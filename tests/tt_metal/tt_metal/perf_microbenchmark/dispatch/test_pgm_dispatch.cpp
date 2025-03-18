@@ -9,7 +9,7 @@
 #include "test_common.hpp"
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/rtoptions.hpp>
+#include "rtoptions.hpp"
 #include <benchmark/benchmark.h>
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;

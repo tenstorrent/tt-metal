@@ -14,6 +14,7 @@
 #include "hostdevcommon/dprint_common.h"
 #include <device.hpp>
 #include "llrt.hpp"
+#include "rtoptions.hpp"
 
 using namespace tt::tt_metal;
 

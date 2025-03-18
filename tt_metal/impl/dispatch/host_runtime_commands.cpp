@@ -46,6 +46,8 @@
 
 #include "tracy/Tracy.hpp"
 
+#include "rtoptions.hpp"
+
 using namespace tt::tt_metal;
 
 namespace tt::tt_metal {

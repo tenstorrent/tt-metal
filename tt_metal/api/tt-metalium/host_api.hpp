@@ -7,6 +7,7 @@
 #include <variant>
 #include <vector>
 
+#include "dispatch_core_common.hpp"
 #include "runtime_args_data.hpp"
 #include "program_impl.hpp"
 #include "device.hpp"

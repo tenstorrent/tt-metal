@@ -24,6 +24,7 @@
 #include "llrt.hpp"
 
 #include "dprint_server.hpp"
+#include "rtoptions.hpp"
 
 namespace tt {
 

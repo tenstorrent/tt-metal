@@ -4,7 +4,7 @@
 #include "gtest/gtest.h"
 #include "debug_tools_fixture.hpp"
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/rtoptions.hpp>
+#include "rtoptions.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking that the DPRINT server can detect an invalid core.

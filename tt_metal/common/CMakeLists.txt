@@ -12,7 +12,6 @@ target_sources(
         shape2d.cpp
         shape_base.cpp
         tt_backend_api_types.cpp
-        utils.cpp
         work_split.cpp
         thread_pool.cpp
 )
