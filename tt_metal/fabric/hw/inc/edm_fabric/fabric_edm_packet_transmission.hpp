@@ -9,7 +9,6 @@
 #include "edm_fabric_worker_adapters.hpp"
 #include "fabric_edm_types.hpp"
 #include <cstdint>
-#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 
 // If the hop/distance counter equals to the below value, it indicates that it has
 // arrived at (atleast one of) the intended destination(s)
@@ -97,15 +96,6 @@ FORCE_INLINE void execute_chip_unicast_to_local_chip(
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
             const auto dest_address = header.command_fields.unicast_write.noc_address;
-            // noc_async_write_one_packet_with_trid(
-            //     payload_start_address, dest_address, payload_size_bytes, transaction_id, edm_to_local_chip_noc);
-
-            // auto noc_address_components = get_noc_address_components(dest_address);
-            // ASSERT(noc_address_components.first.x >= 16);
-            // ASSERT(noc_address_components.first.y >= 16);
-            // for (int i=0; i<100;++i){
-            //     asm volatile("nop");
-            // }
             noc_async_write_one_packet_with_trid(
                 payload_start_address,
                 dest_address,

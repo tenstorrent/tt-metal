@@ -8,8 +8,6 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp"
 
-#include "debug/dprint.h"
-
 #include <cstdint>
 #include <cstddef>
 
@@ -32,7 +30,7 @@ FORCE_INLINE void line_sync(
     if (fabric_connection.has_forward_connection()) {
         mcast_fwd_packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{dest_noc_addr, 1, 128});
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-        // print_pkt_header(mcast_fwd_packet_header);
+        print_pkt_header(mcast_fwd_packet_header);
         fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
             (uint32_t)mcast_fwd_packet_header, sizeof(PACKET_HEADER_TYPE));
     }
@@ -40,7 +38,7 @@ FORCE_INLINE void line_sync(
     if (fabric_connection.has_backward_connection()) {
         mcast_bwd_packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{dest_noc_addr, 1, 128});
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-        // print_pkt_header(mcast_bwd_packet_header);
+        print_pkt_header(mcast_bwd_packet_header);
         fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
             (uint32_t)mcast_bwd_packet_header, sizeof(PACKET_HEADER_TYPE));
     }
