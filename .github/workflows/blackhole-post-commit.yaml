@@ -23,6 +23,8 @@ on:
           - Release
           - Debug
           - RelWithDebInfo
+          - ASan
+          - TSan
   schedule:
     - cron: "0 */2 * * *"
   # Pause this since not enough runners to support every commit to main

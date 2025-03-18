@@ -12,6 +12,8 @@
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include <device.hpp>
 
+namespace tt::tt_metal {
+
 // Helper function for comparing CoreDescriptors for using in sets.
 struct CoreDescriptorComparator {
     bool operator()(const CoreDescriptor& x, const CoreDescriptor& y) const {
@@ -22,7 +24,7 @@ struct CoreDescriptorComparator {
         }
     }
 };
-#define CoreDescriptorSet std::set<CoreDescriptor, CoreDescriptorComparator>
+using CoreDescriptorSet = std::set<CoreDescriptor, CoreDescriptorComparator>;
 
 // Helper function to get CoreDescriptors for all debug-relevant cores on device.
 static CoreDescriptorSet GetAllCores(tt::tt_metal::IDevice* device) {
@@ -75,3 +77,21 @@ inline int GetNumRiscs(tt::tt_metal::IDevice* device, const CoreDescriptor& core
         return DPRINT_NRISCVS;
     }
 }
+
+inline const std::string_view get_core_type_name(CoreType ct) {
+    switch (ct) {
+        case CoreType::ARC: return "ARC";
+        case CoreType::DRAM: return "DRAM";
+        case CoreType::ETH: return "ethernet";
+        case CoreType::PCIE: return "PCIE";
+        case CoreType::WORKER: return "worker";
+        case CoreType::HARVESTED: return "harvested";
+        case CoreType::ROUTER_ONLY: return "router_only";
+        case CoreType::ACTIVE_ETH: return "active_eth";
+        case CoreType::IDLE_ETH: return "idle_eth";
+        case CoreType::TENSIX: return "tensix";
+        default: return "UNKNOWN";
+    }
+}
+
+}  // namespace tt::tt_metal

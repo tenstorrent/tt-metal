@@ -34,6 +34,7 @@ def get_accuracy_thresholds(base_model_name: str, device_name: str, optimization
         lambda line: "|" in line
         and base_model_name.lower() in line.split("|")[1].strip().lower()
         and device_name.lower() in line.split("|")[2].strip().lower()
+        and not "(DP=".lower() in line.lower()  # ignore DP/HP report for now
     )
     rows = [
         line.split("|")[1:]  # Each row starts with a separator
@@ -75,8 +76,8 @@ def get_accuracy_thresholds(base_model_name: str, device_name: str, optimization
 @pytest.mark.parametrize(
     "optimizations",
     [
-        pytest.param(ModelOptimizations.accuracy, id="accuracy"),
-        pytest.param(ModelOptimizations.performance, id="performance"),
+        ModelOptimizations.accuracy,
+        ModelOptimizations.performance,
     ],
 )
 @pytest.mark.parametrize(
@@ -119,6 +120,7 @@ def test_tt_model_acc(
     reset_seeds,
     ensure_gc,
     is_ci_env,
+    request,
 ):
     if is_ci_env and not use_reference_file:
         pytest.skip("CI test only runs vs reference file")
@@ -127,8 +129,11 @@ def test_tt_model_acc(
 
     mesh_device.enable_async(True)
 
+    optimizations = request.config.getoption("--optimizations") or optimizations
+
     # Load model args and tokenizer
     model_args = ModelArgs(mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    logger.info(f"Optimizations: {model_args.optimizations._full_name}")
 
     tokenizer = model_args.tokenizer
 
@@ -217,7 +222,7 @@ def test_tt_model_acc(
         ) = preprocess_inputs_prefill(
             input_prompts,
             tokenizer,
-            model_args,
+            [model_args],
             instruct=False,
             max_generated_tokens=decode_len,
             max_prefill_len=prefill_len,
