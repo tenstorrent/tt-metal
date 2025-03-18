@@ -749,12 +749,12 @@ def test_slice_adversarial_fixed(input_shape, dim, start, end, step, layout, dev
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
 
 
+@pytest.mark.xfail(reason="pytorch2 sweep test failures as of 2025-03")
 @pytest.mark.parametrize(
     "input_shape, dim, start, end, step, layout",
-    (([3], 0, 0, -1, 1, ttnn.TILE_LAYOUT),),  # Difference in expected shape as it's a 1D tensor
+    (([3], 0, 0, -1, 1, ttnn.TILE_LAYOUT),),  # unaligned 1D
 )
 def test_pytorch2_failures(input_shape, dim, start, end, step, layout, device):
-    pytest.skip("These tests are known to fail")
     torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
 
     slice_obj = slice(start, end, step)
@@ -775,6 +775,7 @@ def test_pytorch2_failures(input_shape, dim, start, end, step, layout, device):
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
 
 
+# Op parameters from pytorch2 sweep tests that failed prior to 2025-03
 @pytest.mark.parametrize(
     "input_shape, dim, start, end, step, layout",
     (

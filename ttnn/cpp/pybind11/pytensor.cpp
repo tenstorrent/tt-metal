@@ -1211,11 +1211,11 @@ void pytensor_module(py::module& m_tensor) {
             +---------------------+----------------------------------------------+--------------+-----------------------------------------------------+----------+
             | Argument            | Description                                  | Data type    | Valid range                                         | Required |
             +=====================+==============================================+==============+=====================================================+==========+
-            | arg0                | Start indices of input tensor                | List[int] | Values along each dim must be                       | Yes      |
+            | arg0                | Start indices of input tensor                | List[int]    | Values along each dim must be                       | Yes      |
             |                     |                                              |              |                                                     |          |
             |                     |                                              |              | < input_tensor_shape[i] and <= output_tensor_end[i] |          |
             +---------------------+----------------------------------------------+--------------+-----------------------------------------------------+----------+
-            | arg1                | End indices of input tensor in output tensor | List[int] | Values along each dim must be                       | Yes      |
+            | arg1                | End indices of input tensor in output tensor | List[int]    | Values along each dim must be                       | Yes      |
             |                     |                                              |              |                                                     |          |
             |                     |                                              |              | < input_tensor_shape[i]                             |          |
             +---------------------+----------------------------------------------+--------------+-----------------------------------------------------+----------+

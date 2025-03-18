@@ -132,12 +132,9 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
 
     for dim_idx, sl in enumerate(final_slices):
         # No further negative indexing needed: we already converted above
-        st = sl.start
-        end = sl.stop
-        stp = sl.step
-        slice_start.append(st)
-        slice_end.append(end)
-        slice_step.append(stp)
+        slice_start.append(sl.start)
+        slice_end.append(sl.stop)
+        slice_step.append(sl.step)
 
     # 5) Perform the slicing
     if ttnn.is_tensor_storage_on_device(input_tensor):
@@ -152,8 +149,7 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
     #    or do it from right to left so we don't need to adjust. Either approach works
     #    if we’re careful. The simplest is ascending order with a small counter.
     shift = 0
-    singled_out_dims_sorted = sorted(singled_out_dims)
-    for original_dim in singled_out_dims_sorted:
+    for original_dim in sorted(singled_out_dims):
         # after removing 'shift' dims, the current dim is (original_dim - shift)
         squeeze_dim = original_dim - shift
         # Squeeze only if that dim is actually size 1 after slicing

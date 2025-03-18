@@ -60,18 +60,17 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
     }
 
-    using namespace tt::tt_metal::experimental;
-    auto SRC_BUFFER_ALIGNMENT = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? hal::get_dram_alignment()
-                                    : hal::get_l1_alignment();
-    auto DST_BUFFER_ALIGNMENT = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? hal::get_dram_alignment()
-                                    : hal::get_l1_alignment();
-    auto ALIGNMENT = std::max(SRC_BUFFER_ALIGNMENT, DST_BUFFER_ALIGNMENT);
+    auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+                                    ? ::experimental::hal::get_dram_alignment()
+                                    : ::experimental::hal::get_l1_alignment();
+    auto dst_buffer_alignment = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+                                    ? ::experimental::hal::get_dram_alignment()
+                                    : ::experimental::hal::get_l1_alignment();
+    auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
     uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
-    uint32_t misalignment = begins_bytes % SRC_BUFFER_ALIGNMENT;
+    uint32_t misalignment = begins_bytes % src_buffer_alignment;
 
-    uint32_t unpadded_row_size_bytes_offset = tt::round_up(unpadded_row_size_bytes, ALIGNMENT);
+    uint32_t unpadded_row_size_bytes_offset = tt::round_up(unpadded_row_size_bytes, alignment);
     uint32_t start_addr = input_tensor.buffer()->address();
 
     std::vector<uint32_t> common_reader_kernel_args = {
@@ -186,22 +185,22 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     uint32_t src0_cb_index = 0;
     uint32_t max_read_size = 4096;
 
-    using namespace tt::tt_metal::experimental;
-    auto SRC_BUFFER_ALIGNMENT = a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? hal::get_dram_alignment()
-                                                                                            : hal::get_l1_alignment();
-    auto DST_BUFFER_ALIGNMENT = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? hal::get_dram_alignment()
-                                    : hal::get_l1_alignment();
-    auto ALIGNMENT = std::max(SRC_BUFFER_ALIGNMENT, DST_BUFFER_ALIGNMENT);
+    auto src_buffer_alignment = a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+                                    ? ::experimental::hal::get_dram_alignment()
+                                    : ::experimental::hal::get_l1_alignment();
+    auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+                                    ? ::experimental::hal::get_dram_alignment()
+                                    : ::experimental::hal::get_l1_alignment();
+    auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
 
     // if begins is not aligned then we need to pad the cb size, so that we can read from the nearest aligned address
     uint32_t begins_bytes = output_tensor_start[-1] * a.element_size();
-    uint32_t misalignment = begins_bytes % SRC_BUFFER_ALIGNMENT;
+    uint32_t misalignment = begins_bytes % src_buffer_alignment;
 
     if (misalignment != 0) {
-        ALIGNMENT *= 2;
+        alignment *= 2;
     }
-    uint32_t cb_page_size = tt::round_up(unpadded_row_size_bytes, ALIGNMENT);
+    uint32_t cb_page_size = tt::round_up(unpadded_row_size_bytes, alignment);
 
     uint32_t num_input_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2 ? num_sticks_per_core_group_1
                                                                                          : num_sticks_per_core_group_2;
