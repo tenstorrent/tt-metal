@@ -9,24 +9,7 @@ from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra
 from models.utility_functions import is_blackhole
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize(
-    "batch_size, act_dtype, weight_dtype, math_fidelity",
-    (
-        (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
-        (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
-        (32, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
-    ),
-)
-@pytest.mark.parametrize(
-    "use_pretrained_weight",
-    [True, False],
-    ids=[
-        "pretrained_weight_true",
-        "pretrained_weight_false",
-    ],
-)
-def test_resnet_50(
+def run_resnet_50(
     device,
     use_program_cache,
     batch_size,
@@ -65,18 +48,40 @@ def test_resnet_50(
     assert passed, message
 
 
-def resnet_batch_16_lofi_pretrained_false(
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, act_dtype, weight_dtype, math_fidelity",
+    (
+        (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
+        (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
+        (32, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
+    ),
+)
+@pytest.mark.parametrize(
+    "use_pretrained_weight",
+    [True, False],
+    ids=[
+        "pretrained_weight_true",
+        "pretrained_weight_false",
+    ],
+)
+def test_resnet_50(
     device,
     use_program_cache,
+    batch_size,
+    act_dtype,
+    weight_dtype,
+    math_fidelity,
+    use_pretrained_weight,
     model_location_generator,
 ):
-    test_resnet_50(
+    run_resnet_50(
         device,
         use_program_cache,
-        16,
-        ttnn.bfloat8_b,
-        ttnn.bfloat8_b,
-        ttnn.MathFidelity.LoFi,
-        False,
+        batch_size,
+        act_dtype,
+        weight_dtype,
+        math_fidelity,
+        use_pretrained_weight,
         model_location_generator,
     )
