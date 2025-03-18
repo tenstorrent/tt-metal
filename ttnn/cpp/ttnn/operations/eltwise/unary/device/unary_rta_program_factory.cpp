@@ -86,7 +86,7 @@ UnaryRTAProgramFactory::cached_program_t UnaryRTAProgramFactory::create(
     bool math_approx_mode = std::all_of(
         args.op_chain.begin(), args.op_chain.end(), [](const auto& u) { return utils::get_op_approx_mode(u.op_type); });
     std::map<string, string> unary_defines = utils::get_block_defines(args.op_chain);
-    tt::log_error("Using eltwise_sfpu_rta!!!");
+
     auto unary_compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu_rta.cpp",
