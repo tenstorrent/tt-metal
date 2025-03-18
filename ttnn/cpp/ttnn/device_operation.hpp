@@ -564,7 +564,7 @@ void launch_on_mesh_device(
         tt::tt_metal::distributed::MeshWorkload mesh_workload;
 
         const auto tensor_coordinates = mesh_device_operation_utils::extract_tensor_coordinates(tensor_args);
-        if (!tensor_coordinates.has_value()) {
+        if (tensor_coordinates.has_value()) {
             for (const auto& coord : *tensor_coordinates) {
                 mesh_workload.add_program(ttnn::MeshCoordinateRange(coord, coord), std::move(*make_program()));
             }
