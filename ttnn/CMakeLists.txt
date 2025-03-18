@@ -64,7 +64,12 @@ function(build_library LIBRARY_NAME ALIAS)
         target_precompile_headers(${LIBRARY_NAME} REUSE_FROM ${PRECOMPILED_HEADER_TARGET})
     endif()
 
-    target_link_libraries(${LIBRARY_NAME} PUBLIC ${TARGET_LINK_LIBRARIES})
+    target_link_libraries(
+        ${LIBRARY_NAME}
+        PUBLIC
+            ${TARGET_LINK_LIBRARIES}
+            Boost::algorithm
+    )
 
     # Set compile options for the library
     target_compile_options(
