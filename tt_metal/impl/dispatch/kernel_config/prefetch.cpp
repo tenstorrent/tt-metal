@@ -14,6 +14,8 @@
 #include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
 
+#include "rtoptions.hpp"
+
 using namespace tt::tt_metal;
 
 void PrefetchKernel::GenerateStaticConfigs() {

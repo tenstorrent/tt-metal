@@ -62,14 +62,15 @@ target_link_libraries(
 )
 
 set(LLRT_SRC
-    ${CMAKE_CURRENT_SOURCE_DIR}/llrt.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core_descriptor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/rtoptions.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tlb_config.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tt_cluster.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tt_elffile.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tt_memory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/hal.cpp
+    llrt.cpp
+    core_descriptor.cpp
+    rtoptions.cpp
+    tlb_config.cpp
+    tt_cluster.cpp
+    tt_elffile.cpp
+    tt_memory.cpp
+    hal.cpp
+    utils.cpp
 )
 
 add_library(llrt OBJECT ${LLRT_SRC})
@@ -89,7 +90,7 @@ target_link_libraries(
         yaml-cpp::yaml-cpp
         magic_enum::magic_enum
         span
-        common
+        TT::Metalium::Common
 )
 target_include_directories(llrt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(llrt PRIVATE -Wno-int-to-pointer-cast)
