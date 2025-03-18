@@ -6,6 +6,7 @@
 #include <tt-metalium/buffer_constants.hpp>
 #include <cstdint>
 #include <utility>
+#include "debug/dprint.h"
 
 using address_t = uint32_t;
 
@@ -30,6 +31,7 @@ void kernel_main() {
     const uint32_t is_worker = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t is_reducer = get_arg_val<uint32_t>(arg_idx++);
     if (is_worker == 0 && is_reducer == 0) {
+        DPRINT << "not worker or reducer" << ENDL();
         return;
     }
     if (is_worker == 1) {
@@ -48,6 +50,7 @@ void kernel_main() {
         uint32_t shard_tile_id = first_core_tile_start_offset;
         uint32_t core_id = 0;
         while (tiles_read < num_tiles_to_read) {
+            DPRINT << "tiles_read: " << tiles_read << ENDL();
             uint32_t num_tiles_to_read_this_core =
                 std::min(num_tiles_per_core - shard_tile_id, num_tiles_to_read - tiles_read);
             cb_reserve_back(cb0_id, num_tiles_to_read_this_core);
@@ -64,16 +67,23 @@ void kernel_main() {
             core_id++;
         }
     }
+    DPRINT << "is_reducer: " << is_reducer << ENDL();
     if (is_reducer == 1) {
-        const uint32_t signal_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+        const uint32_t sem_id = get_arg_val<uint32_t>(arg_idx++);
+        DPRINT << "reducer sem_id: " << sem_id << ENDL();
+        const uint32_t signal_semaphore_addr = get_semaphore(sem_id);
         volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr);
 
         // 1. Wait for signal from All-Gather worker
+        DPRINT << "reducer wait" << ENDL();
         noc_semaphore_wait(signal_semaphore_addr_ptr, VALID);
-        noc_semaphore_set(signal_semaphore_addr_ptr, 0);
-
+        if (is_reducer == 1 && is_worker == 0) {
+            noc_semaphore_set(signal_semaphore_addr_ptr, 0);
+        }
+        DPRINT << "reducer signal recieved" << ENDL();
         // 2. Signal compute kernel to start processing
         cb_push_back(cb_id, total_num_reduction_tiles);
+        DPRINT << "reader completed" << ENDL();
     }
 }
