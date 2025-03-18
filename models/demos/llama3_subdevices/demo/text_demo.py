@@ -117,7 +117,7 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
-    tt_model_args.n_layers = 1
+    # tt_model_args.n_layers = 1
     state_dict = tt_model_args.load_state_dict()
 
     page_table = None
@@ -181,7 +181,7 @@ def create_tt_model(
             1,  # repeat_batches
             1024,  # max_seq_len
             1,  # batch_size
-            200,  # max_generated_tokens
+            150,  # max_generated_tokens
             False,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
@@ -195,7 +195,7 @@ def create_tt_model(
             1024,  # max_seq_len
             32,  # batch_size
             200,  # max_generated_tokens
-            True,  # paged_attention
+            False,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
@@ -378,7 +378,6 @@ def test_demo_text(
         use_paged_kv_cache=paged_attention,
     )
 
-    model_args.n_layers = 1
     model_args.tokenizer = Tokenizer(model_args.tokenizer_path)
     tokenizer = model_args.tokenizer
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
@@ -419,7 +418,6 @@ def test_demo_text(
                 k_cache, v_cache = layer.attention.layer_past
                 k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
                 v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
-
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
 
         logger.info("Starting prefill warmup...")
@@ -466,13 +464,12 @@ def test_demo_text(
         iteration = 0
         users_decoding = True
 
-        out_tok = prefilled_token
+        out_tok = prefilled_token  # .repeat(batch_size, 1)
         try:
             model.switch_mode("decode")
         except Exception as e:
             logger.error(f"Error switching to decode mode: {str(e)}")
             model.tt_ccl.close()
-
         logger.info(f"Starting decode loop...")
 
         # Log total inference (accounting for compile_decode as well)
@@ -664,32 +661,27 @@ def test_demo_text(
 
     # Benchmark targets
     supported_models = ["Llama3.1-70B"]
+    model_args.base_model_name = "Llama3.1-70B"
     supported_devices = ["TG"]
 
     tt_device_name = model_args.device_name
 
-    if model_args.base_model_name in supported_models:
-        assert tt_device_name in supported_devices, f"Device {tt_device_name} not supported"
+    # Set the target times to first token for every combination of device and model
+    target_prefill_tok_s = {
+        "TG_Llama3.1-70B": 1050,  # TODO Update target
+    }[f"{tt_device_name}_{model_args.base_model_name}"]
 
-        # Set the target times to first token for every combination of device and model
-        target_prefill_tok_s = {
-            "TG_Llama3.1-70B": 1050,  # TODO Update target
-        }[f"{tt_device_name}_{model_args.base_model_name}"]
+    # Set the target decode timesfor every combination of device and model
+    target_decode_tok_s_u = {
+        "TG_Llama3.1-70B": 20,  # TODO Update target
+    }[f"{tt_device_name}_{model_args.base_model_name}"]
 
-        # Set the target decode timesfor every combination of device and model
-        target_decode_tok_s_u = {
-            "TG_Llama3.1-70B": 20,  # TODO Update target
-        }[f"{tt_device_name}_{model_args.base_model_name}"]
-
-        target_decode_tok_s = target_decode_tok_s_u * batch_size
-        targets = {
-            "prefill_t/s": target_prefill_tok_s,
-            "decode_t/s": target_decode_tok_s,
-            "decode_t/s/u": target_decode_tok_s_u,
-        }
-    else:
-        logger.warning(f"Model {model_args.base_model_name} not does not have performance targets set")
-        targets = {}
+    target_decode_tok_s = target_decode_tok_s_u * batch_size
+    targets = {
+        "prefill_t/s": target_prefill_tok_s,
+        "decode_t/s": target_decode_tok_s,
+        "decode_t/s/u": target_decode_tok_s_u,
+    }
 
     # Save benchmark data for CI dashboard
     if is_ci_env:

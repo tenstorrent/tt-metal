@@ -185,7 +185,7 @@ class TtLlamaAttention(LightweightModule):
 
         self.scale = self.head_dim**-0.5
         if tt_ccl.mode == "decode":
-            self.prefetch()
+            self.prefetch(prefetcher_setup, tt_ccl)
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
@@ -241,9 +241,9 @@ class TtLlamaAttention(LightweightModule):
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                cache_file_name=f"{weight_cache_path}/kvcache_{k_or_v.shape}"
-                if weight_cache_path and not configuration.dummy_weights
-                else None,
+                # cache_file_name=f"{weight_cache_path}/kvcache_{k_or_v.shape}"
+                # if weight_cache_path and not configuration.dummy_weights
+                # else None,
             )
             for k_or_v in [cache_k, cache_v]
         ]
@@ -272,7 +272,7 @@ class TtLlamaAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config_hifi2,
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             dtype=ttnn.bfloat16,
-            sub_device_id=self.worker_sub_device_id,
+            sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
         ttnn.deallocate(x)
         # print("done matmul")
@@ -344,7 +344,7 @@ class TtLlamaAttention(LightweightModule):
         sdpa_out_mem_cfg = self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"](self.batch_size_per_device_group)
 
         if page_table:
-            attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            attn_output_1G4D_sharded = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 q_heads_1BQD,
                 keys,
                 values,
@@ -407,7 +407,7 @@ class TtLlamaAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config_hifi2,
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             dtype=ttnn.bfloat8_b,
-            sub_device_id=self.worker_sub_device_id,
+            sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
         # [1, 1, 32, 2304]
         ttnn.deallocate(attn_output_cat)

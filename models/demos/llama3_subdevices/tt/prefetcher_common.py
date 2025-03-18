@@ -67,6 +67,7 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
                 mesh_device, [self.all_sub_device], 0, 0, True
             )
+            self.mesh_sub_device_manager_id = mesh_sub_device_manager_id
             self.all_sub_device_id = ttnn.SubDeviceId(0)
             self.worker_sub_device_id = self.all_sub_device_id
         else:

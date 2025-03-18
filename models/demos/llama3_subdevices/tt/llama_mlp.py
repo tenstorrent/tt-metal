@@ -87,7 +87,7 @@ class TtLlamaMLP(LightweightModule):
         self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim)
 
         if tt_ccl.mode == "decode":
-            self.prefetch()
+            self.prefetch(prefetcher_setup, tt_ccl)
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
@@ -114,7 +114,7 @@ class TtLlamaMLP(LightweightModule):
             program_config=pc_1,
             memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            sub_device_id=self.worker_sub_device_id if mode == "decode" else None,
+            sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
 
         w3_out = ttnn.linear(
@@ -127,7 +127,7 @@ class TtLlamaMLP(LightweightModule):
             program_config=pc_3,
             memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            sub_device_id=self.worker_sub_device_id if mode == "decode" else None,
+            sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
         ttnn.deallocate(x)
         try:
@@ -167,7 +167,7 @@ class TtLlamaMLP(LightweightModule):
             memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
-            sub_device_id=self.worker_sub_device_id if mode == "decode" else None,
+            sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
         ttnn.deallocate(w2_in)
 

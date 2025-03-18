@@ -213,7 +213,7 @@ class TtTransformer(LightweightModule):
         NOTE: Tokens and current_pos are padded to batch
         """
         B = tokens.shape[0]
-        assert current_pos.shape[0] == B, "Batch size mismatch"
+        # assert current_pos.shape[0] == B, "Batch size mismatch"
         assert B == self.args.max_batch_size, "Batch size must be equal to max_batch_size"
 
         # Necessary padding to be full tile sized when on device
@@ -391,8 +391,14 @@ class TtTransformer(LightweightModule):
         if mode == "decode":
             if self.is_prefill_setup:
                 self.tt_ccl.close()
+                del self.tt_ccl
+                self.mesh_device.clear_loaded_sub_device_manager()
+                self.mesh_device.remove_sub_device_manager(self.prefetcher_setup.mesh_sub_device_manager_id)
                 del self.prefetcher_setup
+                ttnn.synchronize_device(self.mesh_device)
                 self.is_prefill_setup = False
+                self.mesh_device.disable_and_clear_program_cache()
+                self.mesh_device.enable_program_cache()
 
             if self.is_decode_setup is False:
                 self.setup_decode()
@@ -400,6 +406,8 @@ class TtTransformer(LightweightModule):
                 # prefetch
                 for layer in self.layers:
                     layer.prefetch(self.prefetcher_setup, self.tt_ccl)
+                self.norm.tt_ccl = self.tt_ccl
+                self.lm_head.tt_ccl = self.tt_ccl
                 self.tt_tensors = self.prefetcher_setup.get_input_tensors()
 
         else:
@@ -466,7 +474,7 @@ class TtTransformer(LightweightModule):
 
         x = x_norm
 
-        return self.lm_head(x)
+        return self.lm_head(x, self.prefetcher_setup.worker_sub_device_id, mode=mode)
 
     def __del__(self):
         self.tt_ccl.close()

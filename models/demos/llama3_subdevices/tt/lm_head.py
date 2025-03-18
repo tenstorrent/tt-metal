@@ -30,7 +30,6 @@ class LMHead(LightweightModule):
         self.padded_vocab_size = args.padded_vocab_size
         self.num_devices = args.num_devices
         self.tt_ccl = tt_ccl
-        self.worker_sub_device_id = prefetcher_setup.worker_sub_device_id
 
         size_per_device = self.vocab_size // self.num_devices
 
@@ -115,21 +114,8 @@ class LMHead(LightweightModule):
 
         self.output_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         if args.is_galaxy:
-            # self.program_configs = [
-            #     None
-            #     if args.dim == 2048
-            #     else args.dram_matmul_config(
-            #         args.tile_padded_batch_rows,  # (8k, 128k) -> (2k, 16k)
-            #         args.dim // 4,
-            #         16 * 1024,
-            #         args.lm_head_core_grid.num_cores,
-            #     )
-            # ]
-
             self.program_configs = [args.model_config["LM_HEAD_TG_RING_PROGCFG"]] * num_splits
-
-            if args.is_70b:
-                self.output_memory_config = args.model_config["LM_HEAD_OUT_RING_MEMCFG"]
+            self.output_memory_config = args.model_config["LM_HEAD_OUT_RING_MEMCFG"]
         else:
             self.program_configs = [
                 args.dram_matmul_config(
@@ -174,25 +160,35 @@ class LMHead(LightweightModule):
 
         return [output]
 
-    def forward(self, x: ttnn.Tensor):
+    def forward(self, x: ttnn.Tensor, worker_sub_device_id, mode):
         # workaround for OOM issue
-        # return self.forward_on_host(x)
+        # if mode == "prefill":
+        #     return self.forward_on_host(x)
 
         # ttnn.device.dump_device_memory_state(self.mesh_device.get_device(self.mesh_device.get_device_ids()[0]), prefix="")
         x = ttnn.to_memory_config(x, self.args.model_config["SHARDED_LM_HEAD_INPUT_32_RING_MEMCFG"])
         outputs = []
         for weight, pc in zip(self.output_weights, self.program_configs):
             weight_l1 = weight  # ttnn.to_memory_config(weight, self.args.model_config["LM_HEAD_RING_MEMCFG"])
-
-            output = ttnn.linear(
-                x,
-                weight_l1,
-                compute_kernel_config=self.compute_kernel_config,
-                program_config=pc,
-                memory_config=self.output_memory_config,
-                dtype=ttnn.bfloat8_b,
-                sub_device_id=self.worker_sub_device_id,
-            )
+            if mode == "decode":
+                output = ttnn.linear(
+                    x,
+                    weight_l1,
+                    compute_kernel_config=self.compute_kernel_config,
+                    program_config=pc,
+                    memory_config=self.output_memory_config,
+                    dtype=ttnn.bfloat8_b,
+                    sub_device_id=worker_sub_device_id,
+                )
+            else:
+                output = ttnn.linear(
+                    x,
+                    weight_l1,
+                    compute_kernel_config=self.compute_kernel_config,
+                    program_config=pc,
+                    memory_config=self.output_memory_config,
+                    dtype=ttnn.bfloat8_b,
+                )
 
             # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.tt_ccl.worker_sub_device_id])
 
