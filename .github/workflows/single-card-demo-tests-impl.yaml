@@ -52,10 +52,6 @@ jobs:
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf
       options: "--device /dev/tenstorrent"
-    env:
-      ARCH_NAME: ${{ matrix.test-group.arch }}
-      LOGURU_LEVEL: INFO
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     defaults:
       run:
         shell: bash
@@ -103,6 +99,10 @@ jobs:
           path: |
             generated/test_reports/
           prefix: "test_reports_"
+      # env:
+      # ARCH_NAME: ${{ matrix.test-group.arch }}
+      # LOGURU_LEVEL: INFO
+      # LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     # steps:
     #   - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
     #   - name: Enable Performance mode
