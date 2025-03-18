@@ -32,7 +32,9 @@ void kernel_launch(uint32_t kernel_base_addr) {
 
     {
         DeviceZoneScopedMainChildN("ACTIVE-ERISC-KERNEL");
+        WAYPOINT("K");
         kernel_main();
+        WAYPOINT("KD");
         if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
             WAYPOINT("NKFW");
             // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed and the
