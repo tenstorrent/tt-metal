@@ -469,10 +469,10 @@ std::string to_string(
                 }
 
                 auto* mesh_device = storage.mesh_buffer->device();
-                const auto& specs = storage.specs;
-                if (specs.size() == 1) {
+                if (mesh_device->num_devices() == 1) {
                     return to_string<T>(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
                 }
+                const auto& specs = storage.specs;
                 auto specs_it = specs.begin();
                 std::stringstream ss;
                 apply(cpu_tensor, [&](const Tensor& device_shard) {
