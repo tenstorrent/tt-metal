@@ -450,7 +450,6 @@ void HWCommandQueue::read_completion_queue() {
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device_->id());
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
     while (true) {
-        bool has_events_to_read = false;
         uint32_t num_events_to_read = 0;
         {
             std::unique_lock<std::mutex> lock(this->reader_thread_cv_mutex_);
@@ -458,12 +457,11 @@ void HWCommandQueue::read_completion_queue() {
                 return this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_ or
                        this->exit_condition_;
             });
-            has_events_to_read = this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_;
-            if (has_events_to_read) {
+            if (this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_) {
                 num_events_to_read = this->num_entries_in_completion_q_ - this->num_completed_completion_q_reads_;
             }
         }
-        if (has_events_to_read) {
+        if (num_events_to_read > 0) {
             ZoneScopedN("CompletionQueueReader");
             for (uint32_t i = 0; i < num_events_to_read; i++) {
                 ZoneScopedN("CompletionQueuePopulated");
