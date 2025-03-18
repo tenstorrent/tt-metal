@@ -17,11 +17,21 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteAllReduceCreateQkvHe
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
+    // create qkv heads non-optional parameters
+    const QueueId queue_id,
+    const uint32_t num_heads,
+    const std::optional<ttnn::MemoryConfig>& all_reduce_memory_config,
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
-    MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
+    std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
+    // create qkv heads optional parameters
+    std::optional<const uint32_t> num_kv_heads,
+    const std::optional<const bool> overlap_qk_coregrid,
+    const std::optional<const Tensor>& batch_offset,
+    const std::optional<const uint32_t> slice_size,
+    const std::optional<MemoryConfig>& final_memory_config,
+    std::optional<std::array<Tensor, 3>> optional_output_tensors) {
+    MemoryConfig out_memory_config = all_reduce_memory_config.value_or(input_tensor.memory_config());
     return ttnn::operations::experimental::ccl::all_reduce_create_qkv_heads(
         input_tensor,
         buffer_tensor,

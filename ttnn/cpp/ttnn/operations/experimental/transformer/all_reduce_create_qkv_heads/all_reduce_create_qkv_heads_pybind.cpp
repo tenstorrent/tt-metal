@@ -31,10 +31,18 @@ void bind_all_reduce_create_qkv_heads(pybind11::module& module, const ccl_operat
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
                const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+               const QueueId queue_id,
+               const uint32_t num_heads,
                const ttnn::MemoryConfig& memory_config,
                ttnn::ccl::Topology topology,
                const std::optional<size_t> num_links,
-               std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt)
+               std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
+               std::optional<const uint32_t> num_kv_heads,
+               const std::optional<const bool> overlap_qk_coregrid,
+               const std::optional<const Tensor>& batch_offset,
+               const std::optional<const uint32_t> slice_size,
+               const std::optional<MemoryConfig>& final_memory_config,
+               std::optional<std::array<Tensor, 3>> optional_output_tensors)
                 -> std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> {
                 return self(
                     input_tensor,
@@ -42,21 +50,37 @@ void bind_all_reduce_create_qkv_heads(pybind11::module& module, const ccl_operat
                     cluster_axis,
                     mesh_device,
                     multi_device_global_semaphore,
+                    queue_id,
+                    num_heads,
                     memory_config,
                     topology,
                     num_links,
-                    worker_subdevice_id_opt);
+                    worker_subdevice_id_opt,
+                    num_kv_heads,
+                    overlap_qk_coregrid,
+                    batch_offset,
+                    slice_size,
+                    final_memory_config,
+                    optional_output_tensors);
             },
             py::arg("input_tensor"),
             py::arg("buffer_tensor"),
             py::arg("cluster_axis"),
             py::arg("mesh_device"),
             py::arg("multi_device_global_semaphore"),
+            py::arg("queue_id"),
+            py::arg("num_heads"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Linear,
             py::arg("num_links") = std::nullopt,
-            py::arg("subdevice_id") = std::nullopt});
+            py::arg("subdevice_id") = std::nullopt,
+            py::arg("num_kv_heads") = std::nullopt,
+            py::arg("overlap_qk_coregrid") = true,
+            py::arg("batch_offset") = std::nullopt,
+            py::arg("slice_size") = std::nullopt,
+            py::arg("final_memory_config") = std::nullopt,
+            py::arg("optional_output_tensors") = std::nullopt});
 }
 
 }  // namespace detail
@@ -66,40 +90,32 @@ void py_bind_all_reduce_create_qkv_heads(pybind11::module& module) {
         module,
         ttnn::experimental::all_reduce_create_qkv_heads,
         R"doc(
-
         Performs an all_reduce operation on multi-device :attr:`input_tensor` across all devices and creates QKV heads.
         This operation requires a persistent fabric to be enabled in order to function.
 
         Args:
             input_tensor (ttnn.Tensor): multi-device tensor
-            cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the operation on.
-            mesh_device (MeshDevice): Device mesh to perform the operation on.
-        * cluster_axis and mesh_device parameters are applicable only for Linear Topology.
-
-        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md
+            buffer_tensor (ttnn.Tensor): buffer tensor for intermediate results
+            cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the operation on
+            mesh_device (MeshDevice): Device mesh to perform the operation on
+            multi_device_global_semaphore (MultiDeviceGlobalSemaphore): Semaphore for multi-device synchronization
+            queue_id (QueueId): Queue identifier for the operation
+            num_heads (int): Number of attention heads
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
-            num_links (int, optional): Number of links to use for the operation. Defaults to `None`, which indicates to the operation that it should choose. Note that this value will be ignored if there are fewer links available than requested.
-            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation
+            topology (ttnn.Topology, optional): The topology configuration (Ring or Linear). Defaults to Linear
+            num_links (int, optional): Number of links to use for the operation
+            subdevice_id (SubDeviceId, optional): Worker subdevice ID
+            num_kv_heads (int, optional): Number of key/value heads
+            overlap_qk_coregrid (bool, optional): Whether to overlap Q and K coregrid. Defaults to True
+            batch_offset (Tensor, optional): Batch offset tensor
+            slice_size (int, optional): Size of slices
+            final_memory_config (MemoryConfig, optional): Final memory configuration
+            optional_output_tensors (tuple[Tensor, Tensor, Tensor], optional): Optional pre-allocated output tensors
 
         Returns:
-            ttnn.Tensor: the output tensor with QKV heads.
-
-        Example:
-
-            >>> full_tensor = torch.randn([1, 1, 256, 256], dtype=torch.bfloat16)
-            >>> num_devices = 8
-            >>> input_tensors = torch.chunk(full_tensor, num_devices)
-            >>> physical_device_ids = ttnn.get_t3k_physical_device_ids_ring()
-            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), physical_device_ids=physical_device_ids[:8])
-            >>> tt_input_tensors = []
-            >>> for i, t in enumerate(input_tensors):
-                    tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], mem_config))
-            >>> input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
-
-            >>> output = ttnn.all_reduce_create_qkv_heads(input_tensor_mesh, topology=ttnn.Topology.Linear)
-
+            tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: Query, Key, and Value tensors
         )doc");
 }
 

@@ -25,10 +25,20 @@ struct ExecuteAllReduceCreateQkvHeads {
         const uint32_t cluster_axis,
         const MeshDevice& mesh_device,
         const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
-        const std::optional<ttnn::MemoryConfig>& memory_config,
+        // create qkv heads non-optional parameters
+        const QueueId queue_id,
+        const uint32_t num_heads,
+        const std::optional<ttnn::MemoryConfig>& all_reduce_memory_config,
         ttnn::ccl::Topology topology,
         const std::optional<size_t> num_preferred_links,
-        std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt);
+        std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
+        // create qkv heads optional parameters
+        std::optional<const uint32_t> num_kv_heads,
+        const std::optional<const bool> overlap_qk_coregrid = true,
+        const std::optional<const Tensor>& batch_offset = std::nullopt,
+        const std::optional<const uint32_t> slice_size = std::nullopt,
+        const std::optional<MemoryConfig>& final_memory_config = std::nullopt,
+        std::optional<std::array<Tensor, 3>> optional_output_tensors = std::nullopt);
 };
 
 }  // namespace transformer
