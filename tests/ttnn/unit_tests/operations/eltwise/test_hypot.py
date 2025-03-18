@@ -339,3 +339,142 @@ def test_hypot_fp32(device, ttnn_function):
     tt_out = ttnn.to_torch(z_tt_out)
     status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
     assert status
+
+@skip_for_grayskull()
+@pytest.mark.parametrize(
+    "a_shape, b_shape, shard_type, shard_size, core_range, orientation_type",
+    (
+        [
+            torch.Size([5, 7, 2, 35]),
+            torch.Size([5, 7, 2, 35]),
+            ttnn.ShardStrategy.HEIGHT,
+            [64, 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (4, 6))}),
+            ttnn.ShardOrientation.COL_MAJOR,
+        ],
+        [
+            torch.Size([5, 7, 2, 35]),
+            torch.Size([5, 7, 2, 35]),
+            ttnn.ShardStrategy.WIDTH,
+            [32, 35 * 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))}),
+            ttnn.ShardOrientation.COL_MAJOR,
+        ],
+        [
+            torch.Size([5, 7, 2, 35]),
+            torch.Size([5, 7, 2, 35]),
+            ttnn.ShardStrategy.BLOCK,
+            [32, 32 * 5],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (6, 1))}),
+            ttnn.ShardOrientation.COL_MAJOR,
+        ],
+        [
+            torch.Size([1, 1, 512, 512]),
+            torch.Size([1, 1, 512, 512]),
+            ttnn.ShardStrategy.HEIGHT,
+            [512, 128],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 0))}),
+            ttnn.ShardOrientation.COL_MAJOR,
+        ],
+        [
+            torch.Size([1, 1, 512, 512]),
+            torch.Size([1, 1, 512, 512]),
+            ttnn.ShardStrategy.WIDTH,
+            [128, 512],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 0))}),
+            ttnn.ShardOrientation.COL_MAJOR,
+        ],
+        [
+            torch.Size([1, 1, 1024, 1024]),
+            torch.Size([1, 1, 1024, 1024]),
+            ttnn.ShardStrategy.BLOCK,
+            [256, 256],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 3))}),
+            ttnn.ShardOrientation.COL_MAJOR,
+        ],
+        # with broadcasting on w
+        [
+            torch.Size([1, 7, 32, 32]),
+            torch.Size([1, 7, 32, 1]),
+            ttnn.ShardStrategy.HEIGHT,
+            [32, 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (6, 0))}),
+            ttnn.ShardOrientation.COL_MAJOR,
+        ],
+
+        # for row-major-layout cases
+        [
+            torch.Size([64, 64]),
+            torch.Size([64, 64]),
+            ttnn.ShardStrategy.HEIGHT,
+            [32, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))}),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ],
+        [
+            torch.Size([64, 32]),
+            torch.Size([64, 32]),
+            ttnn.ShardStrategy.HEIGHT,
+            [32, 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))}),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ],
+    ),
+)
+
+@pytest.mark.parametrize(
+    "dtype_pt, dtype_tt",
+    (
+        [torch.bfloat16, ttnn.bfloat16],
+        [torch.float32, ttnn.float32],
+    ),
+)
+def test_hypot_sharded_stategies(a_shape, b_shape, shard_type, shard_size, core_range, device, orientation_type, dtype_pt, dtype_tt):
+    torch.manual_seed(0)
+    golden_function = ttnn.get_golden_function(ttnn.hypot)
+
+    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
+    b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
+
+    shard_config = ttnn.create_sharded_memory_config(
+        shard_size,
+        core_grid=core_range,
+        strategy=shard_type,
+        orientation=orientation_type,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    input_combinations = (
+        (ttnn.DRAM_MEMORY_CONFIG, shard_config),
+        (shard_config, ttnn.DRAM_MEMORY_CONFIG),
+        (shard_config, shard_config),
+        (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+    )
+    layout_type = ttnn.TILE_LAYOUT
+    if(orientation_type == ttnn.ShardOrientation.ROW_MAJOR):
+        layout_type = ttnn.ROW_MAJOR_LAYOUT
+
+    for src_config, dst_config in input_combinations:
+        a_tt = ttnn.from_torch(
+            a_pt,
+            dtype=dtype_tt,
+            device=device,
+            layout=layout_type,
+            memory_config=src_config,
+        )
+        b_tt = ttnn.from_torch(
+            b_pt,
+            dtype=dtype_tt,
+            device=device,
+            layout=layout_type,
+            memory_config=dst_config,
+        )
+        out_pt = golden_function(a_pt, b_pt)
+
+        out_tt_sharded = ttnn.experimental.hypot(a_tt, b_tt, memory_config=shard_config)
+        out_tt_sharded = ttnn.to_torch(out_tt_sharded)
+        assert ttnn.pearson_correlation_coefficient(out_tt_sharded, out_pt) >= 0.99988
+
+        out_tt_interleaved = ttnn.experimental.hypot(a_tt, b_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out_tt_interleaved = ttnn.to_torch(out_tt_interleaved)
+        assert ttnn.pearson_correlation_coefficient(out_tt_interleaved, out_pt) >= 0.99988

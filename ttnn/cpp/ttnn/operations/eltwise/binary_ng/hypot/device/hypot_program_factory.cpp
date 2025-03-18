@@ -12,10 +12,22 @@
 using namespace tt::tt_metal;
 
 namespace {
-
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace ttnn::operations::binary_ng;
+
+// For rank > 4 i.e. dims beyond NCHW will be collapsed into a single dim
+uint32_t extract_nD_dims(const Tensor& x, const int out_rank) {
+    const auto& shape = x.get_logical_shape();
+    uint32_t nD_dim = 1;
+    if (out_rank >= 5) {
+        for (int i = -5; i >= -out_rank; --i) {
+            auto dim = shape[i];
+            nD_dim *= dim;
+        }
+    }
+    return nD_dim;
+}
 
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_shape_dims(const Tensor& x) {
     const auto& shape = x.padded_shape();
@@ -112,6 +124,7 @@ uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout me
 class ShardShapeGenerator {
     CoreCoord end_core;
     bool row_major;
+    TensorMemoryLayout memory_layout;
     std::array<uint32_t, 2> shard_shape;
     std::array<uint32_t, 2> last_shard_shape;
 
@@ -119,8 +132,10 @@ public:
     ShardShapeGenerator() = default;
 
     ShardShapeGenerator(const ShardSpec& shard_spec, const Tensor& tensor) :
-        end_core(shard_spec.grid.ranges().begin()->end_coord),
-        row_major(shard_spec.orientation == ShardOrientation::ROW_MAJOR) {
+        // core ranges are sorted, so the last one is indeed the last core
+        end_core(shard_spec.grid.ranges().rbegin()->end_coord),
+        row_major(shard_spec.orientation == ShardOrientation::ROW_MAJOR),
+        memory_layout(tensor.memory_config().memory_layout) {
         auto tile_height = tensor.tensor_spec().tile().get_height();
         auto tile_width = tensor.tensor_spec().tile().get_width();
 
@@ -135,19 +150,26 @@ public:
             shard_shape[1] - (tt::round_up(Wt, shard_shape[1]) - Wt),
         };
     }
-
     std::array<uint32_t, 2> operator()(CoreCoord core) const {
         const unsigned majorDim = row_major ? 1 : 0;
         const unsigned minorDim = row_major ? 0 : 1;
 
         auto current_shape = shard_shape;
-        if (core.x == end_core.x) {
+        // for uneven shard, HEIGHT, WIDTH, and BLOCK handling order should be all different in kernel
+        // only HEIGHT sharding works naturally
+        // for eltwise, it should be insignificant to process the padded tile although it is a waste
+        if (core == end_core) {
+            if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
             current_shape[majorDim] = last_shard_shape[majorDim];
-        }
-        if (core.y == end_core.y) {
             current_shape[minorDim] = last_shard_shape[minorDim];
+            } else {
+                TT_FATAL(
+                    current_shape[majorDim] == last_shard_shape[majorDim] and
+                        current_shape[minorDim] == last_shard_shape[minorDim],
+                    "no un-even shard size support memory layout {}",
+                    memory_layout);
+            }
         }
-
         return current_shape;
     }
 };
@@ -164,16 +186,21 @@ void set_or_update_runtime_arguments(
     F handle_args) {
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
+    const auto out_rank = c.logical_shape().rank();
+    auto aND = extract_nD_dims(a, out_rank);
+    auto bND = b.has_value() ? extract_nD_dims(*b, out_rank) : 1;
+    auto cND = extract_nD_dims(c, out_rank);
 
     const auto [aN, aC, aHt, aWt] = get_shape_dims(a);
     const auto [bN, bC, bHt, bWt] = b.has_value() ? get_shape_dims(*b) : std::tuple{1u, 1u, 1u, 1u};
     const auto [cN, cC, cHt, cWt] = get_shape_dims(c);
     const uint32_t cHt_unrolled = cN * cC * cHt;
 
-    bool row_major = true;
     const auto shard_specs = get_shard_specs(a, b, c);
     const bool has_sharding = shard_specs.has_value();
     auto grid = has_sharding ? shard_specs->a_shard_spec.grid : CoreRangeSet{};
+
+    const auto row_major = has_sharding ? shard_specs->a_shard_spec.orientation == ShardOrientation::ROW_MAJOR : true;
 
     // zero_start_grid is a flag to indicate that we are using a single rectangular grid that starts at (0, 0)
     // as well as having the sharded tensors (if any) start at (0, 0)
@@ -182,7 +209,7 @@ void set_or_update_runtime_arguments(
     bool zero_start_grid = false;
     CoreCoord compute_with_storage_grid;
     const auto& all_device_cores = operation_attributes.worker_grid;
-    if (all_device_cores.size() == 1) {
+    if (grid.size() == 1) {
         const auto& cr = *all_device_cores.ranges().begin();
         if (cr.start_coord.x == 0 && cr.start_coord.y == 0) {
             if (has_sharding) {
@@ -260,8 +287,8 @@ void set_or_update_runtime_arguments(
         } else if (core_group_2.contains(core)) {
             c_num_tiles = num_tiles_per_core_group_2;
         } else {
-            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 11>{0});
-            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 12>{0});
+            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 13>{0});
+            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 14>{0});
             handle_args(program, compute_kernel_id, core, std::array<uint32_t, 3>{0});
             continue;
         }
@@ -286,12 +313,14 @@ void set_or_update_runtime_arguments(
             a_num_tiles,
             c_num_tiles,
             c_current_shard_width,
+            aHt * aWt * aC * aN * (aND > 1),
             aHt * aWt * aC * (aN > 1),
             aHt * aWt * (aC > 1),
             cN,
             cC,
             cHt,
-            cWt};
+            cWt,
+            cND};
         handle_args(program, reader_kernel_id, core, reader_runtime_args);
 
         if (b.has_value()) {
@@ -306,12 +335,14 @@ void set_or_update_runtime_arguments(
                 b_num_tiles,
                 c_num_tiles,
                 c_current_shard_width,
+                bHt * bWt * bC * bN * (bND > 1),
                 bHt * bWt * bC * (bN > 1),
                 bHt * bWt * (bC > 1),
                 cN,
                 cC,
                 cHt,
-                cWt};
+                cWt,
+                cND};
             handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
             auto [freq, counter] =
@@ -334,6 +365,8 @@ void set_or_update_runtime_arguments(
                 cC,
                 cHt,
                 cWt,
+                cND,
+                0u,
                 0u,
                 0u,
                 0u};
@@ -342,6 +375,7 @@ void set_or_update_runtime_arguments(
             std::array compute_runtime_args = {c_num_tiles, 0u, 0u};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         }
+
         start_tile_id += c_num_tiles;
     }
 }
@@ -356,6 +390,7 @@ HypotNgDeviceOperation::HypotProgramFactory::cached_program_t HypotNgDeviceOpera
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, tensor_return_value_t& c) {
     using namespace tt;
     using namespace tt::tt_metal;
+
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
     auto is_sfpu_op = operation_attributes.is_sfpu;
@@ -365,23 +400,24 @@ HypotNgDeviceOperation::HypotProgramFactory::cached_program_t HypotNgDeviceOpera
 
     const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(a, b, c);
     const bool has_sharding = shard_specs.has_value();
+
     auto tile_hw = c.tensor_spec().tile().get_tile_hw();
     uint32_t a_num_tiles_per_shard = has_sharding ? shard_specs->a_shard_spec.numel() / tile_hw : 0;
     uint32_t b_num_tiles_per_shard = has_sharding ? shard_specs->b_shard_spec.numel() / tile_hw : 0;
     uint32_t c_num_tiles_per_shard = has_sharding ? shard_specs->c_shard_spec.numel() / tile_hw : 0;
 
-    auto a_data_format = datatype_to_dataformat_converter(a.get_dtype());
-    auto b_data_format = b.has_value() ? datatype_to_dataformat_converter(b->get_dtype())
-                         : is_sfpu_op  ? datatype_to_dataformat_converter(a.get_dtype())
-                                       : DataFormat::Float16_b;
-    auto c_data_format = datatype_to_dataformat_converter(c.get_dtype());
+    const auto a_dtype = a.get_dtype();
+    // Always pass the more accurate fp32 when the quantization scale is passed as a scalar
+    const auto b_dtype = b->get_dtype();
+    const auto a_data_format = datatype_to_dataformat_converter(a_dtype);
+    const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
+    const auto c_data_format = datatype_to_dataformat_converter(c.get_dtype());
 
     uint32_t a_single_tile_size = tt_metal::detail::TileSize(a_data_format);
     uint32_t b_single_tile_size = tt_metal::detail::TileSize(b_data_format);
     uint32_t c_single_tile_size = tt_metal::detail::TileSize(c_data_format);
 
     // we parallelize the computation across the output tiles
-    constexpr bool row_major = true;
     const auto& all_device_cores = operation_attributes.worker_grid;
 
     Buffer* a_buffer = a.buffer();
@@ -432,30 +468,15 @@ HypotNgDeviceOperation::HypotProgramFactory::cached_program_t HypotNgDeviceOpera
         c_sharded ? c_num_tiles_per_shard : 2,
         c_data_format,
         c_sharded ? c_buffer : nullptr);
+
     uint32_t a_is_dram = a_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     uint32_t b_is_dram = false;
     uint32_t c_is_dram = c_buffer->buffer_type() == tt_metal::BufferType::DRAM;
 
     auto kernel_config = CMAKE_UNIQUE_NAMESPACE::BinaryNgKernelConfig(operation_attributes.subtile_broadcast_type);
-    std::map<std::string, std::string> dataflow_defines;
 
-    if (is_sfpu_op && a.get_dtype() == DataType::FLOAT32) {
-        dataflow_defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
-        dataflow_defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
-        dataflow_defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<float>";
-        dataflow_defines["FILL_WITH_VALUE_FLOAT"] = "fill_with_val<1024, float>";
-    } else if (is_sfpu_op && a.get_dtype() == DataType::INT32) {
-        dataflow_defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
-        dataflow_defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
-        dataflow_defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<int32_t>";
-        dataflow_defines["FILL_WITH_VALUE"] = "fill_with_val<1024, int32_t>";
-    } else {
-        dataflow_defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfloat16";
-        dataflow_defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfloat16";
-        dataflow_defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfloat16";
-        dataflow_defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16";
-    }
-    auto reader_defines = dataflow_defines;
+    // READER KERNEL
+    auto reader_defines = make_dataflow_defines(a_dtype, is_sfpu_op);
     reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
 
     // READER KERNEL
@@ -473,7 +494,7 @@ HypotNgDeviceOperation::HypotProgramFactory::cached_program_t HypotNgDeviceOpera
         writer_kernel = kernel_config.writer_kernel;
         compute_kernel = kernel_config.compute_kernel;
     }
-    auto writer_defines = dataflow_defines;
+    auto writer_defines = make_dataflow_defines(b_dtype, is_sfpu_op);
     writer_defines["SRC_SHARDED"] = b_sharded ? "1" : "0";
     writer_defines["DST_SHARDED"] = c_sharded ? "1" : "0";
 
@@ -493,6 +514,7 @@ HypotNgDeviceOperation::HypotProgramFactory::cached_program_t HypotNgDeviceOpera
     uint32_t src1interim_cb_index = tt::CBIndex::c_4;
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+
     if (is_sfpu_op) {
         unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
         unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
@@ -502,6 +524,7 @@ HypotNgDeviceOperation::HypotProgramFactory::cached_program_t HypotNgDeviceOpera
 
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
 
+    const uint32_t num_tiles_per_cycle = 1;  // we produce 1 output tile per read-compute-write cycle
     std::string compute_hypot_kernel_filepath;
     if(kernel_config.compute_kernel == KernelName::ComputeNoBcast){
         compute_hypot_kernel_filepath = "ttnn/cpp/ttnn/operations/eltwise/binary_ng/hypot/device/kernels/compute/eltwise_hypot_no_bcast.cpp";
@@ -525,7 +548,9 @@ HypotNgDeviceOperation::HypotProgramFactory::cached_program_t HypotNgDeviceOpera
         tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+            .compile_args = {num_tiles_per_cycle},
             .defines = std::move(compute_kernel_defines)});
+
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
         tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
     };
@@ -539,6 +564,7 @@ HypotNgDeviceOperation::HypotProgramFactory::cached_program_t HypotNgDeviceOpera
         tensor_args,
         c,
         set_runtime_args);
+
     return {std::move(program), {reader_kernel_id, writer_kernel_id, compute_kernel_id}};
 }
 
