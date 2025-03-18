@@ -45,7 +45,9 @@ void kernel_launch(uint32_t kernel_base_addr) {
     {
         DeviceZoneScopedMainChildN("BRISC-KERNEL");
         EARLY_RETURN_FOR_DEBUG
+        WAYPOINT("K");
         kernel_main();
+        WAYPOINT("KD");
     }
 #endif
 }
