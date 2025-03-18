@@ -5,6 +5,7 @@
 #include "pool_op.hpp"
 #include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_types.hpp"
+#include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"  // for reduce_op_utils
 #include <tt-metalium/math.hpp>
 
@@ -116,45 +117,45 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     using tt::tt_metal::CBHandle;
     using tt::tt_metal::CircularBuffer;
     using tt::tt_metal::CircularBufferConfig;
-    uint32_t in_scalar_cb_id = tt::CBIndex::c_4;
+
+    uint32_t next_cb_index = tt::CBIndex::c_0;
+    uint32_t in_scalar_cb_id = next_cb_index++;
     uint32_t in_scalar_cb_pagesize = tile_size(in_df);
     uint32_t in_scalar_cb_npages = 1;
-    CircularBufferConfig in_scalar_cb_config =
-        CircularBufferConfig(in_scalar_cb_npages * in_scalar_cb_pagesize, {{in_scalar_cb_id, in_df}})
-            .set_page_size(in_scalar_cb_id, in_scalar_cb_pagesize);
-    auto in_scalar_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, in_scalar_cb_config);
+
+    tt::tt_metal::create_cb(in_scalar_cb_id, program, all_cores, in_scalar_cb_pagesize, in_scalar_cb_npages, in_df);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id, in_scalar_cb_pagesize, in_scalar_cb_npages);
 
     // incoming data is the input cb instead of raw l1/dram addr
     // this input shard has halo and padding inserted.
-    auto raw_in_cb_id = tt::CBIndex::c_2;
     uint32_t raw_in_cb_npages = input.shard_spec().value().shape[0];
     uint32_t raw_in_cb_pagesize = in_nbytes_c;
-    CircularBufferConfig raw_in_cb_config =
-        CircularBufferConfig(raw_in_cb_npages * raw_in_cb_pagesize, {{raw_in_cb_id, in_df}})
-            .set_page_size(raw_in_cb_id, raw_in_cb_pagesize)
-            .set_globally_allocated_address(*input.buffer());
-    auto raw_in_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, raw_in_cb_config);
+    auto [raw_in_cb_id, raw_in_cb] = tt::tt_metal::create_cb(
+        next_cb_index++, program, all_cores, raw_in_cb_pagesize, raw_in_cb_npages, in_df, input.buffer());
+
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", raw_in_cb_id, raw_in_cb_pagesize, raw_in_cb_npages);
 
     // reader indices
-    auto in_reader_indices_cb_id = tt::CBIndex::c_3;
+    uint32_t in_reader_indices_cb_id = next_cb_index++;
     uint32_t in_reader_indices_cb_pagesize =
         tt::round_up(out_nhw_per_core * indices_nbytes, 4);  // pagesize needs to be multiple of 4
     uint32_t in_reader_indices_cb_npages = 1;
+
+    tt::tt_metal::create_cb(
+        in_reader_indices_cb_id,
+        program,
+        all_cores,
+        in_reader_indices_cb_pagesize,
+        in_reader_indices_cb_npages,
+        indices_df,
+        reader_indices_storage.get_buffer());
+
     log_debug(
         tt::LogOp,
         "CB {} :: PS = {}, NP = {}",
         in_reader_indices_cb_id,
         in_reader_indices_cb_pagesize,
         in_reader_indices_cb_npages);
-    CircularBufferConfig in_reader_indices_cb_config =
-        CircularBufferConfig(
-            in_reader_indices_cb_npages * in_reader_indices_cb_pagesize, {{in_reader_indices_cb_id, indices_df}})
-            .set_page_size(in_reader_indices_cb_id, in_reader_indices_cb_pagesize)
-            .set_globally_allocated_address(*reader_indices_storage.get_buffer());
-    auto in_reader_indices_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, in_reader_indices_cb_config);
-
     uint32_t in_cb_sz = 0;
     uint32_t in_nblocks_c = 1;
     if (is_wide_reduction) {
@@ -163,51 +164,51 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     } else {
         in_cb_sz = in_ntiles_c * tt::constants::TILE_HW;
     }
+
     // reader output == input to tilize
-    uint32_t in_cb_id_0 = tt::CBIndex::c_0;  // input rows for "multiple (out_nelems)" output pixels
-    uint32_t in_cb_id_1 = tt::CBIndex::c_1;  // input rows for "multiple (out_nelems)" output pixels
+    uint32_t in_cb_id_0 = next_cb_index++;  // input rows for "multiple (out_nelems)" output pixels
+    uint32_t in_cb_id_1 = 32;               // input rows for "multiple (out_nelems)" output pixels
     uint32_t in_cb_page_padded = tt::round_up(
         in_cb_sz,
         tt::constants::TILE_HW);  // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
     uint32_t in_cb_pagesize = in_nbytes * in_cb_page_padded;
     uint32_t in_cb_npages = multi_buffering_factor * nblocks;
 
-    CircularBufferConfig in_cb_config_0 = CircularBufferConfig(in_cb_npages * in_cb_pagesize, {{in_cb_id_0, in_df}})
-                                              .set_page_size(in_cb_id_0, in_cb_pagesize);
-    auto in_cb_0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in_cb_config_0);
+    tt::tt_metal::create_cb(in_cb_id_0, program, all_cores, in_cb_pagesize, in_cb_npages, in_df);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_0, in_cb_pagesize, in_cb_npages);
 
     if (split_reader) {
-        CircularBufferConfig in_cb_config_1 = CircularBufferConfig(in_cb_npages * in_cb_pagesize, {{in_cb_id_1, in_df}})
-                                                  .set_page_size(in_cb_id_1, in_cb_pagesize);
-        auto in_cb_1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in_cb_config_1);
+        in_cb_id_1 = next_cb_index++;
+        tt::tt_metal::create_cb(in_cb_id_1, program, all_cores, in_cb_pagesize, in_cb_npages, in_df);
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_1, in_cb_pagesize, in_cb_npages);
     }
 
     // output of reduce == writer to write
-    uint32_t out_cb_id = tt::CBIndex::c_16;  // output rows in RM
+    // output rows in RM
     // after reduction
     uint32_t out_cb_pagesize = std::min(tt::constants::TILE_WIDTH, output.shard_spec().value().shape[1]) *
                                out_nbytes;  // there is just one row of channels after each reduction (or 1 block
                                             // of c if its greater than 8 tiles)
     uint32_t out_cb_npages = output.shard_spec().value().shape[0] * in_ntiles_c;
 
-    CircularBufferConfig cb_out_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{out_cb_id, out_df}})
-                                             .set_page_size(out_cb_id, out_cb_pagesize)
-                                             .set_globally_allocated_address(*output.buffer());
-    ;
-    auto cb_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
+    auto [out_cb_id, cb_out] = tt::tt_metal::create_cb(
+        next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, out_df, output.buffer());
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", out_cb_id, out_cb_pagesize, out_cb_npages);
 
+    // Invalid index for circular buffer, will report error if not assigned with valid value before creation
+    uint32_t max_pool_partials_cb_id = 32;
     if (is_large_kernel) {
-        uint32_t max_pool_partials_cb_id = tt::CBIndex::c_25;  // max_pool partials
+        max_pool_partials_cb_id = next_cb_index++;  // max_pool partials
         uint32_t max_pool_partials_cb_pagesize = out_cb_pagesize;
         uint32_t max_pool_partials_cb_npages = nblocks;
-        CircularBufferConfig max_pool_partials_cb_config =
-            CircularBufferConfig(
-                max_pool_partials_cb_npages * max_pool_partials_cb_pagesize, {{max_pool_partials_cb_id, out_df}})
-                .set_page_size(max_pool_partials_cb_id, max_pool_partials_cb_pagesize);
-        auto max_pool_partials_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, max_pool_partials_cb_config);
+
+        tt::tt_metal::create_cb(
+            max_pool_partials_cb_id,
+            program,
+            all_cores,
+            max_pool_partials_cb_pagesize,
+            max_pool_partials_cb_npages,
+            out_df);
         log_debug(
             tt::LogOp,
             "CB {} :: PS = {}, NP = {}",
@@ -285,7 +286,13 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_nblocks_c,
         in_cb_sz,
         max_rows_for_reduction,
-        ceil_pad_w};
+        ceil_pad_w,
+        in_cb_id_0,
+        in_cb_id_1,
+        raw_in_cb_id,
+        in_reader_indices_cb_id,
+        in_scalar_cb_id,
+        max_pool_partials_cb_id};
 
     std::vector<uint32_t> reader1_ct_args = {
         out_nhw_per_core,
@@ -303,7 +310,13 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_nblocks_c,
         in_cb_sz,
         max_rows_for_reduction,
-        ceil_pad_w};
+        ceil_pad_w,
+        in_cb_id_0,
+        in_cb_id_1,
+        raw_in_cb_id,
+        in_reader_indices_cb_id,
+        in_scalar_cb_id,
+        max_pool_partials_cb_id};
 
     std::string reader_kernel_fname;
     if (is_large_kernel) {
@@ -353,7 +366,12 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         out_nhw_per_core / nblocks,  // loop count with blocks
         input_shape[3] / num_shards_c,
         in_nblocks_c,
-        max_rows_for_reduction};
+        max_rows_for_reduction,
+        in_cb_id_0,
+        in_cb_id_1,
+        in_scalar_cb_id,
+        out_cb_id,
+        max_pool_partials_cb_id};
 
     auto reduce_op = tt::tt_metal::ReduceOpMath::MAX;
     auto reduce_dim = tt::tt_metal::ReduceOpDim::H;

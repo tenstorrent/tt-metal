@@ -25,6 +25,8 @@
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
+#include "rtoptions.hpp"
+
 namespace tt::tt_metal {
 namespace {
 
@@ -154,19 +156,15 @@ HWCommandQueue::~HWCommandQueue() {
 void HWCommandQueue::increment_num_entries_in_completion_q() {
     // Increment num_entries_in_completion_q and inform reader thread
     // that there is work in the completion queue to process
+    std::lock_guard lock(this->reader_thread_cv_mutex_);
     this->num_entries_in_completion_q_++;
-    {
-        std::lock_guard lock(this->reader_thread_cv_mutex_);
-        this->reader_thread_cv_.notify_one();
-    }
+    this->reader_thread_cv_.notify_one();
 }
 
 void HWCommandQueue::set_exit_condition() {
+    std::lock_guard lock(this->reader_thread_cv_mutex_);
     this->exit_condition_ = true;
-    {
-        std::lock_guard lock(this->reader_thread_cv_mutex_);
-        this->reader_thread_cv_.notify_one();
-    }
+    this->reader_thread_cv_.notify_one();
 }
 
 IDevice* HWCommandQueue::device() { return this->device_; }
@@ -454,16 +452,19 @@ void HWCommandQueue::read_completion_queue() {
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device_->id());
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
     while (true) {
+        uint32_t num_events_to_read = 0;
         {
             std::unique_lock<std::mutex> lock(this->reader_thread_cv_mutex_);
             this->reader_thread_cv_.wait(lock, [this] {
                 return this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_ or
                        this->exit_condition_;
             });
+            if (this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_) {
+                num_events_to_read = this->num_entries_in_completion_q_ - this->num_completed_completion_q_reads_;
+            }
         }
-        if (this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_) {
+        if (num_events_to_read > 0) {
             ZoneScopedN("CompletionQueueReader");
-            uint32_t num_events_to_read = this->num_entries_in_completion_q_ - this->num_completed_completion_q_reads_;
             for (uint32_t i = 0; i < num_events_to_read; i++) {
                 ZoneScopedN("CompletionQueuePopulated");
                 auto read_descriptor = *(this->issued_completion_q_reads_.pop());
@@ -496,9 +497,9 @@ void HWCommandQueue::read_completion_queue() {
                     },
                     read_descriptor);
             }
-            this->num_completed_completion_q_reads_ += num_events_to_read;
             {
                 std::unique_lock<std::mutex> lock(this->reads_processed_cv_mutex_);
+                this->num_completed_completion_q_reads_ += num_events_to_read;
                 this->reads_processed_cv_.notify_one();
             }
         } else if (this->exit_condition_) {

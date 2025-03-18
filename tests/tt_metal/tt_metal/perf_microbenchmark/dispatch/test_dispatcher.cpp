@@ -10,7 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/rtoptions.hpp>
+#include "rtoptions.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "common.h"
 
