@@ -23,4 +23,6 @@ void jit_build_genfiles_triscs_src(
 
 void jit_build_genfiles_descriptors(const JitBuildEnv& env, JitBuildOptions& options);
 
+// void jit_build_genfiles_binaries_built_success_marker(const JitBuildEnv& env, const JitBuildSettings& settings);
+
 }  // namespace tt::tt_metal
