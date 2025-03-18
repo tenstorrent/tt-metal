@@ -212,6 +212,7 @@ jobs:
     needs: build-artifact
     secrets: inherit
     strategy:
+      fail-fast: false
       matrix:
         config:
           - version: "22.04"

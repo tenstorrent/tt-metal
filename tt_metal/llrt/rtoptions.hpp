@@ -330,12 +330,12 @@ public:
 private:
     // Helper functions to parse feature-specific environment vaiables.
     void ParseFeatureEnv(RunTimeDebugFeatures feature);
-    void ParseFeatureCoreRange(RunTimeDebugFeatures feature, const std::string &env_var, CoreType core_type);
-    void ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string &env_var);
-    void ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string &env_var);
-    void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string &env_var);
-    void ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string &env_var);
-    void ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feature, const std::string &env_var);
+    void ParseFeatureCoreRange(RunTimeDebugFeatures feature, const std::string& env_var, CoreType core_type);
+    void ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string& env_var);
+    void ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string& env_var);
+    void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string& env_var);
+    void ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string& env_var);
+    void ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feature, const std::string& env_var);
 
     // Helper function to parse watcher-specific environment variables.
     void ParseWatcherEnv();

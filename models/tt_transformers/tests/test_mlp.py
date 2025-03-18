@@ -55,7 +55,6 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, rese
         k[len(first_layer_prefix) + 1 :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
 
-    model_args.WEIGHTS_DTYPE = dtype
     reference_model = model_args.reference_mlp()
     reference_model.load_state_dict(partial_state_dict)
 
