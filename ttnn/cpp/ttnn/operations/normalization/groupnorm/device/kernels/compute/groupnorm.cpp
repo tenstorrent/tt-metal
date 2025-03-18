@@ -181,6 +181,14 @@ void MAIN {
 
     for (uint32_t b = 0; b < batch; ++b) {
         index_g_offset = 0;
+
+        row_offset = num_cols_per_group;
+        copy_or_add = true;
+        reset_index = false;
+        group_reset_index = 0;
+        index_block_w = 0;
+        output_tile_index = 0;
+
         for (uint32_t g = 0; g < group; ++g) {
             cb_wait_front(cb_input_mask, block_w);
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; out_block_index++) {

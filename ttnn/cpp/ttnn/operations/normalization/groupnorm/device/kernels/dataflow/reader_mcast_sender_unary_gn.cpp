@@ -18,25 +18,28 @@ void kernel_main() {
 
     constexpr uint32_t num_mcast_cores = get_compile_time_arg_val(4);
     constexpr uint32_t num_batch_group = get_compile_time_arg_val(5);
+    constexpr uint32_t num_batches = get_compile_time_arg_val(6);
+    uint32_t num_groups = num_batch_group / num_batches;
 
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(6);
-    const uint32_t per_core_N_bytes = get_compile_time_arg_val(7);
-    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(8);
-    constexpr uint32_t datum_size_bytes = get_compile_time_arg_val(9);
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(10);
-    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(11);
+    constexpr uint32_t per_core_N = get_compile_time_arg_val(7);
+    const uint32_t per_core_N_bytes = get_compile_time_arg_val(8);
+    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(9);
+    constexpr uint32_t datum_size_bytes = get_compile_time_arg_val(10);
+    constexpr uint32_t per_core_M = get_compile_time_arg_val(11);
+    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(12);
 
-    volatile uint32_t block_h = get_compile_time_arg_val(12);
-    constexpr uint32_t block_w = get_compile_time_arg_val(13);
-    constexpr uint32_t block_hw = get_compile_time_arg_val(14);
+    volatile uint32_t block_h = get_compile_time_arg_val(13);
+    constexpr uint32_t block_w = get_compile_time_arg_val(14);
+    constexpr uint32_t block_hw = get_compile_time_arg_val(15);
 
-    constexpr uint32_t num_cols_per_group = get_compile_time_arg_val(15);
+    constexpr uint32_t num_cols_per_group = get_compile_time_arg_val(16);
+    constexpr uint32_t num_tiles_per_batch = get_compile_time_arg_val(17);
 
-    constexpr uint32_t block_w_last = get_compile_time_arg_val(16);
-    constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_compile_time_arg_val(17);
-    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(18);
-    constexpr uint32_t group_row_offset = get_compile_time_arg_val(19);
-    constexpr uint32_t num_out_blocks = get_compile_time_arg_val(20);
+    constexpr uint32_t block_w_last = get_compile_time_arg_val(18);
+    constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_compile_time_arg_val(19);
+    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(20);
+    constexpr uint32_t group_row_offset = get_compile_time_arg_val(21);
+    constexpr uint32_t num_out_blocks = get_compile_time_arg_val(22);
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
@@ -44,6 +47,7 @@ void kernel_main() {
     constexpr uint32_t tile_w_minux_group_size = TILE_WIDTH - num_cols_per_group;
     uint32_t row_offset = num_cols_per_group;
     uint32_t index_g_offset = 0;
+    uint32_t index_b_offset = 0;
 
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t out_addr = get_arg_val<uint32_t>(1);
@@ -215,14 +219,18 @@ void kernel_main() {
     uint32_t out_block_hw = out_block_h * block_w;
 
     if constexpr (num_mcast_cores > 1) {
-        index_g_offset = 0;
-        for (uint32_t m = 0; m < num_batch_group; ++m) {
-            for (uint32_t n = 0; n < 3; ++n) {
-                uint32_t out_block_start_id_offset = 0;
-                uint32_t l1_write_addr_external = get_write_ptr(cb_ex_external);
-                cb_reserve_back(cb_ex_external, 1);
+        index_b_offset = 0;
+        for (uint32_t b = 0; b < num_batches; ++b) {
+            index_g_offset = 0;
+            row_offset = num_cols_per_group;
 
-                for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; out_block_index++) {
+            for (uint32_t m = 0; m < num_groups; ++m) {
+                for (uint32_t n = 0; n < 3; ++n) {
+                    uint32_t out_block_start_id_offset = 0;
+                    uint32_t l1_write_addr_external = get_write_ptr(cb_ex_external);
+                    cb_reserve_back(cb_ex_external, 1);
+
+                    for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; out_block_index++) {
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
                     const uint32_t src0_tile_bytes = get_tile_size(cb_in0);
                     const DataFormat src0_data_format = get_dataformat(cb_in0);
@@ -234,7 +242,8 @@ void kernel_main() {
                     for (uint32_t mt = 0; mt < out_block_h; mt++) {
                         for (uint32_t nt = 0; nt < block_w; nt++) {
                             noc_async_read_tile(
-                                start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt + index_g_offset,
+                                start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt + index_b_offset +
+                                    index_g_offset,
                                 src_a,
                                 l1_write_addr);
                             l1_write_addr += src0_tile_bytes;
@@ -291,7 +300,7 @@ void kernel_main() {
                                 false);
                         }
                     }
-                }
+                    }
 
                 if (n == 0 || n == 1) {
                     cb_push_back(cb_ex_external, 1);
@@ -350,7 +359,7 @@ void kernel_main() {
                     noc_async_write_barrier();
                     cb_pop_front(cb_mcast, 1);
                 }
-            }
+                }
 
             const InterleavedAddrGenFast<out_is_dram> dst_a = {
                 .bank_base_address = out_addr, .page_size = single_tile_size_bytes, .data_format = out_data_format};
@@ -365,7 +374,8 @@ void kernel_main() {
                 for (uint32_t mt = 0; mt < out_block_h; mt++) {
                     for (uint32_t nt = 0; nt < block_w; nt++) {
                         noc_async_read_tile(
-                            out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt + index_g_offset,
+                            out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt + index_b_offset +
+                                index_g_offset,
                             dst_a,
                             l1_write_addr);
                         l1_write_addr += dst_tile_bytes;
@@ -406,6 +416,8 @@ void kernel_main() {
                     index_g_offset += block_w_minus_two;
                 }
             }
+            }
+            index_b_offset += num_tiles_per_batch;
         }
     }
 
