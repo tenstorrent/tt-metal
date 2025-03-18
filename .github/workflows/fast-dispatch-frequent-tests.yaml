@@ -5,15 +5,19 @@ on:
   workflow_call:
   schedule:
     - cron: "0 */4 * * *"
-  push:
-    branches:
-      - "rkim/0-new-fd-frequent"
 
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
+    with:
+      version: "22.04"
+      build-wheel: true
   fd-nightly:
     needs: build-artifact
     uses: ./.github/workflows/fast-dispatch-frequent-tests-impl.yaml
     secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

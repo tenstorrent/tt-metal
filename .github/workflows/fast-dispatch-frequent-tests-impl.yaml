@@ -3,10 +3,15 @@ name: "[internal] Fast dispatch frequent tests impl"
 on:
   workflow_call:
     inputs:
-      os:
-        required: false
+      build-artifact-name:
+        required: true
         type: string
-        default: "ubuntu-20.04"
+      wheel-artifact-name:
+        required: true
+        type: string
+      docker-image:
+        required: true
+        type: string
 
 jobs:
   fd-frequent:
@@ -29,14 +34,30 @@ jobs:
       LOGURU_LEVEL: INFO
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - uses: ./.github/actions/prepare-metal-run
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.build-artifact-name }}
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         uses: ./.github/actions/docker-run
         with:
-          docker_os_arch: tt-metalium/${{ inputs.os }}-amd64
+          docker_image: ${{ inputs.docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
+          # we want to eventually get rid of TT_METAL_HOME, but
+          # for these pgm dispatch things maybe not that big of a deal
           docker_opts: |
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
