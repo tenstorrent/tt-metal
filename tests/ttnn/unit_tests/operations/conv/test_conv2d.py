@@ -94,16 +94,13 @@ def run_conv(
     activation="",
     preprocess_weights_on_device=True,
 ):
-    if isinstance(device, ttnn.MeshDevice):
-        num_devices = len(device.get_device_ids())
-        if num_devices != 1:
-            assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when using device mesh"
-            assert weight_mesh_mapper is not None, "Expected mesh mapper for weight tensors when using device mesh"
-            assert output_mesh_composer is not None, "Expected mesh composer for output tensor when using device mesh"
-        total_batch_size = num_devices * batch_size  # Batch size across all devices
-        logger.info(f"Using {num_devices} devices for this test")
-    else:
-        total_batch_size = batch_size
+    num_devices = device.get_num_devices()
+    if num_devices != 1:
+        assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when using device mesh"
+        assert weight_mesh_mapper is not None, "Expected mesh mapper for weight tensors when using device mesh"
+        assert output_mesh_composer is not None, "Expected mesh composer for output tensor when using device mesh"
+    total_batch_size = num_devices * batch_size  # Batch size across all devices
+    logger.info(f"Using {num_devices} devices for this test")
 
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
