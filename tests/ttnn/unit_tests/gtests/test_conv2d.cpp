@@ -139,7 +139,7 @@ std::vector<float> reference_implementation_conv2d(
 
 TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
     const chip_id_t device_id = 0;
-    IDevice* device = CreateDevice(device_id, 1, 16384, 0, DispatchCoreConfig(DispatchCoreType::ETH));
+    IDevice* device = CreateDevice(device_id, 1, 16384);
 
     const uint32_t input_channels = 3;                   // in_channels
     const uint32_t output_channels = 17;                 // out_channels
