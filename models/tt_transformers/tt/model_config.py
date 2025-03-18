@@ -151,16 +151,21 @@ class ModelOptimizations:
     def _default_settings(self):
         return {
             "TensorPrecision": {
+                # MLP
                 TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
                 TensorGroup.FF2: PrecisionSetting.BFP8,
+                # Attention
                 TensorGroup.WQKV: PrecisionSetting.BFP8,
                 TensorGroup.WO: PrecisionSetting.BFP8,
                 TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                # Activation across whole model
                 TensorGroup.ACTIVATION: None,  # this signals that original dtype should be used
             },
             "OpFidelity": {
-                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
-                OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
+                # MLP linear operators
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2_FP16,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
+                # Attention operators -- linear and scaled_dot_product_attention, in decode and prefill modes
                 OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
                 OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2_NA,
                 OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2,
