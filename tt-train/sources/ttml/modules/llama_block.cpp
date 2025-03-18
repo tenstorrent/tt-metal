@@ -51,7 +51,7 @@ LlamaBlock::LlamaBlock(
         .num_heads = num_heads,
         .num_groups = num_groups,
         .dropout_prob = dropout_prob,
-        .embedding = std::make_shared<RotaryEmbedding>(rope_params),
+        .rope_params = &rope_params,
     });
 
     create_name("llama_block");
