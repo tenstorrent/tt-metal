@@ -30,7 +30,8 @@ void issue_record_event_commands(
     SystemMemoryManager& manager,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
-    bool notify_host) {
+    bool notify_host,
+    bool clear_count) {
     std::vector<uint32_t> event_payload(DispatchSettings::EVENT_PADDED_SIZE / sizeof(uint32_t), 0);
     event_payload[0] = event_id;
 
@@ -70,7 +71,7 @@ void issue_record_event_commands(
         /* write_barrier ensures that all writes initiated by the dispatcher are
                                         flushed before the event is recorded */
         command_sequence.add_dispatch_wait(
-            CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM |
+            CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | (clear_count ? CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM : 0) |
                 ((i == num_worker_counters - 1) ? CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER : 0),
             0,
             DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(offset_index),

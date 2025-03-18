@@ -31,7 +31,8 @@ void issue_record_event_commands(
     SystemMemoryManager& manager,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
-    bool notify_host = true);
+    bool notify_host = true,
+    bool clear_count = false);
 
 void issue_wait_for_event_commands(
     uint8_t cq_id, uint8_t event_cq_id, SystemMemoryManager& sysmem_manager, uint32_t event_id);

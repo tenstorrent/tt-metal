@@ -364,10 +364,6 @@ TEST_F(MeshWorkloadTestTG, SimultaneousMeshWorkloads) {
 }
 
 TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkload) {
-    // TODO: #19149 - Re-enable the test.
-    if (mesh_device_->num_devices() == 1) {
-        GTEST_SKIP() << "Skipping test for a unit-size mesh device";
-    }
     uint32_t num_programs = 60;
     uint32_t num_iterations = 1500;
     auto random_seed = 10;
