@@ -405,7 +405,6 @@ bool MeshDevice::close() {
     sub_device_manager_tracker_.reset();
     scoped_devices_.reset();
     parent_mesh_.reset();
-    view_.reset();
     return true;
 }
 

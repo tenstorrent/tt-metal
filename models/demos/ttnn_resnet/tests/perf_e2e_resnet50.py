@@ -286,8 +286,7 @@ def run_perf_resnet(
     if device_batch_size <= 2:
         pytest.skip("Batch size 1 and 2 are not supported with sharded data")
 
-    is_mesh_device = isinstance(device, ttnn.MeshDevice)
-    num_devices = device.get_num_devices() if is_mesh_device else 1
+    num_devices = device.get_num_devices()
     batch_size = device_batch_size * num_devices
     first_key = f"first_iter_batchsize{batch_size}"
     second_key = f"second_iter_batchsize{batch_size}"

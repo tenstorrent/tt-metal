@@ -462,16 +462,20 @@ std::string to_string(
                 return detail::to_string(buffer, shape, strides, dtype, layout);
             },
             [&](const DeviceStorage& storage) -> std::string {
+                auto cpu_tensor = tensor.cpu();
                 if (storage.mesh_buffer == nullptr) {
                     // Use owned buffer path above.
-                    return to_string<T>(tensor.cpu());
+                    return to_string<T>(cpu_tensor);
                 }
 
                 auto* mesh_device = storage.mesh_buffer->device();
+                if (mesh_device->num_devices() == 1) {
+                    return to_string<T>(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
+                }
                 const auto& specs = storage.specs;
                 auto specs_it = specs.begin();
                 std::stringstream ss;
-                apply(tensor.cpu(), [&](const Tensor& device_shard) {
+                apply(cpu_tensor, [&](const Tensor& device_shard) {
                     const distributed::MeshCoordinate coord = (specs_it++)->first;
                     ss << "device_id: " << mesh_device->get_device(coord)->id() << ", " << coord << std::endl;
                     ss << to_string<T>(device_shard) << std::endl;

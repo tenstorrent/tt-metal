@@ -258,8 +258,7 @@ class ResNet50TestInfra:
         self.ops_parallel_config = {}
 
     def get_mesh_mappers(self, device):
-        is_mesh_device = isinstance(device, ttnn.MeshDevice)
-        if is_mesh_device:
+        if device.get_num_devices() != 1:
             inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
             weights_mesh_mapper = None  # ttnn.ReplicateTensorToMesh(device) causes unnecessary replication/takes more time on the first pass
             output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)

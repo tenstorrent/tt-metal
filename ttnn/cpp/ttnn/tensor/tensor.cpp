@@ -48,7 +48,11 @@ Tensor create_owned_tensor_from_row_major_data(
     Tensor output(OwnedStorage{owned_buffer::create(std::move(physical_data))}, spec);
 
     if (device.has_value()) {
-        output = output.to_device(device->get_devices(), spec.memory_config());
+        if (auto mesh_device = device->get_mesh_device()) {
+            output = output.to_device(mesh_device, spec.memory_config());
+        } else {
+            output = output.to_device(device->get_devices(), spec.memory_config());
+        }
     }
 
     return output;
@@ -546,6 +550,9 @@ template std::vector<uint16_t> Tensor::to_vector<uint16_t>() const;
 template std::vector<uint32_t> Tensor::to_vector<uint32_t>() const;
 
 Tensor Tensor::to_device(IDevice* target_device, const MemoryConfig& mem_config, QueueId cq_id) const {
+    if (auto mesh_device = dynamic_cast<distributed::MeshDevice*>(target_device)) {
+        return to_device(mesh_device, mem_config, cq_id);
+    }
     return tensor_ops::tensor_to_device(*this, target_device, mem_config, cq_id);
 }
 
@@ -554,6 +561,11 @@ Tensor Tensor::to_device(distributed::MeshDevice* mesh_device, const MemoryConfi
 }
 
 Tensor Tensor::to_device(const std::vector<IDevice*>& workers, const MemoryConfig& mem_config, QueueId cq_id) const {
+    if (workers.size() == 1) {
+        if (auto mesh_device = dynamic_cast<distributed::MeshDevice*>(workers[0])) {
+            return to_device(mesh_device, mem_config, cq_id);
+        }
+    }
     return tensor_ops::tensor_to_device(*this, workers, mem_config, cq_id);
 }
 
