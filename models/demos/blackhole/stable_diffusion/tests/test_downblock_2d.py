@@ -1,0 +1,1 @@
+../../../wormhole/stable_diffusion/tests/test_downblock_2d.py

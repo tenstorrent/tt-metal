@@ -71,12 +71,5 @@ run_python_model_tests_slow_runtime_mode_wormhole_b0() {
 }
 
 run_python_model_tests_blackhole() {
-    SLOW_MATMULS=1 pytest models/demos/wormhole/stable_diffusion/tests/test_basic_transformer_block.py
-    SLOW_MATMULS=1 pytest models/demos/wormhole/stable_diffusion/tests/test_cross_attention.py
-    SLOW_MATMULS=1 pytest models/demos/wormhole/stable_diffusion/tests/test_downblock_2d.py
-    SLOW_MATMULS=1 pytest models/demos/wormhole/stable_diffusion/tests/test_downsample_2d.py
-    SLOW_MATMULS=1 pytest models/demos/wormhole/stable_diffusion/tests/test_embedding.py
-    SLOW_MATMULS=1 pytest models/demos/wormhole/stable_diffusion/tests/test_feedforward.py
-    SLOW_MATMULS=1 pytest models/demos/wormhole/stable_diffusion/tests/test_geglu.py
-    SLOW_MATMULS=1 pytest models/demos/wormhole/stable_diffusion/tests/test_upblock_2d.py
+    SLOW_MATMULS=1 pytest models/demos/blackhole/stable_diffusion/tests
 }
