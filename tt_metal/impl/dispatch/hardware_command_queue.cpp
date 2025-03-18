@@ -157,13 +157,13 @@ void HWCommandQueue::increment_num_entries_in_completion_q() {
     // that there is work in the completion queue to process
     std::lock_guard lock(completion_q_count_mutex_);
     num_outstanding_in_completion_q_++;
-    completion_q_count_cv_.notify_all();
+    completion_q_nonempty_cv_.notify_one();
 }
 
 void HWCommandQueue::set_exit_condition() {
     std::lock_guard lock(this->completion_q_count_mutex_);
     this->exit_condition_ = true;
-    this->completion_q_count_cv_.notify_all();
+    this->completion_q_nonempty_cv_.notify_one();
 }
 
 IDevice* HWCommandQueue::device() { return this->device_; }
@@ -454,7 +454,7 @@ void HWCommandQueue::read_completion_queue() {
         uint32_t num_events_to_read = 0;
         {
             std::unique_lock<std::mutex> lock(this->completion_q_count_mutex_);
-            this->completion_q_count_cv_.wait(
+            this->completion_q_nonempty_cv_.wait(
                 lock, [this] { return num_outstanding_in_completion_q_ > 0 or exit_condition_; });
             num_events_to_read = num_outstanding_in_completion_q_.load();
         }
@@ -495,7 +495,7 @@ void HWCommandQueue::read_completion_queue() {
             {
                 std::unique_lock<std::mutex> lock(completion_q_count_mutex_);
                 num_outstanding_in_completion_q_ -= num_events_to_read;
-                completion_q_count_cv_.notify_all();
+                completion_q_empty_cv_.notify_one();
             }
         } else if (this->exit_condition_) {
             return;
@@ -522,7 +522,7 @@ void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
         }
     } else {
         std::unique_lock<std::mutex> lock(completion_q_count_mutex_);
-        this->completion_q_count_cv_.wait(lock, [this] { return num_outstanding_in_completion_q_ == 0; });
+        this->completion_q_empty_cv_.wait(lock, [this] { return num_outstanding_in_completion_q_ == 0; });
     }
 }
 

@@ -113,7 +113,8 @@ private:
                                                              // command is expected back in the completion queue
                                                              // and completion queue reader thread decrements this after
                                                              // reading an entry out of the completion queue
-    std::condition_variable completion_q_count_cv_;
+    std::condition_variable completion_q_empty_cv_;
+    std::condition_variable completion_q_nonempty_cv_;
 
     CoreType get_dispatch_core_type();
 
