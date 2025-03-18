@@ -45,7 +45,6 @@ jobs:
         ARCH_NAME: ${{ matrix.test-group.arch }}
         LOGURU_LEVEL: INFO
         LD_LIBRARY_PATH: /work/build/lib
-        DONT_USE_VIRTUAL_ENVIRONMENT: 1
         GITHUB_ACTIONS: true
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -64,25 +63,20 @@ jobs:
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
       - name: ⬇️ Download Build
         uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
           name: ${{ inputs.build-artifact-name }}
-          path: docker-job
+          path: /work
       - name: Extract files
         run: tar -xvf ttm_any.tar
       - name: Run demo regression tests
         timeout-minutes: 90
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          source ${{ github.workspace }}/tests/scripts/single_card/run_single_card_demo_tests.sh
+          ./tests/scripts/single_card/run_single_card_demo_tests.sh
           ${{ matrix.test-group.cmd }}
       - name: Save environment data
         if: ${{ matrix.test-group.name == 'N300_performance' && !cancelled() }}
-        env:
-          PYTHONPATH: ${{ github.workspace }}
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
           python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
       - name: Upload benchmark data
         if: ${{ matrix.test-group.name == 'N300_performance' && !cancelled() }}
