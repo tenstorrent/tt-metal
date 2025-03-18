@@ -46,7 +46,7 @@ on:
             - "amd64"
 
 env:
-  IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-${{ inputs.architecture }}
+  IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-dev-${{ inputs.architecture }}
 
 jobs:
   check-docker-images:
@@ -117,3 +117,30 @@ jobs:
           build-args: UBUNTU_VERSION=${{ inputs.version }}
           cache-to: type=inline
           pull: true
+
+  # Cannot use needs.build-docker-image to ensure this job runs sequentially after the build job because it would break when the build job is skipped
+  # Instead, this setup causes the tag-latest job to lag one run behind the actual build.
+  # However, this isn't a huge issue because the image should already have been built on a branch before merging, and if it wasn't (like in a push scenario),
+  # the problem would self-correct on the next merge to main, which happens frequently.
+  tag-latest:
+    name: "🔄 Update latest tag"
+    needs: check-docker-images
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check-docker-images.outputs.ci-build-exists == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag and push latest
+        run: |
+          IMAGE_REPO="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.IMAGE_NAME }}"
+          LATEST_TAG="${IMAGE_REPO}:latest"
+          BUILD_TAG="${{ needs.check-docker-images.outputs.ci-build-tag }}"
+          echo "Tagging ${BUILD_TAG} as ${LATEST_TAG}"
+          docker pull ${BUILD_TAG}
+          docker tag ${BUILD_TAG} ${LATEST_TAG}
+          docker push ${LATEST_TAG}

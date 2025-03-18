@@ -5,7 +5,7 @@
 #pragma once
 
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/overloaded.hpp>
+#include <tt_stl/overloaded.hpp>
 #include <optional>
 #include <random>
 #include <ttnn/tensor/host_buffer/functions.hpp>

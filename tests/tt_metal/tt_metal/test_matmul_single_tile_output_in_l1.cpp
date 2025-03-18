@@ -9,8 +9,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/allocator.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -129,12 +130,12 @@ int main(int argc, char** argv) {
             0,
             100,
             std::chrono::system_clock::now().time_since_epoch().count());
-        auto activations_tile_layout = convert_to_tile_layout(tensor.get_values());
+        auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(tensor.get_values()));
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         tt_metal::detail::WriteToBuffer(src0_dram_buffer, activations);
 
         auto identity = create_identity_matrix(32, 32, 32);  // bflaot16 32x32 identity
-        auto weights_tile_layout = convert_to_tile_layout(identity);
+        auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
         tt_metal::detail::WriteToBuffer(src1_dram_buffer, weights);
 
@@ -167,7 +168,7 @@ int main(int argc, char** argv) {
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
         auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-        auto result_flat_layout = convert_to_flat_layout(result_bfp16);
+        auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
         pass &= (tensor.get_values() == result_flat_layout);  // src1 is all 0's
         pass &= tt_metal::CloseDevice(device);
 

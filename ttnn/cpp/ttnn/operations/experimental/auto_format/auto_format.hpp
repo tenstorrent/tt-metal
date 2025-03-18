@@ -27,99 +27,87 @@ private:
     AutoFormat() {}
 
 public:
-    static void SetDefaultDevice(tt::tt_metal::IDevice* dev) { device = dev; }
-    static tt::tt_metal::IDevice* GetDefaultDevice() { return device; }
+    /**
+     * Sets the default device to be used for auto-formatting operations
+     * @param dev Pointer to the device to be used
+     */
+    static void SetDefaultDevice(tt::tt_metal::IDevice* dev);
 
-    static ttnn::Shape pad_to_tile_shape(
-        const ttnn::Shape& unpadded_shape,
-        bool pad_c = false,
-        bool pad_n = false,
-        bool pad_h = true,
-        bool pad_w = true) {
-        using namespace tt::constants;
-        auto rank = unpadded_shape.rank();
-        TT_ASSERT(rank >= 1, "rank of shape to pad to tile shape must be at least 1.");
-        SmallVector<uint32_t> padded_shape_vec(rank);
-        for (auto i = 0; i < rank; ++i) {
-            padded_shape_vec[i] = unpadded_shape[i];
-        }
-        if (rank >= 1) {
-            auto w = pad_w ? tt::round_up(unpadded_shape[rank - 1], TILE_WIDTH) : unpadded_shape[rank - 1];
-            padded_shape_vec[rank - 1] = w;
-        }
-        if (rank >= 2) {
-            auto h = pad_h ? tt::round_up(unpadded_shape[rank - 2], TILE_HEIGHT) : unpadded_shape[rank - 2];
-            padded_shape_vec[rank - 2] = h;
-        }
-        if (rank >= 3) {
-            auto c = pad_c ? tt::round_up(unpadded_shape[rank - 3], TILE_WIDTH) : unpadded_shape[rank - 3];
-            padded_shape_vec[rank - 3] = c;
-        }
-        if (rank >= 4) {
-            auto n = pad_n ? tt::round_up(unpadded_shape[rank - 4], TILE_HEIGHT) : unpadded_shape[rank - 4];
-            padded_shape_vec[rank - 4] = n;
-        }
-        return Shape(padded_shape_vec);
-    }
+    /**
+     * Gets the default device used for auto-formatting operations
+     * @return Pointer to the default device
+     */
+    static tt::tt_metal::IDevice* GetDefaultDevice();
 
-    static ttnn::Shape pad_to_rm_shape(const ttnn::Shape& unpadded_shape) {
-        ttnn::Shape padded_shape = unpadded_shape;
-        padded_shape[3] = tt::round_up(unpadded_shape[3], 2);
-        return padded_shape;
-    }
+    /**
+     * Pads a shape to align with tile dimensions
+     * @param unpadded_shape Original shape to be padded
+     * @param pad_c Whether to pad the channel dimension
+     * @param pad_n Whether to pad the batch dimension
+     * @param pad_h Whether to pad the height dimension
+     * @param pad_w Whether to pad the width dimension
+     * @return Padded shape aligned to tile dimensions
+     */
+    static ttnn::Shape pad_to_tile_shape(const ttnn::Shape& unpadded_shape);
 
-    static ttnn::Shape pad_to_legal_shape(const ttnn::Shape& unpadded_shape, tt::tt_metal::Layout layout) {
-        ttnn::Shape padded_shape = unpadded_shape;
-        switch (layout) {
-            case tt::tt_metal::Layout::ROW_MAJOR: padded_shape = pad_to_rm_shape(unpadded_shape); break;
-            case tt::tt_metal::Layout::TILE: padded_shape = pad_to_tile_shape(unpadded_shape);
-            default: break;
-        }
-        return padded_shape;
-    }
-
-    // TODO: These legal checks should probably be somewhere else like tensor class, since it is common logic not just
-    // for autoformat
-    static bool legal_tile_shape(const ttnn::Shape& shape) {
-        return (shape[2] % tt::constants::TILE_HEIGHT == 0 && shape[3] % tt::constants::TILE_WIDTH == 0);
-    }
-
-    static bool legal_rm_shape(const ttnn::Shape& shape) { return (shape[3] % 2 == 0); }
-
-    static bool legal_device_shape(const ttnn::Shape& shape, tt::tt_metal::Layout layout) {
-        switch (layout) {
-            case tt::tt_metal::Layout::ROW_MAJOR: return legal_rm_shape(shape);
-            case tt::tt_metal::Layout::TILE: return legal_tile_shape(shape);
-            default: return true;
-        }
-    }
-
+    /**
+     * Checks if a tensor matches the required format specifications
+     * @param a Input tensor to check
+     * @param shape Required shape
+     * @param target_layout Required layout
+     * @return True if tensor matches all format requirements
+     */
     static bool check_input_tensor_format(
-        const Tensor& a, const ttnn::Shape& shape, tt::tt_metal::Layout target_layout = tt::tt_metal::Layout::TILE) {
-        if (a.get_layout() == target_layout && a.get_padded_shape() == shape &&
-            a.storage_type() == tt::tt_metal::StorageType::DEVICE) {
-            return true;
-        }
-        return false;
-    }
+        const Tensor& a, const ttnn::Shape& shape, tt::tt_metal::Layout target_layout = tt::tt_metal::Layout::TILE);
 
     // This code is a workaround for cases where we need to remove autoformat but other dependent ops
     // are not quite ready. So here we basically just put the tensor back on device.
     // Used in backward_ops.cpp
     // See: Remove auto format within permute_op.cpp #9404
+    /**
+     * Moves a tensor to device memory and pads if necessary
+     * @param input Input tensor
+     * @param device Target device
+     * @param target_layout Desired layout
+     * @param target_mem_config Optional memory configuration
+     * @return Formatted tensor on device
+     */
     static Tensor move_tensor_to_device_and_pad(
         const Tensor& input,
         tt::tt_metal::IDevice* device,
         tt::tt_metal::Layout target_layout,
         std::optional<tt::tt_metal::MemoryConfig> target_mem_config);
 
+    /**
+     * Moves a tensor to device memory
+     * @param input Input tensor
+     * @param device Target device
+     * @param mem_config Memory configuration
+     * @return Tensor on device
+     */
     static Tensor move_tensor_to_device(
         const Tensor& input,
         tt::tt_metal::IDevice* device,
         const tt::tt_metal::MemoryConfig& mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
+    /**
+     * Updates tensor memory configuration
+     * @param input Input tensor
+     * @param mem_config Target memory configuration
+     * @return Tensor with updated memory configuration
+     */
     static Tensor move_tensor_to_mem_config(const Tensor& input, const tt::tt_metal::MemoryConfig& mem_config);
 
+    /**
+     * Formats an input tensor to meet device and layout requirements
+     * @param input Input tensor
+     * @param device Target device
+     * @param padded_shape Required padded shape
+     * @param pad_value Value to use for padding
+     * @param target_layout Desired layout
+     * @param target_mem_config Optional memory configuration
+     * @return Formatted tensor
+     */
     static Tensor format_input_tensor(
         const Tensor& input,
         tt::tt_metal::IDevice* device,
@@ -128,6 +116,15 @@ public:
         tt::tt_metal::Layout target_layout,
         std::optional<tt::tt_metal::MemoryConfig> target_mem_config = std::nullopt);
 
+    /**
+     * Formats an output tensor to meet shape and layout requirements
+     * @param output Output tensor
+     * @param shape Target shape
+     * @param device Target device
+     * @param target_layout Desired layout
+     * @param target_mem_config Optional memory configuration
+     * @return Formatted output tensor
+     */
     static Tensor format_output_tensor(
         const Tensor& output,
         const ttnn::Shape& shape,

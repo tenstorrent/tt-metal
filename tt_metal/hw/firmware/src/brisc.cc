@@ -7,6 +7,7 @@
 #include <cstdint>
 
 // clang-format off
+#undef PROFILE_NOC_EVENTS
 #include "risc_common.h"
 #include "tensix.h"
 #include "tensix_types.h"
@@ -24,6 +25,7 @@
 #include "circular_buffer_init.h"
 #include "dataflow_api.h"
 #include "dev_mem_map.h"
+#include "noc_overlay_parameters.h"
 
 #include "debug/watcher_common.h"
 #include "debug/waypoint.h"
@@ -60,6 +62,10 @@ volatile tt_l1_ptr uint32_t* mailbox[MAX_THREADS];
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
+uint8_t my_logical_x_ __attribute__((used));
+uint8_t my_logical_y_ __attribute__((used));
+uint8_t my_relative_x_ __attribute__((used));
+uint8_t my_relative_y_ __attribute__((used));
 
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
@@ -379,6 +385,9 @@ int main() {
 
     mailboxes->launch_msg_rd_ptr = 0; // Initialize the rdptr to 0
     noc_index = 0;
+    my_logical_x_ = mailboxes->core_info.absolute_logical_x;
+    my_logical_y_ = mailboxes->core_info.absolute_logical_y;
+
     risc_init();
     device_setup();
 
@@ -435,22 +444,11 @@ int main() {
                 // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently guaranteed
                 // to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid value.
                 // For future proofing, the noc_index value is initialized to 0, to ensure an invalid NOC txn is not issued.
-                uint64_t dispatch_addr = NOC_XY_ADDR(
-                    NOC_X(mailboxes->go_message.master_x),
-                    NOC_Y(mailboxes->go_message.master_y),
-                    DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
+                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
                 mailboxes->go_message.signal = RUN_MSG_DONE;
                 // Notify dispatcher that this has been done
                 DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
-                noc_fast_atomic_increment(
-                    noc_index,
-                    NCRISC_AT_CMD_BUF,
-                    dispatch_addr,
-                    NOC_UNICAST_WRITE_VC,
-                    1,
-                    31 /*wrap*/,
-                    false /*linked*/,
-                    post_atomic_increments /*posted*/);
+                notify_dispatch_core_done(dispatch_addr, noc_index);
             }
         }
 
@@ -488,6 +486,8 @@ int main() {
 
             noc_index = launch_msg_address->kernel_config.brisc_noc_id;
             noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
+            my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
+            my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
 
             // re-initialize the NoCs
             uint8_t cmd_buf;
@@ -583,24 +583,13 @@ int main() {
                 // Set launch message to invalid, so that the next time this slot is encountered, kernels are only run if a valid launch message is sent.
                 launch_msg_address->kernel_config.enables = 0;
                 launch_msg_address->kernel_config.preload = 0;
-                uint64_t dispatch_addr = NOC_XY_ADDR(
-                    NOC_X(mailboxes->go_message.master_x),
-                    NOC_Y(mailboxes->go_message.master_y),
-                    DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
+                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
                 DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                 // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid launch
                 // messages in the ring buffer. Must be executed before the atomic increment, as after that the launch
                 // message is no longer owned by us.
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
-                noc_fast_atomic_increment(
-                    noc_index,
-                    NCRISC_AT_CMD_BUF,
-                    dispatch_addr,
-                    NOC_UNICAST_WRITE_VC,
-                    1,
-                    31 /*wrap*/,
-                    false /*linked*/,
-                    post_atomic_increments /*posted*/);
+                notify_dispatch_core_done(dispatch_addr, noc_index);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
         }

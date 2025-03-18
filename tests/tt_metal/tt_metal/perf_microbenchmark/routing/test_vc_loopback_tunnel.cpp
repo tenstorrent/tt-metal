@@ -4,18 +4,18 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/rtoptions.hpp>
+#include "rtoptions.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include <tt-metalium/device.hpp>
 #include "test_common.hpp"
 #include "routing_test_common.hpp"
 
-using std::vector;
-using namespace tt;
-using json = nlohmann::json;
-
 int main(int argc, char **argv) {
+    using std::vector;
+    using namespace tt;
+    using namespace tt::packet_queue;
+    using json = nlohmann::json;
 
     constexpr uint32_t default_tx_x = 0;
     constexpr uint32_t default_tx_y = 0;

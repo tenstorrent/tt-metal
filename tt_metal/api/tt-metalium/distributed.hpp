@@ -12,11 +12,7 @@
 
 namespace tt::tt_metal {
 
-inline namespace v0 {
-
 class IDevice;
-
-}  // namespace v0
 
 namespace distributed {
 

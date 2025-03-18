@@ -76,6 +76,7 @@ ub_runtime_packages()
 {
     UB_RUNTIME_LIST=(\
      python3-pip \
+     python3-venv \
      libhwloc-dev \
      libnuma-dev \
      libc++-17-dev \

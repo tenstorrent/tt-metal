@@ -9,6 +9,12 @@ endif()
 # Project setup
 ############################################
 
+# For single-config generators, default to RelWithDebInfo if unspecified
+get_property(isMultiConfig GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(NOT isMultiConfig)
+    set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type")
+endif()
+
 list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(version)
 ParseGitDescribe()
@@ -23,6 +29,11 @@ project(
 )
 message(STATUS "Metalium version: ${PROJECT_VERSION}")
 message(STATUS "Building Unified Library for all architectures, thanks to blozano-tt")
+
+# Defining build types is the pervue of the top-level project
+if(PROJECT_IS_TOP_LEVEL)
+    include(sanitizers)
+endif()
 
 if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
     message(
@@ -56,36 +67,21 @@ include(CTest)
 get_property(isMultiConfig GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 
 # Global settings if we're the top-level project
-if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-    set(CMAKE_CONFIGURATION_TYPES
-        Release
-        RelWithDebInfo
-        Debug
-        CI
-    )
-    if(NOT CMAKE_BUILD_TYPE AND NOT isMultiConfig)
-        message(STATUS "Setting build type to 'Release' as none was specified.")
-        set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Release build is the default" FORCE)
-    endif()
-
+if(PROJECT_IS_TOP_LEVEL)
     set_property(
         GLOBAL
         PROPERTY
             GLOBAL_DEPENDS_NO_CYCLES
-                FALSE #FIXME(14541): We've got work to do :(
+                TRUE
     )
 
     if(ENABLE_CCACHE)
-        include(cmake/ccache.cmake)
+        include(ccache)
     endif()
 endif()
 
 include(compilers)
 CHECK_COMPILERS()
-
-if(NOT isMultiConfig AND NOT CMAKE_BUILD_TYPE IN_LIST CMAKE_CONFIGURATION_TYPES)
-    message(FATAL_ERROR "Invalid build type: ${CMAKE_BUILD_TYPE}. Valid options are: ${CMAKE_CONFIGURATION_TYPES}")
-endif()
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
@@ -257,6 +253,7 @@ include(tracy)
 # Build subdirectories
 ############################################################################################################################
 
+add_subdirectory(tt_stl)
 add_subdirectory(tt_metal)
 add_subdirectory(ttnn)
 

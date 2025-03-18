@@ -5,7 +5,7 @@
 #pragma once
 
 #include "dispatch_fixture.hpp"
-#include <tt-metalium/env_lib.hpp>
+#include "env_lib.hpp"
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>

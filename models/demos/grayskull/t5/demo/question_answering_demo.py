@@ -17,7 +17,6 @@ from models.demos.grayskull.t5.tt import ttnn_optimized_functional_t5
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.utility_functions import (
-    disable_compilation_reports,
     disable_persistent_kernel_cache,
     profiler,
 )
@@ -363,7 +362,6 @@ def test_functional_t5_demo(
     device, use_program_cache, batch_size, sequence_length, max_tokens, model_name, input_path, use_optimized_version
 ):
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     return run_functional_t5_question_and_answering_inference(
         device, batch_size, sequence_length, max_tokens, model_name, input_path, use_optimized_version
@@ -378,7 +376,6 @@ def test_functional_t5_demo_squadv2(
     device, use_program_cache, batch_size, sequence_length, max_tokens, model_name, use_optimized_version
 ):
     disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     return run_functional_t5_question_and_answering_inference_squadv2(
         device, batch_size, sequence_length, max_tokens, model_name, use_optimized_version

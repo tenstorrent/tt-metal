@@ -12,10 +12,12 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/semaphore.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/blockfloat/blockfloat_common.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/blockfloat/bfloat4.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/blockfloat/bfloat8.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/blockfloat/bfloat16.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/blockfloat_common.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat4.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat8.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat16.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tile.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tilize_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list.cpp
@@ -25,6 +27,8 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/l1_banking_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/dispatch.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/profiler/tt_metal_profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/debug_tools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/device_command.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/host_runtime_commands.cpp
@@ -49,6 +53,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/demux.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/eth_router.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/eth_tunneler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/fabric_router_vc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/util/dispatch_settings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_server.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/noc_logging.cpp
@@ -66,6 +71,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/program_types_from_flatbuffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/program_types_to_flatbuffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_replay.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_replay_impl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_capture.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_capture_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/host_api_capture_helpers.cpp
@@ -112,6 +118,7 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/debug
+        ${CMAKE_CURRENT_SOURCE_DIR}/profiler
         ${PROJECT_SOURCE_DIR}/tt_metal/include
     PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers

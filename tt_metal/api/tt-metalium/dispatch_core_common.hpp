@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "core_descriptor.hpp"
+#include "assert.hpp"
 #include "core_coord.hpp"
 #include "data_types.hpp"
-#include "reflection.hpp"
+#include <tt_stl/reflection.hpp>
 
 #include <umd/device/tt_core_coordinates.h>  // CoreType
 
@@ -31,7 +31,8 @@ enum DispatchWorkerType : uint32_t {
     US_TUNNELER_REMOTE = 14,
     PACKET_ROUTER_MUX = 15,
     PACKET_ROUTER_DEMUX = 16,
-    COUNT = 17
+    FABRIC_ROUTER_VC = 17,
+    COUNT,
 };
 
 enum class DispatchCoreType : uint32_t { WORKER, ETH, COUNT };
@@ -73,6 +74,10 @@ public:
 
     bool operator==(const DispatchCoreConfig& other) const { return (type_ == other.type_) && (axis_ == other.axis_); }
 };
+
+// Helper functions to get the dispatch core config/type
+DispatchCoreConfig get_dispatch_core_config();
+CoreType get_dispatch_core_type();
 
 }  // namespace tt::tt_metal
 

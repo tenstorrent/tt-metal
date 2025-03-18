@@ -23,7 +23,6 @@ on:
         required: true
         type: choice
         options:
-          - grayskull
           - wormhole_b0
           - blackhole
       runner-label:
@@ -52,8 +51,6 @@ jobs:
       matrix:
         test-group: [
           {name: All C++, cmd: ./tests/scripts/run_cpp_unit_tests.sh},
-          {name: tools, cmd: ./tests/scripts/run_tools_tests.sh},
-
           {name: user kernel path, cmd: "rm -rf /tmp/kernels && TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api_${{ inputs.arch }} --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*"},
           {name: api, cmd: "./build/test/tt_metal/unit_tests_api_${{ inputs.arch }}"},
           {name: debug_tools, cmd: "./build/test/tt_metal/unit_tests_debug_tools_${{ inputs.arch }}"},

@@ -45,6 +45,8 @@ struct ReadBufferDescriptor {
         starting_host_page_id(starting_host_page_id) {}
 };
 
+using CompletionReaderVariant = std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor>;
+
 // Contains helper functions to interface with buffers on device
 namespace buffer_dispatch {
 
@@ -57,14 +59,43 @@ struct BufferReadDispatchParams {
     uint32_t unpadded_dst_offset = 0;
     uint32_t pages_per_txn = 0;
     uint32_t address = 0;
+    uint32_t total_pages_to_read = 0;
+    uint32_t total_pages_read = 0;
+    uint32_t num_banks = 0;
+
+    virtual ~BufferReadDispatchParams() = default;
+
+    virtual void update_params_to_be_within_bounds(const Buffer& buffer) {
+        const uint32_t num_pages_per_bank = this->src_page_index / this->num_banks;
+        this->address += num_pages_per_bank * this->padded_page_size;
+        this->src_page_index = this->src_page_index % this->num_banks;
+    }
+
+    virtual void calculate_num_pages_for_read_transaction() { this->pages_per_txn = this->total_pages_to_read; }
+
+    virtual void update_params_after_read_transaction() {
+        this->total_pages_to_read -= this->pages_per_txn;
+        this->total_pages_read += this->pages_per_txn;
+        this->src_page_index += this->pages_per_txn;
+    }
 };
+
+struct PartialPageSpec {
+    uint32_t partial_page_size = 0;
+    uint32_t num_partial_pages_per_full_page = 0;
+};
+
+struct BufferReadLargePageDispatchParams : BufferReadDispatchParams {
+    PartialPageSpec partial_page_spec;
+};
+
+using BufferReadDispatchParamsVariant = std::variant<BufferReadDispatchParams, BufferReadLargePageDispatchParams>;
 
 struct ShardedBufferReadDispatchParams : BufferReadDispatchParams {
     bool width_split = false;
     uint32_t initial_pages_skipped = 0;
     uint32_t starting_src_host_page_index = 0;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping = nullptr;
-    uint32_t total_pages_to_read = 0;
     uint32_t total_pages_read = 0;
     uint32_t max_pages_per_shard = 0;
     CoreCoord core;
@@ -85,7 +116,7 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     const BufferRegion& region);
 
-BufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
+BufferReadDispatchParamsVariant initialize_interleaved_buf_read_dispatch_params(
     Buffer& buffer,
     uint32_t cq_id,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
@@ -111,7 +142,7 @@ void copy_completion_queue_data_into_user_space(
     uint16_t channel,
     uint32_t cq_id,
     SystemMemoryManager& sysmem_manager,
-    volatile bool& exit_condition);
+    std::atomic<bool>& exit_condition);
 
 std::vector<CoreCoord> get_cores_for_sharded_buffer(
     bool width_split, const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping, Buffer& buffer);
@@ -123,8 +154,11 @@ tt::stl::Span<const SubDeviceId> select_sub_device_ids(
 std::shared_ptr<::tt::tt_metal::CompletionReaderVariant> generate_sharded_buffer_read_descriptor(
     void* dst, ShardedBufferReadDispatchParams& dispatch_params, Buffer& buffer);
 std::shared_ptr<::tt::tt_metal::CompletionReaderVariant> generate_interleaved_buffer_read_descriptor(
-    void* dst, BufferReadDispatchParams& dispatch_params, Buffer& buffer);
+    void* dst, BufferReadDispatchParams* dispatch_params, Buffer& buffer);
 
+bool are_pages_larger_than_max_prefetch_cmd_size(const Buffer& buffer);
+
+PartialPageSpec calculate_partial_page_spec(const Buffer& buffer);
 }  // namespace buffer_dispatch
 
 }  // namespace tt::tt_metal

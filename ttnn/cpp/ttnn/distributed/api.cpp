@@ -6,9 +6,11 @@
 
 #include <memory>
 
-#include <tt-metalium/overloaded.hpp>
+#include <tt_stl/overloaded.hpp>
+#include "tt-metalium/assert.hpp"
 #include "tt-metalium/mesh_coord.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include <tt-metalium/mesh_device.hpp>
@@ -93,7 +95,25 @@ Tensor aggregate_as_tensor(
         }
         auto storage = MultiDeviceHostStorage{config, std::move(host_owned_buffers), specs};
         return Tensor(std::move(storage), reference_shard.get_tensor_spec());
+    } else if (storage_type == StorageType::BORROWED) {
+        std::vector<ttnn::TensorSpec> specs;
+        std::vector<OwnedBuffer> host_owned_buffers;
+        for (const auto& shard : tensor_shards) {
+            auto buffer = std::get<BorrowedStorage>(shard.get_storage()).buffer;
+            specs.push_back(shard.get_tensor_spec());
+
+            auto visitor = tt::stl::overloaded{[&shard, &host_owned_buffers](const auto& buffer) -> OwnedBuffer {
+                using BorrowedBufferType = std::vector<typename std::decay_t<decltype(buffer)>::value_type>;
+
+                return owned_buffer::create(BorrowedBufferType(buffer.begin(), buffer.end()));
+            }};
+
+            host_owned_buffers.push_back(std::visit(visitor, buffer));
+        }
+        auto storage = MultiDeviceHostStorage{config, std::move(host_owned_buffers), specs};
+        return Tensor(std::move(storage), reference_shard.get_tensor_spec());
     } else {
+        TT_FATAL(storage_type == StorageType::DEVICE, "Unexpected storage type {}", storage_type);
         std::vector<int> ordered_device_ids;
         std::unordered_map<int, ttnn::TensorSpec> specs;
         std::unordered_map<int, std::shared_ptr<Buffer>> device_buffers;

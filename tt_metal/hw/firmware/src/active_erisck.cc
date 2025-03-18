@@ -17,6 +17,7 @@
 #include "stream_io_map.h"
 #include "tdma_xmov.h"
 #include "debug/dprint.h"
+#include "dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include <kernel_includes.hpp>
 #include <stdint.h>
@@ -31,7 +32,9 @@ void kernel_launch(uint32_t kernel_base_addr) {
 
     {
         DeviceZoneScopedMainChildN("ACTIVE-ERISC-KERNEL");
+        WAYPOINT("K");
         kernel_main();
+        WAYPOINT("KD");
         if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
             WAYPOINT("NKFW");
             // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed and the
@@ -42,6 +45,11 @@ void kernel_launch(uint32_t kernel_base_addr) {
             ASSERT(ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX));
             ASSERT(ncrisc_noc_posted_writes_sent(NOC_INDEX));
             WAYPOINT("NKFD");
+        }
+
+        // Ensure no eth transactions are outstanding
+        for (uint32_t i = 0; i < eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS; i++) {
+            ASSERT(erisc_info->channels[i].bytes_sent == 0);
         }
     }
 }

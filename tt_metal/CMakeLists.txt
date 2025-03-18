@@ -27,8 +27,8 @@ target_sources(
             api/tt-metalium/circular_buffer_constants.h
             api/tt-metalium/dev_msgs.h
             api/tt-metalium/tt_log.h
+            api/tt-metalium/fabric_host_interface.h
             core_descriptors/blackhole_140_arch.yaml
-            core_descriptors/grayskull_120_arch.yaml
             core_descriptors/wormhole_b0_80_arch.yaml
             impl/dispatch/kernels/cq_commands.hpp
             impl/dispatch/kernels/cq_common.hpp
@@ -48,7 +48,6 @@ target_sources(
             include/compute_kernel_api/reg_api.h
             include/compute_kernel_api/tile_move_copy.h
             soc_descriptors/blackhole_140_arch.yaml
-            soc_descriptors/grayskull_120_arch.yaml
             soc_descriptors/wormhole_b0_80_arch.yaml
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel.h
             third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_addrmod.h
@@ -110,18 +109,6 @@ target_sources(
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_unpack_A.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_unpack_AB_matmul.h
             third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_unpack_common.h
-            third_party/tt_llk/tt_llk_grayskull/common/inc/ckernel.h
-            third_party/tt_llk/tt_llk_grayskull/common/inc/ckernel_addrmod.h
-            third_party/tt_llk/tt_llk_grayskull/common/inc/ckernel_defs.h
-            third_party/tt_llk/tt_llk_grayskull/common/inc/ckernel_globals.h
-            third_party/tt_llk/tt_llk_grayskull/common/inc/ckernel_gpr_map.h
-            third_party/tt_llk/tt_llk_grayskull/common/inc/ckernel_include.h
-            third_party/tt_llk/tt_llk_grayskull/common/inc/ckernel_instr_params.h
-            third_party/tt_llk/tt_llk_grayskull/common/inc/ckernel_ops.h
-            third_party/tt_llk/tt_llk_grayskull/common/inc/ckernel_structs.h
-            third_party/tt_llk/tt_llk_grayskull/common/inc/ckernel_template.h
-            third_party/tt_llk/tt_llk_grayskull/common/inc/cunpack_common.h
-            third_party/tt_llk/tt_llk_grayskull/llk_lib/llk_defs.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_addrmod.h
             third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_defs.h
@@ -214,18 +201,16 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         TT::Metalium::HostDevCommon
         Reflect::Reflect
+        TT:STL
     PRIVATE
         Metalium::Metal::Impl
-        Metalium::Metal::STL
         metal_common_libs
-        profiler
         common
         jit_build
         llrt
         detail
         distributed
         fabric
-        HAL::grayskull
         HAL::wormhole
         HAL::blackhole
         FlatBuffers::FlatBuffers
@@ -282,7 +267,6 @@ add_subdirectory(tools)
 add_subdirectory(impl)
 add_subdirectory(detail)
 add_subdirectory(distributed)
-add_subdirectory(tt_stl)
 add_subdirectory(fabric)
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(test)

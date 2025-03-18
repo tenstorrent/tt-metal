@@ -9,23 +9,20 @@
 
 #include "device.hpp"
 #include "hostdevcommon/common_values.hpp"
+#include "hostdevcommon/kernel_structs.h"  // Leaked up to ttnn level from here
 #include "work_executor_types.hpp"
-#include "l1_banking_allocator.hpp"
 #include "data_types.hpp"
 #include "program_device_map.hpp"
-#include "build.hpp"
 #include "hal.hpp"
 #include "command_queue_interface.hpp"
 #include "command_queue.hpp"
 #include "sub_device_manager_tracker.hpp"
 #include "sub_device_types.hpp"
 #include "trace_buffer.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "program_cache.hpp"
 
 namespace tt::tt_metal {
-
-inline namespace v0 {
 
 // A physical PCIexpress Tenstorrent device
 class Device : public IDevice {
@@ -213,8 +210,6 @@ private:
 
     void initialize_default_sub_device_state(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap);
 
-    void update_dispatch_cores_for_multi_cq_eth_dispatch();
-
     void compile_command_queue_programs();
     void configure_command_queue_programs();
     void clear_l1_state();
@@ -244,7 +239,7 @@ private:
     std::vector<std::unique_ptr<Program>> command_queue_programs_;
     bool using_fast_dispatch_ = false;
 
-    // Fabric program includes ethernet router kernel and tensix gatekeeper kernel
+    // Fabric program includes ethernet router kernel
     std::unique_ptr<Program> fabric_program_;
 
     // Work Executor for this device - can asynchronously process host side work for
@@ -275,5 +270,4 @@ private:
         false;  // To avoid spam with warnings about calling Device methods when it's not initialized.
 };
 
-}  // namespace v0
 }  // namespace tt::tt_metal

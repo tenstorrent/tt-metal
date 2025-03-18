@@ -9,6 +9,7 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
@@ -429,14 +430,17 @@ operation::ProgramWithCallbacks downsample_single_core(
     TT_ASSERT(output_shard_height % TILE_HEIGHT == 0);
     uint32_t num_rows_of_output_tiles = output_shard_height / TILE_HEIGHT;
 
-    uint32_t input_cb_index = tt::CBIndex::c_0;
+    uint32_t next_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = num_input_tiles_in_row * num_rows_of_input_tiles;
-    tt::tt_metal::CircularBufferConfig input_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_input_tiles * input_single_tile_size, {{input_cb_index, input_cb_data_format}})
-            .set_page_size(input_cb_index, input_single_tile_size);
-    input_cb_config = input_cb_config.set_globally_allocated_address(*a.buffer());
-    auto input_cb = tt::tt_metal::CreateCircularBuffer(program, core_range, input_cb_config);
+    auto [input_cb_index, input_cb] = tt::tt_metal::create_cb(
+        next_cb_index++,
+        program,
+        core_range,
+        input_single_tile_size,
+        num_input_tiles,
+        input_cb_data_format,
+        a.buffer());
+
     log_debug(
         tt::LogOp,
         "CB {}: PS = {} NP = {} :: TOTAL = {}",
@@ -447,14 +451,18 @@ operation::ProgramWithCallbacks downsample_single_core(
 
     // CB to store halo data
     // hardcode to store 1 row of tiles
-    uint32_t halo_prev_input_cb_index = tt::CBIndex::c_1;
+    uint32_t halo_prev_input_cb_index = next_cb_index++;
     uint32_t halo_prev_input_cb_max_rows_of_tiles = 4;
     uint32_t num_halo_prev_cb_input_tiles = num_input_tiles_in_row * halo_prev_input_cb_max_rows_of_tiles;
-    tt::tt_metal::CircularBufferConfig halo_prev_input_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_halo_prev_cb_input_tiles * input_single_tile_size, {{halo_prev_input_cb_index, input_cb_data_format}})
-            .set_page_size(halo_prev_input_cb_index, input_single_tile_size);
-    auto halo_prev_input_cb = tt::tt_metal::CreateCircularBuffer(program, core_range, halo_prev_input_cb_config);
+
+    tt::tt_metal::create_cb(
+        halo_prev_input_cb_index,
+        program,
+        core_range,
+        input_single_tile_size,
+        num_halo_prev_cb_input_tiles,
+        input_cb_data_format);
+
     log_debug(
         tt::LogOp,
         "CB {}: PS = {} NP = {} :: TOTAL = {}",
@@ -463,14 +471,17 @@ operation::ProgramWithCallbacks downsample_single_core(
         num_halo_prev_cb_input_tiles,
         input_single_tile_size * num_halo_prev_cb_input_tiles);
 
-    uint32_t halo_next_input_cb_index = tt::CBIndex::c_2;
+    uint32_t halo_next_input_cb_index = next_cb_index++;
     uint32_t halo_next_input_cb_max_rows_of_tiles = 33;  // TODO: Remove hardcoding
     uint32_t num_halo_next_cb_input_tiles = num_input_tiles_in_row * halo_next_input_cb_max_rows_of_tiles;
-    tt::tt_metal::CircularBufferConfig halo_next_input_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_halo_next_cb_input_tiles * input_single_tile_size, {{halo_next_input_cb_index, input_cb_data_format}})
-            .set_page_size(halo_next_input_cb_index, input_single_tile_size);
-    auto halo_next_input_cb = tt::tt_metal::CreateCircularBuffer(program, core_range, halo_next_input_cb_config);
+    tt::tt_metal::create_cb(
+        halo_next_input_cb_index,
+        program,
+        core_range,
+        input_single_tile_size,
+        num_halo_next_cb_input_tiles,
+        input_cb_data_format);
+
     log_debug(
         tt::LogOp,
         "CB {}: PS = {} NP = {} :: TOTAL = {}",
@@ -482,13 +493,10 @@ operation::ProgramWithCallbacks downsample_single_core(
     // CB to store reader pattern array
     // read pattern array size == output_height
     uint32_t reader_pattern_array_size = output_shard_height;
-    uint32_t reader_pattern_array_cb_index = tt::CBIndex::c_25;
-    tt::tt_metal::CircularBufferConfig reader_pattern_array_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            reader_pattern_array_size * 4, {{reader_pattern_array_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(reader_pattern_array_cb_index, 4);
-    auto reader_pattern_array_cb =
-        tt::tt_metal::CreateCircularBuffer(program, core_range, reader_pattern_array_cb_config);
+    uint32_t reader_pattern_array_cb_index = next_cb_index++;
+    tt::tt_metal::create_cb(
+        reader_pattern_array_cb_index, program, core_range, 4, reader_pattern_array_size, tt::DataFormat::Float16_b);
+
     log_debug(
         tt::LogOp,
         "CB {}: PS = {} NP = {} :: TOTAL = {}",
@@ -498,13 +506,16 @@ operation::ProgramWithCallbacks downsample_single_core(
         4 * reader_pattern_array_size);
 
     // untilized CB has size - [32, full width]
-    uint32_t untilize_cb_index = tt::CBIndex::c_26;
+    uint32_t untilize_cb_index = next_cb_index++;
     uint32_t num_tiles_untilize_cb = num_input_tiles_in_row;
-    tt::tt_metal::CircularBufferConfig untilize_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_tiles_untilize_cb * untilized_single_tile_size, {{untilize_cb_index, untilized_cb_data_format}})
-            .set_page_size(untilize_cb_index, untilized_single_tile_size);
-    auto untilize_cb = tt::tt_metal::CreateCircularBuffer(program, core_range, untilize_cb_config);
+    tt::tt_metal::create_cb(
+        untilize_cb_index,
+        program,
+        core_range,
+        untilized_single_tile_size,
+        num_tiles_untilize_cb,
+        untilized_cb_data_format);
+
     log_debug(
         tt::LogOp,
         "CB {}: PS = {} NP = {} :: TOTAL = {}",
@@ -514,16 +525,18 @@ operation::ProgramWithCallbacks downsample_single_core(
         untilized_single_tile_size * num_tiles_untilize_cb);
 
     uint32_t num_output_tiles = num_output_tiles_in_row * num_rows_of_output_tiles;
-    uint32_t untilize_downsampled_cb_index = tt::CBIndex::c_27;
+    uint32_t untilize_downsampled_cb_index = next_cb_index++;
     uint32_t num_tiles_untilize_downsampled_cb =
         num_output_tiles;  // untilize downsampled cb size == output size per core
-    tt::tt_metal::CircularBufferConfig untilize_downsampled_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_tiles_untilize_downsampled_cb * untilized_single_tile_size,
-            {{untilize_downsampled_cb_index, untilized_cb_data_format}})
-            .set_page_size(untilize_downsampled_cb_index, untilized_single_tile_size);
-    auto untilize_downsampled_cb =
-        tt::tt_metal::CreateCircularBuffer(program, core_range, untilize_downsampled_cb_config);
+
+    tt::tt_metal::create_cb(
+        untilize_downsampled_cb_index,
+        program,
+        core_range,
+        untilized_single_tile_size,
+        num_tiles_untilize_downsampled_cb,
+        untilized_cb_data_format);
+
     log_debug(
         tt::LogOp,
         "CB {}: PS = {} NP = {} :: TOTAL = {}",
@@ -532,16 +545,17 @@ operation::ProgramWithCallbacks downsample_single_core(
         num_tiles_untilize_downsampled_cb,
         untilized_single_tile_size * num_tiles_untilize_downsampled_cb);
 
-    uint32_t final_tilize_output_cb_index = tt::CBIndex::c_16;
     uint32_t num_tiles_final_tilize_output_cb = num_output_tiles;  // final output cb size == output size per core
-    tt::tt_metal::CircularBufferConfig final_tilize_output_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_tiles_final_tilize_output_cb * output_single_tile_size,
-            {{final_tilize_output_cb_index, output_cb_data_format}})
-            .set_page_size(final_tilize_output_cb_index, output_single_tile_size);
-    final_tilize_output_cb_config = final_tilize_output_cb_config.set_globally_allocated_address(*output.buffer());
-    auto final_tilize_output_cb =
-        tt::tt_metal::CreateCircularBuffer(program, core_range, final_tilize_output_cb_config);
+
+    auto [final_tilize_output_cb_index, final_tilize_output_cb] = tt::tt_metal::create_cb(
+        next_cb_index++,
+        program,
+        core_range,
+        output_single_tile_size,
+        num_tiles_final_tilize_output_cb,
+        output_cb_data_format,
+        output.buffer());
+
     log_debug(
         tt::LogOp,
         "CB {}: PS = {} NP = {} :: TOTAL = {}",

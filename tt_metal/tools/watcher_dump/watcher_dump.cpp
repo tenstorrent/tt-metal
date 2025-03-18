@@ -7,6 +7,7 @@
 #include "impl/debug/watcher_server.hpp"
 #include "impl/debug/noc_logging.hpp"
 #include "impl/dispatch/debug_tools.hpp"
+#include "rtoptions.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

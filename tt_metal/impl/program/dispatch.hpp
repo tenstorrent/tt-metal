@@ -74,9 +74,6 @@ void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_
 
 void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, IDevice* device);
 
-void assemble_runtime_args_commands(
-    ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device);
-
 void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr);
 
 void reserve_space_in_kernel_config_buffer(
@@ -111,8 +108,8 @@ void write_program_command_sequence(
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle);
 
 void reset_config_buf_mgrs_and_expected_workers(
-    std::array<WorkerConfigBufferMgr, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& config_buffer_mgrs,
-    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
+    DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgrs,
+    DispatchArray<uint32_t>& expected_num_workers_completed,
     uint32_t num_entries_to_reset);
 
 void reset_worker_dispatch_state_on_device(
@@ -120,7 +117,7 @@ void reset_worker_dispatch_state_on_device(
     SystemMemoryManager& manager,
     uint8_t cq_id,
     CoreCoord dispatch_core,
-    const std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
+    const DispatchArray<uint32_t>& expected_num_workers_completed,
     bool reset_launch_msg_state);
 
 void set_num_worker_sems_on_dispatch(

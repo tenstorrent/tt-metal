@@ -47,6 +47,11 @@ on:
         required: false
         type: boolean
         default: false
+      profile:
+        required: false
+        type: boolean
+        default: false
+        description: "Profile the compilation"
     outputs:
       ci-build-docker-image:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
@@ -97,6 +102,11 @@ on:
         type: string
         default: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
         description: "Toolchain file to use for build"
+      profile:
+        required: false
+        type: boolean
+        default: false
+        description: "Profile the compilation"
 
 
 jobs:
@@ -199,6 +209,9 @@ jobs:
           if [ "${{ inputs.tracy }}" = "true" ]; then
             build_command="$build_command --enable-profiler"
           fi
+          if [ "${{ inputs.profile }}" = "true" ]; then
+            build_command="$build_command --enable-time-trace --disable-unity-builds"
+          fi
 
           nice -n 19 $build_command
 
@@ -206,6 +219,13 @@ jobs:
         run: |
           # --target install is for the tarball that should get replaced by proper packaging later
           nice -19 cmake --build build --target install
+
+      - name: 🛠️ Profile
+        if: ${{ inputs.profile }}
+        run: |
+          echo "maxNameLength = 300" > ClangBuildAnalyzer.ini
+          nice -n 19 ClangBuildAnalyzer --all build capture.bin
+          nice -n 19 ClangBuildAnalyzer --analyze capture.bin
 
       - name: 📦 Package
         run: |
@@ -271,13 +291,5 @@ jobs:
           path: /work/ttm_any.tar
           if-no-files-found: error
 
-      - name: Cleanup
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
-        run: |
-          # We are forced to checkout the repo into a subdir of the host's workdir; this pollutes the host
-          # with root-owned files.  Be sure to clean up after ourselves in case we're on a non-ephemeral runner.
-          echo "pre rm"
-          ls -al /__w/tt-metal/tt-metal
-          rm -rf /__w/tt-metal/tt-metal/docker-job
-          echo "post rm"
-          ls -al /__w/tt-metal/tt-metal

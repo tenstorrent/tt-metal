@@ -4,17 +4,24 @@
 
 #include "topology.hpp"
 #include "data_types.hpp"
+#include "dispatch_core_common.hpp"
 #include "kernel_config/fd_kernel.hpp"
 #include <device_pool.hpp>
+#include <memory>
 #include <tt_metal.hpp>
 #include <host_api.hpp>
+#include <unordered_map>
 #include "kernel_config/fd_kernel.hpp"
 #include "kernel_config/demux.hpp"
 #include "kernel_config/eth_router.hpp"
 #include "kernel_config/eth_tunneler.hpp"
 #include "fabric_host_interface.h"
 
+#include "program_impl.hpp"
+#include "rtoptions.hpp"
 #include "tt_cluster.hpp"
+#include <tt-metalium/erisc_datamover_builder.hpp>
+#include <tt-metalium/mesh_graph.hpp>
 
 namespace tt::tt_metal {
 
@@ -142,6 +149,25 @@ static const std::vector<DispatchKernelNode> two_chip_arch_1cq = {
     {11, 1, x, 0, US_TUNNELER_LOCAL, {7, 12, x, x}, {7, 13, x, x}, k_packet_queue_noc},
     {12, 1, x, 0, MUX_D, {9, x, x, x}, {11, x, x, x}, k_packet_queue_noc},
     {13, 1, x, 0, PACKET_ROUTER_DEMUX, {11, x, x, x}, {8, x, x, x}, k_packet_queue_noc},
+};
+
+static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {
+    {0, 0, 0, 0, PREFETCH_HD, /*up*/ {x, x, x, x}, /*down*/ {1, 2, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+
+    {3, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {7, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {4, 0, 1, 0, DISPATCH_H, {8, x, x, x}, {3, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+
+    // Sender path PREFETCH_H -> PREFETCH_D
+    {5, 0, x, 0, FABRIC_ROUTER_VC, {3, x, x, x}, {7, x, x, x}},
+
+    // Return path DISPATCH_D -> DISPATCH_H
+    {6, 0, x, 0, FABRIC_ROUTER_VC, {8, x, x, x}, {4, x, x, x}},
+
+    {7, 1, 1, 0, PREFETCH_D, {3, x, x, x}, {8, 9, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {8, 1, 1, 0, DISPATCH_D, {7, x, x, x}, {9, 4, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {9, 1, 1, 0, DISPATCH_S, {7, x, x, x}, {8, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
 };
 
 static const std::vector<DispatchKernelNode> two_chip_arch_2cq = {
@@ -447,6 +473,7 @@ static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq = {
 // clang-format on
 
 std::vector<FDKernel*> node_id_to_kernel;
+std::unordered_map<chip_id_t, std::unique_ptr<Program>> command_queue_pgms;
 
 // Helper function to automatically generate dispatch nodes given devices + num hw CQs + detection of card type.
 std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device_ids, uint32_t num_hw_cqs) {
@@ -479,7 +506,7 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
         } else {
             // TODO: determine whether dispatch_s is inserted at this level, instead of inside
             // Device::dispatch_s_enabled().
-            if (dispatch_core_manager::instance().get_dispatch_core_type(0) == CoreType::WORKER) {
+            if (dispatch_core_manager::instance().get_dispatch_core_type() == CoreType::WORKER) {
                 return single_chip_arch_2cq_dispatch_s;
             } else {
                 return single_chip_arch_2cq;
@@ -534,8 +561,16 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
             TT_ASSERT(
                 mmio_devices.size() == remote_devices.size() or remote_devices.empty(),
                 "N300/T3K expects devices in mmio/remote pairs.");
-            const std::vector<DispatchKernelNode>* nodes_for_one_mmio =
-                (num_hw_cqs == 1) ? &two_chip_arch_1cq : &two_chip_arch_2cq;
+            std::vector<DispatchKernelNode> nodes_for_one_mmio;
+            // TODO: Put this in a better place
+            if (llrt::RunTimeOptions::get_instance().get_fd_fabric()) {
+                TT_FATAL(num_hw_cqs == 1, "Only 1 CQ is supported at this time for FD on Fabric");
+                // Must call tt::tt_metal::detail::InitializeFabricConfig upstream
+                nodes_for_one_mmio = two_chip_arch_1cq_fabric;
+            } else {
+                nodes_for_one_mmio = (num_hw_cqs == 1) ? two_chip_arch_1cq : two_chip_arch_2cq;
+            }
+
             uint32_t index_offset = 0;
             for (auto mmio_device_id : mmio_devices) {
                 // Find the corresponding remote chip
@@ -551,7 +586,7 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
                 TT_ASSERT(found_remote, "Couldn't find paired remote chip for device {}", mmio_device_id);
 
                 // Add dispatch kernels for the mmio/remote pair
-                for (DispatchKernelNode node : *nodes_for_one_mmio) {
+                for (DispatchKernelNode node : nodes_for_one_mmio) {
                     TT_ASSERT(node.device_id == 0 || node.device_id == 1);
                     if (node.device_id == 0) {
                         node.device_id = mmio_device_id;
@@ -566,7 +601,7 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
                     increment_node_ids(node, index_offset);
                     nodes.push_back(node);
                 }
-                index_offset += nodes_for_one_mmio->size();
+                index_offset += nodes_for_one_mmio.size();
             }
         }
     }
@@ -577,9 +612,18 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
 // Populate node_id_to_kernel and set up kernel objects. Do this once at the beginning since they (1) don't need a valid
 // Device until fields are populated, (2) need to be connected to kernel objects for devices that aren't created yet,
 // and (3) the table to choose depends on total number of devices, not know at Device creation.
+void populate_fd_kernels(const std::vector<IDevice*>& devices, uint32_t num_hw_cqs) {
+    std::set<chip_id_t> device_ids;
+    for (const auto& device : devices) {
+        device_ids.insert(device->id());
+    }
+    populate_fd_kernels(generate_nodes(device_ids, num_hw_cqs));
+}
+
 void populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_cqs) {
     populate_fd_kernels(generate_nodes(device_ids, num_hw_cqs));
 }
+
 void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
     // If we already had nodes from a previous run, clear them (since we could have a different # of devices or CQs).
     if (!node_id_to_kernel.empty()) {
@@ -723,39 +767,59 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
     }
 }
 
-std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
+void populate_cq_static_args(IDevice* device) {
     TT_ASSERT(
         node_id_to_kernel.size() > 0,
-        "Tried to create CQ program without nodes populated (need to run populate_fd_kernels()");
-
+        "Tried to populate static args on nodes without the nodes populated (need to run populate_fd_kernels()");
     // First pass, add device/program to all kernels for this device and generate static configs.
     auto cq_program_ptr = std::make_unique<Program>();
-    // for (auto &node_and_kernel : node_id_to_kernel) {
-    for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
-        if (node_id_to_kernel[idx]->GetDeviceId() == device->id()) {
-            node_id_to_kernel[idx]->AddDeviceAndProgram(device, cq_program_ptr.get());
-            node_id_to_kernel[idx]->GenerateStaticConfigs();
+    for (auto node_and_kernel : node_id_to_kernel) {
+        // GetDeviceId() uses Id from topology as IDevice* is not present yet
+        if (node_and_kernel->GetDeviceId() == device->id()) {
+            node_and_kernel->AddDevice(device);
+            // TODO: Be careful downstream. Using get() on a smart pointer defeats the purpose of using them
+            // Memory could be changed at that location later.
+            node_and_kernel->AddProgram(cq_program_ptr.get());
+            node_and_kernel->GenerateStaticConfigs();
         }
     }
 
+    // Move program into the storage for create_and_compile_cq_program to be called later
+    command_queue_pgms[device->id()] = std::move(cq_program_ptr);
+}
+
+std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
+    TT_ASSERT(
+        command_queue_pgms.contains(device->id()),
+        "Tried to create and compile CQ program on device {} without static args populated (need to run "
+        "populate_cq_static_args())",
+        device->id());
+    std::unique_ptr<Program> cq_program = std::move(command_queue_pgms[device->id()]);
     // Third pass, populate dependent configs and create kernels for each node
-    // for (auto &node_and_kernel : node_id_to_kernel) {
-    for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
-        if (node_id_to_kernel[idx]->GetDeviceId() == device->id()) {
-            node_id_to_kernel[idx]->GenerateDependentConfigs();
-            node_id_to_kernel[idx]->CreateKernel();
+    for (auto node_and_kernel : node_id_to_kernel) {
+        if (node_and_kernel->GetDeviceId() == device->id()) {
+            node_and_kernel->GenerateDependentConfigs();
+        }
+    }
+
+    for (auto node_and_kernel : node_id_to_kernel) {
+        if (node_and_kernel->GetDeviceId() == device->id()) {
+            node_and_kernel->CreateKernel();
         }
     }
 
     // Compile the program and return it so Device can register it
-    detail::CompileProgram(device, *cq_program_ptr, /*fd_bootloader_mode=*/true);
-    return cq_program_ptr;
+    detail::CompileProgram(device, *cq_program, /*fd_bootloader_mode=*/true);
+    // Erase from map. Note: program in map is no longer valid
+    // It is returned from this function and the caller will take ownership of it
+    command_queue_pgms.erase(device->id());
+    return cq_program;
 }
 
 void configure_dispatch_cores(IDevice* device) {
     // Set up completion_queue_writer core. This doesn't actually have a kernel so keep it out of the struct and config
     // it here. TODO: should this be in the struct?
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
     auto& my_dispatch_constants = DispatchMemMap::get(dispatch_core_type);
     uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
     uint32_t cq_size = device->sysmem_manager().get_cq_size();
@@ -811,12 +875,16 @@ void configure_dispatch_cores(IDevice* device) {
     }
 }
 
-std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
-    auto fabric_program_ptr = std::make_unique<Program>();
-
+std::unique_ptr<Program> create_and_compile_2d_fabric_program(IDevice* device, FabricConfig fabric_config) {
+    std::unique_ptr<Program> fabric_program_ptr;
     std::uint32_t router_mask = 0;
+
     auto router_chans = tt::Cluster::instance().get_fabric_ethernet_channels(device->id());
-    auto fabric_config = tt::Cluster::instance().get_fabric_config();
+    if (router_chans.empty()) {
+        return nullptr;
+    }
+
+    fabric_program_ptr = std::make_unique<Program>();
     size_t num_routers = router_chans.size();
     for (const auto& router_chan : router_chans) {
         router_mask += 0x1 << (uint32_t)router_chan;
@@ -868,7 +936,7 @@ std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
     return fabric_program_ptr;
 }
 
-void configure_fabric_cores(IDevice* device) {
+void configure_2d_fabric_cores(IDevice* device) {
     std::vector<uint32_t> router_zero_buf(1, 0);
 
     auto router_chans = tt::Cluster::instance().get_fabric_ethernet_channels(device->id());
@@ -881,6 +949,145 @@ void configure_fabric_cores(IDevice* device) {
             hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
         detail::WriteToDeviceL1(
             device, router_logical_core, fabric_router_sync_sem_addr, router_zero_buf, CoreType::ETH);
+    }
+}
+
+std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, bool wrap_around_mesh = true) {
+    using namespace tt_fabric;
+    std::unique_ptr<Program> fabric_program_ptr;
+    auto control_plane = tt::Cluster::instance().get_control_plane();
+    std::pair<mesh_id_t, chip_id_t> mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
+    std::unordered_map<RoutingDirection, std::vector<chan_id_t>> active_fabric_eth_channels;
+    std::unordered_map<RoutingDirection, chip_id_t> chip_neighbors;
+    std::unordered_map<chan_id_t, tt::tt_fabric::FabricEriscDatamoverBuilder> edm_builders;
+    auto routing_directions = {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
+
+    for (const auto& direction : routing_directions) {
+        auto active_eth_chans = control_plane->get_active_fabric_eth_channels_in_direction(
+            mesh_chip_id.first, mesh_chip_id.second, direction);
+        if (active_eth_chans.empty()) {
+            continue;
+        }
+
+        auto neighbors = control_plane->get_intra_chip_neighbors(mesh_chip_id.first, mesh_chip_id.second, direction);
+        if (neighbors.empty()) {
+            continue;
+        }
+
+        std::pair<mesh_id_t, chip_id_t> neighbor_mesh_chip_id;
+        // assume same neighbor per direction
+        neighbor_mesh_chip_id = {mesh_chip_id.first, neighbors[0]};
+        chip_neighbors[direction] = control_plane->get_physical_chip_id_from_mesh_chip_id(neighbor_mesh_chip_id);
+        active_fabric_eth_channels.insert({direction, active_eth_chans});
+    }
+
+    if (chip_neighbors.empty()) {
+        // 1D fabric needs atleast one neighbor on the same mesh (atleast for now)
+        return nullptr;
+    }
+
+    fabric_program_ptr = std::make_unique<Program>();
+    static constexpr std::size_t edm_buffer_size =
+        tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
+        sizeof(tt::tt_fabric::PacketHeader);
+    const auto edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+
+    for (const auto& [direction, remote_chip_id] : chip_neighbors) {
+        for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
+            auto eth_logical_core = tt::Cluster::instance()
+                                        .get_soc_desc(device->id())
+                                        .get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
+            auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
+                device, *fabric_program_ptr, eth_logical_core, device->id(), remote_chip_id, edm_config, true, false);
+            edm_builders.insert({eth_chan, edm_builder});
+        }
+    }
+
+    auto get_eth_chan_on_same_routing_plane = [&](chan_id_t src_eth_chan,
+                                                  std::vector<chan_id_t>& target_eth_chans) -> chan_id_t {
+        routing_plane_id_t src_plane_id = control_plane->get_routing_plane_id(src_eth_chan);
+        for (const auto& target_eth_chan : target_eth_chans) {
+            if (src_plane_id == control_plane->get_routing_plane_id(target_eth_chan)) {
+                return target_eth_chan;
+            }
+        }
+        return eth_chan_magic_values::INVALID_DIRECTION;
+    };
+
+    auto connect_downstream_builders = [&](RoutingDirection dir1, RoutingDirection dir2) {
+        bool can_connect =
+            (chip_neighbors.find(dir1) != chip_neighbors.end()) && (chip_neighbors.find(dir2) != chip_neighbors.end());
+        if (can_connect) {
+            auto& eth_chans_dir1 = active_fabric_eth_channels.at(dir1);
+            auto& eth_chans_dir2 = active_fabric_eth_channels.at(dir2);
+
+            for (const auto& eth_chan_dir1 : eth_chans_dir1) {
+                // connect with the router on the same routing plane
+                auto eth_chan_dir2 = get_eth_chan_on_same_routing_plane(eth_chan_dir1, eth_chans_dir2);
+                if (eth_chan_dir2 == eth_chan_magic_values::INVALID_DIRECTION) {
+                    // potentially eth chan in one of the direction is reserved for tunneling
+                    continue;
+                }
+
+                auto& edm_builder1 = edm_builders.at(eth_chan_dir1);
+                auto& edm_builder2 = edm_builders.at(eth_chan_dir2);
+
+                edm_builder1.connect_to_downstream_edm(edm_builder2);
+                edm_builder2.connect_to_downstream_edm(edm_builder1);
+            }
+        }
+    };
+
+    // if the wrap aroud mesh flag is set and corner chip, fold the internal connections
+    if (wrap_around_mesh && chip_neighbors.size() == 2) {
+        auto it = chip_neighbors.begin();
+        auto dir1 = it->first;
+        it++;
+        auto dir2 = it->first;
+        connect_downstream_builders(dir1, dir2);
+    } else {
+        connect_downstream_builders(RoutingDirection::N, RoutingDirection::S);
+        connect_downstream_builders(RoutingDirection::E, RoutingDirection::W);
+    }
+
+    // TODO: this will not be needed once tests are migrated and should be the default behavior
+    std::map<string, string> defines = {};
+    defines["WAIT_FOR_HOST_SIGNAL"] = "";
+
+    for (const auto& [eth_chan, edm_builder] : edm_builders) {
+        const std::vector<uint32_t> edm_kernel_rt_args = edm_builder.get_runtime_args();
+        const std::vector<uint32_t> eth_sender_ct_args = edm_builder.get_compile_time_args();
+        auto eth_logical_core =
+            tt::Cluster::instance().get_soc_desc(device->id()).get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
+
+        auto eth_sender_kernel = tt::tt_metal::CreateKernel(
+            *fabric_program_ptr,
+            "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_datamover.cpp",
+            eth_logical_core,
+            tt::tt_metal::EthernetConfig{
+                .noc = tt_metal::NOC::NOC_0, .compile_args = eth_sender_ct_args, .defines = defines});
+
+        tt::tt_metal::SetRuntimeArgs(*fabric_program_ptr, eth_sender_kernel, eth_logical_core, edm_kernel_rt_args);
+    }
+
+    detail::CompileProgram(device, *fabric_program_ptr, /*fd_bootloader_mode=*/device->using_fast_dispatch());
+    return fabric_program_ptr;
+}
+
+std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
+    auto fabric_config = tt::Cluster::instance().get_fabric_config();
+    if (fabric_config == FabricConfig::FABRIC_1D) {
+        return create_and_compile_1d_fabric_program(device);
+    } else if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
+        return create_and_compile_2d_fabric_program(device, fabric_config);
+    }
+    return nullptr;
+}
+
+void configure_fabric_cores(IDevice* device) {
+    auto fabric_config = tt::Cluster::instance().get_fabric_config();
+    if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
+        configure_2d_fabric_cores(device);
     }
 }
 

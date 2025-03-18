@@ -10,7 +10,8 @@ on:
           - Release
           - Debug
           - RelWithDebInfo
-          - CI
+          - ASan
+          - TSan
         default: "Release"
       build-with-tracy:
         required: false
@@ -25,6 +26,10 @@ on:
         type: boolean
         default: false
       tgg-model-perf:
+        required: false
+        type: boolean
+        default: false
+      tg-quick:
         required: false
         type: boolean
         default: false
@@ -77,6 +82,14 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/tgg-model-perf-tests-impl.yaml
     if: ${{ inputs.tgg-model-perf }}
+  tg-quick:
+    if: ${{ inputs.tg-quick }}
+    needs: build-artifact
+    uses: ./.github/workflows/tg-quick.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   tg-unit-tests:
     needs: build-artifact
     secrets: inherit

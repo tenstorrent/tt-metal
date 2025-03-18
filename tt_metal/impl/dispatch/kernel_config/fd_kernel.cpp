@@ -5,6 +5,8 @@
 #include "fd_kernel.hpp"
 #include <host_api.hpp>
 #include <tt_metal.hpp>
+#include "dispatch/kernel_config/fabric_router_vc.hpp"
+#include "dispatch_core_common.hpp"
 #include "dprint_server.hpp"
 
 #include "kernel_types.hpp"
@@ -15,6 +17,7 @@
 #include "demux.hpp"
 #include "eth_router.hpp"
 #include "eth_tunneler.hpp"
+#include "rtoptions.hpp"
 
 using namespace tt::tt_metal;
 
@@ -93,6 +96,7 @@ FDKernel* FDKernel::Generate(
             return new EthRouterKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true);
         case PACKET_ROUTER_DEMUX:
             return new EthRouterKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false);
+        case FABRIC_ROUTER_VC: return new tt::tt_metal::FabricRouterVC(node_id, device_id, servicing_device_id, cq_id);
         default: TT_FATAL(false, "Unrecognized dispatch kernel type: {}.", type); return nullptr;
     }
 }

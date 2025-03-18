@@ -4,7 +4,7 @@
 
 #include "tt_metal/distributed/coordinate_translation.hpp"
 
-#include "indestructible.hpp"
+#include <tt_stl/indestructible.hpp>
 #include "tt_cluster.hpp"
 
 #include <nlohmann/json.hpp>
@@ -60,9 +60,11 @@ const std::pair<CoordinateTranslationMap, MeshShape>& get_system_mesh_coordinate
 
         // TODO: #17477 - This assumes shapes and coordinates are in 2D. This will be extended for 3D.
         // Consider if 1D can be used for single device and N300.
+        // TODO: These assume devices have chip coordinates which is not true for BH or WH QCs
         const std::unordered_map<size_t, std::pair<std::string, MeshShape>> system_mesh_translation_map = {
             {1, std::make_pair("device.json", MeshShape(1, 1))},
             {2, std::make_pair("N300.json", MeshShape(1, 2))},
+            {4, std::make_pair("4xP150.json", MeshShape(1, 4))},
             {8, std::make_pair("T3000.json", MeshShape(2, 4))},
             {32, std::make_pair(is_qg ? "QG.json" : "TG.json", MeshShape(8, 4))},
             {64, std::make_pair("TGG.json", MeshShape(8, 8))},

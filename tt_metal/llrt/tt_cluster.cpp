@@ -272,8 +272,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_);
         // umd::Cluster::detect_available_device_ids only lists MMIO device ids, since we need remote chip ids
         // generate the cluster desc and pull chip ids from there
-        auto temp_cluster_desc =
-            tt_ClusterDescriptor::create_from_yaml(tt_ClusterDescriptor::get_cluster_descriptor_file_path());
+        auto temp_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
         std::unordered_set<chip_id_t> all_chips = temp_cluster_desc->get_all_chips();
         std::set<chip_id_t> all_chips_set(all_chips.begin(), all_chips.end());
         // This is the target/desired number of mem channels per arch/device.
@@ -347,6 +346,32 @@ std::unordered_map<chip_id_t, eth_coord_t> Cluster::get_user_chip_ethernet_coord
         });
     }
     return user_chip_ethernet_coordinates;
+}
+
+size_t Cluster::number_of_user_devices() const {
+    if (this->cluster_type_ == ClusterType::TG) {
+        const auto& chips = this->cluster_desc_->get_all_chips();
+        return std::count_if(chips.begin(), chips.end(), [&](const auto& id) {
+            return this->cluster_desc_->get_board_type(id) == BoardType::GALAXY;
+        });
+    } else {
+        return this->cluster_desc_->get_number_of_chips();
+    }
+}
+
+std::unordered_set<chip_id_t> Cluster::user_exposed_chip_ids() const {
+    if (this->cluster_type_ == ClusterType::TG) {
+        std::unordered_set<chip_id_t> galaxy_boards;
+        const auto& chips = this->cluster_desc_->get_all_chips();
+        for (const auto& id : chips) {
+            if (this->cluster_desc_->get_board_type(id) == BoardType::GALAXY) {
+                galaxy_boards.insert(id);
+            }
+        }
+        return galaxy_boards;
+    } else {
+        return this->cluster_desc_->get_all_chips();
+    }
 }
 
 const metal_SocDescriptor &Cluster::get_soc_desc(chip_id_t chip) const {
@@ -847,7 +872,7 @@ void Cluster::reserve_ethernet_cores_for_tunneling() {
         }
         std::map<std::tuple<chip_id_t, chip_id_t>, bool> reserved_chip_connections = {};
         for (const auto &chip_id : devices) {
-            if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
+            if (TT_METAL_SLOW_DISPATCH_MODE == nullptr and arch_ == ARCH::WORMHOLE_B0) {
                 for (const auto &[connected_chip_id, active_eth_cores] :
                      this->get_ethernet_cores_grouped_by_connected_chips(chip_id)) {
                     for (const auto &eth_core : active_eth_cores) {
@@ -943,6 +968,13 @@ std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
     return active_ethernet_cores;
 }
 
+tt::tt_fabric::ControlPlane* Cluster::get_control_plane() {
+    if (control_plane_.get() == nullptr) {
+        this->initialize_control_plane();
+    }
+    return control_plane_.get();
+}
+
 void Cluster::initialize_fabric_config(FabricConfig fabric_config) {
     this->fabric_config_ = fabric_config;
     if (fabric_config != FabricConfig::DISABLED) {
@@ -950,6 +982,7 @@ void Cluster::initialize_fabric_config(FabricConfig fabric_config) {
     } else {
         this->release_ethernet_cores_for_fabric_routers();
     }
+    tt::Cluster::instance().get_control_plane()->configure_routing_tables_for_fabric_ethernet_channels();
 }
 
 void Cluster::reserve_ethernet_cores_for_fabric_routers() {
@@ -1182,6 +1215,25 @@ uint32_t Cluster::get_mmio_device_tunnel_count(chip_id_t mmio_device) const {
 uint32_t Cluster::get_device_tunnel_depth(chip_id_t chip_id) const {
     chip_id_t mmio_device_id = this->get_associated_mmio_device(chip_id);
     return (mmio_device_id == chip_id) ? 0 : this->cluster_desc_->get_ethernet_link_distance(chip_id, mmio_device_id);
+}
+
+void Cluster::initialize_control_plane() {
+    // Default mode, auto select mesh graph descriptor. In future, we can add a way for user to specify custom
+    // descriptors
+    std::string mesh_graph_descriptor;
+    switch (this->cluster_type_) {
+        case tt::ClusterType::N150: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::N300: mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::T3K: mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::GALAXY: mesh_graph_descriptor = "quanta_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::TG: mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml"; break;
+        default: TT_THROW("Unknown cluster type");
+    }
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
+
+    control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
 }
 
 }  // namespace tt

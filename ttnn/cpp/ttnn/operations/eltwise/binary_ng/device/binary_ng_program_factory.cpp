@@ -14,6 +14,19 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace ttnn::operations::binary_ng;
 
+// For rank > 4 i.e. dims beyond NCHW will be collapsed into a single dim
+uint32_t extract_nD_dims(const Tensor& x, const int out_rank) {
+    const auto& shape = x.get_logical_shape();
+    uint32_t nD_dim = 1;
+    if (out_rank >= 5) {
+        for (int i = -5; i >= -out_rank; --i) {
+            auto dim = shape[i];
+            nD_dim *= dim;
+        }
+    }
+    return nD_dim;
+}
+
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_shape_dims(const Tensor& x) {
     const auto& shape = x.padded_shape();
     const auto& tile = x.tensor_spec().tile();
@@ -171,6 +184,10 @@ void set_or_update_runtime_arguments(
     F handle_args) {
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
+    const auto out_rank = c.logical_shape().rank();
+    auto aND = extract_nD_dims(a, out_rank);
+    auto bND = b.has_value() ? extract_nD_dims(*b, out_rank) : 1;
+    auto cND = extract_nD_dims(c, out_rank);
 
     const auto [aN, aC, aHt, aWt] = get_shape_dims(a);
     const auto [bN, bC, bHt, bWt] = b.has_value() ? get_shape_dims(*b) : std::tuple{1u, 1u, 1u, 1u};
@@ -268,8 +285,8 @@ void set_or_update_runtime_arguments(
         } else if (core_group_2.contains(core)) {
             c_num_tiles = num_tiles_per_core_group_2;
         } else {
-            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 11>{0});
-            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 12>{0});
+            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 13>{0});
+            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 14>{0});
             handle_args(program, compute_kernel_id, core, std::array<uint32_t, 3>{0});
             continue;
         }
@@ -294,12 +311,14 @@ void set_or_update_runtime_arguments(
             a_num_tiles,
             c_num_tiles,
             c_current_shard_width,
+            aHt * aWt * aC * aN * (aND > 1),
             aHt * aWt * aC * (aN > 1),
             aHt * aWt * (aC > 1),
             cN,
             cC,
             cHt,
-            cWt};
+            cWt,
+            cND};
         handle_args(program, reader_kernel_id, core, reader_runtime_args);
 
         const bool is_quant_op = (operation_attributes.binary_op_type == BinaryOpType::QUANT) ||
@@ -325,12 +344,14 @@ void set_or_update_runtime_arguments(
                 b_num_tiles,
                 c_num_tiles,
                 c_current_shard_width,
+                bHt * bWt * bC * bN * (bND > 1),
                 bHt * bWt * bC * (bN > 1),
                 bHt * bWt * (bC > 1),
                 cN,
                 cC,
                 cHt,
-                cWt};
+                cWt,
+                cND};
             handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
             auto [freq, counter] =
@@ -350,6 +371,8 @@ void set_or_update_runtime_arguments(
                 cC,
                 cHt,
                 cWt,
+                cND,
+                0u,
                 0u,
                 0u,
                 0u};
@@ -588,6 +611,8 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
 
+    const uint32_t num_tiles_per_cycle = 1;  // we produce 1 output tile per read-compute-write cycle
+
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(compute_kernel, is_sfpu_op),
@@ -595,6 +620,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+            .compile_args = {num_tiles_per_cycle},
             .defines = std::move(compute_kernel_defines)});
 
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {

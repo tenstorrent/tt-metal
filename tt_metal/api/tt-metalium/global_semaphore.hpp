@@ -10,13 +10,9 @@
 #include "core_coord.hpp"
 #include "buffer_constants.hpp"
 #include "hal.hpp"
+#include "mesh_buffer.hpp"
 
 namespace tt::tt_metal {
-
-inline namespace v0 {
-
-class Buffer;
-class IDevice;
 
 class GlobalSemaphore {
 public:
@@ -46,12 +42,10 @@ private:
 
     // GlobalSemaphore is implemented as a wrapper around a sharded buffer
     // This can be updated in the future to be its own container with optimized dispatch functions
-    std::shared_ptr<Buffer> buffer_;
+    distributed::AnyBuffer buffer_;
     IDevice* device_;
     CoreRangeSet cores_;
 };
-
-}  // namespace v0
 
 }  // namespace tt::tt_metal
 

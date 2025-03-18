@@ -5,9 +5,9 @@
 #pragma once
 
 #include "routing_table_generator.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/rtoptions.hpp>
 #include <tt-metalium/fabric_host_interface.h>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace tt::tt_fabric {
 
@@ -17,19 +17,22 @@ class ControlPlane {
        ~ControlPlane() = default;
        void initialize_from_mesh_graph_desc_file(const std::string& mesh_graph_desc_file);
 
-       // Takes RoutingTableGenerator table and converts to routing tables for each ethernet port
-       void convert_fabric_routing_table_to_chip_routing_table();
-
        void write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chip_id) const;
-       void configure_routing_tables() const;
+       void write_routing_tables_to_all_chips() const;
 
        // Printing functions
        void print_routing_tables() const;
        void print_ethernet_channels() const;
 
+       // Converts chip level routing tables to per ethernet channel
+       void configure_routing_tables_for_fabric_ethernet_channels();
+
        // Return mesh_id, chip_id from physical chip id
        std::pair<mesh_id_t, chip_id_t> get_mesh_chip_id_from_physical_chip_id(chip_id_t physical_chip_id) const;
        chip_id_t get_physical_chip_id_from_mesh_chip_id(const std::pair<mesh_id_t, chip_id_t>& mesh_chip_id) const;
+
+       std::vector<mesh_id_t> get_user_physical_mesh_ids() const;
+       tt::tt_metal::distributed::MeshShape get_physical_mesh_shape(mesh_id_t mesh_id) const;
 
        // Return valid ethernet channels on the specificed routing plane
        std::vector<chan_id_t> get_valid_eth_chans_on_routing_plane(
@@ -43,7 +46,7 @@ class ControlPlane {
            chip_id_t dst_chip_id,
            chan_id_t src_chan_id) const;
 
-       // Return routers to get to the destination chip, avoid local eth to eth routing
+       // Return routers to get to the destination chip, avoid local eth to eth routing. CoreCoord is a virtual coord.
        std::vector<std::pair<routing_plane_id_t, CoreCoord>> get_routers_to_chip(
            mesh_id_t src_mesh_id, chip_id_t src_chip_id, mesh_id_t dst_mesh_id, chip_id_t dst_chip_id) const;
 
@@ -53,6 +56,9 @@ class ControlPlane {
        routing_plane_id_t get_routing_plane_id(chan_id_t eth_chan_id) const;
 
        size_t get_num_active_fabric_routers(mesh_id_t mesh_id, chip_id_t chip_id) const;
+
+       std::vector<chan_id_t> get_active_fabric_eth_channels_in_direction(
+           mesh_id_t mesh_id, chip_id_t chip_id, RoutingDirection routing_direction) const;
 
    private:
        std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
@@ -79,6 +85,9 @@ class ControlPlane {
 
        std::tuple<mesh_id_t, chip_id_t, chan_id_t> get_connected_mesh_chip_chan_ids(
            mesh_id_t mesh_id, chip_id_t chip_id, chan_id_t chan_id) const;
+
+       // Takes RoutingTableGenerator table and converts to routing tables for each ethernet port
+       void convert_fabric_routing_table_to_chip_routing_table();
 };
 
 }  // namespace tt::tt_fabric

@@ -119,22 +119,41 @@ Result conv2d(
     bool weight_is_on_device = ttnn::is_tensor_on_device_or_multidevice(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
-    if (!weight_is_on_device) {
+    if (!weight_is_on_device || conv_config.always_preprocess_weights) {
         // prepare weights in desired layout and move to device
-        tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
-            weight_tensor,
-            bias_tensor,
-            conv_config.input_channels_alignment,
-            conv_config.weights_dtype,
-            opt_conv_op_block_config.act_block_w_ntiles,
-            opt_conv_op_block_config.out_subblock_w_ntiles,
-            parallel_config,
-            output_parallel_config,
-            device,
-            groups,
-            opt_conv_op_block_config.act_block_h_ntiles,
-            input_width,
-            true);
+
+        // TODO: Implement heuristic to decide if weights should be preprocessed on device.
+        if (conv_config.preprocess_weights_on_device == false) {
+            tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
+                weight_tensor,
+                bias_tensor,
+                conv_config.input_channels_alignment,
+                conv_config.weights_dtype,
+                opt_conv_op_block_config.act_block_w_ntiles,
+                opt_conv_op_block_config.out_subblock_w_ntiles,
+                parallel_config,
+                output_parallel_config,
+                device,
+                groups,
+                opt_conv_op_block_config.act_block_h_ntiles,
+                input_width,
+                true);
+        } else {
+            tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_on_device(
+                weight_tensor,
+                bias_tensor,
+                conv_config.input_channels_alignment,
+                conv_config.weights_dtype,
+                opt_conv_op_block_config.act_block_w_ntiles,
+                opt_conv_op_block_config.out_subblock_w_ntiles,
+                parallel_config,
+                output_parallel_config,
+                device,
+                groups,
+                opt_conv_op_block_config.act_block_h_ntiles,
+                input_width,
+                true);
+        }
     }
     // if 1x1 conv w/ stride 1, convert input tensor to tile layout if required
     if (mm_conv) {
@@ -203,7 +222,7 @@ Result conv2d(
             out_channels,
             groups,
             conv_config.output_layout == Layout::ROW_MAJOR,
-            conv_config.activation == "relu",
+            conv_config.activation,
             opt_conv_op_parallel_config,
             opt_conv_op_block_config,
             conv_out_memory_config,

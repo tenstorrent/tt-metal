@@ -125,10 +125,14 @@ public:
 
     static constexpr uint32_t EVENT_PADDED_SIZE = 16;
 
-    // When page size of buffer to write/read exceeds MAX_PREFETCH_COMMAND_SIZE, the PCIe aligned page size is broken
-    // down into equal sized partial pages BASE_PARTIAL_PAGE_SIZE denotes the initial partial page size to use, it is
-    // incremented by PCIe alignment until page size can be evenly split
-    static constexpr uint32_t BASE_PARTIAL_PAGE_SIZE = 4096;
+    // When page size of buffer to write/read exceeds the max prefetch command size, the PCIe-aligned page size is
+    // broken down into equal sized partial pages. The base partial page size is incremented until it
+    // is PCIE-aligned. If the resulting partial page size doesn't evenly divide the full page size, the last partial
+    // page size is padded appropriately. The base partial page size is different for tensix dispatch and eth dispatch
+    // because the max prefetch command size is different depending on the dispatch core type.
+    static constexpr uint32_t BASE_PARTIAL_PAGE_SIZE_TENSIX_DISPATCH = 4096;
+    static constexpr uint32_t BASE_PARTIAL_PAGE_SIZE_ETH_DISPATCH = BASE_PARTIAL_PAGE_SIZE_TENSIX_DISPATCH / 4;
+    static_assert(BASE_PARTIAL_PAGE_SIZE_TENSIX_DISPATCH % 4 == 0);
 
     static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30;                                        // 1GB
     static constexpr uint32_t MAX_DEV_CHANNEL_SIZE = 1 << 28;                                     // 256 MB;
@@ -145,7 +149,6 @@ public:
     uint32_t prefetch_q_rd_ptr_size_{0};    // configured with alignment
     uint32_t prefetch_q_pcie_rd_ptr_size_;  // configured with alignment
     uint32_t dispatch_s_sync_sem_;          // configured with alignment
-    uint32_t dispatch_message_;             // configured with alignment
     uint32_t other_ptrs_size;               // configured with alignment
 
     // cq_prefetch
@@ -158,8 +161,8 @@ public:
     uint32_t prefetch_d_pages_;  // prefetch_d_buffer_size_ / PREFETCH_D_BUFFER_LOG_PAGE_SIZE
 
     // cq_dispatch
-    uint32_t dispatch_size_;             // total buffer size
-    uint32_t dispatch_pages_;            // total buffer size / page size
+    uint32_t dispatch_size_;   // total buffer size
+    uint32_t dispatch_pages_;  // total buffer size / page size
     uint32_t dispatch_s_buffer_size_;
     uint32_t dispatch_s_buffer_pages_;  // dispatch_s_buffer_size_ / DISPATCH_S_BUFFER_LOG_PAGE_SIZE
 
@@ -169,5 +172,9 @@ public:
 
     CoreType core_type_;  // Which core this settings is for
 };
+
+// Convenience type alias for arrays of `DISPATCH_MESSAGE_ENTRIES` size.
+template <typename T>
+using DispatchArray = std::array<T, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>;
 
 }  // namespace tt::tt_metal

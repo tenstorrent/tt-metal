@@ -17,7 +17,8 @@ on:
           - Release
           - Debug
           - RelWithDebInfo
-          - CI
+          - ASan
+          - TSan
       with-retries:
         default: false
         type: boolean
@@ -45,12 +46,14 @@ jobs:
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
+      version: 22.04
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
+      version: 22.04
     secrets: inherit
 
   smoke-tests:
@@ -83,6 +86,7 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
+      os: ubuntu-22.04
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
     needs: build-artifact
@@ -96,7 +100,7 @@ jobs:
         ]
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     with:
-      os: ubuntu-20.04
+      os: ubuntu-22.04
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
   # Fabric Unit Tests
@@ -111,7 +115,7 @@ jobs:
         ]
     uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
     with:
-      os: ubuntu-20.04
+      os: ubuntu-22.04
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
   # TTNN FD Unit tests
@@ -129,6 +133,9 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # FD Model Tests
   models-unit-tests:
     needs: build-artifact
@@ -159,11 +166,7 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-  code-analysis:
-    uses: ./.github/workflows/code-analysis.yaml
-    secrets: inherit
-    with:
-      version: 22.04
+      os: ubuntu-22.04
   tt-train-cpp-unit-tests:
     needs: build-artifact
     secrets: inherit
@@ -209,19 +212,12 @@ jobs:
     needs: build-artifact
     secrets: inherit
     strategy:
+      fail-fast: false
       matrix:
         config:
-          - version: "20.04"
-            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
-            build-type: "Debug"
-            publish-artifact: false
-          - version: "20.04"
-            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
-            build-type: "RelWithDebInfo"
-            publish-artifact: false
           - version: "22.04"
             toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
-            build-type: "Release"
+            build-type: "Debug"
             publish-artifact: false
           - version: "22.04"
             toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"

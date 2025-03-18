@@ -1,6 +1,5 @@
 # Temporary workaround for Issue #8767
 set(ARCHS
-    grayskull
     wormhole
     blackhole
 )
@@ -30,10 +29,8 @@ set(IRAM_OPTIONS
 )
 
 include(FetchContent)
-set(SFPI_x86_64_Linux_RELEASE
-    "v6.2.0/sfpi-release.tgz"
-    "c546b57c3161b06d03de7473c4add5e5"
-)
+# Break out the version setter for access control reasons
+include(cmake/sfpi-version.cmake)
 if(DEFINED SFPI_${CMAKE_HOST_SYSTEM_PROCESSOR}_${CMAKE_HOST_SYSTEM_NAME}_RELEASE)
     set(SFPI_RELEASE "${SFPI_${CMAKE_HOST_SYSTEM_PROCESSOR}_${CMAKE_HOST_SYSTEM_NAME}_RELEASE}")
     list(GET SFPI_RELEASE 0 SFPI_FILE)
@@ -133,7 +130,6 @@ set(GPP_CMD ${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv32-unknown-elf-
 set(GPP_DEFINES -DTENSIX_FIRMWARE)
 
 # Define flags for each architecture
-set(GPP_FLAGS_grayskull -mcpu=tt-gs)
 set(GPP_FLAGS_wormhole -mcpu=tt-wh)
 set(GPP_FLAGS_blackhole -mcpu=tt-bh)
 
@@ -361,19 +357,6 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 inc/ethernet/tt_eth_ss_regs.h
                 inc/ethernet/tunneling.h
                 inc/firmware_common.h
-                inc/grayskull/c_tensix_core.h
-                inc/grayskull/cfg_defines.h
-                inc/grayskull/core_config.h
-                inc/grayskull/dev_mem_map.h
-                inc/grayskull/eth_l1_address_map.h
-                inc/grayskull/noc/noc.h
-                inc/grayskull/noc/noc_overlay_parameters.h
-                inc/grayskull/noc/noc_parameters.h
-                inc/grayskull/noc_nonblocking_api.h
-                inc/grayskull/stream_io_map.h
-                inc/grayskull/tdma_xmov.h
-                inc/grayskull/tensix.h
-                inc/grayskull/tensix_types.h
                 inc/mod_div_lib.h
                 inc/remote_circular_buffer_api.h
                 inc/risc_attribs.h

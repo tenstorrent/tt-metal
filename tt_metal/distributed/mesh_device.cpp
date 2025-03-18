@@ -19,13 +19,15 @@
 #include <device_impl.hpp>
 #include <sub_device.hpp>
 #include <sub_device_manager_tracker.hpp>
-#include <sub_device_manager.hpp>
-#include <sub_device_types.hpp>
+
+#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 
 #include <hal.hpp>
 #include <mesh_coord.hpp>
 #include <small_vector.hpp>
+
+#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -703,14 +705,22 @@ bool MeshDevice::initialize(
     auto sub_devices = {
         SubDevice(std::array{CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}))})};
 
+    // Resource shared across mesh command queues.
+    auto worker_launch_message_buffer_state = std::make_shared<DispatchArray<LaunchMessageRingBufferState>>();
+
     const auto& allocator = reference_device()->allocator();
     sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
         this, std::make_unique<L1BankingAllocator>(allocator->get_config()), sub_devices);
     mesh_command_queues_.reserve(this->num_hw_cqs());
     if (this->using_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
-            mesh_command_queues_.push_back(
-                std::make_unique<MeshCommandQueue>(this, cq_id, dispatch_thread_pool_, reader_thread_pool_));
+            mesh_command_queues_.push_back(std::make_unique<MeshCommandQueue>(
+                this,
+                cq_id,
+                dispatch_thread_pool_,
+                reader_thread_pool_,
+                worker_launch_message_buffer_state  //
+                ));
         }
     }
     return true;

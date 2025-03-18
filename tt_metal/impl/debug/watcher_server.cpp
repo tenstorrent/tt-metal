@@ -9,10 +9,8 @@
 #include <chrono>
 #include <ctime>
 #include <filesystem>
-#include <memory>
 #include <mutex>
 #include <thread>
-#include <unordered_map>
 
 #include <hal.hpp>
 #include <dev_msgs.h>
@@ -20,6 +18,7 @@
 #include <rtoptions.hpp>
 #include "debug/ring_buffer.h"
 #include "watcher_device_reader.hpp"
+#include "debug_helpers.hpp"
 
 using namespace tt::tt_metal;
 
@@ -139,7 +138,7 @@ static void watcher_loop(int sleep_usecs) {
 
     // Print to the user which features are disabled via env vars.
     string disabled_features = "";
-    auto& disabled_features_set = tt::llrt::RunTimeOptions::get_instance().get_watcher_disabled_features();
+    const auto& disabled_features_set = tt::llrt::RunTimeOptions::get_instance().get_watcher_disabled_features();
     if (!disabled_features_set.empty()) {
         for (auto& feature : disabled_features_set) {
             disabled_features += feature + ",";
@@ -278,8 +277,8 @@ void watcher_init(IDevice* device) {
             }
 
             for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
-                std::vector<CoreCoord> delayed_cores =
-                    tt::llrt::RunTimeOptions::get_instance().get_feature_cores(delay_feature)[core_type];
+                const std::vector<CoreCoord>& delayed_cores =
+                    tt::llrt::RunTimeOptions::get_instance().get_feature_cores(delay_feature).at(core_type);
                 for (tt_xy_pair logical_core : delayed_cores) {
                     CoreCoord virtual_core;
                     bool valid_logical_core = true;
@@ -304,7 +303,7 @@ void watcher_init(IDevice* device) {
                             "TT_METAL_{}_CORES included {} core with logical coordinates {} (virtual coordinates {}), "
                             "which is not a valid core on device {}. This coordinate will be ignored by {} feature.",
                             tt::llrt::RunTimeDebugFeatureNames[delay_feature],
-                            tt::llrt::get_core_type_name(core_type),
+                            tt::tt_metal::get_core_type_name(core_type),
                             logical_core.str(),
                             valid_logical_core ? virtual_core.str() : "INVALID",
                             device->id(),

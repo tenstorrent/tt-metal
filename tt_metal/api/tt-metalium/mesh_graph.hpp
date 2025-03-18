@@ -11,7 +11,7 @@
 #include <magic_enum/magic_enum.hpp>
 
 #include <tt-metalium/assert.hpp>
-#include <tt-metalium/reflection.hpp>
+#include <tt_stl/reflection.hpp>
 
 #include <umd/device/types/arch.h>                      // tt::ARCH
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t

@@ -37,7 +37,7 @@ std::pair<uint32_t, uint32_t> get_max_page_size_and_num_pages(
 operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     const std::vector<Tensor>& input_tensors,
     const uint32_t num_layers,
-    const tt::tt_metal::v1::experimental::GlobalCircularBuffer& global_cb) {
+    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb) {
     /* Buffers */
     const Buffer& global_cb_buffer = global_cb.cb_buffer();
     // tensors that with addresses
@@ -73,9 +73,12 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     // In validate we make sure that all tensors are on the same device
     tt::tt_metal::IDevice* device = tensors[0].device();
     uint32_t num_tensors = tensors.size();
-    uint32_t num_receivers_per_reader = global_cb.receiver_cores().num_cores() / global_cb.sender_cores().num_cores();
+    auto sender_receiver_core_mapping = global_cb.sender_receiver_core_mapping()[0];
+    uint32_t num_receivers_per_reader = sender_receiver_core_mapping.second.num_cores();
 
-    uint32_t num_blocks = global_cb.receiver_cores().num_cores();
+    uint32_t num_readers = tensors[0].shard_spec()->grid.num_cores();
+    uint32_t num_blocks = num_readers * num_receivers_per_reader;
+
     std::vector<uint32_t> tensor_block_num_tiles(num_tensors);
     std::vector<std::vector<uint32_t>> tensor_shapes(num_tensors, std::vector<uint32_t>(2));
     std::vector<uint32_t> tensor_tile_sizes(num_tensors);
@@ -105,8 +108,14 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         global_cb.size());
 
     /* Cores setup */
-    auto reader_core_range = global_cb.sender_cores();
-    auto receiver_core_range = global_cb.receiver_cores();
+    auto all_reader_core_range = global_cb.sender_cores();
+    auto reader_core_range_vec = corerange_to_cores(all_reader_core_range, std::nullopt, true);
+    std::vector<CoreRange> active_reader_core_range_vec;
+    for (uint32_t i = 0; i < num_readers; ++i) {
+        auto core = reader_core_range_vec[i];
+        active_reader_core_range_vec.push_back(CoreRange{core, core});
+    }
+    auto reader_core_range = CoreRangeSet{active_reader_core_range_vec};
 
     /* read cb setup */
     uint32_t reader_cb_single_tile_size = max_tile_size;
@@ -146,7 +155,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         .set_page_size(L1_ALIGNMENT)  // set to 16B so that the infra won't update write pointers to wrong location
         .set_data_format(max_tile_size_df);
     auto remote_cb =
-        tt::tt_metal::v1::experimental::CreateCircularBuffer(program, reader_core_range, remote_cb_config, global_cb);
+        tt::tt_metal::experimental::CreateCircularBuffer(program, reader_core_range, remote_cb_config, global_cb);
 
     /* Compile time args */
 

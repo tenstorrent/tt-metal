@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "gtest/gtest.h"
+
 #include <tt-metalium/bfloat16.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
@@ -11,7 +13,6 @@
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn_multi_command_queue_fixture.hpp"
 
 #include "tt_cluster.hpp"
 

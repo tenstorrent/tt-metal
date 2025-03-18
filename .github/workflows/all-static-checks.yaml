@@ -6,6 +6,7 @@ on:
   pull_request:
     branches:
       - "main"
+  merge_group:
 
 jobs:
   pre-commit:
@@ -107,25 +108,21 @@ jobs:
     - uses: actions/checkout@v4
       with:
         submodules: recursive
-    - name: Check for changed CMake files
-      id: changed-cmake-files
-      uses: tj-actions/changed-files@c3a1bb2c992d77180ae65be6ae6c166cf40f857c
-      with:
-        files: |
-          **/*.cmake
-          **/CMakeLists.txt
+    - name: Look for changed CMake files
+      id: find-changes
+      uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
     - uses: lukka/get-cmake@b516803a3c5fac40e2e922349d15cdebdba01e60
-      if: steps.changed-cmake-files.outputs.any_changed == 'true'
+      if: steps.find-changes.outputs.cmake-changed == 'true'
       with:
         cmakeVersion: "~3.24.0"
     - name: Check CMake version
-      if: steps.changed-cmake-files.outputs.any_changed == 'true'
+      if: steps.find-changes.outputs.cmake-changed == 'true'
       run: cmake --version
     - name: Install Build Dependencies
-      if: steps.changed-cmake-files.outputs.any_changed == 'true'
+      if: steps.find-changes.outputs.cmake-changed == 'true'
       run: sudo ./install_dependencies.sh --mode build
     - name: Check CMake compatibility
-      if: steps.changed-cmake-files.outputs.any_changed == 'true'
+      if: steps.find-changes.outputs.cmake-changed == 'true'
       env:
         ARCH_NAME: wormhole_b0
         CMAKE_GENERATOR: Ninja

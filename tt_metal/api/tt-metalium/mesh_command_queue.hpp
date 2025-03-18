@@ -99,20 +99,24 @@ private:
         bool mcast_go_signals,
         bool unicast_go_signals);
     // Access a reference system memory manager, which acts as a global host side state manager for
-    // specific MeshCommandQueue attributes (launch_message_buffer_state, event counter, etc.)
+    // specific MeshCommandQueue attributes.
     // TODO: All Mesh level host state managed by this class should be moved out, since its not
-    // tied to system memory anyway.
+    // tied to system memory anyway. Move out:
+    // 1. Event ID managment.
+    // 2. Bypass mode tracker.
     SystemMemoryManager& reference_sysmem_manager();
     MultiProducerSingleConsumerQueue<CompletionReaderVariant>& get_read_descriptor_queue(IDevice* device);
 
-    std::array<tt::tt_metal::WorkerConfigBufferMgr, DispatchSettings::DISPATCH_MESSAGE_ENTRIES> config_buffer_mgr_;
-    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES> expected_num_workers_completed_;
+    // Shared across all MeshCommandQueue instances for a MeshDevice.
+    std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>> worker_launch_message_buffer_state_;
 
-    std::array<LaunchMessageRingBufferState, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>
-        worker_launch_message_buffer_state_reset_;
-    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES> expected_num_workers_completed_reset_;
-    std::array<tt::tt_metal::WorkerConfigBufferMgr, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>
-        config_buffer_mgr_reset_;
+    DispatchArray<uint32_t> expected_num_workers_completed_;
+    DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_;
+
+    DispatchArray<LaunchMessageRingBufferState> worker_launch_message_buffer_state_reset_;
+    DispatchArray<uint32_t> expected_num_workers_completed_reset_;
+    DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_reset_;
+
     // The following data structures are only popiulated when the MeshCQ is being used to trace workloads
     // i.e. between record_begin() and record_end() being called
     std::optional<MeshTraceId> trace_id_;
@@ -147,7 +151,7 @@ private:
     // Number of outstanding reads to be completed by the completion queue reader
     std::atomic<uint32_t> num_outstanding_reads_ = 0;
     // Exit signal for the completion queue reader
-    bool exit_condition_ = false;
+    std::atomic<bool> exit_condition_ = false;
     // Completion Queue Reader thread
     std::thread completion_queue_reader_thread_;
     // Global Mutex (used by both CQs) to safely use the reader_thread_pool_
@@ -158,7 +162,8 @@ public:
         MeshDevice* mesh_device,
         uint32_t id,
         std::shared_ptr<ThreadPool>& dispatch_thread_pool,
-        std::shared_ptr<ThreadPool>& reader_thread_pool);
+        std::shared_ptr<ThreadPool>& reader_thread_pool,
+        std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>>& worker_launch_message_buffer_state);
 
     MeshCommandQueue(const MeshCommandQueue& other) = delete;
     MeshCommandQueue& operator=(const MeshCommandQueue& other) = delete;

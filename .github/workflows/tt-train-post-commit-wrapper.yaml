@@ -11,6 +11,9 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
+    with:
+      build-wheel: true
+      version: 22.04
   tt-train-cpp-unit-tests:
     needs: build-artifact
     secrets: inherit
@@ -19,8 +22,7 @@ jobs:
       matrix:
         test-group: [
           { arch: wormhole_b0, runner-label: N150 },
-          # Disabled due to https://github.com/tenstorrent/tt-metal/issues/16012
-          # { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: N300 },
         ]
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:

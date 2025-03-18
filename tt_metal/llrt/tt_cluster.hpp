@@ -10,6 +10,7 @@
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/fabric_host_interface.h>
+#include <tt-metalium/control_plane.hpp>
 #include "umd/device/device_api_metal.h"
 #include "umd/device/tt_cluster_descriptor.h"
 #include "umd/device/tt_xy_pair.h"
@@ -48,7 +49,7 @@ enum class EthRouterMode : uint32_t {
     FABRIC_ROUTER = 2,
 };
 
-enum class FabricConfig { DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, FABRIC_2D_PUSH = 3, CUSTOM = 4 };
+enum class FabricConfig : uint32_t { DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, FABRIC_2D_PUSH = 3, CUSTOM = 4 };
 
 class Cluster {
 public:
@@ -59,20 +60,11 @@ public:
 
     static Cluster& instance();
 
-    // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatc, so user_devices are meant for
-    // user facing host apis
-    size_t number_of_user_devices() const {
-        if (this->cluster_type_ == ClusterType::TG) {
-            const auto& chips = this->cluster_desc_->get_all_chips();
-            return std::count_if(chips.begin(), chips.end(), [&](const auto& id) {
-                return this->cluster_desc_->get_board_type(id) == BoardType::GALAXY;
-            });
-        } else {
-            return this->cluster_desc_->get_number_of_chips();
-        }
-    }
-
+    // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatch, so user_devices are meant
+    // for user facing host apis
     std::unordered_map<chip_id_t, eth_coord_t> get_user_chip_ethernet_coordinates() const;
+    size_t number_of_user_devices() const;
+    std::unordered_set<chip_id_t> user_exposed_chip_ids() const;
 
     size_t number_of_devices() const { return this->cluster_desc_->get_number_of_chips(); }
 
@@ -259,6 +251,8 @@ public:
         return this->tunnels_from_mmio_device.at(mmio_chip_id);
     }
 
+    tt::tt_fabric::ControlPlane* get_control_plane();
+
     void initialize_fabric_config(FabricConfig fabric_config);
 
     // Returns whether we are running on Galaxy.
@@ -305,6 +299,9 @@ private:
 
     void initialize_ethernet_sockets();
 
+    // Initialize control plane, which has mapping of physical device id to MeshGraph config
+    void initialize_control_plane();
+
     // Set tunnels from mmio
     void set_tunnels_from_mmio_device();
 
@@ -345,6 +342,8 @@ private:
     void release_ethernet_cores_for_fabric_routers();
 
     FabricConfig fabric_config_ = FabricConfig::DISABLED;
+
+    std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
 
     // Tunnels setup in cluster
     std::map<chip_id_t, std::vector<std::vector<chip_id_t>>> tunnels_from_mmio_device = {};

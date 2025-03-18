@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "lightmetal_fixture.hpp"
-#include <tt-metalium/env_lib.hpp>
+#include "env_lib.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include "env_lib.hpp"
 #include "gtest/gtest.h"

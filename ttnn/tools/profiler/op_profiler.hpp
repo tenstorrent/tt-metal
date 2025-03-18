@@ -14,7 +14,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <nlohmann/json.hpp>
 #include <magic_enum/magic_enum.hpp>
-#include <tt-metalium/profiler.hpp>
 #include <tt-metalium/kernel.hpp>
 #include "ttnn/operation.hpp"
 #include <tt-metalium/tt_metal.hpp>
@@ -107,6 +106,62 @@ inline auto compute_program_hash(
     }
 }
 #endif
+
+class RuntimeIDToOpName {
+    using RuntimeID = uint32_t;
+    using KeyType = std::pair<chip_id_t, RuntimeID>;
+    using MapType = std::map<KeyType, std::string>;
+
+public:
+    MapType::iterator find(chip_id_t device_id, RuntimeID runtime_id) {
+        std::scoped_lock<std::mutex> lock(map_mutex);
+        return map.find({device_id, runtime_id});
+    }
+    std::string at(chip_id_t device_id, RuntimeID runtime_id) {
+        std::scoped_lock<std::mutex> lock(map_mutex);
+        return map.at({device_id, runtime_id});
+    }
+    void insert(KeyType key, std::string opname) {
+        std::scoped_lock<std::mutex> lock(map_mutex);
+        map.emplace(key, std::move(opname));
+    }
+    MapType export_map() {
+        // thread-safe copy of internal map contents
+        std::scoped_lock<std::mutex> lock(map_mutex);
+        return map;
+    }
+
+private:
+    std::mutex map_mutex;
+    MapType map;
+};
+
+inline RuntimeIDToOpName runtime_id_to_opname_{};
+
+class ProgramHashToOpName {
+    using KeyType = std::pair<chip_id_t, tt::stl::hash::hash_t>;
+
+public:
+    std::string find_if_exists(const KeyType& key) {
+        std::scoped_lock<std::mutex> lock(map_mutex);
+        auto it = map.find(key);
+        if (it != map.end()) {
+            return it->second;
+        } else {
+            return "";
+        }
+    }
+    void insert(const KeyType& key, std::string opname) {
+        std::scoped_lock<std::mutex> lock(map_mutex);
+        map.emplace(key, std::move(opname));
+    }
+
+private:
+    std::mutex map_mutex;
+    std::map<KeyType, std::string> map;
+};
+
+inline ProgramHashToOpName program_hash_to_opname_{};
 
 static void start_tracy_zone(const string& source, const string& functName, uint32_t lineNum, uint32_t color = 0) {
 #if defined(TRACY_ENABLE)
@@ -384,6 +439,10 @@ inline std::string op_meta_data_serialized_json(
         j["op_hash"] = program_hash;
         j["kernel_info"] = get_kernels_json(device_id, program);
 
+        auto opname = j["op_code"].template get<std::string>();
+        runtime_id_to_opname_.insert({device_id, program.get_runtime_id()}, opname);
+        program_hash_to_opname_.insert({device_id, program_hash}, opname);
+
         j["optional_input_tensors"] = std::vector<json>{};
 
         auto perfModel = [&]() {
@@ -412,6 +471,8 @@ inline std::string op_meta_data_serialized_json(
         std::string ser = j.dump(4);
         return fmt::format("{}{} ->\n{}`", short_str, operation_id, ser);
     } else {
+        auto opname = program_hash_to_opname_.find_if_exists({device_id, program_hash});
+        runtime_id_to_opname_.insert({device_id, program.get_runtime_id()}, std::move(opname));
         return fmt::format("{}{}`", cached_ops.at(device_id).at(program_hash), operation_id);
     }
 }

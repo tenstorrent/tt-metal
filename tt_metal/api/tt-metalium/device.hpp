@@ -9,16 +9,16 @@
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
+#include "hostdevcommon/kernel_structs.h"  // Not used here, but leaked to programming examples
 #include "work_executor_types.hpp"
-#include "l1_banking_allocator.hpp"
 #include "data_types.hpp"
 #include "program_device_map.hpp"
-#include "build.hpp"
 #include "hal.hpp"
 #include "command_queue_interface.hpp"
-#include "sub_device_manager.hpp"
 #include "sub_device_types.hpp"
-#include "span.hpp"
+#include <tt-metalium/allocator_types.hpp>
+
+#include <tt_stl/span.hpp>
 
 namespace tt {
 
@@ -36,23 +36,13 @@ size: bytes
 using MemoryBlockTable = std::vector<std::unordered_map<std::string, std::string>>;
 enum class BufferType;
 
-inline namespace v0 {
-
 class Buffer;
 class Program;
 class SubDevice;
 
-}  // namespace v0
-
 class CommandQueue;
 class TraceBuffer;
 struct TraceDescriptor;
-
-namespace detail {
-struct TraceDescriptor;
-}
-
-inline namespace v0 {
 
 class IDevice {
 public:
@@ -84,21 +74,41 @@ public:
 
     // Given a Virtual coordinate in noc_index space, get the equivalent coordinate in Virtual NOC0 space
     virtual CoreCoord virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const = 0;
+
     // Given a coordinate in Virtual NOC0 Space, get the equivalent coordinate in Virtual noc_index space
     virtual CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const = 0;
 
-    virtual std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const = 0;
-    virtual std::vector<CoreCoord> ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const = 0;
+    // Convert logical coordinates to virtual coordinates for worker coordinates
+    virtual std::vector<CoreCoord> worker_cores_from_logical_cores(
+        const std::vector<CoreCoord>& logical_cores) const = 0;
+
+    // Convert logical coordinates to virtaul coordinates for ethernet coordinates
+    virtual std::vector<CoreCoord> ethernet_cores_from_logical_cores(
+        const std::vector<CoreCoord>& logical_cores) const = 0;
+
+    // Returns the optimal DRAM bank coordinates to logical worker assignment
     virtual std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment() = 0;
 
-    virtual CoreCoord virtual_core_from_logical_core(const CoreCoord &logical_coord, const CoreType& core_type) const = 0;
+    // Convert a logical coordinate to virtual coordinate
+    virtual CoreCoord virtual_core_from_logical_core(
+        const CoreCoord& logical_coord, const CoreType& core_type) const = 0;
+
+    // Convert a logical coordinate to a virtual coordinate for a worker coordinate
     virtual CoreCoord worker_core_from_logical_core(const CoreCoord &logical_core) const = 0;
 
-    // Ethernet API
-    virtual CoreCoord ethernet_core_from_logical_core(const CoreCoord &logical_core) const = 0;
-    virtual CoreCoord logical_core_from_ethernet_core(const CoreCoord &ethernet_core) const = 0;
-    virtual std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores=false) const = 0;
+    // Convert a logical coordinate to virtual coordinate for an ethernet coordinate
+    virtual CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const = 0;
+
+    // Convert a virtual ethernet coordinate to logical coordinate
+    virtual CoreCoord logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const = 0;
+
+    // Returns virtual coordinates of active ethernet cores. Some ethernet cores may be reserved for dispatch use.
+    virtual std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores = false) const = 0;
+
+    // Returns virtual coordinates of inactive ethernet cores
     virtual std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const = 0;
+
+    // Returns true if the ethernet core is active
     virtual bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores=false) const = 0;
     virtual std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const = 0;
     virtual std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const = 0;
@@ -106,7 +116,9 @@ public:
 
     virtual CoreCoord compute_with_storage_grid_size() const = 0;
 
+    // Returns a logical CoreRangeSet of the worker cores in the specified sub device that was previously loaded.
     virtual CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const = 0;
+    // Returns the number of worker cores in the specified sub device that was previously loaded.
     virtual uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const = 0;
 
     virtual const std::unique_ptr<Allocator>& allocator() const = 0;
@@ -209,8 +221,6 @@ public:
 
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
 };
-
-}  // namespace v0
 
 template <typename T>
 inline T IDevice::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {

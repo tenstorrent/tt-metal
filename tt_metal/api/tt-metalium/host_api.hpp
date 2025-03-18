@@ -7,11 +7,12 @@
 #include <variant>
 #include <vector>
 
+#include "dispatch_core_common.hpp"
 #include "runtime_args_data.hpp"
 #include "program_impl.hpp"
 #include "device.hpp"
 #include "sub_device_types.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "lightmetal_binary.hpp"
 
 /** @file */
@@ -35,7 +36,6 @@ namespace tt_metal {
 
 class CommandQueue;
 struct TraceDescriptor;
-inline namespace v0 {
 
 class Program;
 class IDevice;
@@ -274,8 +274,10 @@ void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, co
  * | buffer     | Dynamically allocated L1 buffer that shares address space of circular buffer `cb_handle` | const Buffer &               | L1 buffer   | Yes      |
  * | total_size | New size of the circular buffer in bytes                                                 | uint32_t                     |             | Yes      |
  */
+// clang-format on
 void UpdateDynamicCircularBufferAddressAndTotalSize(Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size);
 
+// clang-format off
 /**
  * Initializes semaphore on all cores within core range (inclusive). Each core can have up to eight 4B semaphores aligned to L1_ALIGNMENT.
  *
@@ -1008,7 +1010,6 @@ void Synchronize(
     const std::optional<uint8_t> cq_id = std::nullopt,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
-}  // namespace v0
 }  // namespace tt_metal
 
 }  // namespace tt

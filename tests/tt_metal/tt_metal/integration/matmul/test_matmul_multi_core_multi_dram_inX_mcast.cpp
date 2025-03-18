@@ -7,9 +7,10 @@
 #include "dispatch_fixture.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/tilize_utils.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "matmul_test_utils.hpp"
@@ -360,12 +361,12 @@ bool matmul_multi_core_multi_dram_inX_mcast(tt_metal::IDevice* device, int in1_o
 
     log_debug(LogTest, "Scattering inputs (activation & weights) to dram channels using tiled layout");
     auto activations_tilized = test_utils::tilize(tensor.get_values(), M * 32, K * 32);
-    auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
+    auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
     pass &= move_tiles_to_dram(device, activations, M, K, in0_dram_addr);
 
     auto identity_tilized = test_utils::tilize(identity, K * 32, N * 32);
-    auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
+    auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
     pass &= move_tiles_to_dram(device, weights, K, N, in1_dram_addr);
     log_debug(LogTest, "Copying inputs to dram complete");
@@ -414,7 +415,7 @@ bool matmul_multi_core_multi_dram_inX_mcast(tt_metal::IDevice* device, int in1_o
             std::vector<uint32_t> result_vec;
             tt_metal::detail::ReadFromDeviceDRAMChannel(device, dram_bank, dram_address, single_tile_size, result_vec);
             auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-            auto result_flat_layout = convert_to_flat_layout(result_bfp16);
+            auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
 
             // log_info(LogTest, "Tile id {} on dram bank {}, address {}", tile_id, dram_bank, dram_address);
             // print_vec(result_flat_layout, 32, 32, "Result - tile#" + std::to_string(tile_id));

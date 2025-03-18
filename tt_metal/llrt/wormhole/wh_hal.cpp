@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <numeric>
 
 #include "core_config.h"  // ProgrammableCoreType
 #include "dev_mem_map.h"  // MEM_LOCAL_BASE
@@ -56,6 +57,13 @@ void Hal::initialize_wh() {
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::L1)] = L1_ALIGNMENT;
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::DRAM)] = DRAM_ALIGNMENT;
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::HOST)] = PCIE_ALIGNMENT;
+
+    this->mem_alignments_with_pcie_.resize(static_cast<std::size_t>(HalMemType::COUNT));
+    this->mem_alignments_with_pcie_[static_cast<std::size_t>(HalMemType::L1)] = std::lcm(L1_ALIGNMENT, PCIE_ALIGNMENT);
+    this->mem_alignments_with_pcie_[static_cast<std::size_t>(HalMemType::DRAM)] =
+        std::lcm(DRAM_ALIGNMENT, PCIE_ALIGNMENT);
+    this->mem_alignments_with_pcie_[static_cast<std::size_t>(HalMemType::HOST)] =
+        std::lcm(PCIE_ALIGNMENT, PCIE_ALIGNMENT);
 
     this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr) {
         if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
@@ -121,6 +129,9 @@ void Hal::initialize_wh() {
     this->noc_stream_reg_space_size_ = NOC_STREAM_REG_SPACE_SIZE;
     this->noc_stream_remote_dest_buf_size_reg_index_ = STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX;
     this->noc_stream_remote_dest_buf_start_reg_index_ = STREAM_REMOTE_DEST_BUF_START_REG_INDEX;
+    this->noc_stream_remote_dest_buf_space_available_reg_index_ = STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX;
+    this->noc_stream_remote_dest_buf_space_available_update_reg_index_ =
+        STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
