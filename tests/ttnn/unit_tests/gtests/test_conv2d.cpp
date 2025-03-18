@@ -3,12 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include <iostream>
 #include <vector>
 #include "assert.hpp"
 #include "small_vector.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "dispatch_core_common.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
@@ -105,16 +103,16 @@ std::vector<float> reference_implementation_conv2d(
     uint32_t Xw = (input_width - kernel_width + 2 * padding_width) / stride_width + 1;
 
     std::vector<float> output = std::vector<float>(batch_size * output_channels * Xh * Xw);
-    int i = 0;
-    for (int n = 0; n < batch_size; n++) {
-        for (int co = 0; co < output_channels; co++) {
-            for (int h = 0; h < input_height; h += stride_height) {
+    uint32_t i = 0;
+    for (uint32_t n = 0; n < batch_size; n++) {
+        for (uint32_t co = 0; co < output_channels; co++) {
+            for (uint32_t h = 0; h < input_height; h += stride_height) {
                 std::vector<float> row;
-                for (int w = 0; w < input_width; w += stride_width) {
+                for (uint32_t w = 0; w < input_width; w += stride_width) {
                     float sum = 0;
-                    for (int ci = 0; ci < input_channels; ci++) {
-                        for (int kh = 0; kh < kernel_height; kh++) {
-                            for (int kw = 0; kw < kernel_width; kw++) {
+                    for (uint32_t ci = 0; ci < input_channels; ci++) {
+                        for (uint32_t kh = 0; kh < kernel_height; kh++) {
+                            for (uint32_t kw = 0; kw < kernel_width; kw++) {
                                 if (h + kh - padding_height >= 0 && h + kh - padding_height < input_height &&
                                     w + kw - padding_width >= 0 && w + kw - padding_width < input_width) {
                                     sum += input
@@ -232,9 +230,8 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
     float pcc_calculated = pcc(res, ref_res);
 
     bool pass = CloseDevice(device);
-    std::cout << "PCC: " << pcc_calculated << std::endl;
-    TT_FATAL(pass, "Error");
-    TT_FATAL(pcc_calculated > 0.99, "Failed pcc");
+    TT_FATAL(pass, "Error closing device");
+    TT_FATAL(pcc_calculated > 0.99, "PCC not high enough. Result PCC: {}, Expected PCC: 0.99", pcc_calculated);
 }
 
 INSTANTIATE_TEST_SUITE_P(Conv2DTests, Conv2DFixture, ::testing::Values(Conv2DParam{}));
