@@ -78,7 +78,10 @@ def concatenate(inputs: List, dim=-1, groups=2):
 
 
 def is_valid_device_for_unet(device):
-    return all([is_valid_device_for_unet(d) for d in device.get_devices()])
+    if isinstance(device, ttnn.MeshDevice):
+        return all([is_valid_device_for_unet(d) for d in device.get_devices()])
+    else:
+        return 8 == device.core_grid.x and 8 == device.core_grid.y
 
 
 def preprocess_unet_input_tensor(input_tensor, min_channels=16):
