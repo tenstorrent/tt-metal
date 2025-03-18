@@ -151,7 +151,7 @@ private:
     // Number of outstanding reads to be completed by the completion queue reader
     std::atomic<uint32_t> num_outstanding_reads_ = 0;
     // Exit signal for the completion queue reader
-    bool exit_condition_ = false;
+    std::atomic<bool> exit_condition_ = false;
     // Completion Queue Reader thread
     std::thread completion_queue_reader_thread_;
     // Global Mutex (used by both CQs) to safely use the reader_thread_pool_

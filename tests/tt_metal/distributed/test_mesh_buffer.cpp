@@ -138,8 +138,7 @@ TEST(MeshBufferTest, DeallocationWithoutMeshDevice) {
     // Repeated device init takes very long on TG. Skip.
     skip_for_tg();
     for (int i = 0; i < 100; i++) {
-        auto config =
-            MeshDeviceConfig{.mesh_shape = MeshShape(1, 1), .offset = std::nullopt, .physical_device_ids = {}};
+        MeshDeviceConfig config(MeshShape(1, 1));
         auto mesh_device =
             MeshDevice::create(config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
 
@@ -159,8 +158,7 @@ TEST(MeshBufferTest, DeallocationWithMeshDeviceClosed) {
     // Repeated device init takes very long on TG. Skip.
     skip_for_tg();
     for (int i = 0; i < 100; i++) {
-        auto config =
-            MeshDeviceConfig{.mesh_shape = MeshShape(1, 1), .offset = std::nullopt, .physical_device_ids = {}};
+        MeshDeviceConfig config(MeshShape(1, 1));
         auto mesh_device =
             MeshDevice::create(config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
 
