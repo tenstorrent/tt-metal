@@ -63,3 +63,20 @@ def test_resnet_50(
     test_infra.run()
     passed, message = test_infra.validate()
     assert passed, message
+
+
+def resnet_batch_16_lofi_pretrained_false(
+    device,
+    use_program_cache,
+    model_location_generator,
+):
+    test_resnet_50(
+        device,
+        use_program_cache,
+        16,
+        ttnn.bfloat8_b,
+        ttnn.bfloat8_b,
+        ttnn.MathFidelity.LoFi,
+        False,
+        model_location_generator,
+    )
