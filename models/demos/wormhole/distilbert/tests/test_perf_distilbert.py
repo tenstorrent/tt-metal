@@ -179,7 +179,7 @@ def test_distilbert_perf_device(batch_size, test, reset_seeds):
     if ttnn.GetNumAvailableDevices() == 2:
         batch_size = batch_size * 2
 
-    command = f"pytest tests/ttnn/integration_tests/distilbert/test_ttnn_distilbert_wh.py::test_distilbert_for_question_answering[silicon_arch_name=wormhole_b0-silicon_arch_wormhole_b0=True-sequence_size=768-batch_size=8-model_name=distilbert-base-uncased-distilled-squad]"
+    command = f"pytest tests/ttnn/integration_tests/distilbert/test_ttnn_distilbert_wh.py::test_distilbert_for_question_answering"
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
