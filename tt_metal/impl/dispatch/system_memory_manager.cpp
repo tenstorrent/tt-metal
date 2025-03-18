@@ -342,7 +342,8 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
     }
 }
 
-uint32_t SystemMemoryManager::completion_queue_wait_front(const uint8_t cq_id, volatile bool& exit_condition) const {
+uint32_t SystemMemoryManager::completion_queue_wait_front(
+    const uint8_t cq_id, std::atomic<bool>& exit_condition) const {
     uint32_t write_ptr_and_toggle;
     uint32_t write_ptr;
     uint32_t write_toggle;
