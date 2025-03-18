@@ -57,10 +57,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  tgg-model-perf:
-    needs: build-artifact
-    uses: ./.github/workflows/tgg-model-perf-tests-impl.yaml
-    secrets: inherit
   get-params:
     runs-on: ubuntu-latest
     outputs:
