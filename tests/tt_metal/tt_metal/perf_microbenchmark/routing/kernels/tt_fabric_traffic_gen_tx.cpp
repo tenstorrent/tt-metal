@@ -65,20 +65,19 @@ constexpr uint32_t e_depth = get_compile_time_arg_val(24);
 constexpr uint32_t w_depth = get_compile_time_arg_val(25);
 constexpr uint32_t n_depth = get_compile_time_arg_val(26);
 constexpr uint32_t s_depth = get_compile_time_arg_val(27);
+constexpr uint32_t router_mode = get_compile_time_arg_val(28);
 
 uint32_t max_packet_size_mask;
 
 auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
 volatile local_pull_request_t *local_pull_request = (volatile local_pull_request_t *)(data_buffer_start_addr - 1024);
 volatile tt_l1_ptr fabric_router_l1_config_t* routing_table;
-#ifdef FVC_MODE_PULL
-volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface =
-    (volatile tt_l1_ptr fabric_pull_client_interface_t*)client_interface_addr;
 
+using ClientInterfaceType = typename ClientInterfaceSelector<router_mode>::type;
+volatile tt_l1_ptr ClientInterfaceType client_interface = (volatile tt_l1_ptr ClientInterfaceType)client_interface_addr;
+#ifdef FVC_MODE_PULL
 fvc_inbound_pull_state_t test_producer __attribute__((aligned(16)));
 #else
-volatile tt_l1_ptr fabric_push_client_interface_t* client_interface =
-    (volatile tt_l1_ptr fabric_push_client_interface_t*)client_interface_addr;
 fvc_inbound_push_state_t test_producer __attribute__((aligned(16)));
 #endif
 fvcc_inbound_state_t fvcc_test_producer __attribute__((aligned(16)));
@@ -112,6 +111,7 @@ inline void notify_traffic_controller() {
         MEM_NOC_ATOMIC_RET_VAL_ADDR);
 }
 
+#ifdef FVC_MODE_PULL
 // generates packets with random size and payload on the input sideß
 inline bool test_buffer_handler_async_wr() {
     if (input_queue_state.all_packets_done()) {
@@ -304,6 +304,143 @@ inline bool test_buffer_handler_atomic_inc() {
     test_producer.advance_local_wrptr(words_initialized);
     return false;
 }
+#else
+// generates packets with random size and payload on the input sideß
+inline bool test_buffer_handler_async_wr() {
+    if (input_queue_state.all_packets_done()) {
+        return true;
+    }
+
+    uint32_t free_slots = test_producer.get_num_slots_free();
+    if (free_slots < 1) {
+        // no buffer slot available for new packet.
+        return false;
+    }
+
+    // Each call to test_buffer_handler initializes only up to the end
+    // of the producer buffer. Since the header is 3 words, we need to handle
+    // split header cases, where the buffer has not enough space for the full header.
+    // In this case, we write as many words as space available, and remaining header words
+    // are written on next call.
+    uint32_t slots_initialized = 0;
+    uint32_t curr_payload_bytes = 0;
+    while (slots_initialized < free_slots) {
+        if (input_queue_state.all_packets_done()) {
+            break;
+        }
+
+        uint32_t byte_wr_addr = test_producer.get_local_buffer_write_addr();
+
+        input_queue_state.next_packet(
+            num_dest_endpoints, dest_endpoint_start_id, max_packet_size_words, max_packet_size_mask, total_data_words);
+
+        tt_l1_ptr uint32_t* header_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(byte_wr_addr);
+        curr_payload_bytes =
+            (input_queue_state.curr_packet_size_words - PACKET_HEADER_SIZE_WORDS) * PACKET_WORD_SIZE_BYTES;
+
+        // check for wrap
+        // if the size of fvc buffer is greater than the rx buffer size and/or rx is slow
+        // data validation on rx could fail as tx could overwrite data
+        // explicit sync is needed to ensure data validation in all scenarios
+        if (target_address + curr_payload_bytes > rx_addr_hi) {
+            target_address = base_target_address;
+        }
+
+        packet_header.routing.flags = FORWARD | (mcast_data ? MCAST_DATA : 0);
+        packet_header.routing.packet_size_bytes = input_queue_state.curr_packet_size_words * PACKET_WORD_SIZE_BYTES;
+        packet_header.routing.dst_mesh_id = dest_device >> 16;
+        packet_header.routing.dst_dev_id = dest_device & 0xFFFF;
+        packet_header.session.command = ASYNC_WR;
+        if constexpr (test_command & ATOMIC_INC) {
+            packet_header.session.command |= ATOMIC_INC;
+            packet_header.packet_parameters.async_wr_atomic_parameters.noc_xy = noc_offset;
+            packet_header.packet_parameters.async_wr_atomic_parameters.increment = atomic_increment;
+            if constexpr (fixed_async_wr_notif_addr) {
+                packet_header.packet_parameters.async_wr_atomic_parameters.l1_offset = base_target_address;
+            } else {
+                packet_header.packet_parameters.async_wr_atomic_parameters.l1_offset = target_address;
+                reset_notif_addr = true;
+            }
+        }
+        packet_header.session.target_offset_l = target_address;
+        packet_header.session.target_offset_h = noc_offset;
+        target_address += packet_header.routing.packet_size_bytes - PACKET_HEADER_SIZE_BYTES;
+        if constexpr (mcast_data) {
+            packet_header.packet_parameters.mcast_parameters.east = e_depth;
+            packet_header.packet_parameters.mcast_parameters.west = w_depth;
+            packet_header.packet_parameters.mcast_parameters.north = n_depth;
+            packet_header.packet_parameters.mcast_parameters.south = s_depth;
+        }
+        tt_fabric_add_header_checksum(&packet_header);
+        for (uint32_t i = 0; i < (PACKET_HEADER_SIZE_BYTES / 4); i++) {
+            header_ptr[i] = ((uint32_t*)&packet_header)[i];
+        }
+
+        input_queue_state.curr_packet_words_remaining -= PACKET_HEADER_SIZE_WORDS;
+        byte_wr_addr += PACKET_HEADER_SIZE_BYTES;
+
+        if constexpr (!skip_pkt_content_gen) {
+            uint32_t start_val = (input_queue_state.packet_rnd_seed & 0xFFFF0000) +
+                                 (input_queue_state.curr_packet_size_words -
+                                  input_queue_state.curr_packet_words_remaining - PACKET_HEADER_SIZE_WORDS);
+            fill_packet_data(
+                reinterpret_cast<tt_l1_ptr uint32_t*>(byte_wr_addr),
+                input_queue_state.curr_packet_words_remaining,
+                start_val);
+        }
+        if constexpr (test_command & ATOMIC_INC) {
+            if (reset_notif_addr) {
+                tt_l1_ptr uint32_t* addr = reinterpret_cast<tt_l1_ptr uint32_t*>(byte_wr_addr);
+                *addr = time_seed + input_queue_state.get_num_packets();
+                reset_notif_addr = false;
+            }
+        }
+        slots_initialized += 1;
+        input_queue_state.curr_packet_words_remaining = 0;
+        test_producer.advance_local_wrptr(1);
+    }
+    return false;
+}
+
+// generates packets with random size and payload on the input side
+inline bool test_buffer_handler_atomic_inc() {
+    if (input_queue_state.all_packets_done()) {
+        return true;
+    }
+
+    uint32_t free_slots = test_producer.get_num_slots_free();
+    if (free_slots < 1) {
+        return false;
+    }
+
+    uint32_t slots_initialized = 0;
+    while (slots_initialized < free_slots) {
+        if (input_queue_state.all_packets_done()) {
+            break;
+        }
+        uint32_t byte_wr_addr = test_producer.get_local_buffer_write_addr();
+        input_queue_state.next_inline_packet(total_data_words);
+        tt_l1_ptr uint32_t* header_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(byte_wr_addr);
+        packet_header.routing.flags = INLINE_FORWARD;
+        packet_header.routing.dst_mesh_id = dest_device >> 16;
+        packet_header.routing.dst_dev_id = dest_device & 0xFFFF;
+        packet_header.routing.packet_size_bytes = PACKET_HEADER_SIZE_BYTES;
+        packet_header.session.command = ATOMIC_INC;
+        packet_header.session.target_offset_l = target_address;
+        packet_header.session.target_offset_h = noc_offset;
+        packet_header.packet_parameters.atomic_parameters.wrap_boundary = 31;
+        packet_header.packet_parameters.atomic_parameters.increment = atomic_increment;
+        tt_fabric_add_header_checksum(&packet_header);
+        for (uint32_t i = 0; i < (PACKET_HEADER_SIZE_BYTES / 4); i++) {
+            header_ptr[i] = ((uint32_t*)&packet_header)[i];
+        }
+        slots_initialized += 1;
+        input_queue_state.curr_packet_words_remaining = 0;
+        test_producer.advance_local_wrptr(1);
+    }
+    return false;
+}
+#endif
 
 inline bool test_buffer_handler_fvcc() {
     if (input_queue_state.all_packets_done()) {
@@ -491,8 +628,9 @@ void kernel_main() {
                 (test_producer.current_packet_header.routing.packet_size_bytes + PACKET_WORD_SIZE_BYTES - 1) >> 4;
             uint32_t curr_data_words_sent = test_producer.pull_data_from_fvc_buffer<FVC_MODE_ENDPOINT>();
 #else
-            volatile uint32_t* header_word_0 = (volatile uint32_t*)test_producer.get_local_buffer_read_addr();
-            curr_packet_size = ((header_word_0[0] & 0x3FFFFFFF) + PACKET_WORD_SIZE_BYTES - 1) >> 4;
+            curr_packet_size =
+                ((test_producer.packet_header->routing.packet_size_bytes & 0x3FFFFFFF) + PACKET_WORD_SIZE_BYTES - 1) >>
+                4;
             uint32_t curr_data_words_sent = test_producer.push_data_to_eth_router<FVC_MODE_ENDPOINT>();
 #endif
             curr_packet_words_sent += curr_data_words_sent;

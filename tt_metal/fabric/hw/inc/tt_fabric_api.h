@@ -242,7 +242,7 @@ inline void fabric_client_router_reserve(
             STREAM_ID_NOC_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX)));
     noc_inline_dw_write(router_addr + sizeof(uint32_t), xy_local_addr >> 32);
     client_interface->router_addr_h = router_addr_h;
-    client_interface->buffer_size = FABRIC_ROUTER_OUTBOUND_BUF_SIZE / PACKET_WORD_SIZE_BYTES;
+    client_interface->buffer_size = FABRIC_ROUTER_OUTBOUND_BUF_SLOTS;
     client_interface->wr_ptr = 0;
     client_interface->buffer_start = FABRIC_ROUTER_DATA_BUF_START + direction * FABRIC_ROUTER_OUTBOUND_BUF_SIZE;
     client_interface->router_push_addr = (STREAM_REG_ADDR(
@@ -257,75 +257,33 @@ inline void fabric_client_router_reserve(
 
 template <ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA>
 inline void fabric_async_write_push_data(
-    fabric_push_client_interface_t* client_interface, uint32_t src_addr, uint32_t size, uint32_t header_id) {
-    uint32_t total_words_to_send = (size + PACKET_WORD_SIZE_BYTES - 1) >> 4;
+    volatile tt_l1_ptr fabric_push_client_interface_t* client_interface, uint32_t src_addr, uint32_t size, uint32_t header_id) {
     uint64_t push_addr = get_noc_addr_helper(client_interface->router_addr_h, client_interface->router_push_addr);
     uint32_t router_buf_space = *(volatile uint32_t*)client_interface->router_space;
-    // check and wait for sufficient router space for the entire packet.
-    if (router_buf_space < total_words_to_send) {
-        client_interface->reserved[0]++;
-        while (router_buf_space < total_words_to_send) {
-            router_buf_space = *(volatile uint32_t*)client_interface->router_space;
-        }
+    while (router_buf_space == 0) {
+        router_buf_space = *(volatile uint32_t*)client_interface->router_space;
     }
 
     uint64_t buffer_wr_addr = get_noc_addr_helper(
         client_interface->router_addr_h,
-        (client_interface->buffer_start + (client_interface->wr_ptr * PACKET_WORD_SIZE_BYTES)));
-    uint32_t words_to_send = total_words_to_send;
-
+        (client_interface->buffer_start + (client_interface->wr_ptr * FABRIC_ROUTER_BUF_SLOT_SIZE)));
     if constexpr (data_mode == ClientDataMode::RAW_DATA) {
         // In raw mode, pick up the header from header buffer in client interface.
-        uint32_t words_before_wrap = client_interface->buffer_size - client_interface->wr_ptr;
-        if (words_before_wrap >= PACKET_HEADER_SIZE_WORDS) {
-            noc_async_write_one_packet(
-                (uint32_t)&client_interface->header_buffer[header_id],
-                buffer_wr_addr,
-                PACKET_HEADER_SIZE_BYTES,
-                noc_index);
-            client_interface->wr_ptr += PACKET_HEADER_SIZE_WORDS;
-            if (client_interface->wr_ptr >= client_interface->buffer_size) {
-                client_interface->wr_ptr -= client_interface->buffer_size;
-            }
-        } else {
-            uint32_t header_addr = (uint32_t)&client_interface->header_buffer[header_id];
-            noc_async_write_one_packet(
-                header_addr, buffer_wr_addr, words_before_wrap * PACKET_WORD_SIZE_BYTES, noc_index);
-            uint32_t words_after_wrap = PACKET_HEADER_SIZE_WORDS - words_before_wrap;
-            buffer_wr_addr = get_noc_addr_helper(client_interface->router_addr_h, client_interface->buffer_start);
-            header_addr += words_before_wrap * PACKET_WORD_SIZE_BYTES;
-            noc_async_write_one_packet(
-                header_addr, buffer_wr_addr, words_after_wrap * PACKET_WORD_SIZE_BYTES, noc_index);
-            client_interface->wr_ptr = words_after_wrap;
-        }
-        words_to_send -= PACKET_HEADER_SIZE_WORDS;
-    }
-
-    uint32_t words_before_wrap = client_interface->buffer_size - client_interface->wr_ptr;
-    if (words_before_wrap >= words_to_send) {
-        buffer_wr_addr = get_noc_addr_helper(
-            client_interface->router_addr_h,
-            (client_interface->buffer_start + (client_interface->wr_ptr * PACKET_WORD_SIZE_BYTES)));
-        noc_async_write_one_packet(src_addr, buffer_wr_addr, words_to_send * PACKET_WORD_SIZE_BYTES, noc_index);
-        client_interface->wr_ptr += words_to_send;
-        if (client_interface->wr_ptr >= client_interface->buffer_size) {
-            client_interface->wr_ptr -= client_interface->buffer_size;
-        }
-    } else {
-        buffer_wr_addr = get_noc_addr_helper(
-            client_interface->router_addr_h,
-            (client_interface->buffer_start + (client_interface->wr_ptr * PACKET_WORD_SIZE_BYTES)));
-        noc_async_write_one_packet(src_addr, buffer_wr_addr, words_before_wrap * PACKET_WORD_SIZE_BYTES, noc_index);
-
-        src_addr += words_before_wrap * PACKET_WORD_SIZE_BYTES;
-        buffer_wr_addr = get_noc_addr_helper(client_interface->router_addr_h, client_interface->buffer_start);
         noc_async_write_one_packet(
-            src_addr, buffer_wr_addr, (words_to_send - words_before_wrap) * PACKET_WORD_SIZE_BYTES, noc_index);
-        client_interface->wr_ptr = words_to_send - words_before_wrap;
+            (uint32_t)&client_interface->header_buffer[header_id],
+            buffer_wr_addr,
+            PACKET_HEADER_SIZE_BYTES,
+            noc_index);
+        buffer_wr_addr += PACKET_HEADER_SIZE_BYTES;
+        size -= PACKET_HEADER_SIZE_BYTES;
     }
-    noc_inline_dw_write(push_addr, total_words_to_send << REMOTE_DEST_BUF_WORDS_FREE_INC);
-    *(volatile uint32_t*)client_interface->update_router_space = (-total_words_to_send)
-                                                                 << REMOTE_DEST_BUF_WORDS_FREE_INC;
+    noc_async_write_one_packet(src_addr, buffer_wr_addr, size, noc_index);
+    noc_inline_dw_write(push_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+    client_interface->wr_ptr++;
+    *(volatile uint32_t*)client_interface->update_router_space = (-1) << REMOTE_DEST_BUF_WORDS_FREE_INC;
+    if (client_interface->wr_ptr >= client_interface->buffer_size) {
+        client_interface->wr_ptr -= client_interface->buffer_size;
+    }
 }
 
 template <ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA, AsyncWriteMode mode = AsyncWriteMode::ALL>

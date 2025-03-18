@@ -1659,6 +1659,7 @@ int main(int argc, char **argv) {
             mcast_depth[RoutingDirection::W],   // 25: mcast_w
             mcast_depth[RoutingDirection::N],   // 26: mcast_n
             mcast_depth[RoutingDirection::S],   // 27: mcast_s
+            push_mode                           // 28: Router mode. 0 - Pull, 1 - Push
         };
 
         std::vector<uint32_t> rx_compile_args = {
