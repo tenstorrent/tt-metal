@@ -12,7 +12,6 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
-      skip-tt-train: false
       build-wheel: true
       version: 22.04
   tt-train-cpp-unit-tests:
