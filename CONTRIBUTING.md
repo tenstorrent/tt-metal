@@ -645,12 +645,6 @@ your local branch, and then once everything looks good, push the change. You
 should not rebase your origin branch. That way, if anything goes wrong, you can
 use origin to restore your branch to a good state.
 
-Note: Before rebasing, remember to change your default comment character if you
-start your messages with the issue number. E.g. via the following command:
-```
-git config --global core.commentchar '>'
-```
-
 Note: for very small changes where you don't expect to create a second commit
 it might be okay to use the UI to rebase origin. However, in general, it's
 better to avoid that.
