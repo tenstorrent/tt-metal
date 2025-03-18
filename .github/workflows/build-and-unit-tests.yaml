@@ -95,7 +95,6 @@ jobs:
         TT_METAL_SLOW_DISPATCH_MODE: 1
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         DONT_USE_VIRTUAL_ENVIRONMENT: 1
-        GITHUB_ACTIONS: true
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
