@@ -19,13 +19,15 @@
 #include <device_impl.hpp>
 #include <sub_device.hpp>
 #include <sub_device_manager_tracker.hpp>
-#include <sub_device_manager.hpp>
-#include <sub_device_types.hpp>
+
+#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "tt_metal/common/thread_pool.hpp"
+#include "tt_metal/api/tt-metalium/device_pool.hpp"
 
 #include <hal.hpp>
 #include <mesh_coord.hpp>
 #include <small_vector.hpp>
+#include <env_lib.hpp>
 
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 
@@ -35,6 +37,16 @@ namespace {
 MeshDeviceID generate_unique_mesh_id() {
     static std::atomic<MeshDeviceID> next_id{0};
     return next_id++;
+}
+
+std::shared_ptr<ThreadPool> create_default_thread_pool(
+    const std::vector<IDevice*>& physical_devices, uint32_t logical_cpu_offset = 0) {
+    // Bind the thread-pool to the physical devices being used.
+    if (tt::parse_env("TT_MESH_BOOST_THREAD_POOL", false)) {
+        return create_boost_thread_pool(physical_devices.size());
+    } else {
+        return create_device_bound_thread_pool(physical_devices, logical_cpu_offset);
+    }
 }
 
 // Helper function to verify all devices in the MeshDevice have the same value
@@ -97,7 +109,11 @@ MeshDevice::ScopedDevices::ScopedDevices(
 
 MeshDevice::ScopedDevices::~ScopedDevices() {
     if (!opened_devices_.empty()) {
-        tt::tt_metal::detail::CloseDevices(opened_devices_);
+        std::vector<IDevice*> devices_to_close;
+        for (auto& [id, device] : opened_devices_) {
+            devices_to_close.push_back(device);
+        }
+        tt::DevicePool::instance().close_devices(devices_to_close, /*skip_synchronize=*/true);
     }
 }
 
@@ -109,6 +125,9 @@ uint8_t MeshDevice::num_hw_cqs() const {
 }
 
 bool MeshDevice::is_initialized() const {
+    if (!scoped_devices_) {
+        return false;
+    }
     return validate_and_get_reference_value(
         scoped_devices_->root_devices(), [](const auto& device) { return device->is_initialized(); });
 }
@@ -133,8 +152,9 @@ MeshDevice::MeshDevice(
     view_(std::move(mesh_device_view)),
     mesh_id_(generate_unique_mesh_id()),
     parent_mesh_(std::move(parent_mesh)),
-    dispatch_thread_pool_(create_boost_thread_pool(view_->shape().mesh_size())),
-    reader_thread_pool_(create_boost_thread_pool(view_->shape().mesh_size())) {}
+    program_cache_(std::make_unique<program_cache::detail::ProgramCache>()),
+    dispatch_thread_pool_(create_default_thread_pool(scoped_devices_->root_devices())),
+    reader_thread_pool_(create_default_thread_pool(scoped_devices_->root_devices(), view_->shape().mesh_size())) {}
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,
@@ -381,10 +401,10 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
 }
 
 bool MeshDevice::close() {
+    mesh_command_queues_.clear();
     sub_device_manager_tracker_.reset();
     scoped_devices_.reset();
     parent_mesh_.reset();
-    view_.reset();
     return true;
 }
 
@@ -417,6 +437,7 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const {
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }
 
 void MeshDevice::enable_async(bool enable) {
+    /*
     auto devices = this->get_devices();
     if (enable && devices.size() == 1) {
         tt::log_warning("Async mode is always disabled for a single device, ignoring enable_async call");
@@ -425,27 +446,14 @@ void MeshDevice::enable_async(bool enable) {
     for (auto device : devices) {
         dynamic_cast<Device*>(device)->force_enable_async(enable);
     }
+    */
 }
 
-void MeshDevice::enable_program_cache() {
-    for (auto device : this->get_devices()) {
-        device->enable_program_cache();
-    }
-}
+void MeshDevice::enable_program_cache() { program_cache_->enable(); }
 
-void MeshDevice::disable_and_clear_program_cache() {
-    for (auto device : this->get_devices()) {
-        device->disable_and_clear_program_cache();
-    }
-}
+void MeshDevice::disable_and_clear_program_cache() { program_cache_->clear(); }
 
-size_t MeshDevice::num_program_cache_entries() {
-    size_t total_entries = 0;
-    for (auto device : this->get_devices()) {
-        total_entries += device->num_program_cache_entries();
-    }
-    return total_entries;
-}
+size_t MeshDevice::num_program_cache_entries() { return program_cache_->num_entries(); }
 
 SubDeviceManagerId MeshDevice::create_sub_device_manager(
     tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
@@ -757,7 +765,7 @@ void MeshDevice::push_work(std::function<void()> work, bool blocking) {
     std::lock_guard lock(push_work_mutex_);
     work();
 }
-program_cache::detail::ProgramCache& MeshDevice::get_program_cache() { return reference_device()->get_program_cache(); }
+program_cache::detail::ProgramCache& MeshDevice::get_program_cache() { return *program_cache_; }
 HalProgrammableCoreType MeshDevice::get_programmable_core_type(CoreCoord virtual_core) const { return reference_device()->get_programmable_core_type(virtual_core); }
 std::vector<std::pair<transfer_info_cores, uint32_t>> MeshDevice::extract_dst_noc_multicast_info(
     const std::vector<CoreRange>& ranges, const CoreType core_type) {

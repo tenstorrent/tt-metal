@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <memory>
-#include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/fabric_host_interface.h>
 
@@ -26,7 +25,7 @@ TEST_F(Fabric2DFixture, TestAsyncWrite) {
     std::pair<mesh_id_t, chip_id_t> end_mesh_chip_id;
     chip_id_t physical_end_device_id;
 
-    auto control_plane = tt::DevicePool::instance().get_control_plane();
+    auto control_plane = tt::Cluster::instance().get_control_plane();
 
     // Find a device with a neighbour in the East direction
     bool connection_found = false;
@@ -186,7 +185,7 @@ TEST_F(Fabric2DFixture, TestAtomicInc) {
     std::pair<mesh_id_t, chip_id_t> end_mesh_chip_id;
     chip_id_t physical_end_device_id;
 
-    auto control_plane = tt::DevicePool::instance().get_control_plane();
+    auto control_plane = tt::Cluster::instance().get_control_plane();
 
     // Find a device with a neighbour in the East direction
     bool connection_found = false;
@@ -345,7 +344,7 @@ TEST_F(Fabric2DFixture, TestAsyncWriteAtomicInc) {
     std::pair<mesh_id_t, chip_id_t> end_mesh_chip_id;
     chip_id_t physical_end_device_id;
 
-    auto control_plane = tt::DevicePool::instance().get_control_plane();
+    auto control_plane = tt::Cluster::instance().get_control_plane();
 
     // Find a device with a neighbour in the East direction
     bool connection_found = false;
@@ -527,7 +526,7 @@ TEST_F(Fabric2DFixture, TestAsyncWriteMulticast) {
     auto routing_direction = RoutingDirection::E;
     mcast_hops[routing_direction] = 1;
 
-    auto control_plane = tt::DevicePool::instance().get_control_plane();
+    auto control_plane = tt::Cluster::instance().get_control_plane();
 
     // Find a device with enough neighbours in the specified direction
     bool connection_found = false;
@@ -749,7 +748,7 @@ TEST_F(Fabric2DFixture, TestAsyncWriteMulticastMultidirectional) {
     mcast_hops[RoutingDirection::E] = 1;
     mcast_hops[RoutingDirection::W] = 2;
 
-    auto control_plane = tt::DevicePool::instance().get_control_plane();
+    auto control_plane = tt::Cluster::instance().get_control_plane();
 
     // Find a device with enough neighbours in the specified direction
     bool connection_found = false;

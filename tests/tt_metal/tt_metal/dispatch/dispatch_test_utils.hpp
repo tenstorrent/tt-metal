@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <gtest/gtest.h>
 #include <cstdint>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel.hpp>
+#include "llrt.hpp"
 
 namespace tt::tt_metal {
 
@@ -14,6 +16,17 @@ struct TestBufferConfig {
     uint32_t page_size;
     BufferType buftype;
 };
+
+struct CoreCoordsL1 {
+    uint32_t my_x;
+    uint32_t my_y;
+    uint32_t my_logical_x;
+    uint32_t my_logical_y;
+    uint32_t my_sub_device_x;
+    uint32_t my_sub_device_y;
+};
+
+static_assert(sizeof(CoreCoordsL1) == 24);  // Must match kernel
 
 inline std::vector<uint32_t> generate_arange_vector(uint32_t size_bytes, uint32_t start = 0) {
     TT_FATAL(size_bytes % sizeof(uint32_t) == 0, "Error");
@@ -94,6 +107,42 @@ inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_ar
         force_max_size);
 
     return create_runtime_args(num_rt_args_unique, num_rt_args_common, unique_base, common_base);
+}
+
+inline void verify_kernel_coordinates(
+    tt::RISCV processor_class,
+    const CoreRangeSet& cr_set,
+    const tt::tt_metal::IDevice* device,
+    tt::tt_metal::SubDeviceId sub_device_id,
+    uint32_t cb_addr,
+    bool idle_eth = false) {
+    tt::Cluster::instance().l1_barrier(device->id());
+    tt::tt_metal::HalProgrammableCoreType hal_core_type = processor_class == tt::RISCV::ERISC
+                                                              ? tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH
+                                                              : tt::tt_metal::HalProgrammableCoreType::TENSIX;
+    hal_core_type = idle_eth ? tt::tt_metal::HalProgrammableCoreType::IDLE_ETH : hal_core_type;
+
+    CoreType core_type = processor_class == tt::RISCV::ERISC ? CoreType::ETH : CoreType::WORKER;
+    core_type = idle_eth ? CoreType::IDLE_ETH : core_type;
+
+    const auto& sub_device_origin = device->worker_cores(hal_core_type, sub_device_id).bounding_box().start_coord;
+    for (const auto& cr : cr_set.ranges()) {
+        for (auto core = cr.begin(); core != cr.end(); ++core) {
+            const auto& logical_coord = *core;
+            const auto& virtual_coord = device->virtual_core_from_logical_core(logical_coord, core_type);
+            CoreCoord relative_coord{logical_coord.x - sub_device_origin.x, logical_coord.y - sub_device_origin.y};
+
+            auto read_coords_raw = tt::llrt::read_hex_vec_from_core(
+                device->id(), virtual_coord, cb_addr, sizeof(tt::tt_metal::CoreCoordsL1));
+            auto read_coords = reinterpret_cast<volatile tt::tt_metal::CoreCoordsL1*>(read_coords_raw.data());
+
+            EXPECT_EQ(read_coords->my_logical_x, logical_coord.x) << "Logical X";
+            EXPECT_EQ(read_coords->my_logical_y, logical_coord.y) << "Logical Y";
+
+            EXPECT_EQ(read_coords->my_sub_device_x, (relative_coord).x) << "SubDevice Logical X";
+            EXPECT_EQ(read_coords->my_sub_device_y, (relative_coord).y) << "SubDevice Logical Y";
+        }
+    }
 }
 
 }  // namespace tt::tt_metal

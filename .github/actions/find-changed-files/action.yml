@@ -16,6 +16,8 @@ outputs:
     value: ${{ steps.find-changed-files.outputs.tt-train-changed }}
   submodule-changed:
     value: ${{ steps.find-changed-files.outputs.submodule-changed }}
+  any-code-changed:
+    value: ${{ steps.find-changed-files.outputs.any-code-changed }}
 
 runs:
   using: "composite"

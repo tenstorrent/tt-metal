@@ -50,6 +50,7 @@ MeshCommandQueue::MeshCommandQueue(
 }
 
 MeshCommandQueue::~MeshCommandQueue() {
+    this->finish();
     TT_FATAL(completion_queue_reads_.empty(), "The completion reader queue must be empty when closing devices.");
 
     for (auto& queue : read_descriptors_) {
@@ -94,10 +95,10 @@ void MeshCommandQueue::populate_dispatch_core_type() {
     for (auto device : this->mesh_device_->get_devices()) {
         if (device_idx) {
             TT_FATAL(
-                this->dispatch_core_type_ == dispatch_core_manager::instance().get_dispatch_core_type(device->id()),
+                this->dispatch_core_type_ == dispatch_core_manager::instance().get_dispatch_core_type(),
                 "Expected the Dispatch Core Type to match across device in a Mesh");
         } else {
-            this->dispatch_core_type_ = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+            this->dispatch_core_type_ = dispatch_core_manager::instance().get_dispatch_core_type();
         }
         device_idx++;
     }
@@ -113,7 +114,7 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
     SubDeviceId sub_device_id = *(sub_device_ids.begin());
     auto mesh_device_id = this->mesh_device_->id();
     auto& sysmem_manager = this->reference_sysmem_manager();
-    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
 
     TT_FATAL(
@@ -235,10 +236,7 @@ void MeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
 }
 
 void MeshCommandQueue::write_shard_to_device(
-    std::shared_ptr<Buffer>& shard_view,
-    const void* src,
-    const BufferRegion& region,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    Buffer* shard_view, const void* src, const BufferRegion& region, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
     auto device = shard_view->device();
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
@@ -247,7 +245,7 @@ void MeshCommandQueue::write_shard_to_device(
 }
 
 void MeshCommandQueue::read_shard_from_device(
-    std::shared_ptr<Buffer>& shard_view,
+    Buffer* shard_view,
     void* dst,
     const BufferRegion& region,
     std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
@@ -437,15 +435,14 @@ void MeshCommandQueue::enqueue_write_shard_to_sub_grid(
         // Multi-Threaded writes supported for Replicated buffers.
         // Currently not supported when doing TT-Mesh Native sharding, since we
         // rely on TTNN to perform sharding and call enqueue_write_shards
-        auto dispatch_lambda =
-            std::function<void(MeshCoordinate)>([this, &buffer, host_data, &region](MeshCoordinate&& coord) {
-                auto device_shard_view = buffer.get_device_buffer(coord);
-                const BufferRegion buffer_region = region.value_or(BufferRegion(0, device_shard_view->size()));
-                this->write_shard_to_device(device_shard_view, host_data, buffer_region);
-            });
-
+        auto dispatch_lambda = [this, &buffer, host_data, &region](const MeshCoordinate& coord) {
+            auto device_shard_view = buffer.get_device_buffer(coord);
+            const BufferRegion buffer_region = region.value_or(BufferRegion(0, device_shard_view->size()));
+            this->write_shard_to_device(device_shard_view, host_data, buffer_region);
+        };
         for (const auto& coord : device_range) {
-            dispatch_thread_pool_->enqueue([&dispatch_lambda, coord]() { dispatch_lambda(std::move(coord)); });
+            dispatch_thread_pool_->enqueue(
+                [&dispatch_lambda, coord]() { dispatch_lambda(coord); }, mesh_device_->get_device(coord)->id());
         }
         dispatch_thread_pool_->wait();
     } else {
@@ -478,19 +475,19 @@ void MeshCommandQueue::enqueue_write_shards(
     bool blocking) {
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
-
-    auto dispatch_lambda =
-        std::function<void(uint32_t)>([&shard_data_transfers, &buffer, this](uint32_t shard_idx) {
-            auto& shard_data_transfer = shard_data_transfers[shard_idx];
-            auto device_shard_view = buffer->get_device_buffer(shard_data_transfer.shard_coord);
-            this->write_shard_to_device(
-                device_shard_view,
-                shard_data_transfer.host_data,
-                shard_data_transfer.region.value_or(BufferRegion(0, device_shard_view->size())));
-        });
+    auto dispatch_lambda = [&shard_data_transfers, &buffer, this](uint32_t shard_idx) {
+        auto& shard_data_transfer = shard_data_transfers[shard_idx];
+        auto device_shard_view = buffer->get_device_buffer(shard_data_transfer.shard_coord);
+        this->write_shard_to_device(
+            device_shard_view,
+            shard_data_transfer.host_data,
+            shard_data_transfer.region.value_or(BufferRegion(0, device_shard_view->size())));
+    };
 
     for (std::size_t shard_idx = 0; shard_idx < shard_data_transfers.size(); shard_idx++) {
-        dispatch_thread_pool_->enqueue([&dispatch_lambda, shard_idx]() { dispatch_lambda(shard_idx); });
+        dispatch_thread_pool_->enqueue(
+            [&dispatch_lambda, shard_idx]() { dispatch_lambda(shard_idx); },
+            mesh_device_->get_device(shard_data_transfers[shard_idx].shard_coord)->id());
     }
     dispatch_thread_pool_->wait();
 
@@ -651,9 +648,11 @@ void MeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor& 
         // physical device).
         std::lock_guard<std::mutex> lock(reader_thread_pool_mutex_);
         for (auto& metadata : read_buffer_descriptor.num_reads_per_dev) {
-            reader_thread_pool_->enqueue([&reader_lambda, device = metadata.first, num_reads = metadata.second]() {
-                reader_lambda(device, num_reads);
-            });
+            reader_thread_pool_->enqueue(
+                [&reader_lambda, device = metadata.first, num_reads = metadata.second]() {
+                    reader_lambda(device, num_reads);
+                },
+                metadata.first->id());
         }
         reader_thread_pool_->wait();
     }
@@ -702,7 +701,7 @@ void MeshCommandQueue::write_program_cmds_to_subgrid(
     bool stall_first,
     bool stall_before_program,
     std::unordered_set<uint32_t>& chip_ids_in_workload) {
-    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
 
     for (const auto& coord : sub_grid) {
@@ -747,7 +746,7 @@ void MeshCommandQueue::capture_program_trace_on_subgrid(
     auto& sysmem_manager_for_trace = mesh_device_->get_device(sub_grid.start_coord())->sysmem_manager();
     uint32_t sysmem_manager_offset = sysmem_manager_for_trace.get_issue_queue_write_ptr(id_);
 
-    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
 
     program_dispatch::write_program_command_sequence(

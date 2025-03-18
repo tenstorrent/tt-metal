@@ -24,8 +24,7 @@ jobs:
       matrix:
         os: [ubuntu-20.04]
     runs-on:
-      - build-docker
-      - in-service
+      - ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -70,39 +69,51 @@ jobs:
               {
                 runs-on: ["cloud-virtual-machine", "N150", "in-service"],
                 cmd: pytest tests/end_to_end_tests,
+                arch: wormhole_b0,
               },
               {
                 runs-on: ["cloud-virtual-machine", "N300", "in-service"],
                 cmd: pytest tests/end_to_end_tests,
+                arch: wormhole_b0,
               },
           ]
-    env:
-      LOGURU_LEVEL: INFO
     runs-on: ${{ matrix.test_group.runs-on }}
+    container:
+      image: ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release:${{ inputs.version }}
+      env:
+        LOGURU_LEVEL: INFO
+        ARCH_NAME: ${{ matrix.test_group.arch }}
+        GITHUB_ACTIONS: true
+        PYTHONPATH: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: Checkout
+      - name: ⬇️ Checkout
         uses: actions/checkout@v4
-      - name: Run smoke test on the image
-        timeout-minutes: ${{ inputs.timeout }}
-        uses: ./.github/actions/docker-run
         with:
-          docker_image: ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release:${{ inputs.version }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          run_args: |
+          submodules: recursive
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+      - name: Run frequent regression tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: |
             pip install pytest
-            export PATH="$(pwd)/.local/bin:$PATH"
             ${{ matrix.test_group.cmd }}
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
   tag-docker-image-as-latest:
     needs: [smoke-test-docker-image, create-docker-release-image]
     strategy:
       matrix:
         os: [ubuntu-20.04]
     runs-on:
-      - build-docker
-      - in-service
+      - ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
       - name: Docker login
         uses: docker/login-action@v3
         with:

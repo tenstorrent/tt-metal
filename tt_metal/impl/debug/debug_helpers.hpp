@@ -7,8 +7,12 @@
 #include <set>
 
 #include <tt-metalium/dev_msgs.h>
+#include <tt-metalium/core_descriptor.hpp>
 #include "hostdevcommon/dprint_common.h"
+#include "impl/dispatch/dispatch_core_manager.hpp"
 #include <device.hpp>
+
+namespace tt::tt_metal {
 
 // Helper function for comparing CoreDescriptors for using in sets.
 struct CoreDescriptorComparator {
@@ -20,7 +24,7 @@ struct CoreDescriptorComparator {
         }
     }
 };
-#define CoreDescriptorSet std::set<CoreDescriptor, CoreDescriptorComparator>
+using CoreDescriptorSet = std::set<CoreDescriptor, CoreDescriptorComparator>;
 
 // Helper function to get CoreDescriptors for all debug-relevant cores on device.
 static CoreDescriptorSet GetAllCores(tt::tt_metal::IDevice* device) {
@@ -47,8 +51,7 @@ static CoreDescriptorSet GetAllCores(tt::tt_metal::IDevice* device) {
 static CoreDescriptorSet GetDispatchCores(tt::tt_metal::IDevice* device) {
     CoreDescriptorSet dispatch_cores;
     unsigned num_cqs = device->num_hw_cqs();
-    const auto& dispatch_core_config =
-        tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_config(device->id());
+    const auto& dispatch_core_config = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
     tt::log_warning("Dispatch Core Type = {}", dispatch_core_type);
     for (auto logical_core : tt::get_logical_dispatch_cores(device->id(), num_cqs, dispatch_core_config)) {
@@ -74,3 +77,21 @@ inline int GetNumRiscs(tt::tt_metal::IDevice* device, const CoreDescriptor& core
         return DPRINT_NRISCVS;
     }
 }
+
+inline const std::string_view get_core_type_name(CoreType ct) {
+    switch (ct) {
+        case CoreType::ARC: return "ARC";
+        case CoreType::DRAM: return "DRAM";
+        case CoreType::ETH: return "ethernet";
+        case CoreType::PCIE: return "PCIE";
+        case CoreType::WORKER: return "worker";
+        case CoreType::HARVESTED: return "harvested";
+        case CoreType::ROUTER_ONLY: return "router_only";
+        case CoreType::ACTIVE_ETH: return "active_eth";
+        case CoreType::IDLE_ETH: return "idle_eth";
+        case CoreType::TENSIX: return "tensix";
+        default: return "UNKNOWN";
+    }
+}
+
+}  // namespace tt::tt_metal

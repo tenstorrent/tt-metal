@@ -16,7 +16,7 @@
 using namespace ttml;
 
 auto check_board_is_n300() {
-    return tt_ClusterDescriptor::create()->get_board_type(0) == BoardType::N300;
+    return tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0) == BoardType::N300;
 }
 
 class N300UtilsTest : public ::testing::Test {
@@ -118,7 +118,9 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis2) {
     EXPECT_TRUE(xt::allclose(chunk1, xtensors_back[1]));
 }
 
-TEST_F(N300UtilsTest, TestXTensorReplicateAllReduce) {
+TEST_F(N300UtilsTest, DISABLED_TestXTensorReplicateAllReduce) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric ";
+
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
@@ -142,6 +144,8 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduce) {
 }
 
 TEST_F(N300UtilsTest, TestXTensorReplicateAllReduceBadTiles) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::experimental::all_reduce)";
+
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
@@ -182,6 +186,8 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis2AddScalar) {
 }
 
 TEST_F(N300UtilsTest, TestXTensorShardAxis3Matmul) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
+
     xt::random::seed(42);
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();

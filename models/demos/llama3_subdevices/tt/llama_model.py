@@ -116,6 +116,7 @@ class TtTransformer(LightweightModule):
             state_dict_prefix=state_dict_prefix,
             weight_cache_path=weight_cache_path,
             tt_ccl=self.tt_ccl,
+            prefetcher_setup=self.prefetcher_setup,
         )
         self.tt_tensors = self.prefetcher_setup.get_input_tensors()
 

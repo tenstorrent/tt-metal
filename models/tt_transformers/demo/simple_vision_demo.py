@@ -43,14 +43,17 @@ def get_batch_sampler(temperature, top_p, tokenizer):
     return sample
 
 
-def create_multimodal_model(mesh_device, max_batch_size, max_seq_len, dtype=ttnn.bfloat16, use_paged_kv_cache=False):
+def create_multimodal_model(
+    mesh_device, max_batch_size, max_seq_len, dtype=ttnn.bfloat16, use_paged_kv_cache=False, checkpoint=None
+):
     from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
     from models.tt_transformers.tt.model_config import ModelArgs
 
     tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size)
     # limit length or we'll run out of space
     tt_model_args.max_seq_len = max_seq_len
-    checkpoint = torch.load(tt_model_args.consolidated_weights_path, map_location="cpu", weights_only=True)
+    if checkpoint is None:
+        checkpoint = torch.load(tt_model_args.consolidated_weights_path, map_location="cpu", weights_only=True)
     model = CrossAttentionTransformer(
         mesh_device,
         checkpoint,
@@ -59,7 +62,36 @@ def create_multimodal_model(mesh_device, max_batch_size, max_seq_len, dtype=ttnn
         configuration=tt_model_args,
         use_paged_kv_cache=use_paged_kv_cache,
     )
-    return tt_model_args, model
+    return tt_model_args, model, checkpoint
+
+
+def prepare_generator_args(
+    num_devices, data_parallel, mesh_device, max_batch_size, max_seq_len, dtype=ttnn.bfloat16, use_paged_kv_cache=False
+):
+    # Partition the mesh, singular model implemented for TP on 1xN mesh
+    submesh_devices = (
+        mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
+        if isinstance(mesh_device, ttnn.MeshDevice) and data_parallel > 1
+        else [mesh_device]
+    )
+    state_dict = None
+
+    model_args = []
+    model = []
+
+    for submesh in submesh_devices:
+        model_args_i, model_i, state_dict = create_multimodal_model(
+            mesh_device=submesh,
+            max_batch_size=max_batch_size // data_parallel,
+            max_seq_len=max_seq_len,
+            dtype=dtype,
+            use_paged_kv_cache=use_paged_kv_cache,
+            checkpoint=state_dict,
+        )
+        model_args.append(model_args_i)
+        model.append(model_i)
+
+    return model_args, model
 
 
 @pytest.mark.parametrize(
@@ -86,6 +118,13 @@ def create_multimodal_model(mesh_device, max_batch_size, max_seq_len, dtype=ttnn
     ],
     ids=["batch1-notrace", "batch1-trace", "batch32-trace", "batch4-trace-with-text-prompts"],
 )
+@pytest.mark.parametrize(
+    "data_parallel",
+    [
+        1,
+        # 4,
+    ],
+)
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 14951424, "num_command_queues": 2}], indirect=True)
 def test_multimodal_demo_text(
     mesh_device,
@@ -93,6 +132,7 @@ def test_multimodal_demo_text(
     enable_trace,
     max_batch_size,
     include_text_only_prompts,
+    data_parallel,
     test_type,
     max_seq_len,
     is_ci_env,
@@ -114,12 +154,22 @@ def test_multimodal_demo_text(
 
     mesh_device.enable_program_cache()
     mesh_device.enable_async(True)
-    model_args, model = create_multimodal_model(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len)
+
+    num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
+    max_batch_size *= data_parallel  # input batch_size is interpreted as size per DP group
+
+    model_args, model = prepare_generator_args(
+        num_devices=num_devices,
+        data_parallel=data_parallel,
+        mesh_device=mesh_device,
+        max_batch_size=max_batch_size,
+        max_seq_len=max_seq_len,
+    )
     generator = Generator(model, model_args, mesh_device)
     tokenizer = Tokenizer(model_path=tokenizer_path)
     formatter = ChatFormat(tokenizer)
 
-    xattn_caches = generator.model.setup_cache(model_args.max_batch_size)
+    xattn_caches = [model.setup_cache(model_args[i].max_batch_size) for i, model in enumerate(generator.model)]
 
     with open(IMG_PATH / "ocr_image.jpeg", "rb") as f:
         ocr_image = PIL_Image.open(f).convert("RGB")
@@ -308,16 +358,16 @@ def test_multimodal_demo_text(
     )
     logger.info("")
 
-    tt_device_name = model_args.device_name
+    tt_device_name = model_args[0].device_name
     target_prefill_tok_s = {
         "N300_Llama3.2-11B": 9,
         "T3K_Llama3.2-11B": 4,
-    }[f"{tt_device_name}_{model_args.base_model_name}"]
+    }[f"{tt_device_name}_{model_args[0].base_model_name}"]
 
     target_decode_tok_s_u = {
         "N300_Llama3.2-11B": 19,
         "T3K_Llama3.2-11B": 27,
-    }[f"{tt_device_name}_{model_args.base_model_name}"]
+    }[f"{tt_device_name}_{model_args[0].base_model_name}"]
 
     target_decode_tok_s = target_decode_tok_s_u * max_batch_size
     targets = {
@@ -334,10 +384,10 @@ def test_multimodal_demo_text(
         benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets)
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type=f"{model_args.device_name}-demo",
-            ml_model_name=model_args.base_model_name,
+            run_type=f"{model_args[0].device_name}-demo",
+            ml_model_name=model_args[0].base_model_name,
             ml_model_type="vlm",
-            num_layers=model_args.n_layers,
+            num_layers=model_args[0].n_layers,
             batch_size=max_batch_size,
             input_sequence_length=max(prefill_lens).item(),
             output_sequence_length=max_gen_len,
