@@ -9,58 +9,12 @@
 #include <climits>
 #include <limits>
 
-namespace tt::tt_fabric {
-
-static constexpr uint8_t edm_to_local_chip_noc_index = 1;
-
-static constexpr uint8_t EDM_NOC_ADDR_LOCAL_BITS = 36;
-static constexpr uint8_t EDM_NOC_ADDR_NODE_ID_BITS = 6;
-
-#ifdef ARCH_BLACKHOLE
-constexpr uint8_t noc_size_x = 17;
-constexpr uint8_t noc_size_y = 12;
-#else
-constexpr uint8_t noc_size_x = 10;
-constexpr uint8_t noc_size_y = 12;
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #endif
 
-struct EDMWorkerXY {
-    uint16_t x;
-    uint16_t y;
-
-    constexpr EDMWorkerXY(uint16_t x, uint16_t y) : x(x), y(y) {}
-};
-
-static constexpr size_t VIRTUAL_COORDS_START_X = 16;
-static constexpr size_t VIRTUAL_COORDS_START_Y = 16;
-inline bool is_using_noc_coords(uint16_t noc_x, uint16_t noc_y) {
-    return noc_x < VIRTUAL_COORDS_START_X && noc_y < VIRTUAL_COORDS_START_Y;
-}
-
-#define NOC_0_X_PHYS_COORD(noc_index, noc_size_x, x) (noc_index == 0 ? (x) : (noc_size_x - 1 - (x)))
-#define NOC_0_Y_PHYS_COORD(noc_index, noc_size_y, y) (noc_index == 0 ? (y) : (noc_size_y - 1 - (y)))
-
-inline uint64_t edm_safe_get_noc_addr(uint8_t dest_noc_x, uint8_t dest_noc_y, uint32_t dest_bank_addr, uint8_t noc_id) {
-    bool using_noc_coords = is_using_noc_coords(dest_noc_x, dest_noc_y);
-    uint8_t noc_x = dest_noc_x;
-    uint8_t noc_y = dest_noc_y;
-    if (using_noc_coords) {
-        noc_x = NOC_0_X_PHYS_COORD(noc_id, noc_size_x, dest_noc_x);
-        noc_y = NOC_0_Y_PHYS_COORD(noc_id, noc_size_y, dest_noc_y);
-    }
-
-    uint64_t noc_addr = (((uint64_t)(noc_y)) << (EDM_NOC_ADDR_LOCAL_BITS + EDM_NOC_ADDR_NODE_ID_BITS)) |
-                        (((uint64_t)(noc_x)) << EDM_NOC_ADDR_LOCAL_BITS) | (uint64_t)(dest_bank_addr);
-    return noc_addr;
-}
-
-inline std::pair<EDMWorkerXY, uint32_t> edm_get_noc_address_components(uint64_t noc_addr) {
-    const size_t bank_addr = noc_addr & 0xFFFFFFFF;
-    const size_t noc_x = (noc_addr >> EDM_NOC_ADDR_LOCAL_BITS) & ((1 << EDM_NOC_ADDR_NODE_ID_BITS) - 1);
-    const size_t noc_y =
-        (noc_addr >> (EDM_NOC_ADDR_LOCAL_BITS + EDM_NOC_ADDR_NODE_ID_BITS)) & ((1 << EDM_NOC_ADDR_NODE_ID_BITS) - 1);
-    return {EDMWorkerXY(noc_x, noc_y), bank_addr};
-}
+namespace tt::tt_fabric {
 
 enum TerminationSignal : uint32_t {
     KEEP_RUNNING = 0,
@@ -207,34 +161,38 @@ struct PacketHeaderBase {
 
     inline Derived& to_noc_unicast_write(
         const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_WRITE;
-        auto noc_address_components = edm_get_noc_address_components(noc_unicast_command_header.noc_address);
-        auto noc_addr = edm_safe_get_noc_addr(
+        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
             noc_address_components.first.x,
             noc_address_components.first.y,
             noc_address_components.second,
-            edm_to_local_chip_noc_index);
+            edm_to_local_chip_noc);
         NocUnicastCommandHeader modified_command_header = noc_unicast_command_header;
         modified_command_header.noc_address = noc_addr;
 
         this->command_fields.unicast_write = modified_command_header;
         this->payload_size_bytes = payload_size_bytes;
+#endif
         return *static_cast<Derived*>(this);
     }
 
     inline Derived& to_noc_unicast_inline_write(const NocUnicastInlineWriteCommandHeader& noc_unicast_command_header) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_INLINE_WRITE;
-        auto noc_address_components = edm_get_noc_address_components(noc_unicast_command_header.noc_address);
-        auto noc_addr = edm_safe_get_noc_addr(
+        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
             noc_address_components.first.x,
             noc_address_components.first.y,
             noc_address_components.second,
-            edm_to_local_chip_noc_index);
+            edm_to_local_chip_noc);
         NocUnicastInlineWriteCommandHeader modified_command_header = noc_unicast_command_header;
         modified_command_header.noc_address = noc_addr;
 
         this->command_fields.unicast_inline_write = modified_command_header;
         this->payload_size_bytes = 0;
+#endif
         return *static_cast<Derived*>(this);
     }
 
@@ -248,18 +206,20 @@ struct PacketHeaderBase {
 
     inline Derived& to_noc_unicast_atomic_inc(
         const NocUnicastAtomicIncCommandHeader& noc_unicast_atomic_inc_command_header) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_ATOMIC_INC;
-        auto noc_address_components = edm_get_noc_address_components(noc_unicast_atomic_inc_command_header.noc_address);
-        auto noc_addr = edm_safe_get_noc_addr(
+        auto noc_address_components = get_noc_address_components(noc_unicast_atomic_inc_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
             noc_address_components.first.x,
             noc_address_components.first.y,
             noc_address_components.second,
-            edm_to_local_chip_noc_index);
+            edm_to_local_chip_noc);
         NocUnicastAtomicIncCommandHeader modified_command_header = noc_unicast_atomic_inc_command_header;
         modified_command_header.noc_address = noc_addr;
 
         this->command_fields.unicast_seminc = modified_command_header;
         this->payload_size_bytes = 0;
+#endif
         return *static_cast<Derived*>(this);
     }
 
@@ -284,32 +244,36 @@ struct PacketHeaderBase {
 
     inline volatile Derived* to_noc_unicast_write(
         const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_WRITE;
-        auto noc_address_components = edm_get_noc_address_components(noc_unicast_command_header.noc_address);
-        auto noc_addr = edm_safe_get_noc_addr(
+        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
             noc_address_components.first.x,
             noc_address_components.first.y,
             noc_address_components.second,
-            edm_to_local_chip_noc_index);
+            edm_to_local_chip_noc);
 
         this->command_fields.unicast_write.noc_address = noc_addr;
         this->payload_size_bytes = payload_size_bytes;
+#endif
         return static_cast<volatile Derived*>(this);
     }
 
     inline volatile Derived* to_noc_unicast_inline_write(
         const NocUnicastInlineWriteCommandHeader& noc_unicast_command_header) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_INLINE_WRITE;
-        auto noc_address_components = edm_get_noc_address_components(noc_unicast_command_header.noc_address);
-        auto noc_addr = edm_safe_get_noc_addr(
+        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
             noc_address_components.first.x,
             noc_address_components.first.y,
             noc_address_components.second,
-            edm_to_local_chip_noc_index);
+            edm_to_local_chip_noc);
 
         this->command_fields.unicast_inline_write.noc_address = noc_addr;
         this->command_fields.unicast_inline_write.value = noc_unicast_command_header.value;
         this->payload_size_bytes = 0;
+#endif
         return static_cast<volatile Derived*>(this);
     }
 
@@ -327,18 +291,20 @@ struct PacketHeaderBase {
 
     inline volatile Derived* to_noc_unicast_atomic_inc(
         const NocUnicastAtomicIncCommandHeader& noc_unicast_atomic_inc_command_header) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_ATOMIC_INC;
-        auto noc_address_components = edm_get_noc_address_components(noc_unicast_atomic_inc_command_header.noc_address);
-        auto noc_addr = edm_safe_get_noc_addr(
+        auto noc_address_components = get_noc_address_components(noc_unicast_atomic_inc_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
             noc_address_components.first.x,
             noc_address_components.first.y,
             noc_address_components.second,
-            edm_to_local_chip_noc_index);
+            edm_to_local_chip_noc);
 
         this->command_fields.unicast_seminc.noc_address = noc_addr;
         this->command_fields.unicast_seminc.val = noc_unicast_atomic_inc_command_header.val;
         this->command_fields.unicast_seminc.wrap = noc_unicast_atomic_inc_command_header.wrap;
         this->payload_size_bytes = 0;
+#endif
         return static_cast<volatile Derived*>(this);
     }
 
