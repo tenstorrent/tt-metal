@@ -162,6 +162,7 @@ namespace ccl {
 std::tuple<Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     const Tensor& input_tensor,
     Tensor& buffer_tensor,
+    const Tensor& batch_offset_tensor,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,

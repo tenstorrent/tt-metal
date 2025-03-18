@@ -14,6 +14,7 @@ namespace ttnn::operations::experimental::ccl::transformer {
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteAllReduceCreateQkvHeads::invoke(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& buffer_tensor,
+    const ttnn::Tensor& batch_offset,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
@@ -27,7 +28,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteAllReduceCreateQkvHe
     // create qkv heads optional parameters
     std::optional<const uint32_t> num_kv_heads,
     const std::optional<const bool> overlap_qk_coregrid,
-    const std::optional<const Tensor>& batch_offset,
     const std::optional<const uint32_t> slice_size,
     const std::optional<MemoryConfig>& final_memory_config,
     std::optional<std::array<Tensor, 3>> optional_output_tensors) {
@@ -42,6 +42,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteAllReduceCreateQkvHe
     return ttnn::operations::experimental::ccl::all_reduce_create_qkv_heads(
         input_tensor,
         buffer_tensor,
+        batch_offset,
         cluster_axis,
         mesh_device,
         topology,

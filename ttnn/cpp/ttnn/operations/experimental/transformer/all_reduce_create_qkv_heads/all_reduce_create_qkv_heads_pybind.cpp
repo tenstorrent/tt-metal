@@ -28,6 +28,7 @@ void bind_all_reduce_create_qkv_heads(pybind11::module& module, const ccl_operat
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
                ttnn::Tensor& buffer_tensor,
+               const ttnn::Tensor& batch_offset,
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
                const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
@@ -39,7 +40,6 @@ void bind_all_reduce_create_qkv_heads(pybind11::module& module, const ccl_operat
                std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
                std::optional<const uint32_t> num_kv_heads,
                const std::optional<const bool> overlap_qk_coregrid,
-               const std::optional<const Tensor>& batch_offset,
                const std::optional<const uint32_t> slice_size,
                const std::optional<MemoryConfig>& final_memory_config,
                std::optional<std::array<Tensor, 3>> optional_output_tensors)
@@ -47,6 +47,7 @@ void bind_all_reduce_create_qkv_heads(pybind11::module& module, const ccl_operat
                 return self(
                     input_tensor,
                     buffer_tensor,
+                    batch_offset,
                     cluster_axis,
                     mesh_device,
                     multi_device_global_semaphore,
@@ -58,13 +59,13 @@ void bind_all_reduce_create_qkv_heads(pybind11::module& module, const ccl_operat
                     worker_subdevice_id_opt,
                     num_kv_heads,
                     overlap_qk_coregrid,
-                    batch_offset,
                     slice_size,
                     final_memory_config,
                     optional_output_tensors);
             },
             py::arg("input_tensor"),
             py::arg("buffer_tensor"),
+            py::arg("batch_offset"),
             py::arg("cluster_axis"),
             py::arg("mesh_device"),
             py::arg("multi_device_global_semaphore"),
@@ -77,7 +78,6 @@ void bind_all_reduce_create_qkv_heads(pybind11::module& module, const ccl_operat
             py::arg("subdevice_id") = std::nullopt,
             py::arg("num_kv_heads") = std::nullopt,
             py::arg("overlap_qk_coregrid") = true,
-            py::arg("batch_offset") = std::nullopt,
             py::arg("slice_size") = std::nullopt,
             py::arg("final_memory_config") = std::nullopt,
             py::arg("optional_output_tensors") = std::nullopt});

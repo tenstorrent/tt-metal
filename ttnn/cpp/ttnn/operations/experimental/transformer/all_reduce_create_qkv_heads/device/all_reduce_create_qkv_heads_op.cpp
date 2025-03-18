@@ -123,6 +123,98 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
         "has {}",
         output_shard_shape_volume * this->ring_size,
         buffer_shard_shape_volume);
+
+    // validate for create qkv heads
+    const auto& input_shape = input_tensor.get_logical_shape();
+    const auto& batch_offset = input_tensors.at(2);
+
+    // TODO: Rewrite validation for this decode case
+    // NOTE: Checks for head_dim and shape[3] is done in nlp_create_qkv_heads because it's needed to infer head_dim
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
+    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
+    TT_FATAL(
+        input_tensor.get_dtype() == tt::tt_metal::DataType::FLOAT32 ||
+            input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16,
+        "Unsupported data format");
+    TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Only tile layout is supported for input tensor");
+
+    // input
+    const uint32_t num_users_supported = 32;
+    uint32_t num_users = input_shape[2];
+    TT_FATAL(
+        input_shape[3] % TILE_WIDTH == 0,
+        "Unsupported input shape = {}",
+        input_shape);  // head_dim must be multiple of TILE_WIDTH
+    TT_FATAL(num_users <= num_users_supported, "Unsupported input shape = {}", input_shape);  // 32 users
+    TT_FATAL(input_shape[1] == 1, "Unsupported input shape = {}", input_shape);
+    TT_FATAL(input_shape[0] == 1, "Unsupported input shape = {}", input_shape);
+    const auto QKV_memcfg = input_tensor.memory_config();
+    if (input_tensor.is_sharded()) {
+        TT_FATAL(
+            QKV_memcfg.memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+            "Current input memory layout is {}. It must be width sharded",
+            QKV_memcfg.memory_layout);
+        TT_FATAL(
+            input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_padded_shape()[-1],
+            "Shard shape must be correct");
+        TT_FATAL(
+            input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
+            "Shard orientation must be ROW_MAJOR");
+
+        if (!this->overlap_qk_coregrid) {
+            // Validate if each shard is a multiple of head_dim and doesn't contain partial heads
+            TT_FATAL(
+                this->head_dim % input_tensor.shard_spec().value().shape[1] == 0,
+                "We don't support partial heads in shards when q and k heads are not overlapping coregrid");
+        }
+        /* Don't validate batch_offset and slice_size for now, as they will be provided by the user
+        TT_FATAL(
+            !(batch_offset.has_value() ^ this->slice_size.has_value()),
+            "Both batch_offset and slice_size must be provided or neither");
+        if (batch_offset.has_value() && this->slice_size.has_value()) {
+            TT_FATAL(batch_offset.value().get_logical_shape()[0] == 1, "batch_offset must be unary tensor");
+            num_users = this->slice_size.value();
+        }
+        */
+
+    } else {
+        TT_FATAL(this->overlap_qk_coregrid, "Overlap_qk_coregrid must be true for non-sharded input");
+    }
+
+    // output
+    TT_FATAL(
+        this->final_mem_config.is_sharded() &&
+            this->final_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+        "Output tensor must be height sharded");
+
+    // Support maximum 32 heads for now
+    TT_FATAL(this->num_heads <= 32, "There are {} q heads only 32 are supported", this->num_heads);
+    TT_FATAL(
+        this->num_heads >= this->num_kv_heads,
+        "num_q_heads={} must be greater than or equal to num_kv_heads={}",
+        this->num_heads,
+        this->num_kv_heads);
+
+    uint32_t num_cores;
+    if (this->input_on_subcoregrids) {
+        auto input_core_grid = input_tensor.shard_spec().value().grid;
+        num_cores = input_core_grid.num_cores();
+
+    } else {
+        auto core_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+        num_cores = core_grid_size.x * core_grid_size.y;
+    }
+    // 1 User Per Core Max and 32 users for now
+    if (this->overlap_qk_coregrid) {
+        TT_FATAL(num_cores >= num_users, "Grid Size is {}. Need at least 32 cores for decode", num_cores);
+    } else {
+        TT_FATAL(
+            num_cores >= 2 * num_users,
+            "Input coregrid size is {}. Need cores atleast double of num_users for decode when q and k heads are not "
+            "overlapping "
+            "coregrid",
+            num_cores);
+    }
 }
 
 std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
@@ -271,6 +363,7 @@ namespace ccl {
 std::tuple<Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     const Tensor& input_tensor,
     Tensor& buffer_tensor,
+    const Tensor& batch_offset_tensor,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
@@ -327,6 +420,7 @@ std::tuple<Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
 
             const auto& input_tensor = input_tensors.at(0);
             const auto& buffer_tensor = input_tensors.at(1);
+            const auto& batch_offset_tensor = input_tensors.at(2);
 
             return tt::tt_metal::operation::run(
                 ttnn::ccl::all_reduce_create_qkv_heads_detail::create_all_reduce_create_qkv_heads_struct(
@@ -345,9 +439,9 @@ std::tuple<Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
                     input_on_subcoregrids,
                     slice_size,
                     final_memory_config),
-                {input_tensor, buffer_tensor});
+                {input_tensor, buffer_tensor, batch_offset_tensor});
         },
-        {input_tensor, buffer_tensor},
+        {input_tensor, buffer_tensor, batch_offset_tensor},
         output_tensors);
     return std::make_tuple(output_tensors.at(0), output_tensors.at(0), output_tensors.at(0));
 }
