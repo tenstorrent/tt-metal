@@ -72,7 +72,7 @@ jobs:
       - name: Run demo regression tests
         timeout-minutes: 90
         run: |
-          source ${{ github.workspace }}/tests/scripts/single_card/run_single_card_demo_tests.sh
+          source ./tests/scripts/single_card/run_single_card_demo_tests.sh
           ${{ matrix.test-group.cmd }}
       - name: Save environment data
         if: ${{ matrix.test-group.name == 'N300_performance' && !cancelled() }}
