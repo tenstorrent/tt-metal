@@ -1684,6 +1684,8 @@ class ModelArgs:
 
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
+        # by default, the model is not a mixture-of-expert. This will be set to True if we find any `.experts.` in the keys
+        self.is_mixture_of_experts = False
         if self.dummy_weights:
             if self.checkpoint_type == CheckpointType.HuggingFace:
                 from transformers import AutoConfig, AutoModelForCausalLM
@@ -1725,12 +1727,12 @@ class ModelArgs:
                 state_dict = model.state_dict()
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
+            self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
 
         if self.checkpoint_type == CheckpointType.HuggingFace:
-            if "Qwen2.5-VL" in self.model_name:
-                state_dict = standardize_hf_keys_qwen25_vl(state_dict)
-            else:
-                state_dict = standardize_hf_keys(state_dict)
+            # the model is a mixture-of-experts if we find any `.experts.` in the keys
+            
+            state_dict = standardize_hf_keys(state_dict)
             state_dict = convert_hf_to_meta(state_dict, self.head_dim)
 
         keys_dict = list(state_dict.keys())[:]
