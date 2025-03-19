@@ -12,7 +12,6 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/decorators.hpp"
-#include <tt-metalium/span.hpp>
 #include "cpp/ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::experimental::ccl {

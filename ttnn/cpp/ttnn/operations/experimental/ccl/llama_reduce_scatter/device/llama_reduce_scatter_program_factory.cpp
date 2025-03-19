@@ -197,9 +197,9 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     // if (operation_attributes.ring_index == 3) {
     //     std::cout << "input_grid: " << input_grid.str() << std::endl;
     // }
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "output_grid: " << output_grid.str() << std::endl;
-    }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "output_grid: " << output_grid.str() << std::endl;
+    // }
     auto receiver_grid = detail::next_core_range_set(
         output_grid.bounding_box(),
         device->compute_with_storage_grid_size(),
@@ -432,9 +432,9 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     // if (operation_attributes.ring_index == 3) {
     //     std::cout << "input_cores: " << reader_defines["INPUT_CORE_XY"] << std::endl;
     // }
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "output_cores: " << reader_defines["OUTPUT_CORE_XY"] << std::endl;
-    }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "output_cores: " << reader_defines["OUTPUT_CORE_XY"] << std::endl;
+    // }
     // if (operation_attributes.ring_index == 3) {
     //     std::cout << "receiver_cores: " << reader_defines["RECEIVER_CORE_XY"] << std::endl;
     // }
@@ -502,6 +502,19 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         input_page_size,
         ncores_output,
     };
+
+    auto output_bounding_box = output_grid.bounding_box();
+    auto output_start_worker_core = to_worker_cores({output_bounding_box.start_coord});
+    auto output_end_worker_core = to_worker_cores({output_bounding_box.end_coord});
+
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "output start worker core: " << output_start_worker_core.at(0).str() << std::endl;
+    //     std::cout << "output end worker core: " << output_end_worker_core.at(0).str() << std::endl;
+    // }
+    writer_compile_time_args.push_back(output_start_worker_core.at(0).x);
+    writer_compile_time_args.push_back(output_start_worker_core.at(0).y);
+    writer_compile_time_args.push_back(output_end_worker_core.at(0).x);
+    writer_compile_time_args.push_back(output_end_worker_core.at(0).y);
 
     auto writer_defines = reader_defines;
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
