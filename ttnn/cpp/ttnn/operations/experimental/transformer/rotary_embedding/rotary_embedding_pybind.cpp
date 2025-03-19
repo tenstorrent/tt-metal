@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 #include "rotary_embedding.hpp"
 
@@ -40,7 +40,7 @@ void py_bind_rotary_embedding(pybind11::module& module) {
             ttnn.Tensor: the output tensor.
 
         )doc",
-        ttnn::pybind_arguments_t {
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::arg("cos_cache"),
             py::arg("sin_cache"),

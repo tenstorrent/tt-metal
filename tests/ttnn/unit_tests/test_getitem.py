@@ -76,16 +76,6 @@ def test_getitem_2d(device, height, width, input_layout, on_device):
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
-def test_getitem_scalar_output():
-    torch_input_tensor = torch.rand((16, 32), dtype=torch.bfloat16)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor)
-
-    with pytest.raises(RuntimeError) as e:
-        input_tensor[0, 0]
-    assert "Host tensor slice cannot return a scalar or empty tensor" in str(e.value)
-
-
 @pytest.mark.parametrize("batch_sizes", [(), (1, 1)])
 @pytest.mark.parametrize("height", [32, 64])
 @pytest.mark.parametrize("width", [32, 96])
@@ -110,7 +100,7 @@ def test_getitem_non_tile_boundary(device, batch_sizes, height, width, input_lay
         raise RuntimeError("Invalid batch size")
     assert output_tensor.layout == input_layout
     assert output_tensor.shape[-1] == 1
-    assert output_tensor.shape.with_tile_padding()[-1] == 32
+    assert output_tensor.padded_shape[-1] == 32
 
     output_tensor = ttnn.to_torch(output_tensor)
 

@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "fold_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_fold {
@@ -52,7 +52,7 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     Program program{};
-    Device* device = input.device();
+    IDevice* device = input.device();
 
     uint32_t num_units = output.get_logical_volume() / output.get_logical_shape()[-1];
 
@@ -74,8 +74,8 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     uint32_t aligned_input_cb_page_size = round_up_to_mul32(input_cb_page_size);
     uint32_t aligned_output_cb_page_size = round_up_to_mul32(output_cb_page_size);
 
-    uint32_t input_cb_index = tt::CB::c_in0;    // input
-    uint32_t output_cb_index = tt::CB::c_out0;  // ouput
+    uint32_t input_cb_index = tt::CBIndex::c_0;    // input
+    uint32_t output_cb_index = tt::CBIndex::c_16;  // ouput
 
     CircularBufferConfig input_cb_config =
         CircularBufferConfig(aligned_input_cb_page_size * 2, {{input_cb_index, data_format}})
@@ -119,10 +119,10 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     const auto reader_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_fold/device/kernels/reader_fold_rm.cpp";
     const auto writer_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_fold/device/kernels/writer_fold_rm.cpp";
 
-    const auto reader_kernel_id = CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    const auto writer_kernel_id = CreateWriteKernel(
-        program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
+    const auto reader_kernel_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    const auto writer_kernel_id =
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp

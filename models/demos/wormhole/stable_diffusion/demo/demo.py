@@ -18,7 +18,6 @@ from transformers import CLIPTextModel, CLIPTokenizer
 from diffusers import (
     AutoencoderKL,
     UNet2DConditionModel,
-    StableDiffusionPipeline,
 )
 from models.utility_functions import skip_for_grayskull
 from models.utility_functions import (
@@ -31,11 +30,9 @@ from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_p
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
 )
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import round_up_to_tile_dim
 from torchvision.transforms import ToTensor
 from torchmetrics.multimodal.clip_score import CLIPScore
 from torchmetrics.image.fid import FrechetInceptionDistance
-from scipy import integrate
 
 
 def load_inputs(input_path):
@@ -598,7 +595,6 @@ def run_demo_inference_diffusiondb(
         logger.info(f"CLIP Score (TTNN): {clip_score_ttnn}")
 
 
-@pytest.mark.skip(reason="#9945: Skip for now since this breaks on WH because of di/dt")
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(

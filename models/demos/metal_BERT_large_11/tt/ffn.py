@@ -101,7 +101,7 @@ class TtFeedForwardModel:
             encoder0_ff1_bias = ttnn.load_tensor(
                 str(tt_cache_path / f"{encoder_ff1_str}.bias_{model_config['OP9_FF1_MM_BIAS_DTYPE'].name}.bin")
             ).to(device, model_config["OP9_FF1_MM_BIAS_MEMCFG"])
-            encoder0_ff1_weight_shape = encoder0_ff1_weight.shape.with_tile_padding()
+            encoder0_ff1_weight_shape = encoder0_ff1_weight.padded_shape
 
             encoder0_ff2_weight = ttnn.load_tensor(
                 str(tt_cache_path / f"{encoder_ff2_str}.weight_{model_config['OP10_FF2_MM_WEIGHTS_DTYPE'].name}.bin")
@@ -122,25 +122,19 @@ class TtFeedForwardModel:
             encoder0_ff1_weight_shape = encoder0_ff1_weight.shape
             encoder0_ff1_bias_shape = encoder0_ff1_bias.shape
 
-            encoder0_ff1_weight = (
-                ttnn.Tensor(
-                    encoder0_ff1_weight.reshape(-1).tolist(),
-                    encoder0_ff1_weight.shape,
-                    model_config["OP9_FF1_MM_WEIGHTS_DTYPE"],
-                    ttnn.ROW_MAJOR_LAYOUT,
-                )
-                .to(ttnn.TILE_LAYOUT)
-                .to(device, model_config["OP9_FF1_MM_WEIGHTS_MEMCFG"])
+            encoder0_ff1_weight = ttnn.from_torch(
+                encoder0_ff1_weight,
+                model_config["OP9_FF1_MM_WEIGHTS_DTYPE"],
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=model_config["OP9_FF1_MM_WEIGHTS_MEMCFG"],
             )
-            encoder0_ff1_bias = (
-                ttnn.Tensor(
-                    encoder0_ff1_bias.reshape(-1).tolist(),
-                    encoder0_ff1_bias.shape,
-                    model_config["OP9_FF1_MM_BIAS_DTYPE"],
-                    ttnn.ROW_MAJOR_LAYOUT,
-                )
-                .to(ttnn.TILE_LAYOUT)
-                .to(device, model_config["OP9_FF1_MM_BIAS_MEMCFG"])
+            encoder0_ff1_bias = ttnn.from_torch(
+                encoder0_ff1_bias,
+                model_config["OP9_FF1_MM_BIAS_DTYPE"],
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=model_config["OP9_FF1_MM_BIAS_MEMCFG"],
             )
 
             # FF2 params
@@ -156,25 +150,19 @@ class TtFeedForwardModel:
             encoder0_ff2_weight_shape = encoder0_ff2_weight.shape
             encoder0_ff2_bias_shape = encoder0_ff2_bias.shape
 
-            encoder0_ff2_weight = (
-                ttnn.Tensor(
-                    encoder0_ff2_weight.reshape(-1).tolist(),
-                    encoder0_ff2_weight.shape,
-                    model_config["OP10_FF2_MM_WEIGHTS_DTYPE"],
-                    ttnn.ROW_MAJOR_LAYOUT,
-                )
-                .to(ttnn.TILE_LAYOUT)
-                .to(device, model_config["OP10_FF2_MM_WEIGHTS_MEMCFG"])
+            encoder0_ff2_weight = ttnn.from_torch(
+                encoder0_ff2_weight,
+                model_config["OP10_FF2_MM_WEIGHTS_DTYPE"],
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=model_config["OP10_FF2_MM_WEIGHTS_MEMCFG"],
             )
-            encoder0_ff2_bias = (
-                ttnn.Tensor(
-                    encoder0_ff2_bias.reshape(-1).tolist(),
-                    encoder0_ff2_bias.shape,
-                    model_config["OP10_FF2_MM_BIAS_DTYPE"],
-                    ttnn.ROW_MAJOR_LAYOUT,
-                )
-                .to(ttnn.TILE_LAYOUT)
-                .to(device, model_config["OP10_FF2_MM_BIAS_MEMCFG"])
+            encoder0_ff2_bias = ttnn.from_torch(
+                encoder0_ff2_bias,
+                model_config["OP10_FF2_MM_BIAS_DTYPE"],
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=model_config["OP10_FF2_MM_BIAS_MEMCFG"],
             )
 
         self.ffn = feed_forward(

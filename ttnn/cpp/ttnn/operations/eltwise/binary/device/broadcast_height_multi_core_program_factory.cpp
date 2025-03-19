@@ -5,13 +5,11 @@
 #include "binary_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/device_operation.hpp"
-
-
 
 namespace ttnn::operations::binary {
 
@@ -25,8 +23,8 @@ static const BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType bina
         default: TT_THROW("BinaryOpType cannot be mapped to BcastOpMath");
     }
 }
-}
-}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 BinaryDeviceOperation::BroadcastHeightMultiCore::cached_program_t
 BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
@@ -43,8 +41,8 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
     auto& output = tensor_return_value;
     auto bcast_math = binary_op_type_to_bcast_op_math(operation_attributes.binary_op_type);
 
-    const auto ashape = a.get_legacy_shape();
-    const auto bshape = b->get_legacy_shape();
+    const auto ashape = a.padded_shape();
+    const auto bshape = b->padded_shape();
     uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
     uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
     uint32_t H = ashape[-2];
@@ -66,7 +64,7 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    tt_metal::Device* device = a.device();
+    tt_metal::IDevice* device = a.device();
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::DataFormat src1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b->get_dtype());
@@ -93,7 +91,7 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
     auto dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    uint32_t src0_cb_index = 0;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = 2;
 
     tt_metal::CircularBufferConfig src0_cb_config =
@@ -101,13 +99,13 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
             .set_page_size(src0_cb_index, src0_single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_device_cores, src0_cb_config);
 
-    uint32_t src1_cb_index = 1;
+    uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(num_input_tiles * src1_single_tile_size, {{src1_cb_index, src1_cb_data_format}})
             .set_page_size(src1_cb_index, src1_single_tile_size);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, src1_cb_config);
 
-    uint32_t output_cb_index = 16;  // output operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_2;
     uint32_t num_output_tiles = 2;
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
@@ -123,20 +121,22 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
 
     KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/reader_bcast_h_interleaved_input_rows_partitioned.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/"
+        "reader_bcast_h_interleaved_input_rows_partitioned.cpp",
         all_device_cores,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/writer_unary_interleaved_input_cols_batched.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/"
+        "writer_unary_interleaved_input_cols_batched.cpp",
         all_device_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     std::map<std::string, std::string> bcast_defines = bcast_op_utils::get_defines(BcastOpDim::H, bcast_math);
     auto bcast_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_h.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/bcast_h.cpp",
         all_device_cores,
         tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_defines});
 
@@ -208,9 +208,7 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
 
     return {
         std::move(program),
-        {
-            binary_reader_kernel_id, unary_writer_kernel_id, bcast_kernel_id, compute_with_storage_grid_size}
-    };
+        {binary_reader_kernel_id, unary_writer_kernel_id, bcast_kernel_id, compute_with_storage_grid_size}};
 }
 
 void BinaryDeviceOperation ::BroadcastHeightMultiCore::override_runtime_arguments(
@@ -240,8 +238,8 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCore::override_runtime_argument
 
     auto dst_dram_buffer = output_tensor.buffer();
 
-    const auto ashape = input_tensor_a.get_legacy_shape();
-    const auto bshape = input_tensor_b->get_legacy_shape();
+    const auto ashape = input_tensor_a.padded_shape();
+    const auto bshape = input_tensor_b->padded_shape();
     uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
     uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
     uint32_t H = ashape[-2];

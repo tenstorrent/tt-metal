@@ -83,7 +83,7 @@ class TtSegformerEfficientSelfAttention:
                 strategy=mm_a_x_strategy,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
             ),
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
         )
         query = ttnn.linear(
             hidden_states,
@@ -91,7 +91,7 @@ class TtSegformerEfficientSelfAttention:
             bias=parameters.query.bias,
             memory_config=mm_a_x_memory_config,
             core_grid=ttnn.CoreGrid(y=mm_a_y, x=mm_a_x),
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
         )
 
         query = ttnn.to_memory_config(query, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
@@ -110,20 +110,25 @@ class TtSegformerEfficientSelfAttention:
                 batch_size, __, seq_len, num_channels = hidden_states.shape
 
             # Need for RM input to reshape, then back to TILE after that
-            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
+            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
             hidden_states = ttnn.to_layout(hidden_states, layout=ttnn.ROW_MAJOR_LAYOUT)
             hidden_states = ttnn.reshape(hidden_states, (batch_size, height, width, num_channels))
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
-            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
+            if hidden_states.shape[3] == 160:
+                # conv config update
+                self.sr.output_layout = ttnn.TILE_LAYOUT
+                hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
+                hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
 
             hidden_states, __, __ = self.sr(device, hidden_states)
             hidden_states = ttnn.to_memory_config(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
             hidden_states = ttnn.layer_norm(
                 hidden_states,
                 weight=parameters.layer_norm.weight,
                 bias=parameters.layer_norm.bias,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
             )
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)

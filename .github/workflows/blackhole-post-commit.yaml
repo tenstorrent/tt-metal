@@ -2,7 +2,29 @@ name: "Blackhole post-commit tests"
 
 on:
   workflow_call:
+    inputs:
+      runner-label:
+          description: 'Optional: BH'
+          required: false
+          type: string
+          default: 'BH'
   workflow_dispatch:
+    inputs:
+      runner-label:
+          description: 'Optional: BH'
+          required: true
+          type: string
+          default: 'BH'
+      build-type:
+        required: false
+        default: Release
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
   schedule:
     - cron: "0 */2 * * *"
   # Pause this since not enough runners to support every commit to main
@@ -21,49 +43,56 @@ jobs:
   static-checks:
     uses: ./.github/workflows/all-static-checks.yaml
     secrets: inherit
-  build-docker-image:
-    uses: ./.github/workflows/build-docker-artifact.yaml
-    secrets: inherit
   build-artifact:
-    needs: build-docker-image
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
-      arch: '["blackhole"]'
-      build-docker: false
-  build-wheels:
-    needs: build-artifact
-    uses: ./.github/workflows/_build-wheels-impl.yaml
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      version: "22.04"
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
     with:
-      os: "ubuntu-20.04"
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      tracy: true
+      version: "22.04"
+  run-profiler-regression:
+    needs: build-artifact-profiler
+    uses: ./.github/workflows/run-profiler-regression.yaml
+    secrets: inherit
+    with:
       arch: "blackhole"
-      from-precompiled: true
-#   build-artifact-profiler:
-#     uses: ./.github/workflows/build-artifact.yaml
-#     with:
-#       profiler-build: true
-#     secrets: inherit
+      timeout: 20
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      docker-image: ${{ needs.build-artifact-profiler.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
   umd-unit-tests:
     secrets: inherit
     uses: ./.github/workflows/umd-unit-tests.yaml
     with:
       arch: blackhole
-      runner-label: BH
+      runner-label: ${{ inputs.runner-label || 'BH' }}
   sd-unit-tests:
     needs: build-artifact
     uses: ./.github/workflows/build-and-unit-tests.yaml
     secrets: inherit
     with:
       arch: blackhole
-      runner-label: BH
-      timeout: 30
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      timeout: 15
+      os: "ubuntu-22.04"
   fd-unit-tests:
-    needs: build-wheels
+    needs: build-artifact
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     secrets: inherit
     with:
+      timeout: 20
       arch: blackhole
-      runner-label: BH
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      os: "ubuntu-22.04"
   # FD C++ Unit Tests
   cpp-unit-tests:
     needs: build-artifact
@@ -71,8 +100,17 @@ jobs:
     uses: ./.github/workflows/cpp-post-commit.yaml
     with:
       arch: blackhole
-      runner-label: BH
-      timeout: 60
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      timeout: 20
+      os: "ubuntu-22.04"
+  models-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/models-post-commit.yaml
+    with:
+      arch: blackhole
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      timeout: 10
 
 #   profiler-regression:
 #     needs: build-artifact-profiler
@@ -84,9 +122,6 @@ jobs:
 #   build-docs:
 #     needs: build-artifact
 #     uses: ./.github/workflows/docs-latest-public.yaml
-#     secrets: inherit
-#   build:
-#     uses: ./.github/workflows/build.yaml
 #     secrets: inherit
   # We used to use this for post-commit, but we didn't have enough runners
   # to support the number of developers running this workflow

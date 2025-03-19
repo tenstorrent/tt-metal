@@ -53,10 +53,10 @@ The demo is also parametrized to run for 1 or 3 continuous batch of users, i.e. 
 
 The input prompts are based on the general or instruct (fine-tuned) weights. The prompts are included in the demo folder `models/demos/qwen/demo`.
 
-When running the demo, do not forget to setup the `$QWEN_DIR` environment variable to the corresponding Llama3 model weights.
+When running the demo, do not forget to setup the `$QWEN_DIR` environment variable to the corresponding Qwen model weights.
 
 ```
-# Examples of how to run the demo for any supported Llama3 models
+# Examples of how to run the demo
 
 Currently, this model is only supported on N150 (single-device). If you are running this demo on a multi-chip device, please make sure FAKE_DEVICE is set to N150.
 

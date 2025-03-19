@@ -297,11 +297,9 @@ def _golden_function_isclose(input_tensor_a, input_tensor_b, *args, rtol=1e-05, 
 ttnn.attach_golden_function(ttnn.isclose, golden_function=_golden_function_isclose)
 
 
-def _golden_function_div(input_tensor_a, input_tensor_b, round_mode, *args, **kwargs):
+def _golden_function_div(input_tensor_a, input_tensor_b, round_mode=None, *args, **kwargs):
     import torch
 
-    if round_mode == "None":
-        return torch.div(input_tensor_a, input_tensor_b, rounding_mode=None)
     return torch.div(input_tensor_a, input_tensor_b, rounding_mode=round_mode)
 
 
@@ -332,10 +330,15 @@ def _golden_function_floor_div(input_tensor_a, input_tensor_b, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.floor_div, golden_function=_golden_function_floor_div)
 
 
-def _golden_function_remainder(input_tensor_a, input_tensor_b, *args, **kwargs):
+def _golden_function_remainder(input_tensor_a, input_tensor_b, *args, device, **kwargs):
     import torch
 
-    return torch.remainder(input_tensor_a, input_tensor_b)
+    return torch.nan_to_num(
+        torch.remainder(input_tensor_a, input_tensor_b),
+        nan=device.sfpu_nan(),
+        posinf=device.sfpu_inf(),
+        neginf=-device.sfpu_inf(),
+    )
 
 
 ttnn.attach_golden_function(ttnn.remainder, golden_function=_golden_function_remainder)
@@ -453,6 +456,18 @@ def _golden_function_lcm(input_tensor_a, input_tensor_b, *args, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn.lcm, golden_function=_golden_function_lcm)
+
+
+def _golden_function_prelu(input_tensor_a, input_tensor_b, *args, **kwargs):
+    import torch
+
+    if not torch.is_tensor(input_tensor_b):
+        input_tensor_b = torch.tensor(input_tensor_b, dtype=input_tensor_a.dtype)
+
+    return torch.nn.functional.prelu(input_tensor_a, weight=input_tensor_b)
+
+
+ttnn.attach_golden_function(ttnn.prelu, golden_function=_golden_function_prelu)
 
 
 __all__ = []

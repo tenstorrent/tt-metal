@@ -5,12 +5,11 @@ We'll build a program that will perform matmul operations on two tensors with eq
 The full example program is in
 [matmul_single_core.cpp](../../../tt_metal/programming_examples/matmul_single_core/matmul_single_core.cpp)
 
-To build and execute, you may use the following commands. Note that we include the necessary environment variables here, but you may possibly need more depending on the most up-to-date installation methods.
-
+To build and execute, you may use the following commands:
+Then run the following:
 ```bash
-    export ARCH_NAME=<arch name>
-    export TT_METAL_HOME=<this repo dir>
-    ./build_metal.sh --build-tests
+    export TT_METAL_HOME=$(pwd)
+    ./build_metal.sh --build-programming-examples
     ./build/programming_examples/matmul_single_core
 ```
 
@@ -127,18 +126,18 @@ uint32_t dst_addr = dst_dram_buffer.address();
 We need to declare three circular buffers to enable data transfer between the reader, compute, and writer engines. Input tiles count is 2 because although the computation is a single tile process, we want to get a performance boost by double buffering..
 
 ``` cpp
-uint32_t src0_cb_index = CB::c_in0; //0
+uint32_t src0_cb_index = CBIndex::c_0; //0
 uint32_t num_input_tiles = 2;
 tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
     .set_page_size(src0_cb_index, single_tile_size);
 auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-uint32_t src1_cb_index = CB::c_in1; // 1
+uint32_t src1_cb_index = CBIndex::c_1; // 1
 tt_metal::CircularBufferConfig cb_src1_config = tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
     .set_page_size(src1_cb_index, single_tile_size);
 auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
-uint32_t output_cb_index = CB::c_out0; // output operands start at index 16
+uint32_t output_cb_index = tt::CBIndex::c_16;
 uint32_t num_output_tiles = 2;
 tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, cb_data_format}})
     .set_page_size(output_cb_index, single_tile_size);

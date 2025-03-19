@@ -14,22 +14,20 @@ using namespace tt::constants;
 
 namespace reduce_op_utils {
 
-using namespace tt::tt_metal;
-
-std::map<string, string> get_defines(ReduceOpMath reduce_op, ReduceOpDim reduce_dim) {
+std::map<string, string> get_defines(tt::tt_metal::ReduceOpMath reduce_op, tt::tt_metal::ReduceOpDim reduce_dim) {
     std::map<string, string> defines;
     // TOOD(AP): need a sync with Reduce::Max from HLK headers
-    bool do_max = reduce_op == ReduceOpMath::MAX;
+    bool do_max = reduce_op == tt::tt_metal::ReduceOpMath::MAX;
     string reduce_dim_str;
     switch (reduce_dim) {
-        case ReduceOpDim::W: reduce_dim_str = "ReduceDim::REDUCE_ROW"; break;
-        case ReduceOpDim::H: reduce_dim_str = "ReduceDim::REDUCE_COL"; break;
-        case ReduceOpDim::HW: reduce_dim_str = "ReduceDim::REDUCE_SCALAR"; break;
+        case tt::tt_metal::ReduceOpDim::W: reduce_dim_str = "ReduceDim::REDUCE_ROW"; break;
+        case tt::tt_metal::ReduceOpDim::H: reduce_dim_str = "ReduceDim::REDUCE_COL"; break;
+        case tt::tt_metal::ReduceOpDim::HW: reduce_dim_str = "ReduceDim::REDUCE_SCALAR"; break;
         default: TT_ASSERT(false && "Invalid reduce_op!");
     }
     defines["REDUCE_OP"] = (do_max ? "PoolType::MAX" : "PoolType::SUM");
     defines["REDUCE_DIM"] = reduce_dim_str;
-    if (reduce_dim == ReduceOpDim::W && reduce_op == ReduceOpMath::SUM) {
+    if (reduce_dim == tt::tt_metal::ReduceOpDim::W && reduce_op == tt::tt_metal::ReduceOpMath::SUM) {
         defines["REDUCE_ROW_SUM_VIA_MM"] = 1;
     }
     return defines;
@@ -46,14 +44,32 @@ void Reduce::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to reduce must be tilized");
     if (this->dim == ReduceOpDim::H) {
         if (input_tensor.memory_config().is_sharded()) {
-            TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Illegal input memory config {} for sharded reduction along H!", input_tensor.memory_config().memory_layout);
+            TT_FATAL(
+                input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+                "Illegal input memory config {} for sharded reduction along H!",
+                input_tensor.memory_config().memory_layout);
         } else {
-            TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Illegal input memory config {} for reduction along H!", input_tensor.memory_config().memory_layout);
+            TT_FATAL(
+                input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+                "Illegal input memory config {} for reduction along H!",
+                input_tensor.memory_config().memory_layout);
         }
-        TT_FATAL(input_tensor.memory_config().memory_layout == this->output_mem_config.memory_layout, "Illegal input memory config {} and output memory config {} for reduction along H!", input_tensor.memory_config().memory_layout, this->output_mem_config.memory_layout);
+        TT_FATAL(
+            input_tensor.memory_config().memory_layout == this->output_mem_config.memory_layout,
+            "Illegal input memory config {} and output memory config {} for reduction along H!",
+            input_tensor.memory_config().memory_layout,
+            this->output_mem_config.memory_layout);
     } else {
-        TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Illegal input memory config {} for reduction along {}!", input_tensor.memory_config().memory_layout, this->dim);
-        TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Illegal output memory config {} for reduction along {}!", this->output_mem_config.memory_layout, this->dim);
+        TT_FATAL(
+            input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            "Illegal input memory config {} for reduction along {}!",
+            input_tensor.memory_config().memory_layout,
+            this->dim);
+        TT_FATAL(
+            this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
+            "Illegal output memory config {} for reduction along {}!",
+            this->output_mem_config.memory_layout,
+            this->dim);
     }
 }
 
@@ -84,12 +100,15 @@ std::vector<ttnn::TensorSpec> Reduce::compute_output_specs(const std::vector<Ten
 
     auto output_mem_config = this->output_mem_config;
     if (output_mem_config.is_sharded()) {
-        auto shard_spec = input_tensor.shard_spec().value(); // TODO: This will segfault if input is not sharded...
+        auto shard_spec = input_tensor.shard_spec().value();  // TODO: This will segfault if input is not sharded...
         shard_spec.shape[0] = output_padded_shape.volume() / output_padded_shape[-1];
         output_mem_config.shard_spec = shard_spec;
     }
 
-    return {ttnn::TensorSpec(output_shape, TensorLayout::fromLegacyPaddedShape(this->output_dtype, PageConfig(Layout::TILE), output_mem_config, ttnn::Shape(output_shape.view(), output_padded_shape.view())))};
+    return {ttnn::TensorSpec(
+        output_shape,
+        TensorLayout::fromPaddedShape(
+            this->output_dtype, PageConfig(Layout::TILE), output_mem_config, output_shape, output_padded_shape))};
 }
 
 operation::ProgramWithCallbacks Reduce::create_program(
@@ -137,7 +156,7 @@ Tensor reduce_min(
     const Tensor& input_tensor,
     ReduceOpDim reduce_dim,
     float scaler = 1.0f,
-    const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+    const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt) {
     Tensor input = input_tensor;
     if (input.get_layout() == Layout::ROW_MAJOR && input.storage_type() == StorageType::DEVICE) {
@@ -167,8 +186,12 @@ Tensor reduce(
     auto is_multicore_hw = parallelization_strategy == ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     float pad_value = reduce_math == ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : 0;
 
-    ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(
-        ttnn::init_device_compute_kernel_config(input_tensor.device()->arch(), std::nullopt, MathFidelity::HiFi4));
+    ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(ttnn::init_device_compute_kernel_config(
+        input_tensor.device()->arch(),
+        std::nullopt,
+        MathFidelity::HiFi4,
+        /*default_approx_mode=*/false,
+        /*default_fp32_acc=*/true));
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     if (is_multicore_hw) {
@@ -178,7 +201,7 @@ Tensor reduce(
                 const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                 const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
                 const auto& input_tensor = input_tensors.at(0);
-                Device* device;
+                IDevice* device;
 
                 // Get the device
                 if (input_tensor.storage_type() != StorageType::DEVICE) {
@@ -187,13 +210,17 @@ Tensor reduce(
                 } else {
                     device = input_tensor.device();
                 }
-                auto input_tensor_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape());
+                auto input_tensor_pad_shape =
+                    ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
+                        input_tensor.get_padded_shape());
                 auto formatted_input_tensor = input_tensor;
-                if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(input_tensor, input_tensor_pad_shape)) {
-                    formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
-                        input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
+                if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(
+                        input_tensor, input_tensor_pad_shape)) {
+                    formatted_input_tensor =
+                        ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
+                            input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
                 }
-                const Tensor output_tensor = operation::run_without_autoformat(
+                const Tensor output_tensor = operation::run(
                                                  Reduce{
                                                      reduce_math,
                                                      ReduceOpDim::W,
@@ -203,7 +230,7 @@ Tensor reduce(
                                                      config},
                                                  {formatted_input_tensor})
                                                  .at(0);
-                return operation::run_without_autoformat(
+                return operation::run(
                     Reduce{
                         reduce_math,
                         ReduceOpDim::H,

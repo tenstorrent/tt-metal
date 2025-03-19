@@ -39,6 +39,7 @@ parameters = {
         "mem_config": [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)],
         "enable_async": [True, False],
         "num_iters": [1],
+        "tile": [(32, 32)],
     },
 }
 
@@ -52,6 +53,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         test_vector["num_links"],
         test_vector["input_dtype"],
         test_vector["layout"],
+        test_vector["tile"],
     )
     if is_known_failure:
         return True, f"Skipping unsupported case {message}."
@@ -64,7 +66,7 @@ def mesh_device_fixture():
     assert ttnn.get_num_devices() >= 8, "Not T3000!"
     device_ids = ttnn.get_t3k_physical_device_ids_ring()
     num_devices_requested = len(device_ids)
-    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, num_devices_requested), mesh_type=ttnn.MeshType.Line)
+    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, num_devices_requested))
     print("ALL GATHER: Opened device mesh")
 
     yield (mesh_device, "T3000 Mesh")
@@ -89,6 +91,7 @@ def run(
     mem_config,
     enable_async,
     num_iters,
+    tile,
     *,
     device,
 ) -> list:
@@ -100,7 +103,9 @@ def run(
 
     input_tensor = torch.rand(input_shape).bfloat16()
 
-    ttnn_tensor = ttnn.from_torch(input_tensor, mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=dim))
+    ttnn_tensor = ttnn.from_torch(
+        input_tensor, tile=ttnn.Tile(tile), mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=dim)
+    )
     input_tensor_mesh = ttnn.to_device(ttnn_tensor, t3k_mesh_device)
 
     for i in range(num_iters):

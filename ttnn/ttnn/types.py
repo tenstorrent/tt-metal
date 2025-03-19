@@ -58,25 +58,15 @@ class CoreRange:
     end: CoreGrid
 
 
-@dataclasses.dataclass
-class MeshShape:
-    y: int
-    x: int
-
-    @property
-    def num_devices(self):
-        return self.y * self.x
-
-    def as_tuple(self):
-        return (self.y, self.x)
-
-
 class ShardStrategy(Enum):
     HEIGHT = 1
     WIDTH = 2
     BLOCK = 3
 
 
+MeshShape = ttnn._ttnn.multi_device.MeshShape
+MeshCoordinate = ttnn._ttnn.multi_device.MeshCoordinate
+MeshCoordinateRange = ttnn._ttnn.multi_device.MeshCoordinateRange
 ShardOrientation = ttnn._ttnn.tensor.ShardOrientation
 ShardMode = ttnn._ttnn.tensor.ShardMode
 ShardSpec = ttnn._ttnn.tensor.ShardSpec
@@ -84,6 +74,7 @@ CoreRangeSet = ttnn._ttnn.tensor.CoreRangeSet
 CoreRange = ttnn._ttnn.tensor.CoreRange
 CoreCoord = ttnn._ttnn.tensor.CoreCoord
 
+QueueId = ttnn._ttnn.types.QueueId
 
 UnaryWithParam = ttnn._ttnn.activation.UnaryWithParam
 UnaryOpType = ttnn._ttnn.activation.UnaryOpType

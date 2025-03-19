@@ -11,7 +11,7 @@
  *************************************************************************/
 
 template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None>
-inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_t *unpack_AB_params) {
+inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_t* unpack_AB_params) {
     const bool transpose_xy_srca = unpack_AB_params->transpose_xy_srca;
 
     // In0 -> unpB
@@ -37,8 +37,8 @@ inline void llk_unpack_AB_matmul_hw_configure(const llk_unpack_AB_matmul_params_
         transpose_xy_srca,
         unpA_num_faces,
         unpB_num_faces,
-        cb_interface[unpA_operand_id].fifo_page_size,
-        cb_interface[unpB_operand_id].fifo_page_size);
+        get_local_cb_interface(unpA_operand_id).fifo_page_size,
+        get_local_cb_interface(unpB_operand_id).fifo_page_size);
 }
 
 template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None>
@@ -81,7 +81,8 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const bool partial_face_b = get_operand_partial_face(operandB_id);
 
     const uint32_t unpA_num_faces = partial_face_a ? 1 : get_operand_num_faces(operandA_id);
-    const uint32_t unpB_num_faces = partial_face_b ? 1 : get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
+    const uint32_t unpB_num_faces =
+        partial_face_b ? 1 : get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
 
     _llk_unpack_AB_matmul_init_(
         transpose,
@@ -107,7 +108,7 @@ inline void llk_unpack_AB_matmul(
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
 
-    volatile uint *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
+    volatile uint* cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
@@ -118,11 +119,11 @@ inline void llk_unpack_AB_matmul(
     const bool partial_face_a = get_operand_partial_face(operandA_id);
     const bool partial_face_b = get_operand_partial_face(operandB_id);
 
-    std::uint32_t base_address_a = cb_interface[operandA_id].fifo_rd_ptr - 1;
-    std::uint32_t base_address_b = cb_interface[operandB_id].fifo_rd_ptr - 1;
+    std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
+    std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
 
-    std::uint32_t tile_size_a = cb_interface[operandA_id].fifo_page_size;
-    std::uint32_t tile_size_b = cb_interface[operandB_id].fifo_page_size;
+    std::uint32_t tile_size_a = get_local_cb_interface(operandA_id).fifo_page_size;
+    std::uint32_t tile_size_b = get_local_cb_interface(operandB_id).fifo_page_size;
 
     WAYPOINT("UPMW");
     _llk_unpack_AB_matmul_(

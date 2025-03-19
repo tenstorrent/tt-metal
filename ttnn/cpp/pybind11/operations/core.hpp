@@ -6,10 +6,12 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <optional>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "pybind11/cast.h"
+#include "cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 
 namespace py = pybind11;
 
@@ -22,12 +24,14 @@ void py_module_types(py::module& module) {
 
     py::class_<GrayskullComputeKernelConfig>(module, "GrayskullComputeKernelConfig")
         .def(
-            py::init<MathFidelity, bool>(),
+            py::init<MathFidelity, bool, bool>(),
             py::kw_only(),
             py::arg("math_fidelity") = MathFidelity::Invalid,
-            py::arg("math_approx_mode") = true)
+            py::arg("math_approx_mode") = true,
+            py::arg("dst_full_sync_en") = false)
         .def_readwrite("math_fidelity", &GrayskullComputeKernelConfig::math_fidelity)
-        .def_readwrite("math_approx_mode", &GrayskullComputeKernelConfig::math_approx_mode);
+        .def_readwrite("math_approx_mode", &GrayskullComputeKernelConfig::math_approx_mode)
+        .def_readwrite("dst_full_sync_en", &GrayskullComputeKernelConfig::dst_full_sync_en);
 
     py::class_<WormholeComputeKernelConfig>(module, "WormholeComputeKernelConfig")
         .def(
@@ -46,23 +50,36 @@ void py_module_types(py::module& module) {
 }
 
 void py_module(py::module& module) {
+
+    module.def("init_device_compute_kernel_config", &ttnn::init_device_compute_kernel_config,
+            py::arg("arch"),
+            py::arg("device_kernel_config") = std::nullopt,
+            py::kw_only(),
+            py::arg("math_fidelity") = MathFidelity::LoFi,
+            py::arg("math_approx_mode") = true,
+            py::arg("fp32_dest_acc_en") = false,
+            py::arg("packer_l1_acc") = false,
+            py::arg("dst_full_sync_en") = false
+        );
     module.def("unsqueeze_to_4D", &ttnn::unsqueeze_to_4D, py::arg("tensor"));
 
     module.def(
         "to_device",
-        py::overload_cast<const ttnn::Tensor&, Device*, const std::optional<MemoryConfig>&>(
-            &ttnn::operations::core::to_device),
-        py::arg("tensor"),
-        py::arg("device"),
-        py::arg("memory_config") = std::nullopt);
-
-    module.def(
-        "to_device",
-        py::overload_cast<const ttnn::Tensor&, MeshDevice*, const std::optional<MemoryConfig>&>(
+        py::overload_cast<const ttnn::Tensor&, IDevice*, const std::optional<MemoryConfig>&, QueueId>(
             &ttnn::operations::core::to_device),
         py::arg("tensor"),
         py::arg("device"),
         py::arg("memory_config") = std::nullopt,
+        py::arg("cq_id") = ttnn::DefaultQueueId);
+
+    module.def(
+        "to_device",
+        py::overload_cast<const ttnn::Tensor&, MeshDevice*, const std::optional<MemoryConfig>&, QueueId>(
+            &ttnn::operations::core::to_device),
+        py::arg("tensor"),
+        py::arg("device"),
+        py::arg("memory_config") = std::nullopt,
+        py::arg("cq_id") = ttnn::DefaultQueueId,
         R"doc(
             Copy tensor from host to device.
 
@@ -70,6 +87,7 @@ void py_module(py::module& module) {
                 tensor (ttnn.Tensor): The tensor to be copied from host to device.
                 device (ttnn.Device | ttnn.MeshDevice): The target device where the tensor will be copied.
                 memory_config (ttnn.MemoryConfig, optional): The memory configuration to use. Defaults to `None`.
+                cq_id (int, optional): The command queue ID to use. Defaults to `0`.
 
             Returns:
                 ttnn.Tensor: The device tensor copy.
@@ -109,8 +127,12 @@ void py_module(py::module& module) {
                 >>> host_tensor = ttnn.from_device(tensor=device_tensor, blocking=False)
         )doc");
 
-    module.def("deallocate", &ttnn::operations::core::deallocate, py::arg("tensor"), py::arg("force") = true,
-    R"doc(
+    module.def(
+        "deallocate",
+        &ttnn::operations::core::deallocate,
+        py::arg("tensor"),
+        py::arg("force") = true,
+        R"doc(
         Deallocates device tensor. Releases the resources for `ttnn.Tensor` :attr:`tensor` explicitly.
 
         Args:
@@ -193,11 +215,23 @@ void py_module(py::module& module) {
 
     module.def(
         "allocate_tensor_on_device",
+        py::overload_cast<const ttnn::TensorSpec&, IDevice*>(&ttnn::operations::core::allocate_tensor_on_device),
+        py::arg("tensor_spec"),
+        py::arg("device"));
+
+    module.def(
+        "allocate_tensor_on_device",
+        py::overload_cast<const ttnn::TensorSpec&, MeshDevice*>(&ttnn::operations::core::allocate_tensor_on_device),
+        py::arg("tensor_spec"),
+        py::arg("mesh_device"));
+
+    module.def(
+        "allocate_tensor_on_device",
         py::overload_cast<
             const ttnn::Shape&,
             ttnn::DataType,
             ttnn::Layout,
-            Device*,
+            IDevice*,
             const std::optional<ttnn::MemoryConfig>&>(&ttnn::operations::core::allocate_tensor_on_device),
         py::arg("shape"),
         py::arg("dtype"),
@@ -225,66 +259,6 @@ void py_module(py::module& module) {
         py::arg("host_tensor"),
         py::arg("device_tensor"),
         py::arg("cq_id") = ttnn::DefaultQueueId);
-
-    module.def(
-        "begin_trace_capture",
-        py::overload_cast<Device*, const uint8_t>(&ttnn::operations::core::begin_trace_capture),
-        py::arg("device"),
-        py::kw_only(),
-        py::arg("cq_id") = ttnn::DefaultQueueId);
-
-    module.def(
-        "end_trace_capture",
-        py::overload_cast<Device*, const uint32_t, const uint8_t>(&ttnn::operations::core::end_trace_capture),
-        py::arg("device"),
-        py::arg("trace_id"),
-        py::kw_only(),
-        py::arg("cq_id") = ttnn::DefaultQueueId);
-
-    module.def(
-        "execute_trace",
-        py::overload_cast<Device*, const uint32_t, const uint8_t, bool>(&ttnn::operations::core::execute_trace),
-        py::arg("device"),
-        py::arg("trace_id"),
-        py::kw_only(),
-        py::arg("cq_id") = ttnn::DefaultQueueId,
-        py::arg("blocking") = true);
-
-    module.def(
-        "release_trace",
-        py::overload_cast<Device*, const uint32_t>(&ttnn::operations::core::release_trace),
-        py::arg("device"),
-        py::arg("trace_id"));
-
-    module.def(
-        "begin_trace_capture",
-        py::overload_cast<MeshDevice*, const uint8_t>(&ttnn::operations::core::begin_trace_capture),
-        py::arg("mesh_device"),
-        py::kw_only(),
-        py::arg("cq_id") = ttnn::DefaultQueueId);
-
-    module.def(
-        "end_trace_capture",
-        py::overload_cast<MeshDevice*, const uint32_t, const uint8_t>(&ttnn::operations::core::end_trace_capture),
-        py::arg("mesh_device"),
-        py::arg("trace_id"),
-        py::kw_only(),
-        py::arg("cq_id") = ttnn::DefaultQueueId);
-
-    module.def(
-        "execute_trace",
-        py::overload_cast<MeshDevice*, const uint32_t, const uint8_t, bool>(&ttnn::operations::core::execute_trace),
-        py::arg("mesh_device"),
-        py::arg("trace_id"),
-        py::kw_only(),
-        py::arg("cq_id") = ttnn::DefaultQueueId,
-        py::arg("blocking") = true);
-
-    module.def(
-        "release_trace",
-        py::overload_cast<MeshDevice*, const uint32_t>(&ttnn::operations::core::release_trace),
-        py::arg("mesh_device"),
-        py::arg("trace_id"));
 
     bind_registered_operation(
         module,
@@ -321,7 +295,7 @@ void py_module(py::module& module) {
                const ttnn::Layout layout,
                const std::optional<ttnn::DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               Device* device) -> ttnn::Tensor { return self(tensor, layout, dtype, memory_config, device); },
+               IDevice* device) -> ttnn::Tensor { return self(tensor, layout, dtype, memory_config, device); },
             py::arg("tensor"),
             py::arg("layout"),
             py::arg("dtype") = std::nullopt,
@@ -345,6 +319,11 @@ void py_module(py::module& module) {
         py::overload_cast<const uint32_t, const CoreCoord, const bool>(&tt::tt_metal::num_cores_to_corerangeset),
         R"doc(Create a CoreRangeSet containing the specified number of cores)doc");
 
+    module.def(
+        "num_cores_to_corerangeset_in_subcoregrids",
+        py::overload_cast<const CoreCoord, const uint32_t, const CoreRangeSet&, const bool>(
+            &tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids),
+        R"doc(Create a CoreRangeSet containing the specified number of cores starting from start_core in given subcoregrids)doc");
 }
 
 }  // namespace core

@@ -20,38 +20,38 @@ void MAIN {
     constexpr uint32_t NC = get_compile_time_arg_val(2);
 
 #ifndef ROWWISE
-    init_sfpu(tt::CB::c_in0);
+    init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_16);
 #else
-    transpose_wh_init(tt::CB::c_in0);
+    transpose_wh_init(tt::CBIndex::c_0, tt::CBIndex::c_16);
 #endif
     cumsum_tile_init();
 
     for (uint32_t nc = 0; nc < NC; ++nc) {
-        for(uint32_t wt = 0; wt < Wt; ++wt) {
-            for(uint32_t ht = 0; ht < Ht; ++ht) {
-                cb_reserve_back(tt::CB::c_out0, onetile);
+        for (uint32_t wt = 0; wt < Wt; ++wt) {
+            for (uint32_t ht = 0; ht < Ht; ++ht) {
+                cb_reserve_back(tt::CBIndex::c_16, onetile);
                 acquire_dst();
-                cb_wait_front(tt::CB::c_in0, onetile);
+                cb_wait_front(tt::CBIndex::c_0, onetile);
 
-                #ifndef ROWWISE
-                    copy_tile(tt::CB::c_in0, 0, 0);
-                #else
-                    transpose_wh_init_short(tt::CB::c_in0);
-                    transpose_wh_tile(tt::CB::c_in0, 0, 0);
-                #endif
+#ifndef ROWWISE
+                copy_tile(tt::CBIndex::c_0, 0, 0);
+#else
+                transpose_wh_init_short(tt::CBIndex::c_0);
+                transpose_wh_tile(tt::CBIndex::c_0, 0, 0);
+#endif
                 cumsum_tile(0, ht == 0);
-                #ifdef ROWWISE
-                    transpose_wh_dest_init_short();
-                    transpose_wh_dest(0);
-                #endif
+#ifdef ROWWISE
+                transpose_wh_dest_init_short();
+                transpose_wh_dest(0);
+#endif
 
-                pack_tile(0, tt::CB::c_out0);
+                pack_tile(0, tt::CBIndex::c_16);
 
-                cb_pop_front(tt::CB::c_in0, onetile);
+                cb_pop_front(tt::CBIndex::c_0, onetile);
                 release_dst();
-                cb_push_back(tt::CB::c_out0, onetile);
+                cb_push_back(tt::CBIndex::c_16, onetile);
             }
         }
     }
 }
-}
+}  // namespace NAMESPACE

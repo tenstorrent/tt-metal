@@ -8,7 +8,7 @@
 #include "uniform.hpp"
 
 namespace ttnn::operations::uniform {
-void bind_uniform_operation(py::module &module) {
+void bind_uniform_operation(py::module& module) {
     std::string doc =
         R"doc(
         Update in-place the input tensor with values drawn from the continuous uniform distribution 1 / (`to` - `from`).
@@ -39,6 +39,7 @@ void bind_uniform_operation(py::module &module) {
             py::arg("input"),
             py::arg("from") = 0,
             py::arg("to") = 1,
+            py::arg("seed") = 0,
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt});

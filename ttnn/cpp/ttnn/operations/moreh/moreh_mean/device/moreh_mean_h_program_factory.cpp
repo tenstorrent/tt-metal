@@ -4,9 +4,9 @@
 
 #include <vector>
 
-#include "common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "moreh_mean_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/reduction/generic/device/common.hpp"
@@ -23,7 +23,7 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
     auto input = tensor_args.input;
     auto compute_kernel_config =
         init_device_compute_kernel_config(input.device()->arch(), operation_attributes.compute_kernel_config);
-    const auto shape = input.get_shape();
+    const auto shape = input.get_padded_shape();
 
     auto device = input.device();
     auto kernel_config_val =
@@ -32,14 +32,14 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
-    uint32_t W = shape.value[-1], H = shape.value[-2];
+    uint32_t W = shape[-1], H = shape[-2];
 
     uint32_t Wt = W / constants::TILE_WIDTH;
     uint32_t Ht = H / constants::TILE_HEIGHT;
     uint32_t HtWt = Ht * Wt;
 
     // check mask for h-dim
-    const auto input_shape_without_padding = shape.value.without_padding();
+    const auto input_shape_without_padding = input.get_logical_shape();
     const auto origin_H = input_shape_without_padding[-2];
     const bool do_mask_h = (origin_H % constants::TILE_HEIGHT) != 0;
     const auto mask_h = do_mask_h ? origin_H % constants::TILE_HEIGHT : constants::TILE_HEIGHT;
@@ -68,12 +68,12 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
         all_cores,
         data_format,
         {
-            {CB::c_in0, num_input_tiles},                        // input
-            {CB::c_in2, 1},                                      // scaler
-            {CB::c_in3, 1},                                      // mask
-            {CB::c_intermed0, 1, fp32_dest_acc_en_data_format},  //
-            {CB::c_intermed1, 1},                                //
-            {CB::c_out0, 1},                                     // output
+            {CBIndex::c_0, num_input_tiles},                   // input
+            {CBIndex::c_2, 1},                                 // scaler
+            {CBIndex::c_3, 1},                                 // mask
+            {CBIndex::c_24, 1, fp32_dest_acc_en_data_format},  //
+            {CBIndex::c_25, 1},                                //
+            {CBIndex::c_16, 1},                                // output
         });
 
     float scaler = 1.0f / origin_H;
@@ -95,7 +95,7 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
         reader_defines);
 
     std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(CB::c_out0), static_cast<uint32_t>(is_dram(output))};
+        static_cast<uint32_t>(CBIndex::c_16), static_cast<uint32_t>(is_dram(output))};
 
     const auto writer_kernel_id = CreateWriteKernel(
         program,
@@ -113,7 +113,7 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = 1;
-        unpack_to_dest_mode[tt::CB::c_intermed0] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tt::CBIndex::c_24] = UnpackToDestMode::UnpackToDestFp32;
     }
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         Ht,                      // Ht
@@ -125,7 +125,6 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
         units_per_core_group_2,  // Wt
         1,                       // NC
         origin_H};
-
 
     auto compute_kernel_ids = CreateComputeKernel(
         program,

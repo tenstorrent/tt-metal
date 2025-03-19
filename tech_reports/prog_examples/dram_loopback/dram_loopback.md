@@ -6,13 +6,12 @@ buffer to do so. We call this concept \"loopback\".
 
 We\'ll go through this code section by section. Note that we have this exact, full example program in [loopback.cpp](../../../tt_metal/programming_examples/loopback/loopback.cpp), so you can follow along.
 
-To build and execute, you may use the following commands. Note that we include the necessary environment variables here, but you may possibly need more depending on the most up-to-date installation methods.
-
-    export ARCH_NAME=<arch name>
-    export TT_METAL_HOME=<this repo dir>
-    ./build_metal.sh --build-tests
+To build and execute, you may use the following commands:
+```bash
+    export TT_METAL_HOME=$(pwd)
+    ./build_metal.sh --build-programming-examples
     ./build/programming_examples/loopback
-
+```
 ## Device setup
 
 ``` cpp
@@ -110,11 +109,9 @@ We use a non-blocking call so we can continue setting up our program.
 const std::vector<uint32_t> runtime_args = {
     l1_buffer.address(),
     input_dram_buffer.address(),
-    static_cast<uint32_t>(input_dram_buffer.noc_coordinates().x),
-    static_cast<uint32_t>(input_dram_buffer.noc_coordinates().y),
+    input_bank_id,
     output_dram_buffer.address(),
-    static_cast<uint32_t>(output_dram_buffer.noc_coordinates().x),
-    static_cast<uint32_t>(output_dram_buffer.noc_coordinates().y),
+    output_bank_id,
     l1_buffer.size()
 };
 
@@ -131,9 +128,9 @@ particular kernel, we have to provide:
 
 -   Where the L1 buffer starts (memory address)
 -   Where the input DRAM buffer starts (memory address)
--   The location of the input DRAM buffer\'s channel on the NOC
+-   The Bank ID of the input DRAM buffer
 -   Where the output DRAM buffer starts (memory address)
--   The location of the output DRAM buffer\'s channel on the NOC
+-   The Bank ID of the output DRAM buffer
 -   The size of the buffers
 
 ## Running the program

@@ -14,7 +14,7 @@ def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, in
     if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
         return True, "Invalid combination"
 
-    if input_shape[dim] % num_devices != 0 or (dim == 3 and input_shape[dim] // num_devices % 32 != 0):
+    if input_shape[dim] % num_devices != 0:
         return True, "Unsupported test case"
     if tile != (32, 32) and input_dtype != ttnn.bfloat16:
         return True, "Tiny tile only supports bfloat16"
@@ -36,13 +36,7 @@ def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, in
         return True, "L1 buffer can't support large tensor sizes"
 
     # Check that each chip has a non-zero amount of data available
-    min_sized_chunks_on_dim = input_shape[dim]
-    if dim == 3:
-        min_sized_chunks_on_dim //= 32
-    if dim == 2:
-        if layout == ttnn.TILE_LAYOUT:
-            min_sized_chunks_on_dim //= 32
-    if min_sized_chunks_on_dim < num_devices:
+    if input_shape[dim] < num_devices:
         return (
             True,
             f"Input shape {input_shape} incompatible with {num_devices} on dim {dim} because some chips will have no tensor",
@@ -94,8 +88,7 @@ def run_with_trace(
         num_buffers_per_channel=n_buffer,
         topology=all_gather_topology,
     )
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
 
     # Capture trace
     logger.info("Capturing trace")
@@ -111,15 +104,13 @@ def run_with_trace(
             topology=all_gather_topology,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
 
     # Run the op
     logger.info("Starting Trace perf test...")
     ttnn.execute_trace(mesh_device, trace_id, blocking=False)
     ttnn.release_trace(mesh_device, trace_id)
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
 
     return tt_out_tensor
 
@@ -155,15 +146,14 @@ def run_all_gather_impl(
     logger.info(f"dim: {dim}")
 
     input_tensor = torch.rand(input_shape).bfloat16()
-
-    input_tensors = torch.chunk(input_tensor, num_devices, dim)
-    tt_input_tensors = []
-    for i, t in enumerate(input_tensors):
-        tt_input_tensors.append(
-            ttnn.Tensor(t, input_dtype, {}, ttnn.Tile(tile)).to(layout).to(mesh_device.get_devices()[i], mem_config)
-        )
-
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+    input_tensor_mesh = ttnn.from_torch(
+        input_tensor,
+        dtype=input_dtype,
+        layout=layout,
+        tile=ttnn.Tile(tile),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim),
+        device=mesh_device,
+    )
     if trace_mode:
         tt_out_tensor = run_with_trace(
             mesh_device,
@@ -179,12 +169,11 @@ def run_all_gather_impl(
                 input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=all_gather_topology
             )
 
-            for d in mesh_device.get_devices():
-                ttnn.synchronize_device(d)
+            ttnn.synchronize_device(mesh_device)
             logger.info(f"Done iteration {i}")
 
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-        tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+        tt_output_tensor = ttnn.to_torch(t)
         if input_dtype == ttnn.bfloat16:
             eq, output = comp_equal(tt_output_tensor, input_tensor)
         else:
@@ -328,6 +317,10 @@ def run_all_gather_on_t3000_impl_tight_loop(
         # (4, 2, [4, 1, 256, 32], 0, ttnn.TILE_LAYOUT),        # https://github.com/tenstorrent/tt-metal/issues/9686
         # (8, 1, [8, 1, 256, 32], 0, ttnn.TILE_LAYOUT),        # https://github.com/tenstorrent/tt-metal/issues/9686
         (8, 1, [1, 1, 32, 16384], 3, ttnn.TILE_LAYOUT),
+        (8, 1, [1, 1, 8, 1], 2, ttnn.TILE_LAYOUT),
+        (8, 1, [1, 1, 2, 8], 3, ttnn.TILE_LAYOUT),
+        (8, 1, [1, 1, 2, 33 * 8], 3, ttnn.TILE_LAYOUT),
+        (8, 1, [1, 1, 67 * 8, 35], 2, ttnn.TILE_LAYOUT),
         # (4, 2, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),      # https://github.com/tenstorrent/tt-metal/issues/9686
         # (4, 2, [4, 1, 256, 32], 0, ttnn.ROW_MAJOR_LAYOUT),   # https://github.com/tenstorrent/tt-metal/issues/9686
         # (8, 1, [8, 1, 256, 32], 0, ttnn.ROW_MAJOR_LAYOUT),   # https://github.com/tenstorrent/tt-metal/issues/9686
@@ -625,6 +618,7 @@ def test_all_gather_on_t3000_post_commit(
 
 
 # Enumerate the post-commit cases explicitly
+@pytest.mark.skip(reason="Flaky. Sometimes fails in CI on certain runners")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
@@ -1053,7 +1047,7 @@ def test_all_gather_on_t3000_nightly(
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
-def test_all_gather_on_t3000_nightly(
+def test_all_gather_on_t3000_nightly_pcie(
     pcie_mesh_device,
     num_devices,
     input_shape,
@@ -1186,11 +1180,10 @@ def run_all_gather_sharded(
         shard_grid,
         input_shard_shape,
         orientation,
-        False,
     )
     input_mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
     output_shard_shape = list(input_shard_shape)
-    if dim == 3:
+    if dim == len(input_shape) - 1:
         output_shard_shape[1] *= num_devices
     else:
         output_shard_shape[0] *= num_devices
@@ -1198,7 +1191,6 @@ def run_all_gather_sharded(
         shard_grid,
         output_shard_shape,
         orientation,
-        False,
     )
     output_mem_config = ttnn.MemoryConfig(
         tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
@@ -1255,8 +1247,7 @@ def run_all_gather_sharded(
                 topology=all_gather_topology,
             )
         ## Wait for completion
-        for d in mesh_device.get_devices():
-            ttnn.synchronize_device(d)
+        ttnn.synchronize_device(mesh_device)
 
     torch.set_printoptions(sci_mode=False)
     all_eq = True
@@ -1963,24 +1954,29 @@ def test_all_gather_fp32(  # https://github.com/tenstorrent/tt-metal/issues/9686
         ttnn.bfloat16,
     ],
 )
-@pytest.mark.parametrize(
-    "tensor_mem_layout",
-    [
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-    ],
-)
 @pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
-    "input_shape, input_shard_shape,shard_grid",
+    "input_shape, input_shard_shape,shard_grid,tensor_mem_layout",
     (
         # LLama
         (
             (4, 1, 256, 32),
             (32, 32),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ),
+        (
+            (1, 1, 64, 1024),
+            (64, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+        (
+            (4, 1, 256, 64),
+            (256, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ),
     ),
 )

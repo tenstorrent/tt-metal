@@ -2,21 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <yaml-cpp/node/node.h>
+
 #include <CLI/CLI.hpp>
 #include <core/ttnn_all_includes.hpp>
+#include <functional>
+#include <memory>
 #include <mnist/mnist_reader.hpp>
-#include <ttnn/operations/eltwise/ternary/where.hpp>
-#include <ttnn/tensor/tensor_utils.hpp>
-#include <ttnn/tensor/types.hpp>
+#include <variant>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "datasets/dataloader.hpp"
 #include "datasets/in_memory_dataset.hpp"
-#include "models.hpp"
+#include "model.hpp"
+#include "models/mlp.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/sgd.hpp"
+#include "serialization/serializable.hpp"
 #include "utils.hpp"
 
 using ttml::autograd::TensorPtr;
@@ -28,18 +32,100 @@ using DataLoader = ttml::datasets::DataLoader<
     std::function<BatchType(std::vector<DatasetSample> &&samples)>,
     BatchType>;
 
-constexpr auto model_name = "mlp";
-constexpr auto optimizer_name = "optimizer";
+using Model = std::variant<std::shared_ptr<ttml::modules::MultiLayerPerceptron>, std::shared_ptr<MNISTTensorParallel>>;
+
+const std::string model_name = "mlp";
+const std::string optimizer_name = "optimizer";
+
+struct TrainingConfig {
+    uint32_t batch_size = 128;
+    int logging_interval = 50;
+    size_t num_epochs = 10;
+    float learning_rate = 0.1;
+    float momentum = 0.9F;
+    float weight_decay = 0.F;
+    int model_save_interval = 500;
+    std::string model_path = "/tmp/mnist_mlp.msgpack";
+    ttml::modules::MultiLayerPerceptronParameters mlp_config;
+};
+
+TrainingConfig parse_config(const YAML::Node &yaml_config) {
+    TrainingConfig config;
+    auto training_config = yaml_config["training_config"];
+
+    config.batch_size = training_config["batch_size"].as<uint32_t>();
+    config.logging_interval = training_config["logging_interval"].as<int>();
+    config.num_epochs = training_config["num_epochs"].as<size_t>();
+    config.learning_rate = training_config["learning_rate"].as<float>();
+    config.momentum = training_config["momentum"].as<float>();
+    config.weight_decay = training_config["weight_decay"].as<float>();
+    config.model_save_interval = training_config["model_save_interval"].as<int>();
+    config.mlp_config = ttml::models::mlp::read_config(training_config["mlp_config"]);
+    return config;
+}
+
+void initialize_device(bool enable_tp) {
+    if (enable_tp) {
+        // we support only N300 for now
+        ttml::autograd::ctx().set_mesh_shape(tt::tt_metal::distributed::MeshShape(1, 2));
+    }
+}
+
+void model_to_eval(Model &model) {
+    std::visit([](auto &model) { model->eval(); }, model);
+}
+
+void model_to_train(Model &model) {
+    std::visit([](auto &model) { model->train(); }, model);
+}
+
+ttml::autograd::TensorPtr run_model(Model &model, const ttml::autograd::TensorPtr &data) {
+    return std::visit([&data](auto &model) { return (*model)(data); }, model);
+}
+
+ttml::serialization::NamedParameters get_model_parameters(Model &model) {
+    return std::visit([](auto &model) { return model->parameters(); }, model);
+}
+
+void load_model(
+    Model &model,
+    const TrainingConfig &config,
+    ttml::optimizers::SGD &optimizer,
+    const std::string &model_name,
+    const std::string &optimizer_name) {
+    std::visit(
+        [&config, &optimizer, &model_name, &optimizer_name](auto &model) {
+            load_training_state(config.model_path, model, optimizer, model_name, optimizer_name);
+        },
+        model);
+}
+
+void save_model(
+    Model &model,
+    const TrainingConfig &config,
+    ttml::optimizers::SGD &optimizer,
+    const std::string &model_name,
+    const std::string &optimizer_name) {
+    std::visit(
+        [&config, &optimizer, &model_name, &optimizer_name](auto &model) {
+            save_training_state(config.model_path, model, optimizer, model_name, optimizer_name);
+        },
+        model);
+}
 
 template <typename Model>
 float evaluate(DataLoader &test_dataloader, Model &model, size_t num_targets) {
-    model->eval();
+    model_to_eval(model);
     float num_correct = 0;
     float num_samples = 0;
+    auto *device = &ttml::autograd::ctx().get_device();
     for (const auto &[data, target] : test_dataloader) {
-        auto output = (*model)(data);
-        auto output_vec = ttml::core::to_vector(output->get_value());
-        auto target_vec = ttml::core::to_vector(target->get_value());
+        auto output = run_model(model, data);
+        ttml::core::MeshToXTensorVariant<float> composer = ttml::core::VectorMeshToXTensor<float>(device->shape());
+        auto output_xtensor = ttml::core::to_xtensor(output->get_value(), composer)[0];
+        auto target_xtensor = ttml::core::to_xtensor(target->get_value(), composer)[0];
+        auto output_vec = std::vector<float>(output_xtensor.begin(), output_xtensor.end());
+        auto target_vec = std::vector<float>(target_xtensor.begin(), target_xtensor.end());
         for (size_t i = 0; i < output_vec.size(); i += num_targets) {
             auto predicted_class = std::distance(
                 output_vec.begin() + i,
@@ -51,7 +137,7 @@ float evaluate(DataLoader &test_dataloader, Model &model, size_t num_targets) {
             num_samples++;
         }
     }
-    model->train();
+    model_to_train(model);
     return num_correct / num_samples;
 };
 
@@ -59,23 +145,19 @@ int main(int argc, char **argv) {
     CLI::App app{"Mnist Example"};
     argv = app.ensure_utf8(argv);
 
-    uint32_t batch_size = 128;
-    int logging_interval = 50;
-    size_t num_epochs = 10;
+    std::string config_name = std::string(CONFIGS_FOLDER) + "/training_mnist_mlp.yaml";
     bool is_eval = false;
-    int model_save_interval = 500;
-    std::string model_path = "/tmp/mnist_mlp.msgpack";
-
-    app.add_option("-b,--batch_size", batch_size, "Batch size")->default_val(batch_size);
-    app.add_option("-l,--logging_interval", logging_interval, "Logging interval")->default_val(logging_interval);
-    app.add_option("-m,--model_save_interval", model_save_interval, "model save interval")
-        ->default_val(model_save_interval);
-
-    app.add_option("-n,--num_epochs", num_epochs, "Number of epochs")->default_val(num_epochs);
-    app.add_option("-s,--model_path", model_path, "Model path")->default_val(model_path);
-    app.add_option("-e,--eval", is_eval, "eval only mode")->default_val(is_eval);
+    bool enable_tp = false;
+    app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
+    app.add_option("-e,--eval", is_eval, "Evaluate")->default_val(is_eval);
+    app.add_option("-p, --enable_tp", enable_tp, "Enable tensor parallelism")->default_val(enable_tp);
 
     CLI11_PARSE(app, argc, argv);
+    auto yaml_config = YAML::LoadFile(config_name);
+    TrainingConfig config = parse_config(yaml_config);
+
+    initialize_device(enable_tp);
+
     // Load MNIST data
     const size_t num_targets = 10;
     const size_t num_features = 784;
@@ -111,14 +193,19 @@ int main(int argc, char **argv) {
             return std::make_pair(data_tensor, targets_tensor);
         };
 
-    auto train_dataloader = DataLoader(training_dataset, batch_size, /* shuffle */ true, collate_fn);
-    auto test_dataloader = DataLoader(test_dataset, batch_size, /* shuffle */ false, collate_fn);
+    auto train_dataloader = DataLoader(training_dataset, config.batch_size, /* shuffle */ true, collate_fn);
+    auto test_dataloader = DataLoader(test_dataset, config.batch_size, /* shuffle */ false, collate_fn);
 
-    auto model = create_base_mlp(784, 10);
+    Model model;
+    if (enable_tp) {
+        model = std::make_shared<MNISTTensorParallel>();
+    } else {
+        model = ttml::models::mlp::create(config.mlp_config);
+    }
 
-    const float learning_rate = 0.1F * (static_cast<float>(batch_size) / 128.F);
-    const float momentum = 0.9F;
-    const float weight_decay = 0.F;
+    const float learning_rate = config.learning_rate * (static_cast<float>(config.batch_size) / 128.F);
+    const float momentum = config.momentum;
+    const float weight_decay = config.weight_decay;
     auto sgd_config =
         ttml::optimizers::SGDConfig{.lr = learning_rate, .momentum = momentum, .weight_decay = weight_decay};
 
@@ -128,10 +215,15 @@ int main(int argc, char **argv) {
     fmt::print("    Dampening {}\n", sgd_config.dampening);
     fmt::print("    Weight decay: {}\n", sgd_config.weight_decay);
     fmt::print("    Nesterov: {}\n", sgd_config.nesterov);
-    auto optimizer = ttml::optimizers::SGD(model->parameters(), sgd_config);
-    if (!model_path.empty() && std::filesystem::exists(model_path)) {
-        fmt::print("Loading model from {}\n", model_path);
-        load_model_and_optimizer(model_path, model, optimizer, model_name, optimizer_name);
+    auto parameters = get_model_parameters(model);
+    auto optimizer = ttml::optimizers::SGD(parameters, sgd_config);
+    if (!config.model_path.empty() && std::filesystem::exists(config.model_path)) {
+        if (enable_tp) {
+            fmt::println("Loading model for tensor parallelism is not supported yet. Loading model has been skipped.");
+        } else {
+            fmt::print("Loading model from {}\n", config.model_path);
+            load_model(model, config, optimizer, model_name, optimizer_name);
+        }
     }
 
     // evaluate model before training (sanity check to get reasonable accuracy
@@ -144,19 +236,32 @@ int main(int argc, char **argv) {
 
     LossAverageMeter loss_meter;
     int training_step = 0;
-    for (size_t epoch = 0; epoch < num_epochs; ++epoch) {
+
+    auto get_loss_value = [device](const TensorPtr &loss) {
+        ttml::core::MeshToXTensorVariant<float> composer = ttml::core::VectorMeshToXTensor<float>(device->shape());
+        auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), composer);
+        // sum of loss xtensors
+        float loss_float =
+            std::accumulate(loss_xtensors.begin(), loss_xtensors.end(), 0.0F, [](float acc, auto &xtensor) {
+                return acc + xtensor(0);
+            });
+
+        return loss_float / static_cast<float>(loss_xtensors.size());
+    };
+
+    for (size_t epoch = 0; epoch < config.num_epochs; ++epoch) {
         for (const auto &[data, target] : train_dataloader) {
             optimizer.zero_grad();
-            auto output = (*model)(data);
+            auto output = run_model(model, data);
             auto loss = ttml::ops::cross_entropy_loss(output, target);
-            auto loss_float = ttml::core::to_vector(loss->get_value())[0];
-            loss_meter.update(loss_float, batch_size);
-            if (training_step % logging_interval == 0) {
+            auto loss_float = get_loss_value(loss);
+            loss_meter.update(loss_float, config.batch_size);
+            if (training_step % config.logging_interval == 0) {
                 fmt::print("Step: {:5d} | Average Loss: {:.4f}\n", training_step, loss_meter.average());
             }
-            if (!model_path.empty() && training_step % model_save_interval == 0) {
-                fmt::print("Saving model to {}\n", model_path);
-                save_model_and_optimizer(model_path, model, optimizer, model_name, optimizer_name);
+            if (!config.model_path.empty() && training_step % config.model_save_interval == 0) {
+                fmt::print("Saving model to {}\n", config.model_path);
+                save_model(model, config, optimizer, model_name, optimizer_name);
             }
 
             loss->backward();
@@ -174,9 +279,9 @@ int main(int argc, char **argv) {
         loss_meter.reset();
     }
 
-    if (!model_path.empty()) {
-        fmt::print("Saving model to {}\n", model_path);
-        save_model_and_optimizer(model_path, model, optimizer, model_name, optimizer_name);
+    if (!config.model_path.empty()) {
+        fmt::print("Saving model to {}\n", config.model_path);
+        save_model(model, config, optimizer, model_name, optimizer_name);
     }
 
     return 0;

@@ -21,7 +21,7 @@ run_python_model_tests_grayskull() {
     pytest models/experimental/bert_large_performant/unit_tests/fused_ops/test_bert_large_fused_ln.py -k "in0_L1-out_L1 and batch_9"
     pytest models/experimental/bert_large_performant/unit_tests/fused_ops/test_bert_large_fused_softmax.py -k "in0_L1 and batch_9"
 
-    pytest tests/ttnn/integration_tests/resnet/test_ttnn_functional_resnet50_new.py -k "pretrained_weight_false"
+    pytest tests/ttnn/integration_tests/resnet/test_ttnn_functional_resnet50.py -k "pretrained_weight_false"
     # Falcon tests
     pytest models/demos/falcon7b_common/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_128 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
     pytest models/demos/falcon7b_common/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_512 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
@@ -34,8 +34,8 @@ run_python_model_tests_wormhole_b0() {
     pytest models/demos/falcon7b_common/tests/unit_tests/test_falcon_attn_matmul.py -k "not attn_matmul_from_cache"
     # higher sequence lengths and different formats trigger memory issues
     pytest models/demos/falcon7b_common/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_128 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
-    pytest tests/ttnn/integration_tests/resnet/test_ttnn_functional_resnet50_new.py -k "pretrained_weight_false"
-    pytest models/demos/yolov4/demo/demo.py -k "pretrained_weight_false"
+    pytest tests/ttnn/integration_tests/resnet/test_ttnn_functional_resnet50.py -k "pretrained_weight_false"
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/integration_tests/yolov4/test_ttnn_yolov4.py -k "pretrained_weight_false"
 
     # Unet Shallow
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
@@ -54,7 +54,22 @@ run_python_model_tests_wormhole_b0() {
 
     # Run all Llama3 tests for 8B, 1B, and 3B weights - dummy weights with tight PCC check
     for llama_dir in  "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-        LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/tests/test_llama_model.py -k "quick" ; fail+=$?
+        LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
         echo "LOG_METAL: Llama3 tests for $llama_dir completed"
     done
+}
+
+run_python_model_tests_slow_runtime_mode_wormhole_b0() {
+    # Unet Shallow
+    export TTNN_CONFIG_OVERRIDES='{
+        "enable_fast_runtime_mode": false,
+        "enable_comparison_mode": true,
+        "comparison_mode_should_raise_exception": true,
+        "comparison_mode_pcc": 0.998
+    }'
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
+}
+
+run_python_model_tests_blackhole() {
+    SLOW_MATMULS=1 pytest models/demos/blackhole/stable_diffusion/tests
 }

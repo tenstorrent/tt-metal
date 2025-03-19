@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/types.hpp"
 
@@ -22,20 +22,14 @@ void bind_squeeze(pybind11::module& module, const data_movement_operation_t& ope
         operation,
         doc,
         ttnn::pybind_overload_t{
-            [](const data_movement_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const int dim
-             ) -> ttnn::Tensor {
+            [](const data_movement_operation_t& self, const ttnn::Tensor& input_tensor, const int dim) -> ttnn::Tensor {
                 return self(input_tensor, dim);
             },
             py::arg("input_tensor"),
-            py::arg("dim")
-            }
-        );
+            py::arg("dim")});
 }
 
 }  // namespace detail
-
 
 void py_bind_squeeze(pybind11::module& module) {
     detail::bind_squeeze(

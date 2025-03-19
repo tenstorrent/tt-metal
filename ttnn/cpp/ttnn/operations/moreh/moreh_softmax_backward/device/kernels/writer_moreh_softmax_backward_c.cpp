@@ -12,7 +12,7 @@ void kernel_main() {
     uint32_t inner_size = get_arg_val<uint32_t>(4);
     uint32_t dim_size = get_arg_val<uint32_t>(5);
 
-    constexpr auto cb_out = tt::CB::c_out0;
+    constexpr auto cb_out = tt::CBIndex::c_16;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;

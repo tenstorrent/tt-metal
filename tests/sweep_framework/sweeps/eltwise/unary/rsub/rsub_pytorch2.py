@@ -6,7 +6,6 @@ from typing import Optional, Tuple
 from functools import partial
 
 import torch
-import random
 import ttnn
 from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -14,10 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
-# Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
-
-random.seed(0)
+# Ref: https://github.com/tenstorrent/pytorch2.0_ttnn/blob/main/docs/operations/aten.rsub.Scalar.md
 
 
 # Parameters provided to the test vector generator are defined here.
@@ -78,7 +74,12 @@ parameters = {
             [800, 1],
             [80],
         ],
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "scalar": [
+            1.0,
+        ],
+        "input_a_dtype": [
+            ttnn.bfloat16,
+        ],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -92,6 +93,7 @@ parameters = {
 # If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_shape,
+    scalar,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
@@ -99,17 +101,14 @@ def run(
     *,
     device,
 ) -> list:
-    data_seed = random.randint(0, 20000000)
-    torch.manual_seed(data_seed)
+    torch.manual_seed(0)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    factor = 1.0
-
     golden_function = ttnn.get_golden_function(ttnn.rsub)
-    torch_output_tensor = golden_function(torch_input_tensor_a, factor)
+    torch_output_tensor = golden_function(torch_input_tensor_a, scalar)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -120,7 +119,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.rsub(input_tensor_a, value=factor, memory_config=output_memory_config)
+    output_tensor = ttnn.rsub(input_tensor_a, value=scalar, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 

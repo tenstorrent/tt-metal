@@ -1,0 +1,8 @@
+/*
+  For use in /core only (see /core/conf.py)
+  Hides sphinx generated homepage header (https://docs.tenstorrent.com/)
+*/
+
+#tenstorrent > h1 {
+  display: none !important;
+}

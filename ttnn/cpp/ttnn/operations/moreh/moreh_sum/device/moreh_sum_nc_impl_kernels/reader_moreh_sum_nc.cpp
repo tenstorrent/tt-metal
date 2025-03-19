@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 
 inline uint32_t get_read_tile_id(uint32_t output_tile_id, uint32_t reduce_tile_size, uint32_t inner_tile_size) {
     return ((output_tile_id / inner_tile_size) * reduce_tile_size) + (output_tile_id % inner_tile_size);
@@ -26,11 +26,11 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t cb_id_in0 = 0;
 
-    #ifdef USE_FPU
+#ifdef USE_FPU
     constexpr uint32_t cb_id_in1 = 1;
     constexpr uint32_t scaler = 0;
     generate_reduce_scaler(cb_id_in1, scaler);
-    #endif
+#endif
 
     uint32_t l1_write_addr_in0;
     uint32_t input_tile_bytes = get_tile_size(cb_id_in0);

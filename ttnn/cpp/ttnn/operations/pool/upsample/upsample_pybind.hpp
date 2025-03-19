@@ -10,4 +10,4 @@ namespace ttnn::operations::upsample {
 
 void py_module(py::module& module);
 
-} //namespace ttnn::operations::upsample
+}  // namespace ttnn::operations::upsample

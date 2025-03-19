@@ -29,13 +29,13 @@ void kernel_main() {
     const uint32_t read_page_size = cb_page_size - msg_hdr_size;
     const InterleavedAddrGen<true> src_addr_gen = {.bank_base_address = input_buffer_addr, .page_size = read_page_size};
 
-    auto cb = tt::CB::c_in0;
+    auto cb = tt::CBIndex::c_0;
 
     uint32_t sub_index = 0;
 
     for (uint32_t i = 0; i < num_pages; i++) {
         cb_reserve_back(cb, 1);
-        volatile uint32_t *page_header_addr = reinterpret_cast<volatile uint32_t *>(get_write_ptr(cb));
+        volatile uint32_t* page_header_addr = reinterpret_cast<volatile uint32_t*>(get_write_ptr(cb));
         // NOTE THAT msg_hdr_size is doubled on host side to maintain alignment for the DRAM reads in THIS TEST ONLY
         uint32_t data_out_start = reinterpret_cast<uint32_t>(page_header_addr) + msg_hdr_size;
         uint64_t src_noc_addr = get_noc_addr(i, src_addr_gen);

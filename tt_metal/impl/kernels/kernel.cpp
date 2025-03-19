@@ -1,22 +1,26 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/kernels/kernel.hpp"
+#include <kernel.hpp>
+#include <kernel_types.hpp>
 
 #include <fmt/core.h>
 #include <fmt/ranges.h>
 
+#include <magic_enum/magic_enum.hpp>
 #include <set>
 
-#include "jit_build/build.hpp"
-#include "llrt/llrt.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include "llrt.hpp"
+#include <string_view>
+#include <tt_metal.hpp>
 #include "tt_metal/impl/debug/watcher_server.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/common/utils.hpp"
-#include "tt_metal/common/core_coord.hpp"
+#include <utils.hpp>
+#include <core_coord.hpp>
 #include "tt_metal/jit_build/genfiles.hpp"
+#include "tt_metal/jit_build/build_env_manager.hpp"
+#include "hw/inc/wormhole/eth_l1_address_map.h"
+
 namespace tt {
 
 namespace tt_metal {
@@ -80,6 +84,18 @@ bool Kernel::is_on_logical_core(const CoreCoord &logical_core) const {
     return this->core_range_set_.contains(logical_core);
 }
 
+HalProgrammableCoreType Kernel::get_kernel_programmable_core_type() const {
+    RISCV riscv_processor = this->processor();
+    switch (riscv_processor) {
+        case RISCV::BRISC:
+        case RISCV::NCRISC:
+        case RISCV::COMPUTE: return HalProgrammableCoreType::TENSIX;
+        case RISCV::ERISC: return this->is_idle_eth() ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
+        default: TT_ASSERT(false, "Unsupported kernel processor!");
+    }
+    return HalProgrammableCoreType::TENSIX;
+}
+
 CoreType Kernel::get_kernel_core_type() const {
     RISCV riscv_processor = this->processor();
     switch (riscv_processor) {
@@ -92,7 +108,11 @@ CoreType Kernel::get_kernel_core_type() const {
     return CoreType::WORKER;
 }
 
-const string &Kernel::get_full_kernel_name() const { return this->kernel_full_name_; }
+const std::string& Kernel::get_full_kernel_name() const { return this->kernel_full_name_; }
+
+void Kernel::add_defines(const std::map<std::string, std::string>& defines) {
+    this->defines_.insert(defines.begin(), defines.end());
+}
 
 void Kernel::process_defines(const std::function<void(const string &define, const string &value)> callback) const {
     for (const auto &[define, value] : this->defines_) {
@@ -124,6 +144,24 @@ void EthernetKernel::process_defines(
     callback("NOC_MODE", std::to_string(NOC_MODE::DM_DEDICATED_NOC));
 }
 
+std::string_view DataMovementKernel::get_compiler_opt_level() const {
+    return magic_enum::enum_name(this->config_.opt_level);
+}
+
+std::string_view DataMovementKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
+
+std::string_view ComputeKernel::get_compiler_opt_level() const {
+    return magic_enum::enum_name(this->config_.opt_level);
+}
+
+std::string_view ComputeKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
+
+std::string_view EthernetKernel::get_compiler_opt_level() const {
+    return magic_enum::enum_name(this->config_.opt_level);
+}
+
+std::string_view EthernetKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
+
 void Kernel::process_compile_time_args(const std::function<void(int i, uint32_t value)> callback) const {
     for (int i = 0; i < this->compile_time_args_.size(); i++) {
         callback(i, this->compile_time_args_[i]);
@@ -139,17 +177,17 @@ uint8_t ComputeKernel::expected_num_binaries() const {
     return 3;
 }
 
-std::vector<ll_api::memory> const &Kernel::binaries(uint32_t build_key) const {
-    int expected_num_binaries = this->expected_num_binaries();
-    if (this->binaries_.find(build_key) != this->binaries_.end() and
-        this->binaries_.at(build_key).size() != expected_num_binaries) {
+std::vector<ll_api::memory const*> const& Kernel::binaries(uint32_t build_key) const {
+    auto iter = binaries_.find(build_key);
+    TT_ASSERT(iter != binaries_.end(), "binary not found");
+    if (iter->second.size() != expected_num_binaries()) {
         TT_THROW(
             "Expected {} binaries but have {} for kernel {}",
-            expected_num_binaries,
-            this->binaries_.at(build_key).size(),
+            expected_num_binaries(),
+            iter->second.size(),
             this->name());
     }
-    return this->binaries_.at(build_key);
+    return iter->second;
 }
 
 std::string DataMovementKernel::config_hash() const {
@@ -158,7 +196,10 @@ std::string DataMovementKernel::config_hash() const {
 
 // Add "eth_" to the hash to differentiate between erisc and brisc.
 std::string EthernetKernel::config_hash() const {
-    return fmt::format("eth_{}_{}", magic_enum::enum_name(this->config_.noc), this->config_.eth_mode);
+    return fmt::format("eth_{}_{}_{}",
+        magic_enum::enum_name(this->config_.noc),
+        this->config_.eth_mode,
+        this->config_.processor);
 }
 
 std::string ComputeKernel::config_hash() const {
@@ -292,22 +333,20 @@ void Kernel::set_common_runtime_args_count(uint32_t count) {
     this->common_runtime_args_data_.rt_args_count = count;
 }
 
-bool Kernel::is_idle_eth() {
+bool Kernel::is_idle_eth() const {
     return std::holds_alternative<EthernetConfig>(this->config()) && std::get<EthernetConfig>(this->config()).eth_mode == Eth::IDLE;
 }
 
-uint32_t Kernel::get_binary_packed_size(Device *device, int index) const {
+uint32_t Kernel::get_binary_packed_size(IDevice* device, int index) const {
     // In testing situations we can query the size w/o a binary
-    return (this->binaries_.find(device->build_key()) != this->binaries_.end()) ?
-        this->binaries_.at(device->build_key())[index].get_packed_size() :
-        0;
+    auto iter = binaries_.find(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
+    return iter != this->binaries_.end() ? iter->second[index]->get_packed_size() : 0;
 }
 
-uint32_t Kernel::get_binary_text_size(Device *device, int index) const {
+uint32_t Kernel::get_binary_text_size(IDevice* device, int index) const {
     // In testing situations we can query the size w/o a binary
-    return (this->binaries_.find(device->build_key()) != this->binaries_.end()) ?
-        this->binaries_.at(device->build_key())[index].get_text_size() :
-        0;
+    auto iter = binaries_.find(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
+    return iter != this->binaries_.end() ? iter->second[index]->get_text_size() : 0;
 }
 
 void ComputeKernel::set_build_options(JitBuildOptions &build_options) const {
@@ -319,110 +358,125 @@ void ComputeKernel::set_build_options(JitBuildOptions &build_options) const {
     build_options.bfp8_pack_precise = this->config_.bfp8_pack_precise;
 }
 
-void DataMovementKernel::generate_binaries(Device *device, JitBuildOptions &build_options) const {
-    jit_build_genfiles_kernel_include(device->build_env(), *this, this->kernel_src_);
-    device->generate_device_headers(build_options.path);
-    uint32_t tensix_core_type = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+void DataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions &build_options) const {
+    jit_build_genfiles_kernel_include(
+        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
+    uint32_t tensix_core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
     int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
-    jit_build(device->build_kernel_state(tensix_core_type, dm_class_idx, riscv_id), this);
+    jit_build(
+        BuildEnvManager::get_instance().get_kernel_build_state(
+            device->build_id(), tensix_core_type, dm_class_idx, riscv_id),
+        this);
 }
 
-void EthernetKernel::generate_binaries(Device *device, JitBuildOptions &build_options) const {
-    jit_build_genfiles_kernel_include(device->build_env(), *this, this->kernel_src_);
-    device->generate_device_headers(build_options.path);
-    uint32_t erisc_core_type = hal.get_programmable_core_type_index(
-        this->config_.eth_mode == Eth::IDLE ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH
-    );
+void EthernetKernel::generate_binaries(IDevice* device, JitBuildOptions &build_options) const {
+    jit_build_genfiles_kernel_include(
+        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
+    uint32_t erisc_core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
     int erisc_id = magic_enum::enum_integer(this->config_.processor);
-    jit_build(device->build_kernel_state(erisc_core_type, dm_class_idx, erisc_id), this);
+    jit_build(
+        BuildEnvManager::get_instance().get_kernel_build_state(
+            device->build_id(), erisc_core_type, dm_class_idx, erisc_id),
+        this);
 }
 
-void ComputeKernel::generate_binaries(Device *device, JitBuildOptions &build_options) const {
-    jit_build_genfiles_triscs_src(device->build_env(), *this, this->kernel_src_);
-    uint32_t tensix_core_type = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions &build_options) const {
+    jit_build_genfiles_triscs_src(
+        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
+    uint32_t tensix_core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t compute_class_idx = magic_enum::enum_integer(HalProcessorClassType::COMPUTE);
-    JitBuildStateSubset build_states = device->build_kernel_states(tensix_core_type, compute_class_idx);
+    JitBuildStateSubset build_states = BuildEnvManager::get_instance().get_kernel_build_states(
+        device->build_id(), tensix_core_type, compute_class_idx);
     jit_build_subset(build_states, this);
 }
 
-void Kernel::set_binaries(uint32_t build_key, std::vector<ll_api::memory> &&binaries) {
-    if (this->binaries_.find(build_key) != this->binaries_.end()) {
-        TT_ASSERT(this->binaries_.at(build_key) == binaries);
-    } else {
-        this->binaries_[build_key] = std::move(binaries);
-    }
+void Kernel::set_binaries(uint32_t build_key, std::vector<ll_api::memory const*>&& binaries) {
+    // Try inserting an empry vector, as that is cheap to construct
+    // and avoids an additonal move.
+    auto pair = binaries_.insert({build_key, {}});
+    if (pair.second)
+        pair.first->second = std::move(binaries);
+    else
+        TT_ASSERT(pair.first->second == binaries);
 }
 
-void DataMovementKernel::read_binaries(Device *device) {
+void DataMovementKernel::read_binaries(IDevice* device) {
     TT_ASSERT(!binary_path_.empty(), "Path to Kernel binaries not set!");
-    std::vector<ll_api::memory> binaries;
+    std::vector<ll_api::memory const*> binaries;
 
     // TODO(pgk): move the procssor types into the build system.  or just use integer indicies
     // TODO(pgk): consolidate read_binaries where possible
-    uint32_t tensix_core_type = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    uint32_t tensix_core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
     int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
-    const JitBuildState &build_state = device->build_kernel_state(tensix_core_type, dm_class_idx, riscv_id);
+    const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
+        device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
     // TODO: from HAL
-    ll_api::memory::Relocate relo_type =
+    auto load_type =
         (riscv_id == 1 && (device->arch() == tt::ARCH::GRAYSKULL || device->arch() == tt::ARCH::WORMHOLE_B0)) ?
-        ll_api::memory::Relocate::NONE : ll_api::memory::Relocate::XIP;
-    ll_api::memory binary_mem = llrt::get_risc_binary(
+        ll_api::memory::Loading::CONTIGUOUS : ll_api::memory::Loading::CONTIGUOUS_XIP;
+    ll_api::memory const& binary_mem = llrt::get_risc_binary(
         build_state.get_target_out_path(this->kernel_full_name_),
-        // processor class is BRISC/NCRISC and each have one data movement processor type
-        tensix_core_type, riscv_id, dm_class_idx,
-        ll_api::memory::PackSpans::PACK, relo_type
-    );
-    binaries.push_back(binary_mem);
+        load_type);
+    binaries.push_back(&binary_mem);
     uint32_t binary_size = binary_mem.get_packed_size();
-    log_debug(LogLoader, "RISC {} kernel binary size: {} in bytes", riscv_id, binary_size);
-    this->set_binaries(device->build_key(), std::move(binaries));
+    log_debug(LogLoader, "RISC={}, name={}, size={} (bytes)", riscv_id, this->name(), binary_size);
+    this->set_binaries(
+        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key, std::move(binaries));
 }
 
-void EthernetKernel::read_binaries(Device *device) {
+void EthernetKernel::read_binaries(IDevice* device) {
     // untested
     TT_ASSERT(!binary_path_.empty(), "Path to Kernel binaries not set!");
-    std::vector<ll_api::memory> binaries;
-    uint32_t erisc_core_type = hal.get_programmable_core_type_index(
-        this->config_.eth_mode == Eth::IDLE ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH
-    );
+    std::vector<ll_api::memory const*> binaries;
+    uint32_t erisc_core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
     int erisc_id = magic_enum::enum_integer(this->config_.processor);
-    const JitBuildState &build_state = device->build_kernel_state(erisc_core_type, dm_class_idx, erisc_id);
-    int risc_id = erisc_id + (this->config_.eth_mode == Eth::IDLE ? 6 : 5); // TODO (abhullar): clean this up when llrt helpers use HAL
+    const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
+        device->build_id(), erisc_core_type, dm_class_idx, erisc_id);
     // TODO: fix when active eth supports relo
-    ll_api::memory::Relocate relo_type = (this->config_.eth_mode == Eth::IDLE) ?
-        ll_api::memory::Relocate::XIP : ll_api::memory::Relocate::NONE;
-    ll_api::memory binary_mem = llrt::get_risc_binary(
+    auto load_type = (this->config_.eth_mode == Eth::IDLE) ?
+        ll_api::memory::Loading::CONTIGUOUS_XIP : ll_api::memory::Loading::DISCRETE;
+    ll_api::memory const& binary_mem = llrt::get_risc_binary(
         build_state.get_target_out_path(this->kernel_full_name_),
-        erisc_core_type, erisc_id, dm_class_idx,
-        ll_api::memory::PackSpans::PACK, relo_type
-    );
-   binaries.push_back(binary_mem);
+        load_type);
+    if (tt::llrt::RunTimeOptions::get_instance().get_erisc_iram_enabled() && this->config_.eth_mode != Eth::IDLE) {
+        // text_addr and some of span's addr point to IRAM base address.
+        // However it need to be placed L1 kernel base address for FW to copy it to IRAM then kick off
+        // The kernel can run with IRAM base address once it started.
+        const_cast<ll_api::memory&>(binary_mem)
+            .set_text_addr(tt::tt_metal::hal.erisc_iram_relocate_dev_addr((uint64_t)binary_mem.get_text_addr()));
+        std::function<void(uint64_t& addr)> update_callback = [](uint64_t& addr) {
+            addr = tt::tt_metal::hal.erisc_iram_relocate_dev_addr(addr);
+        };
+        const_cast<ll_api::memory&>(binary_mem).update_spans(update_callback);
+    }
+    binaries.push_back(&binary_mem);
     uint32_t binary_size = binary_mem.get_packed_size();
-    log_debug(LogLoader, "ERISC {} kernel binary size: {} in bytes", erisc_id, binary_size);
-    this->set_binaries(device->build_key(), std::move(binaries));
+    log_debug(LogLoader, "ERISC={}, name={}, size={} (bytes)", erisc_id, this->name(), binary_size);
+    this->set_binaries(
+        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key, std::move(binaries));
 }
 
-void ComputeKernel::read_binaries(Device *device) {
+void ComputeKernel::read_binaries(IDevice* device) {
     TT_ASSERT(!binary_path_.empty(), "Path to Kernel binaries not set!");
-    std::vector<ll_api::memory> binaries;
-    uint32_t tensix_core_type = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    std::vector<ll_api::memory const*> binaries;
+    uint32_t tensix_core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t compute_class_idx = magic_enum::enum_integer(HalProcessorClassType::COMPUTE);
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
-        const JitBuildState &build_state = device->build_kernel_state(tensix_core_type, compute_class_idx, trisc_id);
-        ll_api::memory binary_mem = llrt::get_risc_binary(
+        const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
+            device->build_id(), tensix_core_type, compute_class_idx, trisc_id);
+        ll_api::memory const& binary_mem = llrt::get_risc_binary(
             build_state.get_target_out_path(this->kernel_full_name_),
-            tensix_core_type, compute_class_idx, trisc_id,
-            ll_api::memory::PackSpans::PACK, ll_api::memory::Relocate::XIP
-        );
-        binaries.push_back(binary_mem);
+            ll_api::memory::Loading::CONTIGUOUS_XIP);
+        binaries.push_back(&binary_mem);
         uint32_t binary_size = binary_mem.get_packed_size();
-        log_debug(LogLoader, "RISC {} kernel binary size: {} in bytes", trisc_id + 2, binary_size);
+        log_debug(LogLoader, "RISC={}, name={}, size={} (bytes)", trisc_id + 2, this->name(), binary_size);
     }
-    this->set_binaries(device->build_key(), std::move(binaries));
+    this->set_binaries(
+        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key, std::move(binaries));
 }
 
 RISCV DataMovementKernel::processor() const {
@@ -438,29 +492,31 @@ RISCV EthernetKernel::processor() const { return RISCV::ERISC; }
 
 RISCV ComputeKernel::processor() const { return RISCV::COMPUTE; }
 
-bool DataMovementKernel::configure(Device *device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const {
+bool DataMovementKernel::configure(IDevice* device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const {
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot configure kernel because it is not on core {}", logical_core.str());
     }
     auto device_id = device->id();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
-    ll_api::memory binary_mem = this->binaries(device->build_key()).at(0);
+    const ll_api::memory& binary_mem =
+        *this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)[0];
     int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
     llrt::write_binary_to_address(binary_mem, device_id, worker_core, base_address + offsets[riscv_id]);
 
     return true;
 }
 
-bool EthernetKernel::configure(Device *device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const {
+bool EthernetKernel::configure(IDevice* device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const {
     auto device_id = device->id();
     auto ethernet_core = device->ethernet_core_from_logical_core(logical_core);
-    ll_api::memory binary_mem = this->binaries(device->build_key()).at(0);
+    const ll_api::memory& binary_mem =
+        *this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)[0];
 
     if (this->config_.eth_mode == Eth::IDLE) {
         uint32_t offset_idx = magic_enum::enum_integer(HalProcessorClassType::DM) + magic_enum::enum_integer(this->config_.processor);
         llrt::write_binary_to_address(binary_mem, device_id, ethernet_core, base_address + offsets[offset_idx]);
     } else {
-        uint32_t erisc_core_type = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+        uint32_t erisc_core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
         uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
         int erisc_id = magic_enum::enum_integer(this->config_.processor);
         tt::llrt::test_load_write_read_risc_binary(binary_mem, device_id, ethernet_core, erisc_core_type, dm_class_idx, erisc_id);
@@ -469,17 +525,18 @@ bool EthernetKernel::configure(Device *device, const CoreCoord &logical_core, ui
     return true;
 }
 
-bool ComputeKernel::configure(Device *device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const {
+bool ComputeKernel::configure(IDevice* device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const {
     bool pass = true;
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot configure kernel because it is not on core {}", logical_core.str());
     }
     auto device_id = device->id();
     auto worker_core = device->worker_core_from_logical_core(logical_core);
-    std::vector<ll_api::memory> binaries = this->binaries(device->build_key());
-
+    const std::vector<const ll_api::memory*>& binaries =
+        this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
-        llrt::write_binary_to_address(binaries.at(trisc_id), device_id, worker_core, base_address + offsets[2 + trisc_id]);
+        llrt::write_binary_to_address(
+            *binaries[trisc_id], device_id, worker_core, base_address + offsets[2 + trisc_id]);
     }
 
     return pass;

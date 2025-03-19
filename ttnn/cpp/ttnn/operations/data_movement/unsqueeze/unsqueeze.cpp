@@ -2,23 +2,31 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include "unsqueeze.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor UnsqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const int dim) {
-    const auto tensor_shape = input_tensor.get_shape();
-    const auto rank = tensor_shape.rank();
+    const auto& tensor_shape = input_tensor.get_logical_shape();
+    const uint32_t rank = tensor_shape.rank();
+    const int32_t max_dim = (int)(rank);
+    const int32_t min_dim = -(max_dim)-1;
+
     SmallVector<uint32_t> output_shape_vector;
 
-    TT_FATAL(input_tensor.get_layout() == Layout::ROW_MAJOR or (!tensor_shape.has_tile_padding()), "Currently supporing ROW-MAJOR tensors or TILE tensors with no padding");
-
-    int normal_dim = dim;
+    int normal_dim;
     // Handle negative dimension by converting it to positive
+    TT_FATAL(
+        (dim >= min_dim) && (dim <= max_dim),
+        "Dimension out of range (expected to be in range of [{},{}], but got {})",
+        min_dim,
+        max_dim,
+        dim);
     if (dim < 0) {
-        normal_dim += rank + 1;
+        normal_dim = rank + 1 + dim;
+    } else {
+        normal_dim = dim;
     }
 
     // Insert new dimension
@@ -30,11 +38,11 @@ ttnn::Tensor UnsqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const 
     }
 
     // If the dimension is at the end, append it
-    if (normal_dim >= tensor_shape.size()) {
+    if (normal_dim == rank) {
         output_shape_vector.push_back(1);
     }
 
-    return ttnn::reshape(input_tensor, ttnn::SimpleShape(std::move(output_shape_vector)));
+    return ttnn::reshape(input_tensor, ttnn::Shape(std::move(output_shape_vector)));
 }
 
-} // ttnn::operations::data_movement namespace
+}  // namespace ttnn::operations::data_movement

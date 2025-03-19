@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 template <typename T>
 void write_mean_rstd(
@@ -25,7 +25,7 @@ void write_mean_rstd(
     cb_wait_front(cb_id, onetile);
 
     uint32_t output_l1_write_addr = get_read_ptr(cb_id);
-    auto l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t *>(output_l1_write_addr);
+    auto l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(output_l1_write_addr);
 
     uint32_t output_tile_offset = tile_offset / num_inner;
 
@@ -102,9 +102,9 @@ void kernel_main() {
     constexpr bool rstd_has_value = get_compile_time_arg_val(4) == 1;
     constexpr uint32_t block_size = get_compile_time_arg_val(5);
 
-    constexpr uint32_t cb_id_output = tt::CB::c_out0;
-    constexpr uint32_t cb_id_mean = tt::CB::c_out1;
-    constexpr uint32_t cb_id_rstd = tt::CB::c_out2;
+    constexpr uint32_t cb_id_output = tt::CBIndex::c_16;
+    constexpr uint32_t cb_id_mean = tt::CBIndex::c_17;
+    constexpr uint32_t cb_id_rstd = tt::CBIndex::c_18;
 
     // output
     const uint32_t output_tile_bytes = get_tile_size(cb_id_output);

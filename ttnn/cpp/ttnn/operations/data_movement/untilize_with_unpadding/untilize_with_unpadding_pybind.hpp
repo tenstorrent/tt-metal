@@ -7,13 +7,13 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "untilize_with_unpadding.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
-void bind_untilize_with_unpadding(py::module &module) {
+void bind_untilize_with_unpadding(py::module& module) {
     auto doc =
         R"doc(
             Changes data layout of input tensor to ROW_MAJOR and unpads/removes elements from the tensor.
@@ -42,22 +42,22 @@ void bind_untilize_with_unpadding(py::module &module) {
         ttnn::untilize_with_unpadding,
         doc,
         ttnn::pybind_overload_t{
-            [](const OperationType &self,
-               const ttnn::Tensor &input_tensor,
-               const tt::tt_metal::LegacyShape &output_tensor_end,
-               const std::optional<MemoryConfig> &memory_config,
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const ttnn::Shape& output_tensor_end,
+               const std::optional<MemoryConfig>& memory_config,
                bool use_multicore,
                bool use_pack_untilize,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(queue_id, input_tensor, output_tensor_end, memory_config, use_multicore, use_pack_untilize);
             },
             py::arg("input_tensor"),
             py::arg("output_tensor_end"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("use_multicore") = false,
+            py::arg("use_multicore") = true,
             py::arg("use_pack_untilize") = true,
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
         });
 }
 

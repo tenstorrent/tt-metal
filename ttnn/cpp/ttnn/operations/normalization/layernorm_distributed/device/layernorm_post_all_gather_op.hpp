@@ -16,11 +16,11 @@ using namespace tt::constants;
 
 namespace ttnn::operations::normalization {
 
-operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
-    const Tensor &a,
-    const Tensor &stats,
-    const std::optional<const Tensor> gamma,
-    const std::optional<const Tensor> beta,
+tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_core(
+    const Tensor& a,
+    const Tensor& stats,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& beta,
     Tensor& output,
     LayerNormDistributedType norm_type,
     float eps,
@@ -31,15 +31,16 @@ struct LayerNormPostAllGather {
     float eps;
     MemoryConfig memory_config;
     const DeviceComputeKernelConfig compute_kernel_config;
+    std::optional<DataType> dtype;
 
-    void validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
-    std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
+    void validate(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
+    std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
+    tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        std::vector<Tensor> &output_tensors
-    ) const;
+        std::vector<Tensor>& output_tensors) const;
 };
 
 }  // namespace ttnn::operations::normalization

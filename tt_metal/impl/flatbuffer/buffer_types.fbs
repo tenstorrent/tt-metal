@@ -1,0 +1,83 @@
+include "flatbuffer/base_types.fbs";
+include "flatbuffer/program_types.fbs"; // For CoreRangeSet
+
+namespace tt.tt_metal.flatbuffer;
+
+enum BufferType: ushort {
+  DRAM = 0,
+  L1 = 1,
+  SystemMemory = 2,
+  L1Small = 3,
+  Trace = 4,
+}
+
+enum TensorMemoryLayout: ushort {
+  Interleaved = 0,
+  SingleBank = 1,
+  HeightSharded = 2,
+  WidthSharded = 3,
+  BlockSharded = 4,
+}
+
+enum ShardOrientation : ubyte {
+    RowMajor = 0,
+    ColMajor = 1,
+}
+
+enum ShardMode : ubyte {
+    Physical,
+    Logical,
+}
+
+table ShardShape {
+    height: uint32;
+    width: uint32;
+}
+
+table ShardSpec {
+    grid: CoreRangeSet;
+    shape_h: uint32;
+    shape_w: uint32;
+    orientation: ShardOrientation;
+    shard_mode: ShardMode;
+    physical_shard_shape: ShardShape;
+}
+
+table ShardSpecBuffer {
+  tensor_shard_spec: ShardSpec;
+  page_shape_h: uint32;
+  page_shape_w: uint32;
+  tensor2d_shape_in_pages_h: uint32;
+  tensor2d_shape_in_pages_w: uint32;
+}
+
+struct CBConfigPageSize {
+  index: uint32;  // The index in the array
+  size: uint32;   // The page-size value for this index
+}
+
+struct CBConfigDataFormat {
+  index: uint32;  // The index in the array
+  format: DataFormat; // The data format for this index
+}
+
+
+struct CBConfigTile {
+  index: uint32;  // The index in the array
+  tile: Tile;     // The tile for this index
+}
+
+table CircularBufferConfig {
+  total_size: uint32;
+  globally_allocated_address: Uint32Optional;
+  data_formats: [CBConfigDataFormat]; // Mimic optional array in C++ by using KV map.
+  page_sizes: [CBConfigPageSize];     // Mimic optional array in C++ by using KV map.
+  tiles: [CBConfigTile];              // Mimic optional array in C++ by using KV map.
+  shadow_buf_global_id: Uint32Optional;
+  buffer_indices: [uint8];
+  local_buffer_indices: [uint8];
+  remote_buffer_indices: [uint8];
+  dynamic_cb: bool;
+  max_size: uint32;
+  buffer_size: uint32;
+}

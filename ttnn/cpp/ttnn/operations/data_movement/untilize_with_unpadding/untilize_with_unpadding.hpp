@@ -11,18 +11,11 @@ namespace operations::data_movement {
 
 struct ExecuteUntilizeWithUnpadding {
     static ttnn::Tensor invoke(
-        uint8_t queue_id,
-        const ttnn::Tensor &input_tensor,
-        const tt::tt_metal::LegacyShape &output_tensor_end,
-        const std::optional<MemoryConfig> &memory_config,
-        bool use_multicore = false,
-        bool use_pack_untilize = true);
-
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor &input_tensor,
-        const tt::tt_metal::LegacyShape &output_tensor_end,
-        const std::optional<MemoryConfig> &memory_config,
-        bool use_multicore = false,
+        QueueId queue_id,
+        const ttnn::Tensor& input_tensor,
+        const ttnn::Shape& output_tensor_end,
+        const std::optional<MemoryConfig>& memory_config,
+        bool use_multicore = true,
         bool use_pack_untilize = true);
 };
 

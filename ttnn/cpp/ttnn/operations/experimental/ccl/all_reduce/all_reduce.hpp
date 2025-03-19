@@ -8,7 +8,7 @@
 
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
-#include "ttnn/cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+#include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 
 namespace ttnn {
 namespace operations {

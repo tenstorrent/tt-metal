@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -17,7 +17,7 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(2);
     constexpr uint32_t HtWt = get_compile_time_arg_val(3);
 
-    constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
@@ -25,7 +25,7 @@ void kernel_main() {
     const DataFormat data_format = get_dataformat(cb_id_in0);
 
 #ifdef REDUCE_SCALER
-    constexpr uint32_t cb_id_in2 = tt::CB::c_in2;
+    constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
     constexpr uint32_t scaler = get_compile_time_arg_val(4);
     cb_reserve_back(cb_id_in2, 1);
     constexpr uint32_t num_zeros_reads = 2048 / MEM_ZEROS_SIZE;
@@ -52,7 +52,7 @@ void kernel_main() {
     cb_push_back(cb_id_in2, 1);
 #endif
 
-    constexpr uint32_t cb_id_mask_h = tt::CB::c_in3;
+    constexpr uint32_t cb_id_mask_h = tt::CBIndex::c_3;
 #ifdef DO_MASK_H
     generate_mask_h(cb_id_mask_h, mask_h);
 #endif

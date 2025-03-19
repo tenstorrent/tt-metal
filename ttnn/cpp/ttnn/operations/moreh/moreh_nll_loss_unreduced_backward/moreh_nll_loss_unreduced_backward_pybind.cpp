@@ -8,13 +8,13 @@
 #include <pybind11/stl.h>
 
 #include "moreh_nll_loss_unreduced_backward.hpp"
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 namespace py = pybind11;
 
 namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward {
 
-void bind_moreh_nll_loss_unreduced_backward_operation(py::module &module) {
+void bind_moreh_nll_loss_unreduced_backward_operation(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::moreh_nll_loss_unreduced_backward,

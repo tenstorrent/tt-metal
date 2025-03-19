@@ -30,18 +30,18 @@ struct MorehMatmulOperation {
         const std::optional<const Tensor>& bias;
     };
 
-    using shape_return_value_t = Shape;
+    using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct MultiCoreProgramFactory {
-        struct shared_variable_t {
-            KernelHandle reader_kernel_id;
-            KernelHandle writer_kernel_id;
+        struct shared_variables_t {
+            tt::tt_metal::KernelHandle reader_kernel_id;
+            tt::tt_metal::KernelHandle writer_kernel_id;
             std::size_t num_cores;
             std::size_t num_cores_y;
         };
 
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variable_t>;
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
         static cached_program_t create(
             const operation_attributes_t& operation_attributes,
@@ -61,7 +61,7 @@ struct MorehMatmulOperation {
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
-    static shape_return_value_t compute_output_shapes(const operation_attributes_t&, const tensor_args_t&);
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,
@@ -74,9 +74,8 @@ struct MorehMatmulOperation {
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 
-void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const tt::tt_metal::LegacyShape& shape);
-ttnn::SmallVector<int64_t> find_reduce_dim(
-    const tt::tt_metal::LegacyShape& a_shape, const tt::tt_metal::LegacyShape& b_shape);
+void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape);
+ttnn::SmallVector<int64_t> find_reduce_dim(const ttnn::Shape& a_shape, const ttnn::Shape& b_shape);
 bool is_same_batch_dim(const Tensor& tensor_a, const Tensor& tensor_b);
 
 }  // namespace ttnn::operations::moreh::moreh_matmul

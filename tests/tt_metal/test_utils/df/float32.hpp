@@ -5,7 +5,7 @@
 #pragma once
 #include <iostream>
 
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/logger.hpp>
 
 namespace tt::test_utils::df {
 
@@ -16,10 +16,10 @@ namespace tt::test_utils::df {
 //! Constructor(float in) - constructor with a float as the initializer
 
 class float32 {
-   private:
+private:
     uint32_t uint32_data = 0;
 
-   public:
+public:
     static constexpr size_t SIZEOF = 4;
 
     // create from float: no rounding, just truncate

@@ -4,12 +4,13 @@
 
 #include "repeat_and_interleave_eltwise_mul_program_factory.hpp"
 
-#include "ttnn/common/constants.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::ssm::detail {
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
     const Tensor& a,
@@ -18,9 +19,9 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
     const uint32_t hidden_size,
     MathFidelity math_fidelity,
     CoreCoord compute_with_storage_grid_size) {
-    const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+    const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
 
-    tt::tt_metal::Device* device = a.device();
+    tt::tt_metal::IDevice* device = a.device();
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     tt::tt_metal::Buffer* src1_buffer = b.buffer();
@@ -55,14 +56,14 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
         grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, row_major);
 
     // Create circular buffers
-    uint32_t src0_cb_index = tt::CB::c_in0;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t cb0_tiles = ONE_TILE * 2;  // double buffer
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb0_tiles * in0_single_tile_size, {{src0_cb_index, in0_data_format}})
             .set_page_size(src0_cb_index, in0_single_tile_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    uint32_t src1_cb_index = tt::CB::c_in1;
+    uint32_t src1_cb_index = tt::CBIndex::c_1;
     uint32_t cb1_tiles = ONE_TILE * 2;  // double buffer
     tt::tt_metal::CircularBufferConfig cb_src1_config =
         tt::tt_metal::CircularBufferConfig(cb1_tiles * in1_single_tile_size, {{src1_cb_index, in1_data_format}})
@@ -79,25 +80,25 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
 
     uint32_t interm_num_tiles = ONE_TILE * 2;  // double buffer
     uint32_t interm_cb_size = interm_num_tiles * interm_single_tile_size;
-    uint32_t cb_intermed0_index = tt::CB::c_intermed0;  // cb_in0_transposed
+    uint32_t cb_intermed0_index = tt::CBIndex::c_24;  // cb_in0_transposed
     tt::tt_metal::CircularBufferConfig cb_intermed0_config =
         tt::tt_metal::CircularBufferConfig(interm_cb_size, {{cb_intermed0_index, interm_data_format}})
             .set_page_size(cb_intermed0_index, interm_single_tile_size);
     auto cb_intermed0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed0_config);
 
-    uint32_t cb_intermed1_index = tt::CB::c_intermed1;  // cb_in1_transposed
+    uint32_t cb_intermed1_index = tt::CBIndex::c_25;  // cb_in1_transposed
     tt::tt_metal::CircularBufferConfig cb_intermed1_config =
         tt::tt_metal::CircularBufferConfig(interm_cb_size, {{cb_intermed1_index, interm_data_format}})
             .set_page_size(cb_intermed1_index, interm_single_tile_size);
     auto cb_intermed1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed1_config);
 
-    uint32_t cb_intermed2_index = tt::CB::c_intermed2;  // cb_in1_bcast_row
+    uint32_t cb_intermed2_index = tt::CBIndex::c_26;  // cb_in1_bcast_row
     tt::tt_metal::CircularBufferConfig cb_intermed2_config =
         tt::tt_metal::CircularBufferConfig(interm_cb_size, {{cb_intermed2_index, interm_data_format}})
             .set_page_size(cb_intermed2_index, interm_single_tile_size);
     auto cb_intermed2 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed2_config);
 
-    uint32_t cb_intermed3_index = tt::CB::c_intermed3;  // cb_out_transposed
+    uint32_t cb_intermed3_index = tt::CBIndex::c_27;  // cb_out_transposed
     tt::tt_metal::CircularBufferConfig cb_intermed3_config =
         tt::tt_metal::CircularBufferConfig(interm_cb_size, {{cb_intermed3_index, interm_data_format}})
             .set_page_size(cb_intermed3_index, interm_single_tile_size);

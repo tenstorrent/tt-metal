@@ -7,20 +7,19 @@ set(PERF_MICROBENCH_TESTS_SRCS
     ethernet/test_workers_and_erisc_datamover_unidirectional.cpp
     ethernet/test_ethernet_bidirectional_bandwidth_no_edm.cpp
     ethernet/test_ethernet_link_ping_latency_no_edm.cpp
+    ethernet/test_ethernet_write_worker_latency_no_edm.cpp
     ethernet/test_ethernet_hop_latencies_no_edm.cpp
     routing/test_tx_rx.cpp
     routing/test_mux_demux.cpp
     routing/test_vc_mux_demux.cpp
     routing/test_mux_demux_2level.cpp
-    routing/test_tunnel_1cq.cpp
-    routing/test_tunnel_2cq.cpp
-    routing/test_uni_tunnel.cpp
     routing/test_vc_uni_tunnel.cpp
-    routing/test_uni_tunnel_single_chip.cpp
-    routing/test_bi_tunnel.cpp
     routing/test_vc_bi_tunnel_2ep.cpp
     routing/test_vc_bi_tunnel_4ep.cpp
     routing/test_vc_loopback_tunnel.cpp
+    routing/test_tt_fabric_sanity.cpp
+    routing/test_tt_fabric_multi_hop_sanity.cpp
+    routing/test_tt_fabric_socket_sanity.cpp
     noc/test_noc_unicast_vs_multicast_to_single_core_latency.cpp
     old/matmul/matmul_global_l1.cpp
     old/matmul/matmul_local_l1.cpp
@@ -43,39 +42,54 @@ set(PERF_MICROBENCH_TESTS_SRCS
     11_remote_cb_sync_matmul_single_core/test_remote_cb_sync_matmul.cpp
 )
 
-foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
-    get_filename_component(TEST_TARGET ${TEST_SRC} NAME_WE)
-    get_filename_component(TEST_DIR ${TEST_SRC} DIRECTORY)
-    # test_rw_buffer have two versions >:/ can we remove one?
-    if(${TEST_SRC} STREQUAL "old/pcie/test_rw_buffer.cpp")
-        set(TEST_TARGET "test_rw_buffer_old")
-    endif()
+set(ARCHITECTURES
+    "wormhole"
+    "blackhole"
+)
 
-    add_executable(${TEST_TARGET} ${TEST_SRC})
-    target_link_libraries(${TEST_TARGET} PUBLIC test_metal_common_libs)
-    if(${TEST_TARGET} MATCHES "test_dram_read")
-        target_link_libraries(${TEST_TARGET} PRIVATE yaml-cpp::yaml-cpp)
-    endif()
+foreach(arch ${ARCHITECTURES})
+    foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
+        get_filename_component(TEST_TARGET ${TEST_SRC} NAME_WE)
+        get_filename_component(TEST_DIR ${TEST_SRC} DIRECTORY)
+        # test_rw_buffer have two versions >:/ can we remove one?
+        if(${TEST_SRC} STREQUAL "old/pcie/test_rw_buffer.cpp")
+            set(TEST_TARGET "test_rw_buffer_old")
+        endif()
+        set(TEST_TARGET "${TEST_TARGET}_${arch}")
+        string(REPLACE "wormhole" "wormhole_b0" TEST_TARGET ${TEST_TARGET})
 
-    target_include_directories(
-        ${TEST_TARGET}
-        PRIVATE
-            ${UMD_HOME}
-            ${PROJECT_SOURCE_DIR}
-            ${PROJECT_SOURCE_DIR}/tt_metal
-            ${PROJECT_SOURCE_DIR}/ttnn/cpp/ttnn/deprecated # this all should go away and be replaced with link to ttnn
-            ${PROJECT_SOURCE_DIR}/tt_metal/common
-            ${PROJECT_SOURCE_DIR}/tests
-            ${CMAKE_CURRENT_SOURCE_DIR}
-    )
-    set_target_properties(
-        ${TEST_TARGET}
-        PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY
-                ${PROJECT_BINARY_DIR}/test/tt_metal/perf_microbenchmark/${TEST_DIR}
-    )
-    target_compile_options(${TEST_TARGET} PUBLIC ${COMPILE_OPTIONS})
-    list(APPEND PERF_MICROBENCH_TEST_TARGETS ${TEST_TARGET})
+        add_executable(${TEST_TARGET} ${TEST_SRC})
+        target_link_libraries(
+            ${TEST_TARGET}
+            PUBLIC
+                test_metal_common_libs
+            PRIVATE
+                yaml-cpp::yaml-cpp
+                fabric
+        )
+        if(${TEST_SRC} STREQUAL "dispatch/test_pgm_dispatch.cpp")
+            target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
+        endif()
+        target_include_directories(
+            ${TEST_TARGET}
+            BEFORE
+            PRIVATE
+                ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${arch}
+                "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+                ${PROJECT_SOURCE_DIR}/ttnn/cpp/ttnn/deprecated # this all should go away and be replaced with link to ttnn
+                ${PROJECT_SOURCE_DIR}/tests
+                ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
+                ${CMAKE_CURRENT_SOURCE_DIR}
+        )
+        set_target_properties(
+            ${TEST_TARGET}
+            PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY
+                    ${PROJECT_BINARY_DIR}/test/tt_metal/perf_microbenchmark/${TEST_DIR}
+        )
+        target_compile_options(${TEST_TARGET} PUBLIC ${COMPILE_OPTIONS})
+        list(APPEND PERF_MICROBENCH_TEST_TARGETS ${TEST_TARGET})
+    endforeach()
 endforeach()
 
 add_custom_target(metal_perf_microbenchmark_tests DEPENDS ${PERF_MICROBENCH_TEST_TARGETS})

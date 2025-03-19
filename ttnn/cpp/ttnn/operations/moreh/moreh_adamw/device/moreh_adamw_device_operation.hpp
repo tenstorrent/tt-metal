@@ -41,16 +41,16 @@ struct MorehAdamWDeviceOperation {
         const std::optional<Tensor>& max_exp_avg_sq_out;
     };
 
-    using shape_return_value_t = std::vector<ttnn::Shape>;
+    using spec_return_value_t = std::vector<std::optional<ttnn::TensorSpec>>;
 
     using tensor_return_value_t = std::vector<std::optional<Tensor>>;
 
     struct MultiCore {
         struct shared_variables_t {
-            KernelHandle unary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
-            KernelHandle compute_kernel_group1_id;
-            KernelHandle compute_kernel_group2_id;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle compute_kernel_group1_id;
+            tt::tt_metal::KernelHandle compute_kernel_group2_id;
             CoreRangeSet core_group_1;
             CoreRangeSet core_group_2;
             std::size_t num_cores;
@@ -81,7 +81,7 @@ struct MorehAdamWDeviceOperation {
 
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
-    static shape_return_value_t compute_output_shapes(const operation_attributes_t&, const tensor_args_t&);
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 

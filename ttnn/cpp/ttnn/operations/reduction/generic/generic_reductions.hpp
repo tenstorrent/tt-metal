@@ -33,6 +33,15 @@ struct Reduce {
         float scalar = 1.0f);
 };
 
+// Entry point for pool op, which uses non-standard tensors that cannot be padded.
+[[deprecated]]
+Tensor pool_sum(
+    const Tensor& input_tensor_arg,
+    int dim_arg,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    float scalar);
+
 }  // namespace operations::reduction
 
 // Generic reductions

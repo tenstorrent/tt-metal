@@ -14,15 +14,13 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_sigmoid_appx()
-{
+inline void calculate_sigmoid_appx() {
     vUInt l0 = l_reg[LRegs::LReg0];
     vUInt l1 = l_reg[LRegs::LReg1];
     vUInt l2 = l_reg[LRegs::LReg2];
 
-    #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++)
-    {
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
         vFloat val = dst_reg[0];
 
         dst_reg[0] = lut(val, l0, l1, l2) + 0.5f;
@@ -36,8 +34,7 @@ inline void calculate_sigmoid_appx()
 }
 
 template <bool APPROXIMATION_MODE>
-inline void sigmoid_appx_init()
-{
+inline void sigmoid_appx_init() {
     uint imm0;
     uint imm1;
     uint imm2;

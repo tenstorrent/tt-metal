@@ -20,7 +20,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_post_commit import
     ],
 )
 @pytest.mark.parametrize(
-    "per_chip_output_shape, scatter_dim, layout",
+    "per_chip_output_shape, dim, layout",
     [
         ([1, 1, 32, 4096], 3, ttnn.TILE_LAYOUT),
         ([1, 1, 32, 2048], 3, ttnn.TILE_LAYOUT),
@@ -50,7 +50,7 @@ def test_ring_reduce_scatter_n300_post_commit(
     n300_mesh_device,
     num_devices,
     per_chip_output_shape,
-    scatter_dim,
+    dim,
     num_links,
     math_op,
     input_dtype,
@@ -65,7 +65,7 @@ def test_ring_reduce_scatter_n300_post_commit(
         n300_mesh_device,
         num_devices,
         per_chip_output_shape,
-        scatter_dim,
+        dim,
         num_links,
         math_op,
         input_dtype,

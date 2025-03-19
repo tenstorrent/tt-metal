@@ -7,23 +7,23 @@
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t onetile = 1;
 
-    constexpr auto cb_y = tt::CB::c_in0;
-    constexpr auto cb_dy = tt::CB::c_in1;
-    constexpr auto cb_bcast_scaler = tt::CB::c_in2;
-    constexpr auto cb_mask = tt::CB::c_in3;
-    constexpr auto cb_dx = tt::CB::c_out0;
+    constexpr auto cb_y = tt::CBIndex::c_0;
+    constexpr auto cb_dy = tt::CBIndex::c_1;
+    constexpr auto cb_bcast_scaler = tt::CBIndex::c_2;
+    constexpr auto cb_mask = tt::CBIndex::c_3;
+    constexpr auto cb_dx = tt::CBIndex::c_16;
 
-    constexpr auto cb_ydy = tt::CB::c_intermed0;  // y * dy
-    constexpr auto cb_sum = tt::CB::c_intermed1;
-    constexpr auto cb_inter2 = tt::CB::c_intermed2;
+    constexpr auto cb_ydy = tt::CBIndex::c_24;  // y * dy
+    constexpr auto cb_sum = tt::CBIndex::c_25;
+    constexpr auto cb_inter2 = tt::CBIndex::c_26;
 
-    binary_op_init_common(cb_y, cb_bcast_scaler);
+    binary_op_init_common(cb_y, cb_bcast_scaler, cb_dx);
 
     uint32_t N = get_compile_time_arg_val(0);
     uint32_t Wt = get_compile_time_arg_val(1);
@@ -38,14 +38,14 @@ void MAIN {
             reduce_tile_to_cb<false, REDUCE_OP, REDUCE_DIM>(
                 cb_inter2, cb_bcast_scaler, cb_sum, 1, /*pop0=*/1, /*pop=1*/ 0);
         } else {
-            constexpr auto cb_inter0 = tt::CB::c_intermed0;
+            constexpr auto cb_inter0 = tt::CBIndex::c_24;
             reduce_tile_to_cb<false, REDUCE_OP, REDUCE_DIM>(
                 cb_dy, cb_bcast_scaler, cb_inter0, Wt - 1, /*pop0=*/0, /*pop=1*/ 0);
 
-            constexpr auto cb_inter1 = tt::CB::c_intermed1;
+            constexpr auto cb_inter1 = tt::CBIndex::c_25;
             mask_tile_to_cb(cb_dy, cb_mask, cb_inter1, /*itile=*/Wt - 1, /*mtile=*/0, /*pop=*/0, /*popm=*/0);
 
-            constexpr auto cb_inter2 = tt::CB::c_intermed2;
+            constexpr auto cb_inter2 = tt::CBIndex::c_26;
             reduce_tile_to_cb<false, REDUCE_OP, REDUCE_DIM>(
                 cb_inter1, cb_bcast_scaler, cb_inter2, 1, /*pop0=*/1, /*pop=1*/ 0);
 
@@ -53,7 +53,7 @@ void MAIN {
         }
 
         // dy - sum * exp(y)
-        constexpr auto cb_exp = tt::CB::c_intermed0;  // y * dy
+        constexpr auto cb_exp = tt::CBIndex::c_24;  // y * dy
 
         for (uint32_t w = 0; w < Wt; w += onetile) {
             // exp(y)

@@ -105,7 +105,7 @@ def test_vit(device):
             }
         )
         n_cores = 8
-        shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, False)
+        shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
 
         output = None
         pixel_values = torch2tt_tensor(

@@ -167,15 +167,13 @@ def run_all_gather_matmul_on_t3000_impl(
         logger.info(f"Done executing trace")
 
         # Synchronize the devices
-        for d in devices:
-            ttnn.synchronize_device(d)
+        ttnn.synchronize_device(t3k_mesh_device)
     else:
         for i in range(num_iters):
             tt_all_gather_out_tensor, tt_matmul_out_tensor, tt_datacopy_out_tensor = run_op()
 
             # Synchronize the devices
-            for d in devices:
-                ttnn.synchronize_device(d)
+            ttnn.synchronize_device(t3k_mesh_device)
 
             logger.info(f"Done iteration {i}")
 
@@ -507,7 +505,6 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
                         128,  # shard width
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             ),
             ttnn.MemoryConfig(
@@ -527,7 +524,6 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
                         8192 // 8,  # shard_width_hidden_dim_across_8_cores
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             ),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1),

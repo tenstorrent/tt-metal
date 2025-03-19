@@ -9,7 +9,7 @@
 // #include "debug/dprint.h"
 
 #ifdef FUSE_BIAS
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/reader_bmm_single_core_bias.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/reader_bmm_single_core_bias.hpp"
 #endif
 
 void kernel_main() {
@@ -46,8 +46,8 @@ void kernel_main() {
     uint32_t in1_next_block_stride_h = get_arg_val<uint32_t>(20);
     uint32_t in1_next_block_stride_w = get_arg_val<uint32_t>(21);
 
-    constexpr uint32_t in0_cb_id = tt::CB::c_in0;
-    constexpr uint32_t in1_cb_id = tt::CB::c_in1;
+    constexpr uint32_t in0_cb_id = tt::CBIndex::c_0;
+    constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
 
     const uint32_t in0_tile_nbytes = get_tile_size(in0_cb_id);
     const uint32_t in1_tile_nbytes = get_tile_size(in1_cb_id);
@@ -80,7 +80,7 @@ void kernel_main() {
 
 // read bias first if defined
 #ifdef FUSE_BIAS
-    constexpr uint32_t bias_cb_id = tt::CB::c_in2;
+    constexpr uint32_t bias_cb_id = tt::CBIndex::c_2;
     uint32_t bias_addr = get_arg_val<uint32_t>(22);
     uint32_t bias_width_ntiles = get_arg_val<uint32_t>(23);
     uint32_t bias_log2_of_pagesize = get_arg_val<uint32_t>(24);

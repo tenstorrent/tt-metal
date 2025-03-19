@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/moreh_softmax_backward_device_operation.hpp"
+#include "cpp/ttnn/operations/moreh/moreh_softmax_backward/device/moreh_softmax_backward_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_softmax_backward {
@@ -22,7 +22,7 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create(
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     // split work
-    auto shape = input_grad.get_shape().value;
+    auto shape = input_grad.get_padded_shape();
     auto H = shape[-2];
     auto W = shape[-1];
     auto Ht = H / tt::constants::TILE_HEIGHT;
@@ -51,16 +51,14 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create(
         all_cores,
         data_format,
         {
-            {tt::CB::c_in0, Ht},  // output
-            {tt::CB::c_in1, Ht},  // output_grad
-            {tt::CB::c_in2, 1},   // scaler
-            {tt::CB::c_in3, 1},   // mask
-            {tt::CB::c_out0, 2},  // input_grad
-            {tt::CB::c_intermed0,
-             Ht,
-             fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},                          // output * output_grad
-            {tt::CB::c_intermed1, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // reduce
-            {tt::CB::c_intermed2, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // dy - sum
+            {tt::CBIndex::c_0, Ht},                                                             // output
+            {tt::CBIndex::c_1, Ht},                                                             // output_grad
+            {tt::CBIndex::c_2, 1},                                                              // scaler
+            {tt::CBIndex::c_3, 1},                                                              // mask
+            {tt::CBIndex::c_16, 2},                                                             // input_grad
+            {tt::CBIndex::c_24, Ht, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},  // output * output_grad
+            {tt::CBIndex::c_25, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},   // reduce
+            {tt::CBIndex::c_26, 1, fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format},   // dy - sum
         });
 
     // create read/wrtie kernel
@@ -85,10 +83,11 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create(
         writer_defines);
 
     std::map<string, string> compute_defines;
-    if (op == MorehSoftmaxBackwardOp::SOFTMAX)
+    if (op == MorehSoftmaxBackwardOp::SOFTMAX) {
         compute_defines["SOFTMAX"] = "1";
-    else
+    } else {
         compute_defines["SOFTMIN"] = "1";
+    }
 
     if (op == MorehSoftmaxBackwardOp::LOGSOFTMAX) {
         compute_defines["LOG"] = 1;
@@ -127,9 +126,10 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create(
         }
 
         float scaler = 1.0f;
-        uint32_t mask_h = shape.without_padding()[-2] % tt::constants::TILE_HEIGHT;
-        if (mask_h == 0)
+        uint32_t mask_h = input_grad.get_logical_shape()[-2] % tt::constants::TILE_HEIGHT;
+        if (mask_h == 0) {
             mask_h = tt::constants::TILE_HEIGHT;
+        }
         std::vector<uint32_t> reader_args = {
             output.buffer()->address(),
             output_grad.buffer()->address(),

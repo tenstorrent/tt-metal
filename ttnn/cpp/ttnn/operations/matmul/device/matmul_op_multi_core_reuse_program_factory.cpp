@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
@@ -14,7 +14,7 @@ using namespace tt;
 using tt_metal::Buffer;
 
 tt_metal::operation::ProgramWithCallbacks create_program(
-    tt_metal::Device *device,
+    tt_metal::IDevice* device,
     tt::DataFormat in0_cb_data_format,
     tt::DataFormat in1_cb_data_format,
     tt::DataFormat out_cb_data_format,
@@ -30,9 +30,9 @@ tt_metal::operation::ProgramWithCallbacks create_program(
     uint32_t out_subblock_w,
     uint32_t per_core_M,
     uint32_t per_core_N,
-    tt_metal::Buffer *in0_buffer,
-    tt_metal::Buffer *in1_buffer,
-    tt_metal::Buffer *out_buffer) {
+    tt_metal::Buffer* in0_buffer,
+    tt_metal::Buffer* in1_buffer,
+    tt_metal::Buffer* out_buffer) {
     tt_metal::Program program{};
 
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_cb_data_format);
@@ -84,7 +84,7 @@ tt_metal::operation::ProgramWithCallbacks create_program(
     uint32_t num_blocks_y = M / per_core_M;
     uint32_t num_blocks_x = N / per_core_N;
 
-    CoreRangeSet all_cores(num_cores_to_corerangeset(
+    CoreRangeSet all_cores(tt::tt_metal::num_cores_to_corerangeset(
         num_blocks_x * num_blocks_y, device->compute_with_storage_grid_size(), true));
 
     // Create circular buffers
@@ -100,7 +100,7 @@ tt_metal::operation::ProgramWithCallbacks create_program(
             .set_page_size(src1_cb_index, in1_single_tile_size);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
 
-    uint32_t output_cb_index = 16;  // output operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t interm0_cb_index = 24;
     std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
         {output_cb_index, out_cb_data_format}, {interm0_cb_index, out_cb_data_format}};
@@ -203,9 +203,9 @@ tt_metal::operation::ProgramWithCallbacks create_program(
                                            num_cores_x,
                                            num_blocks_y,
                                            num_blocks_x](
-                                              const tt_metal::Program &program,
-                                              const std::vector<Buffer *> &input_buffers,
-                                              const std::vector<Buffer *> &output_buffers) {
+                                              const tt_metal::Program& program,
+                                              const std::vector<Buffer*>& input_buffers,
+                                              const std::vector<Buffer*>& output_buffers) {
         auto src_dram_buffer_a = input_buffers.at(0);
         auto src_dram_buffer_b = input_buffers.at(1);
 
@@ -219,13 +219,13 @@ tt_metal::operation::ProgramWithCallbacks create_program(
                 CoreCoord core = {(std::size_t)core_idx_x, (std::size_t)core_idx_y};
 
                 {
-                    auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                    auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                     runtime_args[0] = src_dram_buffer_a->address();
                     runtime_args[8] = src_dram_buffer_b->address();
                 }
 
                 {
-                    auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                    auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                     runtime_args[0] = dst_dram_buffer->address();
                 }
                 num_blocks_read++;
@@ -242,17 +242,17 @@ namespace operations {
 
 namespace matmul {
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse(
-    const Tensor &a, const Tensor &b, Tensor &output, bool bcast_batch) {
-    const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse(
+    const Tensor& a, const Tensor& b, Tensor& output, bool bcast_batch) {
+    const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
 
     tt::DataFormat in0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::DataFormat in1_cb_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
     tt::DataFormat out_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 
-    tt_metal::Buffer *in0_buffer = a.buffer();
-    tt_metal::Buffer *in1_buffer = b.buffer();
+    tt_metal::Buffer* in0_buffer = a.buffer();
+    tt_metal::Buffer* in1_buffer = b.buffer();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Matmul Parameters Setup
@@ -274,7 +274,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse(
     TT_FATAL(Kt % in0_block_w == 0, "Error");
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device *device = a.device();
+    tt_metal::IDevice* device = a.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -285,8 +285,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse(
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::tt_metal::LegacyShape cshape = output.get_legacy_shape();  // C=A*B, N1MK*11KN->N1MN
-    tt_metal::Buffer *out_buffer = output.buffer();
+    auto cshape = output.get_padded_shape();  // C=A*B, N1MK*11KN->N1MN
+    tt_metal::Buffer* out_buffer = output.buffer();
     TT_FATAL(out_buffer != nullptr, "Output buffer should be allocated on device!");
 
     ////////////////////////////////////////////////////////////////////////////

@@ -5,11 +5,11 @@
 #include <optional>
 
 #include "binary_device_operation.hpp"
-#include "impl/buffers/buffer.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
@@ -27,8 +27,8 @@ static const BcastOpMath binary_op_type_to_bcast_op_math(const BinaryOpType bina
         default: TT_THROW("BinaryOpType cannot be mapped to BcastOpMath");
     }
 }
-}
-}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::cached_program_t
 BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
@@ -44,8 +44,8 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
     const auto& b = tensor_args.input_tensor_b;
     auto& output = tensor_return_value;
     auto bcast_math = binary_op_type_to_bcast_op_math(operation_attributes.binary_op_type);
-    const auto ashape = a.get_padded_shape();
-    const auto bshape = b.has_value() ? b->get_padded_shape() : Shape{1, 1};
+    const auto ashape = a.padded_shape();
+    const auto bshape = b.has_value() ? b->padded_shape() : ttnn::Shape({1, 1});
     uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
     uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
     uint32_t H = ashape[-2];
@@ -65,7 +65,7 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
 
     auto program = tt_metal::CreateProgram();
 
-    tt_metal::Device* device = a.device();
+    tt_metal::IDevice* device = a.device();
 
     std::optional<ShardSpec> shard_spec = std::nullopt;
     bool src0_sharded = a.memory_config().is_sharded();
@@ -117,14 +117,29 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
     uint32_t num_input_tiles_cb0 = src0_sharded ? num_tiles_per_shard : num_input_tiles;
 
     auto* cb_src0_buffer = src0_sharded ? src0_buffer : nullptr;
-    auto [cb_src0, cb_handle_src0] = create_cb(tt::CB::c_in0, program, all_device_cores, src0_single_tile_size, num_input_tiles_cb0, src0_cb_data_format, cb_src0_buffer);
+    auto [cb_src0, cb_handle_src0] = create_cb(
+        tt::CBIndex::c_0,
+        program,
+        all_device_cores,
+        src0_single_tile_size,
+        num_input_tiles_cb0,
+        src0_cb_data_format,
+        cb_src0_buffer);
 
     uint32_t num_input_tiles_cb1 = src1_buffer != nullptr ? num_input_tiles : 1;
-    create_cb(tt::CB::c_in1, program, all_device_cores, src1_single_tile_size, num_input_tiles_cb1, src1_cb_data_format);
+    create_cb(
+        tt::CBIndex::c_1, program, all_device_cores, src1_single_tile_size, num_input_tiles_cb1, src1_cb_data_format);
 
     uint32_t num_output_tiles = output_sharded ? num_tiles_per_shard : 2;
     auto* cb_output_buffer = output_sharded ? dst_buffer : nullptr;
-    auto [cb_output, cb_handle_output] = create_cb(tt::CB::c_out0, program, all_device_cores, dst_single_tile_size, num_output_tiles, dst_cb_data_format, cb_output_buffer);
+    auto [cb_output, cb_handle_output] = create_cb(
+        tt::CBIndex::c_2,
+        program,
+        all_device_cores,
+        dst_single_tile_size,
+        num_output_tiles,
+        dst_cb_data_format,
+        cb_output_buffer);
 
     auto src0_is_dram = static_cast<uint32_t>(src0_buffer->buffer_type() == tt_metal::BufferType::DRAM);
     auto dst_is_dram = static_cast<uint32_t>(dst_buffer->buffer_type() == tt_metal::BufferType::DRAM);
@@ -145,14 +160,14 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
         auto src1_is_dram = static_cast<uint32_t>(src1_buffer->buffer_type() == tt_metal::BufferType::DRAM);
         binary_reader_kernel_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/"
+            "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/"
             "reader_bcast_hw_interleaved_partitioned.cpp",
             all_device_cores,
             tt_metal::ReaderDataMovementConfig({src0_is_dram, src1_is_dram}, reader_defines));
     } else {
         binary_reader_kernel_id = tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/"
+            "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/"
             "reader_bcast_scalar_interleaved_partitioned.cpp",
             all_device_cores,
             tt_metal::ReaderDataMovementConfig({src0_is_dram}, reader_defines));
@@ -170,7 +185,7 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
 
     auto bcast_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_hw.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/bcast_hw.cpp",
         all_device_cores,
         tt_metal::ComputeConfig{.compile_args = {}, .defines = bcast_compute_defines});
 
@@ -283,8 +298,8 @@ void BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::override_runtime_a
 
     auto dst_buffer = output_tensor.buffer();
 
-    const auto ashape = input_tensor_a.get_padded_shape();
-    const auto bshape = input_tensor_b.has_value() ? input_tensor_b->get_padded_shape() : Shape{1, 1};
+    const auto ashape = input_tensor_a.padded_shape();
+    const auto bshape = input_tensor_b.has_value() ? input_tensor_b->padded_shape() : ttnn::Shape({1, 1});
     uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
     uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
     uint32_t H = ashape[-2];
@@ -369,13 +384,13 @@ void BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::override_runtime_a
     }
 
     if (src0_sharded) {
-        UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer_a);
-        UpdateCircularBufferTotalSize(program, cb_src0, num_tiles_per_core_group_1 * src0_single_tile_size);
+        UpdateDynamicCircularBufferAddressAndTotalSize(
+            program, cb_src0, *src_buffer_a, num_tiles_per_core_group_1 * src0_single_tile_size);
     }
 
     if (out_sharded) {
-        UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
-        UpdateCircularBufferTotalSize(program, cb_output, num_tiles_per_core_group_1 * dst_single_tile_size);
+        UpdateDynamicCircularBufferAddressAndTotalSize(
+            program, cb_output, *dst_buffer, num_tiles_per_core_group_1 * dst_single_tile_size);
     }
 }
 

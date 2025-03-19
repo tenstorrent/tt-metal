@@ -93,19 +93,16 @@ Pointwise Unary
 
    ttnn.abs
    ttnn.acos
-   ttnn.logical_not_
    ttnn.acosh
    ttnn.asin
    ttnn.asinh
    ttnn.atan
    ttnn.atanh
-   ttnn.bitwise_and
-   ttnn.bitwise_or
-   ttnn.bitwise_xor
    ttnn.bitwise_not
    ttnn.bitwise_left_shift
    ttnn.bitwise_right_shift
    ttnn.cbrt
+   ttnn.ceil
    ttnn.celu
    ttnn.clamp
    ttnn.clip
@@ -114,20 +111,25 @@ Pointwise Unary
    ttnn.cosh
    ttnn.deg2rad
    ttnn.digamma
+   ttnn.experimental.dropout
+   ttnn.experimental.gelu_bw
    ttnn.elu
+   ttnn.eqz
    ttnn.erf
    ttnn.erfc
    ttnn.erfinv
    ttnn.exp
    ttnn.exp2
    ttnn.expm1
+   ttnn.fill
    ttnn.floor
-   ttnn.ceil
+   ttnn.frac
    ttnn.geglu
    ttnn.gelu
    ttnn.glu
+   ttnn.gez
+   ttnn.gtz
    ttnn.hardshrink
-   ttnn.normalize_global
    ttnn.hardsigmoid
    ttnn.hardswish
    ttnn.hardtanh
@@ -140,6 +142,7 @@ Pointwise Unary
    ttnn.isneginf
    ttnn.isposinf
    ttnn.leaky_relu
+   ttnn.lez
    ttnn.lgamma
    ttnn.log
    ttnn.log10
@@ -147,27 +150,33 @@ Pointwise Unary
    ttnn.log2
    ttnn.log_sigmoid
    ttnn.logical_not
-   ttnn.frac
-   ttnn.fill
+   ttnn.logical_not_
    ttnn.logit
+   ttnn.ltz
    ttnn.mish
    ttnn.multigammaln
    ttnn.neg
+   ttnn.nez
+   ttnn.normalize_global
    ttnn.normalize_hw
+   ttnn.polygamma
    ttnn.prelu
+   ttnn.rad2deg
+   ttnn.rdiv
+   ttnn.reciprocal
    ttnn.reglu
    ttnn.relu
    ttnn.relu_max
    ttnn.relu_min
    ttnn.relu6
    ttnn.remainder
+   ttnn.round
    ttnn.rsqrt
-   ttnn.rdiv
-   ttnn.rsub
    ttnn.selu
    ttnn.sigmoid
    ttnn.sigmoid_accurate
    ttnn.sign
+   ttnn.signbit
    ttnn.silu
    ttnn.sin
    ttnn.sinh
@@ -175,22 +184,18 @@ Pointwise Unary
    ttnn.softplus
    ttnn.softshrink
    ttnn.softsign
-   ttnn.swish
-   ttnn.tan
-   ttnn.tanh
-   ttnn.signbit
-   ttnn.polygamma
-   ttnn.rad2deg
-   ttnn.reciprocal
-   ttnn.round
    ttnn.sqrt
    ttnn.square
    ttnn.swiglu
-   ttnn.tril
-   ttnn.triu
+   ttnn.swish
+   ttnn.tan
+   ttnn.tanh
    ttnn.tanhshrink
    ttnn.threshold
+   ttnn.tril
+   ttnn.triu
    ttnn.trunc
+   ttnn.unary_chain
    ttnn.clamp_bw
    ttnn.clip_bw
    ttnn.hardtanh_bw
@@ -299,23 +304,20 @@ Pointwise Binary
    ttnn.logical_and_
    ttnn.logical_or_
    ttnn.logical_xor_
-   ttnn.pow
    ttnn.rpow
+   ttnn.rsub
    ttnn.ldexp
    ttnn.logical_and
    ttnn.logical_or
    ttnn.logical_xor
+   ttnn.bitwise_and
+   ttnn.bitwise_or
+   ttnn.bitwise_xor
    ttnn.logaddexp
    ttnn.logaddexp2
    ttnn.hypot
    ttnn.xlogy
    ttnn.squared_difference
-   ttnn.gtz
-   ttnn.ltz
-   ttnn.gez
-   ttnn.lez
-   ttnn.nez
-   ttnn.eqz
    ttnn.gt
    ttnn.gt_
    ttnn.lt_
@@ -333,6 +335,7 @@ Pointwise Binary
    ttnn.maximum
    ttnn.minimum
    ttnn.outer
+   ttnn.pow
    ttnn.polyval
    ttnn.scatter
    ttnn.atan2
@@ -428,7 +431,6 @@ Data Movement
    ttnn.fill_ones_rm
    ttnn.untilize
    ttnn.untilize_with_unpadding
-   ttnn.untilize_with_halo_v2
    ttnn.indexed_fill
 
 Normalization
@@ -442,6 +444,7 @@ Normalization
    ttnn.group_norm
    ttnn.layer_norm
    ttnn.rms_norm
+   ttnn.batch_norm
 
 
 Moreh Operations

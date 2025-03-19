@@ -2,14 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "reshard.hpp"
 #include "ttnn/types.hpp"
-#include "tt_metal/common/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::operations::data_movement {
 
@@ -24,24 +23,23 @@ void bind_reshard(pybind11::module& module, const data_movement_sharded_operatio
         ttnn::pybind_overload_t{
             [](const data_movement_sharded_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const MemoryConfig & output_memory_config,
+               const MemoryConfig& output_memory_config,
                const std::optional<Tensor>& output_tensor,
-               uint8_t queue_id) -> ttnn::Tensor {
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(queue_id, input_tensor, output_memory_config, output_tensor);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("output_memory_config"),
             py::arg("output_tensor").noconvert() = std::nullopt,
             py::kw_only(),
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
 
-            }
-        );
+        });
 }
 
 }  // namespace detail
 
-//TODO: Add more descriptions to the arguments
+// TODO: Add more descriptions to the arguments
 void py_bind_reshard(pybind11::module& module) {
     detail::bind_reshard(
         module,

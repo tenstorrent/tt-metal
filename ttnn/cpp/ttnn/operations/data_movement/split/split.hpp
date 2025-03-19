@@ -6,13 +6,12 @@
 
 #include "ttnn/decorators.hpp"
 
-
 namespace ttnn {
 namespace operations::data_movement {
 
 struct SplitOperation {
     static std::vector<ttnn::Tensor> invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         int64_t& num_splits,
         int64_t& dim,
@@ -26,7 +25,6 @@ struct SplitOperation {
 
     static std::vector<ttnn::Tensor> invoke(const ttnn::Tensor& input_tensor, int64_t& num_splits, int64_t& dim);
 };
-
 
 }  // namespace operations::data_movement
 

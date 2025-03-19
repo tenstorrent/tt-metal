@@ -2,47 +2,45 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <chrono>
-#include <functional>
-#include <random>
 
-#include "common/bfloat16.hpp"
-#include "common/constants.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
+#include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
-#include "tt_metal/host_api.hpp"
-#include "ttnn/operations/numpy/functions.hpp"
+#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <thread>
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
-using namespace tt;
-using namespace tt_metal;
-using namespace constants;
+#include "ttnn/cpp/ttnn/operations/experimental/reshape/view.hpp"
 
+namespace tt::tt_metal {
 namespace {
+
+using ::tt::constants::TILE_HEIGHT;
+using ::tt::constants::TILE_WIDTH;
+
 uint32_t get_device_buffer_address(const Tensor& tensor) {
     TT_FATAL(std::holds_alternative<DeviceStorage>(tensor.get_storage()), "Tensor storage is not DeviceStorage");
     auto buffer = std::get<DeviceStorage>(tensor.get_storage()).buffer;
     uint32_t result = 0;
-    buffer->device()->push_work([&]() {
-        result = buffer->address();
-    }, true);
+    buffer->device()->push_work([&]() { result = buffer->address(); }, true);
     return result;
 }
-}
 
-TEST_F(CommonFixture, TestTensorOwnershipSanity) {
+TEST_F(DispatchFixture, TestTensorOwnershipSanity) {
     // Sanity test tensor read, write and update paths with synchronous
     // Ensure that tensor data is copied and owned as expected
-    Device* device = this->devices_[0];
-    Tensor host_tensor = ttnn::numpy::arange<float>(0, 32 * 32 * 4, 1);
-    Tensor readback_tensor({}, 1);
+    IDevice* device = this->devices_[0];
+    Tensor host_tensor = ttnn::arange(/*start=*/0, /*stop=*/32 * 32 * 4, /*step=*/1, DataType::FLOAT32);
+    Tensor readback_tensor(1);
 
     auto func = [device, host_tensor, readback_tensor]() mutable {
         // Ensure that both the lambda and global scope have ownership to this tensor
@@ -63,13 +61,11 @@ TEST_F(CommonFixture, TestTensorOwnershipSanity) {
             },
             host_tensor.get_storage());
         // Send tensor to device, read it back and copy it to empty tensor initialized by main thread
-        Tensor reshaped_tensor = host_tensor.reshape(ttnn::SimpleShape{1, 1, 32, 128});
-        auto device_tensor = reshaped_tensor.to(Layout::TILE).to(device);
-        auto thread_local_tensor = device_tensor.cpu().to(Layout::ROW_MAJOR);
+        Tensor reshaped_tensor = ttnn::experimental::view(host_tensor, ttnn::Shape{1, 1, 32, 128});
+        auto device_tensor = reshaped_tensor.to_layout(Layout::TILE).to_device(device);
+        auto thread_local_tensor = device_tensor.cpu().to_layout(Layout::ROW_MAJOR);
         readback_tensor.set_storage(thread_local_tensor.get_storage());
-        readback_tensor.set_shape(thread_local_tensor.get_shape());
-        readback_tensor.set_dtype(thread_local_tensor.get_dtype());
-        readback_tensor.set_layout(thread_local_tensor.get_layout());
+        readback_tensor.set_tensor_spec(thread_local_tensor.get_tensor_spec());
         readback_tensor.tensor_attributes->metadata_populated = true;
         readback_tensor.tensor_attributes->num_workers_completed++;
         // Ensure that the readback buffer is owned inside and outside the lambda
@@ -111,11 +107,11 @@ TEST_F(CommonFixture, TestTensorOwnershipSanity) {
         readback_tensor.get_storage());
     EXPECT_EQ(readback_tensor.get_dtype(), DataType::FLOAT32);
     EXPECT_EQ(readback_tensor.get_layout(), Layout::ROW_MAJOR);
-    EXPECT_EQ(readback_tensor.get_shape(), ttnn::Shape(tt::tt_metal::LegacyShape({1, 1, 32, 128})));
+    EXPECT_EQ(readback_tensor.get_logical_shape(), Shape({1, 1, 32, 128}));
 }
 
-TEST_F(CommonFixture, TestAsyncEltwiseBinary) {
-    Device* device = this->devices_[0];
+TEST_F(DispatchFixture, TestAsyncEltwiseBinary) {
+    IDevice* device = this->devices_[0];
     device->enable_async(true);
     // Populate these in first loop and verify that deallocation worked - addresses should be identical across loops
     std::size_t input_a_addr = 0;
@@ -126,16 +122,16 @@ TEST_F(CommonFixture, TestAsyncEltwiseBinary) {
 
     for (int i = 0; i < 5; i++) {
         // Initialize tensors and move them to DRAM
-        Tensor input_tensor_a =
-            ttnn::numpy::full<float>(tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE).to(device);
-        Tensor input_tensor_b =
-            ttnn::numpy::full<float>(tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE).to(device);
-        Tensor input_tensor_c =
-            ttnn::numpy::full<float>(tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE).to(device);
+        Tensor input_tensor_a = ttnn::full(
+            ttnn::Shape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE, *device);
+        Tensor input_tensor_b = ttnn::full(
+            ttnn::Shape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE, *device);
+        Tensor input_tensor_c = ttnn::full(
+            ttnn::Shape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE, *device);
         Tensor output_tensor_device = ttnn::multiply(ttnn::add(input_tensor_a, input_tensor_b), input_tensor_c);
         Tensor output_tensor_device_2 = ttnn::neg(ttnn::subtract(output_tensor_device, input_tensor_c));
 
-        EXPECT_EQ(output_tensor_device.get_shape(), ttnn::Shape(tt::tt_metal::LegacyShape({1, 1, 1024, 1024})));
+        EXPECT_EQ(output_tensor_device.get_logical_shape(), Shape({1, 1, 1024, 1024}));
         EXPECT_EQ(output_tensor_device.get_dtype(), DataType::BFLOAT16);
 
         Tensor output_tensor_host = output_tensor_device_2.cpu();
@@ -171,64 +167,81 @@ TEST_F(CommonFixture, TestAsyncEltwiseBinary) {
 
 Tensor tensor_identity_copy_function(const Tensor& tensor) { return tensor; }
 
-TEST_F(CommonFixture, TestAsyncRefCountManager) {
-    Device* device = this->devices_[0];
+TEST_F(DispatchFixture, TestAsyncRefCountManager) {
+    IDevice* device = this->devices_[0];
     device->enable_async(true);
 
     log_info(LogTest, "Testing Device tensor copy assignment");
     for (int i = 0; i < 5; i++) {
         // Run for multiple loops to ensure deterministic behaviour with device addresses
         // Initialize 2 tensors on device
-        Tensor tensor1 =
-            ttnn::numpy::full<float>(tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16).to(device);
-        Tensor tensor2 =
-            ttnn::numpy::full<float>(tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16).to(device);
+        Tensor tensor1 = ttnn::full(
+            ttnn::Shape({1, 1, 1024, 1024}),
+            static_cast<float>(i),
+            DataType::BFLOAT16,
+            /*layout=*/std::nullopt,
+            *device);
+        Tensor tensor2 = ttnn::full(
+            ttnn::Shape({1, 1, 1024, 1024}),
+            static_cast<float>(i),
+            DataType::BFLOAT16,
+            /*layout=*/std::nullopt,
+            *device);
         uint32_t tensor2_device_buf_addr = get_device_buffer_address(tensor2);
-        // Assign tensor1 to tensor2 and ensure that ref counts are appropriately updated with the buffer for tensor2
-        // deallocated
         tensor2 = tensor1;
-        EXPECT_EQ(tensor2.tensor_attributes->main_thread_ref_count, 2);
-        EXPECT_EQ(tensor1.tensor_attributes->main_thread_ref_count, 2);
         // To check if tensor2 is deallocated, create a third tensor on device and ensure that its address matches the
         // prev addr for tensor2
-        Tensor tensor3 =
-            ttnn::numpy::full<float>(tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16).to(device);
+        Tensor tensor3 = ttnn::full(
+            ttnn::Shape({1, 1, 1024, 1024}),
+            static_cast<float>(i),
+            DataType::BFLOAT16,
+            /*layout=*/std::nullopt,
+            *device);
         EXPECT_EQ(get_device_buffer_address(tensor3), tensor2_device_buf_addr);
         EXPECT_EQ(get_device_buffer_address(tensor1), get_device_buffer_address(tensor2));
     }
     log_info(LogTest, "Testing Device tensor self-assignment through function");
     for (int i = 0; i < 5; i++) {
-        Tensor device_tensor =
-            ttnn::numpy::full<float>(tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16).to(device);
+        Tensor device_tensor = ttnn::full(
+            ttnn::Shape({1, 1, 1024, 1024}),
+            static_cast<float>(i),
+            DataType::BFLOAT16,
+            /*layout=*/std::nullopt,
+            *device);
         uint32_t device_tensor_address = get_device_buffer_address(device_tensor);
         // This step will copy the tensor to a temp rval and std::move it back to the caller's instance of device_tensor
         // Ensure ref count and address remain unchanged
         device_tensor = tensor_identity_copy_function(device_tensor);
-        EXPECT_EQ(device_tensor.tensor_attributes->main_thread_ref_count, 1);
         EXPECT_EQ(get_device_buffer_address(device_tensor), device_tensor_address);
     }
 
     log_info(LogTest, "Testing Device tensor move assignment");
     for (int i = 0; i < 5; i++) {
-        Tensor tensor1 =
-            ttnn::numpy::full<float>(tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16).to(device);
+        Tensor tensor1 = ttnn::full(
+            ttnn::Shape({1, 1, 1024, 1024}),
+            static_cast<float>(i),
+            DataType::BFLOAT16,
+            /*layout=*/std::nullopt,
+            *device);
         Tensor tensor2 = std::move(tensor1);
-        EXPECT_EQ(tensor2.tensor_attributes->main_thread_ref_count, 1);
     }
 
     log_info(LogTest, "Testing Device tensor self-assignment");
-    Tensor tensor_to_self_assign =
-        ttnn::numpy::full<float>(tt::tt_metal::LegacyShape({1, 1, 1024, 1024}), static_cast<float>(0), DataType::BFLOAT16).to(device);
+    Tensor tensor_to_self_assign = ttnn::full(
+        ttnn::Shape({1, 1, 1024, 1024}),
+        static_cast<float>(0),
+        DataType::BFLOAT16,
+        /*layout=*/std::nullopt,
+        *device);
     uint32_t tensor_to_self_assign_address = get_device_buffer_address(tensor_to_self_assign);
     tensor_to_self_assign = tensor_to_self_assign;
-    EXPECT_EQ(tensor_to_self_assign.tensor_attributes->main_thread_ref_count, 1);
     tensor_to_self_assign = std::move(tensor_to_self_assign);
     EXPECT_EQ(get_device_buffer_address(tensor_to_self_assign), tensor_to_self_assign_address);
     auto barrier_tensor = tensor_to_self_assign.cpu();
     device->enable_async(false);
 }
 
-TEST_F(CommonFixture, TestTensorAsyncDataMovement) {
+TEST_F(DispatchFixture, TestTensorAsyncDataMovement) {
     // Test 2 data paths here (resembles async mode):
     // 1. Main -> Worker: Create a tensor in the main thread. Ensure that it is accessible in the worker thread even
     // after its destroyed
@@ -236,17 +249,16 @@ TEST_F(CommonFixture, TestTensorAsyncDataMovement) {
     // 2. Worker -> Main: Create an empty tensor in the mainb thread. Populate it in the worker thread. Ensure that the
     // tensor is correctly
     //                    populated in the main thread once the worker is done.
-    Device* device = this->devices_[0];
+    IDevice* device = this->devices_[0];
     uint32_t tensor_start = 0;
     uint32_t num_tiles = 128;
     uint32_t tensor_stop = TILE_HEIGHT * TILE_WIDTH * num_tiles;
-    Tensor readback_tensor({}, 1);
-    ;
+    Tensor readback_tensor(1);
     std::thread worker;
 
     {
         // host_tensor only lives in this scope
-        Tensor host_tensor = ttnn::numpy::arange<float>(tensor_start, tensor_stop, 1);
+        Tensor host_tensor = ttnn::arange(tensor_start, tensor_stop, /*step=*/1, DataType::FLOAT32);
         log_info(LogTest, "Spawning worker thread");
         worker = std::thread([tensor_stop, host_tensor, readback_tensor, device]() mutable {
             // Sleep for 3 seconds to ensure that main thread deallocates host_tensor
@@ -273,14 +285,12 @@ TEST_F(CommonFixture, TestTensorAsyncDataMovement) {
                 },
                 host_tensor.get_storage());
 
-            Tensor reshaped_tensor = host_tensor.reshape(ttnn::SimpleShape{1, 1, 32, tensor_stop / 32});
-            auto device_tensor = reshaped_tensor.to(Layout::TILE).to(device);
-            auto thread_local_tensor = device_tensor.cpu().to(Layout::ROW_MAJOR);
+            Tensor reshaped_tensor = ttnn::experimental::view(host_tensor, ttnn::Shape{1, 1, 32, tensor_stop / 32});
+            auto device_tensor = reshaped_tensor.to_layout(Layout::TILE).to_device(device);
+            auto thread_local_tensor = device_tensor.cpu().to_layout(Layout::ROW_MAJOR);
             log_info(LogTest, "Worker populating empty host readback_tensor");
             readback_tensor.set_storage(thread_local_tensor.get_storage());
-            readback_tensor.set_shape(thread_local_tensor.get_shape());
-            readback_tensor.set_dtype(thread_local_tensor.get_dtype());
-            readback_tensor.set_layout(thread_local_tensor.get_layout());
+            readback_tensor.set_tensor_spec(thread_local_tensor.get_tensor_spec());
             readback_tensor.tensor_attributes->metadata_populated = true;
             readback_tensor.tensor_attributes->num_workers_completed++;
             // Ensure that this buffer is currently owned by both the thread_local and read_back tensors
@@ -329,5 +339,7 @@ TEST_F(CommonFixture, TestTensorAsyncDataMovement) {
         readback_tensor.get_storage());
     EXPECT_EQ(readback_tensor.get_dtype(), DataType::FLOAT32);
     EXPECT_EQ(readback_tensor.get_layout(), Layout::ROW_MAJOR);
-    EXPECT_EQ(readback_tensor.get_shape(), ttnn::Shape(tt::tt_metal::LegacyShape({1, 1, 32, tensor_stop / 32})));
+    EXPECT_EQ(readback_tensor.get_logical_shape(), Shape({1, 1, 32, tensor_stop / 32}));
 }
+}  // namespace
+}  // namespace tt::tt_metal

@@ -4,18 +4,15 @@
 
 #include "mesh_device.hpp"
 
-#include <core/ttnn_all_includes.hpp>
-
 namespace ttml::core {
 
-MeshDevice::MeshDevice([[maybe_unused]]int device_index) :
-    m_mesh_device(ttnn::distributed::api::open_mesh_device(
-        ttnn::distributed::MeshShape(1, 1),
+MeshDevice::MeshDevice(tt::tt_metal::distributed::MeshShape shape) :
+    m_mesh_device(ttnn::distributed::open_mesh_device(
+        shape,
         DEFAULT_L1_SMALL_SIZE,
         DEFAULT_TRACE_REGION_SIZE,
         /* num_command_queues*/ 1,
-        DispatchCoreType::WORKER,
-        ttnn::distributed::MeshType::RowMajor)) {
+        tt::tt_metal::DispatchCoreConfig{})) {
     assert(m_mesh_device);
 }
 
@@ -25,7 +22,8 @@ MeshDevice::MeshDevice([[maybe_unused]]int device_index) :
 }
 
 MeshDevice::~MeshDevice() {
-    ttnn::distributed::api::close_mesh_device(m_mesh_device);
+    assert(m_mesh_device);
+    ttnn::distributed::close_mesh_device(m_mesh_device);
 }
 
 }  // namespace ttml::core

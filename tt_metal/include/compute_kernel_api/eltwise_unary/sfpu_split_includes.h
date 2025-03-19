@@ -44,6 +44,10 @@
 #include "compute_kernel_api/eltwise_unary/i0.h"
 #endif
 
+#if SFPU_OP_I1_INCLUDE
+#include "compute_kernel_api/eltwise_unary/i1.h"
+#endif
+
 #if SFPU_OP_ERFINV_INCLUDE
 #include "compute_kernel_api/eltwise_unary/erfinv.h"
 #endif
@@ -92,6 +96,10 @@
 #include "compute_kernel_api/eltwise_unary/floor.h"
 #endif
 
+#if SFPU_OP_ROUND_INCLUDE
+#include "compute_kernel_api/eltwise_unary/round.h"
+#endif
+
 #if SFPU_OP_LEFT_SHIFT_INCLUDE
 #include "compute_kernel_api/eltwise_unary/left_shift.h"
 #endif
@@ -114,6 +122,10 @@
 
 #if SFPU_OP_SOFTPLUS_INCLUDE
 #include "compute_kernel_api/eltwise_unary/softplus.h"
+#endif
+
+#if SFPU_OP_PRELU_INCLUDE
+#include "compute_kernel_api/eltwise_unary/prelu.h"
 #endif
 
 #if SFPU_OP_DROPOUT_INCLUDE

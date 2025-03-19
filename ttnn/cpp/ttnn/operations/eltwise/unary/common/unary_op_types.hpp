@@ -5,7 +5,7 @@
 #pragma once
 
 #include <vector>
-#include "tt_metal/tt_stl/reflection.hpp"
+#include <tt_stl/reflection.hpp>
 
 namespace ttnn::operations::unary {
 
@@ -24,6 +24,7 @@ enum class UnaryOpType {
     SIN,
     COS,
     ABS,
+    ABS_INT32,
     SIGN,
     SQUARE,
     EQZ,
@@ -56,6 +57,7 @@ enum class UnaryOpType {
     ISFINITE,
     ERFINV,
     I0,
+    I1,
     TAN,
     RSUB,
     RDIV,
@@ -79,12 +81,17 @@ enum class UnaryOpType {
     BITWISE_OR,
     RIGHT_SHIFT,
     FLOOR,
+    FLOOR_FLOAT32,
     CEIL,
+    CEIL_FLOAT32,
+    ROUND,
     LEFT_SHIFT,
     REMAINDER,
     FMOD,
     DROPOUT,
-    FILL
+    FILL,
+    PRELU_SFPU,
+    ZERO_POINT
 };
 
 struct UnaryWithParam {
@@ -103,7 +110,7 @@ struct UnaryWithParam {
 
 using FusedActivations = std::vector<ttnn::operations::unary::UnaryWithParam>;
 
-}
+}  // namespace ttnn::operations::unary
 
 namespace tt::stl::json {
 

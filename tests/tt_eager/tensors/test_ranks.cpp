@@ -6,121 +6,119 @@
 #include <functional>
 #include <random>
 
-#include "common/bfloat16.hpp"
-#include "common/constants.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
-#include "tt_metal/host_api.hpp"
-#include "ttnn/operations/numpy/functions.hpp"
+#include <tt-metalium/host_api.hpp>
+#include "ttnn/operations/functions.hpp"
 
 using namespace tt;
 using namespace tt_metal;
 using namespace constants;
 
-
-bool test_2d_tensor(Device *device) {
+bool test_2d_tensor(IDevice* device) {
     bool pass = true;
 
-    Shape shape = {30, 30};
-    Tensor tensor = ttnn::numpy::random::random(shape);
+    ttnn::Shape shape({30, 30});
+    Tensor tensor = ttnn::random::random(shape);
     tensor = tensor.pad_to_tile(0.0f);
-    tensor = tensor.to(Layout::TILE);
-    tensor = tensor.to(device);
-    pass &= tensor.get_shape().rank() == 2;
+    tensor = tensor.to_layout(Layout::TILE);
+    tensor = tensor.to_device(device);
+    pass &= tensor.get_logical_shape().rank() == 2;
 
     return pass;
 }
 
-bool test_3d_tensor(Device *device) {
+bool test_3d_tensor(IDevice* device) {
     bool pass = true;
 
-    Shape shape = {3, 30, 30};
-    Tensor tensor = ttnn::numpy::random::random(shape);
+    ttnn::Shape shape({3, 30, 30});
+    Tensor tensor = ttnn::random::random(shape);
     tensor = tensor.pad_to_tile(0.0f);
-    tensor = tensor.to(Layout::TILE);
-    tensor = tensor.to(device);
-    pass &= tensor.get_shape().rank() == 3;
+    tensor = tensor.to_layout(Layout::TILE);
+    tensor = tensor.to_device(device);
+    pass &= tensor.get_logical_shape().rank() == 3;
 
     return pass;
 }
 
-bool test_4d_tensor(Device *device) {
+bool test_4d_tensor(IDevice* device) {
     bool pass = true;
 
-    Shape shape = {2, 3, 30, 30};
-    Tensor tensor = ttnn::numpy::random::random(shape);
+    ttnn::Shape shape({2, 3, 30, 30});
+    Tensor tensor = ttnn::random::random(shape);
     tensor = tensor.pad_to_tile(0.0f);
-    tensor = tensor.to(Layout::TILE);
-    tensor = tensor.to(device);
-    pass &= tensor.get_shape().rank() == 4;
+    tensor = tensor.to_layout(Layout::TILE);
+    tensor = tensor.to_device(device);
+    pass &= tensor.get_logical_shape().rank() == 4;
 
     return pass;
 }
 
-bool test_5d_tensor(Device *device) {
+bool test_5d_tensor(IDevice* device) {
     bool pass = true;
 
-    Shape shape = {2, 2, 3, 30, 30};
-    Tensor tensor = ttnn::numpy::random::random(shape);
+    ttnn::Shape shape({2, 2, 3, 30, 30});
+    Tensor tensor = ttnn::random::random(shape);
     tensor = tensor.pad_to_tile(0.0f);
-    tensor = tensor.to(Layout::TILE);
-    tensor = tensor.to(device);
-    pass &= tensor.get_shape().rank() == 5;
+    tensor = tensor.to_layout(Layout::TILE);
+    tensor = tensor.to_device(device);
+    pass &= tensor.get_logical_shape().rank() == 5;
 
     return pass;
 }
 
-bool test_6d_tensor(Device *device) {
+bool test_6d_tensor(IDevice* device) {
     bool pass = true;
 
-    Shape shape = {2, 2, 2, 3, 30, 30};
-    Tensor tensor = ttnn::numpy::random::random(shape);
+    ttnn::Shape shape({2, 2, 2, 3, 30, 30});
+    Tensor tensor = ttnn::random::random(shape);
     tensor = tensor.pad_to_tile(0.0f);
-    tensor = tensor.to(Layout::TILE);
-    tensor = tensor.to(device);
-    pass &= tensor.get_shape().rank() == 6;
+    tensor = tensor.to_layout(Layout::TILE);
+    tensor = tensor.to_device(device);
+    pass &= tensor.get_logical_shape().rank() == 6;
 
     return pass;
 }
 
-bool test_7d_tensor(Device *device) {
+bool test_7d_tensor(IDevice* device) {
     bool pass = true;
 
-    Shape shape = {2, 2, 2, 2, 3, 30, 30};
-    Tensor tensor = ttnn::numpy::random::random(shape);
+    ttnn::Shape shape({2, 2, 2, 2, 3, 30, 30});
+    Tensor tensor = ttnn::random::random(shape);
     tensor = tensor.pad_to_tile(0.0f);
-    tensor = tensor.to(Layout::TILE);
-    tensor = tensor.to(device);
-    pass &= tensor.get_shape().rank() == 7;
+    tensor = tensor.to_layout(Layout::TILE);
+    tensor = tensor.to_device(device);
+    pass &= tensor.get_logical_shape().rank() == 7;
 
     return pass;
 }
 
-bool test_8d_tensor(Device *device) {
+bool test_8d_tensor(IDevice* device) {
     bool pass = true;
 
-    Shape shape = {2, 2, 2, 2, 2, 3, 30, 30};
-    Tensor tensor = ttnn::numpy::random::random(shape);
+    ttnn::Shape shape({2, 2, 2, 2, 2, 3, 30, 30});
+    Tensor tensor = ttnn::random::random(shape);
     tensor = tensor.pad_to_tile(0.0f);
-    tensor = tensor.to(Layout::TILE);
-    tensor = tensor.to(device);
-    pass &= tensor.get_shape().rank() == 8;
+    tensor = tensor.to_layout(Layout::TILE);
+    tensor = tensor.to_device(device);
+    pass &= tensor.get_logical_shape().rank() == 8;
 
     return pass;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     bool pass = true;
 
     try {
-
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         pass &= test_2d_tensor(device);
         pass &= test_3d_tensor(device);
@@ -132,7 +130,7 @@ int main(int argc, char **argv) {
 
         pass &= tt_metal::CloseDevice(device);
 
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());

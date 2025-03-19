@@ -20,5 +20,5 @@ constexpr auto rotate_half = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::rotate_half",
     ttnn::operations::experimental::transformer::RotateHalfOperation>();
 
-} // namespace experimental
-} // namespace ttnn
+}  // namespace experimental
+}  // namespace ttnn

@@ -4,6 +4,7 @@
 
 #pragma once
 #include "pybind11/pybind_fwd.hpp"
+#include <pybind11/pybind11.h>
 
 namespace py = pybind11;
 

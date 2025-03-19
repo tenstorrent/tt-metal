@@ -12,7 +12,6 @@
 
 #include "noc_parameters.h"
 
-
 /*
 
   Basic NOC API
@@ -52,7 +51,6 @@
 
 */
 
-
 /*
   Copy data from source to destination address.  Supports narrow transfers
   (size not a multiple of 16 bytes).  However, the alignment of source and
@@ -83,8 +81,18 @@
   <transaction_id => optional ID tag for the outgoing request (0-15, used for
               selective transaction flush)>
 */
-void noc_copy(uint32_t src_coordinate, uint64_t src_addr, uint32_t dst_coordinate, uint64_t dst_addr, uint32_t size, bool linked, bool posted, bool static_vc_alloc, uint32_t static_vc, uint32_t vc_arb_priority, uint8_t transaction_id);
-
+void noc_copy(
+    uint32_t src_coordinate,
+    uint64_t src_addr,
+    uint32_t dst_coordinate,
+    uint64_t dst_addr,
+    uint32_t size,
+    bool linked,
+    bool posted,
+    bool static_vc_alloc,
+    uint32_t static_vc,
+    uint32_t vc_arb_priority,
+    uint8_t transaction_id);
 
 /*
   Copy data from source to destination address and accumulate at destination.
@@ -117,9 +125,25 @@ void noc_copy(uint32_t src_coordinate, uint64_t src_addr, uint32_t dst_coordinat
   <transaction_id => optional ID tag for the outgoing request (0-15, used for
               selective transaction flush)>
   <data_format => The format of the data used for accumulation: NOC_AT_ACC_*, e.g. NOC_AT_ACC_FP32>
-  <disable_saturation => Set to disable accumulation saturation, such that values will wrap around if the addition result cannot fit.>
+  <disable_saturation => Set to disable accumulation saturation, such that values will wrap around if the addition
+  result cannot fit.>
 */
-void noc_accumulate(uint32_t src_coordinate, uint64_t src_addr, uint32_t dst_coordinate, uint64_t dst_addr, uint32_t size, bool linked, bool posted, bool static_vc_alloc, uint32_t static_vc, bool multicast, uint32_t multicast_mode, uint32_t vc_arb_priority, uint8_t transaction_id, uint8_t data_format, bool disable_saturation);
+void noc_accumulate(
+    uint32_t src_coordinate,
+    uint64_t src_addr,
+    uint32_t dst_coordinate,
+    uint64_t dst_addr,
+    uint32_t size,
+    bool linked,
+    bool posted,
+    bool static_vc_alloc,
+    uint32_t static_vc,
+    bool multicast,
+    uint32_t multicast_mode,
+    uint32_t vc_arb_priority,
+    uint8_t transaction_id,
+    uint8_t data_format,
+    bool disable_saturation);
 
 /*
   Copy a single word with byte-enables from source to destination address.
@@ -141,8 +165,17 @@ void noc_accumulate(uint32_t src_coordinate, uint64_t src_addr, uint32_t dst_coo
   <transaction_id => optional ID tag for the outgoing request (0-15, used for
               selective transaction flush)>
 */
-void noc_copy_word_be(uint32_t src_coordinate, uint64_t src_addr, uint32_t dst_coordinate, uint64_t dst_addr, uint64_t be, bool linked, bool posted, bool static_vc_alloc, uint32_t static_vc, uint8_t transaction_id);
-
+void noc_copy_word_be(
+    uint32_t src_coordinate,
+    uint64_t src_addr,
+    uint32_t dst_coordinate,
+    uint64_t dst_addr,
+    uint64_t be,
+    bool linked,
+    bool posted,
+    bool static_vc_alloc,
+    uint32_t static_vc,
+    uint8_t transaction_id);
 
 /*
   Write a single 32-bit value using inline header data. (The effect is the
@@ -160,8 +193,16 @@ void noc_copy_word_be(uint32_t src_coordinate, uint64_t src_addr, uint32_t dst_c
   <transaction_id => optional ID tag for the outgoing request (0-15, used for
               selective transaction flush)>
 */
-void noc_write_dw_inline(uint32_t dst_coordinate, uint64_t dst_addr, uint32_t val, uint8_t be, bool linked, bool posted, bool static_vc_alloc, uint32_t static_vc, uint8_t transaction_id);
-
+void noc_write_dw_inline(
+    uint32_t dst_coordinate,
+    uint64_t dst_addr,
+    uint32_t val,
+    uint8_t be,
+    bool linked,
+    bool posted,
+    bool static_vc_alloc,
+    uint32_t static_vc,
+    uint8_t transaction_id);
 
 /*
   Copy data from source to multiple destinations via multicast.  Supports
@@ -186,14 +227,47 @@ void noc_write_dw_inline(uint32_t dst_coordinate, uint64_t dst_addr, uint32_t va
   <transaction_id => optional ID tag for the outgoing request (0-15, used for
               selective transaction flush)>
 */
-void noc_multicast_copy(uint32_t src_coordinate, uint64_t src_addr, uint32_t dst_coordinate, uint64_t dst_addr, uint32_t multicast_mode, uint32_t size, bool linked, bool posted, bool static_vc_alloc, uint32_t static_vc, uint8_t transaction_id);
+void noc_multicast_copy(
+    uint32_t src_coordinate,
+    uint64_t src_addr,
+    uint32_t dst_coordinate,
+    uint64_t dst_addr,
+    uint32_t multicast_mode,
+    uint32_t size,
+    bool linked,
+    bool posted,
+    bool static_vc_alloc,
+    uint32_t static_vc,
+    uint8_t transaction_id);
 
 // support multicast ability to exclude nodes
-void noc_multicast_copy_exclude(uint32_t src_coordinate, uint64_t src_addr, uint32_t dst_coordinate, uint64_t dst_addr, uint32_t multicast_mode, uint32_t multicast_exclude, uint32_t size, bool linked, bool posted, bool static_vc_alloc, uint32_t static_vc, uint8_t transaction_id);
+void noc_multicast_copy_exclude(
+    uint32_t src_coordinate,
+    uint64_t src_addr,
+    uint32_t dst_coordinate,
+    uint64_t dst_addr,
+    uint32_t multicast_mode,
+    uint32_t multicast_exclude,
+    uint32_t size,
+    bool linked,
+    bool posted,
+    bool static_vc_alloc,
+    uint32_t static_vc,
+    uint8_t transaction_id);
 
 // support src include
-void noc_multicast_copy_src_include(uint32_t src_coordinate, uint64_t src_addr, uint32_t dst_coordinate, uint64_t dst_addr, uint32_t multicast_mode, uint32_t size, bool linked, bool posted, bool static_vc_alloc, uint32_t static_vc, uint8_t transaction_id);
-
+void noc_multicast_copy_src_include(
+    uint32_t src_coordinate,
+    uint64_t src_addr,
+    uint32_t dst_coordinate,
+    uint64_t dst_addr,
+    uint32_t multicast_mode,
+    uint32_t size,
+    bool linked,
+    bool posted,
+    bool static_vc_alloc,
+    uint32_t static_vc,
+    uint8_t transaction_id);
 
 /*
   Multicast version of noc_copy_word_be.
@@ -215,8 +289,18 @@ void noc_multicast_copy_src_include(uint32_t src_coordinate, uint64_t src_addr, 
   <transaction_id => optional ID tag for the outgoing request (0-15, used for
               selective transaction flush)>
 */
-void noc_multicast_copy_word_be(uint32_t src_coordinate, uint64_t src_addr, uint32_t dst_coordinate, uint64_t dst_addr, uint32_t multicast_mode, uint64_t be, bool linked, bool posted, bool static_vc_alloc, uint32_t static_vc, uint8_t transaction_id);
-
+void noc_multicast_copy_word_be(
+    uint32_t src_coordinate,
+    uint64_t src_addr,
+    uint32_t dst_coordinate,
+    uint64_t dst_addr,
+    uint32_t multicast_mode,
+    uint64_t be,
+    bool linked,
+    bool posted,
+    bool static_vc_alloc,
+    uint32_t static_vc,
+    uint8_t transaction_id);
 
 /*
   Multicast version of noc_write_dw_inline.
@@ -232,8 +316,17 @@ void noc_multicast_copy_word_be(uint32_t src_coordinate, uint64_t src_addr, uint
   <transaction_id => optional ID tag for the outgoing request (0-15, used for
               selective transaction flush)>
 */
-void noc_multicast_write_dw_inline(uint32_t dst_coordinate, uint64_t dst_addr, uint32_t val, uint32_t multicast_mode, uint8_t be, bool linked, bool posted, bool static_vc_alloc, uint32_t static_vc, uint8_t transaction_id);
-
+void noc_multicast_write_dw_inline(
+    uint32_t dst_coordinate,
+    uint64_t dst_addr,
+    uint32_t val,
+    uint32_t multicast_mode,
+    uint8_t be,
+    bool linked,
+    bool posted,
+    bool static_vc_alloc,
+    uint32_t static_vc,
+    uint8_t transaction_id);
 
 /*
   Atomic wrapping increment of 32-bit value at destination address.  The address has
@@ -258,7 +351,6 @@ void noc_multicast_write_dw_inline(uint32_t dst_coordinate, uint64_t dst_addr, u
 */
 void noc_atomic_increment(uint32_t noc_coordinate, uint64_t addr, uint32_t incr, uint32_t wrap, bool linked);
 
-
 /*
   Performs the same operation as noc_atomic_increment and reads the previous value from the
   destination address to <read_addr>.  The <read_addr> address also has 4-byte granularity,
@@ -282,8 +374,15 @@ void noc_atomic_increment(uint32_t noc_coordinate, uint64_t addr, uint32_t incr,
   <transaction_id => optional ID tag for the outgoing request (0-15, used for
               selective transaction flush)>
 */
-void noc_atomic_read_and_increment(uint32_t noc_coordinate, uint64_t addr, uint32_t incr, uint32_t wrap, uint32_t read_coordinate, uint64_t read_addr, bool linked, uint8_t transaction_id);
-
+void noc_atomic_read_and_increment(
+    uint32_t noc_coordinate,
+    uint64_t addr,
+    uint32_t incr,
+    uint32_t wrap,
+    uint32_t read_coordinate,
+    uint64_t read_addr,
+    bool linked,
+    uint8_t transaction_id);
 
 /*
   Performs the same operation as noc_atomic_increment on multiple multicast destinations.
@@ -295,8 +394,8 @@ void noc_atomic_read_and_increment(uint32_t noc_coordinate, uint64_t addr, uint3
   <wrap> => log2(wrapping limit)-1
   <linked> => link with previous call for ordering
 */
-void noc_multicast_atomic_increment(uint32_t noc_coordinate, uint64_t addr, uint32_t multicast_mode, uint32_t incr, uint32_t wrap, bool linked);
-
+void noc_multicast_atomic_increment(
+    uint32_t noc_coordinate, uint64_t addr, uint32_t multicast_mode, uint32_t incr, uint32_t wrap, bool linked);
 
 /*
   Performs the same operation as noc_atomic_read_and_increment on multiple multicast destinations.
@@ -320,8 +419,16 @@ void noc_multicast_atomic_increment(uint32_t noc_coordinate, uint64_t addr, uint
   <transaction_id => optional ID tag for the outgoing request (0-15, used for
               selective transaction flush)>
 */
-void noc_multicast_atomic_read_and_increment(uint32_t noc_coordinate, uint64_t addr, uint32_t multicast_mode, uint32_t incr, uint32_t wrap, uint32_t read_coordinate, uint64_t read_addr, bool linked, uint8_t transaction_id);
-
+void noc_multicast_atomic_read_and_increment(
+    uint32_t noc_coordinate,
+    uint64_t addr,
+    uint32_t multicast_mode,
+    uint32_t incr,
+    uint32_t wrap,
+    uint32_t read_coordinate,
+    uint64_t read_addr,
+    bool linked,
+    uint8_t transaction_id);
 
 /*
   Set command buffer ID (0-3) to use for the next commmand issued.
@@ -388,7 +495,6 @@ volatile uint32_t noc_rd_resp_received();
 */
 bool noc_command_ready();
 
-
 /*
   Returns ID & dateline info of the local node in the format:
      {10'b0, i_dateline_node_y[0:0], i_dateline_node_x[0:0],
@@ -398,12 +504,10 @@ bool noc_command_ready();
 */
 uint32_t noc_local_node_id();
 
-
 /*
   Returns value of specific status register (see noc_parameters.h for the list).
 */
 uint32_t noc_status_reg(uint32_t status_reg_id);
-
 
 /*
   Sets value of specific NOC config register (see noc_parameters.h for the list).
@@ -415,13 +519,11 @@ void noc_set_cfg_reg(uint32_t cfg_reg_id, uint32_t val);
 */
 uint32_t noc_get_cfg_reg(uint32_t cfg_reg_id);
 
-
 /*
   Reset to 0 each transaction ID outstanding request counter for which the corresponding
   id_mask bit is set.
 */
 void noc_clear_req_id_cnt(uint32_t id_mask);
-
 
 //////////////////////////////////////////////////////////////////
 //////////////////////// ECC Functions ///////////////////////////
@@ -429,17 +531,23 @@ void noc_clear_req_id_cnt(uint32_t id_mask);
 
 /*
   Allows for the enabling/disabling of ECC features in the NIU and Routers
-  Enabling full ECC is a two stage process. First you must call noc_ecc_cfg_stage_1 for all tensix, sync (ensuring all writes went through),
-  and then call noc_ecc_cfg_stage_2 for all tensix.
+  Enabling full ECC is a two stage process. First you must call noc_ecc_cfg_stage_1 for all tensix, sync (ensuring all
+  writes went through), and then call noc_ecc_cfg_stage_2 for all tensix.
 */
 void noc_ecc_cfg_stage_1(bool header_ckh_bits_en);
 
 /*
   Allows for the enabling/disabling of ECC features in the NIU and Routers
-  Enabling full ECC is a two stage process. First you must call noc_ecc_cfg_stage_1 for all tensix, sync (ensuring all writes went through),
-  and then call noc_ecc_cfg_stage_2 for all tensix.
+  Enabling full ECC is a two stage process. First you must call noc_ecc_cfg_stage_1 for all tensix, sync (ensuring all
+  writes went through), and then call noc_ecc_cfg_stage_2 for all tensix.
 */
-void noc_ecc_cfg_stage_2(bool niu_mem_parity_en, bool router_mem_parity_en, bool header_secded_en, bool mem_parity_int_en, bool header_sec_int_en, bool header_ded_int_en);
+void noc_ecc_cfg_stage_2(
+    bool niu_mem_parity_en,
+    bool router_mem_parity_en,
+    bool header_secded_en,
+    bool mem_parity_int_en,
+    bool header_sec_int_en,
+    bool header_ded_int_en);
 
 /*
   Clears the corresponding ECC error interrupt and number of errors register
@@ -453,12 +561,14 @@ void noc_ecc_clear_err(bool clear_mem_parity_err, bool clear_header_sec, bool cl
 void noc_ecc_force_err(bool force_mem_parity_err, bool force_header_sec, bool force_header_ded);
 
 /*
-  Gets the number of memory parity errors. This is the sum of the number of parity errors in the router and niu memories (if enabled in noc_ecc_cfg()). This register indicates a fatal error in the system.
+  Gets the number of memory parity errors. This is the sum of the number of parity errors in the router and niu memories
+  (if enabled in noc_ecc_cfg()). This register indicates a fatal error in the system.
 */
 uint32_t noc_ecc_get_num_mem_parity_errs();
 
 /*
-  Gets the number of single errors that were corrected in the header. This register should be treated as a warning of system instability.
+  Gets the number of single errors that were corrected in the header. This register should be treated as a warning of
+  system instability.
 */
 uint32_t noc_ecc_get_num_header_sec();
 
@@ -469,4 +579,4 @@ uint32_t noc_ecc_get_num_header_ded();
 
 //////
 
-#endif //ndef _NOC_H_
+#endif  // ndef _NOC_H_

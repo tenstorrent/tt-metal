@@ -5,9 +5,9 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
-#include "common/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
-#include "ttnn/cpp/ttnn/distributed/api.hpp"
+#include "cpp/ttnn/distributed/api.hpp"
 
 namespace ttnn {
 namespace operations::experimental::ccl {
@@ -26,13 +26,13 @@ struct ExecuteAllGatherMatmul {
         const bool transpose_a = false,
         const bool transpose_b = false,
         const std::optional<const DataType> dtype = std::nullopt,
-        const std::optional<const operations::matmul::MatmulProgramConfig> program_config = std::nullopt,
+        const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
         const std::optional<const std::string>& activation = std::nullopt,
         const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);
 };
 
-}  // namespace opereations::experimental::ccl
+}  // namespace operations::experimental::ccl
 
 namespace experimental {
 

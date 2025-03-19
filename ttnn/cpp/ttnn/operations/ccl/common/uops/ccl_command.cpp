@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include "cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
 
 namespace ttnn {
 namespace ccl {
@@ -16,7 +16,6 @@ void pack_field_without_header(ttnn::ccl::cmd::args_elem_t* args, ttnn::ccl::Sha
     args[i++] = out.y;
     args[i++] = out.x;
 }
-
 
 }  // namespace cmd
 }  // namespace ccl

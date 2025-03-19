@@ -24,16 +24,12 @@ def run_split_query_key_value_and_split_heads_test(device, batch, dtype, in0_mem
 
     A = torch.randn(a_shape)
 
-    a_t = (
-        ttnn.Tensor(
-            A.flatten().tolist(),
-            a_shape,
-            dtype,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(device, in0_mem_config)
-    )
+    a_t = ttnn.Tensor(
+        A.flatten().tolist(),
+        a_shape,
+        dtype,
+        ttnn.TILE_LAYOUT,
+    ).to(device, in0_mem_config)
 
     q, k, v = ttnn.experimental.split_query_key_value_and_split_heads(
         a_t, ttnn.CoreCoord(12, 9), memory_config=out_mem_config
@@ -49,16 +45,13 @@ def run_split_query_key_value_and_split_heads_test(device, batch, dtype, in0_mem
     logger.debug(f"k: {k.memory_config().buffer_type} and {k.get_dtype()}")
     logger.debug(f"v: {v.memory_config().buffer_type} and {v.get_dtype()}")
 
-    assert q.shape.with_tile_padding() == [batch, 16, 384, 64]
-    assert k.shape.with_tile_padding() == [batch, 16, 64, 384]
-    assert v.shape.with_tile_padding() == [batch, 16, 384, 64]
+    assert q.padded_shape == [batch, 16, 384, 64]
+    assert k.padded_shape == [batch, 16, 64, 384]
+    assert v.padded_shape == [batch, 16, 384, 64]
 
-    tt_host_rm_q = q.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
-    pyt_got_back_rm_q = tt_host_rm_q.to_torch()
-    tt_host_rm_k = k.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
-    pyt_got_back_rm_k = tt_host_rm_k.to_torch()
-    tt_host_rm_v = v.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
-    pyt_got_back_rm_v = tt_host_rm_v.to_torch()
+    pyt_got_back_rm_q = ttnn.to_torch(q)
+    pyt_got_back_rm_k = ttnn.to_torch(k)
+    pyt_got_back_rm_v = ttnn.to_torch(v)
 
     (ref_q, ref_k, ref_v) = torch.split(A, 1024, dim=-1)
 

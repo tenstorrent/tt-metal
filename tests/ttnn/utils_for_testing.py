@@ -10,6 +10,33 @@ from loguru import logger
 from models.utility_functions import comp_pcc, comp_equal, divup, roundup
 from typing import Tuple
 
+import ttnn
+import torch
+import numpy as np
+
+
+# Dictionaries for converting dtypes
+tt_dtype_to_torch_dtype = {
+    ttnn.uint8: torch.uint8,
+    ttnn.uint16: torch.int16,
+    ttnn.uint32: torch.int32,
+    ttnn.int32: torch.int32,
+    ttnn.float32: torch.float,
+    ttnn.bfloat16: torch.bfloat16,
+    ttnn.bfloat8_b: torch.float,
+    ttnn.bfloat4_b: torch.float,
+}
+
+tt_dtype_to_np_dtype = {
+    ttnn.uint8: np.ubyte,
+    ttnn.uint16: np.int16,
+    ttnn.uint32: np.int32,
+    ttnn.int32: np.int32,
+    ttnn.float32: np.float32,
+    ttnn.bfloat8_b: np.float32,
+    ttnn.bfloat4_b: np.float32,
+}
+
 
 def construct_pcc_assert_message(message, expected_pytorch_result, actual_pytorch_result):
     messages = []

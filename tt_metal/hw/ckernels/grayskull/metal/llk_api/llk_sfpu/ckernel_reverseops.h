@@ -13,19 +13,16 @@
 
 using namespace sfpi;
 
-namespace ckernel
-{
-namespace sfpu
-{
+namespace ckernel {
+namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS=4>
-inline void calculate_rsub(uint value)
-{
+template <bool APPROXIMATION_MODE, int ITERATIONS = 4>
+inline void calculate_rsub(uint value) {
     Converter c_value;
     c_value.u = value;
     vFloat arg2 = c_value.f;
 
-    #pragma GCC unroll 4
+#pragma GCC unroll 4
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat value = dst_reg[0];
         dst_reg[0] = arg2 - value;
@@ -33,5 +30,5 @@ inline void calculate_rsub(uint value)
     }
 }
 
-} // namespace sfpu
-} // namespace ckernel
+}  // namespace sfpu
+}  // namespace ckernel

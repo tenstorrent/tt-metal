@@ -1,7 +1,0 @@
-sudo
-nano
-acl
-jq
-openssh-server
-vim
-libmpfr-dev

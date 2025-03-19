@@ -16,7 +16,14 @@ from models.utility_functions import skip_for_wormhole_b0
 @pytest.mark.parametrize("c", [3])
 @pytest.mark.parametrize("h", [230])
 @pytest.mark.parametrize("w", [224])
-@pytest.mark.parametrize("padding,torch_padding", [(((0, 1), (3, 25), (32, 32)), (32, 32, 3, 25, 0, 1))])
+@pytest.mark.parametrize(
+    "padding,torch_padding",
+    [
+        (((0, 1), (3, 25), (32, 32)), (32, 32, 3, 25, 0, 1)),
+        (((0, 1), (3, 25), (4, 6)), (4, 6, 3, 25, 0, 1)),
+        (((0, 1), (3, 25), (4, 7)), (4, 7, 3, 25, 0, 1)),  # Odd padding widths (5 and 7)
+    ],
+)
 @pytest.mark.parametrize("value", [0])
 def test_pad_rm(device, n, c, h, w, padding, torch_padding, value):
     torch.manual_seed(0)
@@ -95,7 +102,7 @@ def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_
     grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
     grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), shard_orient, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), shard_orient)
     sharded_mem_config = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
     )
@@ -110,7 +117,7 @@ def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_
     grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
     grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), shard_orient, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), shard_orient)
     output_mem_config = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
     )
@@ -123,6 +130,123 @@ def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_
 
     assert tt_output_tensor.shape == torch_output_tensor.shape
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
+
+
+def to_torch_padding(padspec):
+    def flatten_to_tuple(padding):
+        return tuple(sum(padding, ()))
+
+    def ttnn_pad_spec_to_padding(padspec):
+        input_tensor_start = padspec["input_tensor_start"]
+        pad_to_shape = padspec["pad_to_shape"]
+        input_shape = padspec["input_shape"]
+
+        padding = []
+        for i in range(len(pad_to_shape)):
+            this_dim_padding = (input_tensor_start[i], pad_to_shape[i] - input_shape[i] - input_tensor_start[i])
+            padding.append(this_dim_padding)
+        return padding
+
+    torch_padding = flatten_to_tuple(reversed(ttnn_pad_spec_to_padding(padspec)))
+    return torch_padding
+
+
+@pytest.mark.parametrize(
+    "input_shape, pad_to_shape, input_tensor_start, pad_value, input_sharded_memory_config_args",
+    [
+        [
+            (1, 1, 1, 4),
+            (1, 1, 1, 16),
+            (0, 0, 0, 0),
+            3.0,
+            {"core_grid": ttnn.CoreGrid(x=1, y=1), "strategy": ttnn.ShardStrategy.HEIGHT},
+        ],
+        [
+            # a reduced version of esmal's test case for UNet
+            (1, 1, 4, 4),
+            (1, 1, 4, 16),
+            (0, 0, 0, 0),
+            3.0,
+            {"core_grid": ttnn.CoreGrid(x=1, y=1), "strategy": ttnn.ShardStrategy.HEIGHT},
+        ],
+        [
+            # width padding across large core grid, 3 sticks per core
+            (1, 1, 3 * 64, 4),
+            (1, 1, 3 * 64, 16),
+            (0, 0, 0, 0),
+            0.0,
+            {"core_grid": ttnn.CoreGrid(x=8, y=8), "strategy": ttnn.ShardStrategy.HEIGHT},
+        ],
+        [
+            # width padding across large core grid, 3 sticks per core, n300 version
+            (1, 1, 3 * 8 * 7, 4),
+            (1, 1, 3 * 8 * 7, 16),
+            (0, 0, 0, 0),
+            0.0,
+            {"core_grid": ttnn.CoreGrid(x=8, y=7), "strategy": ttnn.ShardStrategy.HEIGHT},
+        ],
+        [
+            # width padding only, reduced core grid
+            (1, 1, 12, 8),
+            (1, 1, 12, 64),
+            (0, 0, 0, 0),
+            3.0,
+            {"core_grid": ttnn.CoreGrid(x=2, y=6), "strategy": ttnn.ShardStrategy.HEIGHT},
+        ],
+        [
+            # height and width padding, small core grid
+            (1, 1, 2, 4),
+            (1, 1, 4, 8),
+            (0, 0, 0, 0),
+            3.0,
+            {"core_grid": ttnn.CoreGrid(x=1, y=2), "strategy": ttnn.ShardStrategy.HEIGHT},
+        ],
+        [
+            # borys's second test case
+            (1, 2, 3, 4),
+            (1, 2, 32, 32),
+            (0, 0, 0, 0),
+            3.0,
+            {"core_grid": ttnn.CoreGrid(x=1, y=6), "strategy": ttnn.ShardStrategy.HEIGHT},
+        ],
+    ],
+)
+def test_pad_rm_sharded_stickwise(
+    device, input_shape, pad_to_shape, input_tensor_start, pad_value, input_sharded_memory_config_args
+):
+    core_grid_x_ok = device.core_grid.x >= input_sharded_memory_config_args["core_grid"].x
+    core_grid_y_ok = device.core_grid.y >= input_sharded_memory_config_args["core_grid"].y
+    device_core_grid_ok = core_grid_x_ok and core_grid_y_ok
+    if not device_core_grid_ok:
+        pytest.skip("core grid for this test is not compatible with the device")
+
+    input_shard_memory_config = ttnn.create_sharded_memory_config(input_shape, **input_sharded_memory_config_args)
+
+    torch_input_tensor = torch.ones(input_shape, dtype=torch.float32)
+    ttnn_input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    # Still relay on keep_l1_aligned = True to make it work with the current implementation
+    ttnn_sharded_input_tensor = ttnn.interleaved_to_sharded(
+        ttnn_input_tensor, input_shard_memory_config, keep_l1_aligned=True
+    )
+    padded_tensor = ttnn.pad(ttnn_sharded_input_tensor, pad_to_shape, input_tensor_start, pad_value)
+
+    tt_output_tensor = ttnn.to_memory_config(padded_tensor, ttnn.L1_MEMORY_CONFIG)
+    tt_output_tensor = ttnn.from_device(tt_output_tensor)
+    torch_output_tensor = ttnn.to_torch(tt_output_tensor)
+
+    padspec = {
+        "input_shape": input_shape,
+        "pad_to_shape": pad_to_shape,
+        "input_tensor_start": input_tensor_start,
+    }
+    torch_padded_tensor = torch.nn.functional.pad(
+        torch_input_tensor, to_torch_padding(padspec), mode="constant", value=pad_value
+    )
+
+    assert torch_output_tensor.shape == torch_padded_tensor.shape
+    assert_with_pcc(torch_padded_tensor, torch_output_tensor, 0.99)
 
 
 @pytest.mark.parametrize("n", [20])
@@ -181,7 +305,7 @@ def test_pad_any_input_shape(device, h, w, padding, value):
     output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    tilezed_input_shape = input_tensor.shape.with_tile_padding()
+    tilezed_input_shape = input_tensor.padded_shape
     th = tilezed_input_shape[-2]
     tw = tilezed_input_shape[-1]
     assert output_tensor.shape == ttnn.Shape((th + padding[0][0] + padding[0][1], tw + padding[1][0] + padding[1][1]))
@@ -304,3 +428,26 @@ def test_pad_for_tensor_in_tile_layout(device, h, w, padding, value):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
+@pytest.mark.parametrize("use_multicore", [True, False], ids=["multicore", "singlecore"])
+@pytest.mark.parametrize(
+    "shape, padded_shape",
+    [
+        [[1392, 1392, 3, 3], [1408, 1408, 3, 3]],
+        [[32, 32, 3, 3], [64, 64, 3, 3]],
+        [[3, 3, 1392, 1392], [3, 3, 1408, 1408]],
+    ],
+)
+def test_pad_conv2d_sweep(device, dtype, use_multicore, shape, padded_shape):
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+
+    in_torch = torch.randint(-5, 5, shape, dtype=torch_dtype).float()
+    in_ttnn = ttnn.from_torch(in_torch, memory_config=ttnn.DRAM_MEMORY_CONFIG, device=device, dtype=dtype)
+
+    out_ttnn = ttnn.pad(in_ttnn, padded_shape, [0, 0, 0, 0], 0, use_multicore=use_multicore)
+    out_torch = out_ttnn.cpu().to_torch().float()
+
+    out_torch = out_torch[: shape[0], : shape[1], : shape[2], : shape[3]]
+    assert_with_pcc(in_torch, out_torch, 0.9999)

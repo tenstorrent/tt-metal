@@ -5,11 +5,11 @@
 #include "moreh_clip_grad_norm_pybind.hpp"
 
 #include "moreh_clip_grad_norm.hpp"
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 namespace ttnn::operations::moreh::moreh_clip_grad_norm {
 
-void bind_moreh_clip_grad_norm_operation(py::module &module) {
+void bind_moreh_clip_grad_norm_operation(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::moreh_clip_grad_norm,

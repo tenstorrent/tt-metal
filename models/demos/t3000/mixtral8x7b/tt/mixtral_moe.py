@@ -49,6 +49,7 @@ class TtMoeLayer(LightweightModule):
 
         self.tile_size = 32
         self.compute_kernel = args.get_compute_kernel_attn_config()
+        self.compute_kernel_reduce = args.get_compute_kernel_config_reduce()
 
         top8_mask = torch.full((1, 1, 1, 64), fill_value=torch.finfo(torch.float).min)
         top8_mask[:, :, :, :8] = 0.0
@@ -140,6 +141,8 @@ class TtMoeLayer(LightweightModule):
             output_11BH_gathered = ttnn.all_gather(results_11BH, dim=2, num_links=1)
             results_11BH.deallocate(True)
             # Reduction
-            output_11BH_reduced = ttnn.matmul(self.reduce_mask, output_11BH_gathered)
+            output_11BH_reduced = ttnn.matmul(
+                self.reduce_mask, output_11BH_gathered, compute_kernel_config=self.compute_kernel_reduce
+            )
 
         return output_11BH_reduced

@@ -84,9 +84,7 @@ def run_test_LlamaModel_stress_test(
         cache_path=cache_path,
         read_cache=True,
     )
-    for i in mesh_device.get_device_ids():
-        device = mesh_device.get_device(i)
-        ttnn.synchronize_device(device)
+    ttnn.synchronize_device(mesh_device)
 
     del state_dict
 
@@ -98,7 +96,7 @@ def run_test_LlamaModel_stress_test(
         start_pos = 0
         prev_pos = start_pos
         for cur_pos in tqdm(range(start_pos + 1, total_len), desc="Decode to 2k Progress", leave=False, colour="green"):
-            tt_inp_emb, prev_pos, rot_mat, cache_idxs, _ = tt_model.prepare_device_inputs(
+            tt_inp_emb, prev_pos, rot_mat, cache_idxs, _ = tt_model.prepare_device_inputs_decode(
                 tokens[:, prev_pos:cur_pos], prev_pos
             )
 
@@ -145,7 +143,6 @@ def test_Llama_stress_test(
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
     t3k_mesh_device.enable_program_cache()
-    disable_compilation_reports()
     run_test_LlamaModel_stress_test(
         devices,
         batch,

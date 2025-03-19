@@ -167,7 +167,7 @@ def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
     grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
     shard_shape = (32, 1024)
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
     input_tensor_in0 = ttnn.to_memory_config(input_tensor_in0, sharded_mem_config)
 
@@ -175,7 +175,7 @@ def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
     in1_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
     in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), in1_shard_grid)})
     in1_shard_shape = (8192, 96)
-    in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+    in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     in1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
     input_tensor_in1 = ttnn.from_torch(
         torch_input_tensor_in1,

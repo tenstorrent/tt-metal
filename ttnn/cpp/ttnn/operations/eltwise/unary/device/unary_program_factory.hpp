@@ -7,13 +7,12 @@
 #include "unary_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-
 namespace ttnn::operations::unary::program {
 
 struct UnaryProgramFactory {
     struct shared_variables_t {
-        KernelHandle unary_reader_kernel_id;
-        KernelHandle unary_writer_kernel_id;
+        tt::tt_metal::KernelHandle unary_reader_kernel_id;
+        tt::tt_metal::KernelHandle unary_writer_kernel_id;
         uint32_t num_cores;
         uint32_t num_cores_y;
     };
@@ -31,4 +30,4 @@ struct UnaryProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-} // namespace ttnn::operations::unary::program
+}  // namespace ttnn::operations::unary::program

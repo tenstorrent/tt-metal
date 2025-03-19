@@ -21,7 +21,6 @@ from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconConf
 from models.demos.t3000.falcon40b.tt.falcon_common import PytorchFalconCausalLM
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config, model_config_entries
 from models.utility_functions import (
-    disable_compilation_reports,
     enable_persistent_kernel_cache,
     profiler,
     torch2tt_tensor,
@@ -151,11 +150,6 @@ def print_output_prompts(generated_ids, tokenizer, num_users_to_display=None):
         logger.info(f"Output for user {user_id}:\n{output_prompt}")
 
 
-def synchronize_devices(devices):
-    for device in devices:
-        ttnn.synchronize_device(device)
-
-
 def top_pk_logits(logits, p=0.9, k=10, temperature=1.0, return_probs=False):
     next_token_logscores = top_k_top_p_filtering(logits, top_k=k, top_p=p)
     probs = F.softmax(next_token_logscores / temperature, dim=-1)
@@ -222,7 +216,7 @@ def run_falcon_demo_kv(
     logger.info("Loading weights finished!")
     profiler.end(f"loading_weights")
 
-    synchronize_devices(devices)
+    ttnn.synchronize_device(mesh_device)
 
     logger.info("Tokenizing inputs...")
     profiler.start(f"tokenizing_inputs")
@@ -255,7 +249,7 @@ def run_falcon_demo_kv(
     )  # single layer only used for compile
     logger.info("Moved weights (single layer) to devices!")
 
-    synchronize_devices(devices)
+    ttnn.synchronize_device(mesh_device)
 
     kv_cache_singlelayer = tt_FalconCausalLM_singlelayer.initialize_kv_cache()  # only used for compile
 
@@ -286,7 +280,7 @@ def run_falcon_demo_kv(
                 layer_past_len=0,
                 use_cache=use_cache,
             )
-            synchronize_devices(devices)
+            ttnn.synchronize_device(mesh_device)
 
             del tt_prefill_inputs
             del tt_prefill_attention_mask
@@ -294,7 +288,7 @@ def run_falcon_demo_kv(
 
             time_prefill_compile += time.time() - time_prefill_compile_start
 
-    synchronize_devices(devices)
+    ttnn.synchronize_device(mesh_device)
     logger.info("Finished 1st run prefill stage with compile!")
 
     ### First run decode stage with compile ###
@@ -324,7 +318,7 @@ def run_falcon_demo_kv(
             layer_past_len=kv_cache_len,
             use_cache=use_cache,
         )
-        synchronize_devices(devices)
+        ttnn.synchronize_device(mesh_device)
 
         del tt_decode_inputs
         if tt_decode_attention_mask is not None:
@@ -334,7 +328,7 @@ def run_falcon_demo_kv(
         time_decode_compile += time.time() - time_decode_compile_start
 
     logger.info("Finished 1st run decode stage with compile!")
-    synchronize_devices(devices)
+    ttnn.synchronize_device(mesh_device)
 
     del decode_ids
     del tt_FalconCausalLM_singlelayer
@@ -417,7 +411,7 @@ def run_falcon_demo_kv(
                 layer_past_len=0,
                 use_cache=use_cache,
             )
-            synchronize_devices(devices)
+            ttnn.synchronize_device(mesh_device)
 
             del tt_prefill_inputs
             del tt_prefill_attention_mask
@@ -479,7 +473,7 @@ def run_falcon_demo_kv(
             layer_past_len=kv_cache_len,
             use_cache=use_cache,
         )
-        synchronize_devices(devices)
+        ttnn.synchronize_device(mesh_device)
 
         del tt_decode_inputs
         if tt_decode_attention_mask is not None:
@@ -588,7 +582,6 @@ def test_demo(
     use_program_cache,
 ):
     # disable_persistent_kernel_cache()
-    disable_compilation_reports()
 
     return run_falcon_demo_kv(
         user_input=user_input,

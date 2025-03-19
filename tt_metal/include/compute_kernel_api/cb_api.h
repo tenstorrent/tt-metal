@@ -4,7 +4,6 @@
 
 #pragma once
 
-
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_PACK
 #include "llk_io_pack.h"
@@ -13,9 +12,9 @@
 #include "llk_io_unpack.h"
 #endif
 
-
 namespace ckernel {
 
+// clang-format off
 /**
  * A blocking call that waits for the specified number of tiles to be available in the specified circular buffer (CB).
  * This call is used by the consumer of the CB to wait for the producer to fill the CB with at least the specfied number
@@ -35,13 +34,13 @@ namespace ckernel {
  *
  * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
  * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
+ * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     | 
  * | ntiles    | The number of tiles to wait for      | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  * */
-ALWI void cb_wait_front(uint32_t cbid, uint32_t ntiles) {
-    UNPACK(( llk_wait_tiles(cbid, ntiles)  ));
-}
+ // clang-format on
+ALWI void cb_wait_front(uint32_t cbid, uint32_t ntiles) { UNPACK((llk_wait_tiles(cbid, ntiles))); }
 
+// clang-format off
 /**
  * Pops a specified number of tiles from the front of the specified CB. This
  * also frees this number of tiles in the circular buffer. This call is used by
@@ -67,13 +66,13 @@ ALWI void cb_wait_front(uint32_t cbid, uint32_t ntiles) {
  *
  * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
  * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
+ * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     | 
  * | ntiles    | The number of tiles to be popped     | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
-ALWI void cb_pop_front(uint32_t cbid, uint32_t ntiles) {
-    UNPACK(( llk_pop_tiles(cbid, ntiles)  ));
-}
+ // clang-format on
+ALWI void cb_pop_front(uint32_t cbid, uint32_t ntiles) { UNPACK((llk_pop_tiles(cbid, ntiles))); }
 
+// clang-format off
 /**
  * A blocking call that waits for the specified number of tiles to be free in the specified circular buffer. This call
  * is used by the producer to wait for the consumer to consume (ie. free up) the specified number of tiles.
@@ -84,14 +83,15 @@ ALWI void cb_pop_front(uint32_t cbid, uint32_t ntiles) {
  *
  * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
  * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
+ * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     | 
  * | ntiles    | The number of free tiles to wait for | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
-ALWI void cb_reserve_back(uint32_t cbid, uint32_t ntiles)
-{
-    PACK(( llk_wait_for_free_tiles<false,false,false>(cbid,ntiles)  ));
+ // clang-format on
+ALWI void cb_reserve_back(uint32_t cbid, uint32_t ntiles) {
+    PACK((llk_wait_for_free_tiles<false, false, false>(cbid, ntiles)));
 }
 
+// clang-format off
 /**
  * Pushes a given number of tiles in the back of the specified CB’s queue.
  * Decreases the available space in the circular buffer by this number of
@@ -117,14 +117,13 @@ ALWI void cb_reserve_back(uint32_t cbid, uint32_t ntiles)
  *
  * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
  * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
+ * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     | 
  * | ntiles    | The number of tiles to be pushed     | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
-ALWI void cb_push_back(uint32_t cbid, uint32_t ntiles)
-{
-    PACK(( llk_push_tiles<false,false>(cbid, ntiles)  ));
-}
+ // clang-format on
+ALWI void cb_push_back(uint32_t cbid, uint32_t ntiles) { PACK((llk_push_tiles<false, false>(cbid, ntiles))); }
 
+// clang-format off
 /**
  * Sends the pointer to the given tile index of the specified CB from the UNPACK
  * thread to the MATH and PACK threads, using mailbox writes. Also posts UNPACK_OPERAND_SYNC
@@ -134,10 +133,11 @@ ALWI void cb_push_back(uint32_t cbid, uint32_t ntiles)
  *
  * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
  * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
- * | index     | The tile index within the CB         | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
+ * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     | 
+ * | index     | The tile index within the CB         | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     | 
  * | p_tile    | The pointer that will be populated   | void*    | N/A                                                                                               | True     |
  */
+ // clang-format on
 ALWI void cb_get_tile(uint32_t cb_id, uint32_t index, volatile void* p_tile) {
     UNPACK(llk_unpack_get_tile(cb_id, index, (uint32_t*)p_tile));
 
@@ -146,16 +146,18 @@ ALWI void cb_get_tile(uint32_t cb_id, uint32_t index, volatile void* p_tile) {
     PACK(llk_pack_get_tile(cb_id, index, (uint32_t*)p_tile));
 }
 
+// clang-format off
 /**
  * Blocks UNPACK thread on UNPACK_OPERAND_SYNC semaphore being decremented by
  * MATH and PACK threads.
  *
  * Return value: None
  *
- * | Argument  | Description                          | Type     | Valid Range                                                                                       | Required |
- * |-----------|--------------------------------------|----------|---------------------------------------------------------------------------------------------------|----------|
- * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
+ * | Argument  | Description                          | Type     | Valid Range | Required |
+ * |-----------|--------------------------------------|----------|-------------|----------|
+ * | cb_id     | The index of the cirular buffer (CB) | uint32_t | 0 to 31     | True     |
  */
+ // clang-format on
 ALWI void cb_release_tile(uint32_t cb_id) {
     UNPACK(llk_unpack_release_tile(cb_id));
 
@@ -164,4 +166,4 @@ ALWI void cb_release_tile(uint32_t cb_id) {
     PACK(llk_pack_release_tile(cb_id));
 }
 
-} // namespace ckernel
+}  // namespace ckernel

@@ -10,40 +10,40 @@
 #include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api/eltwise_unary/sqrt.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
     uint32_t step = get_arg_val<uint32_t>(0);
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
 
-    constexpr auto cb_param_in = tt::CB::c_in0;
-    constexpr auto cb_grad_in = tt::CB::c_in1;
-    constexpr auto cb_exp_avg_in = tt::CB::c_in2;
-    constexpr auto cb_exp_avg_sq_in = tt::CB::c_in3;
+    constexpr auto cb_param_in = tt::CBIndex::c_0;
+    constexpr auto cb_grad_in = tt::CBIndex::c_1;
+    constexpr auto cb_exp_avg_in = tt::CBIndex::c_2;
+    constexpr auto cb_exp_avg_sq_in = tt::CBIndex::c_3;
 #ifdef AMSGRAD
-    constexpr auto cb_max_exp_avg_sq_in = tt::CB::c_in4;
+    constexpr auto cb_max_exp_avg_sq_in = tt::CBIndex::c_4;
 #endif
     // lr, beta1, beta2, eps, weight_decay
-    constexpr auto cb_scalar_args = tt::CB::c_in5;
-    constexpr auto cb_one = tt::CB::c_in6;
-    constexpr auto cb_param_out = tt::CB::c_out0;
-    constexpr auto cb_exp_avg_out = tt::CB::c_out1;
-    constexpr auto cb_exp_avg_sq_out = tt::CB::c_out2;
+    constexpr auto cb_scalar_args = tt::CBIndex::c_5;
+    constexpr auto cb_one = tt::CBIndex::c_6;
+    constexpr auto cb_param_out = tt::CBIndex::c_16;
+    constexpr auto cb_exp_avg_out = tt::CBIndex::c_17;
+    constexpr auto cb_exp_avg_sq_out = tt::CBIndex::c_18;
 #ifdef AMSGRAD
-    constexpr auto cb_max_exp_avg_sq_out = tt::CB::c_out3;
+    constexpr auto cb_max_exp_avg_sq_out = tt::CBIndex::c_19;
 #endif
 
-    constexpr auto tmp_cb_param = tt::CB::c_intermed0;
-    constexpr auto tmp_cb_exp_avg = tt::CB::c_intermed1;
-    constexpr auto tmp_cb_exp_avg_sq = tt::CB::c_intermed2;
+    constexpr auto tmp_cb_param = tt::CBIndex::c_24;
+    constexpr auto tmp_cb_exp_avg = tt::CBIndex::c_25;
+    constexpr auto tmp_cb_exp_avg_sq = tt::CBIndex::c_26;
 #ifdef AMSGRAD
-    constexpr auto tmp_cb_max_exp_avg_sq = tt::CB::c_intermed3;
+    constexpr auto tmp_cb_max_exp_avg_sq = tt::CBIndex::c_27;
 #endif
-    constexpr auto cb_beta1_exponent = tt::CB::c_intermed4;
-    constexpr auto cb_beta2_exponent = tt::CB::c_intermed5;
-    constexpr auto cb_tmp1 = tt::CB::c_intermed6;
-    constexpr auto cb_tmp2 = tt::CB::c_intermed7;
+    constexpr auto cb_beta1_exponent = tt::CBIndex::c_28;
+    constexpr auto cb_beta2_exponent = tt::CBIndex::c_29;
+    constexpr auto cb_tmp1 = tt::CBIndex::c_30;
+    constexpr auto cb_tmp2 = tt::CBIndex::c_31;
 
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
@@ -61,7 +61,7 @@ void MAIN {
     cb_wait_front(cb_beta1_exponent, onetile);
     cb_wait_front(cb_beta2_exponent, onetile);
 
-    binary_op_init_common(cb_param_in, cb_scalar_args);
+    binary_op_init_common(cb_param_in, cb_scalar_args, cb_param_out);
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         cb_wait_front(cb_param_in, onetile);

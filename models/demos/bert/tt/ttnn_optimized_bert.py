@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-
+from models.utility_functions import is_grayskull
 from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
 
 
@@ -13,7 +13,7 @@ def bert_attention(
     attention_mask,
     *,
     parameters,
-    num_cores_x=12,
+    num_cores_x=12 if is_grayskull() else 8,
 ):
     num_heads = config.num_attention_heads
     batch_size, _, hidden_size = hidden_states.shape
@@ -43,7 +43,7 @@ def bert_attention(
         query,
         key,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
     )
     ttnn.deallocate(query)
@@ -84,6 +84,7 @@ def bert_attention(
         bias=parameters.output.LayerNorm.bias,
         epsilon=config.layer_norm_eps,
         memory_config=ttnn.L1_MEMORY_CONFIG,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
     )
     ttnn.deallocate(hidden_states)
     ttnn.deallocate(self_output)
@@ -95,7 +96,7 @@ def bert_intermediate(
     hidden_states,
     *,
     parameters,
-    num_cores_x=12,
+    num_cores_x=12 if is_grayskull() else 8,
 ):
     batch_size, *_ = hidden_states.shape
 
@@ -107,6 +108,11 @@ def bert_intermediate(
         dtype=ttnn.bfloat8_b,
         core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
         activation="gelu",
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            packer_l1_acc=False,
+        ),
     )
     return output
 
@@ -117,7 +123,7 @@ def bert_output(
     residual,
     *,
     parameters,
-    num_cores_x=12,
+    num_cores_x=12 if is_grayskull() else 8,
 ):
     batch_size, *_ = hidden_states.shape
 
@@ -138,6 +144,7 @@ def bert_output(
         bias=parameters.LayerNorm.bias,
         epsilon=config.layer_norm_eps,
         memory_config=ttnn.L1_MEMORY_CONFIG,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
     )
     ttnn.deallocate(output)
     ttnn.deallocate(residual)
@@ -221,6 +228,7 @@ def bert(
         weight=parameters.embeddings.LayerNorm.weight,
         bias=parameters.embeddings.LayerNorm.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
     )
     ttnn.deallocate(embeddings)
 

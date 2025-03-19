@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_nll_loss_step1_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 using namespace tt;
@@ -26,14 +26,8 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     const uint32_t channel_size = operation_attributes.channel_size;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    auto target_shape = target.get_shape().value;
-    auto N = target_shape[1];
-
-    const auto target_shape_without_padding = target_shape.without_padding();
-    const auto origin_N = target_shape_without_padding[1];
-
+    auto target_shape = target.get_padded_shape();
     const bool weight_has_value = weight.has_value();
-
     auto H = target_shape[-2];
     auto W = target_shape[-1];
     auto Ht = H / tt::constants::TILE_HEIGHT;
@@ -42,7 +36,7 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     // copy TILE per core
     uint32_t units_to_divide = target.volume() / H / W * (Ht * Wt);
 
-    tt::tt_metal::Device* device = target.device();
+    tt::tt_metal::IDevice* device = target.device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 
@@ -63,7 +57,8 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     const auto data_tile_size = tt_metal::detail::TileSize(data_format);
     const auto intermed_tile_size = tt_metal::detail::TileSize(intermed_data_format);
 
-    const uint32_t available_L1 = device->l1_size_per_core() - device->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t available_L1 =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
 
     uint32_t target_num_tile = 1;
     uint32_t weight_num_tile = weight_has_value ? div_up(channel_size, tt::constants::TILE_WIDTH) : 0;
@@ -80,10 +75,10 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
             all_cores,
             data_format,
             {
-                {CB::c_in0, 1, tt::DataFormat::Int32},       // target
-                {CB::c_in1, 1},                              // weight
-                {CB::c_intermed0, 1, intermed_data_format},  // tmp_weight
-                {CB::c_out0, 1},                             // output
+                {CBIndex::c_0, 1, tt::DataFormat::Int32},  // target
+                {CBIndex::c_1, 1},                         // weight
+                {CBIndex::c_24, 1, intermed_data_format},  // tmp_weight
+                {CBIndex::c_16, 1},                        // output
             });
     } else {
         CreateCircularBuffer(
@@ -91,10 +86,10 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
             all_cores,
             data_format,
             {
-                {CB::c_in0, 1, tt::DataFormat::Int32},       // target
-                {CB::c_in1, weight_num_tile},                // weight
-                {CB::c_intermed0, 1, intermed_data_format},  // tmp_weight
-                {CB::c_out0, 1},                             // output
+                {CBIndex::c_0, 1, tt::DataFormat::Int32},  // target
+                {CBIndex::c_1, weight_num_tile},           // weight
+                {CBIndex::c_24, 1, intermed_data_format},  // tmp_weight
+                {CBIndex::c_16, 1},                        // output
             });
     }
 
@@ -104,8 +99,7 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
         static_cast<uint32_t>(weight.has_value() ? is_dram(weight.value()) : false),
         static_cast<uint32_t>(weight_has_value)};
 
-    const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(is_dram(output))};
+    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(output))};
 
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;
@@ -126,10 +120,10 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step1/device/kernels/"
         "writer_moreh_nll_loss_step1.cpp";
 
-    auto reader_kernel_id = CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    auto writer_kernel_id = CreateWriteKernel(
-        program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
+    auto reader_kernel_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    auto writer_kernel_id =
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
 
     const auto target_addr = target.buffer()->address();
     const auto weight_addr = weight_has_value ? weight.value().buffer()->address() : 0;
@@ -154,7 +148,6 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
             static_cast<uint32_t>(ignore_index),
             num_units_per_core,
             tile_offset,
-            origin_N,
             channel_size,
             weight_num_tile,
             element_size,

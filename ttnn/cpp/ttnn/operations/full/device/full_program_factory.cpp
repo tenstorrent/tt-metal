@@ -3,11 +3,33 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "full_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "ttnn/cpp/ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include <tt-metalium/work_split.hpp>
+#include "cpp/ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 using namespace tt;
 using namespace tt::constants;
+
+// After the full modification and if there are no issues in the overall tests, it will be added to `bfloat16.hpp` and
+// applied globally.
+uint32_t get_bfloat16_rounded(const float val) {
+    uint32_t float_bits = *reinterpret_cast<const uint32_t*>(&val);
+
+    // upper 16 bits
+    uint16_t bfloat16_bits = float_bits >> 16;
+
+    // check Guard, Round, Sticky bits from lower 16 bits
+    uint32_t lower_bits = float_bits & 0xFFFF;
+    uint32_t guard_bit = (lower_bits >> 15) & 1;
+    uint32_t round_bit = (lower_bits >> 14) & 1;
+    uint32_t sticky_bit = (lower_bits & 0x3FFF) != 0;
+
+    // Tie-to-even rounding rule
+    if (guard_bit && (round_bit || sticky_bit || (bfloat16_bits & 1))) {
+        bfloat16_bits += 1;
+    }
+
+    return static_cast<uint32_t>(bfloat16_bits) << 16;
+}
 
 union datatype {
     uint32_t u32;
@@ -29,17 +51,11 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(data_format);
 
-    if (std::holds_alternative<int>(fill_value)) {
-        u.u32 = std::get<int>(fill_value);
-    } else if (std::holds_alternative<float>(fill_value)) {
-        u.f32 = std::get<float>(fill_value);
-    }
-
     // Create program
     Program program = Program();
 
     // Create circular buffer
-    auto cb_index = tt::CB::c_intermed0;
+    auto cb_index = tt::CBIndex::c_24;
     CreateCircularBuffer(
         program,
         all_cores,
@@ -57,6 +73,17 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
         default: break;
     }
 
+    if (std::holds_alternative<int>(fill_value)) {
+        u.u32 = std::get<int>(fill_value);
+    } else if (std::holds_alternative<float>(fill_value)) {
+        auto float_fill_value = std::get<float>(fill_value);
+        if (dtype == DataType::BFLOAT16) {
+            u.u32 = get_bfloat16_rounded(float_fill_value);
+        } else {
+            u.f32 = float_fill_value;
+        }
+    }
+
     auto writer_id = CreateWriteKernel(
         program,
         "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full.cpp",
@@ -71,13 +98,14 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_tiles_per_core;
-        if (core_group_1.contains(core))
+        if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
-        else if (core_group_2.contains(core))
+        } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
-        else
+        } else {
             TT_THROW("Core not in specified core ranges");
-        std::vector<uint32_t> writer_args = {u.u32, output.buffer()->address(), num_tiles_per_core, tile_offset};
+        }
+        std::vector<uint32_t> writer_args = {output.buffer()->address(), u.u32, num_tiles_per_core, tile_offset};
         SetRuntimeArgs(program, writer_id, core, writer_args);
         tile_offset += num_tiles_per_core;
     }

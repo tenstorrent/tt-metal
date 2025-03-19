@@ -2,6 +2,11 @@ name: "All post-commit tests"
 
 on:
   workflow_call:
+    inputs:
+      build-type:
+        required: false
+        default: Release
+        type: string
   workflow_dispatch:
     inputs:
       build-type:
@@ -12,7 +17,12 @@ on:
           - Release
           - Debug
           - RelWithDebInfo
-          - CI
+          - ASan
+          - TSan
+      with-retries:
+        default: false
+        type: boolean
+        description: "Re-run failed jobs (max 3)"
   push:
     branches: ["main"]
 
@@ -23,71 +33,44 @@ permissions:
   pages: write
   id-token: write
   packages: write
+  checks: write
 
+run-name: All post-commit tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)' || ''}}
 jobs:
   static-checks:
     uses: ./.github/workflows/all-static-checks.yaml
     secrets: inherit
-  build-wheels:
-    needs: build-artifact
-    strategy:
-      matrix:
-        # Since pre-compiled builds only run on 20.04, we can only test on 20.04 for now
-        # The full 22.04 flow can be tested without precompiled
-        os: [ubuntu-20.04]
-        arch: [grayskull, wormhole_b0]
-    uses: ./.github/workflows/_build-wheels-impl.yaml
-    with:
-      os: ${{ matrix.os }}
-      arch: ${{ matrix.arch }}
-      from-precompiled: true
-    secrets: inherit
-  test-wheels:
-    needs: build-wheels
-    uses: ./.github/workflows/_test-wheels-impl.yaml
-    with:
-      from-precompiled: true
-    secrets: inherit
-  build-docker-image-2004:
-    uses: ./.github/workflows/build-docker-artifact.yaml
-    secrets: inherit
-    with:
-      os: ubuntu-20.04-amd64
-  build-docker-image-2204:
-    uses: ./.github/workflows/build-docker-artifact.yaml
-    secrets: inherit
-    with:
-      os: ubuntu-22.04-amd64
   build-artifact:
-    needs: build-docker-image-2004
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
-      build-docker: false
       build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      version: 22.04
   build-artifact-profiler:
-    needs: build-docker-image-2004
     uses: ./.github/workflows/build-artifact.yaml
     with:
-      tracy: true
-      build-docker: false
       build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      tracy: true
+      version: 22.04
     secrets: inherit
-  # UMD Unit Tests
-  umd-unit-tests:
-    secrets: inherit
+
+  smoke-tests:
+    needs: build-artifact
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { arch: grayskull, runner-label: E150 },
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+        platform: [
+          "N150",
+          "N300",
         ]
-    uses: ./.github/workflows/umd-unit-tests.yaml
+    uses: ./.github/workflows/smoke.yaml
     with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
+      runner: ${{ matrix.platform }}
+
   # Slow Dispatch Unit Tests
   sd-unit-tests:
     needs: build-artifact
@@ -96,7 +79,6 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: grayskull, runner-label: E150 },
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
@@ -104,31 +86,46 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
+      os: ubuntu-22.04
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
-    needs: build-wheels
+    needs: build-artifact
     secrets: inherit
     strategy:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: grayskull, runner-label: E150 },
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     with:
+      os: ubuntu-22.04
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-  # TTNN FD Unit tests
-  ttnn-unit-tests:
-    needs: build-wheels
+  # Fabric Unit Tests
+  fabric-unit-tests:
+    needs: build-artifact
     secrets: inherit
     strategy:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: grayskull, runner-label: E150 },
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
+    uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
+    with:
+      os: ubuntu-22.04
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+  # TTNN FD Unit tests
+  ttnn-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
@@ -136,15 +133,17 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # FD Model Tests
   models-unit-tests:
-    needs: build-wheels
+    needs: build-artifact
     secrets: inherit
     strategy:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: grayskull, runner-label: E150 },
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
@@ -160,7 +159,6 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: grayskull, runner-label: E150 },
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
@@ -168,12 +166,7 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-  code-analysis:
-    needs: build-docker-image-2204
-    uses: ./.github/workflows/code-analysis.yaml
-    secrets: inherit
-    with:
-      os: ubuntu-22.04-amd64
+      os: ubuntu-22.04
   tt-train-cpp-unit-tests:
     needs: build-artifact
     secrets: inherit
@@ -188,18 +181,60 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-  profiler-regression:
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+  run-profiler-regression:
     needs: build-artifact-profiler
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, runner-label: N150 },
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
+    with:
+      arch: ${{ matrix.test-group.arch}}
+      runner-label: ${{ matrix.test-group.runner-label}}
+      docker-image: ${{ needs.build-artifact-profiler.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
   build-docs:
     needs: build-artifact
     uses: ./.github/workflows/docs-latest-public.yaml
     secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   build:
-    needs: [build-artifact, build-docker-image-2204]
-    uses: ./.github/workflows/build.yaml
+    uses: ./.github/workflows/build-artifact.yaml
+    needs: build-artifact
     secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - version: "22.04"
+            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+            build-type: "Debug"
+            publish-artifact: false
+          - version: "22.04"
+            toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+            build-type: "Release"
+            publish-artifact: false
+            skip-tt-train: true
+          - version: "22.04"
+            toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
+            build-type: "Release"
+            publish-artifact: false
+            skip-tt-train: true
+    with:
+      version: ${{ matrix.config.version }}
+      toolchain: ${{ matrix.config.toolchain }}
+      build-type: ${{ matrix.config.build-type }}
+      publish-artifact: ${{ matrix.config.publish-artifact }}
+      skip-tt-train: ${{ matrix.config.skip-tt-train || false }}
   # We used to use this for post-commit, but we didn't have enough runners
   # to support the number of developers running this workflow
   # build-and-test-measure-perf:

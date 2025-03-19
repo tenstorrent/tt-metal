@@ -6,18 +6,22 @@
 #include <cstdint>
 #include <optional>
 
-#include "common/bfloat4.hpp"
-#include "common/bfloat8.hpp"
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/mesh_device.hpp>
+
+#include <tracy/Tracy.hpp>
+
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_stl/concepts.hpp"
+#include "ttnn/types.hpp"
 
 namespace tt {
 
@@ -51,112 +55,6 @@ std::vector<OutputDataType> cast_vec(const BufferType<InputDataType>& data_to_co
     return converted_data;
 }
 
-// TODO(arakhmati): Should pack_vec_into_uint32_vec be a generator?
-template <typename DataType, template <typename> typename BufferType>
-std::vector<uint32_t> pack_vec_into_uint32_vec(const BufferType<DataType>& data_to_pack) {
-    if constexpr (std::is_same_v<DataType, uint32_t>) {
-        return std::vector(std::begin(data_to_pack), std::end(data_to_pack));
-    } else if constexpr (std::is_same_v<DataType, int32_t>) {
-        std::vector<uint32_t> uint32_data;
-        union int32_uint32_convert {
-            uint32_t u;
-            int32_t i;
-            int32_uint32_convert() : u(0) {}
-        };
-        for (auto i = 0; i < data_to_pack.size(); i++) {
-            int32_uint32_convert a;
-            a.i = data_to_pack[i];
-            uint32_data.push_back(a.u);
-        }
-        return uint32_data;
-    } else if constexpr (std::is_same_v<DataType, uint8_t>) {
-        std::vector<uint32_t> output;
-        for (auto index = 0; index < data_to_pack.size(); index += 4) {
-            auto value = data_to_pack[index + 3] << 24 | data_to_pack[index + 2] << 16 | data_to_pack[index + 1] << 8 | data_to_pack[index];
-            output.push_back(value);
-        }
-        return output;
-    } else if constexpr (std::is_same_v<DataType, uint16_t>) {
-        std::vector<uint32_t> output;
-        for (auto index = 0; index < data_to_pack.size(); index += 2) {
-            auto value = data_to_pack[index + 1] << 16 | data_to_pack[index];
-            output.push_back(value);
-        }
-        return output;
-    } else if constexpr (std::is_same_v<DataType, bfloat16>) {
-        auto bfloat16_vec = std::vector(std::begin(data_to_pack), std::end(data_to_pack));
-        return pack_bfloat16_vec_into_uint32_vec(bfloat16_vec);
-    } else if constexpr (std::is_same_v<DataType, float>) {
-        std::vector<uint32_t> uint32_data;
-        union float_uint32_convert {
-            uint32_t u;
-            float f;
-            float_uint32_convert() : u(0) {}
-        };
-        for (auto i = 0; i < data_to_pack.size(); i++) {
-            float_uint32_convert a;
-            a.f = data_to_pack[i];
-            uint32_data.push_back(a.u);
-        }
-        return uint32_data;
-    } else {
-        static_assert(tt::stl::concepts::always_false_v<DataType>, "Don't know how to unpack uint32 data generically!");
-    }
-}
-
-template <typename DataType>
-std::vector<DataType> unpack_uint32_vec(std::vector<uint32_t>& data_to_unpack) {
-    if constexpr (std::is_same_v<DataType, uint32_t>) {
-        return data_to_unpack;
-    } else if constexpr (std::is_same_v<DataType, int32_t>) {
-        union int32_uint32_convert {
-            uint32_t u;
-            int32_t i;
-            int32_uint32_convert() : u(0) {}
-        };
-        std::vector<int32_t> int32_data;
-        for (auto i = 0; i < data_to_unpack.size(); i++) {
-            int32_uint32_convert a;
-            a.u = data_to_unpack[i];
-            int32_data.push_back(a.i);
-        }
-        return int32_data;
-    } else if constexpr (std::is_same_v<DataType, uint8_t>) {
-        std::vector<DataType> output;
-        for (auto index = 0; index < data_to_unpack.size(); index++) {
-            output.push_back((data_to_unpack[index]) & 0xFF);
-            output.push_back((data_to_unpack[index] >> 8) & 0xFF);
-            output.push_back((data_to_unpack[index] >> 16) & 0xFF);
-            output.push_back((data_to_unpack[index] >> 24) & 0xFF);
-        }
-        return output;
-    } else if constexpr (std::is_same_v<DataType, uint16_t>) {
-        std::vector<DataType> output;
-        for (auto index = 0; index < data_to_unpack.size(); index++) {
-            output.push_back(data_to_unpack[index] & 0xFFFF);
-            output.push_back(data_to_unpack[index] >> 16);
-        }
-        return output;
-    } else if constexpr (std::is_same_v<DataType, bfloat16>) {
-        return unpack_uint32_vec_into_bfloat16_vec(data_to_unpack);
-    } else if constexpr (std::is_same_v<DataType, float>) {
-        union float_uint32_convert {
-            uint32_t u;
-            float f;
-            float_uint32_convert() : u(0) {}
-        };
-        std::vector<float> float_data;
-        for (auto i = 0; i < data_to_unpack.size(); i++) {
-            float_uint32_convert a;
-            a.u = data_to_unpack[i];
-            float_data.push_back(a.f);
-        }
-        return float_data;
-    } else {
-        static_assert(tt::stl::concepts::always_false_v<DataType>, "Don't know how to unpack uint32 data generically!");
-    }
-}
-
 uint32_t element_size_bytes(DataType dtype);
 
 template <typename T>
@@ -185,58 +83,84 @@ constexpr inline size_t packed_buffer_size_bytes<bfloat4_b>(size_t volume_unpack
 // ======================================================================================
 //                                  Layout converters
 // ======================================================================================
-namespace detail {
-static ttnn::SmallVector<uint32_t> to_4D_shape(const tt::tt_metal::LegacyShape& shape) {
-    if (shape.rank() == 1) {
-        return {1, 1, 1, shape[-1]};
-    } else if (shape.rank() == 2) {
-        return {1, 1, shape[-2], shape[-1]};
-    } else if (shape.rank() == 3) {
-        return {1, shape[-3], shape[-2], shape[-1]};
-    } else if (shape.rank() == 4) {
-        return {shape[-4], shape[-3], shape[-2], shape[-1]};
-    } else {
-        TT_THROW("Rank {} is not supported!", shape.rank());
+template <typename T, template <typename...> typename BufferType>
+inline std::vector<T> convert_layout_row_major_to_tile(
+    const Shape2D& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
+    if (shape.width() * shape.height() == 0) {
+        return std::vector<T>();
     }
-}
-
-}  // namespace detail
-
-template <typename T, template <typename> typename BufferType>
-inline std::vector<T> convert_layout_row_major_to_tile(const tt::tt_metal::LegacyShape& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
     TT_FATAL(
-        (shape[-2] % tile.get_tile_shape()[0] == 0 && shape[-1] % tile.get_tile_shape()[1] == 0),
-        "Unsupported shape for tensor conversion from row-major to tile layout. The tensor shape height and width must be a multiple of tile height ({}) and width ({}), but the provided shape is {}", tile.get_tile_shape()[0], tile.get_tile_shape()[1], shape);
+        (shape.height() % tile.get_tile_shape()[0] == 0 && shape.width() % tile.get_tile_shape()[1] == 0),
+        "Unsupported shape for tensor conversion from row-major to tile layout. The tensor shape height and width must "
+        "be a multiple of tile height ({}) and width ({}), but the provided shape is {}",
+        tile.get_tile_shape()[0],
+        tile.get_tile_shape()[1],
+        shape);
 
-    auto tile_shape = ttnn::SmallVector<uint32_t>{ tile.get_tile_shape()[0], tile.get_tile_shape()[1] };
-    auto face_shape = ttnn::SmallVector<uint32_t>{ tile.get_face_shape()[0], tile.get_face_shape()[1] };
+    auto tile_shape = tile.get_tile_shape();
+    auto face_shape = tile.get_face_shape();
     auto transpose_within_face = tile.get_transpose_within_face();
     auto transpose_of_faces = tile.get_transpose_of_faces();
+
     return convert_layout(
-        data_to_convert, tt::stl::Span(shape.begin(), shape.end()), tests::utils::TensorLayoutType::LIN_ROW_MAJOR, tests::utils::TensorLayoutType::TILED_NFACES, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
+        tt::stl::MakeConstSpan(data_to_convert),
+        shape,
+        tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
+        tests::utils::TensorLayoutType::TILED_NFACES,
+        tile_shape,
+        face_shape,
+        transpose_within_face,
+        transpose_of_faces);
 }
 
-template <typename T, template <typename> typename BufferType>
-inline std::vector<T> convert_layout_tile_to_row_major(const tt::tt_metal::LegacyShape& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
-    auto tile_shape = ttnn::SmallVector<uint32_t>{ tile.get_tile_shape()[0], tile.get_tile_shape()[1] };
-    auto face_shape = ttnn::SmallVector<uint32_t>{ tile.get_face_shape()[0], tile.get_face_shape()[1] };
+template <typename T, template <typename...> typename BufferType>
+inline std::vector<T> convert_layout_tile_to_row_major(
+    const Shape2D& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
+    auto tile_shape = tile.get_tile_shape();
+    auto face_shape = tile.get_face_shape();
     auto transpose_within_face = tile.get_transpose_within_face();
     auto transpose_of_faces = tile.get_transpose_of_faces();
+
     return convert_layout(
-        data_to_convert, tt::stl::Span(shape.begin(), shape.end()), tests::utils::TensorLayoutType::TILED_NFACES, tests::utils::TensorLayoutType::LIN_ROW_MAJOR, tile_shape, face_shape, transpose_within_face, transpose_of_faces);
+        tt::stl::MakeConstSpan(data_to_convert),
+        shape,
+        tests::utils::TensorLayoutType::TILED_NFACES,
+        tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
+        tile_shape,
+        face_shape,
+        transpose_within_face,
+        transpose_of_faces);
 }
+
+// Converts logical data into physical data based on tensor spec
+// - Logical data: Flat container of row major data corresponding to some ND logical shape
+// - Physical data: Flat container of physical data corresponding to tensor spec. It takes into account:
+//   * Sharding: Each shard will be padded to nearest page (if needed)
+//     ** This is mostly for logical sharding, since logical shards may not be aligned to page in general
+//     ** For interleaved, it will be handled as a "logically sharded" tensor with same shard shard height/width
+//        as the original tensor dims at -2 and -1. In the future, interleaved may be generalized as sharded.
+//     ** This means padding may be inserted in the middle of logical data (if needed)
+//   * Layout: Each aligned shard will be tilized (if needed)
+//     ** Tilization happens after first inserting padding to align shards (if needed)
+//     ** For the last shard, we only align to nearest page instead of full shard size for partial shards
+//   * After conversion, size of physical data will match 2D physical size indicated by tensor_spec.physical_shape()
+template <typename T>
+std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpec& tensor_spec);
+
+// Converts physical data into logical data based on tensor spec (see encode_tensor_data for details)
+// - Physical data: Flat container of physical data corresponding to tensor spec
+//   * Assumes that the physical data already matches tensor spec
+//   * There is a bare minimum check that size of physical data matches size indicated by tensor_spec.physical_shape()
+// - Logical data: Flat container of row major data corresponding to some ND logical shape
+//   * To get logical data, perform the exact inverse process of encode_tensor_data
+//   * Resulting data is safe to be converted to python tensors or general consumption with just a ND logical shape
+template <typename T>
+std::vector<T> decode_tensor_data(std::vector<T>&& physical_data, const TensorSpec& tensor_spec);
 
 // ======================================================================================
 //                                      Validators
 // ======================================================================================
-void validate_on_device_dtype_and_layout(Device* device, const ttnn::SimpleShape& shape, DataType dtype, Layout layout);
-void validate_sharded_buffer_allocation(
-    const ttnn::SimpleShape& shape,
-    Layout layout,
-    DataType data_type,
-    const ShardSpecBuffer& shard_params,
-    const MemoryConfig& memory_config,
-    const Tile& tile);
+void validate_on_device_dtype_and_layout(IDevice* device, const ttnn::Shape& shape, DataType dtype, Layout layout);
 // -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================
 //                                                              High Level APIs
@@ -247,37 +171,48 @@ void validate_sharded_buffer_allocation(
 //                           Data reader, writer, and initializers
 // ======================================================================================
 
-DeviceBuffer allocate_buffer_on_device(Device* device, const ttnn::SimpleShape& shape, const TensorLayout& layout);
+std::shared_ptr<Buffer> allocate_buffer_on_device(IDevice* device, const TensorSpec& tensor_spec);
+
+std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
+    distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec);
 
 template <typename T>
-inline void read_data_from_device_buffer(
-    CommandQueue& cq, DeviceBuffer device_buffer, void* host_buffer_data, bool blocking) {
+void read_data_from_device_buffer(
+    CommandQueue& cq, std::shared_ptr<Buffer> device_buffer, void* host_buffer_data, bool blocking) {
     EnqueueReadBuffer(cq, device_buffer, host_buffer_data, blocking);
 }
 
 template <typename T>
-inline void read_data_from_device_buffer(DeviceBuffer device_buffer, std::vector<T>& host_buffer) {
-    std::vector<uint32_t> host_buffer_uint32;
-    ::detail::ReadFromBuffer(device_buffer, host_buffer_uint32);
-    host_buffer = unpack_uint32_vec<T>(host_buffer_uint32);
+void read_data_from_device_buffer(std::shared_ptr<Buffer> device_buffer, std::vector<T>& host_buffer) {
+    ::tt::tt_metal::detail::ReadFromBuffer(device_buffer, host_buffer);
 }
 
 // ======================================================================================
-//                                         .to()
+//                                         .to_host() and .to_device()
 // ======================================================================================
 
 template <typename T>
-Tensor to_host(const Tensor& tensor, bool blocking = true, uint8_t cq_id = ttnn::DefaultQueueId);
+Tensor to_host(const Tensor& tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
 
+// TODO: #17215 - This will eventually subsume `to_host`, when "mesh buffer" backed tensors become the default.
 template <typename T>
-Tensor to_host_sharded(const Tensor& tensor);
+Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking = true);
 
 template <typename T>
 Tensor to_device(
     const Tensor& tensor,
-    Device* target_device,
+    IDevice* target_device,
     const MemoryConfig& memory_config,
-    std::optional<std::reference_wrapper<CommandQueue>> queue);
+    QueueId cq_id = ttnn::DefaultQueueId);
+
+// TODO: #17215 - This will eventually subsume `to_device`, when "mesh buffer" backed tensors become the default.
+template <typename T>
+Tensor to_device_mesh_tensor(
+    const Tensor& tensor, distributed::MeshDevice* mesh_device, const MemoryConfig& memory_config);
+
+// ======================================================================================
+//                                  .to_layout()
+// ======================================================================================
 
 template <typename T>
 Tensor to_layout(const Tensor& tensor, Layout target_layout);
@@ -289,10 +224,14 @@ Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout);
 //                                  .pad() and .unpad()
 // ======================================================================================
 template <typename T>
-Tensor pad(const Tensor& tensor, const tt::tt_metal::LegacyShape& output_shape, const ttnn::SimpleShape& input_tensor_start, float pad_value);
+Tensor pad(
+    const Tensor& tensor,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
+    float pad_value);
 
 template <typename T>
-Tensor unpad(const Tensor& tensor, const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end);
+Tensor unpad(const Tensor& tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end);
 
 // ======================================================================================
 //                                         Print
@@ -309,7 +248,10 @@ enum class TensorPrintProfile {
 extern TensorPrintProfile TTNN_TENSOR_PRINT_PROFILE;
 
 template <typename T>
-std::string to_string(const Tensor& tensor, std::optional<DataType> original_dtype = std::nullopt);
+std::string to_string(
+    const Tensor& tensor,
+    std::optional<DataType> original_dtype = std::nullopt,
+    std::optional<Layout> original_layout = std::nullopt);
 
 template <typename T>
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id);

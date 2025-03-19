@@ -527,9 +527,89 @@ def test_bh_alignment_i2s(
         memory_config=input_buffer_type,
         dtype=ttnn.bfloat16,
     )
-    x_t_sharded = ttnn.to_memory_config(x_t, shard_config)
-    x_t = ttnn.to_memory_config(x_t_sharded, output_buffer_type)
+    # So far the sharded tensor alignment is controled by keep_l1_aligned flag, will remove it later after launch
+    x_t_sharded = ttnn.interleaved_to_sharded(x_t, shard_config, keep_l1_aligned=True)
+    x_t = ttnn.sharded_to_interleaved(x_t_sharded, output_buffer_type, is_l1_aligned=True)
     output_data = ttnn.from_device(x_t)
     output_data = ttnn.to_torch(output_data)
     passing = torch.equal(input_data, output_data)
     assert passing
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "kernel_size",
+    ([2, 2],),
+)
+@pytest.mark.parametrize(
+    "padding",
+    ([0, 0],),
+)
+@pytest.mark.parametrize("stride", ([2, 2],))
+@pytest.mark.parametrize("dilation", ([1, 1],))
+@pytest.mark.parametrize("shape", ([1, 64, 24, 24],))
+@pytest.mark.parametrize(
+    "output_buffer_type",
+    [
+        ttnn.L1_MEMORY_CONFIG,
+        ttnn.DRAM_MEMORY_CONFIG,
+    ],
+)
+def test_mnist_max_pool_s2i(
+    device,
+    shape,
+    output_buffer_type,
+    kernel_size,
+    stride,
+    padding,
+    dilation,
+):
+    pytest.skip("currently fails due to i2s call, see GH #18425")
+    torch.manual_seed(0)
+    input_data = torch.randn(shape, dtype=torch.bfloat16)
+    in_n, in_c, in_h, in_w = shape
+    act_shape = (1, 1, in_n * in_h * in_w, in_c)
+    act_permuted = torch.permute(input_data, (0, 2, 3, 1))
+    act_reshaped = act_permuted.reshape(act_shape)
+    ttact = ttnn.from_torch(act_reshaped, ttnn.bfloat16)
+
+    ttact_device = ttnn.to_device(ttact, device)
+
+    output = ttnn.max_pool2d(
+        input_tensor=ttact_device,
+        batch_size=in_n,
+        input_h=in_h,
+        input_w=in_w,
+        channels=in_c,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        memory_config=None,
+        applied_shard_scheme=None,
+        ceil_mode=False,
+    )
+
+    x_t = ttnn.sharded_to_interleaved(output, output_buffer_type, is_l1_aligned=True)
+    output_data = ttnn.from_device(x_t)
+    output_pytorch_padded = torch.Tensor(ttnn.to_torch(output_data))
+    output_pytorch = output_pytorch_padded[:, :, :, :in_c]
+
+    ## reference
+    golden_pytorch = torch.nn.MaxPool2d(
+        kernel_size,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        return_indices=False,
+        ceil_mode=False,
+    )(input_data)
+
+    ## test for equivalance
+    golden_shape = golden_pytorch.shape
+    output_pytorch = output_pytorch.reshape(golden_shape[0], golden_shape[2], golden_shape[3], golden_shape[1])
+
+    output_pytorch = torch.permute(output_pytorch, (0, 3, 1, 2))  ## N, C, H, W
+
+    pcc_thresh = 1.0
+    assert_with_pcc(output_pytorch, golden_pytorch, pcc_thresh)

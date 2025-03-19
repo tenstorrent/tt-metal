@@ -26,30 +26,32 @@ void MorehLayerNormBackwardGammaBetaGradOperation::validate_on_program_cache_hit
     validate_inputs(operation_attributes, tensor_args);
 };
 
-MorehLayerNormBackwardGammaBetaGradOperation::shape_return_value_t
-MorehLayerNormBackwardGammaBetaGradOperation::compute_output_shapes(
+MorehLayerNormBackwardGammaBetaGradOperation::spec_return_value_t
+MorehLayerNormBackwardGammaBetaGradOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    TT_FATAL(false, "The compute_output_shapes function in MorehLayerNormBackwardGammaBetaGrad is not implemented.");
-    return {};
+    std::vector<std::optional<TensorSpec>> result(2);
+    if (tensor_args.gamma_grad.has_value()) {
+        result[0] = tensor_args.gamma_grad->get_tensor_spec();
+    }
+
+    if (tensor_args.beta_grad.has_value()) {
+        result[1] = tensor_args.beta_grad->get_tensor_spec();
+    }
+    return result;
 };
 
 MorehLayerNormBackwardGammaBetaGradOperation::tensor_return_value_t
 MorehLayerNormBackwardGammaBetaGradOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    std::vector<std::optional<Tensor>> result;
-    result.reserve(2);
-    if (tensor_args.gamma_grad.has_value())
-        result.push_back(tensor_args.gamma_grad.value());
-    else {
-        result.push_back(std::nullopt);
+    std::vector<std::optional<Tensor>> result(2);
+    if (tensor_args.gamma_grad.has_value()) {
+        result[0] = tensor_args.gamma_grad.value();
     }
 
-    if (tensor_args.beta_grad.has_value())
-        result.push_back(tensor_args.beta_grad.value());
-    else {
-        result.push_back(std::nullopt);
+    if (tensor_args.beta_grad.has_value()) {
+        result[1] = tensor_args.beta_grad.value();
     }
-    return std::move(result);
+    return result;
 }
 
 std::tuple<

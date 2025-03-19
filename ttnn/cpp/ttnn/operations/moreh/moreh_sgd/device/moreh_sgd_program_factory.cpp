@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "moreh_sgd_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -31,7 +31,7 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
 
     auto compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    auto shape = param_in.get_shape();
+    auto shape = param_in.get_logical_shape();
     auto H = shape[-2];
     auto W = shape[-1];
     auto num = param_in.volume() / H / W;
@@ -45,7 +45,7 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::tt_metal::Device* device = param_in.device();
+    tt::tt_metal::IDevice* device = param_in.device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t units_to_divide = num * Ht * Wt;
     uint32_t core_w = grid.x;
@@ -68,19 +68,17 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
         all_cores,
         data_format,
         {
-            {tt::CB::c_in0, 2},   // param_in
-            {tt::CB::c_in1, 2},   // grad
-            {tt::CB::c_in2, 2},   // momentum_in
-            {tt::CB::c_out0, 2},  // param_out
-            {tt::CB::c_out1, 2},  // momentum_out
+            {tt::CBIndex::c_0, 2},   // param_in
+            {tt::CBIndex::c_1, 2},   // grad
+            {tt::CBIndex::c_2, 2},   // momentum_in
+            {tt::CBIndex::c_16, 2},  // param_out
+            {tt::CBIndex::c_17, 2},  // momentum_out
 
-            {tt::CB::c_intermed0,
-             5,
-             intermed_cb_format},  // cb_scalar_args (lr, momentum, dampening, weight_decay, one)
-            {tt::CB::c_intermed1, 1, intermed_cb_format},  //
-            {tt::CB::c_intermed2, 1, intermed_cb_format},  //
-            {tt::CB::c_intermed3, 1, intermed_cb_format},  //
-            {tt::CB::c_intermed4, 1, intermed_cb_format},  //
+            {tt::CBIndex::c_24, 5, intermed_cb_format},  // cb_scalar_args (lr, momentum, dampening, weight_decay, one)
+            {tt::CBIndex::c_25, 1, intermed_cb_format},  //
+            {tt::CBIndex::c_26, 1, intermed_cb_format},  //
+            {tt::CBIndex::c_27, 1, intermed_cb_format},  //
+            {tt::CBIndex::c_28, 1, intermed_cb_format},  //
         });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -123,13 +121,12 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     const std::vector<uint32_t> reader_compile_time_args{
         static_cast<uint32_t>(is_dram(param_in)),
         static_cast<uint32_t>(is_dram(grad)),
-        static_cast<uint32_t>(
-            momentum_buffer_in.has_value() ? is_dram(momentum_buffer_in.value()) : 0)};
+        static_cast<uint32_t>(momentum_buffer_in.has_value() ? is_dram(momentum_buffer_in.value()) : 0)};
 
     std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(param_out))};
-    if (has_momentum_buffer_out)
-        writer_compile_time_args.push_back(
-            static_cast<uint32_t>(is_dram(momentum_buffer_out.value())));
+    if (has_momentum_buffer_out) {
+        writer_compile_time_args.push_back(static_cast<uint32_t>(is_dram(momentum_buffer_out.value())));
+    }
 
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sgd/device/kernels/"
@@ -138,10 +135,10 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
         "ttnn/cpp/ttnn/operations/moreh/moreh_sgd/device/kernels/"
         "writer_moreh_sgd.cpp";
 
-    const auto reader_kernel_id = CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    const auto writer_kernel_id = CreateWriteKernel(
-        program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
+    const auto reader_kernel_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    const auto writer_kernel_id =
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp

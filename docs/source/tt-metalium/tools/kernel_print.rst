@@ -21,15 +21,16 @@ Note that the core coordinates are logical coordinates, so worker cores and ethe
 
 .. code-block::
 
-    export TT_METAL_DPRINT_CORES=0,0           # required, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all OR worker OR dispatch
-    export TT_METAL_DPRINT_ETH_CORES=0,0       # optional, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all OR worker OR dispatch
-    export TT_METAL_DPRINT_CHIPS=0             # optional, comma separated list of chips
-    export TT_METAL_DPRINT_RISCVS=BR           # optional, default is all RISCs.  Use a subset of BR,NC,TR0,TR1,TR2
-    export TT_METAL_DPRINT_FILE=log.txt        # optional, default is to print to the screen
-    export TT_METAL_DPRINT_ONE_FILE_PER_RISC=1 # optional, splits DPRINT data on a per-RISC basis into files under $TT_METAL_HOME/generated/dprint/. Overrides TT_METAL_DPRINT_FILE.
+    export TT_METAL_DPRINT_CORES=0,0                    # required, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all OR worker OR dispatch
+    export TT_METAL_DPRINT_ETH_CORES=0,0                # optional, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all OR worker OR dispatch
+    export TT_METAL_DPRINT_CHIPS=0                      # optional, comma separated list of chips OR all. Default is all.
+    export TT_METAL_DPRINT_RISCVS=BR                    # optional, default is all RISCs. Use a subset of BR,NC,TR0,TR1,TR2
+    export TT_METAL_DPRINT_FILE=log.txt                 # optional, default is to print to the screen
+    export TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC=0   # optional, enabled by default. Prepends prints with <device id>:(<core x>, <core y>):<RISC>:.
+    export TT_METAL_DPRINT_ONE_FILE_PER_RISC=1          # optional, splits DPRINT data on a per-RISC basis into files under $TT_METAL_HOME/generated/dprint/. Overrides TT_METAL_DPRINT_FILE and disables TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC.
 
 To generate kernel debug prints on the device, include the ``debug/dprint.h`` header and use the APIs defined there.
-And example with the different features available is shown below:
+An example with the different features available is shown below:
 
 .. code-block:: c++
 
@@ -83,26 +84,27 @@ Data from Circular Buffers can be printed using the ``TileSlice`` object. It can
 | print_untilized | bool                | Whether to untilize the CB data while printing it (always done for block float formats), default ``true``.                                                   |
 +-----------------+---------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------+
 
-An example of how to print data from a CB (in this case, ``CB::c_intermed1``) is shown below.  Note that sampling happens relative
+An example of how to print data from a CB (in this case, ``CBIndex::c_25``) is shown below.  Note that sampling happens relative
 to the current CB read or write pointer. This means that for printing a tile read from the front of the CB, the
 ``DPRINT`` call has to occur between the ``cb_wait_front`` and ``cb_pop_front`` calls. For printing a tile from the
 back of the CB, the ``DPRINT`` call has to occur between the ``cb_reserve_back`` and ``cb_push_back`` calls. Currently supported data
-formats for printing from CBs are ``DataFormat::Float32``, ``DataFormat::Float16_b``, ``DataFormat::Bfp8_b``, and ``DataFormat::Bfp4_b``.
+formats for printing from CBs are ``DataFormat::Float32``, ``DataFormat::Float16_b``, ``DataFormat::Bfp8_b``, ``DataFormat::Bfp4_b``,
+``DataFormat::Int8``, ``DataFormat::UInt8``, ``DataFormat::UInt16``, ``DataFormat::Int32``, and ``DataFormat::UInt832``.
 
 .. code-block:: c++
 
     #include "debug/dprint.h"  // required in all kernels using DPRINT
 
     void kernel_main() {
-        // Assuming the tile we want to print from CB::c_intermed1 is from the front the CB, print must happen after
+        // Assuming the tile we want to print from CBIndex::c_25 is from the front the CB, print must happen after
         // this call. If the tile is from the back of the CB, then print must happen after cb_reserve_back().
-        cb_wait_front(CB::c_intermed1, 1);
+        cb_wait_front(CBIndex::c_25, 1);
         ...
 
-        // Extract a numpy slice `[0:32:16, 0:32:16]` from tile `0` from `CB::c_intermed1` and print it.
-        DPRINT << TSLICE(CB::c_intermed1, 0, SliceRange::hw0_32_16()) << ENDL();
+        // Extract a numpy slice `[0:32:16, 0:32:16]` from tile `0` from `CBIndex::c_25` and print it.
+        DPRINT << TSLICE(CBIndex::c_25, 0, SliceRange::hw0_32_16()) << ENDL();
         // Note that since the MATH core does not have access to CBs, so this is an invalid print:
-        DPRINT_MATH({ DPRINT  << TSLICE(CB::c_intermed1, 0, SliceRange::hw0_32_16()) << ENDL(); }); // Invalid
+        DPRINT_MATH({ DPRINT  << TSLICE(CBIndex::c_25, 0, SliceRange::hw0_32_16()) << ENDL(); }); // Invalid
 
         // Print a full tile
         for (int32_t r = 0; r < 32; ++r) {
@@ -118,5 +120,8 @@ formats for printing from CBs are ``DataFormat::Float32``, ``DataFormat::Float16
         }
 
         ...
-        cb_pop_front(CB::c_intermed1, 1);
+        cb_pop_front(CBIndex::c_25, 1);
     }
+
+.. note::
+    The DPRINT buffer for a RISC is only flushed when ``ENDL()`` is called, a ``\n`` character is read, or the device that the RISC belongs to is closed.

@@ -20,6 +20,7 @@
 #include "llk_math_eltwise_unary_sfpu_signbit.h"
 #include "llk_math_eltwise_unary_sfpu_floor.h"
 #include "llk_math_eltwise_unary_sfpu_ceil.h"
+#include "llk_math_eltwise_unary_sfpu_round.h"
 #include "llk_math_eltwise_unary_sfpu_silu.h"
 #include "llk_math_eltwise_unary_sfpu_square.h"
 #include "llk_math_eltwise_unary_sfpu_tanh.h"
@@ -36,3 +37,5 @@
 #include "llk_math_eltwise_unary_sfpu_right_shift.h"
 #include "llk_math_eltwise_unary_sfpu_left_shift.h"
 #include "llk_math_eltwise_unary_sfpu_fill.h"
+#include "llk_math_eltwise_unary_sfpu_prelu.h"
+#include "llk_math_eltwise_unary_sfpu_i1.h"

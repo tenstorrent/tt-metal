@@ -8,7 +8,6 @@
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tilize.h"
 
-
 namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t cache_cb = get_compile_time_arg_val(0);
@@ -22,18 +21,15 @@ void MAIN {
 
     pack_untilize_init<Wt>(in_cb, untilized_in_cb);
 
-
     cb_wait_front(in_cb, Wt);
     cb_reserve_back(untilized_in_cb, Wt);
     pack_untilize_block<Wt>(in_cb, 1, untilized_in_cb);
     cb_push_back(untilized_in_cb, Wt);
     cb_pop_front(in_cb, Wt);
 
+    reconfig_data_format_srca(in_cb, cache_cb);
+    pack_reconfig_data_format(untilized_in_cb, untilized_cache_cb);
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
-
-        reconfig_data_format_srca(in_cb, cache_cb);
-        pack_reconfig_data_format(out_cb, untilized_cache_cb);
-
         pack_untilize_init_short<Wt>(cache_cb, untilized_cache_cb);
 
         // Untilize a block from the cache
@@ -41,8 +37,6 @@ void MAIN {
         cb_reserve_back(untilized_cache_cb, Wt);
 
         pack_untilize_block<Wt>(cache_cb, 1, untilized_cache_cb);
-
-
 
         cb_push_back(untilized_cache_cb, Wt);
         cb_pop_front(cache_cb, Wt);
@@ -52,8 +46,7 @@ void MAIN {
         reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
         pack_reconfig_data_format(untilized_cache_cb, out_cb);
 
-        tilize_init_short(untilized_cache2_cb, Wt);
-
+        tilize_init_short(untilized_cache2_cb, Wt, out_cb);
 
         // Wait on writer to update block. Tilize.
         cb_wait_front(untilized_cache2_cb, Wt);
@@ -62,10 +55,10 @@ void MAIN {
 
         tilize_block(untilized_cache2_cb, Wt, out_cb);
 
-        tilize_uninit(untilized_cache2_cb);
         cb_push_back(out_cb, Wt);
         cb_pop_front(untilized_cache2_cb, Wt);
+        tilize_uninit_with_dt(untilized_cache2_cb, cache_cb, out_cb);
+        pack_reconfig_data_format(out_cb, untilized_cache_cb);
     }
-
 }
-} // NAMESPACE
+}  // namespace NAMESPACE

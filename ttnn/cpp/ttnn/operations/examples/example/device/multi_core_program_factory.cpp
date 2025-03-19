@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "example_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::examples {
 ExampleDeviceOperation::MultiCore::cached_program_t ExampleDeviceOperation::MultiCore::create(
@@ -28,7 +28,7 @@ ExampleDeviceOperation::MultiCore::cached_program_t ExampleDeviceOperation::Mult
 
     uint32_t num_tiles = input_tensor.volume() / tt::constants::TILE_HW;
 
-    tt::tt_metal::Device* device = input_tensor.device();
+    tt::tt_metal::IDevice* device = input_tensor.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -36,14 +36,14 @@ ExampleDeviceOperation::MultiCore::cached_program_t ExampleDeviceOperation::Mult
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
 
-    uint32_t src0_cb_index = 0;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = 2;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    uint32_t output_cb_index = 16;  // output_tensor operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_2;
     uint32_t num_output_tiles = 2;
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(
@@ -76,7 +76,7 @@ ExampleDeviceOperation::MultiCore::cached_program_t ExampleDeviceOperation::Mult
     bool math_approx_mode = false;
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
         core_group_1,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
@@ -91,7 +91,7 @@ ExampleDeviceOperation::MultiCore::cached_program_t ExampleDeviceOperation::Mult
 
         auto eltwise_unary_kernel_group_2_id = tt::tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
             core_group_2,
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,
@@ -158,4 +158,4 @@ void ExampleDeviceOperation::MultiCore::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::example
+}  // namespace ttnn::operations::examples

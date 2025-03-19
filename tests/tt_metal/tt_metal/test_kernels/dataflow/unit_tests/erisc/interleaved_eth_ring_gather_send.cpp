@@ -26,10 +26,8 @@ void kernel_main() {
     constexpr bool src_is_dram = get_compile_time_arg_val(4) == 1;
     constexpr bool dst_is_dram = get_compile_time_arg_val(5) == 1;
 
-    const InterleavedAddrGen<src_is_dram> s = {
-        .bank_base_address = src_addr, .page_size = page_size};
-    const InterleavedAddrGen<dst_is_dram> d = {
-        .bank_base_address = dst_addr, .page_size = page_size};
+    const InterleavedAddrGen<src_is_dram> s = {.bank_base_address = src_addr, .page_size = page_size};
+    const InterleavedAddrGen<dst_is_dram> d = {.bank_base_address = dst_addr, .page_size = page_size};
 
     volatile tt_l1_ptr uint32_t* sender_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
     uint64_t receiver_semaphore_noc_addr = get_noc_addr(receiver_noc_x, receiver_noc_y, sem_addr);
@@ -62,8 +60,6 @@ void kernel_main() {
             receiver_semaphore_noc_addr,
             receiver_data_noc_addr,
             local_eth_l1_src_addr,
-            num_bytes
-        );
-
+            num_bytes);
     }
 }

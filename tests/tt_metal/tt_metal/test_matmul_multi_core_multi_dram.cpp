@@ -6,12 +6,14 @@
 #include <functional>
 #include <random>
 
-#include "common/bfloat16.hpp"
-#include "test_tiles.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/tt_metal.hpp>
+
+#include "test_common.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -20,6 +22,7 @@ using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
+namespace test {
 // Given a tensor that is row-major datums, make it tilized
 // so that its row major within a tile, and each tile's data
 // is contiguous
@@ -46,8 +49,9 @@ std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
     }
     return result;
 }
+}  // namespace test
 
-void print_vec(std::vector<bfloat16> data, int rows, int cols, string name) {
+void print_vec(const std::vector<bfloat16>& data, int rows, int cols, string name) {
     std::cout << name << ": " << std::endl;
     int index = 0;
     for (int i = 0; i < rows; i++) {
@@ -88,7 +92,7 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
 }
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
-    tt_metal::Device *device,
+    tt_metal::IDevice* device,
     int num_cores_r,
     int num_cores_c,
     int M,
@@ -119,38 +123,41 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
 
     uint32_t src0_cb_index = 0;
     uint32_t cb0_tiles = in0_block_tiles * 2;  // double buffer
-    tt_metal::CircularBufferConfig cb_src0_config = tt_metal::CircularBufferConfig(cb0_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
-        .set_page_size(src0_cb_index, single_tile_size);
+    tt_metal::CircularBufferConfig cb_src0_config =
+        tt_metal::CircularBufferConfig(cb0_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(src0_cb_index, single_tile_size);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t src1_cb_index = 1;
-    uint32_t cb1_tiles = in1_block_tiles * 2; // double buffer
-    tt_metal::CircularBufferConfig cb_src1_config = tt_metal::CircularBufferConfig(cb1_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
-        .set_page_size(src1_cb_index, single_tile_size);
+    uint32_t cb1_tiles = in1_block_tiles * 2;  // double buffer
+    tt_metal::CircularBufferConfig cb_src1_config =
+        tt_metal::CircularBufferConfig(cb1_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(src1_cb_index, single_tile_size);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
-    uint32_t ouput_cb_index = 16; // output operands start at index 16
-    uint32_t interm0_cb_index = 24;
+    uint32_t ouput_cb_index = tt::CBIndex::c_16;
+    uint32_t interm0_cb_index = tt::CBIndex::c_24;
     std::map<uint8_t, tt::DataFormat> partials_and_out_data_format_spec = {
-        {ouput_cb_index, tt::DataFormat::Float16_b},
-        {interm0_cb_index, tt::DataFormat::Float16_b}
-    };
-    tt_metal::CircularBufferConfig cb_output_config = tt_metal::CircularBufferConfig(out_CB_size, partials_and_out_data_format_spec)
-        .set_page_size(ouput_cb_index, single_tile_size)
-        .set_page_size(interm0_cb_index, single_tile_size);
+        {ouput_cb_index, tt::DataFormat::Float16_b}, {interm0_cb_index, tt::DataFormat::Float16_b}};
+    tt_metal::CircularBufferConfig cb_output_config =
+        tt_metal::CircularBufferConfig(out_CB_size, partials_and_out_data_format_spec)
+            .set_page_size(ouput_cb_index, single_tile_size)
+            .set_page_size(interm0_cb_index, single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_output_config);
 
     auto mm_reader_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_tile_layout.cpp",
         all_cores,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto unary_writer_kernel = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_matmul_tile_layout.cpp",
         all_cores,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     int num_blocks = (K / in0_block_w);
 
@@ -190,8 +197,8 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
 }
 
 bool assign_runtime_args_to_program(
-    tt_metal::Device *device,
-    tt_metal::Program &program,
+    tt_metal::IDevice* device,
+    tt_metal::Program& program,
     int num_cores_r,
     int num_cores_c,
     tt_metal::KernelHandle mm_reader_kernel,
@@ -232,21 +239,21 @@ bool assign_runtime_args_to_program(
                 (std::uint32_t)K,                            // in0_tensor_stride_h
                 (std::uint32_t)in0_block_w,                  // in0_tensor_next_block_stride
 
-                (std::uint32_t)in0_block_w,                  // in0_block_w
-                (std::uint32_t)per_core_M,                   // in0_block_h
-                (std::uint32_t)in0_block_w * per_core_M,     // in0_block_num_tiles
+                (std::uint32_t)in0_block_w,               // in0_block_w
+                (std::uint32_t)per_core_M,                // in0_block_h
+                (std::uint32_t)in0_block_w * per_core_M,  // in0_block_num_tiles
 
-                (std::uint32_t)in1_dram_addr,                // in1_tensor_addr
-                (std::uint32_t)per_core_N * core_idx_x,      // in1_tensor_start_tile_id
-                (std::uint32_t)1,                            // in1_tensor_stride_w
-                (std::uint32_t)N,                            // in1_tensor_stride_h
-                (std::uint32_t)in0_block_w * N,              // in1_tensor_next_block_stride
+                (std::uint32_t)in1_dram_addr,            // in1_tensor_addr
+                (std::uint32_t)per_core_N * core_idx_x,  // in1_tensor_start_tile_id
+                (std::uint32_t)1,                        // in1_tensor_stride_w
+                (std::uint32_t)N,                        // in1_tensor_stride_h
+                (std::uint32_t)in0_block_w * N,          // in1_tensor_next_block_stride
 
-                (std::uint32_t)per_core_N,                   // in1_block_w
-                (std::uint32_t)in0_block_w,                  // in1_block_h
-                (std::uint32_t)per_core_N * in0_block_w,     // in1_block_num_tiles
+                (std::uint32_t)per_core_N,                // in1_block_w
+                (std::uint32_t)in0_block_w,               // in1_block_h
+                (std::uint32_t)per_core_N * in0_block_w,  // in1_block_num_tiles
 
-                (std::uint32_t)K / in0_block_w               // num_blocks
+                (std::uint32_t)K / in0_block_w  // num_blocks
             };
 
             std::vector<uint32_t> writer_args = {
@@ -254,8 +261,8 @@ bool assign_runtime_args_to_program(
                 (std::uint32_t)core_idx_x * per_core_N + core_idx_y * per_core_M * N,  // out_tensor_start_tile_id
                 (std::uint32_t)1,                                                      // out_tensor_stride_w
                 (std::uint32_t)N,                                                      // out_tensor_stride_h
-                (std::uint32_t)out_subblock_w,                     // out_tensor_next_subblock_stride_w
-                (std::uint32_t)out_subblock_h * N,                 // out_tensor_next_subblock_stride_h
+                (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
+                (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
 
                 (std::uint32_t)out_subblock_w,                     // out_subblock_w
                 (std::uint32_t)out_subblock_h,                     // out_subblock_h
@@ -294,12 +301,7 @@ std::vector<bfloat16> get_col_slice(
     return result;
 }
 
-bool move_tiles_to_dram(
-    CommandQueue &cq,
-    Buffer &buffer,
-    std::vector<uint32_t> tensor,
-    int tiles_r,
-    int tiles_c) {
+bool move_tiles_to_dram(CommandQueue& cq, Buffer& buffer, std::vector<uint32_t> tensor, int tiles_r, int tiles_c) {
     bool pass = true;
     int tile_size = 512;  // 32*32 packed into uint32_t
     int tile_size_bytes = 32 * 32 * 2;
@@ -321,7 +323,7 @@ bool move_tiles_to_dram(
     return pass;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     bool pass = true;
 
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
@@ -330,7 +332,7 @@ int main(int argc, char **argv) {
 
     try {
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         int num_cores_r = device->logical_grid_size().y - 1;
         int num_cores_c = device->logical_grid_size().x;
@@ -362,11 +364,7 @@ int main(int argc, char **argv) {
             per_core_N / out_subblock_w);
         SHAPE shape = {1, 1, M * 32, K * 32};
         tt::deprecated::Tensor<bfloat16> tensor = tt::deprecated::initialize_tensor<bfloat16>(
-            shape,
-            tt::deprecated::Initialize::RANDOM,
-            0,
-            100,
-            10 /* seed */);
+            shape, tt::deprecated::Initialize::RANDOM, 0, 100, 10 /* seed */);
         auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bflaot16 identity
         ////////////////////////////////////////////////////////////////////////////
         //                      Initial Runtime Args Parse
@@ -376,11 +374,10 @@ int main(int argc, char **argv) {
         try {
             std::tie(arch_name, input_args) =
                 test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");
-        } catch (const std::exception &e) {
+        } catch (const std::exception& e) {
             TT_THROW("Command line arguments found exception", e.what());
         }
         const tt::ARCH arch = tt::get_arch_from_string(arch_name);
-
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -398,22 +395,21 @@ int main(int argc, char **argv) {
             per_core_M,
             per_core_N);
 
-
         CommandQueue& cq = device->command_queue();
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
         log_info(LogTest, "Scattering inputs (activation & weights) to dram channels using tiled layout");
-        auto activations_tilized = tilize(tensor.get_values(), M * 32, K * 32);
-        auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
+        auto activations_tilized = test::tilize(tensor.get_values(), M * 32, K * 32);
+        auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
 
         Buffer activation_buffer(device, activations.size() * sizeof(uint32_t), 1024 * 2, BufferType::DRAM);
         pass &= move_tiles_to_dram(cq, activation_buffer, activations, M, K);
 
-        auto identity_tilized = tilize(identity, K * 32, N * 32);
-        auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
+        auto identity_tilized = test::tilize(identity, K * 32, N * 32);
+        auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
 
         Buffer weight_buffer(device, weights.size() * sizeof(uint32_t), 1024 * 2, BufferType::DRAM);
@@ -457,21 +453,19 @@ int main(int argc, char **argv) {
         // Keeping this old code because took me too long to decipher. Matmul
         // owner can refactor at a later time
         auto result_iter = result.begin();
-        for(int i = 0; i < M; i++) {
+        for (int i = 0; i < M; i++) {
             auto row = get_row_slice(golden, M, i, M * 32, N * 32);
-            for(int j = 0; j < N; j++) {
+            for (int j = 0; j < N; j++) {
                 auto golden_tile = get_col_slice(row, N, j, 32, N * 32);
                 std::vector<uint32_t> result_vec;
                 result_vec.insert(result_vec.end(), result_iter, result_iter + 512);
                 result_iter += 512;
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-                auto result_flat_layout = convert_to_flat_layout(result_bfp16);
+                auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
 
                 pass &= (golden_tile == result_flat_layout);
             }
         }
-
-
 
         log_info(LogTest, "Golden check complete");
 
@@ -480,7 +474,7 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         pass &= tt_metal::CloseDevice(device);
 
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());

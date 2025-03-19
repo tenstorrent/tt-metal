@@ -19,14 +19,12 @@ on:
         required: true
         type: choice
         options:
-          - grayskull
           - wormhole_b0
           - blackhole
       runner-label:
         required: true
         type: choice
         options:
-          - E150
           - N150
           - N300
           - BH
@@ -43,17 +41,16 @@ jobs:
       - cloud-virtual-machine
       - in-service
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ inputs.arch }}
       LOGURU_LEVEL: INFO
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build UMD device and tests
         run: |
-          cmake -B build -G Ninja -DTT_UMD_BUILD_TESTS=ON
+          cmake -B build -G Ninja -DTT_UMD_BUILD_TESTS=ON -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake
           cmake --build build --target umd_tests
       - name: Run UMD unit tests
         timeout-minutes: ${{ inputs.timeout }}

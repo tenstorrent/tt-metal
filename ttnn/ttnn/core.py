@@ -42,6 +42,11 @@ def is_sharded(tensor) -> bool:
 
 
 get_memory_config = ttnn._ttnn.core.get_memory_config
+light_metal_begin_capture = ttnn._ttnn.core.light_metal_begin_capture
+light_metal_end_capture = ttnn._ttnn.core.light_metal_end_capture
+
+# Add LightMetalReplay binding
+LightMetalReplay = ttnn._ttnn.core.LightMetalReplay
 
 
 def num_cores_to_corerangeset(
@@ -59,15 +64,32 @@ def num_cores_to_corerangeset(
     )
 
 
+def num_cores_to_corerangeset_in_subcoregrids(
+    start_core: ttnn.CoreCoord,
+    target_num_cores: int,
+    sub_core_grids: ttnn.CoreRangeSet,
+    row_wise: bool = False,
+):
+    """
+    Create a CoreRangeSet containing the specified number of cores starting from start_core in given subcoregrids
+    """
+    return ttnn._ttnn.operations.core.num_cores_to_corerangeset_in_subcoregrids(
+        start_core,
+        target_num_cores,
+        sub_core_grids,
+        row_wise,
+    )
+
+
 def has_tile_padding(tensor, *, dim=None):
     if dim is not None:
         rank = tensor.shape.rank
         dim = dim if dim >= 0 else rank + dim
-        return tensor.shape[dim] != tensor.shape.with_tile_padding()[dim]
+        return tensor.shape[dim] != tensor.padded_shape[dim]
 
     if len(tensor.shape) > 1:
         *_, h, w = tensor.shape
-        *_, h_padded, w_padded = tensor.shape.with_tile_padding()
+        *_, h_padded, w_padded = tensor.padded_shape
         return h != h_padded or w != w_padded
     return False
 
@@ -84,7 +106,6 @@ def create_sharded_memory_config(
     core_grid: Union[ttnn.CoreGrid, ttnn.CoreRange],
     strategy: ShardStrategy,
     orientation: Optional[ShardOrientation] = None,
-    halo: bool = False,
     use_height_and_width_as_shard_shape: bool = False,
 ) -> MemoryConfig:
     """
@@ -95,7 +116,6 @@ def create_sharded_memory_config(
         core_grid (ttnn.CoreGrid | ttnn.CoreRange): the core_grid on which to distribute the sharded tensor on (writes to the cores L1s).
         strategy (ttnn.ShardStrategy): the sharding strategy of either height, width or block.
         orientation (ttnn.ShardOrientation, optional): the order in which to traverse the cores when reading/writing shards. Defaults to `None`.
-        halo (bool, optional): if the shards have overlapping values. Defaults to `False`.
         use_height_and_width_as_shard_shape (bool, optional): if True, the height and width of the tensor will be used as the shard shape. Defaults to `False`. If is False, the shard shape will be calculated based on the core_grid and the tensor shape where tensor shape is seen as [math.prod(dims), width]
 
     Returns:
@@ -105,7 +125,7 @@ def create_sharded_memory_config(
         Currently sharding only supports L1 tensors.
 
     Example:
-        >>> tensor = ttnn.create_sharded_memory_config((5, 8), (320,64), ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR, False)
+        >>> tensor = ttnn.create_sharded_memory_config((5, 8), (320,64), ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR)
 
     """
 
@@ -202,7 +222,7 @@ def create_sharded_memory_config(
         else:
             raise RuntimeError("Invalid sharding scheme")
 
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation, halo)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
     memory_config = MemoryConfig(tensor_memory_layout, BufferType.L1, shard_spec)
     return memory_config
 
@@ -214,12 +234,11 @@ def create_sharded_memory_config_(
     core_grid: Union[ttnn.CoreGrid, ttnn.CoreRange],
     strategy: Union[ShardStrategy, TensorMemoryLayout],
     orientation,
-    halo: bool = False,
     use_height_and_width_as_shard_shape: bool = False,
     tile_layout: bool = False,
 ) -> MemoryConfig:
     """
-    create_sharded_memory_config(shape: Union[ttnn.Shape, Tuple[int, ...], List[int]], core_grid: Union[ttnn.CoreGrid, ttnn.CoreRange], strategy: ShardStrategy, orientation: Optional[ShardOrientation] = None, halo: bool = False, use_height_and_width_as_shard_shape: bool = False) -> MemoryConfig
+    create_sharded_memory_config(shape: Union[ttnn.Shape, Tuple[int, ...], List[int]], core_grid: Union[ttnn.CoreGrid, ttnn.CoreRange], strategy: ShardStrategy, orientation: Optional[ShardOrientation] = None, use_height_and_width_as_shard_shape: bool = False) -> MemoryConfig
 
     Creates a MemoryConfig object with a sharding spec, required for sharded ops.
     Currently sharding only supports L1 tensors.
@@ -229,13 +248,12 @@ def create_sharded_memory_config_(
         * :attr:`core_grid`: the core_grid on which to distribute the sharded tensor on (writes to the cores L1s)
         * :attr:`strategy`: the sharding strategy of either height, width or block
         * :attr:`orientation`: the order in which to traverse the cores when reading/writing shards. Defaults to ttnn.ShardOrientation.ROW_MAJOR
-        * :attr:`halo`: if the shards have overlapping values. Defaults to False
         * :attr:`use_height_and_width_as_shard_shape`: if True, the height and width of the tensor will be used as the shard shape. Defaults to False. If is False, the shard shape will be calculated based on the core_grid and the tensor shape where tensor shape is seen as [math.prod(dims), width]
         * :attr:`tile_layout`: if set to True, shard height will be set to multiple of 32. Last shard may be height padded.
 
 
     Example::
-        >>> tensor = ttnn.create_sharded_memory_config((5, 8), (320,64), ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR, False)
+        >>> tensor = ttnn.create_sharded_memory_config((5, 8), (320,64), ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR)
     """
 
     if not isinstance(shape, (list, tuple, ttnn.Shape)):
@@ -334,7 +352,7 @@ def create_sharded_memory_config_(
 
     if tile_layout and shard_shape[0] % 32 != 0 and shard_shape[1] % 32 != 0:
         raise RuntimeError("Incorrent tensor shape")
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation, halo)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
     memory_config = MemoryConfig(tensor_memory_layout, BufferType.L1, shard_spec)
     return memory_config
 

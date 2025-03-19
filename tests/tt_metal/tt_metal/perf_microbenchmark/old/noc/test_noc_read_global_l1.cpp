@@ -8,13 +8,14 @@
 #include <random>
 #include <thread>
 
-#include "common/bfloat16.hpp"
-#include "test_tiles.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/debug/dprint_server.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "test_common.hpp"
+#include <tt-metalium/host_api.hpp>
+#include "dprint_server.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include <tt-metalium/device.hpp>
 
 using namespace tt;
 using std::chrono::duration_cast;
@@ -22,7 +23,7 @@ using std::chrono::microseconds;
 using std::chrono::steady_clock;
 
 template <typename T>
-std::vector<T> slice_vec(std::vector<T> const &v, int m, int n) {
+std::vector<T> slice_vec(std::vector<T> const& v, int m, int n) {
     auto first = v.cbegin() + m;
     auto last = v.cbegin() + n + 1;
 
@@ -30,7 +31,7 @@ std::vector<T> slice_vec(std::vector<T> const &v, int m, int n) {
     return vec;
 }
 
-void print_vec(std::vector<bfloat16> data, int rows, int cols, string name) {
+void print_vec(const std::vector<bfloat16>& data, int rows, int cols, const string& name) {
     std::cout << name << ": " << std::endl;
     int index = 0;
     for (int i = 0; i < rows; i++) {
@@ -43,7 +44,7 @@ void print_vec(std::vector<bfloat16> data, int rows, int cols, string name) {
     std::cout << std::endl;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         TT_THROW("Test not supported w/ slow dispatch, exiting");
     }
@@ -83,7 +84,7 @@ int main(int argc, char **argv) {
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--one_buffer_share", 0);
             std::tie(validation, input_args) =
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--validation", 1);
-        } catch (const std::exception &e) {
+        } catch (const std::exception& e) {
             TT_THROW("Command line arguments found exception", e.what());
         }
 
@@ -93,7 +94,7 @@ int main(int argc, char **argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -108,8 +109,9 @@ int main(int argc, char **argv) {
         uint32_t single_tile_size = 2 * 1024;
 
         uint32_t shape_Nt = Nt;
-        if (one_buffer_share)
+        if (one_buffer_share) {
             shape_Nt = (num_cores_r * num_cores_c) * Nt;
+        }
         log_info(LogTest, "Activations = {}x{}", shape_Nt * 32, 32);
 
         SHAPE shape = {1, 1, shape_Nt * 32, 32};
@@ -124,11 +126,13 @@ int main(int argc, char **argv) {
                     std::chrono::system_clock::now().time_since_epoch().count());
 
                 tensors.push_back(tensor);
-                if (single_read || one_buffer_share)
+                if (single_read || one_buffer_share) {
                     break;
+                }
             }
-            if (single_read || one_buffer_share)
+            if (single_read || one_buffer_share) {
                 break;
+            }
         }
 
         if (print_tensor) {
@@ -139,11 +143,13 @@ int main(int argc, char **argv) {
                         1,
                         32,
                         std::string("input tensor " + std::to_string(r) + " " + std::to_string(c)));
-                    if (single_read || one_buffer_share)
+                    if (single_read || one_buffer_share) {
                         break;
+                    }
                 }
-                if (single_read || one_buffer_share)
+                if (single_read || one_buffer_share) {
                     break;
+                }
             }
         }
 
@@ -152,11 +158,13 @@ int main(int argc, char **argv) {
             for (int c = 0; c < num_cores_c; ++c) {
                 auto activations = pack_bfloat16_vec_into_uint32_vec(tensors[r * num_cores_c + c].get_values());
                 packed_tensors.push_back(activations);
-                if (single_read || one_buffer_share)
+                if (single_read || one_buffer_share) {
                     break;
+                }
             }
-            if (single_read || one_buffer_share)
+            if (single_read || one_buffer_share) {
                 break;
+            }
         }
 
         tt_metal::Program program = tt_metal::CreateProgram();
@@ -200,14 +208,17 @@ int main(int argc, char **argv) {
         l1_buffers.reserve(l1_buffers_size);
         for (int r = 0; r < num_cores_r; ++r) {
             for (int c = 0; c < num_cores_c; ++c) {
-                l1_buffers.push_back(tt_metal::Buffer::create(device, total_tiles_size_bytes, single_tile_size, tt_metal::BufferType::L1));
+                l1_buffers.push_back(tt_metal::Buffer::create(
+                    device, total_tiles_size_bytes, single_tile_size, tt_metal::BufferType::L1));
                 tt_metal::detail::WriteToBuffer(*l1_buffers[r * num_cores_c + c], packed_tensors[r * num_cores_c + c]);
 
-                if (single_read || one_buffer_share)
+                if (single_read || one_buffer_share) {
                     break;
+                }
             }
-            if (single_read || one_buffer_share)
+            if (single_read || one_buffer_share) {
                 break;
+            }
         }
 
         // validation
@@ -239,11 +250,13 @@ int main(int argc, char **argv) {
                         result_bfp16.size());
                 }
 
-                if (single_read || one_buffer_share)
+                if (single_read || one_buffer_share) {
                     break;
+                }
             }
-            if (single_read || one_buffer_share)
+            if (single_read || one_buffer_share) {
                 break;
+            }
         }
 
         // kernel setup
@@ -336,7 +349,7 @@ int main(int argc, char **argv) {
 
         pass &= tt_metal::CloseDevice(device);
 
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());

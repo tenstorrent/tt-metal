@@ -14,8 +14,8 @@ void kernel_main() {
     uint32_t inner_size = get_arg_val<uint32_t>(5);
     uint32_t dim_size = get_arg_val<uint32_t>(6);
 
-    constexpr auto cb_y = tt::CB::c_in0;
-    constexpr auto cb_dy = tt::CB::c_in1;
+    constexpr auto cb_y = tt::CBIndex::c_0;
+    constexpr auto cb_dy = tt::CBIndex::c_1;
 
     uint32_t l1_write_addr_in;
 

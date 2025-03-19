@@ -7,11 +7,10 @@ on:
         required: true
         type: choice
         options:
-          - grayskull
           - wormhole_b0
           - blackhole
       runner-label:
-        description: 'Optional: N150, N300, E150, BH, config-t3000, config-tg, config-tgg'
+        description: 'Optional: N150, N300, BH, config-t3000, config-tg'
         required: true
         type: string
         default: '["in-service"]'
@@ -22,7 +21,8 @@ on:
           - Release
           - Debug
           - RelWithDebInfo
-          - CI
+          - ASan
+          - TSan
       tracy:
         required: false
         type: boolean
@@ -52,7 +52,6 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     with:
-      arch: '[ "${{ inputs.arch }}" ]'
       build-type: ${{ inputs.build-type }}
       tracy: ${{ inputs.tracy }}
     secrets: inherit
@@ -61,27 +60,23 @@ jobs:
     needs: build-artifact
     timeout-minutes: 1440
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ inputs.arch }}
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: ${{ fromJSON(inputs.runner-label) }}
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Ensure weka mount is active
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - uses: ./.github/actions/ensure-active-weka-mount
         timeout-minutes: 3
         if: ${{ inputs.arch != 'blackhole' }}
-        run: |
-          sudo systemctl restart mnt-MLPerf.mount
-          sudo /etc/rc.local
-          ls -al /mnt/MLPerf/bit_error_tests
       - name: Set up dyanmic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
-          name:  TTMetal_build_${{ inputs.arch }}${{ (inputs.tracy && '_profiler') || '' }}
+          name:  TTMetal_build_any${{ (inputs.tracy && '_profiler') || '' }}
       - name: Extract files
-        run: tar -xvf ttm_${{ inputs.arch }}.tar
+        run: tar -xvf ttm_any.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run pre/post regression tests in a loop
         run: |

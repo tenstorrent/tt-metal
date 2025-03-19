@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include "where.hpp"
 
 #include <functional>
+#include <utility>
 #include <variant>
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -26,13 +26,12 @@ namespace ternary_utils {
 using FloatOrTensor = std::variant<Tensor, float>;
 
 Tensor where_impl(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& predicate,
     const FloatOrTensor& value_true,
     const FloatOrTensor& value_false,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> output_tensor) {
-
     auto get_multiplied = [&](const Tensor& condition, const FloatOrTensor& value) -> Tensor {
         if (std::holds_alternative<Tensor>(value)) {
             return ttnn::multiply(queue_id, condition, std::get<Tensor>(value), std::nullopt, output_mem_config);
@@ -53,47 +52,69 @@ Tensor where_impl(
     return output_tensor.value();
 }
 
-}
+}  // namespace ternary_utils
 Tensor WhereOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& predicate,
     const Tensor& value_true,
     const Tensor& value_false,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> output_tensor) {
-
-    return ternary_utils::where_impl(queue_id, predicate, value_true, value_false, output_mem_config.value_or(predicate.memory_config()), output_tensor);
+    return ternary_utils::where_impl(
+        queue_id,
+        predicate,
+        value_true,
+        value_false,
+        output_mem_config.value_or(predicate.memory_config()),
+        std::move(output_tensor));
 }
 
 Tensor WhereOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& predicate,
     const float value_true,
     const Tensor& value_false,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> output_tensor) {
-
-    return ternary_utils::where_impl(queue_id, predicate, value_true, value_false, output_mem_config.value_or(predicate.memory_config()), output_tensor);
+    return ternary_utils::where_impl(
+        queue_id,
+        predicate,
+        value_true,
+        value_false,
+        output_mem_config.value_or(predicate.memory_config()),
+        std::move(output_tensor));
 }
 
 Tensor WhereOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& predicate,
     const Tensor& value_true,
     const float value_false,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> output_tensor) {
-
-    return ternary_utils::where_impl(queue_id, predicate, value_true, value_false, output_mem_config.value_or(predicate.memory_config()), output_tensor);
+    return ternary_utils::where_impl(
+        queue_id,
+        predicate,
+        value_true,
+        value_false,
+        output_mem_config.value_or(predicate.memory_config()),
+        std::move(output_tensor));
 }
 
 Tensor WhereOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& predicate,
     const float value_true,
-    const float value_false, const std::optional<MemoryConfig>& output_mem_config, std::optional<Tensor> output_tensor) {
-
-    return ternary_utils::where_impl(queue_id, predicate, value_true, value_false, output_mem_config.value_or(predicate.memory_config()), output_tensor);
+    const float value_false,
+    const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> output_tensor) {
+    return ternary_utils::where_impl(
+        queue_id,
+        predicate,
+        value_true,
+        value_false,
+        output_mem_config.value_or(predicate.memory_config()),
+        std::move(output_tensor));
 }
 
 }  // namespace ternary

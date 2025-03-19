@@ -20,10 +20,13 @@ namespace {
 
 using namespace ttnn::graph;
 
-long long extract_peak_DRAM_memory_usage(const nlohmann::json& trace) {
-    long long total_buffer = 0;
-    long long peak_memory_usage = 0;
+using DeviceMemoryMap = std::unordered_map<std::string, long long>;
+
+DeviceMemoryMap extract_peak_DRAM_memory_usage(const nlohmann::json& trace) {
     std::vector<std::string> current_op;
+
+    DeviceMemoryMap current_buffer;
+    DeviceMemoryMap peak_buffer;
 
     for (size_t i = 0; i < trace.size(); ++i) {
         const auto& v = trace[i];
@@ -33,7 +36,8 @@ long long extract_peak_DRAM_memory_usage(const nlohmann::json& trace) {
                 while (++i < trace.size()) {
                     const auto& inner_v = trace[i];
                     if (inner_v[kNodeType] == "buffer" && inner_v[kParams][kType] == "DRAM") {
-                        total_buffer += std::stoll(inner_v[kParams][kSize].get<std::string>());
+                        auto device_id = inner_v[kParams][kDeviceId].get<std::string>();
+                        current_buffer[device_id] += std::stoll(inner_v[kParams][kSize].get<std::string>());
                     } else if (inner_v[kNodeType] == kNodeTensor) {
                         continue;
                     } else {
@@ -44,21 +48,25 @@ long long extract_peak_DRAM_memory_usage(const nlohmann::json& trace) {
             }
             current_op.push_back(v[kParams][kName]);
         } else if (v[kNodeType] == kNodeBufferAllocate && v[kParams][kType] == "DRAM") {
-            total_buffer += stoll(v[kParams][kSize].get<std::string>());
+            auto device_id = v[kParams][kDeviceId].get<std::string>();
+            current_buffer[device_id] += stoll(v[kParams][kSize].get<std::string>());
         } else if (v[kNodeType] == kNodeBufferDeallocate) {
             auto connection = v[kConnections][0].get<int>();
             auto buffer = trace[connection];
             if (buffer[kParams][kType] == "DRAM") {
-                total_buffer -= stoll(buffer[kParams][kSize].get<std::string>());
+                auto device_id = v[kParams][kDeviceId].get<std::string>();
+                current_buffer[device_id] -= stoll(buffer[kParams][kSize].get<std::string>());
             }
         } else if (v[kNodeType] == kNodeFunctionEnd) {
             current_op.pop_back();
         }
 
-        peak_memory_usage = std::max(peak_memory_usage, total_buffer);
+        for (auto& [device_id, total_buffer] : current_buffer) {
+            peak_buffer[device_id] = std::max(peak_buffer[device_id], total_buffer);
+        }
     }
 
-    return peak_memory_usage;
+    return peak_buffer;
 }
 
 }  // namespace
@@ -75,7 +83,7 @@ int main() {
         ttml::core::zeros(ttml::core::create_shape({batch_size, 1, 1, num_targets}), device));
 
     auto model_params = ttml::modules::MultiLayerPerceptronParameters{
-        .m_input_features = num_features, .m_hidden_features = {128}, .m_output_features = num_targets};
+        .input_features = num_features, .hidden_features = {128}, .output_features = num_targets};
     auto model = ttml::modules::MultiLayerPerceptron(model_params);
 
     auto mode = tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH;
@@ -107,10 +115,17 @@ int main() {
     backward_trace_file << pretty_backward_trace;
     backward_trace_file.close();
 
+    auto print_dram_memory_usage = [](const std::string& prefix, const DeviceMemoryMap& memory_usage) {
+        fmt::println("{}", prefix);
+        for (const auto& [device_id, memory] : memory_usage) {
+            fmt::println("    Device id: {} Memory usage: {}", device_id, memory / 1024.0 / 1024.0);
+        }
+    };
+
     fmt::print("Forward peak L1 memory usage (in MB): {}\n", forward_peak_l1_memory_usage / 1024.0 / 1024.0);
-    fmt::print("Forward peak DRAM memory usage (in MB): {}\n", forward_peak_DRAM_memory_usage / 1024.0 / 1024.0);
+    print_dram_memory_usage("Forward peak DRAM memory usage (in MB): ", forward_peak_DRAM_memory_usage);
     fmt::print("Backward peak L1 memory usage (in MB): {}\n", backward_peak_l1_memory_usage / 1024.0 / 1024.0);
-    fmt::print("Backward peak DRAM memory usage (in MB): {}\n", backward_peak_DRAM_memory_usage / 1024.0 / 1024.0);
+    print_dram_memory_usage("Backward peak DRAM memory usage (in MB): ", backward_peak_DRAM_memory_usage);
     fmt::print("Forward trace saved to: {}/forward_trace.json\n", path);
     fmt::print("Backward trace saved to: {}/backward_trace.json\n", path);
     fmt::print("Capture complete\n");

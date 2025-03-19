@@ -6,22 +6,20 @@
 #include <array>
 #include "dataflow_api.h"
 
-
 void kernel_main() {
     // WRITER RUNTIME ARGS
-    uint32_t in0_tensor_addr                   = get_arg_val<uint32_t>(0);
-    uint32_t num_blocks                        = get_arg_val<uint32_t>(1);
-    uint32_t in0_h_dim                         = get_arg_val<uint32_t>(2);
-    uint32_t in0_tensor_tile_id                = get_arg_val<uint32_t>(3);
+    uint32_t in0_tensor_addr = get_arg_val<uint32_t>(0);
+    uint32_t num_blocks = get_arg_val<uint32_t>(1);
+    uint32_t in0_h_dim = get_arg_val<uint32_t>(2);
+    uint32_t in0_tensor_tile_id = get_arg_val<uint32_t>(3);
 
     // COMPILE TIME ARGS
     // interleaved accessor args
-    constexpr uint32_t in0_is_dram             = get_compile_time_arg_val(0);
-    constexpr uint32_t in0_h_tiles             = get_compile_time_arg_val(1);
-    constexpr uint32_t in0_w_tiles             = get_compile_time_arg_val(2);
-    constexpr uint32_t in0_c                   = get_compile_time_arg_val(3);
-    constexpr uint32_t in0_HtWt                = get_compile_time_arg_val(4);
-
+    constexpr uint32_t in0_is_dram = get_compile_time_arg_val(0);
+    constexpr uint32_t in0_h_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t in0_w_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t in0_c = get_compile_time_arg_val(3);
+    constexpr uint32_t in0_HtWt = get_compile_time_arg_val(4);
 
     constexpr uint32_t cb_id_in0 = 0;
     const uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
@@ -29,12 +27,9 @@ void kernel_main() {
 
     constexpr bool in0_is_dram_bool = in0_is_dram == 1;
     const InterleavedAddrGenFast<in0_is_dram_bool> s0 = {
-        .bank_base_address = in0_tensor_addr,
-        .page_size = single_tile_size_bytes,
-        .data_format = data_format
-    };
+        .bank_base_address = in0_tensor_addr, .page_size = single_tile_size_bytes, .data_format = data_format};
 
-    constexpr uint32_t block_size = 1; // micro-block size for read/write; nothing to do with num_blocks
+    constexpr uint32_t block_size = 1;  // micro-block size for read/write; nothing to do with num_blocks
     uint32_t l1_write_addr;
     uint32_t in0_tensor_current_tile_id;
     uint32_t in0_tensor_current_tile_id_along_c;
@@ -67,5 +62,4 @@ void kernel_main() {
             in0_h_dim = 0;
         }
     }
-
 }

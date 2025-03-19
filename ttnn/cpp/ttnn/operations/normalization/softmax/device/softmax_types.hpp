@@ -4,12 +4,11 @@
 
 #pragma once
 
-#include "common/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::operations::normalization {
 
-struct SoftmaxDefaultProgramConfig{
-};
+struct SoftmaxDefaultProgramConfig {};
 struct SoftmaxShardedMultiCoreProgramConfig {
     CoreCoord compute_with_storage_grid_size;
     std::size_t subblock_w;
@@ -17,9 +16,6 @@ struct SoftmaxShardedMultiCoreProgramConfig {
     std::size_t block_w;
 };
 
-using SoftmaxProgramConfig = std::variant<
-    SoftmaxDefaultProgramConfig,
-    SoftmaxShardedMultiCoreProgramConfig
->;
+using SoftmaxProgramConfig = std::variant<SoftmaxDefaultProgramConfig, SoftmaxShardedMultiCoreProgramConfig>;
 
 }  // namespace ttnn::operations::normalization

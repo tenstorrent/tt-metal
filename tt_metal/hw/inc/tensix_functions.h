@@ -261,7 +261,7 @@ inline void execute_kernel_loop(uint kernel_count, uint loop_count, vptr_pc_buf 
 inline void execute_kernel_sync(vptr_pc_buf pc_buf, vptr_mailbox mailbox) {
 #ifndef MODELT
     volatile uint foo = 0xdeadbeef;
-    volatile uint *fooptr = &foo;
+    volatile uint* fooptr = &foo;
     clobber_all_memory();
 
     /*
@@ -285,27 +285,27 @@ inline void execute_kernel_sync(vptr_pc_buf pc_buf, vptr_mailbox mailbox) {
 #endif
 
 #else
-    modelt_accessor_mailbox &mbox = reinterpret_cast<modelt_accessor_mailbox &>(mailbox.acc);
+    modelt_accessor_mailbox& mbox = reinterpret_cast<modelt_accessor_mailbox&>(mailbox.acc);
     mbox.sync_kernels();
 #endif
 }
 
 inline void unhalt_tensix() {
     clobber_all_memory();
-    volatile uint *pc_buf = reinterpret_cast<volatile uint *>(PC_BUF_BASE);
+    volatile uint* pc_buf = reinterpret_cast<volatile uint*>(PC_BUF_BASE);
     pc_buf[0] = TENSIX_UNHALT_VAL;
 }
 
 inline void memory_write(uint addr, uint value) {
 #ifndef MODELT
-    volatile uint *buf = reinterpret_cast<volatile uint *>(addr);
+    volatile uint* buf = reinterpret_cast<volatile uint*>(addr);
     buf[0] = value;
 #endif
 }
 
 inline uint memory_read(uint addr) {
 #ifndef MODELT
-    volatile uint *buf = reinterpret_cast<volatile uint *>(addr);
+    volatile uint* buf = reinterpret_cast<volatile uint*>(addr);
     return buf[0];
 #else
     // FWASSERT("memory_read in modelt not supported yet", 0);
@@ -461,8 +461,9 @@ inline void thcon_write_16b_reg(
 
     setdma_payload = val;
     instrn_arg = 0x0 | addr | (setdma_payload << 8);
-    if (set_signals_mode)
+    if (set_signals_mode) {
         instrn_arg |= (1 << 7);
+    }
     execute_instruction(instrn_buffer, INSTRN_SET_DMA_REG(instrn_arg));
 }
 
@@ -478,13 +479,13 @@ inline void thcon_sigwrite_16b_reg(vptr_uint instrn_buffer, uint addr /* 16b qua
 ///////
 // Address is in 32b quants
 inline void thcon_write_32b_reg(uint addr /*32b quants*/, uint val) {
-    volatile uint *regfile = reinterpret_cast<uint *>(REGFILE_BASE);
+    volatile uint* regfile = reinterpret_cast<uint*>(REGFILE_BASE);
     regfile[addr] = val;
 }
 
 ///////
 // Address is in 16B quants
-inline void thcon_write_16B_reg(uint addr, const uint *val) {
+inline void thcon_write_16B_reg(uint addr, const uint* val) {
     uint addr_bot;
     addr_bot = addr << 2;
     int i;
@@ -599,7 +600,7 @@ inline void thcon_write_descriptor_to_l1(
     uint w_dim,
     uint digest_type,
     uint digest_size) {
-    volatile uint *ptr = reinterpret_cast<volatile uint *>(addr);
+    volatile uint* ptr = reinterpret_cast<volatile uint*>(addr);
 
     tile_descriptor_u td =
         thcon_build_descriptor(tile_id, tile_type, x_dim, y_dim, z_dim, w_dim, digest_type, digest_size);
@@ -687,7 +688,7 @@ inline uint breakpoint_status() {
 }
 
 inline uint breakpoint_data() {
-    volatile uint *ptr = reinterpret_cast<volatile uint *>(RISCV_DEBUG_REG_BREAKPOINT_DATA);
+    volatile uint* ptr = reinterpret_cast<volatile uint*>(RISCV_DEBUG_REG_BREAKPOINT_DATA);
     *ptr = 0;  // Ensure ordering with any previous control writes
     return *ptr;
 }
@@ -710,7 +711,7 @@ inline void dbg_dump_array_disable() {
 inline void dbg_dump_array_rd_cmd(uint thread, uint array_id, uint addr) {
     memory_write(RISCV_DEBUG_REG_DBG_ARRAY_RD_CMD, DBG_RD_CMD_PAYLOAD(thread, array_id, addr));
     volatile uint dummy_wait;
-    volatile uint *dummy_wait_ptr = &dummy_wait;
+    volatile uint* dummy_wait_ptr = &dummy_wait;
     *dummy_wait_ptr = memory_read(RISCV_DEBUG_REG_DBG_ARRAY_RD_CMD);
 }
 
@@ -721,8 +722,9 @@ inline void dbg_dump_array_to_l1(uint thread, uint addr) {
 inline void dbg_instrn_buf_wait_for_ready() {
     while (1) {
         volatile uint status = memory_read(RISCV_DEBUG_REG_INSTRN_BUF_STATUS);
-        if (status == 0x77)
+        if (status == 0x77) {
             break;
+        }
     }
 }
 
@@ -745,5 +747,5 @@ inline void dbg_instrn_buf_clear_override_en() {
     memory_write(RISCV_DEBUG_REG_INSTRN_BUF_CTRL0, 0x0);
 }
 
-extern "C" void wzerorange(uint32_t *start, uint32_t *end);
-inline void wzeromem(uint32_t start, uint32_t len) { wzerorange((uint32_t *)start, (uint32_t *)(start + len)); }
+extern "C" void wzerorange(uint32_t* start, uint32_t* end);
+inline void wzeromem(uint32_t start, uint32_t len) { wzerorange((uint32_t*)start, (uint32_t*)(start + len)); }

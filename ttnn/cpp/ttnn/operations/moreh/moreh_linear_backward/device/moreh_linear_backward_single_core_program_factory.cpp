@@ -6,7 +6,7 @@
 
 #include "moreh_linear_backward_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/util.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::moreh::moreh_linear_backward {
@@ -21,8 +21,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
 
     auto& output_grad = tensor_args.output_grad;
 
-    const auto& bias_grad_shape = bias_grad.get_legacy_shape().without_padding();
-    const auto& output_grad_shape_wo_padding = output_grad.get_legacy_shape().without_padding();
+    const auto& output_grad_shape_wo_padding = output_grad.get_logical_shape();
 
     auto bias_grad_memory_config = operation_attributes.bias_grad_memory_config;
     auto compute_kernel_config = operation_attributes.compute_kernel_config;
@@ -34,7 +33,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     const uint32_t mask_w =
         do_mask_w ? output_grad_shape_wo_padding[-1] % constants::TILE_WIDTH : constants::TILE_WIDTH;
 
-    const auto& output_grad_shape = output_grad.get_legacy_shape();
+    const auto& output_grad_shape = output_grad.get_padded_shape();
     uint32_t batch_num = output_grad.volume() / output_grad_shape[-2] / output_grad_shape[-1];
     uint32_t Ht = output_grad_shape[-2] / constants::TILE_HEIGHT;
     uint32_t Wt = output_grad_shape[-1] / constants::TILE_WIDTH;
@@ -55,7 +54,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     CoreCoord core = {0, 0};
     const uint32_t core_num = 1;
 
-    Device* device = output_grad.device();
+    IDevice* device = output_grad.device();
     auto arch = device->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
@@ -69,21 +68,19 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
         program,
         std::set<CoreRange>{CoreRange(core, core)},
         cb_data_format,
-        {{CB::c_in0, in0_t},    // output_grad
-         {CB::c_in1, in1_t},    // scaler
-         {CB::c_in2, in2_t},    // mask_h_w
-         {CB::c_out0, out0_t},  // bias_grad
-         {CB::c_intermed0, im0_t},
-         {CB::c_intermed1, im1_t, (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format}});
+        {{CBIndex::c_0, in0_t},    // output_grad
+         {CBIndex::c_1, in1_t},    // scaler
+         {CBIndex::c_2, in2_t},    // mask_h_w
+         {CBIndex::c_16, out0_t},  // bias_grad
+         {CBIndex::c_24, im0_t},
+         {CBIndex::c_25, im1_t, (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format}});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
 
-    const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(is_dram(output_grad))};
-    const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(is_dram(bias_grad))};
+    const std::vector<uint32_t> reader_compile_time_args{static_cast<uint32_t>(is_dram(output_grad))};
+    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(bias_grad))};
 
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/reader_moreh_bias_backward_hw.cpp";
@@ -91,10 +88,8 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     const auto writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_linear_backward/device/kernels/writer_moreh_bias_backward.cpp";
 
-    const auto reader_kernel_id =
-        CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
-    const auto writer_kernel_id =
-        CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
+    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, core, reader_compile_time_args);
+    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp

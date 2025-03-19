@@ -11,8 +11,8 @@
 
 template <class T>
 class atomic_rwptr {
-   public:
-    atomic_rwptr(uint address, modelt::l1_cache &l1) : m_address(address), m_l1(l1) {}
+public:
+    atomic_rwptr(uint address, modelt::l1_cache& l1) : m_address(address), m_l1(l1) {}
 
     T load() const noexcept { return m_l1.read_word(m_address); }
     void store(T value) noexcept { m_l1.write_word(m_address, value); }
@@ -21,7 +21,7 @@ class atomic_rwptr {
         store(value);
         return value;
     }
-    atomic_rwptr &operator=(const atomic_rwptr &) = delete;
+    atomic_rwptr& operator=(const atomic_rwptr&) = delete;
 
     operator T() const noexcept { return load(); }
 
@@ -32,9 +32,9 @@ class atomic_rwptr {
         return value;
     }
 
-   private:
+private:
     uint m_address;
-    modelt::l1_cache &m_l1;
+    modelt::l1_cache& m_l1;
 };
 
 #else
@@ -43,9 +43,9 @@ class atomic_rwptr {
 // Atomic using only atomic load and store for single producer / single consumer FIFO read & write pointers.
 template <class T>
 class atomic_rwptr {
-   public:
+public:
     atomic_rwptr() noexcept = default;
-    atomic_rwptr(const atomic_rwptr &) = delete;
+    atomic_rwptr(const atomic_rwptr&) = delete;
 
     T load() const noexcept {
         T value = underlying;
@@ -61,7 +61,7 @@ class atomic_rwptr {
         store(value);
         return value;
     }
-    atomic_rwptr &operator=(const atomic_rwptr &) = delete;
+    atomic_rwptr& operator=(const atomic_rwptr&) = delete;
 
     operator T() const noexcept { return load(); }
 
@@ -74,7 +74,7 @@ class atomic_rwptr {
         return value;
     }
 
-   private:
+private:
     void fence() const volatile noexcept { clobber_all_memory(); }
 
     volatile T underlying;
@@ -90,8 +90,8 @@ using atomic_rwptr = std::atomic<T>;
 #endif
 
 template <class T>
-inline atomic_rwptr<T> &make_atomic_rwptr(T *p) {
-    return reinterpret_cast<atomic_rwptr<T> &>(*p);
+inline atomic_rwptr<T>& make_atomic_rwptr(T* p) {
+    return reinterpret_cast<atomic_rwptr<T>&>(*p);
 }
 
 #endif

@@ -1,0 +1,16 @@
+name: "(Blackhole) Blackhole nightly tests"
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  schedule:
+    - cron: "0 */12 * * *"  # Every day at 0:00 and 12:00 UTC
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+  fd-nightly:
+    needs: build-artifact
+    uses: ./.github/workflows/blackhole-nightly-tests-impl.yaml
+    secrets: inherit

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -11,7 +11,7 @@ void kernel_main() {
     auto num_tiles_per_core = get_arg_val<uint32_t>(i++);
     auto start_id = get_arg_val<uint32_t>(i++);
 
-    constexpr uint32_t cb_output = tt::CB::c_out0;
+    constexpr uint32_t cb_output = tt::CBIndex::c_16;
     const auto output_data_format = get_dataformat(cb_output);
     const uint32_t output_tile_bytes = get_tile_size(cb_output);
 

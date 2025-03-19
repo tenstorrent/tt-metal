@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -18,15 +18,15 @@ void kernel_main() {
     auto W = get_arg_val<uint32_t>(i++);
     auto element_size = get_arg_val<uint32_t>(i++);
 
-    constexpr uint32_t cb_input = tt::CB::c_in0;
-    constexpr uint32_t cb_target = tt::CB::c_in1;
-    constexpr uint32_t cb_weight = tt::CB::c_in2;
-    constexpr uint32_t cb_divisor = tt::CB::c_in3;
+    constexpr uint32_t cb_input = tt::CBIndex::c_0;
+    constexpr uint32_t cb_target = tt::CBIndex::c_1;
+    constexpr uint32_t cb_weight = tt::CBIndex::c_2;
+    constexpr uint32_t cb_divisor = tt::CBIndex::c_3;
 
-    constexpr uint32_t cb_tmp_weight = tt::CB::c_intermed0;
-    constexpr uint32_t cb_tmp_input = tt::CB::c_intermed1;
+    constexpr uint32_t cb_tmp_weight = tt::CBIndex::c_24;
+    constexpr uint32_t cb_tmp_input = tt::CBIndex::c_25;
 
-    constexpr uint32_t cb_output = tt::CB::c_out0;
+    constexpr uint32_t cb_output = tt::CBIndex::c_16;
 
     // ublocks size defined in tiles
     const uint32_t input_tile_bytes = get_tile_size(cb_input);
@@ -86,7 +86,12 @@ void kernel_main() {
         uint32_t traget_noc_id = nt * Wt + wt;
         uint32_t target_offset;
         get_noc_offset(n, w, target_element_size, target_offset);
-        read_tile(cb_target, addrg_target, traget_noc_id, NOC_MINIMUM_READ_SIZE / element_size * target_element_size, target_offset);
+        read_tile(
+            cb_target,
+            addrg_target,
+            traget_noc_id,
+            NOC_MINIMUM_READ_SIZE / element_size * target_element_size,
+            target_offset);
 
 #if defined(WEIGHT)
         cb_reserve_back(cb_tmp_weight, onetile);

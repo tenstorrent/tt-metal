@@ -6,24 +6,23 @@
 #include <functional>
 #include <random>
 
-#include "common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "tt_metal/host_api.hpp"
-#include "ttnn/operations/numpy/functions.hpp"
+#include <tt-metalium/host_api.hpp>
+#include "ttnn/operations/functions.hpp"
 
 using namespace tt;
 using namespace tt_metal;
 using namespace constants;
 
-
-bool test_single_tile_single_dram_bank_loopback(Device *device) {
+bool test_single_tile_single_dram_bank_loopback(IDevice* device) {
     bool pass = true;
-    tt::tt_metal::LegacyShape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+    ttnn::Shape single_tile_shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
 
-    Tensor host_a = ttnn::numpy::random::random(single_tile_shape).to(Layout::TILE);
-    Tensor device_a = host_a.to(device);
+    Tensor host_a = ttnn::random::random(single_tile_shape).to_layout(Layout::TILE);
+    Tensor device_a = host_a.to_device(device);
     Tensor loopbacked_a = device_a.cpu();
     auto host_a_data = owned_buffer::get_as<bfloat16>(host_a);
     auto loopbacked_a_data = owned_buffer::get_as<bfloat16>(loopbacked_a);
@@ -32,12 +31,12 @@ bool test_single_tile_single_dram_bank_loopback(Device *device) {
     return pass;
 }
 
-bool test_multi_tile_multi_dram_bank_loopback(Device *device) {
+bool test_multi_tile_multi_dram_bank_loopback(IDevice* device) {
     bool pass = true;
-    tt::tt_metal::LegacyShape multi_tile_shape = {1, 1, 4*TILE_HEIGHT, 3*TILE_WIDTH};
+    ttnn::Shape multi_tile_shape({1, 1, 4 * TILE_HEIGHT, 3 * TILE_WIDTH});
 
-    Tensor host_a = ttnn::numpy::random::random(multi_tile_shape).to(Layout::TILE);
-    Tensor device_a = host_a.to(device);
+    Tensor host_a = ttnn::random::random(multi_tile_shape).to_layout(Layout::TILE);
+    Tensor device_a = host_a.to_device(device);
     Tensor loopbacked_a = device_a.cpu();
     auto host_a_data = owned_buffer::get_as<bfloat16>(host_a);
     auto loopbacked_a_data = owned_buffer::get_as<bfloat16>(loopbacked_a);
@@ -45,18 +44,15 @@ bool test_multi_tile_multi_dram_bank_loopback(Device *device) {
     return pass;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     bool pass = true;
 
     try {
-
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
-
-
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         pass &= test_single_tile_single_dram_bank_loopback(device);
 
@@ -64,7 +60,7 @@ int main(int argc, char **argv) {
 
         pass &= tt_metal::CloseDevice(device);
 
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());

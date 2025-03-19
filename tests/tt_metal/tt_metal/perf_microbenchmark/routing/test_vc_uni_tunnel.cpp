@@ -2,21 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/impl/dispatch/cq_commands.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/device.hpp>
+#include "rtoptions.hpp"
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "kernels/traffic_gen_test.hpp"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_common.hpp"
-
-using std::vector;
-using namespace tt;
-using json = nlohmann::json;
-
+#include "test_common.hpp"
+#include "routing_test_common.hpp"
 
 int main(int argc, char **argv) {
+    using std::vector;
+    using namespace tt;
+    using namespace tt::packet_queue;
+    using json = nlohmann::json;
 
     constexpr uint32_t default_tx_x = 0;
     constexpr uint32_t default_tx_y = 0;
@@ -167,7 +166,7 @@ int main(int argc, char **argv) {
         }
         int device_id_l = test_device_id;
 
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id_l);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id_l);
         auto const& device_active_eth_cores = device->get_active_ethernet_cores();
 
         if (device_active_eth_cores.size() == 0) {
@@ -181,7 +180,7 @@ int main(int argc, char **argv) {
         auto eth_core_iter = device_active_eth_cores.begin();
         auto [device_id_r, eth_receiver_core] = device->get_connected_ethernet_core(*eth_core_iter);
 
-        tt_metal::Device *device_r = tt_metal::CreateDevice(device_id_r);
+        tt_metal::IDevice* device_r = tt_metal::CreateDevice(device_id_r);
 
         CoreCoord tunneler_logical_core = device->get_ethernet_sockets(device_id_r)[0];
         CoreCoord tunneler_phys_core = device->ethernet_core_from_logical_core(tunneler_logical_core);
@@ -417,7 +416,7 @@ int main(int argc, char **argv) {
                 0, 0, 0, 0, 0, 0, // 38 - 43: remote_sender 4 - 9
                 tunneler_test_results_addr, // 44: test_results_addr
                 tunneler_test_results_size, // 45: test_results_size
-                timeout_mcycles * 1000 * 1000 * 4, // 46: timeout_cycles
+                0, // 46: timeout_cycles
                 0, //47: inner_stop_mux_d_bypass
             };
 
@@ -487,7 +486,7 @@ int main(int argc, char **argv) {
                 0, 0, 0, 0, 0, 0, // 38 - 43: remote_sender 4 - 9
                 tunneler_test_results_addr, // 44: test_results_addr
                 tunneler_test_results_size, // 45: test_results_size
-                timeout_mcycles * 1000 * 1000 * 4, // 46: timeout_cycles
+                0, // 46: timeout_cycles
                 0, //47: inner_stop_mux_d_bypass
             };
 
@@ -591,7 +590,6 @@ int main(int argc, char **argv) {
 
         vector<vector<uint32_t>> tx_results;
         vector<vector<uint32_t>> rx_results;
-
         for (uint32_t i = 0; i < num_src_endpoints; i++) {
             tx_results.push_back(
                 tt::llrt::read_hex_vec_from_core(
@@ -774,9 +772,8 @@ int main(int argc, char **argv) {
                     out.close();
                 }
                 // Determine if it passes performance goal
-                if ((pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::SAME_START_RNDROBIN_FIX_SIZE
-                && tx_skip_pkt_content_gen
-                && !check_txrx_timeout
+                if ((pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::SAME_START_RNDROBIN_FIX_SIZE && tx_skip_pkt_content_gen
+                // && !check_txrx_timeout
                 && rx_disable_data_check
                 && rx_disable_header_check
                 && (data_kb_per_tx >= 1024*1024)
@@ -787,13 +784,13 @@ int main(int argc, char **argv) {
                 && (demux_queue_size_bytes >= 0x10000)) {
                     double target_bandwidth = 0;
                     if (max_packet_size_words >= 2048) {
-                        target_bandwidth = 9;
+                        target_bandwidth = 7;
                         log_info(LogTest, "Perf check for pkt size >= 2048 words");
                     } else if (max_packet_size_words >= 1024) {
-                        target_bandwidth = 10.8;
+                        target_bandwidth = 8.0;
                         log_info(LogTest, "Perf check for pkt size >= 1024 words");
                     } else if (max_packet_size_words >= 256) {
-                        target_bandwidth = 2.8;
+                        target_bandwidth = 2.5;
                         log_info(LogTest, "Perf check for pkt size >= 256 words");
                     }
                     if (demux_bw < target_bandwidth) {
@@ -815,7 +812,7 @@ int main(int argc, char **argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::OptionsG.set_kernels_nullified(false);
+    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

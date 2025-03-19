@@ -4,13 +4,13 @@
 
 #include <cstdint>
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
-
+#include "cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
 
 void kernel_main() {
     constexpr uint32_t page_size = get_compile_time_arg_val(0);
-    volatile uint32_t *receiver_read_sem_addr = reinterpret_cast<volatile uint32_t *>(get_semaphore(get_compile_time_arg_val(1)));
+    volatile uint32_t* receiver_read_sem_addr =
+        reinterpret_cast<volatile uint32_t*>(get_semaphore(get_compile_time_arg_val(1)));
     constexpr uint32_t half_cb_n_pages = get_compile_time_arg_val(2);
     constexpr uint32_t num_buffers_per_channel = get_compile_time_arg_val(3);
 
@@ -26,7 +26,7 @@ void kernel_main() {
 
     ASSERT(half_cb_n_pages > rem_num_pages);
 
-    constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
     ccl::edm::WorkerToEdmReader<ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED> reader(
         ttnn::ccl::WorkerXY(eth_receiver_noc_x, eth_receiver_noc_y),
@@ -53,4 +53,6 @@ void kernel_main() {
     }
 
     reader.close();
+
+    noc_async_full_barrier();
 }

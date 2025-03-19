@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/barrier/barrier.hpp"
 #include "ttnn/types.hpp"
@@ -28,18 +28,15 @@ void bind_barrier(pybind11::module& module, const ccl_operation_t& operation, co
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::MemoryConfig& memory_config,
-               ttnn::ccl::Topology topology)-> ttnn::Tensor {
-                return self(input_tensor, memory_config, topology);
-            },
+               ttnn::ccl::Topology topology) -> ttnn::Tensor { return self(input_tensor, memory_config, topology); },
             py::arg("input_tensor"),
-            py::kw_only(),//The following are optional by key word only
+            py::kw_only(),  // The following are optional by key word only
             py::arg("memory_config") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Ring});
 }
 }  // namespace detail
 
 void py_bind_barrier(pybind11::module& module) {
-
     detail::bind_barrier(
         module,
         ttnn::barrier,
@@ -60,7 +57,7 @@ void py_bind_barrier(pybind11::module& module) {
         Example:
             >>> full_tensor = torch.randn([1, 1, 256, 256], dtype=torch.bfloat16)
             >>> input_tensors = torch.chunk(full_tensor, num_devices, dim)
-            >>> physical_device_ids = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), mesh_type=ttnn.MeshType.Ring)
+            >>> physical_device_ids = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
             >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), physical_device_ids=physical_device_ids[:8])
             >>> tt_input_tensors = []
             >>> for i, t in enumerate(input_tensors):
@@ -73,4 +70,4 @@ void py_bind_barrier(pybind11::module& module) {
         )doc");
 }
 
-}
+}  // namespace ttnn::operations::ccl

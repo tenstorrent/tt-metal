@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -17,13 +17,13 @@ void kernel_main() {
     const auto mask_h = get_arg_val<uint32_t>(i++);
     const auto mask_w = get_arg_val<uint32_t>(i++);
 
-    constexpr uint32_t cb_id_input = tt::CB::c_in0;
-    constexpr uint32_t cb_id_scaler = tt::CB::c_in1;
-    constexpr uint32_t cb_id_eps = tt::CB::c_in2;
-    constexpr uint32_t cb_id_gamma = tt::CB::c_in3;
-    constexpr uint32_t cb_id_beta = tt::CB::c_in4;
-    constexpr uint32_t cb_id_mask_h = tt::CB::c_in5;
-    constexpr uint32_t cb_id_mask_w = tt::CB::c_in6;
+    constexpr uint32_t cb_id_input = tt::CBIndex::c_0;
+    constexpr uint32_t cb_id_scaler = tt::CBIndex::c_1;
+    constexpr uint32_t cb_id_eps = tt::CBIndex::c_2;
+    constexpr uint32_t cb_id_gamma = tt::CBIndex::c_3;
+    constexpr uint32_t cb_id_beta = tt::CBIndex::c_4;
+    constexpr uint32_t cb_id_mask_h = tt::CBIndex::c_5;
+    constexpr uint32_t cb_id_mask_w = tt::CBIndex::c_6;
 
     const uint32_t input_tile_bytes = get_tile_size(cb_id_input);
     const auto input_data_format = get_dataformat(cb_id_input);

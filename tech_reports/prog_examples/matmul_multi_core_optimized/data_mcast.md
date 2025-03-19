@@ -2,8 +2,8 @@
 
 **Note**: This example only works on Grayskull.
 
-Let\'s level up our code and show how you can leverage and fully customize METALIUM\'s core-to-core communication through a data broadcasting scheme. METALIUM offers you customizability for creating your very own compute fabric, allowing precise control over which cores disseminate, collect, or process segments of work. 
-This example builds off of the data_reuse one, so we employ the same intemediate (partial) results handling scheme on-core. However, rather than map tile-work statically to your coregrid, we map in0\'s rows and in1\'s columns to the coregrid\'s edges, and cascade work core-to-core dynamically. 
+Let\'s level up our code and show how you can leverage and fully customize METALIUM\'s core-to-core communication through a data broadcasting scheme. METALIUM offers you customizability for creating your very own compute fabric, allowing precise control over which cores disseminate, collect, or process segments of work.
+This example builds off of the data_reuse one, so we employ the same intemediate (partial) results handling scheme on-core. However, rather than map tile-work statically to your coregrid, we map in0\'s rows and in1\'s columns to the coregrid\'s edges, and cascade work core-to-core dynamically.
 A fun tidbit: \"torrent\" in Tenstorrent pays homage to this concept of tensor computation flowing like an ultra fast stream of water.
 
 ## Additional Compile-Time Argument
@@ -20,7 +20,7 @@ log_info(tt::LogVerif, " -- out_block_tiles= {} --", out_block_tiles);
 
 ## Configuring Core Ranges for Tile Distribution
 
-We can define our coregrid from any upper-left corner and define its range with any height and width that our problem calls for. The cores that make up the grid can be relegated specific broadcast roles (sender or receiver cores) and compute workloads (only certain tiles of in0 and in1). 
+We can define our coregrid from any upper-left corner and define its range with any height and width that our problem calls for. The cores that make up the grid can be relegated specific broadcast roles (sender or receiver cores) and compute workloads (only certain tiles of in0 and in1).
 We start with the following initializations for the grid itself, upper-left corner, and grid edge vectors:
 
 ``` cpp
@@ -111,7 +111,7 @@ auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_co
 ```
 
 METALIUM also allows us to pass all of our CoreRanges defined above through a `CoreRangeSet(...)` function call as the 2nd argument. Let's do so with the following:
- 
+
 ``` cpp
 auto cb_output = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_output_config);
 ```
@@ -167,7 +167,7 @@ auto unary_writer_kernel_noc1_id = tt_metal::CreateKernel(
 ```
 
 If you are interested in further details on how these work, we implore you to check out the exact dataflow kernels located in the
-[tt_metal/programming_examples/matmul_common/kernels/dataflow](../../../tt_metal/programming_examples/matmul_common/kernels/dataflow) file. 
+[tt_metal/programming_examples/matmul_common/kernels/dataflow](../../../tt_metal/programming_examples/matmul_common/kernels/dataflow) file.
 You can see there are many arguments with which to experiment with, such as mcast destination nocs. You can imagine defining your own mcast scheme.
 
     in0_mcast_dest_noc_start_x
@@ -191,13 +191,13 @@ auto mm_kernel_id = tt_metal::CreateKernel(
 a.  **Flow Control through Conditionals**
 
 When bias fusion is enabled ([FUSE_BIAS]{ title-ref}), intermediate results are directly packed and may not require reloading for subsequent operations within the same batch, indicated by [enable_reload = false]. We can employ this as a means of minimizing mem-to-mem operations.
-    
+
 For kernels without bias fusion or when the [PACKER_L1_ACC] is not defined, we determine whether intermediate results need to be reloaded based on the computation phase (ie. our [spill] condition and the current [block]{.title-ref}). This ensures that for operations that accumulate results over multiple blocks, intermediate data is correctly managed across iterations.
 
 b.  **Bias Broadcasting Mechanism**
 
     ``` cpp
-    add_bcast_rows_init_short();
+    add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
     for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
         uint32_t bcast_tile_idx = in1_index_subblock_offset;
         for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
@@ -227,9 +227,9 @@ d.  **Handling Partial Results**
 
 ## Semaphores
 
-To cleanly coordinate the distribution and processing of in0 and in1 tiles in our mcast strategy, we should introduce semaphores: 
-- Without semaphores, we run the risk of mcast sending data from one Tensix core to another too early (before the first Tensix core's CB stream is fully populated), or mcast receiving too few packets of data and thus computing prematurely (before the second Tensix core\'s CB stream is fully populated). 
-- METALIUM makes this very simple, by allowing to call the CreateSemaphore function and simply passing the entire CoreGrid number of cores. 
+To cleanly coordinate the distribution and processing of in0 and in1 tiles in our mcast strategy, we should introduce semaphores:
+- Without semaphores, we run the risk of mcast sending data from one Tensix core to another too early (before the first Tensix core's CB stream is fully populated), or mcast receiving too few packets of data and thus computing prematurely (before the second Tensix core\'s CB stream is fully populated).
+- METALIUM makes this very simple, by allowing to call the CreateSemaphore function and simply passing the entire CoreGrid number of cores.
 - Therefore, we define our sender and receiver core semaphores as follows, to maintain synchronization of compute across the device:
 
 ``` cpp

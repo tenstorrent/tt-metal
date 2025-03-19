@@ -33,7 +33,7 @@ def run_test_update_cache_decode(
     x_pad = torch.nn.functional.pad(x, (0, 0, 0, 32 - num_heads), "constant", 0)
 
     xt = ttnn.Tensor(x_pad, input_dtype).to(ttnn.TILE_LAYOUT)
-    xt = ttnn.reshape(xt, ttnn.Shape(input_shape, x_pad.shape))
+    xt = ttnn.reshape(xt, ttnn.Shape(input_shape))
     # Input is sharded
     compute_grid_size = device.compute_with_storage_grid_size()
     num_cores = num_users
@@ -41,12 +41,10 @@ def run_test_update_cache_decode(
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
-            xt.logical_volume() // xt.shape[-1] // num_cores,
-            xt.shape.with_tile_padding()[-1],
+            xt.volume() // xt.padded_shape[-1] // num_cores,
+            xt.padded_shape[-1],
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,
-        ttnn.ShardMode.LOGICAL,
     )
     input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
     xt = xt.to(device, input_mem_config)
@@ -152,12 +150,10 @@ def test_update_cache_decode(
         input_shard_spec = ttnn.ShardSpec(
             shard_grid,
             [
-                xt.logical_volume() // xt.shape[-1] // num_cores,
-                xt.shape[-1],
+                xt.volume() // xt.padded_shape[-1] // num_cores,
+                xt.padded_shape[-1],
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
-            ttnn.ShardMode.LOGICAL,
         )
         input_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
@@ -236,12 +232,10 @@ def test_update_cache_decode_program_cache(
         input_shard_spec = ttnn.ShardSpec(
             shard_grid,
             [
-                xt.logical_volume() // xt.shape[-1] // num_cores,
-                xt.shape[-1],
+                xt.volume() // xt.padded_shape[-1] // num_cores,
+                xt.padded_shape[-1],
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
-            ttnn.ShardMode.LOGICAL,
         )
         input_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
@@ -279,12 +273,10 @@ def run_test_tensor_index_update_cache_decode(
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
-            xt.logical_volume() // xt.shape[-1] // num_cores,
-            xt.shape[-1],
+            xt.volume() // xt.padded_shape[-1] // num_cores,
+            xt.padded_shape[-1],
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,
-        ttnn.ShardMode.LOGICAL,
     )
     input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
     xt = xt.to(device, input_mem_config)
@@ -418,12 +410,10 @@ def run_test_paged_update_cache_decode(
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         [
-            xt.logical_volume() // xt.shape[-1] // num_cores,
-            xt.shape[-1],
+            xt.volume() // xt.padded_shape[-1] // num_cores,
+            xt.padded_shape[-1],
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,
-        ttnn.ShardMode.LOGICAL,
     )
     input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
     xt = xt.to(device, input_mem_config)
@@ -548,12 +538,10 @@ def test_paged_update_cache_decode_program_caching(
         input_shard_spec = ttnn.ShardSpec(
             shard_grid,
             [
-                xt.logical_volume() // xt.shape[-1] // num_cores,
-                xt.shape[-1],
+                xt.volume() // xt.padded_shape[-1] // num_cores,
+                xt.padded_shape[-1],
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
-            ttnn.ShardMode.LOGICAL,
         )
         input_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec

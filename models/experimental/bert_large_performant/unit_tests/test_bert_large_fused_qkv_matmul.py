@@ -32,40 +32,28 @@ def run_bert_large_fused_qkv_matmul_test(
 
     A = torch.randn(a_shape)
     B = torch.randn(b_shape) - 0.95
-    BIAS = torch.randint(-20, 20, bias_shape, dtype=torch.float)
+    bias = torch.randint(-20, 20, bias_shape, dtype=torch.float)
+    bias_padded = torch.nn.functional.pad(bias, (0, 0, 0, 32 - bias.size(2)))
 
-    a_t = (
-        ttnn.Tensor(
-            A.flatten().tolist(),
-            a_shape,
-            dtype,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(device, in0_mem_config)
-    )
-    b_t = (
-        ttnn.Tensor(
-            B.flatten().tolist(),
-            b_shape,
-            dtype,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(device, in1_mem_config)
-    )
+    a_t = ttnn.Tensor(
+        A.flatten().tolist(),
+        a_shape,
+        dtype,
+        ttnn.TILE_LAYOUT,
+    ).to(device, in0_mem_config)
+    b_t = ttnn.Tensor(
+        B.flatten().tolist(),
+        b_shape,
+        dtype,
+        ttnn.TILE_LAYOUT,
+    ).to(device, in1_mem_config)
     if bias_mem_config is not None:
-        bias_t = (
-            ttnn.Tensor(
-                BIAS.flatten().tolist(),
-                bias_shape,
-                dtype,
-                ttnn.ROW_MAJOR_LAYOUT,
-            )
-            .pad(bias_pad_shape, [0, 0, 0, 0], 0)
-            .to(ttnn.TILE_LAYOUT)
-            .to(device, bias_mem_config)
-        )
+        bias_t = ttnn.Tensor(
+            bias_padded.flatten().tolist(),
+            bias_pad_shape,
+            dtype,
+            ttnn.TILE_LAYOUT,
+        ).to(device, bias_mem_config)
     else:
         bias_t = None
 
@@ -83,13 +71,12 @@ def run_bert_large_fused_qkv_matmul_test(
         logger.debug(f"bias is on: {bias_t.memory_config().buffer_type}")
     logger.debug(f"out is on: {t2.memory_config().buffer_type}")
 
-    assert t2.shape.with_tile_padding() == [9, 1, 384, 3072]
-    tt_host_rm = t2.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
-    pyt_got_back_rm = tt_host_rm.to_torch()
+    assert t2.padded_shape == [9, 1, 384, 3072]
+    pyt_got_back_rm = ttnn.to_torch(t2)
 
     ref_bmm = torch.matmul(A, B)
     if bias_mem_config is not None:
-        ref_bmm = ref_bmm + BIAS
+        ref_bmm = ref_bmm + bias
     passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)
     logger.debug(f"Passing={passing_pcc}")
     logger.debug(f"Output pcc={output_pcc}")
@@ -161,7 +148,7 @@ def test_bert_large_fused_qkv_matmul_with_program_cache(device, use_program_cach
         )
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
-        tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
+        tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype, device, ttnn.TILE_LAYOUT, mem_config)
 
     mem_config = ttnn.L1_MEMORY_CONFIG
     for _ in range(2):
@@ -175,6 +162,6 @@ def test_bert_large_fused_qkv_matmul_with_program_cache(device, use_program_cach
         )
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
-        tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
+        tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype, device, ttnn.TILE_LAYOUT, mem_config)
 
     assert device.num_program_cache_entries() == 2

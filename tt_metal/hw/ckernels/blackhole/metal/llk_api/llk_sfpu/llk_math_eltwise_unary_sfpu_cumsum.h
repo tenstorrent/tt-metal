@@ -14,16 +14,18 @@ namespace ckernel {
 
 template <bool APPROXIMATE /*unused*/>
 inline void llk_math_eltwise_unary_sfpu_cumsum_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::cumsum, false>(sfpu::cumsum_init<false>); // There is only non APPROXIMATE implementation
+    llk_math_eltwise_unary_sfpu_init<SfpuType::cumsum, false>(
+        sfpu::cumsum_init<false>);  // There is only non APPROXIMATE implementation
 }
 
 template <bool APPROXIMATE /*unused*/>
-inline void llk_math_eltwise_unary_sfpu_cumsum(uint dst_index, bool first, int vector_mode = (int)VectorMode::RC_custom /*unused*/) {
+inline void llk_math_eltwise_unary_sfpu_cumsum(
+    uint dst_index, bool first, int vector_mode = (int)VectorMode::RC_custom /*unused*/) {
     llk_math_eltwise_unary_sfpu_params<false>(
-        ckernel::sfpu::calculate_cumsum<false>, // There is only non APPROXIMATE implementation
+        ckernel::sfpu::calculate_cumsum<false>,  // There is only non APPROXIMATE implementation
         dst_index,
-        VectorMode::RC_custom, // Can only work in RC_custom mode
+        VectorMode::RC_custom,  // Can only work in RC_custom mode
         first);
 }
 
-}
+}  // namespace ckernel

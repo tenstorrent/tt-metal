@@ -5,30 +5,28 @@
 #include <algorithm>
 #include <functional>
 #include <random>
-#include <ttnn/operations/numpy/functions.hpp>
+#include <ttnn/operations/functions.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/fold/fold.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
 using namespace tt;
-using namespace tt::tt_metal;
 using namespace constants;
 
-void run_fold(Device *device, tt::tt_metal::LegacyShape shape) {
-    Tensor input_tensor = ttnn::numpy::random::random(shape).to(Layout::ROW_MAJOR).to(device);
+void run_fold(tt::tt_metal::IDevice* device, const ttnn::Shape& shape) {
+    ttnn::Tensor input_tensor = ttnn::random::random(shape).to_layout(ttnn::Layout::ROW_MAJOR).to_device(device);
     uint32_t stride_h = 2;
     uint32_t stride_w = 2;
-    uint8_t queue_id = 0;
-    Tensor device_output_tensor = ttnn::fold(queue_id, input_tensor, stride_h, stride_w);
-    Tensor output_tensor = device_output_tensor.cpu();
+    ttnn::Tensor device_output_tensor = ttnn::fold(ttnn::DefaultQueueId, input_tensor, stride_h, stride_w);
+    ttnn::Tensor output_tensor = device_output_tensor.cpu();
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     int device_id = 0;
-    tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+    tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
-    run_fold(device, {1, 2, 2, 2});
+    run_fold(device, ttnn::Shape({1, 2, 2, 2}));
     bool pass = CloseDevice(device);
 
     if (pass) {

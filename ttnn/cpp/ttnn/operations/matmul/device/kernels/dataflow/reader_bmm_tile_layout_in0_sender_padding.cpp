@@ -6,11 +6,9 @@
 
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
-
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
 void kernel_main() {
-
     uint32_t rt_args_idx = 0;
     // in0 tensor args
     const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
@@ -73,14 +71,17 @@ void kernel_main() {
     // In case we need to send multiple blocks per shard, in0 sharded cb is cb2 and we extract the sub-blocks to cb0
     constexpr uint32_t shard_read_stride = shard_width_in_tiles * in0_single_tile_size_bytes;
     constexpr uint32_t shard_read_width = in0_single_tile_size_bytes * in0_block_w;
+    constexpr uint32_t shard_num_tiles = shard_width_in_tiles * shard_height_in_tiles;
+    constexpr uint32_t in0_tensor_next_h_dim_block_stride_bytes =
+        in0_tensor_next_h_dim_block_stride * in0_single_tile_size_bytes;
 
-    uint64_t noc_shard_read_start_addr = 0;
+    uint32_t noc_shard_read_start_addr = 0;
     if constexpr (extract_shard_sub_blocks) {
         constexpr uint32_t cb_id_in2 = 2;  // in0 sharded cb if extract_shard_sub_blocks
-        noc_shard_read_start_addr = get_noc_addr(get_read_ptr(cb_id_in2));
+        noc_shard_read_start_addr = get_read_ptr(cb_id_in2);
     } else {
-        cb_reserve_back(cb_id_in0, in0_block_num_tiles);
-        cb_push_back(cb_id_in0, in0_block_num_tiles);
+        cb_reserve_back(cb_id_in0, shard_num_tiles);
+        cb_push_back(cb_id_in0, shard_num_tiles);
     }
 #else
     constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
@@ -115,17 +116,20 @@ void kernel_main() {
 #endif
 
     for (uint32_t b = 0; b < batch; ++b) {
+#ifdef IN0_SHARDED
+        uint32_t in0_tensor_current_h_dim_block_start_addr = noc_shard_read_start_addr;
+#endif
         uint32_t in0_tensor_current_h_dim_block_tile_id = in0_tensor_start_tile_id;
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
+#ifdef IN0_SHARDED
+                uint32_t in0_tensor_current_inner_dim_block_start_addr = in0_tensor_current_h_dim_block_start_addr;
+#endif
                 uint32_t in0_tensor_current_inner_dim_block_start_tile_id = in0_tensor_current_h_dim_block_tile_id;
                 for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
                     if constexpr (fuse_op) {
                         fused_op_receiver.update_current_block_start_tile_id(
-                            block,
-                            in0_tensor_current_inner_dim_block_start_tile_id,
-                            in0_tensor_start_tile_id
-                        );
+                            block, in0_tensor_current_inner_dim_block_start_tile_id, in0_tensor_start_tile_id);
                     }
 #ifndef IN0_SHARDED
                     // Operand 0
@@ -133,7 +137,8 @@ void kernel_main() {
                     uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
 
 #ifndef SKIP_MCAST
-                    uint32_t in0_start_address = l1_write_addr_in0;  // copy start address of block, to be used for mcasting
+                    uint32_t in0_start_address =
+                        l1_write_addr_in0;  // copy start address of block, to be used for mcasting
 #endif
 
                     // Copy in0 block into CB, as the default kernel
@@ -163,23 +168,24 @@ void kernel_main() {
                         in0_start_address = l1_write_addr_in0;  // copy start address of block, to be used for mcasting
 #endif
 
-                        uint64_t noc_shard_read_addr = noc_shard_read_start_addr;
-                        noc_shard_read_start_addr += shard_read_width;
+                        uint64_t noc_shard_read_addr = get_noc_addr(in0_tensor_current_inner_dim_block_start_addr);
 
-                        for (uint32_t i = 0; i < shard_height_in_tiles; i++) {
+                        for (uint32_t i = 0; i < in0_block_h; i++) {
                             noc_async_read(noc_shard_read_addr, l1_write_addr_in0, shard_read_width);
 
                             l1_write_addr_in0 += shard_read_width;
                             noc_shard_read_addr += shard_read_stride;
                         }
 
+                        in0_tensor_current_inner_dim_block_start_addr += shard_read_width;
                         noc_async_read_barrier();
                     }
 #endif
 
 #ifndef SKIP_MCAST
-                    // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr (i.e. its value
-                    // should be in0_mcast_num_dests), then reset the semaphore_addr value back to zero for the next block
+                    // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr (i.e.
+                    // its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to zero for
+                    // the next block
                     noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests);
                     noc_semaphore_set(in0_mcast_sender_semaphore_addr_ptr, 0);
 
@@ -188,10 +194,16 @@ void kernel_main() {
 
                     // num_dests must not include source, since we are NOT really doing a local copy!
                     noc_async_write_multicast(
-                        in0_start_address, in0_multicast_data_addr, in0_block_size_bytes, in0_mcast_num_cores, true, true);
+                        in0_start_address,
+                        in0_multicast_data_addr,
+                        in0_block_size_bytes,
+                        in0_mcast_num_cores,
+                        true,
+                        true);
 
-                    // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc, same
-                    // cmd_buf Also, this only works because we are setting VCs statically (using NOC_CMD_STATIC_VC).
+                    // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc,
+                    // same cmd_buf Also, this only works because we are setting VCs statically (using
+                    // NOC_CMD_STATIC_VC).
 #ifdef ARCH_BLACKHOLE
                     // On Blackhole the flush is needed because NoC latency is higherthan L1 <-> RISCV
                     // latency which means data could be changed before write is issued.
@@ -201,9 +213,7 @@ void kernel_main() {
                     // We should also multicast the flag to destinations
                     // num_dests must not include source, since we are NOT really doing a local copy!
                     noc_semaphore_set_multicast(
-                        in0_mcast_receiver_semaphore_addr,
-                        in0_mcast_receiver_semaphore_noc_addr,
-                        in0_mcast_num_cores);
+                        in0_mcast_receiver_semaphore_addr, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_cores);
 #endif
 
 #ifndef IN0_SHARDED
@@ -215,8 +225,12 @@ void kernel_main() {
 #endif
                 }
             }
+#ifdef IN0_SHARDED
+            in0_tensor_current_h_dim_block_start_addr += in0_tensor_next_h_dim_block_stride_bytes;
+#endif
             in0_tensor_current_h_dim_block_tile_id += in0_tensor_next_h_dim_block_stride;
         }
         in0_tensor_start_tile_id += MtKt;
     }
+    noc_async_write_barrier();
 }

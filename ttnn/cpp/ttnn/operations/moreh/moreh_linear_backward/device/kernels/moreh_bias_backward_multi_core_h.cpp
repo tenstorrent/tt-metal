@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -14,12 +14,12 @@ void MAIN {
     const bool do_mask_h = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
     const bool do_mask_w = (arg_fetcher.get_next_arg_val<uint32_t>() == 1);
 
-    constexpr auto cb_in0 = tt::CB::c_in0;
-    constexpr auto cb_scaler = tt::CB::c_in1;
-    constexpr auto cb_mask_h_w = tt::CB::c_in2;
-    constexpr auto cb_intermed0 = tt::CB::c_intermed0;
-    constexpr auto cb_intermed1 = tt::CB::c_intermed1;
-    constexpr auto cb_out0 = tt::CB::c_out0;
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto cb_scaler = tt::CBIndex::c_1;
+    constexpr auto cb_mask_h_w = tt::CBIndex::c_2;
+    constexpr auto cb_intermed0 = tt::CBIndex::c_24;
+    constexpr auto cb_intermed1 = tt::CBIndex::c_25;
+    constexpr auto cb_out0 = tt::CBIndex::c_16;
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
 
@@ -46,16 +46,16 @@ void MAIN {
 
                 if (do_mask) {
                     tile_regs_acquire();
-                    #if defined FP32_DEST_ACC_EN
-                        reconfig_data_format_srca(cb_in0);
-                    #endif
+#if defined FP32_DEST_ACC_EN
+                    reconfig_data_format_srca(cb_in0);
+#endif
                     copy_tile_to_dst_init_short(cb_in0);
                     copy_tile(cb_in0, 0, dst0);
 
                     if (do_mask_h && last_row) {
-                        #if defined FP32_DEST_ACC_EN
-                            reconfig_data_format_srca(cb_mask_h_w);
-                        #endif
+#if defined FP32_DEST_ACC_EN
+                        reconfig_data_format_srca(cb_mask_h_w);
+#endif
                         copy_tile_to_dst_init_short(cb_mask_h_w);
                         copy_tile(cb_mask_h_w, 0, dst1);
                         mask_tile_init();
@@ -63,9 +63,9 @@ void MAIN {
                     }
 
                     if (do_mask_w && last_col) {
-                        #if defined FP32_DEST_ACC_EN
-                            reconfig_data_format_srca(cb_mask_h_w);
-                        #endif
+#if defined FP32_DEST_ACC_EN
+                        reconfig_data_format_srca(cb_mask_h_w);
+#endif
                         copy_tile_to_dst_init_short(cb_mask_h_w);
                         copy_tile(cb_mask_h_w, 1, dst1);
                         mask_tile_init();
@@ -75,9 +75,9 @@ void MAIN {
 
                     tile_regs_wait();
                     cb_reserve_back(cb_intermed0, onetile);
-                    #if defined FP32_DEST_ACC_EN
-                        pack_reconfig_data_format(cb_intermed0);
-                    #endif
+#if defined FP32_DEST_ACC_EN
+                    pack_reconfig_data_format(cb_intermed0);
+#endif
                     pack_tile(dst0, cb_intermed0);
                     cb_push_back(cb_intermed0, onetile);
                     tile_regs_release();
@@ -86,27 +86,29 @@ void MAIN {
                 tile_regs_acquire();
                 if (enable_reload) {
                     cb_wait_front(cb_intermed1, onetile);
-                    #if defined FP32_DEST_ACC_EN
-                        reconfig_data_format_srca(cb_intermed1);
-                    #endif
+#if defined FP32_DEST_ACC_EN
+                    reconfig_data_format_srca(cb_intermed1);
+#endif
                     copy_tile_to_dst_init_short(cb_intermed1);
                     copy_tile(cb_intermed1, 0, 0);
                     cb_pop_front(cb_intermed1, onetile);
                 }
 
-                if (do_mask)
+                if (do_mask) {
                     cb_wait_front(cb_intermed0, onetile);
+                }
 
                 auto cb_reduce = (do_mask) ? (cb_intermed0) : (cb_in0);
-                #if defined FP32_DEST_ACC_EN
-                    reconfig_data_format(cb_reduce, cb_scaler);
-                #endif
-                reduce_init_delta<false>();
+#if defined FP32_DEST_ACC_EN
+                reconfig_data_format(cb_reduce, cb_scaler);
+#endif
+                reduce_init_delta<false>(cb_reduce, cb_scaler, cb_out0);
                 reduce_tile(cb_reduce, cb_scaler, 0, 0, 0);
-                reduce_revert_delta();
+                reduce_revert_delta(cb_out0);
 
-                if (do_mask)
+                if (do_mask) {
                     cb_pop_front(cb_intermed0, onetile);
+                }
 
                 cb_pop_front(cb_in0, onetile);
                 tile_regs_commit();
@@ -114,18 +116,17 @@ void MAIN {
                 tile_regs_wait();
                 if (last_out) {
                     cb_reserve_back(cb_out0, onetile);
-                    #if defined FP32_DEST_ACC_EN
-                        pack_reconfig_data_format(cb_out0);
-                    #endif
+#if defined FP32_DEST_ACC_EN
+                    pack_reconfig_data_format(cb_out0);
+#endif
                     pack_tile(0, cb_out0);
                     cb_push_back(cb_out0, onetile);
 
-                }
-                else {
+                } else {
                     cb_reserve_back(cb_intermed1, onetile);
-                    #if defined FP32_DEST_ACC_EN
-                        pack_reconfig_data_format(cb_intermed1);
-                    #endif
+#if defined FP32_DEST_ACC_EN
+                    pack_reconfig_data_format(cb_intermed1);
+#endif
                     pack_tile(0, cb_intermed1);
                     cb_push_back(cb_intermed1, onetile);
                 }

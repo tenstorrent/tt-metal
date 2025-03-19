@@ -121,6 +121,7 @@ parameters = {
         ],
         "enable_async": [True],
         "num_iters": [1],
+        "tile": [(32, 32)],
     },
     "all_gather_n300_focused_large": {
         "num_devices": [2],
@@ -134,6 +135,7 @@ parameters = {
         ],
         "enable_async": [True],
         "num_iters": [1],
+        "tile": [(32, 32)],
     },
 }
 
@@ -179,6 +181,7 @@ def run(
     mem_config,
     enable_async,
     num_iters,
+    tile,
     *,
     device,
 ) -> list:
@@ -204,7 +207,7 @@ def run(
     input_tensors = torch.chunk(input_tensor, num_devices, dim)
     tt_input_tensors = []
     for i, t in enumerate(input_tensors):
-        t = ttnn.from_torch(t, input_dtype, layout=ttnn.Layout.TILE)
+        t = ttnn.from_torch(t, input_dtype, tile=ttnn.Tile(tile), layout=ttnn.Layout.TILE)
         t = t.to(all_devices[i], mem_config)
         tt_input_tensors.append(t)
 

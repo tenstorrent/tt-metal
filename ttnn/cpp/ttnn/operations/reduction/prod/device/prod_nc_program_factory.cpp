@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
 
 namespace tt {
@@ -15,20 +15,21 @@ namespace operations {
 
 namespace primary {
 
-operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor &output, int64_t dim) {
+tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
+    const tt::tt_metal::Tensor& input, const tt::tt_metal::Tensor& output, int64_t dim) {
     TT_ASSERT(dim == 0 || dim == 1);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    auto *device = input.device();
-    auto program = Program();
+    auto* device = input.device();
+    auto program = tt::tt_metal::Program();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
-    const auto single_tile_size = detail::TileSize(cb_data_format);
+    const auto single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
     const auto input_shape = input.get_padded_shape();
     const auto input_shape_without_padding = input.get_logical_shape();
@@ -78,29 +79,33 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
         all_cores,
         cb_data_format,
         {
-            {CB::c_in0, in0_t},              // input
-            {CB::c_in1, in1_t},              // zero
-            {CB::c_intermed0, intermed0_t},  // accumulated sum
-            {CB::c_out0, out0_t},            // output
+            {CBIndex::c_0, in0_t},        // input
+            {CBIndex::c_1, in1_t},        // zero
+            {CBIndex::c_2, intermed0_t},  // accumulated sum
+            {CBIndex::c_3, out0_t},       // output
         });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::Buffer *input_buffer_type = input.buffer();
+    tt_metal::Buffer* input_buffer_type = input.buffer();
     bool input_is_dram = input_buffer_type->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t) input_is_dram, static_cast<uint32_t>(dim)};
+    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)input_is_dram, static_cast<uint32_t>(dim)};
 
-    tt_metal::Buffer *output_buffer_type = output.buffer();
-    constexpr uint32_t cb_id_out = 16;
+    tt_metal::Buffer* output_buffer_type = output.buffer();
+    constexpr uint32_t cb_id_out = CBIndex::c_3;
     bool output_is_dram = output_buffer_type->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t) cb_id_out, (std::uint32_t) output_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)cb_id_out, (std::uint32_t)output_is_dram};
 
-    const auto reader_kernel_file = "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/dataflow/reader_prod_nc.cpp";
-    const auto writer_kernel_file = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
-    const auto reader_kernel_id = ttnn::operations::CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
-    const auto writer_kernel_id = ttnn::operations::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    const auto reader_kernel_file =
+        "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/dataflow/reader_prod_nc.cpp";
+    const auto writer_kernel_file =
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+    const auto reader_kernel_id =
+        ttnn::operations::CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+    const auto writer_kernel_id =
+        ttnn::operations::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -112,7 +117,7 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
     const auto compute_kernel_1_id = ttnn::operations::CreateComputeKernel(
         program, compute_kernel_file, {core_group_1, num_cols_per_core_group_1, compute_args_group_1}, compute_defines);
 
-    std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
+    std::optional<tt::tt_metal::KernelHandle> compute_kernel_2_id = std::nullopt;
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2};
         compute_kernel_2_id = ttnn::operations::CreateComputeKernel(
@@ -149,14 +154,16 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
              static_cast<uint32_t>(ttnn::operations::is_dram(input)),
              HtWt,
              CHtWt,
-             static_cast<uint32_t>(dim)
-             });
+             static_cast<uint32_t>(dim)});
 
         SetRuntimeArgs(
             program,
             writer_kernel_id,
             core,
-            {output.buffer()->address(), num_tiles_per_core, tile_offset, static_cast<uint32_t>(ttnn::operations::is_dram(output))});
+            {output.buffer()->address(),
+             num_tiles_per_core,
+             tile_offset,
+             static_cast<uint32_t>(ttnn::operations::is_dram(output))});
 
         if (core_group_1.contains(core)) {
             SetRuntimeArgs(program, compute_kernel_1_id, core, {num_reduce_input_tile, num_tiles_per_core});
@@ -170,22 +177,22 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor &input, const Tensor
     }
 
     auto override_runtime_arguments_callback = [reader_kernel_id, writer_kernel_id, num_cores_to_be_used, num_cores_y](
-                                                   const void *operation,
-                                                   const Program &program,
-                                                   const std::vector<Tensor> &input_tensors,
-                                                   const std::vector<std::optional<const Tensor>> &,
-                                                   const std::vector<Tensor> &output_tensors) {
-        const auto *input_buffer = input_tensors.at(0).buffer();
-        const auto *output_buffer = input_tensors.at(1).buffer();
+                                                   const void* operation,
+                                                   const tt::tt_metal::Program& program,
+                                                   const std::vector<tt::tt_metal::Tensor>& input_tensors,
+                                                   const std::vector<std::optional<const tt::tt_metal::Tensor>>&,
+                                                   const std::vector<tt::tt_metal::Tensor>& output_tensors) {
+        const auto* input_buffer = input_tensors.at(0).buffer();
+        const auto* output_buffer = input_tensors.at(1).buffer();
         for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
             {
-                auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 runtime_args[0] = input_buffer->address();
             }
 
             {
-                auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                 runtime_args[0] = output_buffer->address();
             }
         }

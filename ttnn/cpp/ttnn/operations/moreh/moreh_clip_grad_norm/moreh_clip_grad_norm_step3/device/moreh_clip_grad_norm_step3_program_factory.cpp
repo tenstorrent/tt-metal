@@ -5,8 +5,8 @@
 #include <vector>
 
 #include "moreh_clip_grad_norm_step3_device_operation.hpp"
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
@@ -73,9 +73,9 @@ MorehClipGradNormStep3Operation::ProgramFactory::create(
         core_group_1,
         cb_data_format,
         {
-            {tt::CB::c_in0, in0_t},    // input(inplace)
-            {tt::CB::c_in1, in1_t},    // clip_coef_clamped
-            {tt::CB::c_out0, out0_t},  // output(inplace)
+            {tt::CBIndex::c_0, in0_t},    // input(inplace)
+            {tt::CBIndex::c_1, in1_t},    // clip_coef_clamped
+            {tt::CBIndex::c_16, out0_t},  // output(inplace)
         });
 
     ////////////////////////////////////////////////////////////////////////////

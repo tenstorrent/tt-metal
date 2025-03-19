@@ -18,22 +18,19 @@
 #include <unordered_set>
 #include <utility>
 
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/logger.hpp"
+#include <assert.hpp>
+#include <logger.hpp>
 
 #include "llrt.hpp"
-#include "llrt/rtoptions.hpp"
+#include <rtoptions.hpp>
 #include "hal.hpp"
 
-#include "jit_build/settings.hpp"
+#include <jit_build_options.hpp>
 
 #include <fmt/base.h>
 #include <fmt/ranges.h>
 
-// FIXME: ARCH_NAME specific
-#include "dev_msgs.h" // RUN_MSG_DONE
-#include "eth_l1_address_map.h" // address_map
-
+#include <dev_msgs.h>
 
 namespace tt {
 
@@ -44,32 +41,22 @@ using std::uint16_t;
 using std::uint32_t;
 using std::uint64_t;
 
-ll_api::memory get_risc_binary(string const &path,
-    uint32_t core_type_idx, uint32_t processor_class_idx, uint32_t processor_type_idx,
-    ll_api::memory::PackSpans span_type, ll_api::memory::Relocate relo_type) {
-
+ll_api::memory const& get_risc_binary(
+    string const& path,
+    ll_api::memory::Loading loading) {
     static struct {
-      std::unordered_map<std::string, std::unique_ptr<ll_api::memory>> map;
+      std::unordered_map<std::string, std::unique_ptr<ll_api::memory const>> map;
       std::mutex mutex;
       std::condition_variable cvar;
     } cache;
 
     std::unique_lock lock(cache.mutex);
     auto [slot, inserted] = cache.map.try_emplace(path);
+    ll_api::memory const* ptr = nullptr;
     if (inserted) {
       // We're the first with PATH. Create and insert.
       lock.unlock();
-      auto *ptr = new ll_api::memory(path, relo_type);
-
-      // TODO: pass pack_spans into reader, generate text/data sizes
-      // from segment sizes and pack there
-      if (span_type == ll_api::memory::PackSpans::PACK) {
-          uint64_t data_start = MEM_LOCAL_BASE;
-          uint64_t text_start = (relo_type == ll_api::memory::Relocate::XIP) ?
-              0 :
-              tt::tt_metal::hal.get_base_firmware_addr(core_type_idx, processor_class_idx, processor_type_idx);
-          ptr->pack_data_into_text(text_start, data_start);
-      }
+      ptr = new ll_api::memory(path, loading);
 
       lock.lock();
       // maps have iterator stability, so SLOT is still valid.
@@ -77,22 +64,26 @@ ll_api::memory get_risc_binary(string const &path,
       // We can't wake just those waiting on this slot, so wake them
       // all. Should be a rare event anyway.
       cache.cvar.notify_all();
-    } else if (!slot->second) {
-        // Someone else is creating the initial entry, wait for them.
-        cache.cvar.wait(lock, [=] { return bool(slot->second); });
+    } else {
+        if (!slot->second) {
+            // Someone else is creating the initial entry, wait for them.
+            cache.cvar.wait(lock, [=] { return bool(slot->second); });
+        }
+        ptr = slot->second.get();
+        TT_ASSERT(ptr->get_loading() == loading);
     }
 
-    return *slot->second.get();
+    return *ptr;
 }
 
 // CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
 // NOC coord is also synonymous to routing / physical coord
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
 
-void write_hex_vec_to_core(chip_id_t chip, const CoreCoord &core, const std::vector<uint32_t>& hex_vec, uint64_t addr, bool small_access) {
+void write_hex_vec_to_core(chip_id_t chip, const CoreCoord &core, tt::stl::Span<const uint8_t> hex_vec, uint64_t addr, bool small_access) {
     // the API is named "write_core", and its overloaded variant is taking (chip, core) pair, ie. it can write to
     // core's L1
-    tt::Cluster::instance().write_core(hex_vec.data(), hex_vec.size() * sizeof(uint32_t), tt_cxy_pair(chip, core), addr, small_access);
+    tt::Cluster::instance().write_core(hex_vec.data(), hex_vec.size(), tt_cxy_pair(chip, core), addr, small_access);
 }
 
 std::vector<uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t sz_bytes) {
@@ -101,9 +92,8 @@ std::vector<uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &co
     return read_hex_vec;
 }
 
-CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, const CoreCoord &physical_core) {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
-    return soc_desc.get_logical_ethernet_core_from_physical(physical_core);
+CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, const CoreCoord &ethernet_core) {
+    return tt::Cluster::instance().get_logical_ethernet_core_from_virtual(chip_id, ethernet_core);
 }
 
 void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg, go_msg_t *go_msg,  uint64_t base_addr, bool send_go) {
@@ -121,13 +111,10 @@ void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t
     }
 }
 
-void launch_erisc_app_fw_on_core(chip_id_t chip, CoreCoord core) {
-    llrt::write_hex_vec_to_core(chip, core, {0x1}, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
-}
-
 void print_worker_cores(chip_id_t chip_id) {
     std::cout << std::endl << "worker cores: " << std::endl;
-    for (const CoreCoord &core : tt::Cluster::instance().get_soc_desc(chip_id).physical_workers) {
+    for (const CoreCoord& core :
+         tt::Cluster::instance().get_soc_desc(chip_id).get_cores(CoreType::TENSIX, CoordSystem::PHYSICAL)) {
         std::cout << core.str() << " ";
     }
     std::cout << std::endl << std::endl;
@@ -137,54 +124,27 @@ ll_api::memory read_mem_from_core(chip_id_t chip, const CoreCoord &core, const l
 
     ll_api::memory read_mem;
     read_mem.fill_from_mem_template(mem, [&](std::vector<uint32_t>::iterator mem_ptr, uint64_t addr, uint32_t len) {
-        uint64_t relo_addr = relocate_dev_addr(addr, local_init_addr);
+        uint64_t relo_addr = tt::tt_metal::hal.relocate_dev_addr(addr, local_init_addr);
         tt::Cluster::instance().read_core(&*mem_ptr, len * sizeof(uint32_t), tt_cxy_pair(chip, core), relo_addr);
     });
     return read_mem;
 }
 
-
-uint32_t generate_risc_startup_addr(bool is_eth_core) {
-    // Options for handling brisc fw not starting at mem[0]:
-    // 1) Program the register for the start address out of reset
-    // 2) Encode a jump in crt0 for mem[0]
-    // 3) Write the jump to mem[0] here
-    // This does #3.  #1 may be best, #2 gets messy (elf files
-    // drop any section before .init, crt0 needs ifdefs, etc)
-    constexpr uint32_t jal_opcode = 0x6f;
-    constexpr uint32_t jal_max_offset = 0x0007ffff;
-    uint32_t opcode = jal_opcode;
-    uint32_t firmware_base = is_eth_core ? MEM_IERISC_FIRMWARE_BASE : MEM_BRISC_FIRMWARE_BASE;
-    assert(firmware_base < jal_max_offset);
-    // See riscv spec for offset encoding below
-    uint32_t jal_offset_bit_20 = 0;
-    uint32_t jal_offset_bits_10_to_1 = (firmware_base & 0x7fe) << 20;
-    uint32_t jal_offset_bit_11 = (firmware_base & 0x800) << 9;
-    uint32_t jal_offset_bits_19_to_12 = (firmware_base & 0xff000) << 0;
-    uint32_t jal_offset =
-        jal_offset_bit_20 |
-        jal_offset_bits_10_to_1 |
-        jal_offset_bit_11 |
-        jal_offset_bits_19_to_12;
-
-    return jal_offset | opcode;
-}
-
-void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
-    std::vector<uint32_t> jump_to_fw;
-    jump_to_fw.push_back(generate_risc_startup_addr(is_ethernet_core(core, chip_id)));
-    write_hex_vec_to_core(chip_id, core, jump_to_fw, 0);
-}
-
 bool test_load_write_read_risc_binary(
-    ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, uint32_t core_type_idx, uint32_t processor_class_idx, uint32_t processor_type_idx) {
-    assert(is_worker_core(core, chip_id) or is_ethernet_core(core, chip_id));
+    ll_api::memory const& mem,
+    chip_id_t chip_id,
+    const CoreCoord& core,
+    uint32_t core_type_idx,
+    uint32_t processor_class_idx,
+    uint32_t processor_type_idx) {
+    assert(tt::Cluster::instance().is_worker_core(core, chip_id) or tt::Cluster::instance().is_ethernet_core(core, chip_id));
 
-    uint64_t local_init_addr = tt::tt_metal::hal.get_binary_local_init_addr(core_type_idx, processor_class_idx, processor_type_idx);
+    uint64_t local_init_addr = tt::tt_metal::hal.get_jit_build_config(core_type_idx, processor_class_idx, processor_type_idx).local_init_addr;
+    auto core_type = tt::tt_metal::hal.get_programmable_core_type(core_type_idx);
 
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
-        uint64_t relo_addr = relocate_dev_addr(addr, local_init_addr);
+        uint64_t relo_addr = tt::tt_metal::hal.relocate_dev_addr(addr, local_init_addr);
 
         tt::Cluster::instance().write_core(&*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), relo_addr);
     });
@@ -201,8 +161,7 @@ bool test_load_write_read_risc_binary(
     return true;
 }
 
-void write_binary_to_address(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, uint32_t address) {
-
+void write_binary_to_address(ll_api::memory const& mem, chip_id_t chip_id, const CoreCoord& core, uint32_t address) {
     log_debug(tt::LogLLRuntime, "vec size = {}, size_in_bytes = {}", mem.size(), mem.size() * sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
         tt::Cluster::instance().write_core(&*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), address);
@@ -210,13 +169,13 @@ void write_binary_to_address(ll_api::memory &mem, chip_id_t chip_id, const CoreC
 }
 
 CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id) {
-    return tt::Cluster::instance().get_soc_desc(chip_id).get_preferred_worker_core_for_dram_channel(dram_channel_id);
+    return tt::Cluster::instance().get_soc_desc(chip_id).get_preferred_worker_core_for_dram_view(dram_channel_id);
 }
 
 namespace internal_ {
 
 static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord &core, int run_state) {
-    bool is_eth_core = is_ethernet_core(core, chip_id);
+    bool is_eth_core = tt::Cluster::instance().is_ethernet_core(core, chip_id);
     bool is_active_eth_core = false;
     bool is_inactive_eth_core = false;
 
@@ -248,8 +207,7 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
                 run_state,
                 RUN_MSG_DONE);
             TT_FATAL(
-                run == run_state || run == RUN_MSG_DONE,
-                "Read unexpected run_mailbox value");
+                run == run_state || run == RUN_MSG_DONE, "Read unexpected run_mailbox value from core {}", core.str());
         }
 
         return run == RUN_MSG_DONE;
@@ -262,7 +220,9 @@ void wait_until_cores_done(
     // poll the cores until the set of not done cores is empty
     int loop_count = 1;
     auto start = std::chrono::high_resolution_clock::now();
-    if (std::getenv("TT_METAL_SIMULATOR_EN")) timeout_ms = 0;
+    bool is_simulator = llrt::RunTimeOptions::get_instance().get_simulator_enabled();
+
+    if (is_simulator) timeout_ms = 0;
     while (!not_done_phys_cores.empty()) {
         if (timeout_ms > 0) {
             auto now = std::chrono::high_resolution_clock::now();
@@ -296,11 +256,16 @@ void wait_until_cores_done(
             }
         }
         loop_count++;
+
+        // Continuously polling cores on simulator can cause it to run much slower than real hardware.
+        if (is_simulator)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
         // Continuously polling cores here can cause other host-driven noc transactions (dprint, watcher) to drastically
         // slow down for remote devices. So when debugging with these features, add a small delay to allow other
         // host-driven transactions through.
-        if (llrt::OptionsG.get_watcher_enabled() ||
-            llrt::OptionsG.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint))
+        if (llrt::RunTimeOptions::get_instance().get_watcher_enabled() ||
+            llrt::RunTimeOptions::get_instance().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint))
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 }

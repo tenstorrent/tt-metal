@@ -17,9 +17,10 @@ FullLikeOperation::program_factory_t FullLikeOperation::select_program_factory(
 
 void FullLikeOperation::validate(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
-    if (operation_attributes.dtype != input.get_dtype())
+    if (operation_attributes.dtype != input.get_dtype()) {
         TT_FATAL(
             input.get_layout() == Layout::TILE, "Full Like: Data type conversion is only supported with tile layout");
+    }
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Full Like: Input must be on device");
     TT_FATAL(input.buffer() != nullptr, "Full Like: Input must be allocated in buffer on device");
     TT_FATAL(
@@ -41,21 +42,20 @@ void FullLikeOperation::validate_on_program_cache_hit(
     validate(operation_attributes, tensor_args);
 }
 
-FullLikeOperation::shape_return_value_t FullLikeOperation::compute_output_shapes(
+FullLikeOperation::spec_return_value_t FullLikeOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return tensor_args.input.get_logical_shape();
+    return TensorSpec(
+        tensor_args.input.get_logical_shape(),
+        tt::tt_metal::TensorLayout(
+            operation_attributes.dtype,
+            tt::tt_metal::PageConfig(operation_attributes.layout),
+            operation_attributes.memory_config));
 }
 
 FullLikeOperation::tensor_return_value_t FullLikeOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto output_shape = compute_output_shapes(operation_attributes, tensor_args);
-    const auto& input = tensor_args.input;
-    return create_device_tensor(
-        output_shape,
-        operation_attributes.dtype,
-        operation_attributes.layout,
-        input.device(),
-        operation_attributes.memory_config);
+    const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    return create_device_tensor(output_spec, tensor_args.input.device());
 }
 
 std::tuple<FullLikeOperation::operation_attributes_t, FullLikeOperation::tensor_args_t> FullLikeOperation::invoke(
@@ -67,8 +67,8 @@ std::tuple<FullLikeOperation::operation_attributes_t, FullLikeOperation::tensor_
     return {
         operation_attributes_t{
             fill_value,
-            dtype.value_or(input.tensor_attributes->dtype),
-            layout.value_or(input.tensor_attributes->layout),
+            dtype.value_or(input.dtype()),
+            layout.value_or(input.layout()),
             memory_config.value_or(input.memory_config())},
         tensor_args_t{input}};
 }

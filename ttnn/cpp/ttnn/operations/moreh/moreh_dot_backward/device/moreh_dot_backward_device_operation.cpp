@@ -14,8 +14,8 @@ MorehDotBackwardOperation::program_factory_t MorehDotBackwardOperation::select_p
 }
 
 void grad_tensor_validate(const Tensor& tensor, const Tensor& grad_tensor) {
-    const auto& tensor_shape = tensor.get_legacy_shape().without_padding();
-    const auto& grad_tensor_shape = grad_tensor.get_legacy_shape().without_padding();
+    const auto& tensor_shape = tensor.get_logical_shape();
+    const auto& grad_tensor_shape = grad_tensor.get_logical_shape();
     TT_FATAL(tensor_shape == grad_tensor_shape, "Tensor shape and grad tensor shape should be the same.");
     TT_FATAL(grad_tensor.storage_type() == StorageType::DEVICE, "Operands to dot backward need to be on device!");
     TT_FATAL(grad_tensor.device() == tensor.device(), "Operands to dot backward need to be on the same device!");
@@ -69,10 +69,18 @@ void MorehDotBackwardOperation::validate_on_program_cache_hit(
     validate_tensors(operation_attributes, tensor_args);
 }
 
-MorehDotBackwardOperation::shape_return_value_t MorehDotBackwardOperation::compute_output_shapes(
+MorehDotBackwardOperation::spec_return_value_t MorehDotBackwardOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    TT_FATAL(false, "This operation is in place, and as such, should not be computing output shapes.");
-    return {};
+    std::vector<std::optional<TensorSpec>> output_specs;
+    output_specs.reserve(tensor_args.output_tensors.size());
+    for (const auto& output_tensor : tensor_args.output_tensors) {
+        if (output_tensor.has_value()) {
+            output_specs.push_back(output_tensor->get_tensor_spec());
+        } else {
+            output_specs.push_back(std::nullopt);
+        }
+    }
+    return output_specs;
 }
 
 MorehDotBackwardOperation::tensor_return_value_t MorehDotBackwardOperation::create_output_tensors(

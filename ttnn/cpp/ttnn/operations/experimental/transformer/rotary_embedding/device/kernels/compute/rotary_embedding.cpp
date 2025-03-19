@@ -19,25 +19,25 @@ ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
     cb_wait_front(in1_cb, in1_idx + 1);
     cb_reserve_back(out_cb, num_tiles);
 
-    #ifdef DECODE_MODE
+#ifdef DECODE_MODE
     ACQ();
-    mul_bcast_rows_init_short();
+    mul_bcast_rows_init_short(in0_cb, in1_cb);
     mul_tiles_bcast_rows(in0_cb, in1_cb, 0, in1_idx, 0);
     pack_tile(0, out_cb);
     REL();
     cb_push_back(out_cb, num_tiles);
     cb_pop_front(in0_cb, num_tiles);
-    // We don't pop in1 in decode which is sin/cos since we don't stream
-    #else
+// We don't pop in1 in decode which is sin/cos since we don't stream
+#else
     ACQ();
-    mul_tiles_init();
+    mul_tiles_init(in0_cb, in1_cb);
     mul_tiles(in0_cb, in1_cb, 0, 0, 0);
     pack_tile(0, out_cb);
     REL();
     cb_push_back(out_cb, num_tiles);
     cb_pop_front(in0_cb, num_tiles);
     cb_pop_front(in1_cb, num_tiles);
-    #endif
+#endif
 }
 
 ALWI void UNTILIZE_TILES(uint32_t in0_cb, uint32_t out_cb, uint32_t num_tiles) {
@@ -51,7 +51,7 @@ ALWI void UNTILIZE_TILES(uint32_t in0_cb, uint32_t out_cb, uint32_t num_tiles) {
 }
 
 ALWI void TILIZE_ROWS(uint32_t in0_cb, uint32_t sync_cb, uint32_t out_cb, uint32_t num_tiles) {
-    tilize_init_short(in0_cb, num_tiles);
+    tilize_init_short(in0_cb, num_tiles, out_cb);
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(sync_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
@@ -61,7 +61,7 @@ ALWI void TILIZE_ROWS(uint32_t in0_cb, uint32_t sync_cb, uint32_t out_cb, uint32
     // Pop shared cbs after tilize
     cb_pop_front(in0_cb, num_tiles);
     cb_pop_front(sync_cb, num_tiles);
-    tilize_uninit(in0_cb);
+    tilize_uninit(in0_cb, out_cb);
 }
 
 namespace NAMESPACE {
@@ -81,13 +81,12 @@ void MAIN {
     constexpr uint32_t Wt = get_compile_time_arg_val(10);
     constexpr uint32_t half_Wt = get_compile_time_arg_val(11);
 
-
     cb_wait_front(scalar_cb, onetile);
 
     uint32_t updated_cos_cb = cos_cb;
     uint32_t updated_sin_cb = sin_cb;
 
-    #ifdef DECODE_MODE
+#ifdef DECODE_MODE
     constexpr uint32_t untilized_cos_cb = get_compile_time_arg_val(12);
     constexpr uint32_t untilized_cos_sync_cb = get_compile_time_arg_val(13);
     constexpr uint32_t untilized_sin_cb = get_compile_time_arg_val(14);
@@ -103,15 +102,15 @@ void MAIN {
     TILIZE_ROWS(untilized_cos_cb, untilized_cos_sync_cb, retilized_cos_cb, Wt);
     updated_cos_cb = retilized_cos_cb;
     updated_sin_cb = retilized_sin_cb;
-    #else
+#else
     binary_op_init_common(rotated_in_cb, scalar_cb, rotated_in_interm_cb);
-    #endif
+#endif
     uint32_t in1_idx = 0;
     for (uint32_t i = 0; i < num_rows; ++i) {
         for (uint32_t j = 0; j < Wt; ++j) {
-            #ifdef DECODE_MODE
+#ifdef DECODE_MODE
             in1_idx = j;
-            #endif
+#endif
             if (j < half_Wt) {
                 // Multiply half of the rotated input by scalar (-1)
                 reconfig_data_format(rotated_in_cb, scalar_cb);
@@ -119,7 +118,7 @@ void MAIN {
                 cb_wait_front(rotated_in_cb, onetile);
                 cb_reserve_back(rotated_in_interm_cb, onetile);
                 ACQ();
-                mul_tiles_bcast_scalar_init_short();
+                mul_tiles_bcast_scalar_init_short(rotated_in_cb, scalar_cb);
                 mul_tiles_bcast_scalar(rotated_in_cb, scalar_cb, 0, 0, 0);
                 pack_tile(0, rotated_in_interm_cb);
                 REL();
@@ -147,7 +146,7 @@ void MAIN {
             reconfig_data_format_srca(rotated_in_cb, cos_interm_cb);
             pack_reconfig_data_format(cos_interm_cb, out_cb);
             ACQ();
-            add_tiles_init();
+            add_tiles_init(cos_interm_cb, sin_interm_cb);
             add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
             pack_tile(0, out_cb);
             REL();
@@ -155,8 +154,7 @@ void MAIN {
             cb_push_back(out_cb, onetile);
             cb_pop_front(cos_interm_cb, onetile);
             cb_pop_front(sin_interm_cb, onetile);
-
         }
     }
 }
-} // NAMESPACE
+}  // namespace NAMESPACE

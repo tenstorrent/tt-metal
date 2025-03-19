@@ -6,7 +6,7 @@
 
 #include <vector>
 
-#include "common/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -26,13 +26,13 @@ struct MorehClipGradNormStep3Operation {
         const Tensor& clip_coef_clamped;
     };
 
-    using shape_return_value_t = SimpleShape;
+    using spec_return_value_t = std::vector<TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
 
     struct ProgramFactory {
         struct shared_variables_t {
-            KernelHandle reader_kernel_id;
-            KernelHandle writer_kernel_id;
+            tt::tt_metal::KernelHandle reader_kernel_id;
+            tt::tt_metal::KernelHandle writer_kernel_id;
             uint32_t num_cores_to_be_used;
             size_t num_cores_y;
         };
@@ -57,7 +57,7 @@ struct MorehClipGradNormStep3Operation {
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
-    static shape_return_value_t compute_output_shapes(const operation_attributes_t&, const tensor_args_t&);
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const std::vector<Tensor>& inputs,

@@ -8,5 +8,5 @@
 
 namespace ttnn::operations::transformer {
 
-void py_bind_sdpa_decode(pybind11::module &module);
+void py_bind_sdpa_decode(pybind11::module& module);
 }  // namespace ttnn::operations::transformer

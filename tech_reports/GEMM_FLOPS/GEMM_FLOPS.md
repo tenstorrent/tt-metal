@@ -18,14 +18,30 @@ Therefore, the peak achieved flops changes based on the datatype, the size of th
 The matrix multiply TFLOPS results can be tested on N150 card using:
 
 ```bash
-pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf
+TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf
 ```
+
+for manually selected matmul configurations, or using:
+
+```bash
+TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf_out_of_box
+```
+
+for out-of-box matmul configurations.
 
 Alternatively, to test on an N300 card, use the following command:
 
 ```bash
-WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf
-``` 
+WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf
+```
+
+for manually selected matmul configurations, or using:
+
+```bash
+WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf_out_of_box
+```
+
+for out-of-box matmul configurations.
 
 
 ## Design of Experiments
@@ -39,41 +55,44 @@ For more details please refer to the tech reports [Matrix Engine](../matrix_engi
 
 For example, when changing the precision of the matrix, for a given size of matrix the output performance is expected to be different.
 
-![A simple bar chart of the TFLOPS on WH when changing the precision of matrcies](images/effects_of_precision.png "Variance in performance of TFLOPS on WH from SRAM due to changing precision")
+![A simple bar chart of the TFLOPS on WH when changing the precision of matrices](images/effects_of_precision.png "Variance in performance of TFLOPS on WH from SRAM due to changing precision")
 
 
 
 ## MicroBenchmarks
 
-### Matrix Multiplication TFLOPs on Wormhole (WH)
+### Matrix Multiplication TFLOPS on Wormhole (WH)
 
-The WH matrix engine performs 8x16 x 16x16 = 8x16 in a single cycle. 
-- This is 2*8\*16\*16 = 4096 muladds in a single cycle. 
-- At 1GHz, this is 4 TFLOPs per matrix engine. 
+The WH matrix engine performs 8x16 x 16x16 = 8x16 in a single cycle.
+- This is 2*8\*16\*16 = 4096 muladds in a single cycle.
+- At 1GHz, this is 4 TFLOPS per matrix engine.
 - The 8x16 is the smallest matrix that can be fed into in0, and 16x16 is the smallest matrix that can be fed into in1.
 
 If the input matrices fed into the engine are "shorter" than 8x16, for example 1x16, the engine will still perform 8x16 x 16x16 = 8x16, but the effective throughput will be 1/8.
-Thus, for 1x16 x 16x16 matrices, the effective throughput is 0.5 TFLOP per matrix engine.
+Thus, for 1x16 x 16x16 matrices, the effective throughput is 0.5 TFLOPS per matrix engine.
 
-MATH_FIDELITY is used for higher precision, and TFLOPs are calculated by dividing by the MATH_FIDELITY value.
-- LoFi ->  ~4 TFLOPs 
-- HiFi2 -> ~2 TFLOPs 
-- HiFi3 -> ~1.33 TFLOPs 
-- HiFi4 -> ~1 TFLOPs
+MATH_FIDELITY is used for higher precision, and TFLOPS are calculated by dividing by the MATH_FIDELITY value.
+- LoFi ->  ~4 TFLOPS
+- HiFi2 -> ~2 TFLOPS
+- HiFi3 -> ~1.33 TFLOPS
+- HiFi4 -> ~1 TFLOPS
 
 
 ### Utilization derivation formula
 
 ```
-Utilization = ideal cycles / actual cycles. 
+Utilization = ideal cycles / actual cycles.
 Ideal cycles = (m * k * n) / (tile_height * tile_width * tile_height) * (cycle_per_tile / num_cores)
 ```
-- Cycle_per_tile is the ideal compute cycle for each tile, which depends on math fidelity (LoFi: 16, HiFi2: 32, HiFi3: 48, HiFi4: 64). 
+- Cycle_per_tile is the ideal compute cycle for each tile, which depends on math fidelity (LoFi: 16, HiFi2: 32, HiFi3: 48, HiFi4: 64).
 - For utilization of user-specified grid size, num_cores is the user-specified number of cores. In this microbenchmark, it's 8x8.
 - For utilization of full grid size, num_cores is the maximum number of cores available for compute. Currently the max available is 8x8, but will be extended to 8x9 soon.
 
+### Manually tuned Performance
 
-### Resuls: Peak FLOPS
+Here we show the peak results we can get based on manually selected matmul configurations, including packer l1 enablement, math fidelity, input output sharding, and input output L1/DRAM selection.
+
+#### Peak FLOPS
 
 Depending on the fidelity, datatype, and matrix shape chosen, different peak teraflop values can be achieved.
 
@@ -81,7 +100,7 @@ Below is the results generated from running the benchmark script, showcasing the
 
 We also show the results with and without trace (see [AdvancedPerformanceOptimizationsForModels](../AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md) for details of trace). With trace, we can minimize the overhead of host which can reflect the actual device performance better.
 
-Finally, we present the results in terms of device time, device throughput in TFLOPs, device utilization compared to the user-specified grid size and device utilization compared to the full grid size (8x8 in Wormhole). Utilization is calculated with 
+Finally, we present the results in terms of device time, device throughput in TFLOPS, device utilization compared to the user-specified grid size and device utilization compared to the full grid size (8x8 in Wormhole). Utilization is calculated with
 
 
 #### TFLOPS plot across all matrix sizes and configurations
@@ -89,7 +108,7 @@ Finally, we present the results in terms of device time, device throughput in TF
 ![](images/matmul_tflops_5_exp.png)
 
 
-#### Utilization plot across all matrix sizes and configurations, based on the Chip TFLOPs calculated per each Math Fidelity
+#### Utilization plot across all matrix sizes and configurations, based on the Chip TFLOPS calculated per each Math Fidelity
 
 ![](images/matmul_utilization_5_exp.png)
 
@@ -104,7 +123,7 @@ Finally, we present the results in terms of device time, device throughput in TF
 ![](images/matmul_utilization_table_5_exp.png)
 
 
-#### TFLOPS ratio between the results with trace and without-trace. The trace mode has signficiant impact (i.e. higher ratio) when running a sequence of smaller/faster OPs, because the OP dispatch time will be comparable to the OP device runtime.
+#### TFLOPS ratio between the results with trace and without-trace. The trace mode has significant impact (i.e. higher ratio) when running a sequence of smaller/faster OPS, because the OP dispatch time will be comparable to the OP device runtime.
 
 ![](images/mamtul_trace_nontrace_ratio_5_exp.png)
 
@@ -112,7 +131,7 @@ Finally, we present the results in terms of device time, device throughput in TF
 
 #### The full results table
 
-|     m |     k |     n | use_trace   | grid_size   | in0_sharded   | out_sharded   | in0_storage_type   | in1_storage_type   | out_storage_type   | dtype              | math_fidelity      |   inference_time_avg (ns) |   TFLOPs (avg) | Utilization (vs user grid)   | Utilization (vs 8x8 full grid)   |
+|     m |     k |     n | use_trace   | grid_size   | in0_sharded   | out_sharded   | in0_storage_type   | in1_storage_type   | out_storage_type   | dtype              | math_fidelity      |   inference_time_avg (ns) |   TFLOPS (avg) | Utilization (vs user grid)   | Utilization (vs 8x8 full grid)   |
 |------:|------:|------:|:------------|:------------|:--------------|:--------------|:-------------------|:-------------------|:-------------------|:-------------------|:-------------------|--------------------------:|---------------:|:-----------------------------|:---------------------------------|
 |   512 |   512 |   512 | False       | (8, 8)      | True          | True          | L1                 | DRAM               | L1                 | DataType.BFLOAT16  | MathFidelity.HiFi2 |          378654           |           0.71 | 0.54%                        | 0.54%                            |
 |   512 |  1024 |  1024 | False       | (8, 8)      | True          | True          | L1                 | DRAM               | L1                 | DataType.BFLOAT16  | MathFidelity.HiFi2 |          363193           |           2.96 | 2.26%                        | 2.26%                            |
@@ -270,7 +289,7 @@ Finally, we present the results in terms of device time, device throughput in TF
 
 For most hardware, peak performance is achieved with square matrices that best align with the underlying hardware, for example WH performs best when using Square input matrices, we achieve highest device utilization with bfloat16 and HiFi4.
 
-![A simple bar chart of the TFLOPS on WH when using various square matrcies](images/TFLOPS_WH_SQUARE.png "Square Matrix TFLOPS on WH from SRAM")
+![A simple bar chart of the TFLOPS on WH when using various square matrices](images/TFLOPS_WH_SQUARE.png "Square Matrix TFLOPS on WH from SRAM")
 
 #### Rectangular matrices
 
@@ -278,12 +297,102 @@ When deviating from Square matrices, the total balance of compute can be thrown 
 
 Given input matrix A of 512x1024 and B of 1024x2048 to produce output matrix 512x2048 requires the same amount of computation as if the input matrices were of dimensions 1024^2. However, the performance results are measurably different:
 
-|     m |     k |     n | use_trace   | grid_size   | in0_sharded   | out_sharded   | in0_storage_type   | in1_storage_type   | out_storage_type   | dtype              | math_fidelity      |   inference_time_avg (ns) |   TFLOPs (avg) | Utilization (vs user grid)   | Utilization (vs 8x8 full grid)   |
+|     m |     k |     n | use_trace   | grid_size   | in0_sharded   | out_sharded   | in0_storage_type   | in1_storage_type   | out_storage_type   | dtype              | math_fidelity      |   inference_time_avg (ns) |   TFLOPS (avg) | Utilization (vs user grid)   | Utilization (vs 8x8 full grid)   |
 |------:|------:|------:|:------------|:------------|:--------------|:--------------|:-------------------|:-------------------|:-------------------|:-------------------|:-------------------|--------------------------:|---------------:|:-----------------------------|:---------------------------------|
 |   512 |  1024 |  2048 | True        | (8, 8)      | True          | True          | L1                 | DRAM               | L1                 | DataType.BFLOAT16  | MathFidelity.HiFi2 |           52824           |          40.65 | 31.02%                       | 31.02%                           |
-|  1024 |  1024 |  1024 | True        | (8, 8)      | True          | True          | L1                 | DRAM               | L1                 | DataType.BFLOAT16  | MathFidelity.HiFi2 |           36845.2         |          58.28 | 44.47%                       | 44.47%       
+|  1024 |  1024 |  1024 | True        | (8, 8)      | True          | True          | L1                 | DRAM               | L1                 | DataType.BFLOAT16  | MathFidelity.HiFi2 |           36845.2         |          58.28 | 44.47%                       | 44.47%
 
-![A simple bar chart of the TFLOPS on WH when using square vs rectangular matrcies](images/effects_of_shapes.png "Square vs rectangular Matrix TFLOPS on WH from SRAM")
+![A simple bar chart of the TFLOPS on WH when using square vs rectangular matrices](images/effects_of_shapes.png "Square vs rectangular Matrix TFLOPS on WH from SRAM")
+
+
+### Out of Box performance
+
+We also show the peak results we can get based on auto-selected matmul configurations, which the matmul op itself chooses the configurations. It currently is not perfect and we'll continue improve it so that it can match or even surpass the manually selected ones. We show the results from 512x512x512 to 4096x4096x4096. The reason we are not testing shapes larger is due to the wrong selections of matmul configurations.
+
+As we can see, the results are comparable to the manually selected.
+
+#### The full results table
+
+| m | k | n | use_trace | grid_size | in0_storage_type | in1_storage_type | out_storage_type | dtype | math_fidelity | inference_time_avg (ns) | TFLOPS (avg) | Utilization (vs user grid) | Utilization (vs 8x8 full grid) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 512 | 512 | 512 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 400640.96 | 0.67 | 0.51% | 0.51% |
+| 512 | 1024 | 1024 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 296726.23 | 3.62 | 2.76% | 2.76% |
+| 512 | 1024 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 297236.44 | 7.22 | 5.51% | 5.51% |
+| 1024 | 1024 | 1024 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 299668.31 | 7.17 | 5.47% | 5.47% |
+| 1024 | 1024 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 300722.12 | 14.28 | 10.90% | 10.90% |
+| 1024 | 2048 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 300738.81 | 28.56 | 21.79% | 21.79% |
+| 2048 | 2048 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 305151.94 | 56.3 | 42.95% | 42.95% |
+| 2048 | 2048 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 460939.41 | 55.91 | 42.65% | 42.65% |
+| 2048 | 3072 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 596759.32 | 64.77 | 49.42% | 49.42% |
+| 3072 | 3072 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 902006.63 | 64.28 | 49.04% | 49.04% |
+| 3072 | 3072 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1180622.58 | 65.48 | 49.96% | 49.96% |
+| 3072 | 4096 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1516034.6 | 67.99 | 51.87% | 51.87% |
+| 4096 | 4096 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 2168009.28 | 63.39 | 48.37% | 48.37% |
+| 512 | 512 | 512 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 393490.79 | 0.68 | 0.52% | 0.52% |
+| 512 | 1024 | 1024 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 114793.78 | 9.35 | 7.14% | 7.14% |
+| 512 | 1024 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 141630.17 | 15.16 | 11.57% | 11.57% |
+| 1024 | 1024 | 1024 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 70357.32 | 30.52 | 23.29% | 23.29% |
+| 1024 | 1024 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 115475.65 | 37.19 | 28.38% | 28.38% |
+| 1024 | 2048 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 163207.05 | 52.63 | 40.16% | 40.16% |
+| 2048 | 2048 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 302982.33 | 56.7 | 43.26% | 43.26% |
+| 2048 | 2048 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 451309.68 | 57.1 | 43.56% | 43.56% |
+| 2048 | 3072 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 580670.83 | 66.57 | 50.79% | 50.79% |
+| 3072 | 3072 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 873718.26 | 66.36 | 50.63% | 50.63% |
+| 3072 | 3072 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1135830.88 | 68.06 | 51.93% | 51.93% |
+| 3072 | 4096 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 1455934.05 | 70.8 | 54.02% | 54.02% |
+| 4096 | 4096 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 2048006.06 | 67.11 | 51.20% | 51.20% |
+| 512 | 512 | 512 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 371801.85 | 0.72 | 0.28% | 0.28% |
+| 512 | 1024 | 1024 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 300638.68 | 3.57 | 1.36% | 1.36% |
+| 512 | 1024 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 293450.36 | 7.32 | 2.79% | 2.79% |
+| 1024 | 1024 | 1024 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 300242.9 | 7.15 | 2.73% | 2.73% |
+| 1024 | 1024 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 299191.47 | 14.36 | 5.48% | 5.48% |
+| 1024 | 2048 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 300562.38 | 28.58 | 10.90% | 10.90% |
+| 2048 | 2048 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 300052.17 | 57.26 | 21.84% | 21.84% |
+| 2048 | 2048 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 303642.75 | 84.87 | 32.37% | 32.37% |
+| 2048 | 3072 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 304903.98 | 126.78 | 48.36% | 48.36% |
+| 3072 | 3072 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 451674.46 | 128.37 | 48.97% | 48.97% |
+| 3072 | 3072 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 585849.29 | 131.96 | 50.34% | 50.34% |
+| 3072 | 4096 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 749573.71 | 137.52 | 52.46% | 52.46% |
+| 4096 | 4096 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 1039688.59 | 132.19 | 50.43% | 50.43% |
+| 512 | 512 | 512 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 365591.05 | 0.73 | 0.28% | 0.28% |
+| 512 | 1024 | 1024 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 73513.98 | 14.61 | 5.57% | 5.57% |
+| 512 | 1024 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 86894.04 | 24.71 | 9.43% | 9.43% |
+| 1024 | 1024 | 1024 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 41377.54 | 51.9 | 19.80% | 19.80% |
+| 1024 | 1024 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 67162.51 | 63.95 | 24.39% | 24.39% |
+| 1024 | 2048 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 91803.07 | 93.57 | 35.69% | 35.69% |
+| 2048 | 2048 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 159378.05 | 107.79 | 41.12% | 41.12% |
+| 2048 | 2048 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 235373.97 | 109.48 | 41.77% | 41.77% |
+| 2048 | 3072 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 300071.24 | 128.82 | 49.14% | 49.14% |
+| 3072 | 3072 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 441164.97 | 131.43 | 50.14% | 50.14% |
+| 3072 | 3072 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 570080.28 | 135.61 | 51.73% | 51.73% |
+| 3072 | 4096 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 736315.25 | 139.99 | 53.40% | 53.40% |
+| 4096 | 4096 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT8_B | MathFidelity.LoFi | 996146.2 | 137.97 | 52.63% | 52.63% |
+| 512 | 512 | 512 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 367822.65 | 0.73 | 0.28% | 0.28% |
+| 512 | 1024 | 1024 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 295593.74 | 3.63 | 1.39% | 1.39% |
+| 512 | 1024 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 294413.57 | 7.29 | 2.78% | 2.78% |
+| 1024 | 1024 | 1024 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 299553.87 | 7.17 | 2.73% | 2.73% |
+| 1024 | 1024 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 299890.04 | 14.32 | 5.46% | 5.46% |
+| 1024 | 2048 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 301394.46 | 28.5 | 10.87% | 10.87% |
+| 2048 | 2048 | 2048 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 299687.39 | 57.33 | 21.87% | 21.87% |
+| 2048 | 2048 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 299446.58 | 86.06 | 32.83% | 32.83% |
+| 2048 | 3072 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 300545.69 | 128.62 | 49.06% | 49.06% |
+| 3072 | 3072 | 3072 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 338408.95 | 171.34 | 65.36% | 65.36% |
+| 3072 | 3072 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 447473.53 | 172.77 | 65.91% | 65.91% |
+| 3072 | 4096 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 564715.86 | 182.53 | 69.63% | 69.63% |
+| 4096 | 4096 | 4096 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 766568.18 | 179.29 | 68.39% | 68.39% |
+| 512 | 512 | 512 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 361955.17 | 0.74 | 0.28% | 0.28% |
+| 512 | 1024 | 1024 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 58608.06 | 18.32 | 6.99% | 6.99% |
+| 512 | 1024 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 65336.23 | 32.87 | 12.54% | 12.54% |
+| 1024 | 1024 | 1024 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 28140.54 | 76.31 | 29.11% | 29.11% |
+| 1024 | 1024 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 44860.84 | 95.74 | 36.52% | 36.52% |
+| 1024 | 2048 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 64001.08 | 134.22 | 51.20% | 51.20% |
+| 2048 | 2048 | 2048 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 115413.67 | 148.85 | 56.78% | 56.78% |
+| 2048 | 2048 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 171816.35 | 149.98 | 57.21% | 57.21% |
+| 2048 | 3072 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 232594.01 | 166.19 | 63.40% | 63.40% |
+| 3072 | 3072 | 3072 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 333464.15 | 173.88 | 66.33% | 66.33% |
+| 3072 | 3072 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 437791.35 | 176.59 | 67.36% | 67.36% |
+| 3072 | 4096 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 551083.09 | 187.05 | 71.35% | 71.35% |
+| 4096 | 4096 | 4096 | True | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT4_B | MathFidelity.LoFi | 728187.56 | 188.74 | 72.00% | 72.00% |
 
 
 

@@ -11,18 +11,22 @@ namespace operations::data_movement {
 
 struct ExecutePermute {
     static ttnn::Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
-        tt::stl::Span<const int64_t> dims,
+        const SmallVector<int64_t>& dims,
         const std::optional<MemoryConfig>& memory_config,
-        bool composite = true);
+        const std::optional<float>& pad_value = 0.0f);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        tt::stl::Span<const int64_t> dims,
-        const std::optional<MemoryConfig>& memory_config);
+        const SmallVector<int64_t>& dims,
+        const std::optional<MemoryConfig>& memory_config,
+        const std::optional<float>& pad_value = 0.0f);
 
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, tt::stl::Span<const int64_t> dims);
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& input_tensor,
+        const SmallVector<int64_t>& dims,
+        const std::optional<float>& pad_value = 0.0f);
 };
 
 }  // namespace operations::data_movement

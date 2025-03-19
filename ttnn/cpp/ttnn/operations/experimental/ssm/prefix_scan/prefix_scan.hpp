@@ -11,15 +11,7 @@ namespace ttnn::operations::experimental::ssm {
 
 struct ExecutePrefixScan {
     static ttnn::Tensor invoke(
-        uint8_t queue_id,
-        const Tensor& a,
-        const Tensor& bx,
-        const Tensor& h_prev,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<DataType> dtype = std::nullopt,
-        const std::optional<MathFidelity> math_fidelity = std::nullopt);
-
-    static ttnn::Tensor invoke(
+        QueueId queue_id,
         const Tensor& a,
         const Tensor& bx,
         const Tensor& h_prev,

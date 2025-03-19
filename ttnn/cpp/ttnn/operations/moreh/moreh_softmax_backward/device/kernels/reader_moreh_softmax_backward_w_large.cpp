@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
     uint32_t y_addr = get_arg_val<uint32_t>(0);
@@ -15,10 +15,10 @@ void kernel_main() {
     uint32_t scaler = get_arg_val<uint32_t>(5);
     uint32_t mask_w = get_arg_val<uint32_t>(6);
 
-    constexpr auto cb_y = tt::CB::c_in0;
-    constexpr auto cb_dy = tt::CB::c_in1;
-    constexpr auto cb_scaler = tt::CB::c_in2;
-    constexpr auto cb_mask = tt::CB::c_in3;
+    constexpr auto cb_y = tt::CBIndex::c_0;
+    constexpr auto cb_dy = tt::CBIndex::c_1;
+    constexpr auto cb_scaler = tt::CBIndex::c_2;
+    constexpr auto cb_mask = tt::CBIndex::c_3;
 
     uint32_t l1_write_addr_in;
 

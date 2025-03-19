@@ -27,6 +27,7 @@ struct ExecuteRMSNorm {
 
 }  // namespace operations::normalization
 
-constexpr auto rms_norm = ttnn::register_operation_with_auto_launch_op<"ttnn::rms_norm", ttnn::operations::normalization::ExecuteRMSNorm>();
+constexpr auto rms_norm =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::rms_norm", ttnn::operations::normalization::ExecuteRMSNorm>();
 
 }  // namespace ttnn

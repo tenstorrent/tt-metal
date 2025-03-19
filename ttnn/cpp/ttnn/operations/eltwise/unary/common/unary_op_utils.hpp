@@ -19,10 +19,14 @@ UnaryWithParam string_to_unary_with_param(const std::string& name);
 
 bool get_op_approx_mode(UnaryOpType op_type);
 
-std::pair<std::string, std::string> get_op_init_and_func(UnaryOpType op_type, const std::vector<float>& params = {}, const std::string& idst = "0");
+std::pair<std::string, std::string> get_op_init_and_func(
+    UnaryOpType op_type, const std::vector<float>& params = {}, const std::string& idst = "0");
 
 std::map<std::string, std::string> get_defines(
-    UnaryOpType op_type, const std::optional<std::vector<float>>& params = std::nullopt, const std::string& id = "0", const std::string& idst = "0");
+    UnaryOpType op_type,
+    const std::optional<std::vector<float>>& params = std::nullopt,
+    const std::string& id = "0",
+    const std::string& idst = "0");
 
 std::map<std::string, std::string> get_block_defines(
     const std::vector<UnaryWithParam>& op_chain, const std::string& block_id = "0", const std::string& idst = "0");
@@ -58,12 +62,15 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::RIGHT_SHIFT:
         case UnaryOpType::LEFT_SHIFT:
         case UnaryOpType::REMAINDER:
-        case UnaryOpType::DROPOUT:
         case UnaryOpType::FILL:
+        case UnaryOpType::ROUND:
+        case UnaryOpType::PRELU_SFPU:
         case UnaryOpType::FMOD: return true;
         default: return false;
     }
     return false;
 }
 
-}
+void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines);
+
+}  // namespace ttnn::operations::unary::utils

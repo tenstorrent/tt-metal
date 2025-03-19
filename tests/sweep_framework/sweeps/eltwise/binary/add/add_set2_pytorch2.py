@@ -14,6 +14,8 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.utility_functions import torch_random
 
 
+# Ref: https://github.com/tenstorrent/pytorch2.0_ttnn/blob/main/docs/operations/aten.add.Tensor.md
+
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.

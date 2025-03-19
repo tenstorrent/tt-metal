@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 ALWI bool need_to_do_mask_h(uint32_t w_idx, uint32_t origin_num_h_tiles, uint32_t origin_num_w_tiles) {
     return ((w_idx / origin_num_w_tiles) + 1) % origin_num_h_tiles == 0;
@@ -18,29 +18,29 @@ void MAIN {
     constexpr bool is_lastdim_layernorm = get_compile_time_arg_val(5) == 1;
     constexpr bool is_groupnorm = get_compile_time_arg_val(6) == 1;
 
-    binary_op_init_common(tt::CB::c_in1, tt::CB::c_in2);
+    binary_op_init_common(tt::CBIndex::c_1, tt::CBIndex::c_2, tt::CBIndex::c_16);
 
-    constexpr auto cb_dy = tt::CB::c_in0;         // output_grad(==dy)
-    constexpr auto cb_x = tt::CB::c_in1;          // input(==x)
-    constexpr auto cb_mean = tt::CB::c_in2;       // mean
-    constexpr auto cb_rstd = tt::CB::c_in3;       // rstd
-    constexpr auto cb_scaler = tt::CB::c_in4;     // scaler
-    constexpr auto cb_n_recip_n = tt::CB::c_in5;  // n_recip_n
-    constexpr auto cb_gamma = tt::CB::c_in6;      // gamma
-    constexpr auto cb_mask_h_w = tt::CB::c_in7;   // mask_h_w
+    constexpr auto cb_dy = tt::CBIndex::c_0;         // output_grad(==dy)
+    constexpr auto cb_x = tt::CBIndex::c_1;          // input(==x)
+    constexpr auto cb_mean = tt::CBIndex::c_2;       // mean
+    constexpr auto cb_rstd = tt::CBIndex::c_3;       // rstd
+    constexpr auto cb_scaler = tt::CBIndex::c_4;     // scaler
+    constexpr auto cb_n_recip_n = tt::CBIndex::c_5;  // n_recip_n
+    constexpr auto cb_gamma = tt::CBIndex::c_6;      // gamma
+    constexpr auto cb_mask_h_w = tt::CBIndex::c_7;   // mask_h_w
 
     // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (rstd / n)
-    constexpr auto cb_dx = tt::CB::c_out0;  // input_grad(==dx)
+    constexpr auto cb_dx = tt::CBIndex::c_16;  // input_grad(==dx)
 
     // y = (x - mean) * rstd
-    constexpr auto cb_dycopy = tt::CB::c_intermed0;  // copy output_grad(==dycopy)
-    constexpr auto cb_y = tt::CB::c_intermed1;       // output(==y)
-    constexpr auto cb_dysum = tt::CB::c_intermed2;   // Sum[dy]
-    constexpr auto cb_ydysum = tt::CB::c_intermed3;  // Sum[y * dy]
+    constexpr auto cb_dycopy = tt::CBIndex::c_24;  // copy output_grad(==dycopy)
+    constexpr auto cb_y = tt::CBIndex::c_25;       // output(==y)
+    constexpr auto cb_dysum = tt::CBIndex::c_26;   // Sum[dy]
+    constexpr auto cb_ydysum = tt::CBIndex::c_27;  // Sum[y * dy]
 
-    constexpr auto cb_tmp1 = tt::CB::c_intermed4;  // tmp1
-    constexpr auto cb_tmp2 = tt::CB::c_intermed5;  // tmp2
-    constexpr auto cb_tmp3 = tt::CB::c_intermed6;  // tmp3
+    constexpr auto cb_tmp1 = tt::CBIndex::c_28;  // tmp1
+    constexpr auto cb_tmp2 = tt::CBIndex::c_29;  // tmp2
+    constexpr auto cb_tmp3 = tt::CBIndex::c_30;  // tmp3
 
     constexpr uint32_t onetile = 1;
 

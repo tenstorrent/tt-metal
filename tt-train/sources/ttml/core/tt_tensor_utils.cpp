@@ -13,7 +13,8 @@
 #include <functional>
 #include <optional>
 #include <stdexcept>
-#include <core/ttnn_all_includes.hpp>
+
+#include "core/xtensor_utils.hpp"
 
 namespace {
 
@@ -30,8 +31,8 @@ T get_median(std::vector<T>& vec) {
 
 template <typename T>
 void print_tensor_stats_(const tt::tt_metal::Tensor& tensor, const std::string& name) {
-    auto tensor_shape = tensor.get_shape();
-    auto tensor_vec = ttml::core::to_vector<T>(tensor);
+    auto tensor_shape = tensor.get_logical_shape();
+    auto tensor_vec = tensor.to_vector<T>();
 
     auto median = get_median(tensor_vec);
     auto mean = std::accumulate(tensor_vec.begin(), tensor_vec.end(), 0.F) / static_cast<float>(tensor_vec.size());
@@ -54,21 +55,21 @@ void print_tensor_stats_(const tt::tt_metal::Tensor& tensor, const std::string& 
 
 // copypaste from deprecated tensor pybinds ttnn
 tt::tt_metal::OwnedBuffer create_owned_buffer_from_vector_of_floats(
-    const std::vector<float>& data, DataType data_type) {
+    const std::vector<float>& data, ttnn::DataType data_type) {
     switch (data_type) {
-        case DataType::BFLOAT8_B: {
+        case ttnn::DataType::BFLOAT8_B: {
             auto uint32_vector = pack_fp32_vec_as_bfp8_tiles(data, /*row_major_input=*/false, /*is_exp_a=*/false);
             return tt::tt_metal::owned_buffer::create<uint32_t>(std::move(uint32_vector));
         }
-        case DataType::BFLOAT4_B: {
+        case ttnn::DataType::BFLOAT4_B: {
             auto uint32_vector = pack_fp32_vec_as_bfp4_tiles(data, /*row_major_input=*/false, /*is_exp_a=*/false);
             return tt::tt_metal::owned_buffer::create<uint32_t>(std::move(uint32_vector));
         }
-        case DataType::FLOAT32: {
+        case ttnn::DataType::FLOAT32: {
             auto data_copy = data;
             return tt::tt_metal::owned_buffer::create<float>(std::move(data_copy));
         }
-        case DataType::BFLOAT16: {
+        case ttnn::DataType::BFLOAT16: {
             std::vector<bfloat16> bfloat16_data(data.size());
             std::transform(std::begin(data), std::end(data), std::begin(bfloat16_data), [](float value) {
                 return bfloat16(value);
@@ -85,52 +86,8 @@ template <typename T>
 tt::tt_metal::Tensor ttml_create_owned_tensor(
     std::vector<T>&& data, const ttnn::Shape& shape, tt::tt_metal::DataType data_type, tt::tt_metal::Layout layout) {
     auto buffer = tt::tt_metal::owned_buffer::create(std::move(data));
-    auto storage = OwnedStorage{std::move(buffer)};
+    auto storage = ttnn::OwnedStorage{std::move(buffer)};
     return {std::move(storage), shape, data_type, layout};
-}
-
-// TODO: optimize precomputing multipliers
-template <class T = float, class InternalT = bfloat16>
-std::vector<T> untile_tensor_to_vec(const tt::tt_metal::Tensor& cpu_tensor) {
-    auto tiled_buffer = tt::tt_metal::host_buffer::get_as<InternalT>(cpu_tensor);
-    auto untiled_shape = cpu_tensor.get_logical_shape();
-    auto tiled_shape = cpu_tensor.get_padded_shape();
-
-    // Calculate total size of the untiled tensor
-    size_t total_size = untiled_shape.volume();
-
-    std::vector<T> untiled_data(total_size);
-
-    auto compute_flat_index = [](const std::vector<uint32_t>& indices, ttnn::SimpleShape& shape) -> uint32_t {
-        uint32_t flat_index = 0;
-        uint32_t multiplier = 1;
-        for (int i = (int)indices.size() - 1; i >= 0; --i) {
-            flat_index += indices[i] * multiplier;
-            multiplier *= shape[i];
-        }
-        return flat_index;
-    };
-
-    std::vector<uint32_t> indices(tiled_shape.rank(), 0);
-
-    for (size_t idx = 0; idx < total_size; ++idx) {
-        uint32_t untiled_index = compute_flat_index(indices, untiled_shape);
-        uint32_t tiled_index = compute_flat_index(indices, tiled_shape);
-        if constexpr (std::is_same_v<InternalT, bfloat16>) {
-            untiled_data[untiled_index] = tiled_buffer[tiled_index].to_float();
-        } else {
-            untiled_data[untiled_index] = tiled_buffer[tiled_index];
-        }
-
-        for (int dim = (int)tiled_shape.rank() - 1; dim >= 0; --dim) {
-            if (++indices[dim] < untiled_shape[dim]) {
-                break;
-            }
-            indices[dim] = 0;
-        }
-    }
-
-    return untiled_data;
 }
 
 }  // namespace
@@ -145,80 +102,102 @@ tt::tt_metal::Tensor ones_like(const tt::tt_metal::Tensor& tensor) {
 }
 
 tt::tt_metal::Tensor empty(
-    const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, const MemoryConfig& memory_config) {
-    return ttnn::empty(shape, DataType::BFLOAT16, Layout::TILE, device, memory_config);
+    const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, const ttnn::MemoryConfig& memory_config) {
+    return ttnn::empty(shape, ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, device, memory_config);
 }
 
 tt::tt_metal::Tensor full(
-    const ttnn::Shape& shape, float value, ttnn::distributed::MeshDevice* device, DataType dtype) {
-    auto padded = shape.with_tile_padding();
-    // if the shape is not divisible by TILE_SIZE, we need to add padding
-    if (padded[2] % ttnn::types::TILE_SIZE != 0 || padded[3] % ttnn::types::TILE_SIZE != 0) {
-        int additional_padding_h =
-            (ttnn::types::TILE_SIZE - (int)padded[2] % ttnn::types::TILE_SIZE) % ttnn::types::TILE_SIZE;
-        int additional_padding_w =
-            (ttnn::types::TILE_SIZE - (int)padded[3] % ttnn::types::TILE_SIZE) % ttnn::types::TILE_SIZE;
-        auto padded_shape = ttnn::Shape(
-            {shape[0], shape[1], shape[2], shape[3]},
-            {
-                padded[0],
-                padded[1],
-                (padded[2] + additional_padding_h),
-                (padded[3] + additional_padding_w),
-            });
-        // temporary solution to avoid using the device, and use only MeshDevice in highlevel api
-        return ttnn::full(padded_shape, value, dtype, Layout::TILE, std::ref(*device->get_device(0)));
-    }
-    // if not padding available, we can just create a tensor with the given shape
-    return ttnn::full(shape, value, dtype, Layout::TILE, std::ref(*device->get_device(0)));
+    const ttnn::Shape& shape, float value, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype) {
+    return ttnn::full(shape, value, dtype, ttnn::Layout::TILE, std::ref(*device));
 }
 
-tt::tt_metal::Tensor zeros(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, DataType dtype) {
+tt::tt_metal::Tensor zeros(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype) {
     return core::full(shape, 0.F, device, dtype);
 }
 
-tt::tt_metal::Tensor ones(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, DataType dtype) {
+tt::tt_metal::Tensor ones(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype) {
     return core::full(shape, 1.F, device, dtype);
 }
 
+template <class T, ttnn::DataType TensorType>
+[[nodiscard]] tt::tt_metal::Tensor from_xtensors_to_host(
+    const std::vector<xt::xarray<T>>& buffers, const std::unordered_map<std::string, std::string>& config) {
+    std::vector<tt::tt_metal::OwnedBuffer> host_owned_buffers;
+    std::vector<ttnn::TensorSpec> host_owned_specs;
+    host_owned_buffers.reserve(buffers.size());
+    host_owned_specs.reserve(buffers.size());
+    if (buffers.empty()) {
+        throw std::runtime_error("Cannot create a host buffer from an empty vector of xtensors!");
+    }
+    auto first_shape = buffers.front().shape();
+    for (int i = 0; i < buffers.size(); ++i) {
+        if (buffers[i].shape() != first_shape) {
+            throw std::runtime_error(fmt::format(
+                "Cannot create a host buffer from xtensors with different shapes: {} vs {}!",
+                ttnn::experimental::xtensor::get_shape_from_xarray(buffers[0]),
+                ttnn::experimental::xtensor::get_shape_from_xarray(buffers[i])));
+        }
+    }
+    for (const auto& buffer : buffers) {
+        auto shape = ttnn::experimental::xtensor::get_shape_from_xarray(buffer);
+
+        if constexpr (std::is_same_v<T, float>) {
+            auto owned_buffer =
+                create_owned_buffer_from_vector_of_floats(std::vector<T>(buffer.begin(), buffer.end()), TensorType);
+            host_owned_buffers.push_back(owned_buffer);
+        } else {
+            auto owned_buffer = tt::tt_metal::owned_buffer::create(std::vector<T>(buffer.begin(), buffer.end()));
+            host_owned_buffers.push_back(owned_buffer);
+        }
+
+        host_owned_specs.push_back(ttnn::TensorSpec(
+            shape, ttnn::TensorLayout(TensorType, ttnn::PageConfig(ttnn::Layout::ROW_MAJOR), ttnn::MemoryConfig{})));
+    }
+    auto distributed_tensor_config = tt::tt_metal::get_distributed_tensor_config(config);
+    auto storage = tt::tt_metal::MultiDeviceHostStorage(
+        distributed_tensor_config, std::move(host_owned_buffers), host_owned_specs);
+
+    // remove possible paddings from the shape (it conflicts with ROW MAJOR)
+    auto output = ttnn::Tensor(std::move(storage), host_owned_specs[0]);
+    return output;
+}
+
+template tt::tt_metal::Tensor from_xtensors_to_host<float, ttnn::DataType::BFLOAT16>(
+    const std::vector<xt::xarray<float>>& buffers, const std::unordered_map<std::string, std::string>& config);
+template tt::tt_metal::Tensor from_xtensors_to_host<uint32_t, ttnn::DataType::UINT32>(
+    const std::vector<xt::xarray<uint32_t>>& buffers, const std::unordered_map<std::string, std::string>& config);
+template tt::tt_metal::Tensor from_xtensors_to_host<int32_t, tt::tt_metal::DataType::INT32>(
+    const std::vector<xt::xarray<int32_t>>& buffers, const std::unordered_map<std::string, std::string>& config);
+
 template <>
-tt::tt_metal::Tensor from_vector<float, DataType::BFLOAT16>(
-    const std::vector<float>& buffer, const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, Layout layout) {
+tt::tt_metal::Tensor from_vector<float, ttnn::DataType::BFLOAT16>(
+    const std::vector<float>& buffer,
+    const ttnn::Shape& shape,
+    ttnn::distributed::MeshDevice* device,
+    ttnn::Layout layout) {
     assert(device != nullptr);
-    const DataType data_type = DataType::BFLOAT16;
-    MemoryConfig output_mem_config{};
-    auto logical_shape = shape.logical_shape();
-    size_t volume = logical_shape.volume();
+    const ttnn::DataType data_type = ttnn::DataType::BFLOAT16;
+    ttnn::MemoryConfig output_mem_config{};
+    size_t volume = shape.volume();
     if (buffer.size() != volume) {
         throw std::logic_error(
             fmt::format("Current buffer size is {} different from shape volume {}", buffer.size(), volume));
     }
     auto owned_buffer = create_owned_buffer_from_vector_of_floats(buffer, data_type);
     // remove possible paddings from the shape (it conflicts with ROW MAJOR)
-    auto output = tt::tt_metal::Tensor(OwnedStorage{owned_buffer}, logical_shape, data_type, Layout::ROW_MAJOR);
+    auto output = tt::tt_metal::Tensor(ttnn::OwnedStorage{owned_buffer}, shape, data_type, ttnn::Layout::ROW_MAJOR);
 
-    auto to_device_odd_slow = [&]() {
-        if (layout == Layout::TILE) {
-            output = ttnn::to_layout(output, layout, std::nullopt, output_mem_config, device);
-        }
-
+    const size_t MAX_TILE_DIMENSION = 16384;
+    // Temporary workaround for the issue with tilize for large size
+    // https://github.com/tenstorrent/tt-metal/issues/15950
+    if (shape[-1] >= MAX_TILE_DIMENSION && layout == ttnn::Layout::TILE) {
+        output = ttnn::to_layout(output, ttnn::Layout::TILE, std::nullopt, output_mem_config, device);
         output = ttnn::to_device(output, device, output_mem_config);
-        return output;
-    };
-
-    auto to_device_even_fast = [&]() {
+    } else {
         output = ttnn::to_device(output, device, output_mem_config);
-        if (layout == Layout::TILE) {
+        if (layout == ttnn::Layout::TILE) {
             output = ttnn::tilize_with_zero_padding(output, output_mem_config, std::nullopt, /* multicore */ true);
         }
-
-        return output;
-    };
-
-    if (shape[-1] % 2 == 1) {
-        output = to_device_odd_slow();
-    } else {
-        output = to_device_even_fast();
     }
 
     return output;
@@ -227,35 +206,26 @@ tt::tt_metal::Tensor from_vector<float, DataType::BFLOAT16>(
 // Workaround implementation due to issue with tilize for float32
 // it is expected that tilize will be fixed in the after next tt-metal main update
 template <>
-tt::tt_metal::Tensor from_vector<float, DataType::FLOAT32>(
-    const std::vector<float>& buffer, const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, Layout layout) {
-    auto tensor = from_vector<float, DataType::BFLOAT16>(buffer, shape, device, layout);
-    return ttnn::typecast(tensor, DataType::FLOAT32);
-}
-
-template <>
-std::vector<float> to_vector<float>(const tt::tt_metal::Tensor& tensor) {
-    auto cpu_tensor = tensor.cpu();
-    cpu_tensor = cpu_tensor.to(Layout::ROW_MAJOR);
-    if (cpu_tensor.get_dtype() == DataType::BFLOAT16) {
-        return untile_tensor_to_vec<float, bfloat16>(cpu_tensor);
-    }
-    assert(cpu_tensor.get_dtype() == DataType::FLOAT32);
-    return untile_tensor_to_vec<float, float>(cpu_tensor);
+tt::tt_metal::Tensor from_vector<float, ttnn::DataType::FLOAT32>(
+    const std::vector<float>& buffer,
+    const ttnn::Shape& shape,
+    ttnn::distributed::MeshDevice* device,
+    ttnn::Layout layout) {
+    auto tensor = from_vector<float, ttnn::DataType::BFLOAT16>(buffer, shape, device, layout);
+    return ttnn::typecast(tensor, ttnn::DataType::FLOAT32);
 }
 
 /*
 From vector uint32 doesn't support tilize_with_zero_padding on device
 */
 template <>
-tt::tt_metal::Tensor from_vector<uint32_t, DataType::UINT32>(
+tt::tt_metal::Tensor from_vector<uint32_t, ttnn::DataType::UINT32>(
     const std::vector<uint32_t>& buffer,
     const ttnn::Shape& shape,
     ttnn::distributed::MeshDevice* device,
-    Layout layout) {
-    MemoryConfig output_mem_config{};
-    auto logical_shape = shape.logical_shape();
-    auto volume = logical_shape.volume();
+    ttnn::Layout layout) {
+    ttnn::MemoryConfig output_mem_config{};
+    auto volume = shape.volume();
     if (buffer.size() != volume) {
         throw std::logic_error(
             fmt::format("Current buffer size is {} different from shape volume {}", buffer.size(), volume));
@@ -263,9 +233,10 @@ tt::tt_metal::Tensor from_vector<uint32_t, DataType::UINT32>(
 
     // remove possible paddings from the shape (it conflicts with ROW MAJOR)
     std::vector<uint32_t> buffer_copy = buffer;
-    auto output = ttml_create_owned_tensor(std::move(buffer_copy), logical_shape, DataType::UINT32, Layout::ROW_MAJOR);
+    auto output =
+        ttml_create_owned_tensor(std::move(buffer_copy), shape, ttnn::DataType::UINT32, ttnn::Layout::ROW_MAJOR);
     if (device != nullptr) {
-        if (layout != Layout::ROW_MAJOR) {
+        if (layout != ttnn::Layout::ROW_MAJOR) {
             output = ttnn::to_layout(output, layout, std::nullopt, output_mem_config, device);
         }
         output = ttnn::to_device(output, device, output_mem_config);
@@ -278,14 +249,13 @@ tt::tt_metal::Tensor from_vector<uint32_t, DataType::UINT32>(
 From vector int32 doesn't support tilize_with_zero_padding on device
 */
 template <>
-tt::tt_metal::Tensor from_vector<int32_t, DataType::INT32>(
+tt::tt_metal::Tensor from_vector<int32_t, ttnn::DataType::INT32>(
     const std::vector<int32_t>& buffer,
     const ttnn::Shape& shape,
     ttnn::distributed::MeshDevice* device,
-    Layout layout) {
-    MemoryConfig output_mem_config{};
-    auto logical_shape = shape.logical_shape();
-    auto volume = logical_shape.volume();
+    ttnn::Layout layout) {
+    ttnn::MemoryConfig output_mem_config{};
+    auto volume = shape.volume();
     if (buffer.size() != volume) {
         throw std::logic_error(
             fmt::format("Current buffer size is {} different from shape volume {}", buffer.size(), volume));
@@ -293,31 +263,16 @@ tt::tt_metal::Tensor from_vector<int32_t, DataType::INT32>(
 
     // remove possible paddings from the shape (it conflicts with ROW MAJOR)
     std::vector<int32_t> buffer_copy = buffer;
-    auto output = ttml_create_owned_tensor(std::move(buffer_copy), logical_shape, DataType::INT32, Layout::ROW_MAJOR);
+    auto output =
+        ttml_create_owned_tensor(std::move(buffer_copy), shape, ttnn::DataType::INT32, ttnn::Layout::ROW_MAJOR);
     if (device != nullptr) {
-        if (layout != Layout::ROW_MAJOR) {
+        if (layout != ttnn::Layout::ROW_MAJOR) {
             output = ttnn::to_layout(output, layout, std::nullopt, output_mem_config, device);
         }
         output = ttnn::to_device(output, device, output_mem_config);
     }
 
     return output;
-}
-
-template <>
-std::vector<uint32_t> to_vector<uint32_t>(const tt::tt_metal::Tensor& tensor) {
-    auto cpu_tensor = tensor.cpu();
-    cpu_tensor = cpu_tensor.to(Layout::ROW_MAJOR);
-
-    return untile_tensor_to_vec<uint32_t, uint32_t>(cpu_tensor);
-}
-
-template <>
-std::vector<int32_t> to_vector<int32_t>(const tt::tt_metal::Tensor& tensor) {
-    auto cpu_tensor = tensor.cpu();
-    cpu_tensor = cpu_tensor.to(Layout::ROW_MAJOR);
-
-    return untile_tensor_to_vec<int32_t, int32_t>(cpu_tensor);
 }
 
 bool is_tensor_initialized(const tt::tt_metal::Tensor& tensor) {
@@ -329,11 +284,54 @@ ttnn::Shape create_shape(const std::array<uint32_t, 4>& args) {
 }
 
 void print_tensor_stats(const tt::tt_metal::Tensor& tensor, const std::string& name) {
-    if (tensor.get_dtype() == DataType::BFLOAT16 || tensor.get_dtype() == DataType::FLOAT32) {
+    if (tensor.get_dtype() == ttnn::DataType::BFLOAT16 || tensor.get_dtype() == ttnn::DataType::FLOAT32) {
         print_tensor_stats_<float>(tensor, name);
     } else {
         print_tensor_stats_<uint32_t>(tensor, name);
     }
 }
+
+template <class T, ttnn::DataType TensorType>
+tt::tt_metal::Tensor from_xtensor(
+    const xt::xarray<T>& tensor,
+    ttnn::distributed::MeshDevice* device,
+    const XTensorToMeshVariant<T>& composer,
+    ttnn::Layout layout) {
+    auto sharded_tensors = std::visit([&tensor](auto&& arg) { return arg.map(tensor); }, composer);
+    auto config = std::visit([](auto&& arg) { return arg.config(); }, composer);
+    auto output = from_xtensors_to_host<T, TensorType>(sharded_tensors, config);
+    ttnn::MemoryConfig output_mem_config{};
+
+    if constexpr (std::is_same_v<T, int32_t> || std::is_same_v<T, uint32_t>) {
+        if (layout != ttnn::Layout::ROW_MAJOR) {
+            output = ttnn::to_layout(output, layout, std::nullopt, output_mem_config, device);
+        }
+        output = ttnn::to_device(output, device, output_mem_config);
+    } else {
+        output = ttnn::to_device(output, device, output_mem_config);
+        if (layout == ttnn::Layout::TILE) {
+            output = ttnn::tilize_with_zero_padding(output, output_mem_config, std::nullopt, /* multicore */ true);
+        }
+    }
+    return output;
+}
+
+template tt::tt_metal::Tensor from_xtensor<float, ttnn::DataType::BFLOAT16>(
+    const xt::xarray<float>& tensor,
+    ttnn::distributed::MeshDevice* device,
+    const XTensorToMeshVariant<float>& composer,
+    ttnn::Layout layout);
+
+template tt::tt_metal::Tensor from_xtensor<int32_t, ttnn::DataType::INT32>(
+    const xt::xarray<int32_t>& tensor,
+    ttnn::distributed::MeshDevice* device,
+    const XTensorToMeshVariant<int32_t>& composer,
+    ttnn::Layout layout);
+
+template tt::tt_metal::Tensor from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+    const xt::xarray<uint32_t>& tensor,
+    ttnn::distributed::MeshDevice* device,
+    const XTensorToMeshVariant<uint32_t>& composer,
+    ttnn::Layout layout);
 
 }  // namespace ttml::core

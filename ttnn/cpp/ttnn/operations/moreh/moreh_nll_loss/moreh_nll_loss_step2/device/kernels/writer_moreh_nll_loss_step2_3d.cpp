@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -13,7 +13,7 @@ void kernel_main() {
     auto W = get_arg_val<uint32_t>(i++);
     auto element_size = get_arg_val<uint32_t>(i++);
 
-    constexpr uint32_t cb_output = tt::CB::c_out0;
+    constexpr uint32_t cb_output = tt::CBIndex::c_16;
 
     constexpr bool output_is_dram = get_compile_time_arg_val(0) == 1;
 

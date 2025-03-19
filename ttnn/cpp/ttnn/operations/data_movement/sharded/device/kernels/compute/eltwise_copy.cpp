@@ -12,22 +12,21 @@ namespace NAMESPACE {
 void MAIN {
     uint32_t per_core_tile_cnt = get_arg_val<uint32_t>(0);
 
-    unary_op_init_common(tt::CB::c_in0);
-    for(uint32_t b=0;b<per_core_tile_cnt;++b)
-    {
+    unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         acquire_dst();
 
         // Pop tile after tile, copy to DST and pack
-        cb_wait_front(tt::CB::c_in0, 1);
-        cb_reserve_back(tt::CB::c_out0, 1);
-        copy_tile(tt::CB::c_in0, 0, 0);
+        cb_wait_front(tt::CBIndex::c_0, 1);
+        cb_reserve_back(tt::CBIndex::c_16, 1);
+        copy_tile(tt::CBIndex::c_0, 0, 0);
 
-        pack_tile(0, tt::CB::c_out0);
+        pack_tile(0, tt::CBIndex::c_16);
 
-        cb_pop_front(tt::CB::c_in0, 1);
-        cb_push_back(tt::CB::c_out0, 1);
+        cb_pop_front(tt::CBIndex::c_0, 1);
+        cb_push_back(tt::CBIndex::c_16, 1);
 
         release_dst();
     }
 }
-}
+}  // namespace NAMESPACE

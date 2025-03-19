@@ -8,19 +8,20 @@
 
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
+#include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 
 using namespace tt::constants;
-
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::downsample::detail {
 
 std::pair<uint32_t, uint32_t> get_num_cores_height_width_sliced(
-    CoreRangeSet all_cores, TensorMemoryLayout memory_layout, ShardOrientation shard_orientation) {
+    const CoreRangeSet& all_cores, TensorMemoryLayout memory_layout, ShardOrientation shard_orientation) {
     TT_ASSERT(
         memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || memory_layout == TensorMemoryLayout::BLOCK_SHARDED);
     if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -33,12 +34,12 @@ std::pair<uint32_t, uint32_t> get_num_cores_height_width_sliced(
     auto first_core_range = *all_cores.ranges().begin();
     uint32_t num_cores_height_sliced =
         memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ? num_cores : first_core_range.end_coord.x + 1;
-    uint32_t num_cores_width_sliced = memory_layout == TensorMemoryLayout::HEIGHT_SHARDED
-                                          ? 1
-                                          : first_core_range.end_coord.y + 1;  // width is not sliced when height sharded
+    uint32_t num_cores_width_sliced =
+        memory_layout == TensorMemoryLayout::HEIGHT_SHARDED
+            ? 1
+            : first_core_range.end_coord.y + 1;  // width is not sliced when height sharded
     return {num_cores_height_sliced, num_cores_width_sliced};
 }
-
 
 struct DownsampleReadPatternParams {
     uint32_t top_partial_middle_aligned_row_width;
@@ -53,7 +54,6 @@ struct DownsampleReadPatternParams {
     uint32_t bottom_partial_left_aligned_row_width;
     uint32_t skip_bottom_partial_left_aligned_row;
 };
-
 
 struct ImgTrackingVars {
     uint32_t img_h = 0;
@@ -338,10 +338,9 @@ DownsampleReadPatternParams generate_downsample_read_pattern(
         .skip_bottom_partial_left_aligned_row = skip_bottom_partial_left_aligned_row};
 }
 
-
 operation::ProgramWithCallbacks downsample_single_core(
     const Tensor& a, std::array<uint32_t, 5> downsample_params, Tensor& output) {
-              tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
@@ -352,10 +351,10 @@ operation::ProgramWithCallbacks downsample_single_core(
     auto [img_batch_size, img_height, img_width, img_stride_h, img_stride_w] = downsample_params;
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
-    TT_ASSERT(a.get_legacy_shape()[0] == 1 && a.get_legacy_shape()[1] == 1);
-    TT_ASSERT(output.get_legacy_shape()[0] == 1 && output.get_legacy_shape()[1] == 1);
+    TT_ASSERT(a.get_padded_shape()[0] == 1 && a.get_padded_shape()[1] == 1);
+    TT_ASSERT(output.get_padded_shape()[0] == 1 && output.get_padded_shape()[1] == 1);
 
-    tt::tt_metal::Device* device = a.device();
+    tt::tt_metal::IDevice* device = a.device();
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -387,11 +386,11 @@ operation::ProgramWithCallbacks downsample_single_core(
     auto core_range = all_cores;
 
     uint32_t input_height =
-        a.get_legacy_shape()[2];  // input height == flattened face of input image, multiple images are stacked in H dim
-    uint32_t input_width = a.get_legacy_shape()[3];         // input width == input image # of channels
-    uint32_t output_height = output.get_legacy_shape()[2];  // output height == flattened face of output image, multiple
+        a.get_padded_shape()[2];  // input height == flattened face of input image, multiple images are stacked in H dim
+    uint32_t input_width = a.get_padded_shape()[3];         // input width == input image # of channels
+    uint32_t output_height = output.get_padded_shape()[2];  // output height == flattened face of output image, multiple
                                                             // images are stacked in H dim
-    uint32_t output_width = output.get_legacy_shape()[3];
+    uint32_t output_width = output.get_padded_shape()[3];
     TT_ASSERT(input_width == output_width);
 
     uint32_t input_height_unpadded = img_batch_size * img_height * img_width;
@@ -431,14 +430,17 @@ operation::ProgramWithCallbacks downsample_single_core(
     TT_ASSERT(output_shard_height % TILE_HEIGHT == 0);
     uint32_t num_rows_of_output_tiles = output_shard_height / TILE_HEIGHT;
 
-    uint32_t input_cb_index = tt::CB::c_in0;
+    uint32_t next_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = num_input_tiles_in_row * num_rows_of_input_tiles;
-    tt::tt_metal::CircularBufferConfig input_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_input_tiles * input_single_tile_size, {{input_cb_index, input_cb_data_format}})
-            .set_page_size(input_cb_index, input_single_tile_size);
-    input_cb_config = input_cb_config.set_globally_allocated_address(*a.buffer());
-    auto input_cb = tt::tt_metal::CreateCircularBuffer(program, core_range, input_cb_config);
+    auto [input_cb_index, input_cb] = tt::tt_metal::create_cb(
+        next_cb_index++,
+        program,
+        core_range,
+        input_single_tile_size,
+        num_input_tiles,
+        input_cb_data_format,
+        a.buffer());
+
     log_debug(
         tt::LogOp,
         "CB {}: PS = {} NP = {} :: TOTAL = {}",
@@ -449,14 +451,18 @@ operation::ProgramWithCallbacks downsample_single_core(
 
     // CB to store halo data
     // hardcode to store 1 row of tiles
-    uint32_t halo_prev_input_cb_index = tt::CB::c_in1;
+    uint32_t halo_prev_input_cb_index = next_cb_index++;
     uint32_t halo_prev_input_cb_max_rows_of_tiles = 4;
     uint32_t num_halo_prev_cb_input_tiles = num_input_tiles_in_row * halo_prev_input_cb_max_rows_of_tiles;
-    tt::tt_metal::CircularBufferConfig halo_prev_input_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_halo_prev_cb_input_tiles * input_single_tile_size, {{halo_prev_input_cb_index, input_cb_data_format}})
-            .set_page_size(halo_prev_input_cb_index, input_single_tile_size);
-    auto halo_prev_input_cb = tt::tt_metal::CreateCircularBuffer(program, core_range, halo_prev_input_cb_config);
+
+    tt::tt_metal::create_cb(
+        halo_prev_input_cb_index,
+        program,
+        core_range,
+        input_single_tile_size,
+        num_halo_prev_cb_input_tiles,
+        input_cb_data_format);
+
     log_debug(
         tt::LogOp,
         "CB {}: PS = {} NP = {} :: TOTAL = {}",
@@ -465,14 +471,17 @@ operation::ProgramWithCallbacks downsample_single_core(
         num_halo_prev_cb_input_tiles,
         input_single_tile_size * num_halo_prev_cb_input_tiles);
 
-    uint32_t halo_next_input_cb_index = tt::CB::c_in2;
+    uint32_t halo_next_input_cb_index = next_cb_index++;
     uint32_t halo_next_input_cb_max_rows_of_tiles = 33;  // TODO: Remove hardcoding
     uint32_t num_halo_next_cb_input_tiles = num_input_tiles_in_row * halo_next_input_cb_max_rows_of_tiles;
-    tt::tt_metal::CircularBufferConfig halo_next_input_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_halo_next_cb_input_tiles * input_single_tile_size, {{halo_next_input_cb_index, input_cb_data_format}})
-            .set_page_size(halo_next_input_cb_index, input_single_tile_size);
-    auto halo_next_input_cb = tt::tt_metal::CreateCircularBuffer(program, core_range, halo_next_input_cb_config);
+    tt::tt_metal::create_cb(
+        halo_next_input_cb_index,
+        program,
+        core_range,
+        input_single_tile_size,
+        num_halo_next_cb_input_tiles,
+        input_cb_data_format);
+
     log_debug(
         tt::LogOp,
         "CB {}: PS = {} NP = {} :: TOTAL = {}",
@@ -484,12 +493,10 @@ operation::ProgramWithCallbacks downsample_single_core(
     // CB to store reader pattern array
     // read pattern array size == output_height
     uint32_t reader_pattern_array_size = output_shard_height;
-    uint32_t reader_pattern_array_cb_index = tt::CB::c_intermed1;
-    tt::tt_metal::CircularBufferConfig reader_pattern_array_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            reader_pattern_array_size * 4, {{reader_pattern_array_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(reader_pattern_array_cb_index, 4);
-    auto reader_pattern_array_cb = tt::tt_metal::CreateCircularBuffer(program, core_range, reader_pattern_array_cb_config);
+    uint32_t reader_pattern_array_cb_index = next_cb_index++;
+    tt::tt_metal::create_cb(
+        reader_pattern_array_cb_index, program, core_range, 4, reader_pattern_array_size, tt::DataFormat::Float16_b);
+
     log_debug(
         tt::LogOp,
         "CB {}: PS = {} NP = {} :: TOTAL = {}",
@@ -499,13 +506,16 @@ operation::ProgramWithCallbacks downsample_single_core(
         4 * reader_pattern_array_size);
 
     // untilized CB has size - [32, full width]
-    uint32_t untilize_cb_index = tt::CB::c_intermed2;
+    uint32_t untilize_cb_index = next_cb_index++;
     uint32_t num_tiles_untilize_cb = num_input_tiles_in_row;
-    tt::tt_metal::CircularBufferConfig untilize_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_tiles_untilize_cb * untilized_single_tile_size, {{untilize_cb_index, untilized_cb_data_format}})
-            .set_page_size(untilize_cb_index, untilized_single_tile_size);
-    auto untilize_cb = tt::tt_metal::CreateCircularBuffer(program, core_range, untilize_cb_config);
+    tt::tt_metal::create_cb(
+        untilize_cb_index,
+        program,
+        core_range,
+        untilized_single_tile_size,
+        num_tiles_untilize_cb,
+        untilized_cb_data_format);
+
     log_debug(
         tt::LogOp,
         "CB {}: PS = {} NP = {} :: TOTAL = {}",
@@ -515,15 +525,18 @@ operation::ProgramWithCallbacks downsample_single_core(
         untilized_single_tile_size * num_tiles_untilize_cb);
 
     uint32_t num_output_tiles = num_output_tiles_in_row * num_rows_of_output_tiles;
-    uint32_t untilize_downsampled_cb_index = tt::CB::c_intermed3;
+    uint32_t untilize_downsampled_cb_index = next_cb_index++;
     uint32_t num_tiles_untilize_downsampled_cb =
         num_output_tiles;  // untilize downsampled cb size == output size per core
-    tt::tt_metal::CircularBufferConfig untilize_downsampled_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_tiles_untilize_downsampled_cb * untilized_single_tile_size,
-            {{untilize_downsampled_cb_index, untilized_cb_data_format}})
-            .set_page_size(untilize_downsampled_cb_index, untilized_single_tile_size);
-    auto untilize_downsampled_cb = tt::tt_metal::CreateCircularBuffer(program, core_range, untilize_downsampled_cb_config);
+
+    tt::tt_metal::create_cb(
+        untilize_downsampled_cb_index,
+        program,
+        core_range,
+        untilized_single_tile_size,
+        num_tiles_untilize_downsampled_cb,
+        untilized_cb_data_format);
+
     log_debug(
         tt::LogOp,
         "CB {}: PS = {} NP = {} :: TOTAL = {}",
@@ -532,15 +545,17 @@ operation::ProgramWithCallbacks downsample_single_core(
         num_tiles_untilize_downsampled_cb,
         untilized_single_tile_size * num_tiles_untilize_downsampled_cb);
 
-    uint32_t final_tilize_output_cb_index = tt::CB::c_out0;
     uint32_t num_tiles_final_tilize_output_cb = num_output_tiles;  // final output cb size == output size per core
-    tt::tt_metal::CircularBufferConfig final_tilize_output_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_tiles_final_tilize_output_cb * output_single_tile_size,
-            {{final_tilize_output_cb_index, output_cb_data_format}})
-            .set_page_size(final_tilize_output_cb_index, output_single_tile_size);
-    final_tilize_output_cb_config = final_tilize_output_cb_config.set_globally_allocated_address(*output.buffer());
-    auto final_tilize_output_cb = tt::tt_metal::CreateCircularBuffer(program, core_range, final_tilize_output_cb_config);
+
+    auto [final_tilize_output_cb_index, final_tilize_output_cb] = tt::tt_metal::create_cb(
+        next_cb_index++,
+        program,
+        core_range,
+        output_single_tile_size,
+        num_tiles_final_tilize_output_cb,
+        output_cb_data_format,
+        output.buffer());
+
     log_debug(
         tt::LogOp,
         "CB {}: PS = {} NP = {} :: TOTAL = {}",

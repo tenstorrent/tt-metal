@@ -2,6 +2,25 @@
 
 Contact for questions/comments: [Sean Nijjar](mailto:snijjar@tenstorrent.com)
 
+# Table of Contents
+
+[Summary](#summary)
+
+[Multichip Topologies and Connectivity](#multichip-topologies-and-connectivity)
+
+[Ethernet And ERISCs](#ethernet-core-and-eriscs)
+
+[Moving Data Between Chips](#moving-data-between-chips)
+
+[Microbenchmarks](#microbenchmarks)
+
+[Operating Environment](#operating-environment)
+
+[Writing Ethernet Kernels](#writing-ethernet-kernels)
+
+[Example Multi-Chip Program Implementation Walkthrough](#example-multi-chip-program-implementation-walkthrough)
+
+<a name="summary"></a>
 # Summary
 
 This documentation is intended to be used as a guide for a new developer, looking to understand the multichip capabilities and programming model for Tenstorrent scaleout and multi-chip. This document aims to assist a reader in understanding several key categories of information:
@@ -34,24 +53,8 @@ It is recommended to the reader to be familiar with the following concepts befor
 
 Additionally, unless otherwise stated, any specifics with respect to details such as performance numbers, specifications, or resource counts, are specific to the Wormhole architecture. Performance numbers for CCL operations are expected to improve over time as optimizations are incrementally applied.
 
-[Summary](#summary)
-
-[Multichip Topologies and Connectivity](#multichip-topologies-and-connectivity)
-
-[Ethernet And ERISCs](#ethernet-core-and-eriscs)
-
-[Moving Data Between Chips](#moving-data-between-chips)
-
-[Microbenchmarks](#microbenchmarks)
-
-[Operating Environment](#operating-environment)
-
-[Writing Ethernet Kernels](#writing-ethernet-kernels)
-
-[Example Multi-Chip Program Implementation Walkthrough](#example-multi-chip-program-implementation-walkthrough)
-
-
-# Multichip Topologies and Connectivity {#multichip-topologies-and-connectivity}
+<a name="multichip-topologies-and-connectivity"></a>
+# Multichip Topologies and Connectivity
 
 Starting with the Wormhole architecture, Tenstorrent offers multi-chip functionality where two or more Wormhole chips can be connected together. Tenstorrent’s scaleout strategy enables Wormhole and later chips to communicate directly with each other,
 It doesn’t require:
@@ -63,7 +66,8 @@ It doesn’t require:
 
 Currently, device chips are connected directly to each other via a number of Ethernet links. Several multi-chip topologies are possible and can be assembled together to build larger systems, in accordance with user needs.
 
-# Ethernet core and ERISCs {#ethernet-core-and-eriscs}
+<a name="ethernet-core-and-eriscs"></a>
+# Ethernet core and ERISCs
 
 To achieve Ethernet scale-out capabilities, the Wormhole architecture adds a new core type. Like worker cores, DRAM, PCIe, ARC, and routing cores that are present in Grayskull, the new core type (called an Ethernet core), is also accessed as a NoC endpoint. Every Wormhole part contains 16 total Ethernet cores on the NoC. Depending on the particular part, all 16 Ethernet cores may be connected to active links. This provides a large space for cluster topology design.
 
@@ -175,7 +179,7 @@ Given that Ethernet scale-out enables multichip systems where only a subset of t
 
 This base level firmware implements multi-chip routing for moving data to non-memory-mapped/PCIe connected chips, from the host. This firmware is saved onto the SPI-ROM and is loaded at board startup. This routing layer is used by the “Slow Dispatch” dispatcher path and is further used to bootstrap more higher level components, such as Fast Dispatch.
 
-# Moving Data Between Chips {#moving-data-between-chips}
+# Moving Data Between Chips <a name="moving-data-between-chips"></a>
 
 This section outlines the basic commands and APIs for sending data over Ethernet, between chips. It describes the basics of how commands are queued up and how they complete. It also briefly discusses topics such as flow control over Ethernet and comparisons with single chip datalow_api commands such as noc_async_write.
 
@@ -252,7 +256,8 @@ eth_send_packet(
   send_size_eth_words);
 ```
 
-# Microbenchmarks {#microbenchmarks}
+<a name="microbenchmarks"></a>
+# Microbenchmarks
 
 Several microbenchmarks have been built and run to help characterize the Ethernet performance and capabilities. The microbenchmark results are summarized in this section. They are intended to drive multichip workloads towards better performing designs.
 
@@ -313,7 +318,8 @@ Not shown are the time taken to initiate packet sends, which is roughly 80ns (in
 
 The results of this microbenchmark can inform Ethernet packet sizing for performance in order to mask send latency. Based on the numbers above, it is recommended to keep at least 8 KB worth of outstanding Ethernet message sized transfers in the tx command queues.
 
-# Operating Environment {#operating-environment}
+<a name="operating-environment"></a>
+# Operating Environment
 
 The operating environment encompasses all of the runtime components that are outside of a user kernel and that are responsible for launching and executing user kernels. Typically, this operating environment includes the fast dispatch component, which offers certain guarantees for single chip workloads.
 
@@ -398,7 +404,8 @@ Dynamic routing simplifies the multi-chip programming processing while also pote
 
 Design work on a multichip fabric that supports dynamic routing is underway, but is not mature enough to describe in detail here.
 
-# Writing Ethernet Kernels {#writing-ethernet-kernels}
+<a name="writing-ethernet-kernels"></a>
+# Writing Ethernet Kernels
 
 Previous sections have outlined the fundamentals that are needed in order to design multi-chip workloads, including differences in the programming model relative to single chip programming. However, the mechanics for implementing those multichip workloads are still required. This section outlines the key primitives and APIs that are used in building multi-chip applications, from a kernel writing perspective. This section does not discuss the mechanics for calling multiple multichip ops/workloads sequentially, back to back.
 
@@ -528,7 +535,8 @@ for (std::size_t i = sender_channels_start;
 
 Without this wait for credits to arrive back at sender, it is possible for a channel done update from the other link to corrupt a future op running on the sender ERISC core, as mentioned in the “Asynchronous Program Completion Problem” section.
 
-# Example Multi-Chip Program Implementation Walkthrough {#example-multi-chip-program-implementation-walkthrough}
+<a name="example-multi-chip-program-implementation-walkthrough"></a>
+# Example Multi-Chip Program Implementation Walkthrough
 
 With the information presented in earlier sections, it is possible to write end-to-end multi-chip workloads/programs. This section walks through the implementation of a simple end-to-end microbenchmark including host and device code snippets.
 

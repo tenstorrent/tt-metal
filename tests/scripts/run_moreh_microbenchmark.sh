@@ -8,11 +8,6 @@ run_profiling_test() {
     exit 1
   fi
 
-  if [[ -z "$TT_METAL_HOME" ]]; then
-    echo "Must provide TT_METAL_HOME in environment" 1>&2
-    exit 1
-  fi
-
   if [[ "$TT_METAL_DEVICE_PROFILER" != 1 ]]; then
     echo "Must set TT_METAL_DEVICE_PROFILER to 1 to run microbenchmarks" 1>&2
     exit 1
@@ -20,8 +15,6 @@ run_profiling_test() {
 
   echo "Make sure this test runs in a build with cmake option ENABLE_TRACY=ON"
 
-  source python_env/bin/activate
-  export PYTHONPATH=$TT_METAL_HOME
   export TT_METAL_CLEAR_L1=1
 
   pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_pcie_h2d_dram --timeout=720
@@ -32,15 +25,9 @@ run_profiling_test() {
   pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_matmul_dram -k $ARCH_NAME # how to set r and c for this
   pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_matmul_l1 -k $ARCH_NAME # how to set r and c for this
 
-  if [[ "$ARCH_NAME" != "grayskull" ]]; then
-    pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_matmul_single_core_sharded -k $ARCH_NAME
-    pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_dram_read_all_core -k $ARCH_NAME
-    pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_dram_read_remote_cb_sync -k $ARCH_NAME
-  fi
-  # bypass wh_b0 for now until we can move FD cores to last col
-  if [[ "$ARCH_NAME" != "wormhole_b0" ]]; then
-    pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_dram_read_l1_write_core -k $ARCH_NAME
-  fi
+  pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_matmul_single_core_sharded -k $ARCH_NAME
+  pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_dram_read_all_core -k $ARCH_NAME
+  pytest --capture=tee-sys $TT_METAL_HOME/tests/scripts/test_moreh_microbenchmark.py::test_dram_read_remote_cb_sync -k $ARCH_NAME
 }
 
 run_profiling_test

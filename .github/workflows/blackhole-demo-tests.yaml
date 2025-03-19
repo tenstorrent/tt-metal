@@ -1,0 +1,16 @@
+name: "(Blackhole) Demo tests"
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  schedule:
+    - cron: "0 4 * * *"  # Every day at 4:00 UTC
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+  single-card-demo-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-demo-tests-impl.yaml

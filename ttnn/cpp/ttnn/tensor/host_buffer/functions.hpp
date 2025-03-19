@@ -8,7 +8,7 @@
 
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
+#include <tt_stl/reflection.hpp>
 
 namespace tt {
 
@@ -42,7 +42,10 @@ Buffer<T> get_as(BorrowedBuffer& buffer) {
 
 template <typename T>
 Buffer<T> get_as(const BorrowedBuffer& buffer) {
-    TT_ASSERT(std::holds_alternative<Buffer<T>>(buffer), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(buffer));
+    TT_ASSERT(
+        std::holds_alternative<Buffer<T>>(buffer),
+        "Unexpected type {}",
+        tt::stl::get_active_type_name_in_variant(buffer));
     return std::get<Buffer<T>>(buffer);
 }
 
@@ -95,7 +98,9 @@ void validate_datatype(const Tensor& tensor) {
     if constexpr (std::is_same_v<T, uint32_t>) {
         TT_FATAL(
             tensor.get_dtype() == DataType::UINT32 or tensor.get_dtype() == DataType::BFLOAT8_B or
-            tensor.get_dtype() == DataType::BFLOAT4_B, "Incorrect data type {}", tensor.get_dtype());
+                tensor.get_dtype() == DataType::BFLOAT4_B,
+            "Incorrect data type {}",
+            tensor.get_dtype());
     } else if constexpr (std::is_same_v<T, int32_t>) {
         TT_FATAL(tensor.get_dtype() == DataType::INT32, "Incorrect data type {}", tensor.get_dtype());
     } else if constexpr (std::is_same_v<T, float>) {
@@ -129,6 +134,9 @@ Buffer<T> get_as(Tensor& tensor) {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
                 return get_as<T>(storage.buffer);
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
+                TT_FATAL(storage.buffers.size() == 1, "Can't get a single buffer from multi device host storage");
+                return get_as<T>(storage.buffers[0]);
             } else {
                 TT_THROW("Tensor must have OwnedStorage");
             }
@@ -144,6 +152,9 @@ Buffer<T> get_as(const Tensor& tensor) {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
                 return get_as<T>(storage.buffer);
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
+                TT_FATAL(storage.buffers.size() == 1, "Can't get a single buffer from multi device host storage");
+                return get_as<T>(storage.buffers[0]);
             } else {
                 TT_THROW("Tensor must have OwnedStorage");
             }
@@ -157,14 +168,20 @@ namespace host_buffer {
 
 template <typename T>
 borrowed_buffer::Buffer<T> get_as(OwnedBuffer& buffer) {
-    TT_ASSERT(std::holds_alternative<owned_buffer::Buffer<T>>(buffer), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(buffer));
+    TT_ASSERT(
+        std::holds_alternative<owned_buffer::Buffer<T>>(buffer),
+        "Unexpected type {}",
+        tt::stl::get_active_type_name_in_variant(buffer));
     auto& owned_buffer = std::get<owned_buffer::Buffer<T>>(buffer);
     return borrowed_buffer::Buffer<T>(owned_buffer.begin(), owned_buffer.size());
 }
 
 template <typename T>
 borrowed_buffer::Buffer<T> get_as(const OwnedBuffer& buffer) {
-    TT_ASSERT(std::holds_alternative<owned_buffer::Buffer<T>>(buffer), "Unexpected type {}", tt::stl::get_active_type_name_in_variant(buffer));
+    TT_ASSERT(
+        std::holds_alternative<owned_buffer::Buffer<T>>(buffer),
+        "Unexpected type {}",
+        tt::stl::get_active_type_name_in_variant(buffer));
     auto owned_buffer = std::get<owned_buffer::Buffer<T>>(buffer);
     return borrowed_buffer::Buffer<T>(owned_buffer.begin(), owned_buffer.size());
 }
@@ -191,6 +208,9 @@ borrowed_buffer::Buffer<T> get_as(Tensor& tensor) {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
                 return host_buffer::get_as<T>(storage.buffer);
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
+                TT_FATAL(storage.buffers.size() == 1, "Can't get a single buffer from multi device host storage");
+                return host_buffer::get_as<T>(storage.buffers[0]);
             } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
                 return host_buffer::get_as<T>(storage.buffer);
             } else {
@@ -207,6 +227,9 @@ borrowed_buffer::Buffer<T> get_as(const Tensor& tensor) {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
                 return host_buffer::get_as<T>(storage.buffer);
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
+                TT_FATAL(storage.buffers.size() == 1, "Can't get a single buffer from multi device host storage");
+                return host_buffer::get_as<T>(storage.buffers[0]);
             } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
                 return host_buffer::get_as<T>(storage.buffer);
             } else {

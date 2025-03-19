@@ -15,7 +15,6 @@ from models.demos.falcon7b_common.tt.model_config import (
 )
 
 from models.utility_functions import (
-    disable_compilation_reports,
     disable_persistent_kernel_cache,
     is_e75,
     skip_for_grayskull,
@@ -86,7 +85,6 @@ class TestParametrized:
         )
 
         disable_persistent_kernel_cache()
-        disable_compilation_reports()
 
         if llm_mode == "prefill":
             expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc = PREFILL_CONFIG_TO_PCC[
@@ -139,7 +137,6 @@ class TestParametrized:
         )
 
         disable_persistent_kernel_cache()
-        disable_compilation_reports()
 
         run_test_FalconCausalLM_end_to_end(
             mesh_device,
@@ -249,8 +246,8 @@ class TestParametrized:
             ("prefill", 4, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.142, False),
             ("prefill", 4, 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.42, False),
             ("prefill", 4, 32, 1, 2048, 0, "BFLOAT16-DRAM", 1.02, False),
-            ("decode", 4, 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", 0.063, False),
-            ("decode", 4, 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.067, False),
+            ("decode", 4, 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", 0.067, False),
+            ("decode", 4, 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.069, False),
             ("decode", 4, 32, 32, 1, 2047, "BFLOAT16-L1_SHARDED", 0.073, False),
             ("prefill", 4, 32, 1, 128, 0, "BFLOAT16-DRAM", 0.070, True),  # Issue 9422
             ("prefill", 4, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.142, True),

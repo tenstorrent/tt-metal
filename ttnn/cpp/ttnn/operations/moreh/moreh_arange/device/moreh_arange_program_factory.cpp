@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_arange_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_arange {
@@ -12,7 +12,7 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto dtype = output.get_dtype();
-    auto W = output.get_legacy_shape()[-1];
+    auto W = output.get_padded_shape()[-1];
     auto Wt = tt::div_up(W, tt::constants::TILE_WIDTH);
 
     auto start = operation_attributes.start;
@@ -31,7 +31,7 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
         all_cores,
         tt::tt_metal::datatype_to_dataformat_converter(dtype),
         {
-            {tt::CB::c_out0, 1},
+            {tt::CBIndex::c_16, 1},
         });
 
     // Create write kernel
@@ -58,12 +58,13 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
         uint32_t num_tiles_per_core;
-        if (core_group_1.contains(core))
+        if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
-        else if (core_group_2.contains(core))
+        } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
-        else
+        } else {
             TT_FATAL(false, "Core not in specified core ranges");
+        }
         std::vector<uint32_t> writer_args = {
             output.buffer()->address(),
             tile_offset,

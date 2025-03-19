@@ -11,6 +11,28 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+@pytest.mark.parametrize(
+    "concat_spec",
+    (([[1, 1, 12, 50], [1, 1, 12, 50]], -1),),
+)
+@pytest.mark.parametrize("async_mode", [True, False], ids=["async_on", "async_off"])
+def test_tiled_concat(device, concat_spec, async_mode):
+    shapes, dim = concat_spec
+    device.enable_async(async_mode)
+    torch_input_tensors = [torch.rand(shape, dtype=torch.bfloat16) for shape in shapes]
+    torch_output_tensor = torch.concat(torch_input_tensors, dim=dim)
+
+    input_tensors = [
+        ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+        for torch_input_tensor in torch_input_tensors
+    ]
+
+    output = ttnn.concat(input_tensors, dim=dim)
+    output = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_output_tensor, output, 0.9999)
+
+
 @pytest.mark.parametrize("height", [20, 32])
 @pytest.mark.parametrize("width", [4, 32])
 @pytest.mark.parametrize("dim", [0, 1])
@@ -23,9 +45,6 @@ def test_concat(device, height, width, dim, async_mode):
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
-
-    if ttnn.has_tile_padding(input_tensor_a, dim=dim) or ttnn.has_tile_padding(input_tensor_b, dim=dim):
-        pytest.skip("Cannot concat tensors with tile padding")
 
     output = ttnn.concat([input_tensor_a, input_tensor_b], dim=dim)
     output = ttnn.to_torch(output)
@@ -188,76 +207,34 @@ def test_sharded_concat(device, inputs, output_shard_shape, shard_grid, strategy
     assert_with_pcc(torch_output_tensor_2, output_2)
 
 
-def grouped_concat(activations, residuals, groups):
-    """
-    Concatenate activations and residuals with flexible interleaving based on groups.
-
-    Args:
-        activations (torch.Tensor): Activation tensor with shape [N, H, W, C].
-        residuals (torch.Tensor): Residual tensor with shape [N, H, W, C].
-        groups (int): Number of groups to split channels into.
-
-    Returns:
-        torch.Tensor: Concatenated tensor with interleaved groups.
-    """
-    assert (
-        activations.shape[:-1] == residuals.shape[:-1]
-    ), "Activations and residuals must have the same shape in all dims but -1"
-
-    N, H, W, activation_channels = activations.shape
-    assert activation_channels % groups == 0, "Channel count must be divisible by the number of groups"
-
-    N, H, W, residual_channels = residuals.shape
-    assert residual_channels % groups == 0, "Channel count must be divisible by the number of groups"
-
-    act_groups = activations.view(N, H, W, groups, activation_channels // groups)
-    res_groups = residuals.view(N, H, W, groups, residual_channels // groups)
-
-    # Interleave activations and residuals along the channel axis
-    interleaved = torch.cat([act_groups, res_groups], dim=-1)  # Shape: [N, H, W, groups, 2 * group_size]
-
-    # Reshape to combine groups and channels correctly
-    interleaved = interleaved.permute(0, 1, 2, 3, 4).reshape(N, H, W, residual_channels + activation_channels)
-
-    return interleaved
-
-
 @pytest.mark.parametrize("dim", [3])
 @pytest.mark.parametrize("groups", [1, 2, 4])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize(
-    "input_shapes, output_shape, core_grid",
+    "input_shapes, output_shape, core_grid, layout",
     (
-        (
-            ((1, 1, 1, 32), (1, 1, 1, 32)),
-            (1, 1, 1, 64),
-            ttnn.CoreGrid(x=1, y=1),
-        ),
-        (
-            ((1, 1, 1, 32), (1, 1, 1, 64)),
-            (1, 1, 1, 96),
-            ttnn.CoreGrid(x=1, y=1),
-        ),
-        (
-            ((1, 1, 1, 64), (1, 1, 1, 32)),
-            (1, 1, 1, 96),
-            ttnn.CoreGrid(x=1, y=1),
-        ),
-        (
-            ((1, 1, 1024, 64), (1, 1, 1024, 32)),
-            (1, 1, 1024, 96),
-            ttnn.CoreGrid(x=4, y=1),
-        ),
-        (
-            ((1, 1, 256, 64), (1, 1, 256, 128)),
-            (1, 1, 256, 192),
-            ttnn.CoreGrid(x=8, y=1),
-        ),
+        (((1, 1, 1, 32), (1, 1, 1, 32)), (1, 1, 1, 64), ttnn.CoreGrid(x=1, y=1), ttnn.ROW_MAJOR_LAYOUT),
+        (((1, 1, 1, 32), (1, 1, 1, 64)), (1, 1, 1, 96), ttnn.CoreGrid(x=1, y=1), ttnn.ROW_MAJOR_LAYOUT),
+        (((1, 1, 1, 64), (1, 1, 1, 32)), (1, 1, 1, 96), ttnn.CoreGrid(x=1, y=1), ttnn.ROW_MAJOR_LAYOUT),
+        (((1, 1, 1024, 64), (1, 1, 1024, 32)), (1, 1, 1024, 96), ttnn.CoreGrid(x=4, y=1), ttnn.ROW_MAJOR_LAYOUT),
+        (((1, 1, 256, 64), (1, 1, 256, 128)), (1, 1, 256, 192), ttnn.CoreGrid(x=8, y=1), ttnn.ROW_MAJOR_LAYOUT),
+        (((1, 1, 32, 32), (1, 1, 32, 32)), (1, 1, 32, 64), ttnn.CoreGrid(x=1, y=1), ttnn.TILE_LAYOUT),
+        (((1, 1, 32, 64), (1, 1, 32, 64)), (1, 1, 32, 128), ttnn.CoreGrid(x=1, y=1), ttnn.TILE_LAYOUT),
+        (((1, 1, 256, 64), (1, 1, 256, 128)), (1, 1, 256, 192), ttnn.CoreGrid(x=8, y=1), ttnn.TILE_LAYOUT),
+        (((1, 1, 512, 64), (1, 1, 512, 128)), (1, 1, 512, 192), ttnn.CoreGrid(x=8, y=1), ttnn.TILE_LAYOUT),
+        (((1, 1, 512, 128), (1, 1, 512, 64)), (1, 1, 512, 192), ttnn.CoreGrid(x=8, y=1), ttnn.TILE_LAYOUT),
     ),
 )
-def test_sharded_concat_with_groups(device, input_shapes, output_shape, dim, groups, core_grid):
-    torch_input_tensors = [torch.full(shapes, idx + 1, dtype=torch.bfloat16) for idx, shapes in enumerate(input_shapes)]
+def test_sharded_concat_with_groups(device, input_shapes, output_shape, dim, groups, dtype, core_grid, layout):
+    torch_input_tensors = [torch.rand(shapes, dtype=torch.bfloat16) for idx, shapes in enumerate(input_shapes)]
 
-    expected = grouped_concat(torch_input_tensors[0], torch_input_tensors[1], groups)
+    if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("Cannot use bfloat8 with RM layout")
+
+    if layout == ttnn.TILE_LAYOUT and (input_shapes[0][-1] // groups < 16 or input_shapes[1][-1] // groups < 16):
+        pytest.xfail("Group size < 16 is currently not supported for tiled inputs")
+
+    expected = ttnn.concat.golden_function(torch_input_tensors, dim, groups)
 
     sharded_memory_configs = [
         ttnn.create_sharded_memory_config(
@@ -266,9 +243,7 @@ def test_sharded_concat_with_groups(device, input_shapes, output_shape, dim, gro
         for x in torch_input_tensors
     ]
     ttnn_input_tensors = [
-        ttnn.from_torch(
-            x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
-        )
+        ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
         for x, memory_config in zip(torch_input_tensors, sharded_memory_configs)
     ]
 
@@ -278,7 +253,7 @@ def test_sharded_concat_with_groups(device, input_shapes, output_shape, dim, gro
     )
 
     actual = ttnn.to_torch(z)
-    assert_with_pcc(expected, actual, 1.0)
+    assert_with_pcc(expected, actual, 1.0 if dtype == ttnn.bfloat16 else 0.99995)
 
 
 @pytest.mark.parametrize("dim", [0, 1, 2, 3])
@@ -290,3 +265,56 @@ def test_concat_5d(device, dim):
     ttnn_result = ttnn.concat([ttnn_input_tensor, ttnn_input_tensor], dim=dim)
     ttnn_result = ttnn.to_torch(ttnn_result)
     assert_with_pcc(torch_result, ttnn_result, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "core_grid, hw, channels1, channels2, shard_height",
+    (
+        (
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1)),
+                }
+            ),
+            96,
+            64,
+            32,
+            64,
+        ),
+    ),
+)
+def test_concat_sharded_pad(device, core_grid, hw, channels1, channels2, shard_height, use_program_cache):
+    shape1 = [1, 1, hw, channels1]
+    shape2 = [1, 1, hw, channels2]
+
+    shape1_shard_shape = (shard_height, channels1)
+    shape1_shard_spec = ttnn.ShardSpec(core_grid, shape1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    shape1_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shape1_shard_spec
+    )
+    torch_input_tensor1 = torch.randn(shape1, dtype=torch.bfloat16)
+    ttnn_input_tensor1 = ttnn.from_torch(torch_input_tensor1, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_input_tensor1 = ttnn.to_device(ttnn_input_tensor1, device, memory_config=shape1_memory_config)
+
+    shape2_shard_shape = (shard_height, channels2)
+    shape2_shard_spec = ttnn.ShardSpec(core_grid, shape2_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    shape2_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shape2_shard_spec
+    )
+    torch_input_tensor2 = torch.randn(shape2, dtype=torch.bfloat16)
+    ttnn_input_tensor2 = ttnn.from_torch(torch_input_tensor2, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_input_tensor2 = ttnn.to_device(ttnn_input_tensor2, device, memory_config=shape2_memory_config)
+
+    output_shard_shape = (shard_height, channels1 + channels2)
+    output_shard_spec = ttnn.ShardSpec(core_grid, output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    output_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec
+    )
+
+    actual = ttnn.concat(
+        [ttnn_input_tensor1, ttnn_input_tensor2],
+        dim=-1,
+        memory_config=output_memory_config,
+    )
+    expected = torch.concat([torch_input_tensor1, torch_input_tensor2], dim=-1)
+    assert_with_pcc(expected, ttnn.to_torch(actual), 0.9999)

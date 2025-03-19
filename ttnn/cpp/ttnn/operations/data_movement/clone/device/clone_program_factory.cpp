@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "clone_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 
 namespace ttnn::operations::data_movement::clone {
@@ -36,7 +36,7 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
     auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, num_units);
 
-    uint32_t src_cb_id = CB::c_in4;
+    uint32_t src_cb_id = CBIndex::c_4;
     uint32_t aligned_input_unit_size = round_up_to_mul32(input_unit_size);
     auto src_cb_config = CircularBufferConfig(2 * aligned_input_unit_size, {{src_cb_id, input_data_format}})
                              .set_page_size(src_cb_id, aligned_input_unit_size);
@@ -44,7 +44,7 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
 
     uint32_t dst_cb_id = src_cb_id;
     if (convert_dtype) {
-        dst_cb_id = CB::c_out4;
+        dst_cb_id = CBIndex::c_20;
         uint32_t aligned_output_unit_size = round_up_to_mul32(output_unit_size);
         auto dst_cb_config = CircularBufferConfig(2 * aligned_output_unit_size, {{dst_cb_id, output_data_format}})
                                  .set_page_size(dst_cb_id, aligned_output_unit_size);

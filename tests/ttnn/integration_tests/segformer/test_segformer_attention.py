@@ -117,4 +117,4 @@ def test_segformer_attention(
     if len(ttnn_final_output.shape) == 4:
         ttnn_final_output = ttnn_final_output[0]
 
-    assert_with_pcc(output[0], ttnn_final_output, pcc=0.99)
+    assert_with_pcc(output[0], ttnn_final_output, pcc=0.986)

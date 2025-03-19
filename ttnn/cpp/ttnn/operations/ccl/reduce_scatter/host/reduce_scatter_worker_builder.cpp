@@ -5,18 +5,20 @@
 #include <cstdint>
 #include <iterator>
 
-#include "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.hpp"
+#include "cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.hpp"
 #include "hostdevcommon/kernel_structs.h"
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include "cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+
+#include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 
 namespace ttnn {
 namespace ccl {
 namespace reduce_scatter_detail {
 
 ReduceScatterWorkerArgBuilder::ReduceScatterWorkerArgBuilder (
-    Device const* device,
+    IDevice const* device,
     ttnn::ccl::CCLOpConfig const& op_config,
     ttnn::ccl::RingTopology const& topology_config,
     ttnn::ccl::InterleavedTensorWorkerSlice const& worker_input_slice,
@@ -412,6 +414,8 @@ static void convert_slices_to_ccl_commands() {
 
 }
 
+// Moved to (and updated in) ccl_worker_builder.cpp
+/*
 void emit_ccl_send_slice_sequence_commands(std::vector<TensorSlice> const& slices, std::vector<uint32_t>& args_out) {
     for (std::size_t i = 0; i < slices.size(); i++) {
         auto const& slice = slices[i];
@@ -553,6 +557,7 @@ void emit_ccl_send_slice_sequence_commands(std::vector<TensorSlice> const& slice
         }
     }
 }
+*/
 
 std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_line_start_sender_kernel_rt_args(
     WorkerEdmInterfaceArgs const& edm_interface,
@@ -582,8 +587,8 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_line_start_sender_
 
     // If we are on device zero, we send n-1 chunks in ascending order
     auto &input_tensor = this->op_config.get_input_tensor(0);
-    TT_ASSERT(input_tensor.get_legacy_shape().size() == 4, "Only 4D tensors are supported for reduce scatter");
-    ttnn::ccl::Shape4D<uint32_t> input_tensor_shape = {input_tensor.get_legacy_shape()[0], input_tensor.get_legacy_shape()[1],input_tensor.get_legacy_shape()[2],input_tensor.get_legacy_shape()[3]};
+    TT_ASSERT(input_tensor.get_padded_shape().size() == 4, "Only 4D tensors are supported for reduce scatter");
+    ttnn::ccl::Shape4D<uint32_t> input_tensor_shape = {input_tensor.get_padded_shape()[0], input_tensor.get_padded_shape()[1],input_tensor.get_padded_shape()[2],input_tensor.get_padded_shape()[3]};
 
     std::vector<uint32_t> args = {
         static_cast<uint32_t>(input_tensor.buffer()->address()),
@@ -605,7 +610,7 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_line_start_sender_
     std::ranges::copy(std::vector<uint32_t>{this->op_config.get_page_size()}, std::back_inserter(args));
     log_trace(tt::LogOp, "ccl_send arg[{}]: page_size {}", logged_arg_idx, args[logged_arg_idx]);logged_arg_idx++;
 
-    auto const& addr_gen_rt_args = ttnn::ccl::emit_address_generator_runtime_args(this->device, input_tensor);
+    auto const& addr_gen_rt_args = ttnn::ccl::legacy_emit_address_generator_runtime_args(this->device, input_tensor);
     std::ranges::copy(addr_gen_rt_args, std::back_inserter(args));
     for (auto const& arg : addr_gen_rt_args) {
         log_trace(tt::LogOp, "ccl_send arg[{}]: addr_gen_rt_args[] {}", logged_arg_idx, args[logged_arg_idx]);logged_arg_idx++;
@@ -616,7 +621,7 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_line_start_sender_
     log_trace(tt::LogOp, "ccl_send arg[{}]: semaphore_id {}", logged_arg_idx, args[logged_arg_idx]);logged_arg_idx++;
 
     log_trace(tt::LogOp, "Generating {} ccl send commands", slices.size());
-    emit_ccl_send_slice_sequence_commands(slices, args);
+    ttnn::ccl::worker_detail::emit_ccl_send_slice_sequence_commands(slices, args);
 
     log_trace(tt::LogOp, "Reduce Scatter Sender Worker has {} RT Args: {}", args.size(), args);
 
@@ -630,11 +635,11 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_line_start_sender_
         static_cast<uint32_t>(this->op_config.get_input_tensor(0).buffer()->buffer_type()), // buffer type
         static_cast<uint32_t>(this->op_config.get_input_tensor(0).layout()), // page layout
         static_cast<uint32_t>(this->edm_termination_mode), // (EDM) termination mode
-        static_cast<uint32_t>(tt::CB::c_in0) // cb_id
+        static_cast<uint32_t>(tt::CBIndex::c_0) // cb_id
     };
 
     auto const& input_tensor = this->op_config.get_input_tensor(0);
-    auto const& addr_gen_rt_args = ttnn::ccl::emit_address_generator_compile_time_args(input_tensor);
+    auto const& addr_gen_rt_args = ttnn::ccl::legacy_emit_address_generator_compile_time_args(input_tensor);
     std::ranges::copy(addr_gen_rt_args, std::back_inserter(args));
 
     return args;

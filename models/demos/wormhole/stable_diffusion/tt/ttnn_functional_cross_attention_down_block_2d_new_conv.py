@@ -24,9 +24,7 @@ class cross_attention_down_block_2d:
             for i, resnet in enumerate(parameters.resnets)
         ]
         self.attentions = [
-            transformer_2d_model(
-                device, attention, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
-            )
+            transformer_2d_model(device, attention, batch_size, input_height, input_width, compute_kernel_config)
             for attention in parameters.attentions
         ]
         self.downsample_2d = downsample_2d(

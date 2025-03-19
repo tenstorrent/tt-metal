@@ -12,51 +12,9 @@ namespace ttnn {
 namespace operations {
 namespace unary {
 
-struct ExecutePower{
-
-     static Tensor invoke(
-        uint8_t queue_id,
-        const Tensor& input_tensor,
-        uint32_t exponent,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt)
-        {
-        return OpHandler<UnaryCompositeOpType::POW>::handle(queue_id, input_tensor, exponent, memory_config.value_or(input_tensor.memory_config()), optional_output_tensor);
-        }
-
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        uint32_t exponent,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt)
-        {
-        return OpHandler<UnaryCompositeOpType::POW>::handle(DefaultQueueId, input_tensor, exponent, memory_config.value_or(input_tensor.memory_config()), optional_output_tensor);
-        }
-
-    static Tensor invoke(
-        uint8_t queue_id,
-        const Tensor& input_tensor,
-        float exponent,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt)
-        {
-        return OpHandler<UnaryCompositeOpType::POW>::handle(queue_id, input_tensor, exponent, memory_config.value_or(input_tensor.memory_config()), optional_output_tensor);
-        }
-
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        float exponent,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt)
-        {
-        return OpHandler<UnaryCompositeOpType::POW>::handle(DefaultQueueId, input_tensor, exponent, memory_config.value_or(input_tensor.memory_config()), optional_output_tensor);
-        }
-};
-
 template <UnaryCompositeOpType unary_comp_op_type>
 struct ExecuteUnaryCompositeOp {
-    static Tensor invoke(
-        const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+    static Tensor invoke(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
         auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
         return OpHandler<unary_comp_op_type>::handle(input_tensor, output_memory_config);
     }
@@ -64,7 +22,7 @@ struct ExecuteUnaryCompositeOp {
 
 struct ExecuteTrunc {
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
@@ -75,107 +33,101 @@ struct ExecuteTrunc {
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 
-//OpHandler_float : get_function_type_float
+// OpHandler_float : get_function_type_float
 template <UnaryCompositeOpType unary_comp_op_type>
 struct ExecuteUnaryCompositeOpWithFloat {
-
-    //Type : 1 inputs, 1 float
+    // Type : 1 inputs, 1 float
     static ttnn::Tensor invoke(
-        const Tensor &input_tensor,
-        float param1,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
+        const Tensor& input_tensor, float param1, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
         return OpHandler<unary_comp_op_type>::handle(input_tensor, param1, memory_config);
-        }
+    }
 };
 
 template <UnaryCompositeOpType unary_comp_op_type>
-struct ExecuteUnaryCompositeOpWithDim
-{
+struct ExecuteUnaryCompositeOpWithDim {
     static Tensor invoke(
-        const Tensor& input_tensor,
-        int32_t dim,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt)
-        {
-            auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
-            return OpHandler<unary_comp_op_type>::handle(input_tensor, dim, output_memory_config);
-        }
+        const Tensor& input_tensor, int32_t dim, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+        auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
+        return OpHandler<unary_comp_op_type>::handle(input_tensor, dim, output_memory_config);
+    }
 };
 
 template <UnaryCompositeOpType unary_comp_op_type>
 struct ExecuteUnaryCompositeOpWithFloats {
-    //Type 1: 1 inputs, 2 float
+    // Type 1: 1 inputs, 2 float
     static Tensor invoke(
-        const Tensor &input_tensor,
+        const Tensor& input_tensor,
         float param1,
         float param2,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt)
-        {
-            auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
-            return OpHandler<unary_comp_op_type>::handle(input_tensor, param1, param2, output_memory_config);
-        }
+        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+        auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
+        return OpHandler<unary_comp_op_type>::handle(input_tensor, param1, param2, output_memory_config);
+    }
 };
 
 struct ExecuteUnaryCompositeClamp {
     static Tensor invoke(
-        const Tensor &input_tensor,
+        const Tensor& input_tensor,
         std::optional<float> min = std::nullopt,
         std::optional<float> max = std::nullopt,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
     static Tensor invoke(
-        const Tensor &input_tensor,
+        const Tensor& input_tensor,
         std::optional<Tensor> min = std::nullopt,
         std::optional<Tensor> max = std::nullopt,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+};
+
+struct ExecuteUnaryCompositeThreshold {
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        float threshold,
+        float value,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
 struct ExecuteUnaryCompositeClip {
     static Tensor invoke(
-        const Tensor &input_tensor,
+        const Tensor& input_tensor,
         std::optional<float> min = std::nullopt,
         std::optional<float> max = std::nullopt,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
     static Tensor invoke(
-        const Tensor &input_tensor,
+        const Tensor& input_tensor,
         std::optional<Tensor> min = std::nullopt,
         std::optional<Tensor> max = std::nullopt,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
 template <UnaryCompositeOpType unary_comp_op_type>
 struct ExecuteUnaryCompositeOpWithInt {
-
     static Tensor invoke(
-        const Tensor &input_tensor,
-        int32_t param1,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt) {
+        const Tensor& input_tensor, int32_t param1, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
         auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
         return OpHandler<unary_comp_op_type>::handle(input_tensor, param1, output_memory_config);
-        }
+    }
 };
 
 struct ExecuteRdiv {
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& input_tensor,
         float value,
-        const std::string& round_mode = "None",
+        const std::optional<std::string>& round_mode = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 
 struct ExecuteMish {
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    static Tensor invoke(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
 }  // namespace unary
 }  // namespace operations
 
 // auto prelu = ttnn::leaky_relu;  // Alias for leaky_relu. TODO(#8544): implement PReLU properly
-
 
 // Other unaries
 
@@ -220,9 +172,6 @@ auto transform_first_matching_arg(Lambda lambda, First&& first, Rest&&... rest) 
 
 constexpr auto rdiv = ttnn::register_operation_with_auto_launch_op<"ttnn::rdiv", operations::unary::ExecuteRdiv>();
 
-constexpr auto pow = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::pow",
-    operations::unary::ExecutePower>();
 constexpr auto tanhshrink = ttnn::register_operation_with_auto_launch_op<
     "ttnn::tanhshrink",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::TANHSHRINK>>();
@@ -256,9 +205,7 @@ constexpr auto lgamma = ttnn::register_operation_with_auto_launch_op<
 constexpr auto log1p = ttnn::register_operation_with_auto_launch_op<
     "ttnn::log1p",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::LOG1P>>();
-constexpr auto mish = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::mish",
-    operations::unary::ExecuteMish>();
+constexpr auto mish = ttnn::register_operation_with_auto_launch_op<"ttnn::mish", operations::unary::ExecuteMish>();
 constexpr auto multigammaln = ttnn::register_operation_with_auto_launch_op<
     "ttnn::multigammaln",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::MULTIGAMMALN>>();
@@ -271,9 +218,7 @@ constexpr auto softsign = ttnn::register_operation_with_auto_launch_op<
 constexpr auto swish = ttnn::register_operation_with_auto_launch_op<
     "ttnn::swish",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SWISH>>();
-constexpr auto trunc = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::trunc",
-    operations::unary::ExecuteTrunc>();
+constexpr auto trunc = ttnn::register_operation_with_auto_launch_op<"ttnn::trunc", operations::unary::ExecuteTrunc>();
 constexpr auto var_hw = ttnn::register_operation_with_auto_launch_op<
     "ttnn::var_hw",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::VAR_HW>>();
@@ -294,19 +239,15 @@ constexpr auto hardsigmoid = ttnn::register_operation_with_auto_launch_op<
 constexpr auto hardtanh = ttnn::register_operation_with_auto_launch_op<
     "ttnn::hardtanh",
     operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::HARDTANH>>();
-constexpr auto clip = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::clip",
-    operations::unary::ExecuteUnaryCompositeClip>();
-constexpr auto clamp = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::clamp",
-    operations::unary::ExecuteUnaryCompositeClamp>();
+constexpr auto clip =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::clip", operations::unary::ExecuteUnaryCompositeClip>();
+constexpr auto clamp =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::clamp", operations::unary::ExecuteUnaryCompositeClamp>();
 constexpr auto selu = ttnn::register_operation_with_auto_launch_op<
     "ttnn::selu",
     operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::SELU>>();
-constexpr auto threshold = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::threshold",
-    operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::THRESHOLD>>();
-
+constexpr auto threshold = ttnn::
+    register_operation_with_auto_launch_op<"ttnn::threshold", operations::unary::ExecuteUnaryCompositeThreshold>();
 constexpr auto glu = ttnn::register_operation_with_auto_launch_op<
     "ttnn::glu",
     operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::GLU>>();
@@ -340,9 +281,6 @@ constexpr auto tril = ttnn::register_operation_with_auto_launch_op<
 constexpr auto triu = ttnn::register_operation_with_auto_launch_op<
     "ttnn::triu",
     operations::unary::ExecuteUnaryCompositeOpWithInt<operations::unary::UnaryCompositeOpType::TRIU>>();
-constexpr auto round = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::round",
-    operations::unary::ExecuteUnaryCompositeOpWithInt<operations::unary::UnaryCompositeOpType::ROUND>>();
 constexpr auto polygamma = ttnn::register_operation_with_auto_launch_op<
     "ttnn::polygamma",
     operations::unary::ExecuteUnaryCompositeOpWithInt<operations::unary::UnaryCompositeOpType::POLYGAMMA>>();
@@ -355,6 +293,5 @@ constexpr auto normalize_global = ttnn::register_operation_with_auto_launch_op<
 constexpr auto frac = ttnn::register_operation_with_auto_launch_op<
     "ttnn::frac",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::FRAC>>();
-
 
 }  // namespace ttnn

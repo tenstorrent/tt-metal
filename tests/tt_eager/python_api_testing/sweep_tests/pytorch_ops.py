@@ -757,9 +757,7 @@ def silu(x, *args, **kwargs):
     return torch.nn.functional.silu(x)
 
 
-def div(x, y, *args, accurate_mode, round_mode, **kwargs):
-    if round_mode == "None":
-        return torch.div(x, y)
+def div(x, y, *args, accurate_mode, round_mode=None, **kwargs):
     return torch.div(x, y, rounding_mode=round_mode)
 
 
@@ -799,9 +797,7 @@ def div_unary(x, *args, scalar, **kwargs):
     return result
 
 
-def unary_div(x, *args, scalar, accurate_mode, round_mode, **kwargs):
-    if round_mode == "None":
-        return torch.div(x, scalar)
+def unary_div(x, *args, scalar, accurate_mode, round_mode=None, **kwargs):
     return torch.div(x, scalar, rounding_mode=round_mode)
 
 
@@ -894,14 +890,10 @@ def fill_rm(x, *args, **kwargs):
     return y
 
 
-def fill_bw(x, *args, **kwargs):
-    grad_data = x.detach().clone()
-
-    put_y = torch.zeros_like(grad_data)
-    grad_sum = grad_data.sum()
-    put_y.fill_(grad_sum)
-
-    return put_y
+def fill_bw(x, y, *args, **kwargs):
+    y.requires_grad = True
+    golden_function = ttnn.get_golden_function(ttnn.fill_bw)
+    return golden_function(x, y)[0]
 
 
 def fill_zero_bw(x, *args, **kwargs):
@@ -942,7 +934,7 @@ def lerp_ternary(x, y, z, *args, **kwargs):
 
 
 ## Binary Ops
-def atan2(x, y, *args, **kwargs):
+def atan2(y, x, *args, **kwargs):
     return torch.atan2(y, x)
 
 
@@ -986,7 +978,7 @@ def prod(x, *args, all_dimensions, dim, **kwargs):
     if all_dimensions:
         result = torch.prod(x)
         return result.view(1, 1, 1, 1)
-    return torch.prod(x, dim, keepdim=True)
+    return torch.prod(x, dim, keepdim=kwargs["keepdim"])
 
 
 def ldexp(x, y, *args, **kwargs):
@@ -1486,6 +1478,38 @@ def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
         return x.to(torch.bfloat16)
     elif tt_input_dtype[0] == ttnn.uint16 and tt_output_dtype[0] == ttnn.uint32:
         return torch.clamp(x.to(torch.int32), min=0, max=65535)
+    elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.bfloat16:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat16 and tt_output_dtype[0] == ttnn.bfloat8_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.float32:
+        return x.to(torch.bfloat16).to(torch.float32)
+    elif tt_input_dtype[0] == ttnn.float32 and tt_output_dtype[0] == ttnn.bfloat8_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.uint16:
+        return torch.clamp(x.to(torch.bfloat16).to(torch.int32), min=0, max=65535)  # due to no uint16 support
+    elif tt_input_dtype[0] == ttnn.uint16 and tt_output_dtype[0] == ttnn.bfloat4_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.int32:
+        return x.to(torch.bfloat16).to(torch.int32)
+    elif tt_input_dtype[0] == ttnn.int32 and tt_output_dtype[0] == ttnn.bfloat4_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.uint32:
+        return torch.relu(x.to(torch.int32))  # due to no uint32 support
+    elif tt_input_dtype[0] == ttnn.uint32 and tt_output_dtype[0] == ttnn.bfloat4_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.bfloat16:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat16 and tt_output_dtype[0] == ttnn.bfloat4_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.float32:
+        return x.to(torch.bfloat16).to(torch.float32)
+    elif tt_input_dtype[0] == ttnn.float32 and tt_output_dtype[0] == ttnn.bfloat4_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.bfloat8_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.bfloat4_b:
+        return x.to(torch.bfloat16)
     else:
         return x
 

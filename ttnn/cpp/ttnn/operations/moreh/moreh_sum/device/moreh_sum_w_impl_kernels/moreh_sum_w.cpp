@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "compute_kernel_api/matmul.h"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -12,12 +12,12 @@ void MAIN {
     uint32_t NC = get_compile_time_arg_val(2);
     constexpr uint32_t origin_W = get_compile_time_arg_val(3);
 
-    auto cb_input = tt::CB::c_in0;
-    constexpr auto cb_scaler = tt::CB::c_in2;
-    constexpr auto cb_mask_w = tt::CB::c_in3;
-    constexpr auto cb_accum_dst = tt::CB::c_intermed0;
-    constexpr auto cb_masked_input = tt::CB::c_intermed1;
-    constexpr auto cb_out = tt::CB::c_out0;
+    auto cb_input = tt::CBIndex::c_0;
+    constexpr auto cb_scaler = tt::CBIndex::c_2;
+    constexpr auto cb_mask_w = tt::CBIndex::c_3;
+    constexpr auto cb_accum_dst = tt::CBIndex::c_24;
+    constexpr auto cb_masked_input = tt::CBIndex::c_25;
+    constexpr auto cb_out = tt::CBIndex::c_16;
     constexpr uint32_t TILE_W = 32;
     constexpr bool do_mask_w = (origin_W % TILE_W) != 0;
 
@@ -38,7 +38,7 @@ void MAIN {
             // tiles are expected to be coming in in NCHW order (W-contiguous)
             // reducing in W means out[h][0] = sum(w=0..W-1, in[h][w])
             // in this case we just sequentially add to accumulator all the W-tiles in a row
-            cb_input = tt::CB::c_in0;
+            cb_input = tt::CBIndex::c_0;
             bool is_w_single_tile = (Wt == 1);
             if (!is_w_single_tile) {
                 tile_regs_acquire();

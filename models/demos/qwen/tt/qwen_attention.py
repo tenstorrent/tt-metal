@@ -161,7 +161,7 @@ class TtQwenAttention(LightweightModule):
 
         # TODO: uncomment this for prefill which needs padding info
         # self.bias_qkv = ttnn.reshape(
-        #     self.bias_qkv, ttnn.Shape([1, 1, 1, self.bias_qkv.shape[-1]], [1, 1, 32, self.bias_qkv.shape[-1]])
+        #     self.bias_qkv, [1, 1, 1, self.bias_qkv.shape[-1]], [1, 1, 32, self.bias_qkv.shape[-1]]
         # )
 
         # For ring topology we can use all gather matmul for wo
@@ -281,9 +281,7 @@ class TtQwenAttention(LightweightModule):
 
         # Reshape such that true unpadded batch is tracked in shape
         fqkv_shape = xqkv_fused.shape
-        xqkv_fused = ttnn.reshape(
-            xqkv_fused, ttnn.Shape((1, 1, self.max_batch_size, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3]))
-        )
+        xqkv_fused = ttnn.reshape(xqkv_fused, (1, 1, self.max_batch_size, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3]))
 
         ###
         # Reshape and rotary embeddings
@@ -414,7 +412,7 @@ class TtQwenAttention(LightweightModule):
         if self.is_multichip and not self.use_fused_all_gather_matmul:
             dense_out_reduced = ttnn.reduce_scatter(
                 dense_out,
-                scatter_dim=3,
+                dim=3,
                 math_op=ttnn.ReduceType.Sum,
                 num_links=1,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -598,7 +596,7 @@ class TtQwenAttention(LightweightModule):
         if self.is_multichip and not self.use_fused_all_gather_matmul:
             dense_out_reduced = ttnn.reduce_scatter(
                 output_11SH,
-                scatter_dim=3,
+                dim=3,
                 math_op=ttnn.ReduceType.Sum,
                 num_links=1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,

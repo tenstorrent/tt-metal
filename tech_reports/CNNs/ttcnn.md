@@ -44,62 +44,196 @@ real-world applications including video analysis, medical imaging
 analysis, and natural language processing, where they can analyze data
 to extract meaningful features and patterns.
 
+## Convolution Operations in TTNN
+
+### `conv2d`
+
+Applies a 2D convolution over `input_tensor`, a 4D tensor with dimensions ordered as `(batch_size, input_height, input_width, in_channels)` using provided weights, with dimensions `(out_channels, in_channels, kernel_height, kernel_width)`, and optional `bias`, with dimensions `(1, 1, 1, out_channels)`, and generates `output_tensor` with first three dimensions flattened and ordered as `(1, 1, batch_size * output_height * output_width, out_channels)`. A simple `reshape` can be used to obtain the unflattened tensor.
+
+#### Python API
+
+```python
+    output_tensor = ttnn.conv2d(
+        input_tensor,
+        weight_tensor,
+        in_channels,
+        out_channels,
+        device,
+        bias_tensor,
+        kernel_size,
+        stride,
+        padding,
+        dilation,
+        batch_size,
+        input_height,
+        input_width,
+        ## optional arguments
+        conv_config,
+        compute_config,
+        groups,
+        memory_config,
+        return_weights_and_bias=False,
+        return_output_dim=False,
+    )
+```
+
+Arguments:
+
+* `input_tensor`
+* `weight_tensor`
+* `bias_tensor`
+* `in_channels` the number of input channels as an `int`.
+* `out_channels` the number of output channels as an `int`.
+* `device` device pointer as `ttnn.Device`.
+* `kernel_size` tuple of two ints: `(kernel_height, kernel_width)`.
+* `stride` tuple of two ints: `(stride_height, stride_width)`.
+* `padding` tuple of two ints: `(padding_height, padding_width)`.
+* `dilation` tuple of two ints: `(dilation_height, dilation_width)`.
+* `batch_size` an `int`.
+* `input_height` an `int`.
+* `input_width` an `int`.
+* `conv_config` _optional_ structure of configuration parameters of type `Conv2DConfig`. This is described in detail below.
+* `compute_config` _optional_ structure of compute configuration parameters of type `DeviceConfiguration`. This is described in detail below.
+* `groups` _optional_ `int` to control the connections between inputs and outputs. Both `in_channels` and `out_channels` should be divisible by `groups`.
+* `memory_config` _optional_ output tensor memory configuration. This is described below.
+* `return_weights_and_bias = False` _optional_ `bool` indicating whether to return pre-processed weights and bias tensors on device.
+* `return_output_dim = False` _optional_ `bool` indicating whether to return the outout tensor height and width.
+
+#### `Conv2dConfig`
+
+Following are the conv2d operation configuration parameters:
+
+* `dtype = ttnn.bfloat16` input activations data type.
+* `weights_dtype = ttnn.bfloat16` weights and bias data type.
+* `activation = ""` _optional_ `string`. Any activation function to apply. Options are `"relu"`.
+* `input_channels_alignment = 32` _optional_ `uint32_t`. Alignment value for channels dimension in the input tensor. This is applicable when `in_channels <= 16` when the alignment can be set to 16 instead of 32.
+* `deallocate_activation = False` _optional_ bool indicating whether the input activation tensor memory should be deallocated.
+* `reallocate_halo_output = False` _optional_ bool indicating if the intermediate tensor generated within the op should be reallocated to reduce memory fragmentation.
+* `act_block_h_override = 0` _optional_ `uint32_t` to override the `act_block_h` parameter, which determines the size of blocks used in computations -- smaller values require less memory, larger values require more memory but are more performant. This argument is ignored when `shard_layout = WIDTH_SHARDED`.
+* `act_block_w_div = 1` _optional_ `uint32_t`, value by which the maximum possible `act_block_w` parameter is divided. This arguments is ignored when `shard_layout = HEIGHT_SHARDED` or `BLOCK_SHARDED`.
+* `reshard_if_not_optimal = False` _optional_ bool indicating whether the operation can re-shard the input tensor to make it more optimal for performance. If true, override_sharding_config should not be set to true.
+* `override_sharding_config = False` _optional_ bool indicating if input sharding config should be overridden with provided shard_layout. If true, reshard_if_not_optimal should not be set to true.
+* `shard_layout = None` _optional_ `ttnn.TensorMemoryLayout` to specify type of sharding to use.
+* `core_grid = None` _optional_ `ttnn.CoreRangeSet` specifies the core grid to use. Applicable only when `override_sharding_config = True`,
+* `transpose_shards = True` _optional_ `bool` whether the shards be distributed in `ROW_MAJOR` order. This is applicable only when not using height sharding.
+* `output_layout = ttnn.TILE_LAYOUT` _optional_ `ttnn.Layout` to specify whether the output tensor be in `TILE` or `ROW_MAJOR` layout.
+* `enable_act_double_buffer = False` _optional_ bool to enable activation double buffering.
+* `enable_weights_double_buffer = False` _optional_ bool to enable weights double buffering when using block sharding.
+* `enable_split_reader = False` _optional_ bool to two concurrent reader kernels instead of one.
+
+#### Compute Config
+
+Architecture specific device compute kernel configuration, `DeviceComputeKernelConfig` with the following parameters:
+
+* `math_fidelity = MathFidelity.HiFi4`
+* `math_approx_mode = True`
+* `dst_full_sync_en = False`
+
+Wormhole and Blackhole specific parameters:
+
+* `fp32_dest_acc_en = False` enable accumulations in fp32.
+* `packer_l1_acc = False` enable packer accumulation directly in L1.
+
+#### Example Usage
+
+##### Preparing input tensors
+
+`conv2d` takes 4D `input_tensor` with dimensions ordered as `(N, H, W, C)` (channels last), and `weight_tensor` as `(C_in, C_out // groups, kernel_h, kernel_w)` 4D tensor. The input activation, weight and bias tensors can be on host or on device. If weight and bias are on device, they need to be already pre-processed by the conv2d op.
+
+```python
+    import ttnn
+    import torch
+
+    ## activation tensor
+
+    input_shape_nchw = [batch_size, in_channels, input_height, input_width]
+    torch_input_tensor_nchw = torch.randn(input_shape_nchw, dtype=torch.bfloat16)
+    torch_input_tensor_nhwc = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
+
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor_nhwc, ttnn.bfloat16)
+
+    ## weight tensor
+
+    weight_shape = [out_channels, in_channels // groups, kernel_height, kernel_width]
+    torch_weight_tensor = torch.randn(weight_shape, dtype=torch.bfloat16)
+
+    ttnn_weight_tensor = ttnn.from_torch(torch_weight_tensor, ttnn.bfloat16)
+
+    ## bias tensor
+
+    bias_shape = [1, 1, 1, out_channels]
+    torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16)
+
+    ttnn_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16)
+```
+
+##### Calling the operation
+
+Once the inputs are prepared, we can call the `conv2d` operation as shown in the following example. Many of the arguments in the `conv2d` API are optional, and will be using defaults as listed above.
+
+```python
+
+    conv_config = ttnn.Conv2dConfig(
+        dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat16
+    )
+
+    [ttnn_output_tensor_on_device, [out_height, out_width]] = ttnn.conv2d(
+        input_tensor=ttnn_input_tensor,
+        weight_tensor=ttnn_weight_tensor,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        device=device,
+        bias_tensor=ttnn_bias_tensor,
+        kernel_size=(kernel_h, kernel_w),
+        stride=(stride_h, stride_w),
+        padding=(pad_h, pad_w),
+        dilation=(dilation_h, dilation_w),
+        batch_size=batch_size,
+        input_height=input_height,
+        input_width=input_width,
+        conv_config=conv_config,
+        return_output_dim=True,
+    )
+```
+
+Note that the `conv2d` supports controling the return of output dimensions, through argument `return_output_dim`, and for processed weights and bias tensors, through argument `return_weights_and_bias`.
+
+To achieve higher performance it is advisable to use the following optional arguments:
+
+* `deallocate_activation = True` If the input tensor is no longer needed after the conv2d operation, this option will free up the input buffer and have more memory available for the operation.
+* `reallocate_halo_output = True` The `conv2d` operation executes a _haloing_ step before computing the convolutions to optimize memory accesses. This option will reallocate the output of this step in order to reduce memory fragmentation to avoid memory fitting issues.
+* `enable_act_double_buffer = True` If enough memory is available, enabling double buffering of the input activations will result in a better performance.
+* `enable_weights_double_buffer = false` If enough memory is available, enabling weights double buffering can improve performance when using block sharding.
+* `enable_split_reader = True` By default, a single reader kernel is used to read in activations from the input shard. Enabling this option will use two concurrent reader kernels, potentially improving overall performance.
+
+##### Output post-processing
+
+The generated output of the `conv2d` operation is a 4D tensor with the `NHWC` order of dimensions, and requires a permute operation to convert to the standard `NCHW` order. The following is an example of how to typically post-process the output tensor. Note that the `reshape` is used to un-flatten the outout tensor. The slice operation removes any padding that may have been added by the operation to the last dimension.
+
+```python
+    ttnn_output_tensor = ttnn.from_device(ttnn_output_tensor_on_device)
+    torch_output_tensor = ttnn.to_torch(ttnn_output_tensor)
+    torch_output_tensor = torch_output_tensor.reshape(batch_size, out_height, out_width, torch_output_tensor.shape[-1])
+    torch_output_tensor = torch_output_tensor[:, :, :, :out_channels]
+    torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
+```
+
+
+### `maxpool2d`
+_Coming soon._
+
+
 Convolution as Matrix Multiplication
 ------------------------------------
 
-Consider an example input image of resolution (dimensions) $16\times16$,
-that is, height and width, $H$ and $W$ are both $16$, and each pixel has
-a channel depth, $C$, of $32$ (see
-Figure [\[fig:input\]](#fig:input){reference-type="ref"
-reference="fig:input"}). Let us input two such images, setting batch
-$N=2$, to the convolution operation. Putting it together, the input
-tensor to convolution operation is, hence, of dimensions $[2,16,16,32]$,
-where the order of the dimensions is $[N, H, W, C]$. Let us perform the
-convolution with filters of size $[3,3]$ (see
-Figure [\[fig:filters\]](#fig:filters){reference-type="ref"
-reference="fig:filters"}), using a stride of $2$ in both $H$ and $W$
-dimensions, indicating downsample, and with padding enabled. The output
-of this convolution would be a tensor of dimensions $[2,8,8,64]$.
+We want to perform convolution op on our hardware, but we do not have support for it - there are no instructions that are going to do specific convolution stuff.
+It turns out that the convolution operation can be transformed into matrix multiplication. If we look at what we need to do in convolution, it is basically the dot product of the corresponding sliding window values and filter values. This is the same thing we do in matrix multiplication—take the dot product of a row in the first input and a column in the second input. So, if we represent all the sliding window values as rows (with each row being a flattened version of a sliding window), and all the filters as columns in the second input (in the same way as the first input), every value in the output matrix would correspond to the filter applied to a specific window.
 
-The key variables as input to the convolution operation are:
+<img src="media/im2col6.png" style="width:600px;">\
+_Figure 1: Idea of convolution as matrix multiplication_
 
-  -------------------- ----------- ------------ ------------ ------------
-            **Input**:   $N = 2$    $H_i = 16$   $W_i = 16$   $C_i = 32$
-
-    **Kernel window**:  $K_h = 3$   $K_w = 3$
-
-           **Stride**:  $S_h = 2$   $S_w = 2$
-
-           **Output**:   $N = 2$    $H_o = 8$    $W_o = 8$    $C_o = 64$
-  -------------------- ----------- ------------ ------------ ------------
-
-The input tensor to the convolution must first be transformed into a
-matrix such that multiplying this matrix with the filters (as weights)
-gives the convolution output -- In a convolution a dot product is
-performed between the filter elements and each of the kernel window
-position. This kernel window is a sliding window, going across the width
-and height of the input image (see
-Figure [\[fig:filterwindow\]](#fig:filterwindow){reference-type="ref"
-reference="fig:filterwindow"}.) In a matrix multiply a dot product is
-performed between a row in the first input and a column in the second
-input. The transformed matrix must, hence, consist of rows where each
-row corresponds to the elements from the input image that are overlapped
-by the kernel window. This is illustrated in
-Figure [\[fig:inputtransform\]](#fig:inputtransform){reference-type="ref"
-reference="fig:inputtransform"}. For every valid kernel window position
-(which corresponds to a unique output element), there must be a
-corresponding row in the transformed matrix.
-
-The filters can be reshaped into a matrix of dimensions
-$[K_h \times K_w \times C_i, C_o]$. Based on this, the transformed input
-tensor matrix should have dimensions
-$[N \times H_o \times W_o , K_h \times K_w \times C_i]$. On multiplying
-this matrix with the filters matrix (weight matrix) yields an output
-matrix of dimensions $[N \times H_o \times W_o, C_o]$, which is the
-expected output (see
-Figure [\[fig:output\]](#fig:output){reference-type="ref"
-reference="fig:output"}.)
-
+In Figure 1, we can see that each window is transformed into a row in the first input, and each filter is transformed into a column in the second input. After performing matrix multiplication, convolution is applied.
 
 Convolution Operation on Tenstorrent Architecture
 =================================================
@@ -159,7 +293,7 @@ need the the following input blocks:
 To make sure that the output block and corresponding input data fit in
 local L1, the following constraints must be met.
 
--   $[bH_{o}\times bW_{o} + K_h \times K_w \times C_i \times (bH_{o} + bW_{o})] \times \texttt{sizeof}($datatype$) < L1_{free}$
+-   $[bH_{o} \times bW_{o} + K_h \times K_w \times C_i \times (bH_{o} + bW_{o})] \times \text{\texttt{sizeof}}(\text{datatype}) < L1_{free}$
 
 -   $bH_{o} \bmod 32 = 0$
 
@@ -242,10 +376,10 @@ output block in to the destination registers. The pack core moves the
 output block data from the destination registers to the local L1 memory.
 
 <img src="media/op1.png" style="width:500px;">\
-_Convolutions operation using generic interleaved global tensors._
+_Figure 5: Convolutions operation using generic interleaved global tensors._
 
 <img src="media/op2.png" style="width:500px;">\
-_Convolutions operation using sharded local tensors._
+_Figure 6: Convolutions operation using sharded local tensors._
 
 Parallelization of Convolution Operation
 ========================================
@@ -284,7 +418,10 @@ of each strategy, consider a 2D matrix of size $[H, W]$ (representing a
 flattened tensor), and let $p$ be the number of cores used.
 
 <img src="media/heightshard.png" style="width:300px;">\
-<img src="media/blockshard.png" style="width:300px;">
+_Figure 7: Height sharding_
+
+<img src="media/blockshard.png" style="width:300px;">\
+_Figure 8: Block sharding_
 
 1.  **Height sharding (1D)**: In the height sharded scheme, the input
     matrix height is equally divided into $p$ contiguous segments and
@@ -351,10 +488,10 @@ Haloing
 -------
 
 <img src="media/halos.png" style="width:200px;">\
-_Halo._
+_Figure 9: Halo_
 
 In the following example, we describe the haloing process. This is a
-data movement operation we use to construct \"haloed\" shards, where
+data movement operation we use to construct 'haloed' shards, where
 each input shard contains all the data it requires to generate
 convolution output for its assigned output tensor shard. This eliminates
 any need for a Tensix core to access the L1 memory of another core
@@ -369,21 +506,29 @@ off with an example. We start with the following tensors:
 
 3.  Output activation tensor of size $[1, 6, 4, 6]$.
 
-This tensor can be visualized as in the following
-Figure [6](#fig:halo1){reference-type="ref" reference="fig:halo1"}. We
-will separate the input tensor dimensions versus the output tensor
-dimensions.
+For simplicity, let the batch size, stride and dilation be one.
+Let's visualize the activation tensor.
 
-<img src="media/halo1.png" style="width:200px;">
+<div>
+<img src="media/halo2.png" style="height:350px;">
+<img src="media/halo3.png" style="height:350px;">
+<img src="media/halo4.png" style="height:350px;">
+<img src="media/halo5.png" style="height:350px;">
+</div>
 
-For simplicity, let the batch size be one. IN the figure, we also
+_Figure 10: Input tensor (A, B, C, D)_
+
+
+Let's define one pixel with the channel dimension as a *stick*
+(shown in Figure 3).
+
+In the Figure 10: A, aside from the full input tensor, we also
 demonstrate a single channel view of this block. This view will be a
 useful visualization tool on which we will build on top of. Let us
 assume we have $p = 3$ cores. The sharding strategy we will be using is
-*height*-sharding. This is depicted in the figure via three distinct
+*height*-sharding. This is depicted in the Figure 10: B via three distinct
 colors, one for each shard.
 
-<img src="media/halo2.png" style="width:200px;">
 
 Next, we can visualize what our window will look like. Recall that the
 weight tensor consists of a number of filters, and each filter consists
@@ -391,91 +536,306 @@ of one or more kernels. This kernel is also referred to as the *window*
 in 2D visualization representation. We can see the 3D kernels (a single
 filter) that is being convoluted across our input tensor.
 
-<img src="media/halo3.png" style="width:200px;">
 
 We will keep in mind the strides, $S_w$ and $S_h$, as how many data
 elements we traverse by. We have not shown any padding ($pad_h$ and
-$pad_w$), but they will also be included if they were non zero values.
+$pad_w$), but they would also be included if they were non zero values.
 The 2D representation shows the window and what parts of each shard it
 will perform matrix multiplication with. We can see that the shown
 window position spans two different shards. Thus, if we were calculating
 the output data element for this window, we would somehow need to get
 some shard data from another core.
 
-In the following figure, we see the same window that has traversed
+
+In the Figure 10: D, we see the same window that has traversed
 several elements and is located at its current position. In the 2D
 single channel representation, we can see that this window spans data
 from all 3 shards. Thus, for this particular output data element, it
 will need data from its current core, as well as 2 other cores for the 2
 other shards.
 
-<img src="media/halo4.png" style="width:200px;">
 
-<img src="media/halo5.png" style="width:200px;">
+**The goal of halo is to determine which input data is required for the output data
+elements calculated on a specific core and to transfer that data to the core.**
 
-The goal of halo is to figure out what data is needed for the current
-output data element calculation, and to bring that within the core that
-is doing the computation. We will stick to the case where we only need
-to gather data from another shard. Assume the same example tensor as
-before with the same weight/filter/kernel parameters. From the previous
-example, we will first add the appropriate padding onto the input
-tensor. In the case of convolution, the padding value is 0. We have
-chosen to have $pad_w$ and $pad_h$ to be 0.
+### Halo implementation
 
-<img src="media/halo6.png" style="width:200px;">
 
-Moving on, from this tensor, we will generate another tensor of boolean
-values that will be sized the same as the original input tensor. Each of
-these values will signify whether the current element is a padding value
-or a data value. Padding values are set to true (value=1), while the
-latter is set to false (value=0). This is called our padding config
-tensor.
+Halo op performs needed data movement on each core in the following manner:
+1. allocate buffer for the halo'd output shard, which consists of local input data sticks,
+padding sticks and remote input data sticks
+2. fill padding sticks in the allocated buffer with padding value
+3. copy input shard sticks from the input buffer to the allocated output buffer
+4. remote copy sticks of the local shard to the cores that need them to calculate their output shards*
 
-<img src="media/halo7.png" style="width:200px;">
+\* If the `remote_read` argument of the halo_op is set to **true**, then each core
+will copy the needed sticks from remote cores instead. Default remote data movement
+is done by the core that contains the data (src-local, dst-remote), while if this
+flag is triggered, remote data movement is performed by the core that consumes the data (src-remote, dst-local).
+
+To perform steps 2-4, halo kernel needs to know for each stick in the halo output
+(which will be convolution input), whether it is (a) padding, it comes from (b) the local
+shard or from (c) a remote shard. This is calculated on host by the sliding window
+infrastructure that is called from the halo operation. The final config is pushed
+to the device as a sharded tensor to the reserved part of memory - currently we reserve
+this memory using `l1_small_size config` when initializing the device.
+Config tensors are then consumed by the halo kernel to perform needed transfers.
+
+
+Let's explain how this config is generated, step by step. We will focus on the 2D
+representation, since we are using the height-sharding example which does not split channels on cores.
+These steps match functions defined in the `sliding_window` namespace called from
+[the halo op](https://github.com/tenstorrent/tt-metal/blob/main/ttnn/cpp/ttnn/operations/sliding_window/halo/device/halo_device_operation.cpp),
+in the `create_program` function, before the kernels are dispatched.
+
+Note: This example is simplified for clarity. In a real-world scenario,
+additional padding would be added to fit the tile height and width before
+the halo operation is called. However, we are intentionally overlooking that detail here.
+
+#### Step 1 - Pad metadata
+
+Let's now expand our convolution to include the following padding (see Figure 11):
+- $pad_h$ = 1
+- $pad_w$ = 1
+- padding value = 0
+
+We will generate a vector of boolean values that will be sized the same
+as the original input tensor. Each of these values will signify whether the
+current element is a padding value or a data value. Padding values are set to true
+(value=1), while the latter are set to false (value=0).
+
+<img src="media/halo7.png" style="">\
+_Figure 11: Pad metadata_
+
+#### Step 2 - Op trace metadata
 
 Next up, we will traverse through the input tensor and store the indices
 that correspond to each stick. You can see that certain sticks will
 correspond to padding values whereas certain sticks will correspond to
-data values. We store these indices. If you know the top-leftmost index,
+data values. We store these indices in a vector. If you know the top-leftmost index,
 you can generate all the indices in your window that you will need.
 
-<img src="media/halo8.png" style="width:200px;">
+<img src="media/optracemetadata.png" style="height:300px;">\
+_Figure 12: Op trace metadata_
 
-Now we will determine where data needs to be read from. We first compute
+#### Step 3 - Shard boundaries
+
+Now we will determine what data we need for each core. We first compute
 what part of the output each core is responsible for. Therefore, the
 point of view of computation is from the output, not the input. Our
-output tensor dimensions are as shown. Each shard will be computed by a
-specific core. Let us focus on the first shard. Going back to our input,
+output tensor dimensions are shown in Figure 13 below.
+Each shard will be computed by a specific core.
+
+In this step, for each core, we determine:
+- start and end stick indices of the output shard computed on the core
+- start and end stick indices of the padded input tensor needed for the output shard
+(indices generated in step 2)
+
+
+Let us focus on the first core. First core's output shard covers output sticks
+between indices [0-7] (see Figure 13).
+
+
+<img src="media/halo9.png" style="height:250px;">\
+_Figure 13: Convolution output tensor_
+
+
+To obtain the input boundaries for this shard,
 we can traverse through each output data element and figure out what
-input elements were needed to compute that. The 2D window diagrams you
-see are the window being convoluted across the input sticks to get the
-entirety of the blue shard output. When doing this traversal, we can
-store the indices that we need to obtain in the current core. There are
-3 types: padding config, local config and remote config. Padding config
-refers to the indices that are padding sticks. Local config refers to
-the indices that are already present in the current core. Remote config
-refers to the indices that need to be obtained from another core.
+input elements are needed to compute that (see Figure 14). We
+can see that we need input sticks between indices [0-27]. These sticks
+include padding, local shard to the first core, and some sticks from the
+second core.
 
-As you can see, the blue shard output needs to get the input indices as
-below: padding: \[1, 2, 3, 4, 5, 6, 7, 8, 9, 16, 17, 24, 25\] local:
-\[10, 11, 12, 13, 14, 15, 18, 19\] remote: \[20, 21, 22, 23, 26, 27,
-28\]
+<img src="media/inputtraverse.png" style="height:450px;">\
+_Figure 14: Window traverse for core 0 output_
 
-At this point, the local core which will compute the blue shard output
-knows what data it needs to get and where. Thus, it will issue a Halo
-operation with these indices and their locations and obtain the relevant
-data within its own core.
+After halo op is done, each core will contain all the input sticks needed to
+compute the assigned output shard (see Figure 15). Halo output is then passed
+to the convolution op as input.
 
-<img src="media/halo9.png" style="width:200px;">\
-<img src="media/halo10.png" style="width:200px;">
+<img src="media/halooutput.png" style="height:450px;">\
+_Figure 15: Convolution input per core (halo output)_
 
+#### Step 4 - Tensor metadata
+
+In this step, for each stick in the input tensor, we generate information
+about where it is located at. For each core, we generate following info:
+- `padding`: true/false
+- `location`:
+    - `core_id`: int - the core it is located on
+    - `local_core_index`: int - index of the stick on the core it is located on
+
+
+#### Step 5 - Kernel config tensors
+
+This is the final step where we generate config tensors consumed by the halo kernel.
+Using the information from steps 1-4, we generate 3 config tensors:
+padding config, local config and remote configs.
+
+##### Padding config
+
+This is a vector of pairs, where each pair describes a chunk of consecutive padding sticks:
+- index of the first stick
+- length
+
+For core 0, we would have 3 chunks:
+
+<img src="media/padconfig.png" style="height:200px;">\
+_Figure 16: Padding chunks for core 0_
+
+<img src="media/tablepad.png" style="height:250px;">\
+_Figure 17: Padding config_
+
+
+##### Local config
+
+This is a vector with following data:
+- core coordinates (first 2 vector elements)
+- number of elements describing chunks of local shard needed (3rd vector element)
+     - this is basically count of the remaining elements in the vector and equals 3 * number of chunks
+- for each chunk of consecutive sticks (rest of the vector elements)
+    1. index of the first stick in the local input shard (see Figure 17)
+    2. index in the first stick in the halo output shard (see Figure 18)
+    3. chunk length
+
+
+<img src="media/inputshards.png" style="height:200px;">\
+_Figure 18: Local input shard indices_
+
+<img src="media/localconfig.png" style="height:200px;">\
+_Figure 19: Local input shard chunks for core 0_
+
+For core 0, this vector would describe 2 chunks needed by core 1 (see Figure 18):
+
+<img src="media/tablelocal.png" style="height:450px;">\
+_Figure 20: Local config_
+
+
+##### Remote config
+
+Remote config describes chunks of local data needed by other cores.
+It is a vector similar to the local config vector, only now we have an extra level on top
+that describes each remote core that needs data. The vector consists of the following elements
+for each remote core:
+- remote core coordinates (first 2 vector elements)
+- number of elements describing chunks of local shard needed (3rd vector element)
+    - this is basically count of the remaining elements in the vector and equals 3 * number of chunks
+- for each chunk of consecutive sticks (rest of the vector elements)
+    1. index of the first stick in the local input shard (see Figure 17)
+    2. index in the first stick in the halo output shard (see Figure 18)
+    3. chunk length
+
+<img src="media/remoteconfig.png" style="height:200px;">\
+_Figure 21: Remote input shard chunks for core 1_
+
+
+<img src="media/tableremote.png" style="height:450px;">\
+_Figure 22: Remote config_
+
+
+Implementation
+------------------------------------
+
+Consider an example input image with a resolution of $32 \times 32$, meaning both the height $H$ and width $W$ are 32, and each pixel has a channel depth $C$ of 1. Let's use just one image, setting the batch size $N = 1$ for the convolution operation. Therefore, the input tensor for the convolution has dimensions $[1, 32, 32, 1]$, where the order of the dimensions is $[N, H, W, C]$. The last dimension will be padded to 32 before the convolution starts because the unit of calculation is a tile.
+
+Logical activations shape: $[1, 32, 32, 1]$
+
+Padded activations shape: $[1, 32, 32, 32]$
+
+In this case, we will focus on height-sharded convolution.
+
+Let us perform the convolution with a filter of size $[3, 3]$, using a stride of 1 in both the $H$ and $W$ dimensions, with padding enabled (both height and width padding are 1). The dilation is also 1. We will have just 1 input and 1 output channel, but these will be padded to 32 (for the same reason as the number of input channels in the activation input). In other words, only one filter (and just the first layer of it) is effective. Therefore, these are weights dimensions, where the order of dimensions is $[C_i, C_o, K_h, K_w]$:
+
+Logical weights shape: $[1, 1, 3, 3]$
+
+Padded weights shape: $[32, 32, 3, 3]$
+
+<img src="media/im2col3.png" style="width:400px;">\
+_Figure 1: Filters_
+
+The output of this convolution will be a tensor with dimensions $[1, 32, 32, 1]$ — it has the same dimensions as the input tensor.
+
+The key variables as input to the convolution operation in this example are:
+
+
+| **Parameter**       | **Value** |
+|---------------------|-----------|
+| **Input**           |           |
+| - Batch Size ($N$)  | 1         |
+| - Height ($H_i$)    | 32        |
+| - Width ($W_i$)     | 32        |
+| - Channels ($C_i$)  | 1         |
+| **Kernel window**   |           |
+| - Height ($K_h$)    | 3         |
+| - Width ($K_w$)     | 3         |
+| **Stride**          |           |
+| - Height ($S_h$)    | 1         |
+| - Width ($S_w$)     | 1         |
+| **Padding**          |           |
+| - Height ($P_h$)    | 1         |
+| - Width ($P_w$)     | 1         |
+| **Dilation**          |           |
+| - Height ($D_h$)    | 1         |
+| - Width ($D_w$)     | 1         |
+| **Output**          |           |
+| - Batch Size ($N$)  | 1         |
+| - Height ($H_o$)    | 32         |
+| - Width ($W_o$)     | 32         |
+| - Channels ($C_o$)  | 1        |
+
+Before the part of the operation where the actual convolution is done, several actions take place (sharding, padding, haloing, etc.). The input to the convolution micro-op is the output of the halo operation. Halo op ensures that each core has all data required to apply the convolution operation (which is essentially matrix multiplication) in local L1 memory.
+
+In this case, we will analyze the height-sharded convolution. The output will be $[1, 32, 32, 1]$. Each core will process one row of the output, so 32 cores will be used—one row of output per core. Each core will handle this chunk of the tensor:
+
+
+<img src="media/im2col1.png" style="width:600px;">\
+_Figure 2: Chunk of data each core is going to process_
+
+Initially, each core will have just a $1 \times 32 \times 32$ shard (an equally divided tensor with padded input channels). However, after adding padding to the tensor (height and width are now 34 instead of 32) and gathering data from other cores, the dimensions will be $[1, 3, 34, 32]$.
+
+Conv input is 2D tensor - first 3 dimensions are squashed into 1 ($N$, $H$, $W$), and $C$ is going to be second dimension of reshaped tensor.
+After reshaping this tensor into 2D (this part is not part of conv micro-op, halo output is already 2D tensor), each stick from the tensor in Figure 2 will correspond to one row of the reshaped tensor:
+
+
+<img src="media/im2col2.png" style="width:400px;">\
+_Figure 3: Chunk of data each core is going to process - 2d reshaped_
+
+
+This is an actual shard that will be processed in the convolution micro-op, and it is also the output of the halo operation.
+
+Weights are stored as an interleaved tensor (usually in DRAM), and after reshaping to 2D, it looks like this:
+
+<img src="media/im2col4.png" style="width:400px;">\
+_Figure 4: Filters - 2d reshaped_
+
+Each column in the weight tensor represents one filter.
+
+The input tensor to the convolution must first be transformed into a matrix such that multiplying this matrix with the filters (as weights) gives the convolution output. In convolution, a dot product is performed between the filter elements and each kernel window position. This kernel window is a sliding window that moves across the width and height of the input image.
+
+In matrix multiplication, a dot product is performed between a row in the first input matrix and a column in the second input matrix. This means we need to transform our input into an appropriate matrix for matrix multiplication. Logically, if we look at Figure 2, one window where the filter is applied is one "box" (e.g., from $a_{0,0,0}$ to $a_{2,2,31}$). We need to store that data in one row of the transformed matrix so that when we apply the dot product of that row with the filter (weight matrix), we get the result of applying the filter to the input window.
+
+This is the job of the activation reader kernel. The activation reader kernel rearranges input data into a buffer (CB) that will be consumed by the compute kernel, in a way that enables matrix multiplication. Specifically, each row in this matrix is a flattened version of the input elements from each kernel window.
+
+Looking at both Figure 2 and Figure 3, we can see that the data for one row in the transformed matrix is not placed continuously in the input. For the first window, we take the first 3 elements, then skip the next 31 elements, and take the next 3 elements, and so on. For each row of the transformed matrix, we select which sticks (input elements) to use by choosing the starting point and applying the appropriate offsets.
+
+<img src="media/im2col5.png" style="width:600px;">\
+_Figure 5: Transformed input for matrix multiplication_
+
+Colors can be matched with those on Figure 1. These dimensions essentially mean that we have 32 windows in our input, with each window containing 288 values (3x3 sticks).
+
+On the other side, the weight reader kernel reads the weight data from DRAM into L1. The entire weight tensor is fetched to each core, and a 1D matrix multiplication (matmul) is performed.
+
+Once the data from the reader and writer are ready, the compute kernel performs the matrix multiplication and stores the output as height-sharded.
+
+The output tensor is 32x32 per core, where only the first row is effective, because we have 31 padded filters.
 
 CNN Models: ResNet-50 Benchmark
 ===============================
 
 <img src="media/resnet1.png" style="width:200px;">\
 <img src="media/resnet2.png" style="width:200px;">\
-_Resnet Blocks_
+_Figure 23: Resnet Blocks_
 
 ResNet-50 is a CNN with 50 layers, part of
 the ResNet (Residual Network) family. Primarily to address the vanishing

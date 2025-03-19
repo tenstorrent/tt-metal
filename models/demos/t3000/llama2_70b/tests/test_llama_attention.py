@@ -146,7 +146,7 @@ def tt_llama_attention_prepare_inputs(
             cos_gathered,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            cache_file_name=cache_name(f"cos_gathered_prefill_{seq_len}"),
+            cache_file_name=cache_name(f"cos_gathered_prefill_{start_pos}_to_{start_pos + seq_len}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=llama_attention_model.mesh_device,
             mesh_mapper=ReplicateTensorToMesh(llama_attention_model.mesh_device),
@@ -155,7 +155,7 @@ def tt_llama_attention_prepare_inputs(
             sin_gathered,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            cache_file_name=cache_name(f"sin_gathered_prefill_{seq_len}"),
+            cache_file_name=cache_name(f"sin_gathered_prefill_{start_pos}_to_{start_pos + seq_len}"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=llama_attention_model.mesh_device,
             mesh_mapper=ReplicateTensorToMesh(llama_attention_model.mesh_device),
@@ -219,6 +219,8 @@ def run_test_LlamaAttention_inference(
     tokenizer_path,
     cache_path,
     paged_attention,
+    is_chunked_prefill=False,
+    chunk_size=None,
 ):
     # Prepare paths and devices
     skip_model_load = should_skip_model_load()
@@ -315,15 +317,9 @@ def run_test_LlamaAttention_inference(
         start_pos = generation_start_pos + i
 
         # PyTorch output --------------------------------------------------------------------
-        if mode == "prefill":
-            attention_input, start_pos, freqs_cis, attn_mask = pytorch_LlamaAttention_model.prepare_inputs_prefill(
-                pt_inp_normed, start_pos
-            )
-        else:
-            attention_input, start_pos, freqs_cis, attn_mask = pytorch_LlamaAttention_model.prepare_inputs(
-                pt_inp_normed, start_pos
-            )
-
+        attention_input, start_pos, freqs_cis, attn_mask = pytorch_LlamaAttention_model.prepare_inputs_prefill(
+            pt_inp_normed, start_pos
+        )
         pytorch_out = pytorch_LlamaAttention_model(
             attention_input,
             start_pos,
@@ -331,36 +327,108 @@ def run_test_LlamaAttention_inference(
             attn_mask,
         )
 
-        # TT hardware execution -------------------------------------------------------------
-        attention_input, start_pos, rot_mat, cache_idxs = tt_llama_attention_prepare_inputs(
-            tt_LlamaAttention_model,
-            tt_input,
-            start_pos,
-            mode,
-            configuration.rope_theta,
-            rope_setup=rope_setup if mode == "decode" else None,
-            use_scaled_rope=configuration.use_scaled_rope,
-        )
+        if is_chunked_prefill:
+            assert mode == "prefill", "Chunked prefill should only be run in prefill mode"
+            assert start_pos == 0, "Start pos should be 0 for chunked prefill"
+            assert batch == 1, "Batch should be 1 for chunked prefill"
 
-        tt_out = tt_LlamaAttention_model(
-            attention_input,
-            rot_mat,
-            start_pos,
-            cache_idxs=cache_idxs if mode == "decode" else None,
-            page_table=page_table_tt,
-            mode=mode,
-        )
+            """
+            In chunked prefill mode, we need to split the prefill input into chunks.
+            Each chunk will be processed sequentially. Each chunk must be given the appropriate
+            sin/cos values. Also, each chunk must be given a partial page table for paged_fill_cache
+            so that paged_fill_cache fills the current chunk properly.
+            Be vary careful that we don't pick up cached sin/cos values since they will be incorrect.
+            """
+            for chunk_start in range(0, seq_len, chunk_size):
+                chunk_end = chunk_start + chunk_size
+                assert chunk_end <= seq_len, "Chunk end should be less than seq_len"
+                chunk_page_table = page_table[
+                    :,
+                    chunk_start // paged_attention_config.block_size : chunk_end // paged_attention_config.block_size,
+                ]
+                chunk_page_table_tt = ttnn.as_tensor(
+                    chunk_page_table,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=t3k_mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+                )
+                # SDPA requires that the page table batch dim matches the input batch dim, which must be 1 in prefill
+                prefill_page_table = page_table[0:1, :]
+                prefill_page_table_tt = ttnn.as_tensor(
+                    prefill_page_table,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=t3k_mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+                )
 
-        tt_out = ttnn.from_device(tt_out)
-        tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
-        tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [batch, seq_len, hidden_dim]
-        if mode == "decode":
-            tt_out = tt_out[:batch]
+                chunk_tt_input = tt_input[:, chunk_start:chunk_end]
+                # TT hardware execution -------------------------------------------------------------
+                attention_input, _, rot_mat, cache_idxs = tt_llama_attention_prepare_inputs(
+                    tt_LlamaAttention_model,
+                    chunk_tt_input,
+                    chunk_start,
+                    mode,
+                    configuration.rope_theta,
+                    rope_setup=None,
+                    use_scaled_rope=configuration.use_scaled_rope,
+                )
+                tt_chunk_out = tt_LlamaAttention_model(
+                    attention_input,
+                    rot_mat,
+                    None,
+                    cache_idxs=None,
+                    page_table=prefill_page_table_tt,
+                    mode=mode,
+                    chunk_page_table=chunk_page_table_tt,
+                    chunk_start_idx=chunk_start,
+                )
 
-        # check outputs ----------------------------------------------------------------------
-        does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
-        logger.info(f"Output: {output_pcc}")
-        all_pccs.append(extract_pcc_from_log(output_pcc))
+                tt_chunk_out = ttnn.from_device(tt_chunk_out)
+                tt_chunk_out = ttnn.to_torch(tt_chunk_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
+                tt_chunk_out = tt_chunk_out.permute(2, 1, 0, 3).squeeze(1)  # [batch, seq_len, hidden_dim]
+
+                # check outputs ----------------------------------------------------------------------
+                pytorch_chunk_out = pytorch_out[:, chunk_start:chunk_end]
+                does_pass, output_pcc = comp_pcc(pytorch_chunk_out, tt_chunk_out, pcc)
+                logger.info(f"Chunk {chunk_start} output: {output_pcc}")
+                all_pccs.append(extract_pcc_from_log(output_pcc))
+
+        else:
+            # TT hardware execution -------------------------------------------------------------
+            attention_input, start_pos, rot_mat, cache_idxs = tt_llama_attention_prepare_inputs(
+                tt_LlamaAttention_model,
+                tt_input,
+                start_pos,
+                mode,
+                configuration.rope_theta,
+                rope_setup=rope_setup if mode == "decode" else None,
+                use_scaled_rope=configuration.use_scaled_rope,
+            )
+
+            tt_out = tt_LlamaAttention_model(
+                attention_input,
+                rot_mat,
+                start_pos,
+                cache_idxs=cache_idxs,
+                page_table=page_table_tt,
+                mode=mode,
+            )
+
+            tt_out = ttnn.from_device(tt_out)
+            tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
+            tt_out = tt_out.permute(2, 1, 0, 3).squeeze(1)  # [batch, seq_len, hidden_dim]
+
+            if mode == "decode":
+                tt_out = tt_out[:batch]
+
+            # check outputs ----------------------------------------------------------------------
+            does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
+            logger.info(f"Output: {output_pcc}")
+            all_pccs.append(extract_pcc_from_log(output_pcc))
 
         if does_pass:
             logger.info(f"[start_pos={start_pos}] {llama_version} Attention output Passed!")
@@ -387,7 +455,6 @@ def run_test_LlamaAttention_inference(
     # concat the pasts by heads
     tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_LlamaAttention_model.layer_past]
     if paged_attention:
-        tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_LlamaAttention_model.layer_past]
         tt_layer_present_all = [
             (
                 ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=1))[reverse_permutation]
@@ -451,9 +518,13 @@ def run_test_LlamaAttention_inference(
     ),
 )
 @pytest.mark.parametrize(
-    "paged_attention",
-    (True, False),
-    ids=("paged_attention", "non_paged_attention"),
+    "paged_attention, is_chunked_prefill, chunk_size",
+    (
+        (True, True, 128),
+        (True, False, None),
+        (False, False, None),
+    ),
+    ids=("chunked_paged_attention", "standard_paged_attention", "non_paged_attention"),
 )
 def test_LlamaAttention_inference(
     batch,
@@ -464,6 +535,8 @@ def test_LlamaAttention_inference(
     max_context_len,
     llama_version,
     paged_attention,
+    is_chunked_prefill,
+    chunk_size,
     use_program_cache,
 ):
     if seq_len == 1 and batch != max_batch_size:
@@ -474,6 +547,15 @@ def test_LlamaAttention_inference(
 
     if llama_version == "llama2" and seq_len > 2048:
         pytest.skip(f"Llama2 with seq_len={seq_len} is not supported (max 2048)")
+
+    if is_chunked_prefill and seq_len == 1:
+        pytest.skip("Chunked prefill is not valid for decode mode tests")
+
+    if is_chunked_prefill:
+        assert paged_attention, "Chunked prefill is only valid for paged attention"
+        assert chunk_size is not None, "Chunk size must be provided for chunked prefill"
+        assert chunk_size > 0, "Chunk size must be greater than 0"
+        assert seq_len % chunk_size == 0, "Sequence length must be divisible by chunk size"
 
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,
@@ -494,4 +576,6 @@ def test_LlamaAttention_inference(
         tokenizer_path,
         cache_path,
         paged_attention,
+        is_chunked_prefill,
+        chunk_size,
     )
