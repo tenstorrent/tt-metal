@@ -791,8 +791,7 @@ void Device::clear_l1_state() {
     // Clear erisc sync info
     for (const auto& eth_core : this->get_active_ethernet_cores()) {
         static const uint32_t max_l1_loading_size =
-            hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED) +
-            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+            hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
         static uint32_t zero_vec_size = max_l1_loading_size;
         auto zero_vec_addr = HalL1MemAddrType::UNRESERVED;

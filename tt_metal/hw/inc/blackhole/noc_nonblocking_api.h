@@ -725,6 +725,11 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     bool linked,
     bool posted = false,
     uint32_t atomic_ret_val = 0) {
+    // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
+    // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
+    // mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate force atomics to
+    // be non-posted.
+    posted = false;
     while (!noc_cmd_buf_ready(noc, cmd_buf));
     if constexpr (noc_mode == DM_DYNAMIC_NOC || program_ret_addr == true) {
         uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);

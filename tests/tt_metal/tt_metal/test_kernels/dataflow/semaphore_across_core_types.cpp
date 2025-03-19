@@ -29,5 +29,8 @@ void kernel_main() {
     noc_semaphore_inc(dst_addr, 1);
 
     // Spin until other core updates the local semaphore confirming the addresses are correct
-    while (*my_sem_addr == sem_init_value);
+    while (*my_sem_addr == sem_init_value) {
+        invalidate_l1_cache();
+    }
+    noc_async_atomic_barrier();
 }
