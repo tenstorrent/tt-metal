@@ -40,7 +40,7 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        os: ["ubuntu-20.04"]
+        os: ["ubuntu-22.04"]
         test-group: [
           {name: model},
         ]
@@ -54,6 +54,8 @@ jobs:
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: ./.github/actions/retry-command
+        # For BH we use yyzo machines and they don't have MLPerf mounted
+        if: ${{ inputs.arch != 'blackhole' }}
         with:
           timeout-seconds: 100
           max-retries: 10
@@ -88,11 +90,12 @@ jobs:
           prefix: "test_reports_"
 
   models-tests-slow-runtime-mode:
-    if: ${{ inputs.runner-label != 'E150' }} # Currently no tests for GS so skip it
+    # BH runs only FD tests to avoid using too many CI resources
+    if: ${{ inputs.arch != 'blackhole' }}
     strategy:
       fail-fast: false
       matrix:
-        os: ["ubuntu-20.04"]
+        os: ["ubuntu-22.04"]
         test-group: [
           {name: model},
         ]

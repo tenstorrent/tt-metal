@@ -5,7 +5,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/rtoptions.hpp>
+#include "rtoptions.hpp"
 #include <tt-metalium/control_plane.hpp>
 // #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
@@ -235,7 +235,7 @@ int main(int argc, char** argv) {
             std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
             "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
         auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(tg_mesh_graph_desc_path.string());
-        control_plane->configure_routing_tables();
+        control_plane->write_routing_tables_to_all_chips();
 
         int num_devices = tt_metal::GetNumAvailableDevices();
         if (test_device_id_l >= num_devices) {

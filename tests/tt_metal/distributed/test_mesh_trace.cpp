@@ -10,6 +10,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/sub_device.hpp>
 
 #include <tt_stl/indestructible.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
@@ -203,6 +204,9 @@ TEST_F(MeshTraceTestT3000, EltwiseBinaryMeshTrace) {
 }
 
 TEST_F(MeshTraceTestSuite, SyncWorkloadsOnSubDeviceTrace) {
+    if (mesh_device_->num_devices() == 1) {
+        GTEST_SKIP() << "Skipping test for a unit-size mesh device";
+    }
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
 
@@ -298,6 +302,9 @@ TEST_F(MeshTraceTestSuite, SyncWorkloadsOnSubDeviceTrace) {
 }
 
 TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
+    if (mesh_device_->num_devices() == 1) {
+        GTEST_SKIP() << "Skipping test for a unit-size mesh device";
+    }
     // Create 4 SubDevices
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {0, 0}))});  // Sync with host
     SubDevice sub_device_2(std::array{CoreRangeSet(CoreRange({1, 1}, {1, 1}))});  // Run datacopy

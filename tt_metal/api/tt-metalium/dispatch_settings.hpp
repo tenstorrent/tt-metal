@@ -128,11 +128,8 @@ public:
     // When page size of buffer to write/read exceeds the max prefetch command size, the PCIe-aligned page size is
     // broken down into equal sized partial pages. The base partial page size is incremented until it
     // is PCIE-aligned. If the resulting partial page size doesn't evenly divide the full page size, the last partial
-    // page size is padded appropriately. The base partial page size is different for tensix dispatch and eth dispatch
-    // because the max prefetch command size is different depending on the dispatch core type.
-    static constexpr uint32_t BASE_PARTIAL_PAGE_SIZE_TENSIX_DISPATCH = 4096;
-    static constexpr uint32_t BASE_PARTIAL_PAGE_SIZE_ETH_DISPATCH = BASE_PARTIAL_PAGE_SIZE_TENSIX_DISPATCH / 4;
-    static_assert(BASE_PARTIAL_PAGE_SIZE_TENSIX_DISPATCH % 4 == 0);
+    // page size is padded appropriately.
+    static constexpr uint32_t BASE_PARTIAL_PAGE_SIZE_DISPATCH = 4096;
 
     static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30;                                        // 1GB
     static constexpr uint32_t MAX_DEV_CHANNEL_SIZE = 1 << 28;                                     // 256 MB;
@@ -149,7 +146,6 @@ public:
     uint32_t prefetch_q_rd_ptr_size_{0};    // configured with alignment
     uint32_t prefetch_q_pcie_rd_ptr_size_;  // configured with alignment
     uint32_t dispatch_s_sync_sem_;          // configured with alignment
-    uint32_t dispatch_message_;             // configured with alignment
     uint32_t other_ptrs_size;               // configured with alignment
 
     // cq_prefetch

@@ -11,13 +11,13 @@
 #include <magic_enum/magic_enum.hpp>
 #include <set>
 
-#include <build.hpp>
 #include "llrt.hpp"
 #include <string_view>
 #include <tt_metal.hpp>
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include <utils.hpp>
 #include <core_coord.hpp>
+#include <device.hpp>
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "hw/inc/wormhole/eth_l1_address_map.h"

@@ -5,6 +5,7 @@
 #include "build_env_manager.hpp"
 #include <command_queue_interface.hpp>
 #include "tt_cluster.hpp"
+#include "impl/dispatch/dispatch_core_manager.hpp"
 
 namespace tt::tt_metal {
 
@@ -36,7 +37,7 @@ std::map<std::string, std::string> initialize_device_kernel_defines(chip_id_t de
     const size_t num_dram_banks = static_cast<size_t>(soc_d.get_num_dram_views());
     // # of L1 banks needs to match allocator. For L1BankingAllocator this is the # of storage cores. TODO: when
     // allocator is pulled out of device, use it to get that info here.
-    const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device_id);
+    const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     const size_t num_compute_and_storage_cores =
         tt::get_logical_compute_cores(device_id, num_hw_cqs, dispatch_core_config).size();
     const size_t num_storage_only_cores =
@@ -94,7 +95,7 @@ uint32_t compute_build_key(chip_id_t device_id, uint8_t num_hw_cqs) {
 
     // num_hw_cqs, dispatch_core_axis, dispatch_core_type all change the number of banks, so need to be part of the
     // build key since we have defines based on number of banks.
-    const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device_id);
+    const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     build_key = (static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_type())
                  << (harvesting_map_bits + num_hw_cq_bits + dispatch_core_axis_bits)) |
                 (static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_axis())
@@ -114,9 +115,9 @@ uint32_t compute_build_key(chip_id_t device_id, uint8_t num_hw_cqs) {
 
 JitBuildStateSet create_build_state(JitBuildEnv& build_env, chip_id_t device_id, uint8_t num_hw_cqs, bool is_fw) {
     // Get the dispatch message address for this device
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
-    uint32_t dispatch_message_addr = DispatchMemMap::get(dispatch_core_type, num_hw_cqs)
-                                         .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
+    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
+    uint32_t dispatch_message_addr =
+        DispatchMemMap::get(dispatch_core_type, num_hw_cqs).get_dispatch_message_addr_start();
 
     // Prepare the container for build states
     uint32_t num_build_states = hal.get_num_risc_processors();

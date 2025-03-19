@@ -1328,7 +1328,6 @@ void Program::generate_dispatch_commands(IDevice* device) {
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
-        program_dispatch::assemble_runtime_args_commands(program_command_sequence, *this, device);
         program_dispatch::assemble_device_commands(program_command_sequence, *this, device, sub_device_id);
         cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
         pimpl_->set_cached();
@@ -1379,7 +1378,7 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
         //      - eth kernels cannot be on idle eth cores
         bool slow_dispatch = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
 
-        const auto& dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+        const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
         CoreType dispatch_core_type = dispatch_core_config.get_core_type();
         const std::vector<CoreCoord>& storage_cores =
             DispatchQueryManager::instance().get_logical_storage_cores_on_user_chips();

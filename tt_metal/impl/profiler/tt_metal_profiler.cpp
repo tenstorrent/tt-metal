@@ -7,12 +7,15 @@
 
 #include <hal.hpp>
 #include <host_api.hpp>
+#include <dispatch_core_common.hpp>
+#include <core_descriptor.hpp>
 
 #include <profiler.hpp>
 #include "hostdevcommon/profiler_common.h"
 
 #include <tt_metal.hpp>
 
+#include "tracy/Tracy.hpp"
 #include "tracy/TracyTTDevice.hpp"
 #include <device.hpp>
 #include <device_pool.hpp>
@@ -21,6 +24,7 @@
 #include "llrt.hpp"
 
 #include "dprint_server.hpp"
+#include "rtoptions.hpp"
 
 namespace tt {
 
@@ -105,6 +109,9 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     }
     auto device_id = device->id();
     auto core = device->worker_core_from_logical_core(logical_core);
+
+    const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(device_id);
+    auto phys_core = soc_desc.translate_coord_to(core, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
 
     deviceHostTimePair.emplace(device_id, (std::vector<std::pair<uint64_t, uint64_t>>){});
     smallestHostime.emplace(device_id, 0);
@@ -254,8 +261,8 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         log_file << fmt::format(
                         "{:5},{:5},{:5},{:20},{:20},{:20.2f},{:20},{:20},{:20.2f},{:20.15f},{:20.15f},{:20},1.0,0",
                         device_id,
-                        core.x,
-                        core.y,
+                        phys_core.x,
+                        phys_core.y,
                         deviceHostTimePair[device_id][i].first,
                         deviceHostTimePair[device_id][i].second,
                         (double)deviceHostTimePair[device_id][i].second * tracyToSecRatio,
@@ -276,7 +283,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         frequencyFit);
 
     tt_metal_device_profiler_map.at(device_id).device_core_sync_info.emplace(
-        core, std::make_tuple(smallestHostime[device_id], delay, frequencyFit));
+        phys_core, std::make_tuple(smallestHostime[device_id], delay, frequencyFit));
 }
 void setShift(int device_id, int64_t shift, double scale) {
     if (std::isnan(scale)) {
@@ -622,13 +629,13 @@ void InitDeviceProfiler(IDevice* device) {
 #endif
 }
 
-void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState state) {
+void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState state, const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     std::vector<CoreCoord> workerCores;
     auto device_id = device->id();
     auto device_num_hw_cqs = device->num_hw_cqs();
-    const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device_id);
+    const auto& dispatch_core_config = get_dispatch_core_config();
     for (const CoreCoord& core : tt::get_logical_compute_cores(device_id, device_num_hw_cqs, dispatch_core_config)) {
         const CoreCoord curr_core = device->worker_core_from_logical_core(core);
         workerCores.push_back(curr_core);
@@ -637,8 +644,8 @@ void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState state) {
         auto virtualCore = device->virtual_core_from_logical_core(core, CoreType::ETH);
         workerCores.push_back(virtualCore);
     }
-    device->push_work([device, workerCores, state]() mutable {
-        DumpDeviceProfileResults(device, workerCores, state);
+    device->push_work([device, workerCores, state, metadata]() mutable {
+        DumpDeviceProfileResults(device, workerCores, state, metadata);
         if (deviceDeviceTimePair.find(device->id()) != deviceDeviceTimePair.end() and
             state == ProfilerDumpState::CLOSE_DEVICE_SYNC) {
             for (auto& connected_device : deviceDeviceTimePair.at(device->id())) {
@@ -651,13 +658,13 @@ void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState state) {
 #endif
 }
 
-void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_cores, ProfilerDumpState state) {
+void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_cores, ProfilerDumpState state, const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     std::string name = fmt::format("Device Dump {}", device->id());
     ZoneName(name.c_str(), name.size());
     std::scoped_lock<std::mutex> lock(device_mutex);
-    const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device->id());
+    const auto& dispatch_core_config = get_dispatch_core_config();
     auto dispatch_core_type = dispatch_core_config.get_core_type();
     if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
         auto device_id = device->id();
@@ -737,7 +744,7 @@ void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_co
                 }
             }
             tt_metal_device_profiler_map.at(device_id).setDeviceArchitecture(device->arch());
-            tt_metal_device_profiler_map.at(device_id).dumpResults(device, worker_cores, state);
+            tt_metal_device_profiler_map.at(device_id).dumpResults(device, worker_cores, state, metadata);
 
             if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 // Process is ending, no more device dumps are coming, reset your ref on the buffer so deallocate is the

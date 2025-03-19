@@ -26,6 +26,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 
 #include <tt-metalium/persistent_kernel_cache.hpp>
+#include <thread>
 
 #include "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_ubenchmark_types.hpp"
 

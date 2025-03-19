@@ -5,6 +5,8 @@ MODULE_DIR="tests/ttnn/unit_tests/operations/ccl/perf"
 DEBUG=false
 TARGET="n300"
 
+set -e
+
 # Function to display help
 show_help() {
     echo "Usage: ./tests/ttnn/unit_tests/operations/ccl/perf/run_profile.sh [OPTIONS]"

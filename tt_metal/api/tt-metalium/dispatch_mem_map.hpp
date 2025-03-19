@@ -7,6 +7,8 @@
 #include <tt-metalium/dispatch_settings.hpp>
 #include <tt-metalium/command_queue_common.hpp>
 
+#include <tt_stl/indestructible.hpp>
+
 namespace tt::tt_metal {
 
 //
@@ -68,9 +70,18 @@ public:
 
     uint32_t get_host_command_queue_addr(const CommandQueueHostAddrType& host_addr) const;
 
-    uint32_t get_dispatch_message_offset(uint32_t index) const;
+    uint32_t get_sync_offset(uint32_t index) const;
+
+    uint32_t get_dispatch_message_addr_start() const;
+
+    uint32_t get_dispatch_stream_index(uint32_t index) const;
+
+    // Offset to be passed in the go message.
+    uint8_t get_dispatch_message_update_offset(uint32_t index) const;
 
 private:
+    friend class tt::stl::Indestructible<DispatchMemMap>;
+
     DispatchMemMap() = default;
 
     static DispatchMemMap& get_instance();

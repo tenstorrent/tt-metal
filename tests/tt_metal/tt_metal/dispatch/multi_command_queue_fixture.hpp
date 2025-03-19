@@ -15,7 +15,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/kernel.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/rtoptions.hpp>
+#include "rtoptions.hpp"
 
 namespace tt::tt_metal {
 

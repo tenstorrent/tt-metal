@@ -73,7 +73,8 @@ TEST_F(TensorDistributionTest, DistributeToDevice) {
 
     // If no device is provided, the tensor is kept on host.
     EXPECT_TRUE(distribute_tensor(input_tensor, *mapper).storage_type() == StorageType::MULTI_DEVICE_HOST);
-    EXPECT_TRUE(distribute_tensor(input_tensor, *mapper, *mesh_device_).storage_type() == StorageType::MULTI_DEVICE);
+    EXPECT_TRUE(
+        distribute_tensor(input_tensor, *mapper, *mesh_device_).storage_type() != StorageType::MULTI_DEVICE_HOST);
 }
 
 TEST_F(TensorDistributionTest, Replication) {

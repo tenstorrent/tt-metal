@@ -13,11 +13,12 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "test_common.hpp"
-#include <tt-metalium/rtoptions.hpp>
+#include "rtoptions.hpp"
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/event.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/allocator.hpp>
 
 #include "tt_cluster.hpp"
 
@@ -404,7 +405,7 @@ int main(int argc, char** argv) {
             vector<std::uint32_t> vec;
             vec.resize(page_size_g / sizeof(uint32_t));
 
-            CoreType core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+            CoreType core_type = get_dispatch_core_type();
             uint32_t dispatch_l1_unreserved_base =
                 DispatchMemMap::get(core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
             for (int i = 0; i < warmup_iterations_g; i++) {

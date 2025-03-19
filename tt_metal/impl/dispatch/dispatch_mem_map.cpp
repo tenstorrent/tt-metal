@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/dispatch_mem_map.hpp>
-#include <tt-metalium/helpers.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/fabric_host_interface.h>
+#include "indestructible.hpp"
 #include "rtoptions.hpp"
 
 namespace tt::tt_metal {
@@ -73,15 +73,40 @@ uint32_t DispatchMemMap::get_host_command_queue_addr(const CommandQueueHostAddrT
            tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST);
 }
 
-uint32_t DispatchMemMap::get_dispatch_message_offset(uint32_t index) const {
+uint32_t DispatchMemMap::get_sync_offset(uint32_t index) const {
     TT_ASSERT(index < tt::tt_metal::DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
     uint32_t offset = index * hal.get_alignment(HalMemType::L1);
     return offset;
 }
 
+uint32_t DispatchMemMap::get_dispatch_message_addr_start() const {
+    // Address of the first dispatch message entry. Remaining entries are each offset by
+    // get_noc_stream_reg_space_size() bytes.
+    return tt::tt_metal::hal.get_noc_overlay_start_addr() +
+           tt::tt_metal::hal.get_noc_stream_reg_space_size() * get_dispatch_stream_index(0) +
+           tt::tt_metal::hal.get_noc_stream_remote_dest_buf_space_available_update_reg_index() * sizeof(uint32_t);
+}
+
+uint32_t DispatchMemMap::get_dispatch_stream_index(uint32_t index) const {
+    if (last_core_type == CoreType::WORKER) {
+        // There are 64 streams. CBs use entries 8-39.
+        return 48u + index;
+    } else if (last_core_type == CoreType::ETH) {
+        // There are 32 streams.
+        return 16u + index;
+    } else {
+        TT_THROW("get_dispatch_starting_stream_index not implemented for core type");
+    }
+}
+
+uint8_t DispatchMemMap::get_dispatch_message_update_offset(uint32_t index) const {
+    TT_ASSERT(index < tt::tt_metal::DispatchSettings::DISPATCH_MESSAGES_MAX_OFFSET);
+    return index;
+}
+
 DispatchMemMap& DispatchMemMap::get_instance() {
-    static DispatchMemMap instance;
-    return instance;
+    static tt::stl::Indestructible<DispatchMemMap> instance;
+    return instance.get();
 }
 
 // Reset the instance using the settings for the core_type and num_hw_cqs.
@@ -114,8 +139,6 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
             device_cq_addr_sizes_[dev_addr_idx] = settings.prefetch_q_pcie_rd_ptr_size_;
         } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM) {
             device_cq_addr_sizes_[dev_addr_idx] = settings.dispatch_s_sync_sem_;
-        } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_MESSAGE) {
-            device_cq_addr_sizes_[dev_addr_idx] = settings.dispatch_message_;
         } else if (dev_addr_type == CommandQueueDeviceAddrType::FABRIC_INTERFACE) {
             if (llrt::RunTimeOptions::get_instance().get_fd_fabric()) {
                 device_cq_addr_sizes_[dev_addr_idx] = tt_fabric::PACKET_HEADER_SIZE_BYTES;
@@ -140,12 +163,11 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
     }
 
     uint32_t prefetch_dispatch_unreserved_base =
-        device_cq_addrs_[tt::utils::underlying_type<CommandQueueDeviceAddrType>(
-            CommandQueueDeviceAddrType::UNRESERVED)];
-    cmddat_q_base_ = prefetch_dispatch_unreserved_base + round_size(settings.prefetch_q_size_, pcie_alignment);
-    scratch_db_base_ = cmddat_q_base_ + round_size(settings.prefetch_cmddat_q_size_, pcie_alignment);
-    dispatch_buffer_base_ =
-        align(prefetch_dispatch_unreserved_base, 1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
+    device_cq_addrs_[tt::utils::underlying_type<CommandQueueDeviceAddrType>(
+        CommandQueueDeviceAddrType::UNRESERVED)];
+    cmddat_q_base_ = align(prefetch_dispatch_unreserved_base + settings.prefetch_q_size_, pcie_alignment);
+    scratch_db_base_ = align(cmddat_q_base_ + settings.prefetch_cmddat_q_size_, pcie_alignment);
+    dispatch_buffer_base_ = align(prefetch_dispatch_unreserved_base, 1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
     dispatch_buffer_block_size_pages_ = settings.dispatch_pages_ / DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
     const uint32_t dispatch_cb_end = dispatch_buffer_base_ + settings.dispatch_size_;
 
