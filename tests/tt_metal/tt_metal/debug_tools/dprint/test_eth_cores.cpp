@@ -79,7 +79,7 @@ static void RunTest(
         );
 
         // Clear the log file for the next core's test
-        tt::DPrintServerClearLogFile();
+        DPrintServerClearLogFile();
     }
 }
 }

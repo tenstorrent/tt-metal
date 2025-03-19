@@ -103,7 +103,11 @@ inline void fabric_send_pull_request(
     } else {
         router_addr = get_noc_addr_helper(routing, FABRIC_ROUTER_REQ_QUEUE_START);
     }
-    tt_fabric_send_pull_request(router_addr, (volatile local_pull_request_t*)&client_interface->local_pull_request);
+
+    volatile local_pull_request_t* pull_request = (volatile local_pull_request_t*)&client_interface->local_pull_request;
+    tt_fabric_reserve_pull_request_slot(router_addr, pull_request);
+    tt_fabric_check_pull_request_slot<true>(router_addr, pull_request);
+    tt_fabric_send_pull_request(router_addr, pull_request);
 }
 
 FORCE_INLINE void fabric_wait_for_pull_request_words_flushed(
