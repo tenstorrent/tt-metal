@@ -131,8 +131,8 @@ struct WorkerToFabricEdmSenderImpl {
     }
 
     FORCE_INLINE void setup_edm_noc_cmd_buf(uint8_t cmd_buf) const {
-        uint64_t edm_noc_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
-        noc_async_write_one_packet_with_trid_set_state(edm_noc_addr, cmd_buf);
+        uint64_t edm_noc_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, edm_to_local_chip_noc);
+        noc_async_write_one_packet_with_trid_set_state(edm_noc_addr, cmd_buf, edm_to_local_chip_noc);
     }
 
     FORCE_INLINE bool edm_has_space_for_packet() const {
@@ -300,9 +300,10 @@ struct WorkerToFabricEdmSenderImpl {
     uint8_t edm_noc_cmd_buf;
 
 private:
-    FORCE_INLINE void update_edm_buffer_slot_wrptr() {
-        const uint64_t noc_sem_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr);
-        noc_inline_dw_write(noc_sem_addr, *this->buffer_slot_wrptr_ptr);
+    FORCE_INLINE void update_edm_buffer_slot_wrptr(uint8_t noc = noc_index) {
+        const uint64_t noc_sem_addr =
+            get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr, noc);
+        noc_inline_dw_write(noc_sem_addr, *this->buffer_slot_wrptr_ptr, 0xf, noc);
     }
 
     FORCE_INLINE uint8_t get_buffer_slot_index() const {
@@ -329,9 +330,9 @@ private:
         return get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_addr);
     }
 
-    FORCE_INLINE void post_send_payload_increment_pointers() {
+    FORCE_INLINE void post_send_payload_increment_pointers(uint8_t noc = noc_index) {
         this->advance_buffer_slot_wrptr();
-        this->update_edm_buffer_slot_wrptr();
+        this->update_edm_buffer_slot_wrptr(noc);
     }
     template <EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_packet_header_and_notify_fabric(uint32_t source_address) {
@@ -367,7 +368,7 @@ private:
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
         send_chunk_from_address_with_trid<blocking_mode>(
             source_address, 1, size_bytes, this->edm_buffer_addr, trid, this->edm_noc_cmd_buf);
-        post_send_payload_increment_pointers();
+        post_send_payload_increment_pointers(edm_to_local_chip_noc);
     }
 
     template <EDM_IO_BLOCKING_MODE blocking_mode>
