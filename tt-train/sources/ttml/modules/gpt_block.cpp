@@ -33,10 +33,8 @@ autograd::TensorPtr GPTMLP::operator()(const autograd::TensorPtr& input) {
 
 GPTBlock::GPTBlock(uint32_t embedding_size, uint32_t num_heads, float dropout_prob, bool use_composite_layernorm) {
     mlp = std::make_shared<GPTMLP>(embedding_size, dropout_prob);
-    // ln1 = std::make_shared<LayerNormLayer>(embedding_size, use_composite_layernorm);
-    // ln2 = std::make_shared<LayerNormLayer>(embedding_size, use_composite_layernorm);
-    ln1 = std::make_shared<RMSNormLayer>(embedding_size);
-    ln2 = std::make_shared<RMSNormLayer>(embedding_size);
+    ln1 = std::make_shared<LayerNormLayer>(embedding_size, use_composite_layernorm);
+    ln2 = std::make_shared<LayerNormLayer>(embedding_size, use_composite_layernorm);
     attention = std::make_shared<MultiHeadAttention>(embedding_size, num_heads, dropout_prob);
 
     create_name("gpt_block");

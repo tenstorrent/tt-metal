@@ -12,7 +12,6 @@
 #include "modules/gpt_block.hpp"
 #include "modules/layer_norm_module.hpp"
 #include "modules/positional_embeddings.hpp"
-#include "modules/rms_norm_module.hpp"
 #include "ops/unary_ops.hpp"
 namespace ttml::models::gpt2 {
 
@@ -146,8 +145,7 @@ Transformer::Transformer(const TransformerConfig& config) {
         blocks.push_back(
             std::make_shared<ttml::modules::GPTBlock>(embedding_dim, num_heads, dropout_prob, use_composite_layernorm));
     }
-    // ln_fc = std::make_shared<ttml::modules::LayerNormLayer>(embedding_dim, use_composite_layernorm);
-    ln_fc = std::make_shared<ttml::modules::RMSNormLayer>(embedding_dim);
+    ln_fc = std::make_shared<ttml::modules::LayerNormLayer>(embedding_dim, use_composite_layernorm);
     fc = last_fc;
 
     create_name("transformer");
