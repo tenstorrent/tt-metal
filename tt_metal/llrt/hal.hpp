@@ -14,10 +14,9 @@
 #include <variant>
 #include <vector>
 #include <memory>
-#include "assert.hpp"
-#include "utils.hpp"
-
-#include "hal_types.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/utils.hpp>
 
 enum class CoreType;
 
