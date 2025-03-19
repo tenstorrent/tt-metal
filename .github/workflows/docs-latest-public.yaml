@@ -32,7 +32,7 @@ jobs:
       fail-fast: false
     runs-on: ubuntu-latest
     container:
-      image: ${{ inputs.docker-image }}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
