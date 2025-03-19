@@ -218,10 +218,10 @@ def run_test_create_min_width_shard(
     sub_core_grids=None,
 ):
     # Split Heads
-    if not overlap_coregrid and batch >= 32:
+    if not overlap_coregrid and (slice_size >= 32 if slice_size is not None else batch >= 32):
         # Test with smaller batch size for CI to pass on devices not utlizing full coregrid
         pytest.skip(
-            "Skipping tests for batch>=32 for non-overlapping coregrid as CI device does not support full coregrid"
+            "Skipping tests for batch_per_device>=32 for non-overlapping coregrid as CI device does not support full coregrid"
         )
     seq_len = 1
     total_heads = n_local_heads + n_local_kv_heads * 2

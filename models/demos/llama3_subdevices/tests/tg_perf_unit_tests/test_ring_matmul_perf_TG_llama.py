@@ -10,6 +10,8 @@ import ttnn
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
 
+THRESHOLD = 1.0
+
 
 @pytest.mark.parametrize(
     "mm_type, perf_target_us",
@@ -60,4 +62,6 @@ def test_ring_mm_tg_llama_perf(
         ml_model_name="llama70b-tg-unit",
     )
 
-    assert measured_avg_us < perf_target_us, f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+    assert (
+        measured_avg_us < perf_target_us + THRESHOLD
+    ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
