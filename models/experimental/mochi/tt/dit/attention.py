@@ -354,7 +354,7 @@ class AsymmetricAttention(LightweightModule):
 
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
-            q_chunk_size=128,  # TODO: Make this dynamic
+            q_chunk_size=256,  # TODO: Make this dynamic
             k_chunk_size=512,
             exp_approx_mode=False,
         )
