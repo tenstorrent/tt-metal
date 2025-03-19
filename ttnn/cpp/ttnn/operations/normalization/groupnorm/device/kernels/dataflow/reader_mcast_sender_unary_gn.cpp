@@ -178,6 +178,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_receiver_semaphore_addr);
 
     constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;
+    constexpr uint32_t cb_ex2_partial = tt::CBIndex::c_21;
     constexpr uint32_t cb_ex = tt::CBIndex::c_9;
     constexpr uint32_t cb_ex2 = tt::CBIndex::c_13;
     constexpr uint32_t cb_ex_external = tt::CBIndex::c_10;
@@ -209,16 +210,9 @@ void kernel_main() {
     }
 #endif
 
-    uint32_t l1_read_addr_ex_par = get_read_ptr(cb_ex_partial);
-    volatile tt_l1_ptr uint16_t* rptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_read_addr_ex_par);
-
-    uint32_t l1_write_addr_external = get_write_ptr(cb_ex_external);
-    volatile tt_l1_ptr uint16_t* wptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_external);
-
     uint32_t out_block_h = block_h / num_out_blocks;
     uint32_t out_block_hw = out_block_h * block_w;
 
-    if constexpr (num_mcast_cores > 1) {
         index_b_offset = 0;
         for (uint32_t b = 0; b < num_batches; ++b) {
             index_g_offset = 0;
@@ -229,140 +223,160 @@ void kernel_main() {
                     uint32_t out_block_start_id_offset = 0;
                     uint32_t l1_write_addr_external = get_write_ptr(cb_ex_external);
                     cb_reserve_back(cb_ex_external, 1);
-
                     for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; out_block_index++) {
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
-                    const uint32_t src0_tile_bytes = get_tile_size(cb_in0);
-                    const DataFormat src0_data_format = get_dataformat(cb_in0);
-                    const InterleavedAddrGenFast<src0_is_dram> src_a = {
-                        .bank_base_address = src_addr, .page_size = src0_tile_bytes, .data_format = src0_data_format};
-                    uint32_t l1_write_addr;
-                    l1_write_addr = get_write_ptr(cb_in0);
-                    cb_reserve_back(cb_in0, out_block_hw);
-                    for (uint32_t mt = 0; mt < out_block_h; mt++) {
-                        for (uint32_t nt = 0; nt < block_w; nt++) {
-                            noc_async_read_tile(
-                                start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt + index_b_offset +
-                                    index_g_offset,
-                                src_a,
-                                l1_write_addr);
-                            l1_write_addr += src0_tile_bytes;
-                            noc_async_read_barrier();
+                        const uint32_t src0_tile_bytes = get_tile_size(cb_in0);
+                        const DataFormat src0_data_format = get_dataformat(cb_in0);
+                        const InterleavedAddrGenFast<src0_is_dram> src_a = {
+                            .bank_base_address = src_addr,
+                            .page_size = src0_tile_bytes,
+                            .data_format = src0_data_format};
+                        uint32_t l1_write_addr;
+                        l1_write_addr = get_write_ptr(cb_in0);
+                        cb_reserve_back(cb_in0, out_block_hw);
+                        for (uint32_t mt = 0; mt < out_block_h; mt++) {
+                            for (uint32_t nt = 0; nt < block_w; nt++) {
+                                noc_async_read_tile(
+                                    start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
+                                        index_b_offset + index_g_offset,
+                                    src_a,
+                                    l1_write_addr);
+                                l1_write_addr += src0_tile_bytes;
+                                noc_async_read_barrier();
+                            }
                         }
-                    }
-                    out_block_start_id_offset += out_block_h * num_channels_tiles;
-                    cb_push_back(cb_in0, out_block_hw);
-
+                        out_block_start_id_offset += out_block_h * num_channels_tiles;
+                        cb_push_back(cb_in0, out_block_hw);
 #endif
-                    if (n == 0 || n == 1) {
-                        // wait for local data ready
-                        cb_wait_front(cb_ex_partial, 1);
+                        if (n == 0 || n == 1) {
+                            // wait for local data ready
+                            if (n == 0) {
+                                cb_wait_front(cb_ex_partial, 1);
+                            } else {
+                                cb_wait_front(cb_ex2_partial, 1);
+                            }
 
-                        // read self Ex partial - on the first iteration, read a full tile for overwriting garbage in
-                        // L1, on subsequent just treat it as another core
-                        uint32_t l1_read_addr_ex_par = get_read_ptr(cb_ex_partial);
-                        uint64_t noc_addr_ex_par = get_noc_addr(noc_coord_x[0], noc_coord_y[0], l1_read_addr_ex_par);
-                        uint32_t read_size = out_block_index ? num_bytes_read : single_tile_size_bytes;
-                        noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, read_size);
-                        l1_write_addr_external += 16;
-                        noc_async_read_barrier();
-
-                        // wait for all other cores data ready
-                        noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_mcast_cores - 1);
-                        noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
-
-                        // read data from other cores
-                        for (uint32_t i = 0; i < num_mcast_cores - 1; ++i) {
+                            // read self Ex partial - on the first iteration, read a full tile for overwriting
+                            // garbage in L1, on subsequent just treat it as another core
+                            uint32_t l1_read_addr_ex_par =
+                                n == 0 ? get_read_ptr(cb_ex_partial) : get_read_ptr(cb_ex2_partial);
                             uint64_t noc_addr_ex_par =
-                                get_noc_addr(noc_coord_x[i + 1], noc_coord_y[i + 1], l1_read_addr_ex_par);
-                            noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, num_bytes_read);
+                                get_noc_addr(noc_coord_x[0], noc_coord_y[0], l1_read_addr_ex_par);
+                            uint32_t read_size = out_block_index ? num_bytes_read : single_tile_size_bytes;
+                            noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, read_size);
                             l1_write_addr_external += 16;
                             noc_async_read_barrier();
+
+                            if constexpr (num_mcast_cores > 1) {
+                                // wait for all other cores data ready
+                                noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_mcast_cores - 1);
+                                noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
+
+                                // read data from other cores
+                                for (uint32_t i = 0; i < num_mcast_cores - 1; ++i) {
+                                    uint64_t noc_addr_ex_par =
+                                        get_noc_addr(noc_coord_x[i + 1], noc_coord_y[i + 1], l1_read_addr_ex_par);
+                                    noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, num_bytes_read);
+                                    l1_write_addr_external += 16;
+                                    noc_async_read_barrier();
+                                }
+                            }
+                            if (n == 0) {
+                                cb_pop_front(cb_ex_partial, 1);
+                            } else {
+                                cb_pop_front(cb_ex2_partial, 1);
+                            }
+
+                            if constexpr (num_mcast_cores > 1) {
+                                noc_semaphore_set_multicast(
+                                    reduce_sender_semaphore_addr,
+                                    reduce_sender_semaphore_noc_addr,
+                                    num_mcast_cores_mid_group,
+                                    false);
+                                if (has_mcast_first_group) {
+                                    noc_semaphore_set_multicast(
+                                        reduce_sender_semaphore_addr,
+                                        reduce_sender_first_group_semaphore_noc_addr,
+                                        num_mcast_cores_first_group,
+                                        false);
+                                }
+                                if (has_mcast_last_group) {
+                                    noc_semaphore_set_multicast(
+                                        reduce_sender_semaphore_addr,
+                                        reduce_sender_last_group_semaphore_noc_addr,
+                                        num_mcast_cores_last_group,
+                                        false);
+                                }
+                            }
                         }
-                        cb_pop_front(cb_ex_partial, 1);
-                        noc_semaphore_set_multicast(
-                            reduce_sender_semaphore_addr,
-                            reduce_sender_semaphore_noc_addr,
-                            num_mcast_cores_mid_group,
-                            false);
-                        if (has_mcast_first_group) {
+                    }
+
+                    if (n == 0 || n == 1) {
+                        cb_push_back(cb_ex_external, 1);
+
+                        if constexpr (num_mcast_cores > 1) {
+                            uint32_t cb_mcast;
+                            if (n == 0) {
+                                cb_mcast = cb_ex;
+                            } else if (n == 1) {
+                                cb_mcast = cb_ex2;
+                            }
+
+                            // global reduce
+                            cb_wait_front(cb_mcast, 1);
+
+                            // mcast to other cores
+                            uint32_t l1_read_addr_ex = get_read_ptr(cb_mcast);
+                            noc_async_write_multicast(
+                                l1_read_addr_ex,
+                                multicast_data_noc | l1_read_addr_ex,
+                                num_bytes_read,
+                                num_mcast_cores_mid_group,
+                                true);
                             noc_semaphore_set_multicast(
                                 reduce_sender_semaphore_addr,
-                                reduce_sender_first_group_semaphore_noc_addr,
-                                num_mcast_cores_first_group,
+                                reduce_sender_semaphore_noc_addr,
+                                num_mcast_cores_mid_group,
                                 false);
+
+                            if (has_mcast_first_group) {
+                                noc_async_write_multicast(
+                                    l1_read_addr_ex,
+                                    multicast_first_group_data_noc | l1_read_addr_ex,
+                                    num_bytes_read,
+                                    num_mcast_cores_first_group,
+                                    true);
+                                noc_semaphore_set_multicast(
+                                    reduce_sender_semaphore_addr,
+                                    reduce_sender_first_group_semaphore_noc_addr,
+                                    num_mcast_cores_first_group,
+                                    false);
+                            }
+
+                            if (has_mcast_last_group) {
+                                noc_async_write_multicast(
+                                    l1_read_addr_ex,
+                                    multicast_last_group_data_noc | l1_read_addr_ex,
+                                    num_bytes_read,
+                                    num_mcast_cores_last_group,
+                                    true);
+                                noc_semaphore_set_multicast(
+                                    reduce_sender_semaphore_addr,
+                                    reduce_sender_last_group_semaphore_noc_addr,
+                                    num_mcast_cores_last_group,
+                                    false);
+                            }
+                            noc_async_write_barrier();
+                            cb_pop_front(cb_mcast, 1);
                         }
-                        if (has_mcast_last_group) {
-                            noc_semaphore_set_multicast(
-                                reduce_sender_semaphore_addr,
-                                reduce_sender_last_group_semaphore_noc_addr,
-                                num_mcast_cores_last_group,
-                                false);
-                        }
                     }
-                    }
-
-                if (n == 0 || n == 1) {
-                    cb_push_back(cb_ex_external, 1);
-
-                    uint32_t cb_mcast;
-                    if (n == 0) {
-                        cb_mcast = cb_ex;
-                    } else if (n == 1) {
-                        cb_mcast = cb_ex2;
-                    }
-
-                    // global reduce
-                    cb_wait_front(cb_mcast, 1);
-
-                    // mcast to other cores
-                    uint32_t l1_read_addr_ex = get_read_ptr(cb_mcast);
-                    noc_async_write_multicast(
-                        l1_read_addr_ex,
-                        multicast_data_noc | l1_read_addr_ex,
-                        num_bytes_read,
-                        num_mcast_cores_mid_group,
-                        true);
-                    noc_semaphore_set_multicast(
-                        reduce_sender_semaphore_addr,
-                        reduce_sender_semaphore_noc_addr,
-                        num_mcast_cores_mid_group,
-                        false);
-
-                    if (has_mcast_first_group) {
-                        noc_async_write_multicast(
-                            l1_read_addr_ex,
-                            multicast_first_group_data_noc | l1_read_addr_ex,
-                            num_bytes_read,
-                            num_mcast_cores_first_group,
-                            true);
-                        noc_semaphore_set_multicast(
-                            reduce_sender_semaphore_addr,
-                            reduce_sender_first_group_semaphore_noc_addr,
-                            num_mcast_cores_first_group,
-                            false);
-                    }
-
-                    if (has_mcast_last_group) {
-                        noc_async_write_multicast(
-                            l1_read_addr_ex,
-                            multicast_last_group_data_noc | l1_read_addr_ex,
-                            num_bytes_read,
-                            num_mcast_cores_last_group,
-                            true);
-                        noc_semaphore_set_multicast(
-                            reduce_sender_semaphore_addr,
-                            reduce_sender_last_group_semaphore_noc_addr,
-                            num_mcast_cores_last_group,
-                            false);
-                    }
-                    noc_async_write_barrier();
-                    cb_pop_front(cb_mcast, 1);
-                }
                 }
 
             const InterleavedAddrGenFast<out_is_dram> dst_a = {
                 .bank_base_address = out_addr, .page_size = single_tile_size_bytes, .data_format = out_data_format};
+
+            // add or copy with previous output results
+            uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
 
             uint32_t out_block_start_id_offset = 0;
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; out_block_index++) {
@@ -372,7 +386,7 @@ void kernel_main() {
                 cb_reserve_back(cb_reread_out, out_block_hw);
 
                 for (uint32_t mt = 0; mt < out_block_h; mt++) {
-                    for (uint32_t nt = 0; nt < block_w; nt++) {
+                    for (uint32_t nt = 0; nt < block_w_curr; nt++) {
                         noc_async_read_tile(
                             out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt + index_b_offset +
                                 index_g_offset,
@@ -419,7 +433,6 @@ void kernel_main() {
             }
             index_b_offset += num_tiles_per_batch;
         }
-    }
 
 #if defined(READER_REPACK) and defined(UNTILIZE_OUT)
     uint32_t l1_write_addr_repack = get_write_ptr(cb_out0);
