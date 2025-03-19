@@ -20,7 +20,7 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    constexpr auto cb_id_dst = tt::CBIndex::c_0;
+    constexpr auto cb_id_dst = tt::CBIndex::c_16;
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
     const DataFormat dst_data_format = get_dataformat(cb_id_dst);
@@ -39,10 +39,14 @@ void kernel_main() {
     uint32_t num_tiles_written = 0;
     // DPRINT << "broadcast_to writer row start, number of tile written " << num_tiles_written << ENDL();
     for (uint32_t n = start_n; n < N && num_tiles_written < num_tiles; ++n, start_c = 0) {
+        // DeviceZoneScopedN("writer_row_n");
         for (uint32_t c = start_c; c < C && num_tiles_written < num_tiles; ++c, start_th = 0) {
+            // DeviceZoneScopedN("writer_row_c");
             for (uint32_t th = start_th; th < Ht && num_tiles_written < num_tiles; ++th, start_tw = 0) {
+                //  DeviceZoneScopedN("writer_row_th");
                 for (uint32_t tw = start_tw; tw < Wt && num_tiles_written < num_tiles; ++tw, ++num_tiles_written) {
                     // write a tile to dst, since the dst shape is full, the tile offset simply grows linearly
+                    // DeviceZoneScopedN("writer_row_tw");
                     cb_wait_front(cb_id_dst, onetile);
                     uint32_t l1_read_addr = get_read_ptr(cb_id_dst);
                     noc_async_write_tile(start_tile_id + num_tiles_written, dst, l1_read_addr);

@@ -20,12 +20,17 @@ enum class KernelName {
     WriterRowBcast,
     WriterColBcast,
     WriterScalarBcast,
+    ComputeNoBcast,
+    ComputeRowBcast,
+    ComputeColBcast,
+    ComputeScalarBcast,
 };
 
 struct BcastToKernelConfig {
     BcastToKernelConfig(SubtileBroadcastType subtile_broadcast_type);
     KernelName reader_kernel;
     KernelName writer_kernel;
+    KernelName compute_kernel;
 };
 
 std::string get_kernel_file_path(KernelName kernel_name);
