@@ -667,8 +667,9 @@ TEST_P(Conv2dOpIfTest, Conv2d) {
             std::nullopt,
             output_spec.tensor_layout().get_memory_config());
 
+        // Todo(arminaleTT): There is a known problem with calculating conv output size. Once fixed, this test will be
+        // expanded
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Error);
-        std::cout << "Armin: " << query.error_message.value();
     }
 }
 
