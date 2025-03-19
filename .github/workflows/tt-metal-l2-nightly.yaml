@@ -96,7 +96,7 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           path: |
-            generated/test_reports/
+            /work/generated/test_reports/
           prefix: "test_reports_"
       - uses: ./.github/actions/slack-report
         # Only notify during failed scheduled runs
