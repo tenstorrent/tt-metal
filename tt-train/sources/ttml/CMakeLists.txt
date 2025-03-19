@@ -1,16 +1,5 @@
 project(ttml)
 
-# file(
-#     GLOB_RECURSE SOURCES
-#     LIST_DIRECTORIES true
-#     *.hpp
-#     *.cpp
-# ) # I am a really bad person
-
-# foreach(file ${SOURCES})
-#     message(STATUS "Found source file: ${file}")
-# endforeach()
-
 set(SOURCE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd
     ${CMAKE_CURRENT_SOURCE_DIR}/core
