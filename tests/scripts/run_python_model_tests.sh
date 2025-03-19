@@ -69,3 +69,7 @@ run_python_model_tests_slow_runtime_mode_wormhole_b0() {
     }'
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
 }
+
+run_python_model_tests_blackhole() {
+    SLOW_MATMULS=1 pytest models/demos/blackhole/stable_diffusion/tests
+}
