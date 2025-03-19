@@ -184,7 +184,7 @@ jobs:
   tag-latest:
     name: "🔄 Update latest tag"
     needs: check-docker-images
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && (needs.check-docker-images.outputs.ci-build-exists != 'true' || needs.check-docker-images.outputs.dev-exists != 'true')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check-docker-images.outputs.dev-exists != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Login to GitHub Container Registry
