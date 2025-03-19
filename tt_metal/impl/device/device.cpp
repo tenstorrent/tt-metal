@@ -981,8 +981,8 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
     // Trying to preserve logic that was in device_pool.cpp
     // However, I honestly don't understand it
     this->num_hw_cqs_ = num_hw_cqs;
-    BuildEnvManager::get_instance().add_build_env(this->id(), this->num_hw_cqs());
-    this->initialize_cluster();
+    // BuildEnvManager::get_instance().add_build_env(this->id(), this->num_hw_cqs());
+    // this->initialize_cluster();
     this->initialize_default_sub_device_state(l1_small_size, trace_region_size, l1_bank_remap);
     this->generate_device_bank_to_noc_tables();
 
