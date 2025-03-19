@@ -89,4 +89,4 @@ class UNetVGG19(nn.Module):
         outputs = self.out(d4)
         outputs = self.sigmoid(outputs)
 
-        return outputs
+        return

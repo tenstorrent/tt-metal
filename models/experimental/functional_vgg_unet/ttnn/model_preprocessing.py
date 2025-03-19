@@ -238,14 +238,14 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.b1["32"]["transpose_shards"] = False
     parameters.conv_args.b1["32"]["activation"] = "relu"
 
-    parameters.conv_args.b1["32"]["act_block_h"] = None
-    parameters.conv_args.b1["32"]["enable_split_reader"] = False
-    parameters.conv_args.b1["32"]["enable_act_double_buffer"] = False
-    parameters.conv_args.b1["32"]["deallocate_activation"] = True
-    parameters.conv_args.b1["32"]["reshard_if_not_optimal"] = False
-    parameters.conv_args.b1["32"]["shard_layout"] = None
-    parameters.conv_args.b1["32"]["transpose_shards"] = False
-    parameters.conv_args.b1["32"]["activation"] = "relu"
+    parameters.conv_args.b1["34"]["act_block_h"] = None
+    parameters.conv_args.b1["34"]["enable_split_reader"] = False
+    parameters.conv_args.b1["34"]["enable_act_double_buffer"] = False
+    parameters.conv_args.b1["34"]["deallocate_activation"] = True
+    parameters.conv_args.b1["34"]["reshard_if_not_optimal"] = False
+    parameters.conv_args.b1["34"]["shard_layout"] = None
+    parameters.conv_args.b1["34"]["transpose_shards"] = False
+    parameters.conv_args.b1["34"]["activation"] = "relu"
 
     parameters.conv_args.d1.up["act_block_h"] = None
     parameters.conv_args.d1.up["enable_split_reader"] = False
@@ -254,6 +254,7 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d1.up["reshard_if_not_optimal"] = False
     parameters.conv_args.d1.up["shard_layout"] = None
     parameters.conv_args.d1.up["transpose_shards"] = False
+    parameters.conv_args.d1.up["dtype"] = ttnn.bfloat16
 
     parameters.conv_args.d1.conv_block.conv1["act_block_h"] = None
     parameters.conv_args.d1.conv_block.conv1["enable_split_reader"] = False
@@ -263,6 +264,8 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d1.conv_block.conv1["shard_layout"] = None
     parameters.conv_args.d1.conv_block.conv1["transpose_shards"] = False
     parameters.conv_args.d1.conv_block.conv1["activation"] = ""
+    parameters.conv_args.d1.conv_block.conv1["padding"] = (0, 0)
+    parameters.conv_args.d1.conv_block.conv1["padding_mode"] = "same"
 
     parameters.conv_args.d1.conv_block.conv2["act_block_h"] = None
     parameters.conv_args.d1.conv_block.conv2["enable_split_reader"] = False
@@ -272,6 +275,8 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d1.conv_block.conv2["shard_layout"] = None
     parameters.conv_args.d1.conv_block.conv2["transpose_shards"] = False
     parameters.conv_args.d1.conv_block.conv2["activation"] = "relu"
+    parameters.conv_args.d1.conv_block.conv2["padding"] = (0, 0)
+    parameters.conv_args.d1.conv_block.conv2["padding_mode"] = "same"
 
     parameters.conv_args.d2.up["act_block_h"] = None
     parameters.conv_args.d2.up["enable_split_reader"] = False
@@ -280,6 +285,7 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d2.up["reshard_if_not_optimal"] = False
     parameters.conv_args.d2.up["shard_layout"] = None
     parameters.conv_args.d2.up["transpose_shards"] = False
+    parameters.conv_args.d2.up["dtype"] = ttnn.bfloat16
 
     parameters.conv_args.d2.conv_block.conv1["act_block_h"] = None
     parameters.conv_args.d2.conv_block.conv1["enable_split_reader"] = False
@@ -289,6 +295,8 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d2.conv_block.conv1["shard_layout"] = None
     parameters.conv_args.d2.conv_block.conv1["transpose_shards"] = False
     parameters.conv_args.d2.conv_block.conv1["activation"] = ""
+    parameters.conv_args.d2.conv_block.conv1["padding"] = (0, 0)
+    parameters.conv_args.d2.conv_block.conv1["padding_mode"] = "same"
 
     parameters.conv_args.d2.conv_block.conv2["act_block_h"] = None
     parameters.conv_args.d2.conv_block.conv2["enable_split_reader"] = False
@@ -298,6 +306,8 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d2.conv_block.conv2["shard_layout"] = None
     parameters.conv_args.d2.conv_block.conv2["transpose_shards"] = False
     parameters.conv_args.d2.conv_block.conv2["activation"] = "relu"
+    parameters.conv_args.d2.conv_block.conv2["padding"] = (0, 0)
+    parameters.conv_args.d2.conv_block.conv2["padding_mode"] = "same"
 
     parameters.conv_args.d3.up["act_block_h"] = None
     parameters.conv_args.d3.up["enable_split_reader"] = False
@@ -306,6 +316,7 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d3.up["reshard_if_not_optimal"] = False
     parameters.conv_args.d3.up["shard_layout"] = None
     parameters.conv_args.d3.up["transpose_shards"] = False
+    parameters.conv_args.d3.up["dtype"] = ttnn.bfloat16
 
     parameters.conv_args.d3.conv_block.conv1["act_block_h"] = None
     parameters.conv_args.d3.conv_block.conv1["enable_split_reader"] = False
@@ -315,6 +326,8 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d3.conv_block.conv1["shard_layout"] = None
     parameters.conv_args.d3.conv_block.conv1["transpose_shards"] = False
     parameters.conv_args.d3.conv_block.conv1["activation"] = ""
+    parameters.conv_args.d3.conv_block.conv1["padding"] = (0, 0)
+    parameters.conv_args.d3.conv_block.conv1["padding_mode"] = "same"
 
     parameters.conv_args.d3.conv_block.conv2["act_block_h"] = None
     parameters.conv_args.d3.conv_block.conv2["enable_split_reader"] = False
@@ -324,6 +337,39 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d3.conv_block.conv2["shard_layout"] = None
     parameters.conv_args.d3.conv_block.conv2["transpose_shards"] = False
     parameters.conv_args.d3.conv_block.conv2["activation"] = "relu"
+    parameters.conv_args.d3.conv_block.conv2["padding"] = (0, 0)
+    parameters.conv_args.d3.conv_block.conv2["padding_mode"] = "same"
+
+    parameters.conv_args.d4.up["act_block_h"] = None
+    parameters.conv_args.d4.up["enable_split_reader"] = False
+    parameters.conv_args.d4.up["enable_act_double_buffer"] = False
+    parameters.conv_args.d4.up["deallocate_activation"] = True
+    parameters.conv_args.d4.up["reshard_if_not_optimal"] = False
+    parameters.conv_args.d4.up["shard_layout"] = None
+    parameters.conv_args.d4.up["transpose_shards"] = False
+    parameters.conv_args.d4.up["dtype"] = ttnn.bfloat16
+
+    parameters.conv_args.d4.conv_block.conv1["act_block_h"] = None
+    parameters.conv_args.d4.conv_block.conv1["enable_split_reader"] = False
+    parameters.conv_args.d4.conv_block.conv1["enable_act_double_buffer"] = False
+    parameters.conv_args.d4.conv_block.conv1["deallocate_activation"] = True
+    parameters.conv_args.d4.conv_block.conv1["reshard_if_not_optimal"] = False
+    parameters.conv_args.d4.conv_block.conv1["shard_layout"] = None
+    parameters.conv_args.d4.conv_block.conv1["transpose_shards"] = False
+    parameters.conv_args.d4.conv_block.conv1["activation"] = ""
+    parameters.conv_args.d4.conv_block.conv1["padding"] = (0, 0)
+    parameters.conv_args.d4.conv_block.conv1["padding_mode"] = "same"
+
+    parameters.conv_args.d4.conv_block.conv2["act_block_h"] = None
+    parameters.conv_args.d4.conv_block.conv2["enable_split_reader"] = False
+    parameters.conv_args.d4.conv_block.conv2["enable_act_double_buffer"] = False
+    parameters.conv_args.d4.conv_block.conv2["deallocate_activation"] = True
+    parameters.conv_args.d4.conv_block.conv2["reshard_if_not_optimal"] = False
+    parameters.conv_args.d4.conv_block.conv2["shard_layout"] = None
+    parameters.conv_args.d4.conv_block.conv2["transpose_shards"] = False
+    parameters.conv_args.d4.conv_block.conv2["activation"] = "relu"
+    parameters.conv_args.d4.conv_block.conv2["padding"] = (0, 0)
+    parameters.conv_args.d4.conv_block.conv2["padding_mode"] = "same"
 
     parameters.conv_args.out["act_block_h"] = None
     parameters.conv_args.out["enable_split_reader"] = False
@@ -333,5 +379,8 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.out["shard_layout"] = None
     parameters.conv_args.out["transpose_shards"] = False
     parameters.conv_args.out["activation"] = ""
+    parameters.conv_args.out["padding"] = (0, 0)
+    parameters.conv_args.out["padding_mode"] = "same"
+    print(parameters.conv_args)
 
     return parameters

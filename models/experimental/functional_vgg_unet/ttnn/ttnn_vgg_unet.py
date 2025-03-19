@@ -208,24 +208,24 @@ class Conv_transpose:
             "output_padding": conv_param.output_padding,
         }
 
-        if not ttnn.is_tensor_storage_on_device(self.weight):
-            self.weight = ttnn.prepare_conv_weights(
-                weight_tensor=self.weight,
-                weights_format="OIHW",
-                input_memory_config=self.input_memory_config,
-                input_layout=ttnn.TILE_LAYOUT,
-                has_bias=True,
-                **self.conv_kwargs,
-            )
+        # if not ttnn.is_tensor_storage_on_device(self.weight):
+        #     self.weight = ttnn.prepare_conv_weights(
+        #         weight_tensor=self.weight,
+        #         weights_format="OIHW",
+        #         input_memory_config=self.input_memory_config,
+        #         input_layout=ttnn.TILE_LAYOUT,
+        #         has_bias=True,
+        #         **self.conv_kwargs,
+        #     )
 
-            self.bias = ttnn.prepare_conv_bias(
-                bias_tensor=self.bias,
-                input_memory_config=self.input_memory_config,
-                input_layout=ttnn.TILE_LAYOUT,
-                **self.conv_kwargs,
-            )
-            self.weight = ttnn.to_device(self.weight, device)
-            self.bias = ttnn.to_device(self.bias, device)
+        #     self.bias = ttnn.prepare_conv_bias(
+        #         bias_tensor=self.bias,
+        #         input_memory_config=self.input_memory_config,
+        #         input_layout=ttnn.TILE_LAYOUT,
+        #         **self.conv_kwargs,
+        #     )
+        #     self.weight = ttnn.to_device(self.weight, device)
+        #     self.bias = ttnn.to_device(self.bias, device)
 
     def __str__(self) -> str:
         return f"Conv: {self.weights.shape} {self.bias.shape} {self.kernel_size}"
@@ -245,12 +245,17 @@ class Conv_transpose:
 
 
 class Tt_decoder_block:
-    def __init__(self, device, parameters, conv_args) -> None:
+    def __init__(self, device, conv_args, parameters) -> None:
         self.up = Conv_transpose(device, conv_args.up, parameters.up)
-        self.conv1 = Conv(device, conv_args.conv1, parameters.conv1)
-        self.conv2 = Conv(device, conv_args.conv2, parameters.conv2)
+        self.conv1 = Conv(device, conv_args.conv_block.conv1, parameters.conv1)
+        self.conv2 = Conv(device, conv_args.conv_block.conv2, parameters.conv2)
 
-    # def __call__(self, x, cat_in):
+    def __call__(self, x, cat_in):
+        x = self.up(x)
+        x = sharded_concat((x, cat_in))
+        x = self.conv1(x)
+        x = self.conv2(x)
+        return x
 
 
 class Tt_vgg_unet:
@@ -273,7 +278,84 @@ class Tt_vgg_unet:
         self.b1_30 = Conv(device, conv_args.b1["30"], parameters["30"])
         self.b1_32 = Conv(device, conv_args.b1["32"], parameters["32"])
         self.b1_34 = Conv(device, conv_args.b1["34"], parameters["34"])
+        self.d1 = Tt_decoder_block(device, conv_args.d1, parameters.d1)
+        self.d2 = Tt_decoder_block(device, conv_args.d2, parameters.d2)
+        self.d3 = Tt_decoder_block(device, conv_args.d3, parameters.d3)
+        self.d4 = Tt_decoder_block(device, conv_args.d4, parameters.d4)
+        self.out = Conv(device, conv_args.out, parameters.out)
 
     def __call__(self, x):
         x = self.s1_0(x)
+        x = self.s1_2(x)
+        s1 = x
+
+        x = ttnn.max_pool2d(
+            input_tensor=x,
+            batch_size=self.conv_args.s2["4"].batch_size,
+            input_h=self.conv_args.s2["4"].input_height,
+            input_w=self.conv_args.s2["4"].input_width,
+            channels=x.shape[3],
+            kernel_size=[self.conv_args.s2["4"].kernel_size, self.conv_args.s2["4"].kernel_size],
+            stride=[self.conv_args.s2["4"].stride, self.conv_args.s2["4"].stride],
+            padding=[self.conv_args.s2["4"].padding, self.conv_args.s2["4"].padding],
+            dilation=[self.conv_args.s2["4"].dilation, self.conv_args.s2["4"].dilation],
+        )
+        x = self.s2_5(x)
+        x = self.s2_7(x)
+        s2 = x
+
+        x = ttnn.max_pool2d(
+            input_tensor=x,
+            batch_size=self.conv_args.s3["9"].batch_size,
+            input_h=self.conv_args.s3["9"].input_height,
+            input_w=self.conv_args.s3["9"].input_width,
+            channels=x.shape[3],
+            kernel_size=[self.conv_args.s3["9"].kernel_size, self.conv_args.s3["9"].kernel_size],
+            stride=[self.conv_args.s3["9"].stride, self.conv_args.s3["9"].stride],
+            padding=[self.conv_args.s3["9"].padding, self.conv_args.s3["9"].padding],
+            dilation=[self.conv_args.s3["9"].dilation, self.conv_args.s3["9"].dilation],
+        )
+        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+        x = self.s3_10(x)
+        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+        x = self.s3_12(x)
+        x = self.s3_14(x)
+        x = self.s3_16(x)
+
+        s3 = x
+
+        x = ttnn.max_pool2d(
+            input_tensor=x,
+            batch_size=self.conv_args.s4["18"].batch_size,
+            input_h=self.conv_args.s4["18"].input_height,
+            input_w=self.conv_args.s4["18"].input_width,
+            channels=x.shape[3],
+            kernel_size=[self.conv_args.s4["18"].kernel_size, self.conv_args.s4["18"].kernel_size],
+            stride=[self.conv_args.s4["18"].stride, self.conv_args.s4["18"].stride],
+            padding=[self.conv_args.s4["18"].padding, self.conv_args.s4["18"].padding],
+            dilation=[self.conv_args.s4["18"].dilation, self.conv_args.s4["18"].dilation],
+        )
+
+        x = self.s4_19(x)
+        x = self.s4_21(x)
+        x = self.s4_23(x)
+        x = self.s4_25(x)
+        s4 = x
+
+        x = ttnn.max_pool2d(
+            input_tensor=x,
+            batch_size=self.conv_args.b1["27"].batch_size,
+            input_h=self.conv_args.b1["27"].input_height,
+            input_w=self.conv_args.b1["27"].input_width,
+            channels=x.shape[3],
+            kernel_size=[self.conv_args.b1["27"].kernel_size, self.conv_args.b1["27"].kernel_size],
+            stride=[self.conv_args.b1["27"].stride, self.conv_args.b1["27"].stride],
+            padding=[self.conv_args.b1["27"].padding, self.conv_args.b1["27"].padding],
+            dilation=[self.conv_args.b1["27"].dilation, self.conv_args.b1["27"].dilation],
+        )
+        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+        x = self.b1_28(x)
+        x = self.b1_30(x)
+        x = self.b1_32(x)
+        x = self.b1_34(x)
         return x
