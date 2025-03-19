@@ -6,25 +6,21 @@
 
 #include <bit>
 #include <cstdint>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/util.hpp>
-#include <tt-metalium/work_split.hpp>
 
 #include "rmsnorm_fw_device_operation_types.hpp"
 
 namespace {
 
 constexpr auto kWriterKernelPath =
-    "tt-train/sources/ttml/metal_ops/rmsnorm_fw/device/kernels/dataflow/"
+    "tt-train/sources/ttml/metal/ops/rmsnorm_fw/device/kernels/dataflow/"
     "writer_rmsnorm_fw_interleaved_start_id.cpp";
 
 constexpr auto kReaderKernelPath =
-    "tt-train/sources/ttml/metal_ops/rmsnorm_fw/device/kernels/dataflow/"
+    "tt-train/sources/ttml/metal/ops/rmsnorm_fw/device/kernels/dataflow/"
     "reader_rmsnorm_fw_interleaved_start_id.cpp";
 
 constexpr auto kComputeKernelPath =
-    "tt-train/sources/ttml/metal_ops/rmsnorm_fw/device/kernels/compute/rmsnorm_fw_kernel.cpp";
+    "tt-train/sources/ttml/metal/ops/rmsnorm_fw/device/kernels/compute/rmsnorm_fw_kernel.cpp";
 
 // reader runtime args
 constexpr uint32_t kInputBufferIdx = 0;
@@ -76,7 +72,7 @@ uint32_t get_block_size(uint32_t num_inner) {
 
 }  // namespace
 
-namespace ttnn::operations::experimental::rmsnorm_fw::program {
+namespace ttml::metal::ops::rmsnorm_fw::device {
 
 /**
  *   Helper struct to hold references to all kernels we create,
@@ -330,25 +326,25 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     // -------------------------------------------------------------------------
     auto* input_buffer = input.buffer();
     TT_FATAL(
-        input_buffer->buffer_type() == BufferType::DRAM,
+        input_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Input buffer must be in DRAM. Input buffer of type {}",
         magic_enum::enum_name(input_buffer->buffer_type()));
 
     auto* gamma_buffer = gamma.buffer();
     TT_FATAL(
-        gamma_buffer->buffer_type() == BufferType::DRAM,
+        gamma_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Gamma buffer must be in DRAM. Gamma buffer of type {}",
         magic_enum::enum_name(gamma_buffer->buffer_type()));
 
     auto* output_buffer = output.front().buffer();
     TT_FATAL(
-        output_buffer->buffer_type() == BufferType::DRAM,
+        output_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Output buffer must be in DRAM. Output buffer of type {}",
         magic_enum::enum_name(output_buffer->buffer_type()));
 
     auto* rms_output_buffer = output.back().buffer();
     TT_FATAL(
-        rms_output_buffer->buffer_type() == BufferType::DRAM,
+        rms_output_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "RMS output buffer must be in DRAM. RMS output buffer of type {}",
         magic_enum::enum_name(rms_output_buffer->buffer_type()));
 
@@ -496,4 +492,4 @@ void RMSNormForwardProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::rmsnorm_fw::program
+}  // namespace ttml::metal::ops::rmsnorm_fw::device

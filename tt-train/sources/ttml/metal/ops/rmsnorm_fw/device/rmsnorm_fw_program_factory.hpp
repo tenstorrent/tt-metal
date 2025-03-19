@@ -4,11 +4,10 @@
 
 #pragma once
 
-#include <cpp/ttnn/device_operation.hpp>
-
+#include "metal/ttnn_all_includes.hpp"
 #include "rmsnorm_fw_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::rmsnorm_fw::program {
+namespace ttml::metal::ops::rmsnorm_fw::device {
 
 struct RMSNormForwardProgramFactory {
     struct shared_variables_t {
@@ -35,4 +34,4 @@ struct RMSNormForwardProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttnn::operations::experimental::rmsnorm_fw::program
+}  // namespace ttml::metal::ops::rmsnorm_fw::device

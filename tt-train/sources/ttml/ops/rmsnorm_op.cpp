@@ -16,7 +16,7 @@
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
-#include "metal_ops/rmsnorm_fw/rmsnorm_fw.hpp"
+#include "metal/operations.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 namespace ttml::ops {
@@ -52,7 +52,7 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
     // ttnn::Tensor out_tensor =
     //     ttnn::experimental::div(gamma_times_activations, rms_a);  // [B,1,S,C] x [B,1,S,C] -> [B,1,S,C]
 
-    auto res = ttnn::experimental::rmsnorm_fw_op(tensor->get_value(), gamma->get_value(), true, epsilon);
+    auto res = ttml::metal::rmsnorm_fw(tensor->get_value(), gamma->get_value(), true, epsilon);
 
     auto out_tensor = res.front().value();
     auto rms_a = res.back().value();

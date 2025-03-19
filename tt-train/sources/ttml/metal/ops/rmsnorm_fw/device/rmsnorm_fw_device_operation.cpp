@@ -4,19 +4,13 @@
 
 #include "rmsnorm_fw_device_operation.hpp"
 
-#include <cpp/ttnn/tensor/tensor_utils.hpp>
-#include <magic_enum/magic_enum.hpp>
-#include <tt-metalium/constants.hpp>
-
 #include "rmsnorm_fw_program_factory.hpp"
 
-using namespace tt::tt_metal;
-
-namespace ttnn::operations::experimental::rmsnorm_fw {
+namespace ttml::metal::ops::rmsnorm_fw::device {
 
 RMSNormForwardDeviceOperation::program_factory_t RMSNormForwardDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return program::RMSNormForwardProgramFactory{};
+    return RMSNormForwardProgramFactory{};
 }
 
 void RMSNormForwardDeviceOperation::validate_on_program_cache_hit(
@@ -26,7 +20,7 @@ void RMSNormForwardDeviceOperation::validate_on_program_cache_hit(
 
 void RMSNormForwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto check_tensor = [](const Tensor& tensor, const std::string& name) {
+    auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
         TT_FATAL(
             tensor.device()->arch() == tt::ARCH::WORMHOLE_B0,
             "RMSNormForward operation is only supported on Wormhole. Device arch: {}. Tensor name {}",
@@ -34,7 +28,7 @@ void RMSNormForwardDeviceOperation::validate_on_program_cache_miss(
             name);
 
         TT_FATAL(
-            tensor.storage_type() == StorageType::DEVICE,
+            tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
             "RMSNormForward operation requires {} to be on Device. Input storage type: {}",
             name,
             static_cast<int>(tensor.storage_type()));
@@ -45,19 +39,19 @@ void RMSNormForwardDeviceOperation::validate_on_program_cache_miss(
             name);
 
         TT_FATAL(
-            tensor.get_layout() == Layout::TILE,
+            tensor.get_layout() == tt::tt_metal::Layout::TILE,
             "RMSNormForward operation requires tensor to be in Tile layout. {} tensor layout: {}",
             name,
             static_cast<int>(tensor.get_layout()));
 
         TT_FATAL(
-            tensor.get_dtype() == DataType::BFLOAT16,
+            tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT16,
             "RMSNormForward operation requires tensor to be of BFLOAT16 data type. {} tensor data type: {}",
             name,
             static_cast<int>(tensor.get_dtype()));
 
         TT_FATAL(
-            tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            tensor.memory_config().memory_layout == ttnn::TensorMemoryLayout::INTERLEAVED,
             "RMSNormForward operation requires Interleaved memory layout. {} "
             "memory layout: `{}`",
             name,
@@ -88,7 +82,8 @@ spec_return_value_t RMSNormForwardDeviceOperation::compute_output_specs(
     } else {
         output_specs.emplace_back(
             tensor_args.input.get_logical_shape(),
-            TensorLayout(tensor_args.input.get_dtype(), Layout::TILE, tensor_args.input.memory_config()));
+            tt::tt_metal::TensorLayout(
+                tensor_args.input.get_dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
     }
 
     if (args.return_intermediates) {
@@ -99,7 +94,9 @@ spec_return_value_t RMSNormForwardDeviceOperation::compute_output_specs(
             shape[-1] = 1U;  // RMS is a scalar per row
 
             output_specs.emplace_back(
-                shape, TensorLayout(tensor_args.input.get_dtype(), Layout::TILE, tensor_args.input.memory_config()));
+                shape,
+                tt::tt_metal::TensorLayout(
+                    tensor_args.input.get_dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
         }
     }
 
@@ -135,7 +132,7 @@ tt::stl::hash::hash_t RMSNormForwardDeviceOperation::compute_program_hash(
     const auto& input_tensor = tensor_args.input;
     const auto& input_logical_shape = input_tensor.get_logical_shape();
     auto program_factory = select_program_factory(args, tensor_args);
-    operation::Hash hash = operation::hash_operation<RMSNormForwardDeviceOperation>(
+    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<RMSNormForwardDeviceOperation>(
         args, program_factory.index(), input_tensor.dtype(), input_logical_shape);
 
     return hash;
@@ -143,12 +140,12 @@ tt::stl::hash::hash_t RMSNormForwardDeviceOperation::compute_program_hash(
 
 std::tuple<RMSNormForwardDeviceOperation::operation_attributes_t, RMSNormForwardDeviceOperation::tensor_args_t>
 RMSNormForwardDeviceOperation::invoke(
-    const Tensor& input_tensor,
-    const Tensor& gamma_tensor,
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& gamma_tensor,
     bool return_intermediates,
     float epsilon,
-    const std::optional<Tensor>& preallocated_rms,
-    const std::optional<Tensor>& preallocated_output) {
+    const std::optional<ttnn::Tensor>& preallocated_rms,
+    const std::optional<ttnn::Tensor>& preallocated_output) {
     return {
         operation_attributes_t{
             .return_intermediates = return_intermediates,
@@ -162,4 +159,4 @@ RMSNormForwardDeviceOperation::invoke(
         }};
 }
 
-}  // namespace ttnn::operations::experimental::rmsnorm_fw
+}  // namespace ttml::metal::ops::rmsnorm_fw::device

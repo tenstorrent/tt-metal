@@ -27,13 +27,17 @@ endforeach()
 
 # Manually select only specific files from metal_ops
 set(METAL_OPS_FILES
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal_ops/rmsnorm_fw/rmsnorm_fw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal_ops/rmsnorm_fw/rmsnorm_fw.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal_ops/rmsnorm_fw/device/rmsnorm_fw_device_operation_types.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal_ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal_ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal_ops/rmsnorm_fw/device/rmsnorm_fw_program_factory.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal_ops/rmsnorm_fw/device/rmsnorm_fw_program_factory.cpp
+    # General
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/operations.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ttnn_all_includes.hpp
+    # RMSNorm
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})
