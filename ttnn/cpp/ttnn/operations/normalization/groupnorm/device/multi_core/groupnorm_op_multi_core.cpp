@@ -27,6 +27,48 @@ inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
 }
 inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
 
+inline bool cbs_fit_in_DRAM(
+    uint32_t in0_CB_size,
+    uint32_t in_CB_size,
+    uint32_t in2_CB_size,
+    uint32_t in3_CB_size,
+    uint32_t in5_CB_size,
+    uint32_t in6_CB_size,
+    uint32_t in_mask_CB_size,
+    uint32_t repack_CB_size,
+    uint32_t im_out_CB_size,
+    uint32_t x_CB_size,
+    uint32_t xmm_CB_size,
+    uint32_t ex_partial_CB_size,
+    uint32_t ex_global_CB_size,
+    uint32_t ex2_global_CB_size,
+    uint32_t xmm2_CB_size,
+    uint32_t xmm3_CB_size,
+    uint32_t ex2pe_CB_size,
+    uint32_t out_CB_size,
+    uint32_t l1_size) {
+    uint32_t sum = 0;
+    sum += in0_CB_size;
+    sum += in_CB_size;
+    sum += in2_CB_size;
+    sum += in3_CB_size;
+    sum += in5_CB_size;
+    sum += in6_CB_size;
+    sum += in_mask_CB_size;
+    sum += repack_CB_size;
+    sum += im_out_CB_size;
+    sum += x_CB_size;
+    sum += xmm_CB_size;
+    sum += ex_partial_CB_size;
+    sum += ex_global_CB_size;
+    sum += ex2_global_CB_size;
+    sum += xmm2_CB_size;
+    sum += xmm3_CB_size;
+    sum += ex2pe_CB_size;
+    sum += out_CB_size;
+    return sum < l1_size;
+}
+
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w) {
     if (n <= max_subblock_w) {
         return n;
@@ -1260,6 +1302,28 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t ex2pe_CB_size = ex_partial_CB_size;
     // output buffer size
     uint32_t out_CB_size = in0_block_tiles * out_single_tile_size;
+    TT_FATAL(
+        cbs_fit_in_DRAM(
+            in0_CB_size,
+            in_CB_size,
+            in2_CB_size,
+            in3_CB_size,
+            in5_CB_size,
+            in6_CB_size,
+            in_mask_CB_size,
+            repack_CB_size,
+            im_out_CB_size,
+            x_CB_size,
+            xmm_CB_size,
+            ex_partial_CB_size,
+            ex_global_CB_size,
+            ex2_global_CB_size,
+            xmm2_CB_size,
+            xmm3_CB_size,
+            ex2pe_CB_size,
+            out_CB_size,
+            a.device()->l1_size_per_core()),
+        "Circular buffers require too much space to fit into L1");
 
     log_debug(tt::LogOp, "per_core_Nt: {}", per_core_Nt);
     log_debug(tt::LogOp, "per_core_Mt: {}", per_core_Mt);
