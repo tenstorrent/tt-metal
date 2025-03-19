@@ -675,7 +675,6 @@ def test_all_reduce_qkv_heads_fuse(
 
 
 @skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.timeout(900)
 @pytest.mark.parametrize("num_iters, warmup_iters", [[100, 10]])
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize("enable_async", [True])
