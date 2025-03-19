@@ -452,7 +452,12 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         "ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/kernels/dataflow/"
         "reader_llama_reduce_scatter.cpp",
         all_cores_grid,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
+        // tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
+        tt_metal::DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = reader_compile_time_args,
+            .defines = reader_defines});
 
     uint32_t local_input_page = chip_id * input_shard_cores_per_device * tiles_per_core_width;
     for (auto core : all_cores) {
@@ -522,7 +527,12 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         "ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/kernels/dataflow/"
         "writer_llama_reduce_scatter.cpp",
         all_cores_grid,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
+        // tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
+        tt_metal::DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = writer_compile_time_args,
+            .defines = writer_defines});
 
     std::vector<uint32_t> writer_runtime_args = {
         cross_device_semaphore->address(), local_semaphore, false, false, chip_id};
