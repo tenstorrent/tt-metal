@@ -216,13 +216,16 @@ void kernel_main() {
         uint32_t output_tile_offset = receiver_for_device_id * tiles_per_core_width_output * page_size_bytes;
 
         // Wait on semaphore
+        // DPRINT << "writer receiver waiting on semaphore" << ENDL();
         noc_semaphore_wait((uint32_t*)receiver_semaphore_address, 1);
+        // DPRINT << "writer receiver semaphore received" << ENDL();
         // while (*(uint32_t*)receiver_semaphore_address < 1) {
         // }
 
         // Process all tiles
         constexpr uint32_t total_tiles = input_shard_cores_per_device * tiles_per_core_width;
-        for (uint32_t tile = 0; tile < total_tiles; tile++) {
+        for (uint32_t tile = 0; tile < total_tiles / 2; tile++) {
+            // DPRINT << "writer receiver processing tile " << tile << ENDL();
             // one tile to each core
             uint32_t output_core = tile;
             uint32_t output_core_x = output_core_xy[output_core][x_index];
@@ -240,12 +243,18 @@ void kernel_main() {
             // noc_semaphore_inc(local_receiver_semaphore_noc_addr, 1);  // mcast inc is needed, this will tank latency
         }
         noc_async_write_barrier();
+        // DPRINT << "writer receiver async write barrier done" << ENDL();
         // Now we have the block in the CB address, we can mcast to dests!
         uint64_t multicast_semaphore_addr =
             static_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, local_semaphore_address);
         // DPRINT << "multicast_semaphore_addr: " << multicast_semaphore_addr << ENDL();
-        noc_multicast_semaphore_inc(multicast_semaphore_addr, 1, num_dests, 0);
+        // DPRINT << "writer receiver waiting on semaphore inc from reader" << ENDL();
+        // DPRINT << "receiver semaphore value: " << *(uint32_t*)receiver_semaphore_address << ENDL();
+        noc_semaphore_wait((uint32_t*)receiver_semaphore_address, 2);
+        // DPRINT << "writer receiver semaphore inc from reader received" << ENDL();
+        noc_multicast_semaphore_inc(multicast_semaphore_addr, 1, num_dests);
         noc_async_atomic_barrier();
+        // DPRINT << "writer receiver async atomic barrier done" << ENDL();
         // DPRINT << "semaphore_inc_done" << ENDL();
 
         // for (uint32_t tile = 0; tile < total_tiles; tile++) {

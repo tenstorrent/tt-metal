@@ -42,7 +42,7 @@ void MAIN {
 
     // This loop doesn't do anything now that print statements are commented out
     // for (uint32_t i = 0; i < num_devices; i++) {
-    //     // UNPACK(print_full_tile(accumulator_cb_id, i, true));
+    //     UNPACK(print_full_tile(accumulator_cb_id, i, true));
     // }
 
     // Reserve output space once before processing

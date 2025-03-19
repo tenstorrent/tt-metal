@@ -159,7 +159,7 @@ def run_reduce_scatter_test(mesh_device, dim, shard_height, shard_width, num_dev
         assert eq, f"{i} FAILED: {output_results}"
 
 
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 34816}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 40960}], indirect=True)
 def test_fabric_reduce_scatter_t3k_trace(t3k_mesh_device):
     torch.manual_seed(2005)
     dim = 3
