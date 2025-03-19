@@ -4,9 +4,9 @@
 # Accept an argument to specify the Ubuntu version and host architecture
 ARG UBUNTU_VERSION=20.04
 ARG IMAGE_ARCH=amd64
-ARG BASE_IMAGE_TAG=latest
+ARG BASE_IMAGE=ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-${UBUNTU_VERSION}-dev-${IMAGE_ARCH}:latest
 # Since release is a different workflow, we'll use the current image for now, but append -dev later in development
-FROM ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-${UBUNTU_VERSION}-dev-${IMAGE_ARCH}:${BASE_IMAGE_TAG} AS release
+FROM ${BASE_IMAGE} AS release
 
 #############################################################
 

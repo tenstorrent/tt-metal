@@ -4,10 +4,10 @@
 # Accept an argument to specify the Ubuntu version and host architecture
 ARG UBUNTU_VERSION=20.04
 ARG IMAGE_ARCH=amd64
-ARG BASE_IMAGE_TAG=latest
+ARG BASE_IMAGE=ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-${UBUNTU_VERSION}-ci-build-${IMAGE_ARCH}:latest
 # Since release is a different workflow, we'll use the current image for now, but append -dev later in development
 # For now this relies on ci-build, but that same image will need to be called ci-test
-FROM ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-${UBUNTU_VERSION}-ci-build-${IMAGE_ARCH}:${BASE_IMAGE_TAG} AS dev
+FROM ${BASE_IMAGE} AS dev
 
 ENV DEBIAN_FRONTEND=noninteractive
 
