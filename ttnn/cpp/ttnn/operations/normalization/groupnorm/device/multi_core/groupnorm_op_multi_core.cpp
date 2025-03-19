@@ -1079,8 +1079,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     IDevice* device = a.device();
 
     // grid
-    uint32_t num_cores_c = grid_size.x;
-    uint32_t num_cores_r = grid_size.y;
+    uint32_t num_cores_c = grid_size.y;
+    uint32_t num_cores_r = grid_size.x;
     uint32_t num_cores = num_cores_c * num_cores_r;
     auto all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid_size, true);
 
@@ -1280,13 +1280,13 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t start_core_y = 0;
 
     // create a vector of cores, in either RM or CM
-    std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_cores_c, num_cores_r, false);
+    std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_cores_r, num_cores_c, false);
     for (int i = 0; i < core_coords.size(); ++i) {
         log_debug(tt::LogOp, "worker coord: {} {}", core_coords[i].x, core_coords[i].y);
     }
     std::vector<std::vector<CoreCoord>> core_coords2D;
-    for (int j = 0; j < num_cores_r; ++j) {
-        for (int i = 0; i < num_cores_c / num_cores_per_group; ++i) {
+    for (int j = 0; j < num_cores_c; ++j) {
+        for (int i = 0; i < num_cores_r / num_cores_per_group; ++i) {
             std::vector<CoreCoord> temp;
             for (int k = 0; k < num_cores_per_group; ++k) {
                 temp.push_back(CoreCoord{(std::size_t)(k + i * num_cores_per_group), (std::size_t)j});
