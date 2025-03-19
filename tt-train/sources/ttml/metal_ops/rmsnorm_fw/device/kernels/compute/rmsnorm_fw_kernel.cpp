@@ -46,7 +46,6 @@ ALWI void calculate_sum_x_squared() {
 
     const uint32_t accum_register = 0;
     const uint32_t tile_register = 1U;
-    const uint32_t mask_register = 2U;
     tile_regs_acquire();
     for (uint32_t col = 0; col < num_inner; ++col) {
         auto working_register = col == 0 ? accum_register : tile_register;
@@ -55,7 +54,10 @@ ALWI void calculate_sum_x_squared() {
 
 #ifdef DO_MASK_W
         if (col + 1 == num_inner) {
-            reconfig_data_format_srca(cb_mask);
+            // this is limitation of the function mask_tile
+            // mask tile currently does not work for mask register that is not next to data register
+            const uint32_t mask_register = working_register + 1U;
+
             copy_tile_init(cb_mask);
             copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
 
@@ -63,7 +65,6 @@ ALWI void calculate_sum_x_squared() {
             mask_tile(working_register, mask_register);
         }
 #endif
-
         mul_binary_tile_init();
         mul_binary_tile(working_register, working_register);
 
@@ -78,8 +79,8 @@ ALWI void calculate_sum_x_squared() {
     pack_reconfig_data_format(cb_rms_before_reduction_intermediate);
     pack_tile(accum_register, cb_rms_before_reduction_intermediate);
 
-    cb_push_back(cb_rms_before_reduction_intermediate, onetile);
     tile_regs_release();
+    cb_push_back(cb_rms_before_reduction_intermediate, onetile);
 }
 
 #else

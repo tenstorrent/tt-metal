@@ -368,7 +368,8 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     }
 
     // setup defines for reduce
-    // it does not compile without these defines
+    // Compute kernel does not compile without these defines
+    // LLK reduction uses define values as default template parameters
     defines["REDUCE_OP"] = "PoolType::SUM";
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
