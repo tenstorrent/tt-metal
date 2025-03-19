@@ -2,6 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
+
+
+from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
+from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.attention import Attention
@@ -52,17 +56,8 @@ class TransformerBlock(LightweightModule):
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
         )
-        if False:
-            self.feed_forward = MLP(
-                mesh_device=mesh_device,
-                args=args,
-                state_dict=state_dict,
-                weight_cache_path=weight_cache_path,
-                layer_num=layer_num,
-                dtype=dtype,
-                model_config=self.model_config,
-            )
-        else:
+
+        if self.args.is_mixture_of_experts:
             self.feed_forward = TtMoeLayer(
                 mesh_device=mesh_device,
                 state_dict=state_dict,
@@ -81,6 +76,17 @@ class TransformerBlock(LightweightModule):
                 layer_num=layer_num,
                 dtype=dtype,
             )
+        else:
+            self.feed_forward = MLP(
+                mesh_device=mesh_device,
+                args=args,
+                state_dict=state_dict,
+                weight_cache_path=weight_cache_path,
+                layer_num=layer_num,
+                dtype=dtype,
+                model_config=self.model_config,
+            )
+
         self.attention_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
@@ -164,8 +170,8 @@ class TransformerBlock(LightweightModule):
             x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
         )  # h_val is fractured across devices
         ttnn.deallocate(attn_out)
-        # if mode == "prefill":
-        #     x.deallocate(True)
+        if mode == "prefill":
+            x.deallocate(True)
 
         # Norms take fractured inputs and output replicated across devices
         ff_in = self.ff_norm(h_val, mode)  # ff_in is replicated across devices
@@ -174,11 +180,10 @@ class TransformerBlock(LightweightModule):
         # MLP takes replicated inputs and produces fractured outputs
         # Check the input sizes here and make sure they are what a MOE expects for Mixtral
         ff_out = self.feed_forward.forward(ff_in, mode)  # ff_out is replicated
-        breakpoint()
-        ff_out_trimmed = ff_out[:, :, :, 0:512]
+        ff_out = ff_out[:, :, :, 0:512]
         # ff_out = ff_out.to_memory_config(memory_config=ttnn.MemoryConfig(memory_config=ttnn.MemoryConfig(memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,buffer_type=ttnn.BufferType.DRAM)))
-        ff_out_replicated = ttnn.to_memory_config(
-            ff_out_trimmed,
+        ff_out = ttnn.to_memory_config(
+            ff_out,
             memory_config=ttnn.MemoryConfig(
                 memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type=ttnn.BufferType.DRAM
             ),
@@ -193,7 +198,7 @@ class TransformerBlock(LightweightModule):
 >>>>>>> c9a8a458de (Initial commit for mixtral on ttX)
         out = ttnn.add(
             h_val,
-            ff_out_replicated,
+            ff_out,
             memory_config=skip_mem_cfg,
             dtype=self.args.ccl_dtype
             if TG and not self.args.is_distributed_norm(mode)
