@@ -39,10 +39,10 @@ GenericOpDeviceOperation::GenericProgram::cached_program_t GenericOpDeviceOperat
             .set_page_size(buffer_index, circular_buffer_attributes.page_size);
 
         // used for sharding to point to the existing buffer
-        if (circular_buffer_attributes.set_globally_allocated_address.has_value()) {
+        // if (circular_buffer_attributes.set_globally_allocated_address.has_value()) {
 
-            cb_config.set_globally_allocated_address(*tensor_args.io_tensors[circular_buffer_attributes.set_globally_allocated_address.value()].buffer());
-        }
+        //     cb_config.set_globally_allocated_address(*tensor_args.io_tensors[circular_buffer_attributes.set_globally_allocated_address.value()].buffer());
+        // }
 
         cb_handles[buffer_index] = tt::tt_metal::CreateCircularBuffer(program, circular_buffer_attributes.core_spec, cb_config);
     }
@@ -99,11 +99,11 @@ void GenericOpDeviceOperation::GenericProgram::override_runtime_arguments(
     auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
 
     // Not implemented
-    const auto& input_tensor = tensor_args.io_tensors.front();
-    auto& output_tensor = tensor_args.io_tensors.back();
+    // const auto& input_tensor = tensor_args.io_tensors.front();
+    // auto& output_tensor = tensor_args.io_tensors.back();
 
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    // auto src_buffer = input_tensor.buffer();
+    // auto dst_buffer = output_tensor.buffer();
 
     // for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
     //     CoreCoord core = {i / num_cores_y, i % num_cores_y};

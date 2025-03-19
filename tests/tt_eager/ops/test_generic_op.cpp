@@ -1111,7 +1111,7 @@ struct exp_with_param {
 
 //         ttnn::operations::generic::program_attributes_t program_attributes = {
 //             .circular_buffer_attributes =
-//                 {{tt::CB::c_in0,
+//                 {{tt::CBIndex::c_0,
 //                   {
 //                       .core_spec = all_cores,
 //                       .total_size = num_tiles_per_shard * tt::tt_metal::detail::TileSize(input_a_cb_data_format),
@@ -1119,7 +1119,7 @@ struct exp_with_param {
 //                       .data_format = input_a_cb_data_format,
 //                       .set_globally_allocated_address = 0,
 //                   }},
-//                  {tt::CB::c_in1,
+//                  {tt::CBIndex::c_1,
 //                   {
 //                       .core_spec = all_cores,
 //                       .total_size = num_tiles_per_shard * tt::tt_metal::detail::TileSize(input_b_cb_data_format),
@@ -1127,7 +1127,7 @@ struct exp_with_param {
 //                       .data_format = input_b_cb_data_format,
 //                       .set_globally_allocated_address = 1,
 //                   }},
-//                  {tt::CB::c_out0,
+//                  {tt::CBIndex::c_16,
 //                   {
 //                       .core_spec = all_cores,
 //                       .total_size = num_tiles_per_shard * tt::tt_metal::detail::TileSize(input_b_cb_data_format),
@@ -1504,7 +1504,7 @@ void test_matmul() {
             num_tiles_written += num_output_tiles_per_core;
         }
 
-        ttnn::generic_op(std::vector<Tensor>{a, b}, program_attributes, std::vector<Tensor>{output});
+        output = ttnn::generic_op(std::vector<Tensor>{a, b}, program_attributes);
 
         auto output_tensor = output.cpu();
 
@@ -1514,7 +1514,104 @@ void test_matmul() {
     }
 
     TT_FATAL(tt::tt_metal::CloseDevice(device), "Failed to close device");
+}
 
+void test_eltwise_sfpu() {
+    const std::map<std::string, std::string> sfpu_defines = {
+        {"SFPU_OP_EXP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}};
+
+    tt::log_info(tt::LogTest, "Running {}", __func__);
+    constexpr int device_id = 0;
+    auto device = tt::tt_metal::CreateDevice(device_id);
+
+    uint32_t num_tiles = 1;
+    uint32_t src_bank_id = 0;
+    uint32_t dst_bank_id = 0;
+
+    auto shape = ttnn::Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
+    Tensor input_tensor = ttnn::random::random(shape, DataType::BFLOAT16);
+    tt::log_info(tt::LogTest, "input_tensor storage type: {}", input_tensor.storage_type());
+    Tensor device_input_tensor = input_tensor.to_layout(Layout::TILE).to_device(device);
+    tt::log_info(tt::LogTest, "device_input_tensor storage type: {}", device_input_tensor.storage_type());
+    Tensor device_output_tensor = tt::tt_metal::create_device_tensor(
+        ttnn::TensorSpec(
+            input_tensor.get_logical_shape(),
+            ttnn::TensorLayout(
+                input_tensor.get_dtype(), ttnn::PageConfig(input_tensor.get_layout()), input_tensor.memory_config())),
+        device_input_tensor.device()
+    );
+    
+
+    auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor.get_dtype());
+    bool is_dram_input = device_input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+
+    CoreCoord core = {0, 0};
+    CoreRange core_range = {core, core};
+    CoreRangeSet device_cores = std::set<CoreRange>({core_range});
+
+    ttnn::operations::generic::circular_buffer_attributes_t input_cb_attributes = {
+        .core_spec = device_cores,
+        .total_size = 2 * tt::tt_metal::detail::TileSize(input_cb_data_format),
+        .page_size = tt::tt_metal::detail::TileSize(input_cb_data_format),
+        .data_format = input_cb_data_format,
+    };
+
+    ttnn::operations::generic::circular_buffer_attributes_t output_cb_attributes = {
+        .core_spec = device_cores,
+        .total_size = 2 * tt::tt_metal::detail::TileSize(input_cb_data_format),
+        .page_size = tt::tt_metal::detail::TileSize(input_cb_data_format),
+        .data_format = input_cb_data_format,
+    };
+
+    const std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)is_dram_input};
+    const std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)tt::CBIndex::c_16, (std::uint32_t)is_dram_input};
+    const std::vector<uint32_t> read_rt_args = {device_input_tensor.buffer()->address(), src_bank_id, num_tiles};
+    const std::vector<uint32_t> write_rt_args = {device_output_tensor.buffer()->address(), dst_bank_id, num_tiles};
+    ttnn::operations::generic::data_movement_attributes_t reader_attributes = {
+        .core_spec = device_cores,
+        .kernel_path = "tt_metal/kernels/dataflow/reader_unary.cpp",
+        .config = tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args),
+        .runtime_args_per_core = {{core, read_rt_args}},
+    };
+
+    ttnn::operations::generic::data_movement_attributes_t writer_attributes = {
+        .core_spec = device_cores,
+        .kernel_path = "tt_metal/kernels/dataflow/writer_unary.cpp",
+        .config = tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args),
+        .runtime_args_per_core = {{core, read_rt_args}},
+    };
+
+    ttnn::operations::generic::compute_attributes_t compute_attributes = {
+        .core_spec = device_cores,
+        .kernel_path = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+        .config = {
+            .math_approx_mode = false,
+            .compile_args = {num_tiles, 1},
+            .defines = sfpu_defines,
+        },
+    };
+
+    ttnn::operations::generic::program_attributes_t program_attributes = {
+        .circular_buffer_attributes = {
+            {tt::CBIndex::c_0, input_cb_attributes},
+            {tt::CBIndex::c_16, output_cb_attributes},
+        },
+        .data_movement_attributes = {reader_attributes, writer_attributes},
+        .compute_attributes = {compute_attributes},
+    };
+
+    Tensor device_output = ttnn::generic_op(std::vector<Tensor>{device_input_tensor}, program_attributes);
+    // Tensor golden = host_function<::detail::exp>(input_tensor);
+    Tensor golden = ttnn::exp(device_input_tensor).cpu();
+
+    log_info(tt::LogTest, "device_output: {}", device_output.cpu());
+    log_info(tt::LogTest, "golden: {}", golden);
+
+    auto allclose = ttnn::allclose<bfloat16>(golden, device_output.cpu(), 1e-1f, 1e-5f);
+
+    TT_FATAL(allclose, "Error");
+
+    TT_FATAL(tt::tt_metal::CloseDevice(device), "Failed to close device");
 }
 
 int main(int argc, char** argv) {
@@ -1522,6 +1619,7 @@ int main(int argc, char** argv) {
     // test_shape_padding();
     // test_numerically();
     // test_program_cache();
-    test_matmul();
+    // test_matmul();
+    test_eltwise_sfpu();
     return 0;
 }
