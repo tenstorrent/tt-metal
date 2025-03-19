@@ -17,6 +17,7 @@
 #include "demux.hpp"
 #include "eth_router.hpp"
 #include "eth_tunneler.hpp"
+#include "rtoptions.hpp"
 
 using namespace tt::tt_metal;
 

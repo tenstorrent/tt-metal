@@ -12,6 +12,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 
 namespace tt::tt_fabric {
+namespace fabric_router_tests {
 
 TEST_F(Fabric1DFixture, TestUnicast) {
     CoreCoord sender_logical_core = {0, 0};
@@ -181,4 +182,5 @@ TEST_F(Fabric1DFixture, TestUnicast) {
     EXPECT_EQ(sender_bytes, receiver_bytes);
 }
 
+}  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric

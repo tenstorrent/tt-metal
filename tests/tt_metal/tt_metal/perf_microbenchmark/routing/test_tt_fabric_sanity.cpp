@@ -6,7 +6,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/rtoptions.hpp>
+#include "rtoptions.hpp"
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/control_plane.hpp>
 //#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"

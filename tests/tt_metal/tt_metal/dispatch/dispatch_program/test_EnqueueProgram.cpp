@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,9 @@
 #include <random>
 
 #include "command_queue_fixture.hpp"
+#include "core_coord.hpp"
+#include "hal_exp.hpp"
+#include "llrt.hpp"
 #include "multi_command_queue_fixture.hpp"
 #include "random_program_fixture.hpp"
 #include "dispatch_test_utils.hpp"
@@ -19,7 +22,9 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/kernel.hpp>
 #include <tt-metalium/allocator.hpp>
-#include "umd/device/tt_soc_descriptor.h"
+#include "sub_device_types.hpp"
+#include "tt_backend_api_types.hpp"
+#include "umd/device/tt_core_coordinates.h"
 
 namespace tt::tt_metal {
 
@@ -55,6 +60,57 @@ struct IncrementKernelsSet {
 };
 
 namespace local_test_functions {
+
+// Helper function to create a kernel
+KernelHandle create_kernel(
+    tt::RISCV processor_class,
+    Program& program,
+    const CoreRangeSet& cr_set,
+    const std::vector<uint32_t>& compile_args,
+    const std::string& kernel_path,
+    bool idle_eth = false) {
+    switch (processor_class) {
+        case tt::RISCV::BRISC:
+            return CreateKernel(
+                program,
+                kernel_path,
+                cr_set,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                    .compile_args = compile_args,
+                });
+        case tt::RISCV::NCRISC:
+            return CreateKernel(
+                program,
+                kernel_path,
+                cr_set,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_1,
+                    .noc = NOC::RISCV_1_default,
+                    .compile_args = compile_args,
+                });
+        case tt::RISCV::COMPUTE:
+            return CreateKernel(
+                program,
+                kernel_path,
+                cr_set,
+                tt::tt_metal::ComputeConfig{
+                    .compile_args = compile_args,
+                });
+        case tt::RISCV::ERISC:
+            return CreateKernel(
+                program,
+                kernel_path,
+                cr_set,
+                tt::tt_metal::EthernetConfig{
+                    .eth_mode = idle_eth ? Eth::IDLE : Eth::RECEIVER,
+                    .noc = NOC::NOC_0,
+                    .compile_args = compile_args,
+                });
+        default: TT_THROW("Unsupported {} processor in test.", magic_enum::enum_name(processor_class));
+    }
+}
 
 void initialize_dummy_kernels(Program& program, const CoreRangeSet& cr_set) {
     auto dummy_reader_kernel = CreateKernel(
@@ -381,21 +437,24 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     // TODO: this test would be better if it varied args across core ranges and kernel type
 
     CoreRangeSet cr_set = program_config.cr_set;
+    constexpr uint32_t kCommonRTASeparation = 1024 * sizeof(uint32_t);
 
     uint32_t rta_base_dm0 = device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    ;
-    uint32_t rta_base_dm1 = rta_base_dm0 + 1024 * sizeof(uint32_t);
-    uint32_t rta_base_compute = rta_base_dm1 + 2048 * sizeof(uint32_t);
+    uint32_t rta_base_dm1 = rta_base_dm0 + 2048 * sizeof(uint32_t);
+    uint32_t rta_base_compute = rta_base_dm1 + 4096 * sizeof(uint32_t);
     // Copy max # runtime args in the kernel for simplicity
     std::map<string, string> dm_defines0 = {
+        {"COMMON_RUNTIME_ARGS", "1"},
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(256)},
         {"RESULTS_ADDR", std::to_string(rta_base_dm0)}};
     std::map<string, string> dm_defines1 = {
+        {"COMMON_RUNTIME_ARGS", "1"},
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(256)},
         {"RESULTS_ADDR", std::to_string(rta_base_dm1)}};
     std::map<string, string> compute_defines = {
+        {"COMMON_RUNTIME_ARGS", "1"},
         {"COMPUTE", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(256)},
         {"RESULTS_ADDR", std::to_string(rta_base_compute)}};
@@ -433,6 +492,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     uint32_t idx = 0;
     constexpr uint32_t num_common_runtime_args = 13;
     for (uint32_t iter = 0; iter < num_iterations; iter++) {
+        SCOPED_TRACE(iter);
         dummy_cr0_args.clear();
         dummy_cr1_args.clear();
         dummy_common_args.clear();
@@ -475,11 +535,23 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
             SetRuntimeArgs(program, dummy_compute_kernel, core_coord, dummy_cr1_args);
         }
 
-        // These aren't validated yet...
         if (iter == 0) {
             SetCommonRuntimeArgs(program, dummy_kernel0, dummy_common_args);
             SetCommonRuntimeArgs(program, dummy_kernel1, dummy_common_args);
             SetCommonRuntimeArgs(program, dummy_compute_kernel, dummy_common_args);
+        } else {
+            memcpy(
+                GetCommonRuntimeArgs(program, dummy_kernel0).rt_args_data,
+                dummy_common_args.data(),
+                dummy_common_args.size() * sizeof(uint32_t));
+            memcpy(
+                GetCommonRuntimeArgs(program, dummy_kernel1).rt_args_data,
+                dummy_common_args.data(),
+                dummy_common_args.size() * sizeof(uint32_t));
+            memcpy(
+                GetCommonRuntimeArgs(program, dummy_compute_kernel).rt_args_data,
+                dummy_common_args.data(),
+                dummy_common_args.size() * sizeof(uint32_t));
         }
 
         EnqueueProgram(cq, program, false);
@@ -492,33 +564,65 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
                 first = false;
                 continue;
             }
+            {
+                vector<uint32_t> dummy_kernel0_args_readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    rta_base_dm0,
+                    dummy_cr0_args.size() * sizeof(uint32_t),
+                    dummy_kernel0_args_readback);
+                pass &= (dummy_cr0_args == dummy_kernel0_args_readback);
 
-            vector<uint32_t> dummy_kernel0_args_readback;
-            tt::tt_metal::detail::ReadFromDeviceL1(
-                device,
-                core_coord,
-                rta_base_dm0,
-                dummy_cr0_args.size() * sizeof(uint32_t),
-                dummy_kernel0_args_readback);
-            pass &= (dummy_cr0_args == dummy_kernel0_args_readback);
+                vector<uint32_t> dummy_kernel1_args_readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    rta_base_dm1,
+                    dummy_cr0_args.size() * sizeof(uint32_t),
+                    dummy_kernel1_args_readback);
+                pass &= (dummy_cr0_args == dummy_kernel1_args_readback);
 
-            vector<uint32_t> dummy_kernel1_args_readback;
-            tt::tt_metal::detail::ReadFromDeviceL1(
-                device,
-                core_coord,
-                rta_base_dm1,
-                dummy_cr0_args.size() * sizeof(uint32_t),
-                dummy_kernel1_args_readback);
-            pass &= (dummy_cr0_args == dummy_kernel1_args_readback);
+                vector<uint32_t> dummy_compute_args_readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    rta_base_compute,
+                    dummy_cr0_args.size() * sizeof(uint32_t),
+                    dummy_compute_args_readback);
+                pass &= (dummy_cr0_args == dummy_compute_args_readback);
+            }
+            {
+                vector<uint32_t> dummy_kernel0_args_readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    rta_base_dm0 + kCommonRTASeparation,
+                    dummy_common_args.size() * sizeof(uint32_t),
+                    dummy_kernel0_args_readback);
+                EXPECT_EQ(dummy_common_args, dummy_kernel0_args_readback);
+                pass &= (dummy_common_args == dummy_kernel0_args_readback);
 
-            vector<uint32_t> dummy_compute_args_readback;
-            tt::tt_metal::detail::ReadFromDeviceL1(
-                device,
-                core_coord,
-                rta_base_compute,
-                dummy_cr0_args.size() * sizeof(uint32_t),
-                dummy_compute_args_readback);
-            pass &= (dummy_cr0_args == dummy_compute_args_readback);
+                vector<uint32_t> dummy_kernel1_args_readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    rta_base_dm1 + kCommonRTASeparation,
+                    dummy_common_args.size() * sizeof(uint32_t),
+                    dummy_kernel1_args_readback);
+                EXPECT_EQ(dummy_common_args, dummy_kernel1_args_readback);
+                pass &= (dummy_common_args == dummy_kernel1_args_readback);
+
+                vector<uint32_t> dummy_compute_args_readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    rta_base_compute + kCommonRTASeparation,
+                    dummy_common_args.size() * sizeof(uint32_t),
+                    dummy_compute_args_readback);
+                EXPECT_EQ(dummy_common_args, dummy_compute_args_readback);
+                pass &= (dummy_common_args == dummy_compute_args_readback);
+            }
         }
 
         first = true;
@@ -528,33 +632,65 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
                 first = false;
                 continue;
             }
+            {
+                vector<uint32_t> dummy_kernel0_args_readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    rta_base_dm0,
+                    dummy_cr1_args.size() * sizeof(uint32_t),
+                    dummy_kernel0_args_readback);
+                pass &= (dummy_cr1_args == dummy_kernel0_args_readback);
 
-            vector<uint32_t> dummy_kernel0_args_readback;
-            tt::tt_metal::detail::ReadFromDeviceL1(
-                device,
-                core_coord,
-                rta_base_dm0,
-                dummy_cr1_args.size() * sizeof(uint32_t),
-                dummy_kernel0_args_readback);
-            pass &= (dummy_cr1_args == dummy_kernel0_args_readback);
+                vector<uint32_t> dummy_kernel1_args_readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    rta_base_dm1,
+                    dummy_cr1_args.size() * sizeof(uint32_t),
+                    dummy_kernel1_args_readback);
+                pass &= (dummy_cr1_args == dummy_kernel1_args_readback);
 
-            vector<uint32_t> dummy_kernel1_args_readback;
-            tt::tt_metal::detail::ReadFromDeviceL1(
-                device,
-                core_coord,
-                rta_base_dm1,
-                dummy_cr1_args.size() * sizeof(uint32_t),
-                dummy_kernel1_args_readback);
-            pass &= (dummy_cr1_args == dummy_kernel1_args_readback);
+                vector<uint32_t> dummy_compute_args_readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    rta_base_compute,
+                    dummy_cr1_args.size() * sizeof(uint32_t),
+                    dummy_compute_args_readback);
+                pass &= (dummy_cr1_args == dummy_compute_args_readback);
+            }
+            {
+                vector<uint32_t> dummy_kernel0_args_readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    rta_base_dm0 + kCommonRTASeparation,
+                    dummy_common_args.size() * sizeof(uint32_t),
+                    dummy_kernel0_args_readback);
+                EXPECT_EQ(dummy_common_args, dummy_kernel0_args_readback);
+                pass &= (dummy_common_args == dummy_kernel0_args_readback);
 
-            vector<uint32_t> dummy_compute_args_readback;
-            tt::tt_metal::detail::ReadFromDeviceL1(
-                device,
-                core_coord,
-                rta_base_compute,
-                dummy_cr1_args.size() * sizeof(uint32_t),
-                dummy_compute_args_readback);
-            pass &= (dummy_cr1_args == dummy_compute_args_readback);
+                vector<uint32_t> dummy_kernel1_args_readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    rta_base_dm1 + kCommonRTASeparation,
+                    dummy_common_args.size() * sizeof(uint32_t),
+                    dummy_kernel1_args_readback);
+                EXPECT_EQ(dummy_common_args, dummy_kernel1_args_readback);
+                pass &= (dummy_common_args == dummy_kernel1_args_readback);
+
+                vector<uint32_t> dummy_compute_args_readback;
+                tt::tt_metal::detail::ReadFromDeviceL1(
+                    device,
+                    core_coord,
+                    rta_base_compute + kCommonRTASeparation,
+                    dummy_common_args.size() * sizeof(uint32_t),
+                    dummy_compute_args_readback);
+                EXPECT_EQ(dummy_common_args, dummy_compute_args_readback);
+                pass &= (dummy_common_args == dummy_compute_args_readback);
+            }
         }
     }
 
@@ -673,55 +809,14 @@ IncrementKernelsSet create_increment_kernels(
     const auto [unique_args_addr, common_args_addr] = get_args_addr(device, riscv, idle_eth);
     std::vector<uint32_t> compile_args{num_unique_rt_args, num_common_rt_args, unique_args_addr, common_args_addr};
 
+    const std::string increment_kernel_path =
+        riscv == tt::RISCV::COMPUTE ? "tests/tt_metal/tt_metal/test_kernels/compute/increment_runtime_arg.cpp"
+                                    : "tests/tt_metal/tt_metal/test_kernels/misc/increment_runtime_arg.cpp";
+
     // CreateKernel on each core range set
     for (const auto& program_config : program_configs) {
         const auto& cr_set = program_config.cr_set;
-        KernelHandle kernel_id;
-        switch (riscv) {
-            case tt::RISCV::BRISC:
-                kernel_id = CreateKernel(
-                    program,
-                    "tests/tt_metal/tt_metal/test_kernels/misc/increment_runtime_arg.cpp",
-                    cr_set,
-                    DataMovementConfig{
-                        .processor = DataMovementProcessor::RISCV_0,
-                        .noc = NOC::RISCV_0_default,
-                        .compile_args = compile_args,
-                    });
-                break;
-            case tt::RISCV::NCRISC:
-                kernel_id = CreateKernel(
-                    program,
-                    "tests/tt_metal/tt_metal/test_kernels/misc/increment_runtime_arg.cpp",
-                    cr_set,
-                    DataMovementConfig{
-                        .processor = DataMovementProcessor::RISCV_1,
-                        .noc = NOC::RISCV_1_default,
-                        .compile_args = compile_args,
-                    });
-                break;
-            case tt::RISCV::COMPUTE:
-                kernel_id = CreateKernel(
-                    program,
-                    "tests/tt_metal/tt_metal/test_kernels/compute/increment_runtime_arg.cpp",
-                    cr_set,
-                    tt::tt_metal::ComputeConfig{
-                        .compile_args = compile_args,
-                    });
-                break;
-            case tt::RISCV::ERISC: {
-                kernel_id = CreateKernel(
-                    program,
-                    "tests/tt_metal/tt_metal/test_kernels/misc/increment_runtime_arg.cpp",
-                    cr_set,
-                    tt::tt_metal::EthernetConfig{
-                        .eth_mode = idle_eth ? Eth::IDLE : Eth::RECEIVER,
-                        .noc = NOC::NOC_0,
-                        .compile_args = compile_args,
-                    });
-            } break;
-            default: TT_THROW("Unsupported {} processor in test.", riscv);
-        }
+        KernelHandle kernel_id = create_kernel(riscv, program, cr_set, compile_args, increment_kernel_path);
 
         kernels.push_back(kernel_id);
     }
@@ -815,6 +910,33 @@ bool test_increment_runtime_args_sanity(
         num_common_rt_args,
         riscv,
         idle_eth);
+}
+
+void test_my_coordinates(IDevice* device, tt::RISCV processor_class, size_t cq_id = 0, bool idle_eth = false) {
+    const std::string k_kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/read_my_coordinates.cpp";
+
+    // All logical cores
+    CoreRangeSet cr{CoreRange{{2, 2}, {6, 6}}};
+    if (processor_class == tt::RISCV::ERISC) {
+        const auto eth_cores =
+            idle_eth ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores(true);
+        cr = CoreRangeSet{std::set<CoreRange>{eth_cores.begin(), eth_cores.end()}};
+    }
+
+    uint32_t cb_addr = processor_class == tt::RISCV::ERISC ? experimental::hal::get_erisc_l1_unreserved_base()
+                                                           : experimental::hal::get_tensix_l1_unreserved_base();
+    std::vector<uint32_t> compile_args{
+        cb_addr,
+    };
+
+    Program program = tt::tt_metal::CreateProgram();
+    KernelHandle kernel =
+        create_kernel(processor_class, program, CoreRangeSet{cr}, compile_args, k_kernel_path, idle_eth);
+
+    EnqueueProgram(device->command_queue(cq_id), program, false);
+    Finish(device->command_queue(cq_id));
+
+    tt::tt_metal::verify_kernel_coordinates(processor_class, cr, device, tt::tt_metal::SubDeviceId{0}, cb_addr);
 }
 
 }  // namespace local_test_functions
@@ -1407,6 +1529,47 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixIncrementRuntimeArgsSanityMul
     for (IDevice* device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
             device, dummy_program_config, 16, 16, tt::RISCV::NCRISC));
+    }
+}
+
+// Ensure the data movement core can access their own logical coordinate. Same binary enqueued to multiple cores.
+TEST_F(CommandQueueSingleCardProgramFixture, TestLogicalCoordinatesDataMovement) {
+    for (IDevice* device : devices_) {
+        local_test_functions::test_my_coordinates(device, tt::RISCV::BRISC);
+        local_test_functions::test_my_coordinates(device, tt::RISCV::NCRISC);
+    }
+}
+
+// Ensure the eth core can access their own logical coordinate. Same binary enqueued to multiple cores.
+TEST_F(CommandQueueSingleCardProgramFixture, TestLogicalCoordinatesEth) {
+    for (IDevice* device : devices_) {
+        if (!does_device_have_active_eth_cores(device)) {
+            GTEST_SKIP() << "Skipping test because device " << device->id()
+                         << " does not have any active ethernet cores";
+        }
+        local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC);
+    }
+}
+
+// Ensure the data movement core can access their own logical coordinate. Same binary enqueued to multiple cores.
+TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesDataMovement) {
+    for (IDevice* device : devices_) {
+        local_test_functions::test_my_coordinates(device, tt::RISCV::BRISC);
+        local_test_functions::test_my_coordinates(device, tt::RISCV::BRISC, 1);
+        local_test_functions::test_my_coordinates(device, tt::RISCV::NCRISC);
+        local_test_functions::test_my_coordinates(device, tt::RISCV::NCRISC, 1);
+    }
+}
+
+// Ensure the eth core can access their own logical coordinate. Same binary enqueued to multiple cores.
+TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesEth) {
+    for (IDevice* device : devices_) {
+        if (!does_device_have_active_eth_cores(device)) {
+            GTEST_SKIP() << "Skipping test because device " << device->id()
+                         << " does not have any active ethernet cores";
+        }
+        local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC, 0);
+        local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC, 1);
     }
 }
 
