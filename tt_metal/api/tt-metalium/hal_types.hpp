@@ -12,6 +12,8 @@ using DeviceAddr = std::uint64_t;
 
 enum class HalProgrammableCoreType { TENSIX = 0, ACTIVE_ETH = 1, IDLE_ETH = 2, COUNT = 3 };
 
+static constexpr uint32_t NumHalProgrammableCoreTypes = static_cast<uint32_t>(HalProgrammableCoreType::COUNT);
+
 enum class HalProcessorClassType : uint8_t {
     DM = 0,
     // Setting this to 2 because we currently treat brisc and ncrisc as two unique processor classes on Tensix
@@ -45,7 +47,5 @@ enum class HalL1MemAddrType : uint8_t {
 enum class HalDramMemAddrType : uint8_t { DRAM_BARRIER = 0, COUNT = 1 };
 
 enum class HalMemType : uint8_t { L1 = 0, DRAM = 1, HOST = 2, COUNT = 3 };
-
-static constexpr uint32_t NumHalProgrammableCoreTypes = static_cast<uint32_t>(HalProgrammableCoreType::COUNT);
 
 }  // namespace tt::tt_metal
