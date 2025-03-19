@@ -84,7 +84,9 @@ void MAIN {
             cb_push_back(cb_out0, 1);
             tile_regs_release();
         }
+        ACQ();  // has to be called for both threads, neither one can pop from intermed while someone else works with it
         cb_pop_front(cb_intermed, 1);  // this solves blocking in cases where outer loop has multiple iterations
+        REL();
     }
     cb_pop_front(cb_in1, 1);
 }
