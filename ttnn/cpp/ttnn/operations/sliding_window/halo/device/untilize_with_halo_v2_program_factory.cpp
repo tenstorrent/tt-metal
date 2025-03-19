@@ -258,7 +258,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         0,            // Block start offset
         block_stride  // Block stride
     };
-    reader_ct_args[0] = padding_config_cb_id;
+    reader_ct_args[0] = 0;
     reader_ct_args[1] = local_config_cb_id;
     reader_ct_args[2] = 0;
     reader_ct_args[3] = 0;
@@ -271,7 +271,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_ct_args});
 
-    reader_ct_args[0] = 0;
+    reader_ct_args[0] = padding_config_cb_id;
     reader_ct_args[1] = remote_config_cb_id;
     reader_ct_args[2] = 0;
     reader_ct_args[3] = 0;
