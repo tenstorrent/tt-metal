@@ -7,11 +7,12 @@
 #include <variant>
 #include <vector>
 
+#include "dispatch_core_common.hpp"
 #include "runtime_args_data.hpp"
 #include "program_impl.hpp"
 #include "device.hpp"
 #include "sub_device_types.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "lightmetal_binary.hpp"
 
 /** @file */

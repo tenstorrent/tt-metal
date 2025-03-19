@@ -12,7 +12,7 @@
 #include "command_queue_interface.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "memcpy.hpp"
-#include "aligned_allocator.hpp"
+#include <tt_stl/aligned_allocator.hpp>
 #include "hal.hpp"
 #include "tt_align.hpp"
 
@@ -45,16 +45,9 @@ public:
     vector_memcpy_aligned<uint32_t> cmd_vector() const;
 
     void add_dispatch_wait(
-        uint8_t barrier,
-        uint32_t address,
-        uint32_t count,
-        uint8_t clear_count = 0,
-        bool notify_prefetch = false,
-        bool do_wait = true,
-        uint8_t dispatcher_type = 0);
+        uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t dispatcher_type = 0);
 
-    void add_dispatch_wait_with_prefetch_stall(
-        uint8_t barrier, uint32_t address, uint32_t count, uint8_t clear_count = 0, bool do_wait = true);
+    void add_dispatch_wait_with_prefetch_stall(uint32_t flags, uint32_t address, uint32_t stream, uint32_t count);
 
     void add_prefetch_relay_linear(uint32_t noc_xy_addr, uint32_t lengthB, uint32_t addr);
 

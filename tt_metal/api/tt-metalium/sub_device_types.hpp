@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include "strong_type.hpp"
+#include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_metal {
 

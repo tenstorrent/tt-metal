@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "device.hpp"
+#include "dispatch_core_common.hpp"
 
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
@@ -18,7 +19,7 @@
 #include "mesh_trace_id.hpp"
 #include "small_vector.hpp"
 #include "sub_device_types.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
 

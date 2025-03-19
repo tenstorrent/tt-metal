@@ -1,18 +1,6 @@
 name: "Nightly tt-metal L2 tests"
 
 on:
-  workflow_call:
-    inputs:
-      arch:
-        required: true
-        type: string
-      runner-label:
-        required: true
-        type: string
-      timeout:
-        required: false
-        type: number
-        default: 120
   workflow_dispatch:
     inputs:
       arch:
@@ -36,17 +24,17 @@ on:
     - cron: "0 22 * * *"
 
 jobs:
-  build:
+  build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
       build-wheel: true
+      version: 22.04
   test:
-    needs: build
+    needs: build-artifact
     strategy:
       fail-fast: false
       matrix:
-        os: ["ubuntu-20.04"]
         test-group:
           - name: ttnn nightly conv tests
             cmd: pytest tests/ttnn/nightly/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"
@@ -57,37 +45,58 @@ jobs:
           - name: ttnn nightly pool tests
             cmd: pytest tests/ttnn/nightly/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"
             owner: U052J2QDDKQ # Pavle Josipovic
+    container:
+      image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      env:
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ inputs.arch || 'wormhole_b0' }}
+        LOGURU_LEVEL: INFO
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     name: ${{ matrix.test-group.name }}
-    env:
-      LOGURU_LEVEL: INFO
     runs-on:
       - ${{ inputs.runner-label || 'N150' }}
       - "in-service"
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - uses: actions/download-artifact@v4
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
-          name: eager-dist-${{ matrix.os }}-any
-      - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: ${{ fromJSON(inputs.timeout) || 120 }}
-        uses: ./.github/actions/docker-run
+          name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          path: docker-job
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
-          docker_username: ${{ github.actor }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e ARCH_NAME=${{ inputs.arch || 'wormhole_b0' }}
-            -e GITHUB_ACTIONS=true
-          run_args: |
-            WHEEL_FILENAME=$(ls -1 *.whl)
-            pip3 install --user $WHEEL_FILENAME
-            ${{ matrix.test-group.cmd }}
+          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          path: docker-job
+      - name: Install Wheel
+        run: |
+          WHEEL_FILENAME=$(ls -1 *.whl)
+          pip3 install $WHEEL_FILENAME
+      - name: ${{ matrix.test-group.name }} tests
+        timeout-minutes: ${{ (github.event_name == 'schedule' && 120) || fromJSON(inputs.timeout) }}
+        run: ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: |
-            generated/test_reports/
+            /work/generated/test_reports/
           prefix: "test_reports_"
       - uses: ./.github/actions/slack-report
         # Only notify during failed scheduled runs
@@ -95,3 +104,5 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: ${{ matrix.test-group.owner }}
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

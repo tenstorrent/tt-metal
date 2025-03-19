@@ -13,9 +13,9 @@
 #include <tt_backend_api_types.hpp>
 #include <utils.hpp>
 #include "hostdevcommon/common_values.hpp"
-#include <build.hpp>
+#include "build.hpp"
 #include <data_format.hpp>
-#include <settings.hpp>
+#include <jit_build_options.hpp>
 
 #include <circular_buffer_constants.h>
 

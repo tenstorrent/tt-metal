@@ -18,8 +18,10 @@
 #include "hal.hpp"
 #include "umd/device/tt_soc_descriptor.h"
 #include "fmt/base.h"
-#include <reflection.hpp>
+#include <tt_stl/reflection.hpp>
 #include "lightmetal/host_api_capture_helpers.hpp"
+
+#include "rtoptions.hpp"
 
 #include "tracy/Tracy.hpp"
 

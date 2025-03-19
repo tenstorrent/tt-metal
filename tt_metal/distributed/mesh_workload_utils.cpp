@@ -31,7 +31,7 @@ void write_go_signal(
 
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
 
-    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
     auto sub_device_index = *sub_device_id;
 
@@ -41,12 +41,7 @@ void write_go_signal(
     run_program_go_signal.master_x = dispatch_core.x;
     run_program_go_signal.master_y = dispatch_core.y;
     run_program_go_signal.dispatch_message_offset =
-        (uint8_t)DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(sub_device_index);
-
-    uint32_t dispatch_message_addr =
-        DispatchMemMap::get(dispatch_core_type)
-            .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE) +
-        DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(sub_device_index);
+        DispatchMemMap::get(dispatch_core_type).get_dispatch_message_update_offset(sub_device_index);
 
     // When running with dispatch_s enabled:
     //   - dispatch_d must notify dispatch_s that a go signal can be sent
@@ -66,7 +61,7 @@ void write_go_signal(
     go_signal_cmd_sequence.add_dispatch_go_signal_mcast(
         expected_num_workers_completed,
         *reinterpret_cast<uint32_t*>(&run_program_go_signal),
-        dispatch_message_addr,
+        DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(sub_device_index),
         send_mcast ? device->num_noc_mcast_txns(sub_device_id) : 0,
         send_unicasts ? ((num_unicast_txns > 0) ? num_unicast_txns : device->num_noc_unicast_txns(sub_device_id)) : 0,
         device->noc_data_start_index(sub_device_id, send_mcast, send_unicasts), /* noc_data_start_idx */

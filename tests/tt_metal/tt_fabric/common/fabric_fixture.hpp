@@ -8,7 +8,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/rtoptions.hpp>
+#include "rtoptions.hpp"
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
@@ -24,6 +24,7 @@ class ControlPlaneFixture : public ::testing::Test {
                    "Control plane test suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
                GTEST_SKIP();
            }
+           tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::FABRIC_2D);
        }
 
        void TearDown() override {}

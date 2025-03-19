@@ -35,9 +35,13 @@ AllGatherAsync create_all_gather_async_struct(
             semaphore = semaphores.at(i);  // Get raw pointer
             if (i != 0) {
                 backward_device = devices.at(i - 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                backward_device = devices.at(num_devices - 1);
             }
             if (i != num_devices - 1) {
                 forward_device = devices.at(i + 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                forward_device = devices.at(0);
             }
         }
     }
@@ -136,7 +140,10 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
     log_trace(tt::LogOp, "[select_version] output_shard_num_cores: {}", output_shard_num_cores);
 
     // Check for minimal interleaved case
-    if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
+    if (((input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] % 32 == 0) ||
+         (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[3] % 32 == 0) ||
+         (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 8 &&
+          (input_tensor_shape[2] % 32 == 0 && input_tensor_shape[3] % 32 == 0))) &&
         input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
         input_tensor_page_layout == tt::tt_metal::Layout::TILE && this->enable_persistent_fabric_mode) {
         return AllGatherAsyncVersion::MINIMAL_INTERLEAVED_32;

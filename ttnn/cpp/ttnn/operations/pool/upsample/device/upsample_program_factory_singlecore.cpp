@@ -6,6 +6,7 @@
 
 #include "tt-metalium/hal.hpp"
 #include "upsample_op.hpp"
+#include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 
 #include <tt-metalium/host_api.hpp>
@@ -13,7 +14,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/math.hpp>
 
-#include <tt-metalium/reflection.hpp>
+#include <tt_stl/reflection.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -38,14 +39,13 @@ operation::ProgramWithCallbacks upsample_single_core(
     tt_metal::IDevice* device = output.device();
 
     // circulat buffer for input
-    uint32_t src0_cb_index = CBIndex::c_0;
+    uint32_t next_cb_index = CBIndex::c_0;
+    uint32_t src0_cb_index = next_cb_index++;
     uint32_t num_input_units = 2;
     uint32_t aligned_input_unit_size = tt::round_up(input_unit_size, hal.get_alignment(HalMemType::DRAM));
-    tt_metal::CircularBufferConfig cb_src0_config =
-        tt_metal::CircularBufferConfig(
-            num_input_units * aligned_input_unit_size, {{src0_cb_index, input_cb_data_format}})
-            .set_page_size(src0_cb_index, aligned_input_unit_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+
+    tt::tt_metal::create_cb(
+        src0_cb_index, program, core, aligned_input_unit_size, num_input_units, input_cb_data_format);
 
     // circulat buffer same for input and output. No compute kernels.
     uint32_t output_cb_index = src0_cb_index;  // same as input cb

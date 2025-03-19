@@ -49,17 +49,15 @@ class MLP(LightweightModule):
             cache_file_name=cache_name(name),
         )
 
-        self.four_bit_mlp = args.optimizations.bfp4_mlp
-
         # Sharded weights
         w1_dims = (-1, -2) if args.is_galaxy else (-2, -1)
         w2_dims = (-2, -1) if args.is_galaxy else (-1, -2)
 
         self.w1 = as_sharded_tensor(
-            "w1_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dims=w1_dims
+            "w1_sharded", self.model_config["FF1_3_DTYPE"], dims=w1_dims
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        self.w2 = as_sharded_tensor("w2_sharded", ttnn.bfloat8_b, dims=w2_dims)
-        self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dims=w1_dims)
+        self.w2 = as_sharded_tensor("w2_sharded", self.model_config["FF2_DTYPE"], dims=w2_dims)
+        self.w3 = as_sharded_tensor("w3_sharded", self.model_config["FF1_3_DTYPE"], dims=w1_dims)
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """
@@ -81,9 +79,9 @@ class MLP(LightweightModule):
                 pc_2 = self.model_config["DECODE_MLP_W2_PRG_CONFIG"]
                 pc_3 = self.model_config["DECODE_MLP_W1_W3_PRG_CONFIG"]
         else:  # Update the program configs based for prefill
-            if seq_len >= 1024:
+            if seq_len >= self.args.prefill_len_cutoff:  # 512 if Blackhole, 1024 if Wormhole
                 # Reshape input to to fit on device and parallelize computation
-                x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
+                x = ttnn.reshape(x, [1, seq_len // self.args.prefill_len_cutoff, self.args.prefill_len_cutoff, -1])
             pc_1 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len)
             pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
             pc_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len)
@@ -93,13 +91,9 @@ class MLP(LightweightModule):
         w1_out = ttnn.linear(
             x,
             self.w1,
-            compute_kernel_config=(
-                self.args.compute_kernel_config_lofi
-                if self.four_bit_mlp
-                else self.args.compute_kernel_config_hifi2_fp16
-            ),
+            dtype=ttnn.bfloat8_b if TG else self.model_config["ACTIVATION_DTYPE"] or ttnn.bfloat16,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
-            dtype=ttnn.bfloat8_b if TG else ttnn.bfloat16,
+            compute_kernel_config=self.model_config["LI_FF1_3_COMPUTE_KERNEL_CFG"],
             program_config=pc_1,
             memory_config=x.memory_config(),
         )
@@ -107,13 +101,9 @@ class MLP(LightweightModule):
         w3_out = ttnn.linear(
             x,
             self.w3,
-            compute_kernel_config=(
-                self.args.compute_kernel_config_lofi
-                if self.four_bit_mlp
-                else self.args.compute_kernel_config_hifi2_fp16
-            ),
+            dtype=ttnn.bfloat8_b if TG else self.model_config["ACTIVATION_DTYPE"] or ttnn.bfloat16,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
-            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.model_config["LI_FF1_3_COMPUTE_KERNEL_CFG"],
             program_config=pc_3,
             memory_config=x.memory_config(),
         )
@@ -169,9 +159,10 @@ class MLP(LightweightModule):
             w1_out,
             w3_out,
             input_tensor_a_activation=ttnn.UnaryOpType.SILU,
-            dtype=ttnn.bfloat8_b,
+            dtype=self.model_config["ACTIVATION_DTYPE"] or ttnn.bfloat8_b,
             memory_config=w1_out.memory_config(),
         )
+
         if mode == "decode" and not TG:
             # w2 may use a different core grid, this is a no-op if they already match
             w2_in = ttnn.to_memory_config(w2_in, self.model_config["SHARDED_MLP2_INPUT_MEMCFG"])
@@ -195,8 +186,8 @@ class MLP(LightweightModule):
         w2_out = ttnn.linear(
             w2_in,
             self.w2,
-            compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
-            dtype=self.args.ccl_dtype if TG else ttnn.bfloat16,
+            compute_kernel_config=self.model_config["LI_FF2_COMPUTE_KERNEL_CFG"],
+            dtype=self.args.ccl_dtype if TG else self.model_config["ACTIVATION_DTYPE"] or ttnn.bfloat16,
             program_config=pc_2,
             memory_config=(
                 (ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG)

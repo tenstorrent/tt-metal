@@ -19,8 +19,8 @@
 #include <device_impl.hpp>
 #include <sub_device.hpp>
 #include <sub_device_manager_tracker.hpp>
-#include <sub_device_manager.hpp>
-#include <sub_device_types.hpp>
+
+#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 
 #include <hal.hpp>
@@ -381,6 +381,7 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
 }
 
 bool MeshDevice::close() {
+    mesh_command_queues_.clear();
     sub_device_manager_tracker_.reset();
     scoped_devices_.reset();
     parent_mesh_.reset();
