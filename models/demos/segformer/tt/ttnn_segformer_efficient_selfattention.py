@@ -128,6 +128,7 @@ class TtSegformerEfficientSelfAttention:
                 weight=parameters.layer_norm.weight,
                 bias=parameters.layer_norm.bias,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
             )
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)

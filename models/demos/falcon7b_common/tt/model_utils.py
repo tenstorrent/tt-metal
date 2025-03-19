@@ -105,6 +105,7 @@ def layernorm(ln_input, ln_eps, ln_gamma, ln_betta, model_config):
             ln_input,
             epsilon=ln_eps,
             memory_config=model_config["LN_F_OUTPUT_MEMCFG"],
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
         )
         ln_output = ttnn.multiply(ln_output, ln_gamma, memory_config=model_config["LN_F_OUTPUT_MEMCFG"])
         ln_output = ttnn.add(

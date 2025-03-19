@@ -150,6 +150,7 @@ def squeezebert_conv_layernorm(
         weight=parameters.layernorm.weight,
         bias=parameters.layernorm.bias,
         epsilon=config.layer_norm_eps,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
     )
     ttnn.deallocate(self_output_layernorm)
     attention_output = permute_reshape(attention_output)
@@ -410,6 +411,7 @@ def squeezebert(
         weight=parameters.embeddings.LayerNorm.weight,
         bias=parameters.embeddings.LayerNorm.bias,
         memory_config=ttnn.DRAM_MEMORY_CONFIG if is_grayskull() else ttnn.L1_MEMORY_CONFIG,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
     )
     ttnn.deallocate(embeddings)
 

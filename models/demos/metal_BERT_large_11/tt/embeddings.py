@@ -200,6 +200,7 @@ class TtEmbeddings:
                 weight=self.layerNorm_gamma,
                 bias=self.layerNorm_beta,
                 memory_config=self.model_config["OP1_FUSED_QKV_MM_INPUT_MEMCFG"],
+                compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
             )
         else:
             embeddings_tt_tensor_layerNorm = ttnn.layer_norm(
@@ -209,5 +210,6 @@ class TtEmbeddings:
                 weight=self.layerNorm_gamma,
                 bias=self.layerNorm_beta,
                 memory_config=self.model_config["OP1_FUSED_QKV_MM_INPUT_MEMCFG"],
+                compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
             )
         return embeddings_tt_tensor_layerNorm

@@ -325,6 +325,7 @@ class TtFalconDecoderLayer:
             bias=self.ln_attn_beta,
             memory_config=self.model_config["LN_ATTN_OUTPUT_MEMCFG"],
             program_config=self.model_config["LN_ATTN_PROGCFG"],
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
         )
         mlp_ln_output = ttnn.layer_norm(
             replicated_hidden_states,
@@ -333,6 +334,7 @@ class TtFalconDecoderLayer:
             bias=self.ln_mlp_beta,
             memory_config=self.model_config["LN_MLP_OUTPUT_MEMCFG"],
             program_config=self.model_config["LN_MLP_PROGCFG"],
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
         )
 
         output = hidden_states
