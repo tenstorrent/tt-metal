@@ -1031,8 +1031,8 @@ bool Device::close() {
 
     llrt::internal_::wait_until_cores_done(mmio_device_id, RUN_MSG_GO, wait_for_cores);
 
-    DprintServerDetach(this);
-    watcher_detach(this);
+    DprintServerDetach(this->id());
+    watcher_detach(this->id());
 
     // Assert worker cores
     CoreCoord grid_size = this->logical_grid_size();
@@ -1123,24 +1123,6 @@ CoreCoord Device::compute_with_storage_grid_size() const {
     return tt::get_compute_grid_size(id_, num_hw_cqs_, dispatch_core_config);
 }
 
-CoreType Device::core_type_from_physical_core(const CoreCoord &physical_coord) const {
-    const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    CoreType core_type = soc_desc.translate_coord_to(physical_coord, CoordSystem::PHYSICAL, CoordSystem::PHYSICAL).core_type;
-    if (core_type == CoreType::TENSIX) {
-        core_type = CoreType::WORKER;
-    }
-    return core_type;
-}
-
-CoreType Device::core_type_from_virtual_core(const CoreCoord &virtual_coord) const {
-    if (tt::Cluster::instance().is_worker_core(virtual_coord, this->id_)) {
-        return CoreType::WORKER;
-    } else if (tt::Cluster::instance().is_ethernet_core(virtual_coord, this->id_)) {
-        return CoreType::ETH;
-    }
-    return this->core_type_from_physical_core(virtual_coord);
-}
-
 CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {
     if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
@@ -1155,23 +1137,6 @@ CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) co
             hal.noc_coordinate(noc_index, grid_size.y, coord.y)
         };
         return virtual_coord;
-    }
-}
-
-CoreCoord Device::virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const {
-     if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y) {
-        // Coordinate already in virtual space: NOC0 and NOC1 are the same
-        return coord;
-    } else {
-        const auto& grid_size = this->grid_size();
-        // Coordinate passed in can be NOC0 or NOC1. The noc_index corresponds to
-        // the system this coordinate belongs to.
-        // Use this to convert to NOC0 coordinates and then derive Virtual Coords from it.
-        CoreCoord physical_coord = {
-            hal.noc_coordinate(noc_index, grid_size.x, coord.x),
-            hal.noc_coordinate(noc_index, grid_size.y, coord.y)
-        };
-        return this->virtual_core_from_physical_core(physical_coord);
     }
 }
 

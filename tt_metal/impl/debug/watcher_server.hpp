@@ -3,21 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-
-#include <device.hpp>
+#include <string>
+#include <core_coord.hpp>
+#include <system_memory_manager.hpp>  // For chip_id_t
 
 struct metal_SocDescriptor;
 
 namespace tt {
 
-void watcher_init(tt_metal::IDevice* device);
-void watcher_attach(tt_metal::IDevice* device);
-void watcher_detach(tt_metal::IDevice* dev);
+void watcher_init(chip_id_t device_id);
+void watcher_attach(chip_id_t device_id);
+void watcher_detach(chip_id_t device_id);
 
 void watcher_sanitize_host_noc_read(const metal_SocDescriptor& soc_d, CoreCoord core, uint64_t addr, uint32_t len);
 void watcher_sanitize_host_noc_write(const metal_SocDescriptor& soc_d, CoreCoord core, uint64_t addr, uint32_t len);
 
-int watcher_register_kernel(const string& name);
+int watcher_register_kernel(const std::string& name);
 
 // Helper functions for manually dumping watcher contents.
 void watcher_dump();
@@ -35,7 +36,7 @@ std::string get_watcher_exception_message();
 void watcher_clear_log();
 
 // Helper function to get the current watcher log file name/path
-string watcher_get_log_file_name();
+std::string watcher_get_log_file_name();
 
 // Helper function to get the current watcher dump count
 int watcher_get_dump_count();
