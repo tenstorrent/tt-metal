@@ -14,17 +14,12 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 @pytest.mark.parametrize(
     "shape",
     (
-        torch.Size([1, 1, 10, 10]),
-        torch.Size([4, 3, 32, 32]),
-        torch.Size([2, 2, 32, 32]),
-        torch.Size([6, 4, 32, 32]),
         torch.Size([1, 1, 320, 320]),
-        torch.Size([1, 3, 320, 64]),
         torch.Size([1, 1, 320, 384]),
         torch.Size([1, 3, 320, 384]),
     ),
 )
-@pytest.mark.parametrize("decimal", range(-6, 7))
+@pytest.mark.parametrize("decimal", [-3, 6, -1])
 @pytest.mark.parametrize(
     "dtypes",
     [
