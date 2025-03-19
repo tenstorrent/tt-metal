@@ -97,6 +97,8 @@ void kernel_main() {
     constexpr uint8_t input_core_xy[input_tensor_cores][2] = INPUT_CORE_XY;
     constexpr uint8_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
 
+    constexpr uint32_t num_dests = (noc_end_x - noc_start_x + 1) * (noc_end_y - noc_start_y + 1);
+
     // Runtime arguments
     uint32_t receiver_semaphore_address = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t local_semaphore_address = get_semaphore(get_arg_val<uint32_t>(rt_arg_idx++));
@@ -242,7 +244,7 @@ void kernel_main() {
         uint64_t multicast_semaphore_addr =
             static_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, local_semaphore_address);
         // DPRINT << "multicast_semaphore_addr: " << multicast_semaphore_addr << ENDL();
-        noc_multicast_semaphore_inc(multicast_semaphore_addr, 1, output_cores_per_device + 2, 0);
+        noc_multicast_semaphore_inc(multicast_semaphore_addr, 1, num_dests, 0);
         noc_async_atomic_barrier();
         // DPRINT << "semaphore_inc_done" << ENDL();
 
