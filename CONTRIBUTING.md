@@ -473,6 +473,12 @@ To set up pre-commit on your local machine, follow these steps:
 ### CI/CD Principles
 
 - Revert commits on main which fail post-commit tests immediately.
+  - The names listed in the commit, and technical leads if their names are
+    convenient and clear to find, will be pinged in #tt-metal-pipelines.
+  - We will usually give a grace period during working hours depending on the
+    load of the teams to see if the author(s) can merge a fix quickly.
+    Otherwise, the revert will be immediate to prevent the issue from spreading
+    to other peoples' pipelines.
 - There shall be a periodic discussion among the technical leads of this
   project concerning:
   - Certain codeowners and project-specific members review current tests in
