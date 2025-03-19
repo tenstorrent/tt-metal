@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <iostream>
 #include <vector>
 #include "assert.hpp"
 #include "small_vector.hpp"
@@ -22,39 +23,18 @@ namespace operations {
 namespace conv::conv2d {
 namespace test {
 
-struct Conv2DParam {};
+struct Conv2DParam {
+    uint32_t input_channels;
+    uint32_t output_channels;
+    uint32_t batch_size;
+    uint32_t input_height;
+    uint32_t input_width;
+    std::array<uint32_t, 2> kernel_size;
+    std::array<uint32_t, 2> stride;
+    std::array<uint32_t, 2> padding;
+};
 
 class Conv2DFixture : public ::testing::Test, public testing::WithParamInterface<Conv2DParam> {};
-
-float pcc(std::vector<float>& x, std::vector<float>& y) {
-    if (x.size() != y.size()) {
-        throw std::invalid_argument("Vectors must be of the same length.");
-    }
-    int n = x.size();
-    float mean_x = 0, mean_y = 0;
-    for (int i = 0; i < n; ++i) {
-        mean_x += x[i];
-        mean_y += y[i];
-    }
-    mean_x /= n;
-    mean_y /= n;
-
-    float numerator = 0, sum_sq_x = 0, sum_sq_y = 0;
-    for (int i = 0; i < n; ++i) {
-        float diff_x = x[i] - mean_x;
-        float diff_y = y[i] - mean_y;
-        numerator += diff_x * diff_y;
-        sum_sq_x += diff_x * diff_x;
-        sum_sq_y += diff_y * diff_y;
-    }
-
-    float denominator = std::sqrt(sum_sq_x * sum_sq_y);
-    if (denominator == 0) {
-        return 0;
-    }
-
-    return numerator / denominator;
-}
 
 /*
     Reference implementation of Conv2D
@@ -136,25 +116,19 @@ std::vector<float> reference_implementation_conv2d(
 }
 
 TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
+    const Conv2DParam param = GetParam();
     const chip_id_t device_id = 0;
     IDevice* device = CreateDevice(device_id, 1, 16384);
-
-    const uint32_t input_channels = 3;                   // in_channels
-    const uint32_t output_channels = 17;                 // out_channels
-    const uint32_t batch_size = 5;                       // batch_size
-    const uint32_t input_height = 111;                   // input_height
-    const uint32_t input_width = 25;                     // input_width
-    const std::array<uint32_t, 2> kernel_size = {3, 3};  // kernel_size
-    const std::array<uint32_t, 2> stride = {1, 1};       // stride
-    const std::array<uint32_t, 2> padding = {1, 1};      // padding
 
     MemoryConfig dram_mem_config =
         MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM};
 
     // (N,Ci,H,W)
-    std::array<uint32_t, 4> dimensions = {batch_size, input_channels, input_height, input_width};
+    std::array<uint32_t, 4> dimensions = {
+        param.batch_size, param.input_channels, param.input_height, param.input_width};
     // (Co,Ci,KH,KW)
-    std::array<uint32_t, 4> dimensions_weight = {output_channels, input_channels, kernel_size[0], kernel_size[1]};
+    std::array<uint32_t, 4> dimensions_weight = {
+        param.output_channels, param.input_channels, param.kernel_size[0], param.kernel_size[1]};
 
     random::seed(42);
     // Create input tensor on device
@@ -177,14 +151,14 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
         input_tensor,
         weight_tensor,
         device,
-        input_channels,
-        output_channels,
-        batch_size,
-        input_height,
-        input_width,
-        kernel_size,
-        stride,
-        padding,
+        param.input_channels,
+        param.output_channels,
+        param.batch_size,
+        param.input_height,
+        param.input_width,
+        param.kernel_size,
+        param.stride,
+        param.padding,
         {1, 1},  // dilation
         1        // groups
     );
@@ -199,14 +173,15 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
     output_tensor = ttnn::slice(
         output_tensor,
         std::array<uint32_t, 4>({0, 0, 0, 0}),
-        std::array<uint32_t, 4>({1, 1, batch_size * output_height * output_width, output_channels}),
+        std::array<uint32_t, 4>({1, 1, param.batch_size * output_height * output_width, param.output_channels}),
         std::array<uint32_t, 4>({1, 1, 1, 1}),
         dram_mem_config);
 
     // H'  - output_height
     // W'  - output_width
     // (1,1,NH'W',Co) -> (N,H',W',Co)
-    output_tensor = ttnn::reshape(output_tensor, Shape({batch_size, output_height, output_width, output_channels}));
+    output_tensor =
+        ttnn::reshape(output_tensor, Shape({param.batch_size, output_height, output_width, param.output_channels}));
 
     // (N,H',W',Co) -> (N,Co,H',W')
     output_tensor = ttnn::permute(output_tensor, SmallVector<int64_t>{0, 3, 1, 2});
@@ -218,23 +193,46 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
     std::vector<float> ref_res = reference_implementation_conv2d(
         input_vector,
         weight_vector,
-        input_channels,
-        output_channels,
-        batch_size,
-        input_height,
-        input_width,
-        kernel_size,
-        stride,
-        padding);
+        param.input_channels,
+        param.output_channels,
+        param.batch_size,
+        param.input_height,
+        param.input_width,
+        param.kernel_size,
+        param.stride,
+        param.padding);
 
-    float pcc_calculated = pcc(res, ref_res);
+    float pcc_calculated = ttnn::pcc(res, ref_res);
+    TT_FATAL(pcc_calculated > 0.99, "PCC not high enough. Result PCC: {}, Expected PCC: 0.99", pcc_calculated);
 
     bool pass = CloseDevice(device);
     TT_FATAL(pass, "Error closing device");
-    TT_FATAL(pcc_calculated > 0.99, "PCC not high enough. Result PCC: {}, Expected PCC: 0.99", pcc_calculated);
 }
 
-INSTANTIATE_TEST_SUITE_P(Conv2DTests, Conv2DFixture, ::testing::Values(Conv2DParam{}));
+INSTANTIATE_TEST_SUITE_P(
+    Conv2DTests,
+    Conv2DFixture,
+    ::testing::Values(
+        Conv2DParam{
+            .input_channels = 3,
+            .output_channels = 17,
+            .batch_size = 5,
+            .input_height = 111,
+            .input_width = 25,
+            .kernel_size = {3, 3},
+            .stride = {1, 1},
+            .padding = {1, 1},
+        },
+        Conv2DParam{
+            .input_channels = 32,
+            .output_channels = 32,
+            .batch_size = 2,
+            .input_height = 256,
+            .input_width = 256,
+            .kernel_size = {3, 3},
+            .stride = {1, 1},
+            .padding = {1, 1},
+        }));
 
 }  // namespace test
 }  // namespace conv::conv2d
