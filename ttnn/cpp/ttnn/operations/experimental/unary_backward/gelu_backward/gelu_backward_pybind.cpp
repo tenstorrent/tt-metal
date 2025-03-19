@@ -35,7 +35,7 @@ void bind_experimental_gelu_backward_operation(py::module& module) {
 
             .. list-table::
                 :header-rows: 1
-    
+
                 * - Dtypes
                     - Layouts
                     - Ranks
