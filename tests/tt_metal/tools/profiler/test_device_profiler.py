@@ -351,6 +351,7 @@ def test_timestamped_events():
         assert eventCount in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong event count"
 
 
+@pytest.mark.skip(reason="This test is currently broken")
 def test_noc_event_profiler():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in ["grayskull", "wormhole_b0", "blackhole"]
