@@ -219,16 +219,16 @@ void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors)
 
 std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
-    // const auto& input_tensor = input_tensors[0];
-    // auto shape = input_tensor.get_logical_shape();
-    // auto output_tensor_layout =
-    //     input_tensor.get_tensor_spec().tensor_layout().with_memory_config(this->all_reduce_mem_config);
-    // return {TensorSpec(shape, output_tensor_layout)};
+    const auto& input_tensor = input_tensors[0];
+    const auto& input_shape = input_tensor.get_logical_shape();
+    auto output_tensor_layout =
+        input_tensor.get_tensor_spec().tensor_layout().with_memory_config(this->all_reduce_mem_config);
+    auto all_reduce_tensor_spec{TensorSpec(input_shape, output_tensor_layout)};
 
     // copied from qkv create heads compute_output_specs
     using namespace tt::constants;
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& input_shape = input_tensor.get_logical_shape();
+    // const auto& input_tensor = input_tensors.at(0);
+    // const auto& input_shape = input_tensor.get_logical_shape();
 
     auto batch = input_shape[2];
     if (this->slice_size.has_value()) {
@@ -248,34 +248,24 @@ std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
     MemoryConfig k_mem_config = this->final_mem_config;
     MemoryConfig v_mem_config = this->final_mem_config;
     CoreRangeSet q_shard_grid, k_shard_grid, v_shard_grid;
-    if (!this->input_on_subcoregrids) {
-        auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
-        q_shard_grid = tt::tt_metal::num_cores_to_corerangeset(batch, core_grid, true);
-        if (this->overlap_qk_coregrid) {
-            k_shard_grid = q_shard_grid;
-        } else {
-            k_shard_grid = tt::tt_metal::num_cores_to_corerangeset(
-                CoreCoord{batch % core_grid.x, batch / core_grid.x}, batch, core_grid, true);
-        }
-        v_shard_grid = q_shard_grid;
-    } else {
-        auto input_core_grid = input_tensor.shard_spec().value().grid;
-        auto start_core_coord = input_core_grid.bounding_box().start_coord;
-        q_shard_grid =
-            tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core_coord, batch, input_core_grid, true);
-        if (this->overlap_qk_coregrid) {
-            k_shard_grid = q_shard_grid;
-        } else {
-            CoreRangeSet q_plus_one_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
-                start_core_coord, batch + 1, input_core_grid, true);
-            if (!q_plus_one_grid.ranges().empty()) {
-                start_core_coord = q_plus_one_grid.ranges().back().end_coord;
-            }
-            k_shard_grid =
-                tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core_coord, batch, input_core_grid, true);
-        }
-        v_shard_grid = q_shard_grid;
+    // auto input_core_grid = input_tensor.shard_spec().value().grid;
+    auto sub_core_grid = tt::tt_metal::CoreRangeSet(
+        tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(1, 0), tt::tt_metal::CoreCoord(3, 9)));
+    auto start_core_coord = sub_core_grid.bounding_box().start_coord;
+
+    q_shard_grid =
+        tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core_coord, batch, sub_core_grid, true);
+
+    CoreRangeSet q_plus_one_grid =
+        tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core_coord, batch + 1, sub_core_grid, true);
+    if (!q_plus_one_grid.ranges().empty()) {
+        start_core_coord = q_plus_one_grid.ranges().back().end_coord;
     }
+    k_shard_grid =
+        tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core_coord, batch, sub_core_grid, true);
+
+    v_shard_grid = q_shard_grid;
+
     tt::tt_metal::ShardSpec q_shard_spec{q_shard_grid, {num_q_heads_padded, this->head_dim}};
     q_mem_config.shard_spec = q_shard_spec;
     tt::tt_metal::ShardSpec k_shard_spec{k_shard_grid, {num_kv_heads_padded, this->head_dim}};
@@ -284,6 +274,7 @@ std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
     v_mem_config.shard_spec = v_shard_spec;
 
     return {
+        all_reduce_tensor_spec,
         TensorSpec(
             q_output_shape,
             tt::tt_metal::TensorLayout(
