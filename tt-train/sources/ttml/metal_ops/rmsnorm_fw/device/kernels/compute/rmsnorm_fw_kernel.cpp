@@ -36,6 +36,17 @@ constexpr auto cb_rms_output = tt::CBIndex::c_9;
 constexpr auto cb_output_intermediate = tt::CBIndex::c_10;
 
 constexpr uint32_t onetile = 1;
+#ifdef DO_MASK_W
+constexpr bool do_mask_w = true;
+#else
+constexpr bool do_mask_w = false;
+#endif
+
+#ifdef RETURN_RMS
+constexpr bool return_rms = true;
+#else
+constexpr bool return_rms = false;
+#endif
 
 // calculate x = sum(y^2)
 #if defined(EVERYTHING_FITS_IN_L1) || defined(EVERYTHING_EXCEPT_GAMMA_FITS_IN_L1)
@@ -52,19 +63,19 @@ ALWI void calculate_sum_x_squared() {
         copy_tile_init(cb_input);
         copy_tile(cb_input, /* tile_idx */ col, /* register_idx */ working_register);
 
-#ifdef DO_MASK_W
-        if (col + 1 == num_inner) {
-            // this is limitation of the function mask_tile
-            // mask tile currently does not work for mask register that is not next to data register
-            const uint32_t mask_register = working_register + 1U;
+        if constexpr (do_mask_w) {
+            if (col + 1 == num_inner) {
+                // this is limitation of the function mask_tile
+                // mask tile currently does not work for mask register that is not next to data register
+                const uint32_t mask_register = working_register + 1U;
 
-            copy_tile_init(cb_mask);
-            copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
+                copy_tile_init(cb_mask);
+                copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
 
-            mask_tile_init();
-            mask_tile(working_register, mask_register);
+                mask_tile_init();
+                mask_tile(working_register, mask_register);
+            }
         }
-#endif
         mul_binary_tile_init();
         mul_binary_tile(working_register, working_register);
 
@@ -99,15 +110,20 @@ ALWI void calculate_sum_x_squared() {
             copy_tile_init(cb_input);
             copy_tile(cb_input, /* tile_idx */ block_idx, /* register_idx */ working_register);
 
-#ifdef DO_MASK_W
-            if (col + 1 == num_inner) {
-                copy_tile_init(cb_mask);
-                copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
+            if constexpr (do_mask_w) {
+                if (col + 1 == num_inner) {
+                    // this is limitation of the function mask_tile
+                    // mask tile currently does not work for mask register that is not next to data register
+                    const uint32_t mask_register = working_register + 1U;
 
-                mask_tile_init();
-                mask_tile(working_register, mask_register);
+                    copy_tile_init(cb_mask);
+                    copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
+
+                    mask_tile_init();
+                    mask_tile(working_register, mask_register);
+                }
             }
-#endif
+
             mul_binary_tile_init();
             mul_binary_tile(working_register, working_register);
             if (col > 0) {
@@ -264,9 +280,9 @@ void MAIN {
     cb_wait_front(cb_scaler, onetile);
     cb_wait_front(cb_eps, onetile);
 
-#ifdef DO_MASK_W
-    cb_wait_front(cb_mask, onetile);
-#endif
+    if constexpr (do_mask_w) {
+        cb_wait_front(cb_mask, onetile);
+    }
 
     init_sfpu(cb_input, cb_output);
     binary_op_init_common(cb_input, cb_gamma, cb_output);
@@ -314,9 +330,8 @@ void MAIN {
             cb_pop_front(cb_rms_before_reduction_intermediate, onetile);
         }
 
-#ifdef RETURN_RMS
         // copy tile from cb_rms_after_reduction_intermediate to cb_rms_output
-        {
+        if constexpr (return_rms) {
             const uint32_t temporary_register = 0;
 
             cb_wait_front(cb_rms_after_reduction_intermediate, onetile);
@@ -332,7 +347,6 @@ void MAIN {
             tile_regs_release();
             cb_push_back(cb_rms_output, onetile);
         }
-#endif
 
         // reciprocal of rms intermediate
         {
@@ -366,9 +380,9 @@ void MAIN {
     cb_pop_front(cb_scaler, onetile);
     cb_pop_front(cb_eps, onetile);
 
-#ifdef DO_MASK_W
-    cb_pop_front(cb_mask, onetile);
-#endif
+    if constexpr (do_mask_w) {
+        cb_pop_front(cb_mask, onetile);
+    }
 }
 
 }  // namespace NAMESPACE

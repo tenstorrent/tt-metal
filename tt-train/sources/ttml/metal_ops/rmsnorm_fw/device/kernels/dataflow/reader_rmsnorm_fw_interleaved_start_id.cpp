@@ -2,12 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
-
 #include <cstdint>
+#include <cstring>
 
 #include "dataflow_api.h"
 
+// TODO: improve with a more efficient implementation
+// using noc_async_writes
 void generate_tile_with_value(uint32_t cb, uint32_t packed_value) {
     constexpr uint32_t onetile = 1U;
     cb_reserve_back(cb, onetile);
@@ -40,9 +41,14 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1U;
 
-    // generate mask tile
 #ifdef DO_MASK_W
-    {
+    constexpr bool do_mask_w = true;
+#else
+    constexpr bool do_mask_w = false;
+#endif
+
+    // generate mask tile
+    if constexpr (do_mask_w) {
         cb_reserve_back(cb_mask_w_idx, onetile);
         uint16_t* ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_mask_w_idx));
         constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
@@ -57,7 +63,6 @@ void kernel_main() {
         }
         cb_push_back(cb_mask_w_idx, onetile);
     }
-#endif
 
     // generate tiles to include scalar and epsilon
     generate_tile_with_value(cb_scaler_idx, packed_scaler);
