@@ -366,7 +366,6 @@ def test_multimodal_demo_text(
     )
     logger.info("")
 
-
     if max_batch_size == 1 and enable_trace:  # Only profiling these parametrizations
         tt_device_name = model_args[0].device_name
         base_model_name = model_args[0].base_model_name
