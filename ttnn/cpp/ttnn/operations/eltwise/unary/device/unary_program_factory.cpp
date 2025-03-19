@@ -4,12 +4,11 @@
 
 #include <algorithm>
 
-#include "unary_program_factory.hpp"
-
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "ttnn/operations/eltwise/unary/device/unary_program_factory.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 namespace ttnn::operations::unary::program {
@@ -77,11 +76,6 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::vector<uint32_t> compute_kernel_args_group_1 = {
-        num_tiles_per_core_group_1,  // per_core_block_cnt
-        1                            // per_core_block_size
-    };
-
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
         unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
@@ -90,38 +84,18 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     bool math_approx_mode = std::all_of(
         args.op_chain.begin(), args.op_chain.end(), [](const auto& u) { return utils::get_op_approx_mode(u.op_type); });
     std::map<string, string> unary_defines = utils::get_block_defines(args.op_chain);
-    auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
+
+    auto unary_compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
-        core_group_1,
+        all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .bfp8_pack_precise = args.bfp8_pack_precise,
             .math_approx_mode = math_approx_mode,
-            .compile_args = compute_kernel_args_group_1,
             .defines = unary_defines});
-
-    if (!core_group_2.ranges().empty()) {
-        std::vector<uint32_t> compute_kernel_args_group_2 = {
-            num_tiles_per_core_group_2,  // per_core_block_cnt
-            1                            // per_core_block_size
-        };
-
-        auto eltwise_unary_kernel_group_2_id = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
-            core_group_2,
-            tt::tt_metal::ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
-                .fp32_dest_acc_en = args.fp32_dest_acc_en,
-                .unpack_to_dest_mode = unpack_to_dest_mode,
-                .bfp8_pack_precise = args.bfp8_pack_precise,
-                .math_approx_mode = math_approx_mode,
-                .compile_args = compute_kernel_args_group_2,
-                .defines = unary_defines});
-    }
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -137,13 +111,16 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
         tt::tt_metal::SetRuntimeArgs(
             program, unary_reader_kernel_id, core, {src_buffer->address(), num_tiles_per_core, num_tiles_written});
 
+        tt::tt_metal::SetRuntimeArgs(program, unary_compute_kernel_id, core, {num_tiles_per_core, 1});
+
         tt::tt_metal::SetRuntimeArgs(
             program, unary_writer_kernel_id, core, {dst_buffer->address(), num_tiles_per_core, num_tiles_written});
         num_tiles_written += num_tiles_per_core;
     }
 
     return cached_program_t{
-        std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, num_cores, num_cores_y}};
+        std::move(program),
+        {unary_reader_kernel_id, unary_compute_kernel_id, unary_writer_kernel_id, num_cores, num_cores_y}};
 }
 
 void UnaryProgramFactory::override_runtime_arguments(
@@ -152,6 +129,7 @@ void UnaryProgramFactory::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
+    auto& unary_compute_kernel_id = cached_program.shared_variables.unary_compute_kernel_id;
     auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     const uint32_t num_cores = cached_program.shared_variables.num_cores;
     const uint32_t num_cores_y = cached_program.shared_variables.num_cores_y;
@@ -162,18 +140,44 @@ void UnaryProgramFactory::override_runtime_arguments(
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
 
+    uint32_t num_tiles = input.volume() / tt::constants::TILE_HW;
+    tt::tt_metal::IDevice* device = input.device();
+
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto [_, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
+
+        uint32_t num_tiles_per_core = 0;
+        if (core_group_1.contains(core)) {
+            num_tiles_per_core = num_tiles_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            num_tiles_per_core = num_tiles_per_core_group_2;
+        } else {
+            TT_ASSERT(false, "Core not in specified core ranges");
+        }
 
         {
             auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
+            runtime_args[1] = num_tiles_per_core;
+            runtime_args[2] = num_tiles_written;
+        }
+
+        {
+            auto& runtime_args = GetRuntimeArgs(program, unary_compute_kernel_id, core);
+            runtime_args[0] = num_tiles_per_core;
         }
 
         {
             auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
+            runtime_args[1] = num_tiles_per_core;
+            runtime_args[2] = num_tiles_written;
         }
+        num_tiles_written += num_tiles_per_core;
     }
 }
 

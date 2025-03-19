@@ -30,11 +30,12 @@ void validate_supported_arch_dtype(
                 static_cast<int>(op_type));
             break;
         case UnaryOpType::FILL:
-           if(arch == tt::ARCH::GRAYSKULL){
+            if (arch == tt::ARCH::GRAYSKULL) {
                 TT_FATAL(
                     (input_datatype == DataType::BFLOAT16 || input_datatype == DataType::BFLOAT8_B),
-                    "Unsupported dtype {}. On Grayskull only BFLOAT16/BFLOAT8_B are supported", input_datatype);
-                }
+                    "Unsupported dtype {}. On Grayskull only BFLOAT16/BFLOAT8_B are supported",
+                    input_datatype);
+            }
             break;
         case UnaryOpType::BITWISE_XOR:
         case UnaryOpType::BITWISE_NOT:
@@ -154,7 +155,7 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
             computed_output_shape,
             preallocated_output_shape);
 
-        if(!input_tensor.is_sharded()){
+        if (!input_tensor.is_sharded()) {
             TT_FATAL(
                 (preallocated_output_tensor.value().get_layout() == Layout::TILE),
                 "Unary operation requires output tensor to be in Tile layout when working with non-sharded tensor.");
@@ -195,8 +196,7 @@ tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         args,
         program_factory.index(),
         input_tensor.dtype(),
-        std::get<DeviceStorage>(input_tensor.storage()).memory_config(),
-        input_shape.volume());
+        std::get<DeviceStorage>(input_tensor.storage()).memory_config());
 
     return hash;
 }

@@ -10,8 +10,8 @@
 
 namespace NAMESPACE {
 void MAIN {
-    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
-    uint32_t per_core_block_dim = get_compile_time_arg_val(1);
+    uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
+    uint32_t per_core_block_dim = get_arg_val<uint32_t>(1);
 
     init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_2);
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
