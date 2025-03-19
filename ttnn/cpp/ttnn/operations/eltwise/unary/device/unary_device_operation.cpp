@@ -192,8 +192,7 @@ tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     const auto& input_shape = input_tensor.get_padded_shape();
 
     auto program_factory = select_program_factory(args, tensor_args);
-    operation::Hash hash;
-    hash = operation::hash_operation<UnaryDeviceOperation>(
+    operation::Hash hash = operation::hash_operation<UnaryDeviceOperation>(
         args,
         program_factory.index(),
         input_tensor.dtype(),
