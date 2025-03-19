@@ -24,9 +24,9 @@ void MAIN {
     init_sfpu(cb_input, cb_output);
 
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
+        cb_reserve_back(cb_output, per_core_block_dim);
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
-            cb_reserve_back(cb_output, per_core_block_dim);
-            cb_wait_front(cb_input, per_core_block_dim);
+            cb_wait_front(cb_input, 1);
             tile_regs_acquire();
 
             // Pop tile after tile, copy to DST and pack
@@ -55,9 +55,9 @@ void MAIN {
 
             tile_regs_release();
 
-            cb_pop_front(cb_input, per_core_block_dim);
-            cb_push_back(cb_output, per_core_block_dim);
+            cb_pop_front(cb_input, 1);
         }
+        cb_push_back(cb_output, per_core_block_dim);
     }
 }
 }  // namespace NAMESPACE
