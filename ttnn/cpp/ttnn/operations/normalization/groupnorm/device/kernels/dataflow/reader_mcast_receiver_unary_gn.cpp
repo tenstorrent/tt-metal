@@ -159,6 +159,9 @@ void kernel_main() {
         const InterleavedAddrGenFast<out_is_dram> dst_a = {
             .bank_base_address = out_addr, .page_size = single_tile_size_bytes, .data_format = out_data_format};
 
+        // add or copy with previous output results
+        uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
+
         uint32_t out_block_start_id_offset = 0;
         for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; out_block_index++) {
             const uint32_t dst_tile_bytes = get_tile_size(cb_reread_out);
@@ -167,7 +170,7 @@ void kernel_main() {
             cb_reserve_back(cb_reread_out, out_block_hw);
 
             for (uint32_t mt = 0; mt < out_block_h; mt++) {
-                for (uint32_t nt = 0; nt < block_w; nt++) {
+                for (uint32_t nt = 0; nt < block_w_curr; nt++) {
                     noc_async_read_tile(
                         out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt + index_b_offset +
                             index_g_offset,

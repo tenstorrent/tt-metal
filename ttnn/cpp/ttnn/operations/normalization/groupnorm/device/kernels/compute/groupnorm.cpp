@@ -513,6 +513,7 @@ void MAIN {
                 cb_reserve_back(cb_reread_write_out, out_block_hw);
                 for (uint32_t w = 0; w < block_w_curr; ++w) {
                     uint32_t index_h_offset = 0;
+                    uint32_t index_h1_offset = 0;
 
                     if (copy_or_add == true) {
                         copy_tile_init(cb_xmm);
@@ -522,19 +523,21 @@ void MAIN {
 
                     for (uint32_t i = 0; i < out_block_h; ++i) {
                         tile_regs_acquire();
-                        uint32_t index_xmm = w + index_h_offset;
+                        uint32_t index_reread_out = w + index_h_offset;
+                        uint32_t index_xmm = w + index_h1_offset;
 
                         if (copy_or_add == true) {
                             copy_tile(cb_xmm, index_xmm, dst0);
                         } else {
-                            add_tiles(cb_reread_out, cb_xmm, index_xmm, index_xmm, dst0);
+                            add_tiles(cb_reread_out, cb_xmm, index_reread_out, index_xmm, dst0);
                         }
                         tile_regs_commit();
                         tile_regs_wait();
-                        pack_tile<true>(dst0, cb_reread_write_out, index_xmm);
+                        pack_tile<true>(dst0, cb_reread_write_out, index_reread_out);
                         tile_regs_release();
 
-                        index_h_offset += block_w;
+                        index_h_offset += block_w_curr;
+                        index_h1_offset += block_w;
                     }
 
                     // update group tile offset
@@ -566,7 +569,7 @@ void MAIN {
                     cb_wait_front(cb_gamma, per_core_N);  // TODO FIX THIS, ONLY LOAD ONCE ADD POP
                     cb_wait_front(cb_reread_write_out, out_block_hw);
                     for (uint32_t i = 0; i < out_block_h; ++i) {
-                        for (uint32_t j = 0; j < block_w; ++j) {
+                        for (uint32_t j = 0; j < block_w_curr; ++j) {
                             tile_regs_acquire();
                             uint32_t index = j + index_h_offset;
                             uint32_t index_gamma = j + index_g_offset;
@@ -576,7 +579,7 @@ void MAIN {
                             pack_tile(dst0, cb_outgamma);
                             tile_regs_release();
                         }
-                        index_h_offset += block_w;
+                        index_h_offset += block_w_curr;
                     }
                     cb_push_back(cb_outgamma, out_block_hw);
                     cb_pop_front(cb_reread_write_out, out_block_hw);
@@ -589,7 +592,7 @@ void MAIN {
                     cb_reserve_back(cb_outbeta, out_block_hw);
                     cb_wait_front(cb_beta, per_core_N);  // TODO FIX THIS, ONLY LOAD ONCE ADD POP
                     for (uint32_t i = 0; i < out_block_h; ++i) {
-                        for (uint32_t j = 0; j < block_w; ++j) {
+                        for (uint32_t j = 0; j < block_w_curr; ++j) {
                             tile_regs_acquire();
                             uint32_t index = j + index_h_offset;
                             uint32_t index_beta = j + index_g_offset;
@@ -599,7 +602,7 @@ void MAIN {
                             pack_tile(dst0, cb_outbeta);
                             tile_regs_release();
                         }
-                        index_h_offset += block_w;
+                        index_h_offset += block_w_curr;
                     }
                     cb_push_back(cb_outbeta, out_block_hw);
                     cb_pop_front(cb_inbeta, out_block_hw);

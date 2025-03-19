@@ -176,6 +176,9 @@ void kernel_main() {
                 }
             }
 
+            // add or copy with previous output results
+            uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
+
             const InterleavedAddrGenFast<out_is_dram> dst_a = {
                 .bank_base_address = out_addr, .page_size = single_tile_size_bytes, .data_format = out_data_format};
 
@@ -184,7 +187,7 @@ void kernel_main() {
                 cb_wait_front(cb_out, out_block_hw);
                 uint32_t l1_read_addr = get_read_ptr(cb_out);
                 for (uint32_t mt = 0; mt < out_block_h; mt++) {
-                    for (uint32_t nt = 0; nt < block_w; nt++) {
+                    for (uint32_t nt = 0; nt < block_w_curr; nt++) {
                         noc_async_write_tile(
                             out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt + index_b_offset +
                                 index_g_offset,
@@ -192,6 +195,7 @@ void kernel_main() {
                             l1_read_addr);
                         l1_read_addr += single_tile_size_bytes;
                     }
+                    // l1_read_addr += (single_tile_size_bytes * (block_w-block_w_curr));
                 }
                 out_block_start_id_offset += out_block_h * num_channels_tiles;
                 noc_async_write_barrier();
