@@ -210,8 +210,8 @@ def test_tt_attn_prepare_qkv(
     tt_y = to_tt_tensor(y_input.view(1, batch_size, text_seq_len, dim_y), mesh_device)
     tt_scale_x = to_tt_tensor(scale_x.view(batch_size, 1, 1, dim_x), mesh_device)
     tt_scale_y = to_tt_tensor(scale_y.view(batch_size, 1, 1, dim_y), mesh_device)
-    tt_rope_cos = to_tt_tensor(cos_pad, mesh_device, shard_dim=-2)
-    tt_rope_sin = to_tt_tensor(sin_pad, mesh_device, shard_dim=-2)
+    tt_rope_cos = to_tt_tensor(cos_pad, mesh_device, shard_dim=-3)
+    tt_rope_sin = to_tt_tensor(sin_pad, mesh_device, shard_dim=-3)
 
     trans_mat = get_rot_transformation_mat(None)
     trans_mat_tt = to_tt_tensor(trans_mat, mesh_device)
@@ -524,8 +524,8 @@ def test_tt_attn_forward(
     tt_y = to_tt_tensor(y_input.unsqueeze(0), mesh_device)
     tt_scale_x = to_tt_tensor(scale_x.view(batch_size, 1, 1, dim_x), mesh_device)
     tt_scale_y = to_tt_tensor(scale_y.view(batch_size, 1, 1, dim_y), mesh_device)
-    tt_rope_cos = to_tt_tensor(cos_padded, mesh_device, shard_dim=-2)
-    tt_rope_sin = to_tt_tensor(sin_padded, mesh_device, shard_dim=-2)
+    tt_rope_cos = to_tt_tensor(cos_padded, mesh_device, shard_dim=-3)
+    tt_rope_sin = to_tt_tensor(sin_padded, mesh_device, shard_dim=-3)
 
     # Create transformation matrix for RoPE
     trans_mat = get_rot_transformation_mat(None)

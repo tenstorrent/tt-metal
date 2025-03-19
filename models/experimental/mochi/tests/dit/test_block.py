@@ -142,8 +142,8 @@ def test_tt_block(mesh_device, vision_seq_len, text_seq_len, use_program_cache, 
     tt_x = to_tt_tensor(x_padded, mesh_device, shard_dim=-2)
     tt_y = to_tt_tensor(y_input.view(1, batch_size, text_seq_len, dim_y), mesh_device)
     tt_c = to_tt_tensor(c_input.view(batch_size, 1, 1, dim_x), mesh_device)
-    tt_rope_cos = to_tt_tensor(cos_padded, mesh_device, shard_dim=-2)
-    tt_rope_sin = to_tt_tensor(sin_padded, mesh_device, shard_dim=-2)
+    tt_rope_cos = to_tt_tensor(cos_padded, mesh_device, shard_dim=-3)
+    tt_rope_sin = to_tt_tensor(sin_padded, mesh_device, shard_dim=-3)
     tt_trans_mat = to_tt_tensor(trans_mat, mesh_device)
 
     # Create packed indices
@@ -280,8 +280,8 @@ def test_tt_block_with_saved_tensors(mesh_device, use_program_cache, reset_seeds
     rope_cos_stack, rope_sin_stack = stack_cos_sin(
         tensors["rope_cos"].unsqueeze(0).permute(0, 2, 1, 3), tensors["rope_sin"].unsqueeze(0).permute(0, 2, 1, 3)
     )
-    tt_rope_cos = to_tt_tensor(rope_cos_stack, mesh_device, shard_dim=-2)
-    tt_rope_sin = to_tt_tensor(rope_sin_stack, mesh_device, shard_dim=-2)
+    tt_rope_cos = to_tt_tensor(rope_cos_stack, mesh_device, shard_dim=-3)
+    tt_rope_sin = to_tt_tensor(rope_sin_stack, mesh_device, shard_dim=-3)
 
     # Get transformation matrix
     trans_mat = get_rot_transformation_mat(None)

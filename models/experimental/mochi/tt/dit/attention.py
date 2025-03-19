@@ -77,7 +77,7 @@ class AsymmetricAttention(LightweightModule):
         self.out_bias = out_bias
 
         # Define the qkv and output projections
-        self.qkv_x, self.qkv_x_bias = self._load_qkv(
+        self.qkv_x, self.qkv_x_bias = self._col_parallel_qkv(
             "qkv_x", self.qkv_bias, weight_cache_path, state_dict, state_dict_prefix
         )
         self.qkv_y, self.qkv_y_bias = self._col_parallel_qkv(
@@ -172,15 +172,15 @@ class AsymmetricAttention(LightweightModule):
             )
         return w, b
 
-    def _seq_to_head_parallel_tensor(self, seq_parallel_tensor, N):
-        num_heads = seq_parallel_tensor.shape[1]
-        local_heads = num_heads // self.num_devices
+    def _seq_to_col_parallel_tensor(self, seq_parallel_tensor, N):
+        dim = seq_parallel_tensor.shape[3]
+        local_dim = dim // self.num_devices
         replicated_tensor = ttnn.all_gather(seq_parallel_tensor, dim=2)
         tensors = ttnn.get_device_tensors(replicated_tensor)
         tile_padded_seqlen = math.ceil(N / 32) * 32
         for i in range(len(tensors)):
             # Slice out local head and slice sequence padding
-            tensors[i] = tensors[i][:, i * local_heads : (i + 1) * local_heads, :tile_padded_seqlen]
+            tensors[i] = tensors[i][:, :, :tile_padded_seqlen, i * local_dim : (i + 1) * local_dim]
             # Add padding information
             tensors[i] = ttnn.reshape(
                 tensors[i], [tensors[i].shape[0], tensors[i].shape[1], N, tensors[i].shape[3]], tensors[i].shape
@@ -280,12 +280,14 @@ class AsymmetricAttention(LightweightModule):
             program_config=self.qkv_x_config(m=M),
         )
 
+        qkv_x_1BNE = self._seq_to_col_parallel_tensor(qkv_x_1BNE, N=N)
+
         # Split qkv_x into q, k, v
         # Need to get these tensors to shape [B, H, L, D] for rotary embeddings
         q_x_BHND, k_x_BHND, v_x_BHND = ttnn.experimental.nlp_create_qkv_heads(
             qkv_x_1BNE,
-            num_heads=self.num_heads,
-            num_kv_heads=self.num_heads,
+            num_heads=self.n_local_heads,
+            num_kv_heads=self.n_local_heads,
             transpose_k_heads=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -295,11 +297,6 @@ class AsymmetricAttention(LightweightModule):
         q_x_BHND = ttnn.experimental.rotary_embedding_llama(q_x_BHND, rope_cos, rope_sin, trans_mat)
         k_x_BHND = self.k_norm_x(k_x_BHND, mode="prefill")
         k_x_BHND = ttnn.experimental.rotary_embedding_llama(k_x_BHND, rope_cos, rope_sin, trans_mat)
-
-        # TODO remove this once we have an optimized conversion
-        q_x_BHND = self._seq_to_head_parallel_tensor(q_x_BHND, N=N)
-        k_x_BHND = self._seq_to_head_parallel_tensor(k_x_BHND, N=N)
-        v_x_BHND = self._seq_to_head_parallel_tensor(v_x_BHND, N=N)
 
         # Process text features if present
         if B == 1:
@@ -424,7 +421,7 @@ class AsymmetricAttention(LightweightModule):
         M = out_1BNX.shape[2]
 
         # BUG: This linear clobbers `out_joint_1BLX` if padded and certain program configs are used
-        proj_x = ttnn.all_gather(self.proj_x, dim=-1, num_links=1)
+        proj_x = ttnn.all_gather(self.proj_x, dim=-1)
         out_1BNX = ttnn.linear(
             out_1BNX,
             proj_x,

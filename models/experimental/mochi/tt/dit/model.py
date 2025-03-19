@@ -8,7 +8,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.experimental.mochi.tt.dit.block import AsymmetricJointBlock
 from models.experimental.mochi.tt.dit.final_layer import FinalLayer
 from models.experimental.mochi.tt.dit.embed import PatchEmbed
-from models.experimental.mochi.tt.common import to_tt_tensor, unsqueeze_to_4d, stack_cos_sin
+from models.experimental.mochi.tt.common import to_tt_tensor, unsqueeze_to_4d, stack_cos_sin, pad_vision_seq_parallel
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 
 from genmo.mochi_preview.dit.joint_model.layers import (
@@ -156,8 +156,8 @@ class AsymmDiTJoint(LightweightModule):
 
         trans_mat = get_rot_transformation_mat(None)
 
-        tt_rope_cos_1HND = to_tt_tensor(unsqueeze_to_4d(rope_cos_1HND), self.mesh_device, shard_dim=-2)
-        tt_rope_sin_1HND = to_tt_tensor(unsqueeze_to_4d(rope_sin_1HND), self.mesh_device, shard_dim=-2)
+        tt_rope_cos_1HND = to_tt_tensor(unsqueeze_to_4d(rope_cos_1HND), self.mesh_device, shard_dim=-3)
+        tt_rope_sin_1HND = to_tt_tensor(unsqueeze_to_4d(rope_sin_1HND), self.mesh_device, shard_dim=-3)
         tt_trans_mat = to_tt_tensor(trans_mat, self.mesh_device)
 
         return tt_rope_cos_1HND, tt_rope_sin_1HND, tt_trans_mat
@@ -196,8 +196,8 @@ class AsymmDiTJoint(LightweightModule):
 
         tt_y_feat_1BLY = to_tt_tensor(unsqueeze_to_4d(y_feat_BLY), self.mesh_device)  # Add dim for ttnn format
         tt_y_pool_11BX = to_tt_tensor(unsqueeze_to_4d(t5_y_pool), self.mesh_device)
-        tt_rope_cos_1HND = to_tt_tensor(unsqueeze_to_4d(rope_cos_1HND), self.mesh_device, shard_dim=-2)
-        tt_rope_sin_1HND = to_tt_tensor(unsqueeze_to_4d(rope_sin_1HND), self.mesh_device, shard_dim=-2)
+        tt_rope_cos_1HND = to_tt_tensor(unsqueeze_to_4d(rope_cos_1HND), self.mesh_device, shard_dim=-3)
+        tt_rope_sin_1HND = to_tt_tensor(unsqueeze_to_4d(rope_sin_1HND), self.mesh_device, shard_dim=-3)
         tt_trans_mat = to_tt_tensor(trans_mat, self.mesh_device)
 
         return tt_y_feat_1BLY, tt_y_pool_11BX, tt_rope_cos_1HND, tt_rope_sin_1HND, tt_trans_mat
@@ -218,9 +218,11 @@ class AsymmDiTJoint(LightweightModule):
         B, C, T, H, W = x.shape
 
         pH, pW = H // self.patch_size, W // self.patch_size
+        N = T * pH * pW
         # Flatten x for embedding
         x = x.reshape(C, T, pH, self.patch_size, pW, self.patch_size)
         x_1BNI = x.permute(1, 2, 4, 0, 3, 5).reshape(1, B, T * pH * pW, C * self.patch_size * self.patch_size)
+        x_1BNI = pad_vision_seq_parallel(x_1BNI, self.num_devices)
         x_1BNI = to_tt_tensor(x_1BNI, self.mesh_device, shard_dim=-2)
         x_1BNX = self.x_embedder(x_1BNI)
 
@@ -229,7 +231,7 @@ class AsymmDiTJoint(LightweightModule):
         c_t_11BX = to_tt_tensor(unsqueeze_to_4d(c_t_BX), self.mesh_device)  # Add dims for ttnn format
         c_11BX = c_t_11BX + tt_y_pool
 
-        return x_1BNX, c_11BX
+        return x_1BNX, c_11BX, N
 
     def _prepare(
         self,
@@ -270,12 +272,14 @@ class AsymmDiTJoint(LightweightModule):
         B, C, T, H, W = x.shape
         assert B == 1, "Batch size must be 1"
         pH, pW = H // self.patch_size, W // self.patch_size
+        N = T * pH * pW
         x = x.reshape(B, C, T, pH, self.patch_size, pW, self.patch_size)
-        x = x.permute(0, 2, 3, 5, 1, 4, 6).reshape(1, B, T * pH * pW, C * self.patch_size * self.patch_size)
+        x = x.permute(0, 2, 3, 5, 1, 4, 6).reshape(1, B, N, C * self.patch_size * self.patch_size)
+        x = pad_vision_seq_parallel(x, self.num_devices)
         x = to_tt_tensor(x, self.mesh_device, shard_dim=-2)
-        return x
+        return x, N
 
-    def reverse_preprocess(self, x, T, H, W):
+    def reverse_preprocess(self, x, T, H, W, N):
         """
         This is the reverse of preprocess_input. It differs from postprocess_output
         in that the input x is of shape: B (T pH pW) (C p p)
@@ -285,7 +289,9 @@ class AsymmDiTJoint(LightweightModule):
         assert x.shape[0] == 1
         B = x.shape[1]
         pH, pW = H // self.patch_size, W // self.patch_size
+        x = ttnn.all_gather(x, dim=2)  # Gather sequence-parallel output
         x = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).squeeze(0)
+        x = x[:, :N]  # Slice out sequence-parallel padding tokens
         x = x.reshape(B, T, pH, pW, self.out_channels, self.patch_size, self.patch_size)
         x = x.permute(0, 4, 1, 2, 5, 3, 6).reshape(B, self.out_channels, T, H, W)
         return x
@@ -305,8 +311,8 @@ class AsymmDiTJoint(LightweightModule):
         tt_y_feat, tt_y_pool, tt_rope_cos, tt_rope_sin, tt_trans_mat = self.prepare_step_independent(
             T, H, W, t5_feat, t5_mask
         )
-        x_1BNX, c_11BX = self.prepare_step_dependent(x, sigma, tt_y_pool)
-        return x_1BNX, c_11BX, tt_y_feat, tt_rope_cos, tt_rope_sin, tt_trans_mat
+        x_1BNX, c_11BX, N = self.prepare_step_dependent(x, sigma, tt_y_pool)
+        return x_1BNX, c_11BX, tt_y_feat, tt_rope_cos, tt_rope_sin, tt_trans_mat, N
 
     def forward_inner(
         self,
@@ -317,17 +323,17 @@ class AsymmDiTJoint(LightweightModule):
         rope_cos_1HND: ttnn.Tensor,
         rope_sin_1HND: ttnn.Tensor,
         trans_mat: ttnn.Tensor,
+        N: int,
         uncond: bool = False,
     ):
         """
         Optimized forward pass which depends on outer loop to prepare inputs.
-        Returns
         """
         x_1BNX = self.x_embedder(x_1BNI)
 
         # Global vector embedding for conditionings
         c_t_BX = self.t_embedder(1 - sigma)
-        c_t_11BX = to_tt_tensor(unsqueeze_to_4d(c_t_BX), self.mesh_device, shard_dim=-2)  # Add dims for ttnn format
+        c_t_11BX = to_tt_tensor(unsqueeze_to_4d(c_t_BX), self.mesh_device)  # Add dims for ttnn format
         c_11BX = c_t_11BX + y_pool_11BX
 
         # Run blocks
@@ -339,14 +345,12 @@ class AsymmDiTJoint(LightweightModule):
                 rope_cos=rope_cos_1HND,
                 rope_sin=rope_sin_1HND,
                 trans_mat=trans_mat,
+                N=N,
                 uncond=uncond,
             )
 
         # Run final layer
         x_1BNI = self.final_layer(x_1BNX, c_11BX)
-
-        if self.num_devices > 1:
-            x_1BNI = ttnn.all_gather(x_1BNI, dim=2)
 
         return x_1BNI
 
@@ -364,7 +368,7 @@ class AsymmDiTJoint(LightweightModule):
         """
         _, _, T, H, W = x.shape
 
-        x_1BNX, c_11BX, y_feat_1BLY, rope_cos_1HND, rope_sin_1HND, trans_mat = self.prepare(
+        x_1BNX, c_11BX, y_feat_1BLY, rope_cos_1HND, rope_sin_1HND, trans_mat, N = self.prepare(
             x, sigma, y_feat[0], y_mask[0]
         )
         # TODO: c shape should be broadcastable to x shape, with batch dim matching. It currently doesn't.
@@ -378,16 +382,14 @@ class AsymmDiTJoint(LightweightModule):
                 rope_cos=rope_cos_1HND,
                 rope_sin=rope_sin_1HND,
                 trans_mat=trans_mat,
+                N=N,
                 uncond=uncond,
             )
 
         # Run final layer
         x_1BND = self.final_layer(x_1BNX, c_11BX)
 
-        if self.num_devices > 1:
-            x_1BND = ttnn.all_gather(x_1BND, dim=2)
-
         # Converts output back to torch and expected shape
-        x_BCTHW = self.reverse_preprocess(x_1BND, T, H, W)
+        x_BCTHW = self.reverse_preprocess(x_1BND, T, H, W, N)
 
         return x_BCTHW

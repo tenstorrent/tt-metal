@@ -79,11 +79,11 @@ def test_sample_model(mesh_device, use_program_cache, reset_seeds, n_layers):
     }
 
     # Run both implementations
-    logger.info("Running reference sample_model")
-    reference_output = reference_sample_model(device=device, dit=ref_dit, conditioning=conditioning, **sample_args)
-
     logger.info("Running TT sample_model")
     tt_output = sample_model_tt(device=device, dit=tt_dit, conditioning=conditioning, **sample_args)
+
+    logger.info("Running reference sample_model")
+    reference_output = reference_sample_model(device=device, dit=ref_dit, conditioning=conditioning, **sample_args)
 
     # Compute metrics
     pcc_required = 0.985
@@ -202,7 +202,6 @@ def test_sample_model_perf(mesh_device, use_program_cache, reset_seeds, n_layers
         host_prepare = time.perf_counter() - start
 
         def model_fn(*, z_1BNI, sigma_B, cfg_scale):
-            print("in model_fn")
             cond_z_1BNI = dit.forward_inner(
                 x_1BNI=z_1BNI,
                 sigma=sigma_B,
@@ -211,6 +210,7 @@ def test_sample_model_perf(mesh_device, use_program_cache, reset_seeds, n_layers
                 rope_cos_1HND=rope_cos_1HND,
                 rope_sin_1HND=rope_sin_1HND,
                 trans_mat=trans_mat,
+                N=N,
                 uncond=False,
             )
 
@@ -222,6 +222,7 @@ def test_sample_model_perf(mesh_device, use_program_cache, reset_seeds, n_layers
                 rope_cos_1HND=rope_cos_1HND,
                 rope_sin_1HND=rope_sin_1HND,
                 trans_mat=trans_mat,
+                N=N,
                 uncond=True,
             )
 
@@ -238,7 +239,7 @@ def test_sample_model_perf(mesh_device, use_program_cache, reset_seeds, n_layers
         uncond_y_feat_1BLY, uncond_y_pool_11BX = dit.prepare_text_features(
             t5_feat=cond_null["y_feat"][0], t5_mask=cond_null["y_mask"][0]
         )
-        z_1BNI = dit.preprocess_input(z_BCTHW)
+        z_1BNI, N = dit.preprocess_input(z_BCTHW)
         ttnn.synchronize_device(mesh_device)
         device_prepare = time.perf_counter() - start
 
@@ -255,7 +256,7 @@ def test_sample_model_perf(mesh_device, use_program_cache, reset_seeds, n_layers
         device_steps = time.perf_counter() - start
         # Postprocess z
         start = time.perf_counter()
-        z_BCTHW = dit.reverse_preprocess(z_1BNI, latent_t, latent_h, latent_w).float()
+        z_BCTHW = dit.reverse_preprocess(z_1BNI, latent_t, latent_h, latent_w, N).float()
         device_postprocess = time.perf_counter() - start
         ttnn.synchronize_device(mesh_device)
         start = time.perf_counter()
@@ -286,9 +287,9 @@ def test_sample_model_perf(mesh_device, use_program_cache, reset_seeds, n_layers
     logger.info(f"Running benchmark for {num_bench_steps} steps")
     bench_output = sample_model_profile(device=device, dit=tt_dit, conditioning=conditioning, **bench_args)
 
-    logger.info(f"Host prepare: {bench_output['host_prepare']} s")
-    logger.info(f"Device prepare: {bench_output['device_prepare']} s")
-    logger.info(f"Device steps: {bench_output['device_steps']} s")
-    logger.info(f"Device per-step: {bench_output['device_steps'] / num_bench_steps} s")
-    logger.info(f"Device postprocess: {bench_output['device_postprocess']} s")
-    logger.info(f"Host postprocess: {bench_output['host_postprocess']} s")
+    logger.info(f"Host prepare: {bench_output['host_prepare']*1000:.3f} ms")
+    logger.info(f"Device prepare: {bench_output['device_prepare']*1000:.3f} ms")
+    logger.info(f"Device steps: {bench_output['device_steps']*1000:.3f} ms")
+    logger.info(f"Device per-step: {bench_output['device_steps'] / num_bench_steps*1000:.3f} ms")
+    logger.info(f"Device postprocess: {bench_output['device_postprocess']*1000:.3f} ms")
+    logger.info(f"Host postprocess: {bench_output['host_postprocess']*1000:.3f} ms")

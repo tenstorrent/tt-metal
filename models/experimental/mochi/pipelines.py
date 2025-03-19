@@ -70,6 +70,7 @@ def sample_model(device, dit, conditioning, **args):
             rope_cos_1HND=rope_cos_1HND,
             rope_sin_1HND=rope_sin_1HND,
             trans_mat=trans_mat,
+            N=N,
             uncond=False,
         )
 
@@ -81,6 +82,7 @@ def sample_model(device, dit, conditioning, **args):
             rope_cos_1HND=rope_cos_1HND,
             rope_sin_1HND=rope_sin_1HND,
             trans_mat=trans_mat,
+            N=N,
             uncond=True,
         )
 
@@ -107,14 +109,14 @@ def sample_model(device, dit, conditioning, **args):
         sigma = sigma_schedule[i]
         dsigma = sigma - sigma_schedule[i + 1]
 
-        z_1BNI = dit.preprocess_input(z_BCTHW)
+        z_1BNI, N = dit.preprocess_input(z_BCTHW)
         sigma_B = torch.full([B], sigma, device=device)
         pred_BCTHW = model_fn(z_1BNI=z_1BNI, sigma_B=sigma_B, cfg_scale=cfg_schedule[i])
         # assert pred_BCTHW.dtype == torch.float32
         z_BCTHW = z_BCTHW + dsigma * pred_BCTHW
 
     # Postprocess z
-    z_BCTHW = dit.reverse_preprocess(z_1BNI, latent_t, latent_h, latent_w).float()
+    z_BCTHW = dit.reverse_preprocess(z_1BNI, latent_t, latent_h, latent_w, N).float()
     return dit_latents_to_vae_latents(z_BCTHW)
 
 

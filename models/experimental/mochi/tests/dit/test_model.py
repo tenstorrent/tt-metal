@@ -124,7 +124,7 @@ def test_tt_asymm_dit_joint_inference(mesh_device, n_layers, use_program_cache, 
     }
 
     logger.info("Run TtAsymmDiTJoint")
-    tt_output = tt_model(
+    tt_output = tt_model.forward(
         x=x,
         sigma=sigma,
         y_feat=[t5_feat],
@@ -196,12 +196,13 @@ def test_tt_asymm_dit_joint_prepare(mesh_device, use_program_cache, reset_seeds)
     tt_outputs = tt_model.prepare(x, sigma, t5_feat, t5_mask)
     ref_outputs = reference_model.prepare(x, sigma, t5_feat, t5_mask)
 
-    x, c, y_feat, rope_cos, rope_sin, _ = tt_outputs
-    x = ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-2))[0:1]
+    x, c, y_feat, rope_cos, rope_sin, _, _ = tt_outputs
+    x = ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-2))
+    x = x[:, :, :num_visual_tokens]
     c = ttnn.to_torch(c, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0:1]
     y_feat = ttnn.to_torch(y_feat, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0:1]
-    rope_cos = ttnn.to_torch(rope_cos, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-2))
-    rope_sin = ttnn.to_torch(rope_sin, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-2))
+    rope_cos = ttnn.to_torch(rope_cos, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-3))
+    rope_sin = ttnn.to_torch(rope_sin, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-3))
 
     # Undo cos/sin permutation and stacking
     def unstack(x):
@@ -286,7 +287,7 @@ def test_tt_asymm_dit_joint_model_fn(mesh_device, use_program_cache, reset_seeds
         uncond_y_feat_1BLY, uncond_y_pool_11BX = model.prepare_text_features(
             t5_feat=cond_null["y_feat"][0], t5_mask=cond_null["y_mask"][0]
         )
-        z_1BNI = model.preprocess_input(z_BCTHW)
+        z_1BNI, N = model.preprocess_input(z_BCTHW)
 
         cond_z_1BNI = model.forward_inner(
             x_1BNI=z_1BNI,
@@ -296,6 +297,7 @@ def test_tt_asymm_dit_joint_model_fn(mesh_device, use_program_cache, reset_seeds
             rope_cos_1HND=rope_cos_1HND,
             rope_sin_1HND=rope_sin_1HND,
             trans_mat=trans_mat,
+            N=N,
             uncond=False,
         )
 
@@ -307,6 +309,7 @@ def test_tt_asymm_dit_joint_model_fn(mesh_device, use_program_cache, reset_seeds
             rope_cos_1HND=rope_cos_1HND,
             rope_sin_1HND=rope_sin_1HND,
             trans_mat=trans_mat,
+            N=num_visual_tokens,
             uncond=True,
         )
 
@@ -319,17 +322,15 @@ def test_tt_asymm_dit_joint_model_fn(mesh_device, use_program_cache, reset_seeds
         pred = uncond_z_1BNI + cfg_scale * (cond_z_1BNI - uncond_z_1BNI)
 
         print(pred.shape)
-        if mesh_device.get_num_devices() > 1:
-            z_1BNI = ttnn.all_gather(z_1BNI, dim=2)
         print(z_1BNI.shape)
         # z_1BNI = ttnn.typecast(z_1BNI, dtype=ttnn.float32)
         z = z_1BNI + dsigma * pred
 
-        torch_output = model.reverse_preprocess(z, T, H, W)
+        torch_output = model.reverse_preprocess(z, T, H, W, N)
 
-        torch_pred = model.reverse_preprocess(pred, T, H, W)
-        torch_cond = model.reverse_preprocess(cond_z_1BNI, T, H, W)
-        torch_uncond = model.reverse_preprocess(uncond_z_1BNI, T, H, W)
+        torch_pred = model.reverse_preprocess(pred, T, H, W, N)
+        torch_cond = model.reverse_preprocess(cond_z_1BNI, T, H, W, N)
+        torch_uncond = model.reverse_preprocess(uncond_z_1BNI, T, H, W, N)
         return torch_output, torch_pred, torch_cond, torch_uncond
 
     # Default arguments from cli.py
@@ -450,10 +451,8 @@ def test_tt_asymm_dit_joint_preprocess(mesh_device, use_program_cache, reset_see
     num_visual_tokens = T * H * W // (PATCH_SIZE**2)
     _, tt_model, _ = create_models(mesh_device, n_layers=0)
     x = torch.randn(B, C, T, H, W)
-    x_1BNI = tt_model.preprocess_input(x)
-    if mesh_device.get_num_devices() > 1:
-        x_1BNI = ttnn.all_gather(x_1BNI, dim=2)
-    x_back = tt_model.reverse_preprocess(x_1BNI, T, H, W)
+    x_1BNI, N = tt_model.preprocess_input(x)
+    x_back = tt_model.reverse_preprocess(x_1BNI, T, H, W, N)
     pcc, mse, mae = compute_metrics(x, x_back)
     logger.info(f"PCC: {pcc}, MSE: {mse}, MAE: {mae}")
     assert pcc >= 0.99
