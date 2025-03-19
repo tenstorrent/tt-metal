@@ -9,9 +9,11 @@
 #include "cpp/ttnn/operations/data_movement/sharded/sharded_common.hpp"
 #include "cpp/ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op.hpp"
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/hal_exp.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -80,7 +82,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             input_unit_size - (tt::round_up(num_units_per_row, input_unit_size) - num_units_per_row);
         //Adjust accordingly to l1 alignment, do it for all archs
         if(keep_l1_aligned){
-            padded_offset_bytes = tt::align(input_unit_size, hal.get_alignment(HalMemType::L1));
+            padded_offset_bytes = tt::align(input_unit_size, hal::get_l1_alignment());
         }
         else {
             padded_offset_bytes = tt::align(input_unit_size, input.buffer()->alignment());
@@ -106,12 +108,12 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             .set_page_size(out_cb_index, output_page_size)
             .set_globally_allocated_address(*output.buffer());
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
-    uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
+    uint32_t dram_alignment = hal::get_dram_alignment();
     if (src_is_dram && input_unit_size % dram_alignment != 0 or is_blackhole or keep_l1_aligned) {
         uint32_t scratch_cb_page_size;
         //scratchpad going to be used to align DRAM (64B) to L1 (16B)
         if (is_blackhole) {
-            scratch_cb_page_size = tt::align(input_unit_size, hal.get_alignment(HalMemType::L1));
+            scratch_cb_page_size = tt::align(input_unit_size, hal::get_l1_alignment());
         }
         else {
             scratch_cb_page_size = tt::align(input_unit_size, dram_alignment);
@@ -255,8 +257,8 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
                 }
             }
 
-            uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
-            uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+            uint32_t dram_alignment = hal::get_dram_alignment();
+            uint32_t l1_alignment = hal::get_l1_alignment();
             bool aligned = (src_is_dram ? (curr_idx_w % dram_alignment == 0) && (padded_offset_bytes % dram_alignment == 0) : true);
             //for blackhole and keep_l1_aligned cases, always enforce unaligned kernel call
             aligned = aligned and !(is_blackhole);

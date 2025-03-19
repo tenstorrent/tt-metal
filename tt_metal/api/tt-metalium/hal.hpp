@@ -27,10 +27,6 @@ enum class ARCH;
 
 namespace tt_metal {
 
-static constexpr uint32_t NumHalProgrammableCoreTypes = static_cast<uint32_t>(HalProgrammableCoreType::COUNT);
-
-using DeviceAddr = std::uint64_t;
-
 // Note: nsidwell will be removing need for fw_base_addr and local_init_addr
 // fw_launch_addr is programmed with fw_launch_addr_value on the master risc
 // of a given progammable core to start FW.
