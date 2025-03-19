@@ -20,6 +20,7 @@ FORCE_INLINE void fill_with_val_bfloat16(uint32_t cb_id, uint32_t packed_scalar)
 // Reads the very first element of the CB and fills the entire tile with that value.
 // Tile is assumed to have 16-bit elements
 FORCE_INLINE void fill_tile_with_first_element_bfloat16(uint32_t cb_id) {
+    // DeviceZoneScopedN("fill_tile_with_first_element");
     auto* read_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id));
     const uint16_t first_elem = read_ptr[0];
     const uint32_t packed_first_elem = first_elem << 16 | first_elem;
@@ -36,9 +37,10 @@ FORCE_INLINE void fill_tile_with_first_element_bfloat16(uint32_t cb_id) {
 // Reads the very first row of the CB and fills the entire tile with the same row.
 // Tile is assumed to have 16-bit elements.
 FORCE_INLINE void fill_tile_with_first_row_bfloat16(uint32_t cb_id) {
-    // Here we have to account for the fact that a tile consists of 4 16x16 faces.
-    // So we have to fill faces 0 and 2 with the first row of face 0, and faces 1 and 3
-    // with the first row of face 1.
+    // DeviceZoneScopedN("fill_tile_with_first_row");
+    //  Here we have to account for the fact that a tile consists of 4 16x16 faces.
+    //  So we have to fill faces 0 and 2 with the first row of face 0, and faces 1 and 3
+    //  with the first row of face 1.
     auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
 
     uint32_t row_offset = 8;  // start at second row since first row is source
@@ -62,9 +64,10 @@ FORCE_INLINE void fill_tile_with_first_row_bfloat16(uint32_t cb_id) {
 // Reads the very first column of the CB and fills the entire tile with the same column.
 // Tile is assumed to have 16-bit elements.
 FORCE_INLINE void fill_tile_with_first_column_bfloat16(uint32_t cb_id) {
-    // Here we have to account for the fact that a tile consists of 4 16x16 faces.
-    // So we have to fill faces 0 and 1 with the first column of face 0, and faces 2 and 3
-    // with the first column of face 2.
+    // DeviceZoneScopedN("fill_tile_with_first_col");
+    //  Here we have to account for the fact that a tile consists of 4 16x16 faces.
+    //  So we have to fill faces 0 and 1 with the first column of face 0, and faces 2 and 3
+    //  with the first column of face 2.
     auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id));
 
     constexpr uint32_t num_rows = 16;

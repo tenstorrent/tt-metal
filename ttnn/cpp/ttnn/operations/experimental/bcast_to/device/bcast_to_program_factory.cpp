@@ -33,6 +33,7 @@ void set_or_update_runtime_arguments(
     Program& program,
     KernelHandle reader_kernel_id,
     KernelHandle writer_kernel_id,
+    KernelHandle compute_kernel_id,
     CoreCoord compute_with_storage_grid_size,
     const BcastToOperation::operation_attributes_t& operation_attributes,
     const BcastToOperation::tensor_args_t& tensor_args,
@@ -98,6 +99,18 @@ void set_or_update_runtime_arguments(
             oWt};
         handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
+        std::array compute_runtime_args = {
+            start_tile_id,
+            num_tiles_per_core,
+            oHtWt,
+            iHt * iWt * iC * (iN > 1),
+            iHt * iWt * (iC > 1),
+            oN,
+            oC,
+            oHt,
+            oWt};
+        handle_args(program, compute_kernel_id, core, compute_runtime_args);
+
         start_tile_id += num_tiles_per_core;
     }
 }
@@ -158,6 +171,9 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
     auto [input_cb, input_cb_handle] = create_cb(
         tt::CBIndex::c_0, program, all_device_cores, input_single_tile_size, num_tiles_per_cb, input_data_format);
 
+    auto [output_cb, output_cb_handle] = create_cb(
+        tt::CBIndex::c_16, program, all_device_cores, input_single_tile_size, num_tiles_per_cb, input_data_format);
+
     const auto src_is_dram = static_cast<const uint32_t>(input.buffer()->is_dram());
     const auto dst_is_dram = static_cast<const uint32_t>(output.buffer()->is_dram());
 
@@ -177,6 +193,9 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
         all_device_cores,
         tt::tt_metal::WriterDataMovementConfig({dst_is_dram}));
 
+    auto compute_id = tt::tt_metal::CreateKernel(
+        program, get_kernel_file_path(kernel_config.compute_kernel), all_device_cores, tt::tt_metal::ComputeConfig{});
+
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
         tt::tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
     };
@@ -185,13 +204,14 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
         program,
         reader_id,
         writer_id,
+        compute_id,
         compute_with_storage_grid_size,
         operation_attributes,
         tensor_args,
         output,
         set_runtime_args);
 
-    return {std::move(program), {reader_id, writer_id, compute_with_storage_grid_size}};
+    return {std::move(program), {reader_id, writer_id, compute_id, compute_with_storage_grid_size}};
 }
 
 void BcastToOperation::BcastToTileFactory::override_runtime_arguments(
@@ -209,6 +229,7 @@ void BcastToOperation::BcastToTileFactory::override_runtime_arguments(
         cached_program.program,
         cached_program.shared_variables.reader_kernel_id,
         cached_program.shared_variables.writer_kernel_id,
+        cached_program.shared_variables.compute_kernel_id,
         cached_program.shared_variables.compute_with_storage_grid_size,
         operation_attributes,
         tensor_args,
