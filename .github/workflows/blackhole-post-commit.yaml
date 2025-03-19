@@ -92,7 +92,7 @@ jobs:
       timeout: 20
       arch: blackhole
       runner-label: ${{ inputs.runner-label || 'BH' }}
-      os: "ubuntu-22.04"
+      os: "ubuntu-20.04"
   # FD C++ Unit Tests
   cpp-unit-tests:
     needs: build-artifact
