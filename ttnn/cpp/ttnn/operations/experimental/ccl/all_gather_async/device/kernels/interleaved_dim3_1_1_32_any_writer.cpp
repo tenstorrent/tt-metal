@@ -27,28 +27,30 @@ constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(6);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(7);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(8);
 constexpr bool last_dim = get_compile_time_arg_val(9);
-constexpr uint32_t tile_cols_for_chip = get_compile_time_arg_val(10);
-constexpr uint32_t num_banks = get_compile_time_arg_val(11);
+constexpr uint32_t num_banks = get_compile_time_arg_val(10);
 
 template <bool DRAM>
 inline void fabric_send_non_contig_tiles(
     uint32_t num_tiles,
     uint32_t& tile_id,
+    uint32_t ring_size,
+    uint32_t tile_cols_per_chip,
+    uint32_t tile_id_start,
     InterleavedAddrGenFast<DRAM>& addrgen,
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
-    FabricConnectionManager& fabric_connection,
-    uint32_t ring_size,
-    uint32_t tile_id_start) {
+    FabricConnectionManager& fabric_connection) {
     uint32_t row = 0;
+    DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] BEGIN fabric_send_non_contig_tiles tile_id: " << tile_id
+           << ", num_tiles: " << num_tiles << ", packet_size_in_pages: " << packet_size_in_pages << "\n";
     for (uint32_t i = 0; i < num_tiles; i += packet_size_in_pages) {
         uint32_t num_pages_to_read = min(num_tiles - i, packet_size_in_pages);
         cb_wait_front(cb0_id, num_pages_to_read);
         size_t l1_read_addr = get_read_ptr(cb0_id);
         for (uint32_t j = 0; j < num_pages_to_read; j++) {
             uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, addrgen, 0 /*offset*/, 0 /*noc_id*/);
-            DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] rest_tiles tile_id: " << tile_id
-                   << ", noc0_dest_noc_addr: " << noc0_dest_noc_addr << "\n";
+            DPRINT << "\t\t\t[W][" << (uint32_t)my_chip_id << "] rest_tiles i: " << i << ", j: " << j
+                   << ", tile_id: " << tile_id << ", packet_size_in_pages: " << packet_size_in_pages << "\n";
             write_and_advance_local_read_address_for_fabric_write(
                 noc0_dest_noc_addr,
                 pkt_hdr_forward,
@@ -58,14 +60,168 @@ inline void fabric_send_non_contig_tiles(
                 tensor0_page_size);
             tile_id++;
             if constexpr (last_dim) {
-                if (tile_id % tile_cols_for_chip == 0) {
+                if (tile_id % tile_cols_per_chip == 0) {
                     row++;
-                    tile_id = row * (tile_cols_for_chip * ring_size) + tile_id_start;
+                    tile_id = row * (tile_cols_per_chip * ring_size) + tile_id_start;
                 }
             }
         }
         noc_async_writes_flushed();
         cb_pop_front(cb0_id, num_pages_to_read);
+        DPRINT << "\t\t[W][" << (uint32_t)my_chip_id << "] outer DONE i: " << i << " -> " << i + packet_size_in_pages
+               << "\n";
+    }
+    DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] DONE fabric_send_non_contig_tiles tile_id: " << tile_id
+           << ", num_tiles: " << num_tiles << "\n";
+}
+
+inline uint32_t dim3_rel2abs_tile_id(
+    uint32_t rel_tile_id, uint32_t tile_cols_per_chip, uint32_t ring_size, uint32_t ring_idx) {
+    uint32_t row = rel_tile_id / tile_cols_per_chip;
+    uint32_t idx = rel_tile_id % tile_cols_per_chip;
+    return idx + (tile_cols_per_chip * ring_idx) + row * ring_size * tile_cols_per_chip;
+}
+
+template <bool DRAM>
+inline void fabric_send_contig_tiles_dim3_bf16(
+    uint32_t num_tiles,
+    uint32_t ring_size,
+    uint32_t tile_cols_per_chip,
+    InterleavedAddrGenFast<DRAM>& addrgen,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
+    FabricConnectionManager& fabric_connection) {
+    DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] BEGIN fabric_send_contig_tiles_dim3 num_tiles: " << num_tiles
+           << "\n";
+    uint32_t row = 0;
+    uint32_t total = 0;
+    uint32_t tile_id = 0;
+    uint32_t total_cols = tile_cols_per_chip * ring_size;
+    uint32_t contig_cnt = 0;
+    uint32_t end_abs_tile_id = dim3_rel2abs_tile_id(num_tiles - 1, tile_cols_per_chip, ring_size, my_chip_id);
+    while (total < num_tiles) {
+        uint32_t abs_tile_id = dim3_rel2abs_tile_id(tile_id, tile_cols_per_chip, ring_size, my_chip_id);
+        if ((abs_tile_id >= 2 * num_banks) &&
+            ((uint32_t)my_chip_id == ((abs_tile_id - 2 * num_banks) % total_cols) / tile_cols_per_chip)) {
+            cb_wait_front(cb0_id, 2);
+            size_t l1_read_addr = get_read_ptr(cb0_id);
+            DPRINT << "\t\t\t[W][" << (uint32_t)my_chip_id << "] write non contig tiles abs_tile_id: " << abs_tile_id
+                   << "\n";
+            for (uint32_t j = 0; j < 1; j++) {  // TODO: loop count
+                uint64_t noc0_dest_noc_addr = get_noc_addr(abs_tile_id, addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                write_and_advance_local_read_address_for_fabric_write(
+                    noc0_dest_noc_addr,
+                    pkt_hdr_forward,
+                    pkt_hdr_backward,
+                    fabric_connection,
+                    l1_read_addr,
+                    tensor0_page_size);
+                tile_id++;
+                total++;
+                if (tile_id % tile_cols_per_chip == 0) {
+                    row++;
+                }
+            }
+            noc_async_writes_flushed();
+            cb_pop_front(cb0_id, 2);
+        } else if (
+            (abs_tile_id >= num_banks) &&
+            ((uint32_t)my_chip_id == ((abs_tile_id - num_banks) % total_cols) / tile_cols_per_chip)) {
+            DPRINT << "\t\t[W][" << (uint32_t)my_chip_id << "] SKIP!! total: " << total << ", tile_id: " << tile_id
+                   << ", abs_tile_id: " << abs_tile_id << "\n";
+            tile_id++;
+            if (tile_id % tile_cols_per_chip == 0) {
+                row++;
+            }
+        } else {
+            DPRINT << "\t\t[W][" << (uint32_t)my_chip_id << "] total: " << total << ", tile_id: " << tile_id
+                   << ", abs_tile_id: " << abs_tile_id << "\n";
+            if ((abs_tile_id + num_banks) <= end_abs_tile_id &&
+                (uint32_t)my_chip_id == ((abs_tile_id + num_banks) % total_cols) / tile_cols_per_chip) {
+                cb_wait_front(cb0_id, packet_size_in_pages);
+                size_t l1_read_addr = get_read_ptr(cb0_id);
+
+                DPRINT << "\t\t\t[W][" << (uint32_t)my_chip_id << "] write contig tiles: abs_tile_id: " << abs_tile_id
+                       << ", contig_cnt: " << contig_cnt << "\n";
+                uint64_t noc0_dest_noc_addr = get_noc_addr(abs_tile_id, addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                write_and_advance_local_read_address_for_fabric_write(
+                    noc0_dest_noc_addr,
+                    pkt_hdr_forward,
+                    pkt_hdr_backward,
+                    fabric_connection,
+                    l1_read_addr,
+                    packet_size_in_pages * tensor0_page_size);
+
+                noc_async_writes_flushed();
+                cb_pop_front(cb0_id, packet_size_in_pages);
+                contig_cnt++;
+                tile_id++;
+                total += 2;
+                if (tile_id % tile_cols_per_chip == 0) {
+                    row++;
+                }
+            } else {
+                cb_wait_front(cb0_id, 2);
+                size_t l1_read_addr = get_read_ptr(cb0_id);
+
+                DPRINT << "\t\t\t[W][" << (uint32_t)my_chip_id
+                       << "] write non contig tiles abs_tile_id: " << abs_tile_id << "\n";
+                for (uint32_t j = 0; j < 1; j++) {  // TODO: loop count
+                    uint64_t noc0_dest_noc_addr = get_noc_addr(abs_tile_id, addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                    write_and_advance_local_read_address_for_fabric_write(
+                        noc0_dest_noc_addr,
+                        pkt_hdr_forward,
+                        pkt_hdr_backward,
+                        fabric_connection,
+                        l1_read_addr,
+                        tensor0_page_size);
+                    tile_id++;
+                    total++;
+                    if (tile_id % tile_cols_per_chip == 0) {
+                        row++;
+                    }
+                }
+                noc_async_writes_flushed();
+                cb_pop_front(cb0_id, 2);
+            }
+        }
+    }
+    DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] DONE fabric_send_contig_tiles_dim3 num_tiles: " << num_tiles
+           << "\n";
+}
+
+template <bool DRAM>
+inline void fabric_send_full_contig_tiles(
+    uint32_t num_cols,
+    uint32_t& col_id,
+    InterleavedAddrGenFast<DRAM>& addrgen,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
+    FabricConnectionManager& fabric_connection,
+    uint32_t tile_id_start) {
+    DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] fabric_send_full_contig_tiles num_cols: " << num_cols
+           << ", col_id:" << col_id << "\n";
+    while (col_id < num_cols) {
+        cb_wait_front(cb0_id, packet_size_in_pages);
+        size_t l1_read_addr = get_read_ptr(cb0_id);
+
+        uint64_t noc0_dest_noc_addr = get_noc_addr(col_id + tile_id_start, addrgen, 0 /*offset*/, 0 /*noc_id*/);
+        DPRINT << "\t\t[W][" << (uint32_t)my_chip_id << "] tile_id: " << col_id + tile_id_start
+               << ", noc0_dest_noc_addr: " << noc0_dest_noc_addr << "\n";
+        write_and_advance_local_read_address_for_fabric_write(
+            noc0_dest_noc_addr,
+            pkt_hdr_forward,
+            pkt_hdr_backward,
+            fabric_connection,
+            l1_read_addr,
+            packet_size_in_pages * tensor0_page_size);
+
+        col_id++;
+        if (col_id % num_banks == 0) {
+            col_id += num_banks * (packet_size_in_pages - 1);
+        }
+        noc_async_writes_flushed();
+        cb_pop_front(cb0_id, packet_size_in_pages);
     }
 }
 
@@ -89,8 +245,9 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_tiles_per_chip = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t ring_size = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t tile_cols_per_chip = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_idx);
 
@@ -105,7 +262,6 @@ void kernel_main() {
     DPRINT << "num_targets_forward_direction: " << (uint32_t)num_targets_forward_direction << "\n";
     DPRINT << "num_targets_backward_direction: " << (uint32_t)num_targets_backward_direction << "\n";
     DPRINT << "last_dim: " << (uint32_t)last_dim << "\n";
-    DPRINT << "tile_cols_for_chip: " << (uint32_t)tile_cols_for_chip << "\n";
     DPRINT << "num_banks: " << (uint32_t)num_banks << "\n";
 
     DPRINT << "rt args: \n";
@@ -119,6 +275,7 @@ void kernel_main() {
     DPRINT << "out_ready_sem_noc0_y: " << (uint32_t)out_ready_sem_noc0_y << "\n";
     DPRINT << "out_ready_sem_wait_value: " << (uint32_t)out_ready_sem_wait_value << "\n";
     DPRINT << "ring_size: " << (uint32_t)ring_size << "\n";
+    DPRINT << "tile_cols_per_chip: " << (uint32_t)tile_cols_per_chip << "\n";
     DPRINT << "num_tiles_per_chip: " << (uint32_t)num_tiles_per_chip << "\n";
 
     DPRINT << "arg_for_fab: " << (uint32_t)arg_for_fab << "\n";
@@ -171,7 +328,7 @@ void kernel_main() {
 
     // when last_dim == true, tile_id coordinate is as follows
     //      |        chip0          |       chip1           |
-    //      |  tile_cols_for_chip   |                       |
+    //      |  tile_cols_per_chip   |                       |
     //      | id 0|    1|    2|    3|    4|    5|    6|    7|
     // row  |    8|    9|   10|   11|   12|   13|   14|   15|
     //      |   16|   17|   18|   19|   20|   21|   22|   23|
@@ -187,129 +344,109 @@ void kernel_main() {
     //      |   24|   25|   26|   27|   28|   29|   30|   31|
     //
 
-    uint32_t tile_id = tile_id_start;
-    uint32_t row = 0;
-    uint32_t total = 0;
-    if constexpr (!last_dim) {
-        total = tile_id_start;
-    }
-    if (true) {
-        fabric_send_non_contig_tiles<is_dram>(
-            num_tiles_per_chip,
-            tile_id_start,
+    if constexpr (last_dim) {
+        if constexpr (true) {
+            fabric_send_contig_tiles_dim3_bf16<is_dram>(
+                num_tiles_per_chip,
+                ring_size,
+                tile_cols_per_chip,
+                tensor0_addrgen,
+                pkt_hdr_forward,
+                pkt_hdr_backward,
+                fabric_connection);
+        } else {
+            fabric_send_non_contig_tiles<is_dram>(
+                num_tiles_per_chip,
+                tile_id_start,
+                ring_size,
+                tile_cols_per_chip,
+                tile_id_start,
+                tensor0_addrgen,
+                pkt_hdr_forward,
+                pkt_hdr_backward,
+                fabric_connection);
+        }
+    } else {
+        auto filled_bank_rows = num_tiles_per_chip / (num_banks * packet_size_in_pages);
+        auto rest_filled_bank = num_tiles_per_chip % (num_banks * packet_size_in_pages);
+        auto rest_full_contig_cols = 0;
+        uint32_t tile_id = tile_id_start;
+        uint32_t total = 0;
+
+        if (num_banks * (packet_size_in_pages - 1) < rest_filled_bank) {
+            rest_full_contig_cols = (rest_filled_bank) % (num_banks * (packet_size_in_pages - 1));
+        }
+        fabric_send_full_contig_tiles<is_dram>(
+            filled_bank_rows * num_banks * packet_size_in_pages + rest_full_contig_cols,
+            total,
             tensor0_addrgen,
             pkt_hdr_forward,
             pkt_hdr_backward,
             fabric_connection,
-            ring_size,
             tile_id_start);
-    } else {
-        total = 0;
+
         if (packet_size_in_pages == 2) {  // bf16
-            auto filled_bank_2rows = num_tiles_per_chip / (num_banks * packet_size_in_pages);
-            auto filled_bank_1rows = num_tiles_per_chip / num_banks;
-            auto rest_contig_tiles = filled_bank_1rows % packet_size_in_pages != 0 ? num_tiles_per_chip % num_banks : 0;
-            auto rest_tiles = filled_bank_1rows % packet_size_in_pages != 0 ? num_banks - rest_contig_tiles
-                                                                            : num_tiles_per_chip % num_banks;
-            DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] filled_bank_2rows:" << filled_bank_2rows
-                   << ", filled_bank_1rows:" << filled_bank_1rows << ", rest_contig_tiles:" << rest_contig_tiles
+            auto rest_tiles = 0;
+            if (num_banks * 1 < rest_filled_bank) {
+                rest_tiles = num_banks - (rest_filled_bank % (num_banks * (packet_size_in_pages - 1)));
+            } else {
+                rest_tiles = num_tiles_per_chip % (num_banks * packet_size_in_pages);
+            }
+
+            DPRINT << "[W][" << (uint32_t)my_chip_id << "] filled_bank_rows:" << filled_bank_rows
                    << ", rest_tiles:" << rest_tiles << "\n";
 
-            while (total < filled_bank_2rows * num_banks * packet_size_in_pages + rest_contig_tiles) {
-                cb_wait_front(cb0_id, packet_size_in_pages);
-                size_t l1_read_addr = get_read_ptr(cb0_id);
-
-                uint64_t noc0_dest_noc_addr =
-                    get_noc_addr(total + tile_id_start, tensor0_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-                DPRINT << "\t\t[W][" << (uint32_t)my_chip_id << "] tile_id: " << total + tile_id_start
-                       << ", noc0_dest_noc_addr: " << noc0_dest_noc_addr << "\n";
-                write_and_advance_local_read_address_for_fabric_write(
-                    noc0_dest_noc_addr,
-                    pkt_hdr_forward,
-                    pkt_hdr_backward,
-                    fabric_connection,
-                    l1_read_addr,
-                    packet_size_in_pages * tensor0_page_size);
-
-                total++;
-                if (total % num_banks == 0) {
-                    total += num_banks * (packet_size_in_pages - 1);
-                }
-                noc_async_writes_flushed();
-                cb_pop_front(cb0_id, packet_size_in_pages);
-            }
             total += tile_id_start;
             fabric_send_non_contig_tiles<is_dram>(
                 rest_tiles,
                 total,
+                ring_size,
+                tile_cols_per_chip,
+                tile_id_start,
                 tensor0_addrgen,
                 pkt_hdr_forward,
                 pkt_hdr_backward,
-                fabric_connection,
-                ring_size,
-                tile_id_start);
+                fabric_connection);
         } else {  // bf8
-            auto filled_bank_4rows = num_tiles_per_chip / (num_banks * packet_size_in_pages);
-            auto filled_bank_2rows =
-                (num_tiles_per_chip % (num_banks * packet_size_in_pages)) / (num_banks * packet_size_in_pages / 2);
-            auto rest_tiles = num_tiles_per_chip % (num_banks * packet_size_in_pages / 2);  // rest of 2 bank row
-            DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] filled_bank_4rows:" << filled_bank_4rows
+            auto rest_2contig_cols = 0;
+            auto rest_tiles = 0;
+            if (num_banks * 3 < rest_filled_bank) {
+                rest_2contig_cols = (num_banks - rest_full_contig_cols);
+                rest_tiles = rest_2contig_cols;
+            } else if (num_banks * 2 < rest_filled_bank) {
+                rest_2contig_cols = num_banks;
+                rest_tiles = (rest_filled_bank) % (num_banks * 2);
+            } else if (num_banks < rest_filled_bank) {
+                rest_2contig_cols = (rest_filled_bank) % num_banks;
+                rest_tiles = num_banks - rest_2contig_cols;
+            } else {
+                rest_tiles = rest_filled_bank;
+            }
+
+            DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] filled_bank_rows:" << filled_bank_rows
                    << ", rest_tiles:" << rest_tiles << "\n";
 
-            while (total < filled_bank_4rows * num_banks * packet_size_in_pages) {
+            while (total <
+                   rest_2contig_cols + (filled_bank_rows * num_banks * packet_size_in_pages + rest_full_contig_cols)) {
                 cb_wait_front(cb0_id, packet_size_in_pages);
                 size_t l1_read_addr = get_read_ptr(cb0_id);
 
-                uint64_t noc0_dest_noc_addr =
-                    get_noc_addr(total + tile_id_start, tensor0_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-                DPRINT << "\t\t[W][" << (uint32_t)my_chip_id << "] tile_id: " << total + tile_id_start
-                       << ", noc0_dest_noc_addr: " << noc0_dest_noc_addr << "\n";
-                write_and_advance_local_read_address_for_fabric_write(
-                    noc0_dest_noc_addr,
-                    pkt_hdr_forward,
-                    pkt_hdr_backward,
-                    fabric_connection,
-                    l1_read_addr,
-                    packet_size_in_pages * tensor0_page_size);
-
-                total++;
-                if (total % num_banks == 0) {
-                    total += num_banks * (packet_size_in_pages - 1);
+                for (uint32_t j = 0; j < 2; j++) {
+                    uint64_t noc0_dest_noc_addr =
+                        get_noc_addr(total + tile_id_start, tensor0_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+                    DPRINT << "\t\t[W][" << (uint32_t)my_chip_id << "] tile_id: " << total + tile_id_start
+                           << ", noc0_dest_noc_addr: " << noc0_dest_noc_addr << "\n";
+                    write_and_advance_local_read_address_for_fabric_write(
+                        noc0_dest_noc_addr,
+                        pkt_hdr_forward,
+                        pkt_hdr_backward,
+                        fabric_connection,
+                        l1_read_addr,
+                        packet_size_in_pages * tensor0_page_size / 2);
+                    total++;
                 }
-                noc_async_writes_flushed();
-                cb_pop_front(cb0_id, packet_size_in_pages);
-            }
-            while (total < filled_bank_2rows * num_banks * (packet_size_in_pages / 2) +
-                               (filled_bank_4rows * num_banks * packet_size_in_pages)) {
-                cb_wait_front(cb0_id, packet_size_in_pages);
-                size_t l1_read_addr = get_read_ptr(cb0_id);
-
-                uint64_t noc0_dest_noc_addr =
-                    get_noc_addr(total + tile_id_start, tensor0_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-                DPRINT << "\t\t[W][" << (uint32_t)my_chip_id << "] tile_id: " << total + tile_id_start
-                       << ", noc0_dest_noc_addr: " << noc0_dest_noc_addr << "\n";
-                write_and_advance_local_read_address_for_fabric_write(
-                    noc0_dest_noc_addr,
-                    pkt_hdr_forward,
-                    pkt_hdr_backward,
-                    fabric_connection,
-                    l1_read_addr,
-                    packet_size_in_pages * tensor0_page_size / 2);
-                total++;
-                noc0_dest_noc_addr = get_noc_addr(total + tile_id_start, tensor0_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-                DPRINT << "\t\t[W][" << (uint32_t)my_chip_id << "] tile_id: " << total + tile_id_start
-                       << ", noc0_dest_noc_addr: " << noc0_dest_noc_addr << "\n";
-                write_and_advance_local_read_address_for_fabric_write(
-                    noc0_dest_noc_addr,
-                    pkt_hdr_forward,
-                    pkt_hdr_backward,
-                    fabric_connection,
-                    l1_read_addr,
-                    packet_size_in_pages * tensor0_page_size / 2);
-
-                total++;
                 if (total % num_banks == 0) {
-                    total += num_banks * (packet_size_in_pages - 3);
+                    total += num_banks + rest_full_contig_cols;
                 }
                 noc_async_writes_flushed();
                 cb_pop_front(cb0_id, packet_size_in_pages);
@@ -318,12 +455,13 @@ void kernel_main() {
             fabric_send_non_contig_tiles<is_dram>(
                 rest_tiles,
                 total,
+                ring_size,
+                tile_cols_per_chip,
+                tile_id_start,
                 tensor0_addrgen,
                 pkt_hdr_forward,
                 pkt_hdr_backward,
-                fabric_connection,
-                ring_size,
-                tile_id_start);
+                fabric_connection);
         }
     }
 

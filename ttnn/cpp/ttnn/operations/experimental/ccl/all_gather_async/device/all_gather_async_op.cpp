@@ -143,6 +143,7 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
           (input_tensor_shape[2] % 32 == 0 && input_tensor_shape[3] % 32 == 0))) &&
         input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
         input_tensor_page_layout == tt::tt_metal::Layout::TILE && this->enable_persistent_fabric_mode) {
+        fprintf(stderr, "DEBUG: AllGatherAsyncVersion::MINIMAL_INTERLEAVED_32\n");
         return AllGatherAsyncVersion::MINIMAL_INTERLEAVED_32;
     }
 
@@ -198,7 +199,7 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
         }
     }
     log_trace(tt::LogOp, "Using generic implementation");
-    fprintf(stderr, "DEBUG: AllGatherAsyncVersion::GENERIC;\n");
+    fprintf(stderr, "DEBUG: AllGatherAsyncVersion::GENERIC\n");
     return AllGatherAsyncVersion::GENERIC;
 }
 
