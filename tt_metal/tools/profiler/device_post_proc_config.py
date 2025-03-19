@@ -125,6 +125,24 @@ class perf_analysis(default_setup):
             "start": {"core": "ANY", "risc": "TRISC_0", "zone_name": "MATH-BLOCK"},
             "end": {"core": "ANY", "risc": "TRISC_0", "zone_name": "MATH-BLOCK"},
         },
+        "trisc0_tilize_block_duration": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TILIZE-BLOCK"},
+            "end": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TILIZE-BLOCK"},
+        },
+        "trisc1_tilize_block_duration": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_1", "zone_name": "TILIZE-BLOCK"},
+            "end": {"core": "ANY", "risc": "TRISC_1", "zone_name": "TILIZE-BLOCK"},
+        },
+        "trisc2_tilize_block_duration": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_2", "zone_name": "TILIZE-BLOCK"},
+            "end": {"core": "ANY", "risc": "TRISC_2", "zone_name": "TILIZE-BLOCK"},
+        },
         "trisc0_kernel_duration": {
             "across": "core",
             "type": "adjacent",

@@ -61,6 +61,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
             }
         }
     }
+    tt::log_info(tt::LogOp, "TILIZE argumments {} {} {}", num_tiles, num_tiles_per_block, max_tiles);
     uint32_t block_width_size = num_tiles_per_block * TILE_WIDTH * a.element_size();
     uint32_t num_full_blocks_in_row = num_tiles_in_row / num_tiles_per_block;
     uint32_t num_leftover_tiles = num_tiles_in_row % num_tiles_per_block;
