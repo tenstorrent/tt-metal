@@ -1253,6 +1253,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t x_CB_size = interm_block_tiles * single_tile_size;
     uint32_t xmm_CB_size = interm_block_tiles * single_tile_size;
     uint32_t ex_partial_CB_size = single_tile_size;   // partial Ex
+    uint32_t ex2_partial_CB_size = single_tile_size;  // partial Ex
     uint32_t ex_global_CB_size = ex_partial_CB_size;  // the final result Ex
     uint32_t ex2_global_CB_size = ex_partial_CB_size;  // the final result Ex
     uint32_t xmm2_CB_size = interm_block_tiles * single_tile_size;
@@ -1734,6 +1735,12 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         tt::tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex_cb_partial_index, cb_data_format}})
             .set_page_size(ex_cb_partial_index, single_tile_size);
     auto cb_ex_partial = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_partial_config);
+    // ex2_partial
+    uint32_t ex2_cb_partial_index = tt::CBIndex::c_21;
+    tt::tt_metal::CircularBufferConfig ex2_cb_partial_config =
+        tt::tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex2_cb_partial_index, cb_data_format}})
+            .set_page_size(ex2_cb_partial_index, single_tile_size);
+    auto cb_ex2_partial = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_cb_partial_config);
     // ex_external
     uint32_t ex_cb_external_index = tt::CBIndex::c_10;
     tt::tt_metal::CircularBufferConfig ex_cb_external_config =

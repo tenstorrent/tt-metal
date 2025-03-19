@@ -178,6 +178,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_receiver_semaphore_addr);
 
     constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;
+    constexpr uint32_t cb_ex2_partial = tt::CBIndex::c_21;
     constexpr uint32_t cb_ex = tt::CBIndex::c_9;
     constexpr uint32_t cb_ex2 = tt::CBIndex::c_13;
     constexpr uint32_t cb_ex_external = tt::CBIndex::c_10;
@@ -209,12 +210,6 @@ void kernel_main() {
     }
 #endif
 
-    uint32_t l1_read_addr_ex_par = get_read_ptr(cb_ex_partial);
-    volatile tt_l1_ptr uint16_t* rptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_read_addr_ex_par);
-
-    uint32_t l1_write_addr_external = get_write_ptr(cb_ex_external);
-    volatile tt_l1_ptr uint16_t* wptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_external);
-
     uint32_t out_block_h = block_h / num_out_blocks;
     uint32_t out_block_hw = out_block_h * block_w;
 
@@ -229,7 +224,6 @@ void kernel_main() {
                     uint32_t out_block_start_id_offset = 0;
                     uint32_t l1_write_addr_external = get_write_ptr(cb_ex_external);
                     cb_reserve_back(cb_ex_external, 1);
-
                     for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; out_block_index++) {
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
                     const uint32_t src0_tile_bytes = get_tile_size(cb_in0);
@@ -256,11 +250,16 @@ void kernel_main() {
 #endif
                     if (n == 0 || n == 1) {
                         // wait for local data ready
-                        cb_wait_front(cb_ex_partial, 1);
+                        if (n == 0) {
+                            cb_wait_front(cb_ex_partial, 1);
+                        } else {
+                            cb_wait_front(cb_ex2_partial, 1);
+                        }
 
                         // read self Ex partial - on the first iteration, read a full tile for overwriting garbage in
                         // L1, on subsequent just treat it as another core
-                        uint32_t l1_read_addr_ex_par = get_read_ptr(cb_ex_partial);
+                        uint32_t l1_read_addr_ex_par =
+                            n == 0 ? get_read_ptr(cb_ex_partial) : get_read_ptr(cb_ex2_partial);
                         uint64_t noc_addr_ex_par = get_noc_addr(noc_coord_x[0], noc_coord_y[0], l1_read_addr_ex_par);
                         uint32_t read_size = out_block_index ? num_bytes_read : single_tile_size_bytes;
                         noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, read_size);
@@ -279,7 +278,11 @@ void kernel_main() {
                             l1_write_addr_external += 16;
                             noc_async_read_barrier();
                         }
-                        cb_pop_front(cb_ex_partial, 1);
+                        if (n == 0) {
+                            cb_pop_front(cb_ex_partial, 1);
+                        } else {
+                            cb_pop_front(cb_ex2_partial, 1);
+                        }
                         noc_semaphore_set_multicast(
                             reduce_sender_semaphore_addr,
                             reduce_sender_semaphore_noc_addr,

@@ -57,6 +57,7 @@ void kernel_main() {
     const uint32_t mcast_sender_noc_y = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;  // E[x] partial reduce
+    constexpr uint32_t cb_ex2_partial = tt::CBIndex::c_21;  // E[x] partial reduce
     constexpr uint32_t cb_ex = tt::CBIndex::c_9;          // E[x] partial reduce
     constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;  // E[x] global reduce
     constexpr uint32_t cb_ex2 = tt::CBIndex::c_13;        // E[x]^2 partial reduce
@@ -134,11 +135,19 @@ void kernel_main() {
                 if (n == 0 || n == 1) {
                     // wait for local data ready
                     noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
-                    cb_wait_front(cb_ex_partial, 1);
+                    if (n == 0) {
+                        cb_wait_front(cb_ex_partial, 1);
+                    } else {
+                        cb_wait_front(cb_ex2_partial, 1);
+                    }
                     noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
 
                     noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
-                    cb_pop_front(cb_ex_partial, 1);
+                    if (n == 0) {
+                        cb_pop_front(cb_ex_partial, 1);
+                    } else {
+                        cb_pop_front(cb_ex2_partial, 1);
+                    }
                 }
                 }
 

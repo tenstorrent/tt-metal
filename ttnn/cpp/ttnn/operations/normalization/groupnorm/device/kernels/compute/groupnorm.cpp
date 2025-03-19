@@ -95,11 +95,12 @@ void MAIN {
     constexpr uint32_t cb_x = tt::CBIndex::c_24;
     constexpr uint32_t cb_xmm = tt::CBIndex::c_25;
     constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;
+    constexpr uint32_t cb_ex2_partial = tt::CBIndex::c_21;
     constexpr uint32_t cb_ex = tt::CBIndex::c_9;
     constexpr uint32_t cb_ex2 = tt::CBIndex::c_13;
     constexpr uint32_t cb_ex_external = tt::CBIndex::c_10;
     constexpr uint32_t cb_ex_global = num_cores_per_mcast_group == 1 ? cb_ex_partial : tt::CBIndex::c_15;
-    constexpr uint32_t cb_ex2_global = num_cores_per_mcast_group == 1 ? cb_ex_partial : tt::CBIndex::c_14;
+    constexpr uint32_t cb_ex2_global = num_cores_per_mcast_group == 1 ? cb_ex2_partial : tt::CBIndex::c_14;
     constexpr uint32_t cb_ex2pe = tt::CBIndex::c_27;
 
     // interm cbs reuse
@@ -355,8 +356,8 @@ void MAIN {
 
                 // Partial-Var(x)
                 index_h_offset = 0;
-                reduce_init_delta<false>(cb_xmm, cb_scaler, cb_ex_partial);
-                cb_reserve_back(cb_ex_partial, 1);
+                reduce_init_delta<false>(cb_xmm, cb_scaler, cb_ex2_partial);
+                cb_reserve_back(cb_ex2_partial, 1);
                 tile_regs_acquire();
                 cb_wait_front(cb_xmm, out_block_hw);
                 cb_wait_front(cb_scaler, 1);  // TODO DELETE THIS
@@ -369,11 +370,11 @@ void MAIN {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile(dst0, cb_ex_partial);
+                pack_tile(dst0, cb_ex2_partial);
                 tile_regs_release();
-                cb_push_back(cb_ex_partial, 1);
+                cb_push_back(cb_ex2_partial, 1);
                 cb_pop_front(cb_xmm, out_block_hw);
-                reduce_revert_delta(cb_ex_partial);
+                reduce_revert_delta(cb_ex2_partial);
             }
 
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
