@@ -39,6 +39,20 @@
 //     }
 // }
 
+template <uint8_t noc_ind = noc_index>
+FORCE_INLINE std::uint64_t static_noc_multicast_addr(
+    std::uint32_t noc_x_start,
+    std::uint32_t noc_y_start,
+    std::uint32_t noc_x_end,
+    std::uint32_t noc_y_end,
+    std::uint32_t addr) {
+    if constexpr (noc_ind == 0) {
+        return get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, addr);
+    } else {
+        return get_noc_multicast_addr(noc_x_end, noc_y_end, noc_x_start, noc_y_start, addr);
+    }
+}
+
 void kernel_main() {
     // DPRINT << "Starting kernel_main for writer" << ENDL();
     size_t ct_arg_idx = 0, rt_arg_idx = 0;
@@ -58,6 +72,10 @@ void kernel_main() {
     constexpr uint32_t num_devices = get_compile_time_arg_val(11);
     constexpr uint32_t page_size_bytes = get_compile_time_arg_val(12);
     constexpr uint32_t output_cores_per_device = get_compile_time_arg_val(13);
+    constexpr uint32_t noc_start_x = get_compile_time_arg_val(14);
+    constexpr uint32_t noc_start_y = get_compile_time_arg_val(15);
+    constexpr uint32_t noc_end_x = get_compile_time_arg_val(16);
+    constexpr uint32_t noc_end_y = get_compile_time_arg_val(17);
 
     // Derived compile-time constants
     constexpr uint32_t input_tensor_cores = input_shard_cores_per_device * num_devices;
@@ -221,12 +239,8 @@ void kernel_main() {
         }
         noc_async_write_barrier();
         // Now we have the block in the CB address, we can mcast to dests!
-        uint64_t multicast_semaphore_addr = get_noc_multicast_addr(
-            25,  // remove hardcoding
-            21,  // remove hardcoding
-            output_core_xy[0][x_index],
-            output_core_xy[0][y_index],
-            local_semaphore_address);
+        uint64_t multicast_semaphore_addr =
+            static_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, local_semaphore_address);
         // DPRINT << "multicast_semaphore_addr: " << multicast_semaphore_addr << ENDL();
         noc_multicast_semaphore_inc(multicast_semaphore_addr, 1, output_cores_per_device + 2, 0);
         noc_async_atomic_barrier();
