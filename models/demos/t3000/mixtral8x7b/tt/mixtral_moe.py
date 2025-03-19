@@ -48,8 +48,20 @@ class TtMoeLayer(LightweightModule):
         )
 
         self.tile_size = 32
-        self.compute_kernel = args.get_compute_kernel_attn_config()
-        self.compute_kernel_reduce = args.get_compute_kernel_config_reduce()
+        # self.compute_kernel = args.get_compute_kernel_attn_config()
+        # self.compute_kernel_reduce = args.get_compute_kernel_config_reduce()
+        # self.compute_kernel = args.get_compute_kernel_attn_config()
+        self.compute_kernel = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        # self.compute_kernel_reduce = args.get_compute_kernel_config_reduce()
+        self.compute_kernel_reduce = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
 
         top8_mask = torch.full((1, 1, 1, 64), fill_value=torch.finfo(torch.float).min)
         top8_mask[:, :, :, :8] = 0.0

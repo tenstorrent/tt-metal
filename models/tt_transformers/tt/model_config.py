@@ -262,6 +262,10 @@ class ModelArgs:
         # Decoder
         "DECODE_RESIDUAL",
         "OUTPUT_MM",
+        # MoE
+        "GATE_W_LAYOUT",
+        "GATE_WEIGHTS",
+        "GATE_MM_OUTPUT",
     )
 
     LOCAL_LLAMA_PARAMS = {
@@ -507,6 +511,19 @@ class ModelArgs:
 
             # Configure data precision and math fidelity for tensors and kernels
             self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
+            # Mixtral
+            self.model_config["PREFILL_MLP_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+            self.model_config["GATE_MM_OUTPUT_KERNEL_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+            # end mixtral
             precision_setting_lookup = {
                 PrecisionSetting.BFP4: ttnn.bfloat4_b,
                 PrecisionSetting.BFP8: ttnn.bfloat8_b,
