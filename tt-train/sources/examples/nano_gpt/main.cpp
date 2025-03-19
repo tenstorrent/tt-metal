@@ -26,6 +26,10 @@
 #include "tokenizers/char_tokenizer.hpp"
 #include "utils.hpp"
 
+namespace {
+constexpr auto gpt2_tokenizer_file_name = "/gpt2-tokenizer.json";
+}
+
 /* WANDB BLocks this signal.
  Control+C didn't work.
 */
@@ -376,6 +380,7 @@ struct TrainingConfig {
     std::string data_path;
     std::string tokenizer_type = "char";
     std::string scheduler_type = "identity";
+    std::string tokenizer_path = std::string(DATA_FOLDER) + gpt2_tokenizer_file_name;
     bool use_clip_grad_norm = false;
     float clip_grad_norm_max_norm = 1.0F;
     ttml::models::gpt2::TransformerConfig transformer_config;
@@ -400,6 +405,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.data_path = training_config["data_path"].as<std::string>(std::string(DATA_FOLDER) + "/shakespeare.txt");
     config.tokenizer_type = training_config["tokenizer_type"].as<std::string>(config.tokenizer_type);
     config.scheduler_type = training_config["scheduler_type"].as<std::string>(config.scheduler_type);
+    config.tokenizer_path = training_config["tokenizer_path"].as<std::string>(config.tokenizer_path);
     config.use_clip_grad_norm = training_config["use_clip_grad_norm"].as<bool>(config.use_clip_grad_norm);
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
@@ -495,8 +501,15 @@ int main(int argc, char **argv) {
     auto schedule_func = schedulers.at(config.scheduler_type);
 
     std::string text;
+    std::variant<std::string, std::vector<uint32_t>> text_or_tokens;
     try {
         text = read_file_to_str(config.data_path);
+        // check file extension:
+        if (config.data_path.ends_with(".txt")) {
+            text_or_tokens = read_file_to_str(config.data_path);
+        } else {
+            text_or_tokens = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
+        }
     } catch (const std::exception &e) {
         std::cerr << e.what() << std::endl;
         return -1;
@@ -509,19 +522,25 @@ int main(int argc, char **argv) {
     fmt::print("Seed {}\n", ttml::autograd::ctx().get_seed());
     auto sequence_length = config.transformer_config.max_sequence_length;
 
-    auto create_dataset_and_tokenizer = [](const auto &text, const auto sequence_length, const auto &tokenizer_type) {
-        if (tokenizer_type == "char") {
-            return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
-                text, sequence_length);
-        } else if (tokenizer_type == "bpe") {
-            return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::BPETokenizer>(
-                text, sequence_length);
-        } else {
-            throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
-        }
-    };
+    auto create_dataset_and_tokenizer =
+        [](const auto &text, const auto sequence_length, const auto &tokenizer_path, const auto &tokenizer_type) {
+            if (tokenizer_type == "char") {
+                return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
+                    std::get<0>(text), sequence_length);
+            } else if (tokenizer_type == "bpe") {
+                return std::visit(
+                    [&](const auto &tokens) {
+                        return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::BPETokenizer>(
+                            tokens, sequence_length, tokenizer_path);
+                    },
+                    text);
+            } else {
+                throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
+            }
+        };
 
-    auto [dataset, tokenizer] = create_dataset_and_tokenizer(text, sequence_length, config.tokenizer_type);
+    auto [dataset, tokenizer] =
+        create_dataset_and_tokenizer(text_or_tokens, sequence_length, config.tokenizer_path, config.tokenizer_type);
     fmt::print("Dataset size: {}\n", dataset.get_size());
     fmt::print("Vocab size: {}\n", tokenizer->get_vocab_size());
     fmt::print("Tokenizer type: {}\n", config.tokenizer_type);
