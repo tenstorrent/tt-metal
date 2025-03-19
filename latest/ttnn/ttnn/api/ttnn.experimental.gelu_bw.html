@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ttnn.erfc_bw &mdash; TT-NN  documentation</title>
+  <title>ttnn.experimental.gelu_bw &mdash; TT-NN  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.erfc_bw.html" />
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.experimental.gelu_bw.html" />
   <!--[if lt IE 9]>
     <script src="../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -23,8 +23,8 @@
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.ceil_bw" href="ttnn.ceil_bw.html" />
-    <link rel="prev" title="ttnn.log1p_bw" href="ttnn.log1p_bw.html" /> 
+    <link rel="next" title="ttnn.elu" href="ttnn.elu.html" />
+    <link rel="prev" title="ttnn.experimental.dropout" href="ttnn.experimental.dropout.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -86,7 +86,7 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.deg2rad.html">ttnn.deg2rad</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.digamma.html">ttnn.digamma</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.experimental.dropout.html">ttnn.experimental.dropout</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.experimental.gelu_bw.html">ttnn.experimental.gelu_bw</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.experimental.gelu_bw</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.elu.html">ttnn.elu</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.eqz.html">ttnn.eqz</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.erf.html">ttnn.erf</a></li>
@@ -224,7 +224,7 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.sinh_bw.html">ttnn.sinh_bw</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.log10_bw.html">ttnn.log10_bw</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.log1p_bw.html">ttnn.log1p_bw</a></li>
-<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.erfc_bw</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.erfc_bw.html">ttnn.erfc_bw</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.ceil_bw.html">ttnn.ceil_bw</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.softsign_bw.html">ttnn.softsign_bw</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.cosh_bw.html">ttnn.cosh_bw</a></li>
@@ -310,9 +310,9 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-      <li class="breadcrumb-item active">ttnn.erfc_bw</li>
+      <li class="breadcrumb-item active">ttnn.experimental.gelu_bw</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../_sources/ttnn/api/ttnn.erfc_bw.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../_sources/ttnn/api/ttnn.experimental.gelu_bw.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -320,33 +320,38 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="ttnn-erfc-bw">
-<h1>ttnn.erfc_bw<a class="headerlink" href="#ttnn-erfc-bw" title="Permalink to this heading"></a>
+  <section id="ttnn-experimental-gelu-bw">
+<h1>ttnn.experimental.gelu_bw<a class="headerlink" href="#ttnn-experimental-gelu-bw" title="Permalink to this heading"></a>
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
-<dt class="sig sig-object py" id="ttnn.erfc_bw">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">erfc_bw</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">grad_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><span class="pre">ttnn.Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_a</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><span class="pre">ttnn.Tensor</span></a></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="../dependencies/tensor.html#ttnn.MemoryConfig" title="ttnn.MemoryConfig"><span class="pre">ttnn.MemoryConfig</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">List</span> <span class="pre">of</span> <span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.erfc_bw" title="Permalink to this definition"></a>
+<dt class="sig sig-object py" id="ttnn.experimental.gelu_bw">
+<span class="sig-prename descclassname"><span class="pre">ttnn.experimental.</span></span><span class="sig-name descname"><span class="pre">gelu_bw</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">grad_tensor:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">approximate:</span> <span class="pre">str</span> <span class="pre">|</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config:</span> <span class="pre">ttnn.MemoryConfig</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None.</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_grad:</span> <span class="pre">ttnn.Tensor</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None.</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">queue_id:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">0.</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><span class="pre">ttnn.Tensor</span></a></span></span><a class="headerlink" href="#ttnn.experimental.gelu_bw" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Performs backward operations for erfc on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p>
+<p>Applies the backward pass of the GELU function using ttnn experimental kernels.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>grad_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – the input gradient tensor.</p></li>
-<li><p><strong>input_tensor_a</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – the input tensor.</p></li>
+<li><p><strong>grad_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – The input gradient tensor.</p></li>
+<li><p><strong>input_tensor</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a>) – The input tensor.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
-<p><strong>memory_config</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.MemoryConfig" title="ttnn.MemoryConfig"><em>ttnn.MemoryConfig</em></a><em>, </em><em>optional</em>) – memory configuration for the operation. Defaults to <cite>None</cite>.</p>
+<ul class="simple">
+<li><p><strong>approximate</strong> (<em>str</em><em>, </em><em>optional</em>) – “tanh” or “none” (default). The gelu approximation algorithm to use.</p></li>
+<li><p><strong>memory_config</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.MemoryConfig" title="ttnn.MemoryConfig"><em>ttnn.MemoryConfig</em></a><em>, </em><em>optional</em>) – Memory configuration for this operation. Defaults to None.</p></li>
+<li><p><strong>input_grad</strong> (<a class="reference internal" href="../dependencies/tensor.html#ttnn.Tensor" title="ttnn.Tensor"><em>ttnn.Tensor</em></a><em>, </em><em>optional</em>) – Preallocated output tensor. Defaults to None.</p></li>
+<li><p><strong>queue_id</strong> (<em>int</em><em>, </em><em>optional</em>) – Command queue ID. Defaults to 0.</p></li>
+</ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>List of ttnn.Tensor</em> – the output tensor.</p>
+<p><em>ttnn.Tensor</em> – The output tensor.</p>
 </dd>
 </dl>
 <div class="admonition note">
@@ -355,16 +360,16 @@
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
-<th class="head"><p>Dtypes</p></th>
-<th class="head"><p>Layouts</p></th>
-<th class="head"><p>Ranks</p></th>
+<th class="head"><p>Dtypes
+- Layouts
+- Ranks</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16</p></td>
-<td><p>TILE</p></td>
-<td><p>2, 3, 4</p></td>
+<td><p>BFLOAT16
+- TILE
+- 2, 3, 4</p></td>
 </tr>
 </tbody>
 </table>
@@ -372,9 +377,15 @@
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">grad_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="nb">input</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">requires_grad</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">erfc_bw</span><span class="p">(</span><span class="n">grad_tensor</span><span class="p">,</span> <span class="nb">input</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">grad_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
+<span class="gp">... </span>    <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span>
+<span class="gp">... </span>    <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
+<span class="gp">... </span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
+<span class="gp">... </span>    <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">requires_grad</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span>
+<span class="gp">... </span>    <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
+<span class="gp">... </span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">experimental</span><span class="o">.</span><span class="n">gelu_bw</span><span class="p">(</span><span class="n">grad_tensor</span><span class="p">,</span> <span class="n">input_tensor</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -388,8 +399,8 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.log1p_bw.html" class="btn btn-neutral float-left" title="ttnn.log1p_bw" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.ceil_bw.html" class="btn btn-neutral float-right" title="ttnn.ceil_bw" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.experimental.dropout.html" class="btn btn-neutral float-left" title="ttnn.experimental.dropout" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.elu.html" class="btn btn-neutral float-right" title="ttnn.elu" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
