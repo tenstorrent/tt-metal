@@ -24,33 +24,6 @@ using OptionalConstTensors = tt::tt_metal::operation::OptionalConstTensors;
 
 namespace detail {
 
-template <typename Tuple, typename T>
-constexpr bool is_homogenous_tuple() {
-    return []<std::size_t... Ns>(std::index_sequence<Ns...>) {
-        return (std::is_same_v<T, std::tuple_element_t<Ns, Tuple>> && ...);
-    }(std::make_index_sequence<std::tuple_size_v<Tuple>>{});
-}
-
-template <typename Tuple, typename T>
-constexpr Tuple make_tuple_from_vector(const std::vector<T>& vector) {
-    return ([&vector]<std::size_t... Ns>(std::index_sequence<Ns...>) {
-        return std::forward_as_tuple(vector.at(Ns)...);
-    }(std::make_index_sequence<std::tuple_size_v<Tuple>>{}));
-}
-
-template <typename Include, typename... args_t>
-auto extract_args_to_vector(args_t&&... args) {
-    std::vector<Include> result;
-    auto process_arg = [&](auto&& arg) {
-        using ArgType = std::decay_t<decltype(arg)>;
-        if constexpr (std::is_same_v<ArgType, Include>) {
-            result.push_back(arg);
-        }
-    };
-    (process_arg(std::forward<args_t>(args)), ...);
-    return result;
-}
-
 template <typename... args_t>
 void log(const std::string& prefix, args_t&&... args) {
     auto args_tuple = std::tuple{[](auto&& arg) {
