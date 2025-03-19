@@ -16,9 +16,11 @@ on:
         type: string
         default: "amd64"
     outputs:
-      # BTW we've been using the dev tag everywhere for this in downstream
-      # jobs... might be a bit of a chore to validate very pipeline that we run
-      # Docker on hasn't been using something that is only in dev
+      # BTW although it's called ci-build-tag here, we've been using the dev
+      # image everywhere for this in downstream jobs... might be a bit of a
+      # chore to validate every pipeline which uses Docker to see if any of
+      # them use something that really should only be a dev dependency and not
+      # something CI should depend on
       ci-build-tag:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
         value: ${{ jobs.check-docker-images.outputs.ci-build-tag }}
@@ -51,8 +53,10 @@ on:
         options:
             - "amd64"
 
+# Can rm this comment, but since the full image name will be different for each target,
+# we could make a separate composite action to compute this. Just a one-liner though
+# which only really would be used in this workflow, so perhaps low ROI
 # env:
-  # BRRRRR GOTTA CHANGE THE DEV IN HERE !!! Gotta permeate it...
   # IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-dev-${{ inputs.architecture }}
 
 jobs:
@@ -88,8 +92,10 @@ jobs:
           # TEST_TAG=$(cat tt_metal/python_env/requirements-dev.txt pyproject.toml | sha1sum | cut -d' ' -f1)
           # echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${TEST_IMAGE_NAME}:${TEST_TAG}" >> $GITHUB_OUTPUT
 
-          # Since we are calling everything ci-build, we will just make sure that
-          # poc works, but we eventually will use $TEST_TAG here
+          # Since we are currently calling dev "ci-build", for current changes
+          # we will just make sure that poc works, but eventually ci-test will
+          # be its own target which uses $TEST_TAG
+          # Any further dependencies that build on top of previous image would go in here
           DEV_TAG=$(echo $BUILD_TAG \
             | sha1sum | cut -d' ' -f1)
           DEV_IMAGE_NAME=${{ inputs.distro }}-${{ inputs.version }}-dev-${{ inputs.architecture }}
@@ -135,10 +141,11 @@ jobs:
         if: ${{ needs.check-docker-images.outputs.ci-build-exists != 'true' }}
         with:
           context: ${{ github.workspace }}
-          # HRMM better to be explicit so we keep despite it being in different files now?
+          # HRMM better to be explicit so we keep this monolithic Dockerfile
+          # for now?
           # For now, for the sake of showing the team and not breaking other pipes,
           # call the ci-test target "ci-build" from the monolith Dockerfile
-          # even though "ci-build" is the one used everywhere
+          # even though "ci-build" is the one used in all the pipelines
           file: dockerfile/Dockerfile
           target: ci-test
           push: true
@@ -150,6 +157,11 @@ jobs:
           pull: true
       - name: Build dev Docker image and push to GHCR
         uses: docker/build-push-action@v6
+        # I wonder if there should be some sort of sanity check using bash magic
+        # in the previous check-images job to ensure that the tree of dependencies
+        # actually makes sense... for ex. if ci-build-exists is false but
+        # dev-exists is true, something in previous computations went horribly
+        # wrong
         if: ${{ needs.check-docker-images.outputs.dev-exists != 'true' }}
         with:
           context: ${{ github.workspace }}
