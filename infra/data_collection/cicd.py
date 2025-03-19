@@ -15,6 +15,7 @@ from infra.data_collection.github.workflows import (
     get_github_job_id_to_test_reports,
     get_github_job_id_to_annotations,
     get_tests_from_test_report_path,
+    get_github_job_ids_to_tt_smi_versions,
 )
 from infra.data_collection import pydantic_models
 
@@ -56,6 +57,8 @@ def create_cicd_json_for_data_analysis(
         workflow_outputs_dir, github_pipeline_id, github_job_ids
     )
 
+    github_job_id_to_smi_versions = get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, github_pipeline_id)
+
     jobs = []
 
     for raw_job in raw_jobs:
@@ -84,6 +87,7 @@ def create_cicd_json_for_data_analysis(
         try:
             job = pydantic_models.Job(
                 **raw_job,
+                tt_smi_version=github_job_id_to_smi_versions.get(github_job_id),
                 tests=tests,
             )
         except ValueError as e:

@@ -150,6 +150,8 @@ def test_create_pipeline_json_for_run_github_timed_out_job(workflow_run_gh_envir
         if job.github_job_id == 30868260202:
             assert len(job.tests) > 0
             assert job.job_status == JobStatus.failure
+        if job.github_job_id == 30650754720:
+            assert job.tt_smi_version is not None
 
 
 def test_create_pipeline_json_for_timeout_bad_testcase(workflow_run_gh_environment):
@@ -288,3 +290,36 @@ def test_create_pipeline_json_for_testcases_with_annotations(workflow_run_gh_env
             assert job.failure_signature == str(TestErrorV1.PY_TEST_FAILURE)
             assert job.failure_description is not None and ".py" in job.failure_description
             assert job.job_status == JobStatus.failure
+
+
+def test_create_pipeline_json_for_ctest_case(workflow_run_gh_environment):
+    github_runner_environment = workflow_run_gh_environment
+    github_pipeline_json_filename = (
+        "tests/_data/data_collection/cicd/tt_train_post_commit_ctest_13858791332/workflow.json"
+    )
+    github_jobs_json_filename = (
+        "tests/_data/data_collection/cicd/tt_train_post_commit_ctest_13858791332/workflow_jobs.json"
+    )
+
+    workflow_outputs_dir = pathlib.Path(
+        "tests/_data/data_collection/cicd/tt_train_post_commit_ctest_13858791332/"
+    ).resolve()
+    assert workflow_outputs_dir.is_dir()
+    assert workflow_outputs_dir.exists()
+
+    pipeline = create_cicd_json_for_data_analysis(
+        workflow_outputs_dir,
+        github_runner_environment,
+        github_pipeline_json_filename,
+        github_jobs_json_filename,
+    )
+
+    assert pipeline.github_pipeline_id == 13858791332
+
+    for job in pipeline.jobs:
+        # failing ctest testcase
+        if job.github_job_id == 38782158256 or job.github_job_id == 38782157821:
+            assert len(job.tests) == 190
+            assert job.job_success is False
+            # check that there are failing cpp tests stored in the pydantic testcase list
+            assert len([x for x in job.tests if not x.success]) == 2

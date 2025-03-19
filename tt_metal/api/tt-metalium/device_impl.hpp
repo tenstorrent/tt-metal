@@ -9,10 +9,10 @@
 
 #include "device.hpp"
 #include "hostdevcommon/common_values.hpp"
+#include "hostdevcommon/kernel_structs.h"  // Leaked up to ttnn level from here
 #include "work_executor_types.hpp"
 #include "data_types.hpp"
 #include "program_device_map.hpp"
-#include "build.hpp"
 #include "hal.hpp"
 #include "command_queue_interface.hpp"
 #include "command_queue.hpp"
@@ -64,10 +64,7 @@ public:
     CoreCoord grid_size() const override;
     CoreCoord logical_grid_size() const override;
     CoreCoord dram_grid_size() const override;
-    CoreType core_type_from_virtual_core(const CoreCoord& virtual_coord) const override;
 
-    // Given a Virtual coordinate in noc_index space, get the equivalent coordinate in Virtual NOC0 space
-    CoreCoord virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const override;
     // Given a coordinate in Virtual NOC0 Space, get the equivalent coordinate in Virtual noc_index space
     CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const override;
 
@@ -210,8 +207,6 @@ private:
 
     void initialize_default_sub_device_state(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap);
 
-    void update_dispatch_cores_for_multi_cq_eth_dispatch();
-
     void compile_command_queue_programs();
     void configure_command_queue_programs();
     void clear_l1_state();
@@ -228,7 +223,6 @@ private:
 
     CoreCoord physical_worker_core_from_logical_core(const CoreCoord &logical_core) const;
     CoreCoord dram_core_from_dram_channel(uint32_t dram_channel) const;
-    CoreType core_type_from_physical_core(const CoreCoord &physical_core) const;
     CoreCoord virtual_core_from_physical_core(const CoreCoord& physical_coord) const;
 
     chip_id_t id_;

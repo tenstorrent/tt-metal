@@ -18,11 +18,6 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import 
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows,
 )
 
-from tests.ttnn.unit_tests.operations.ccl.test_ccl_async_TG_llama import (
-    PREFETCHER_NOC1_RING,
-    get_core_range_set,
-)
-
 
 def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout):
     if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
@@ -173,6 +168,7 @@ def run_all_gather_impl(
             0,
             enable_persistent_fabric,
             wrap_fabric_around_mesh=wrap_fabric_around_mesh,
+            topology=all_gather_topology,
         )
         mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
@@ -334,7 +330,9 @@ def run_all_gather_impl(
 
     if enable_persistent_fabric and teardown_persistent_fabric:
         mesh_device.reset_sub_device_stall_group()
-        teardown_fabric_interface(mesh_device)
+        teardown_fabric_interface(
+            mesh_device, wrap_fabric_around_mesh=wrap_fabric_around_mesh, topology=all_gather_topology
+        )
 
     if not passed:
         assert eq, f"{i} FAILED: {output}"
@@ -496,10 +494,9 @@ def test_all_gather_huge_bf8_dram(
     "mem_config",
     [
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
-@pytest.mark.parametrize("num_iters", [1])
+@pytest.mark.parametrize("num_iters", [10])
 @pytest.mark.parametrize("enable_async", [True])
 def test_all_gather_huge_bf16_dram(
     t3k_mesh_device,
@@ -595,7 +592,6 @@ def test_all_gather_huge_bf8_l1(
         create_persistent_fabric=True,
         teardown_persistent_fabric=True,
         mem_config=mem_config,
-        trace_mode=True,
     )
 
 
@@ -764,6 +760,80 @@ def test_all_gather_sharded(
         teardown_persistent_fabric=True,
         wrap_fabric_around_mesh=True,
         trace_mode=True,
+    )
+
+
+# Enumerate the post-commit cases explicitly
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
+    [
+        (
+            4,
+            [1, 4, 32, 1280],
+            3,
+            ttnn.TILE_LAYOUT,
+            (32, 320),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 4))}),
+            None,
+            None,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize("num_iters", [8])
+@pytest.mark.parametrize("enable_async", [False])
+def test_all_gather_sharded_ring(
+    pcie_mesh_device,
+    num_devices,
+    output_shape,
+    dim,
+    num_links,
+    input_dtype,
+    layout,
+    num_iters,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    input_shard_shape,
+    input_shard_grid,
+    output_shard_shape,
+    output_shard_grid,
+    tensor_mem_layout,
+):
+    if num_links > 1:
+        assert f"num_links > 1 not supported for sharded all gather test function which is currently using the pcie_mesh_device (and hence only has 1 link available for use)"
+
+    run_all_gather_impl(
+        pcie_mesh_device,
+        num_devices,
+        output_shape,
+        dim,
+        num_links,
+        input_dtype,
+        layout,
+        use_program_cache,
+        function_level_defaults,
+        all_gather_topology=ttnn.Topology.Ring,
+        num_iters=num_iters,
+        enable_async=enable_async,
+        rand_tensor=True,
+        input_shard_shape=input_shard_shape,
+        input_shard_grid=input_shard_grid,
+        output_shard_shape=output_shard_shape,
+        output_shard_grid=output_shard_grid,
+        tensor_mem_layout=tensor_mem_layout,
+        create_persistent_fabric=True,
+        teardown_persistent_fabric=True,
+        wrap_fabric_around_mesh=True,
     )
 
 

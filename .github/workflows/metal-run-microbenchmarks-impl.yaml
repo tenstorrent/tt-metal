@@ -1,0 +1,115 @@
+name: "[internal] metal - Run microbenchmarks impl"
+
+on:
+  workflow_call:
+    inputs:
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      docker-image:
+        required: true
+        type: string
+
+jobs:
+  run-microbenchmarks:
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        test-group: [
+          {
+            arch: wormhole_b0,
+            runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"],
+            name: "N300 Moreh ubench",
+            cmd: "./tests/scripts/run_moreh_microbenchmark.sh",
+          },
+          {
+            arch: wormhole_b0,
+            runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"],
+            name: "N300 metal ubench",
+            cmd: "pytest -svv tests/tt_metal/microbenchmarks",
+          },
+          {
+            arch: wormhole_b0,
+            runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"],
+            name: "N300 ccl all gather",
+            cmd: "tests/ttnn/unit_tests/operations/ccl/perf/run_all_gather_profile.sh -t n300",
+          },
+          {
+            arch: wormhole_b0,
+            runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"],
+            name: "N300 ccl reduce scatter",
+            cmd: "tests/ttnn/unit_tests/operations/ccl/perf/run_reduce_scatter_profile.sh -t n300",
+          },
+          {
+            arch: wormhole_b0,
+            runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"],
+            name: "N300 tunneler",
+            cmd: "TT_METAL_SLOW_DISPATCH_MODE=1 ./tests/scripts/run_tunneler_tests.sh --machine-type N300",
+          },
+          {
+            arch: wormhole_b0,
+            runs-on: ["arch-wormhole_b0", "pipeline-perf", "config-t3000", "in-service"],
+            name: "T3K ubench",
+            cmd: "pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_fabric_edm_bandwidth.py",
+          },
+        ]
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        # All of these tests need this environment variable...
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ matrix.test-group.arch }}
+        LOGURU_LEVEL: INFO
+        # We make extensive use of device profiler
+        TT_METAL_DEVICE_PROFILER: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs-on }}
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.build-artifact-name }}
+          path: docker-job
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+          path: docker-job
+      - name: Install Wheel
+        run: |
+          WHEEL_FILENAME=$(ls -1 *.whl)
+          pip3 install $WHEEL_FILENAME
+      - name: Run microbenchmark tests
+        timeout-minutes: 45
+        run: ${{ matrix.test-group.cmd }}
+      - name: Upload microbenchmark report csvs
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: microbenchmark-report-csv-${{ join(matrix.test-group.name) }}
+          path: generated/profiler/.logs
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main

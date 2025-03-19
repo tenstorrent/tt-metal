@@ -14,16 +14,15 @@
 
 #include "env_lib.hpp"
 
-#include "dispatch_core_manager.hpp"
 #include "dispatch_settings.hpp"
 #include "dprint_server.hpp"
 #include "host_api.hpp"
-#include "control_plane.hpp"
 #include "erisc_datamover_builder.hpp"
 #include <tt_metal.hpp>
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 
@@ -273,9 +272,9 @@ void DevicePool::initialize_host(IDevice* dev) const {
         TT_ASSERT(dev->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
     }
 
-    ClearNocData(dev);
-    DprintServerAttach(dev);
-    watcher_init(dev);
+    ClearNocData(dev->id());
+    DprintServerAttach(dev->id());
+    watcher_init(dev->id());
 
     // TODO: as optimization, investigate removing all this call for already initialized devivces
     if (!llrt::RunTimeOptions::get_instance().get_skip_reset_cores_on_init()) {
@@ -283,7 +282,7 @@ void DevicePool::initialize_host(IDevice* dev) const {
     }
     dev->initialize_and_launch_firmware();
 
-    watcher_attach(dev);
+    watcher_attach(dev->id());
 }
 
 void DevicePool::initialize_active_devices() const {
@@ -293,15 +292,9 @@ void DevicePool::initialize_active_devices() const {
     FabricConfig fabric_config = tt::Cluster::instance().get_fabric_config();
     if (fabric_config == FabricConfig::FABRIC_1D || fabric_config == FabricConfig::FABRIC_2D ||
         fabric_config == FabricConfig::FABRIC_2D_PUSH) {
-        // Initialize control plane, does not configure kernels/routing tables
-        // We always need a control plane for mapping of logical devices to physical devices
-        // TODO: add single device support
-        _inst->initialize_control_plane();  // not const
-
         if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
             // write routing tables to all ethernet cores
-            // TODO: writing to device normally goes through cluster
-            this->control_plane->configure_routing_tables();
+            tt::Cluster::instance().get_control_plane()->write_routing_tables_to_all_chips();
         }
 
         // Initialize fabric on mmio device
@@ -461,14 +454,14 @@ void DevicePool::wait_for_fabric_router_sync() const {
         std::vector<uint32_t> signal(1, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
 
         auto wait_for_handshake = [&](IDevice* dev) {
-            auto [mesh_id, chip_id] = this->control_plane->get_mesh_chip_id_from_physical_chip_id(dev->id());
+            auto [mesh_id, chip_id] = tt::Cluster::instance().get_control_plane()->get_mesh_chip_id_from_physical_chip_id(dev->id());
             for (const auto& direction : routing_directions) {
                 auto fabric_active_eth_chans =
-                    control_plane->get_active_fabric_eth_channels_in_direction(mesh_id, chip_id, direction);
+                    tt::Cluster::instance().get_control_plane()->get_active_fabric_eth_channels_in_direction(mesh_id, chip_id, direction);
                 if (fabric_active_eth_chans.empty()) {
                     continue;
                 }
-                auto neighbors = this->control_plane->get_intra_chip_neighbors(mesh_id, chip_id, direction);
+                auto neighbors = tt::Cluster::instance().get_control_plane()->get_intra_chip_neighbors(mesh_id, chip_id, direction);
                 if (neighbors.empty()) {
                     continue;
                 }
@@ -518,8 +511,10 @@ void DevicePool::wait_for_fabric_router_sync() const {
                 tt::Cluster::instance().get_virtual_eth_core_from_channel(dev->id(), fabric_master_router_chan);
             auto fabric_master_router_core = dev->logical_core_from_ethernet_core(virtual_eth_core);
 
-            auto [mesh_id, chip_id] = this->control_plane->get_mesh_chip_id_from_physical_chip_id(dev->id());
-            auto num_routers = this->control_plane->get_num_active_fabric_routers(mesh_id, chip_id);
+            auto [mesh_id, chip_id] =
+                tt::Cluster::instance().get_control_plane()->get_mesh_chip_id_from_physical_chip_id(dev->id());
+            auto num_routers =
+                tt::Cluster::instance().get_control_plane()->get_num_active_fabric_routers(mesh_id, chip_id);
             while (master_router_status[0] != num_routers) {
                 tt_metal::detail::ReadFromDeviceL1(
                     dev,
@@ -607,29 +602,6 @@ void DevicePool::init_firmware_on_active_devices() const {
 
     this->initialize_active_devices();
 }
-
-void DevicePool::initialize_control_plane() {
-    // Default mode, auto select mesh graph descriptor. In future, we can add a way for user to specify custom
-    // descriptors
-    std::string mesh_graph_descriptor;
-    switch (tt::Cluster::instance().get_cluster_type()) {
-        case tt::ClusterType::N150: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::N300: mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::T3K: mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::GALAXY: mesh_graph_descriptor = "quanta_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::TG: mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml"; break;
-        default: TT_THROW("Unknown cluster type");
-    }
-    const std::filesystem::path mesh_graph_desc_path =
-        std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
-
-    this->control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
-}
-
-tt::tt_fabric::ControlPlane* DevicePool::get_control_plane() const {
-    return this->control_plane.get();
-}  // TODO: Don't use get to expose the raw pointer
 
 DevicePool::DevicePool() {
     ZoneScoped;
@@ -746,14 +718,14 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
         auto routing_directions = {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
 
         for (const auto& dev : this->get_all_active_devices()) {
-            auto [mesh_id, chip_id] = this->control_plane->get_mesh_chip_id_from_physical_chip_id(dev->id());
+            auto [mesh_id, chip_id] = tt::Cluster::instance().get_control_plane()->get_mesh_chip_id_from_physical_chip_id(dev->id());
             for (const auto& direction : routing_directions) {
                 auto fabric_active_eth_chans =
-                    control_plane->get_active_fabric_eth_channels_in_direction(mesh_id, chip_id, direction);
+                    tt::Cluster::instance().get_control_plane()->get_active_fabric_eth_channels_in_direction(mesh_id, chip_id, direction);
                 if (fabric_active_eth_chans.size() == 0) {
                     continue;
                 }
-                auto neighbors = this->control_plane->get_intra_chip_neighbors(mesh_id, chip_id, direction);
+                auto neighbors = tt::Cluster::instance().get_control_plane()->get_intra_chip_neighbors(mesh_id, chip_id, direction);
                 if (neighbors.size() == 0) {
                     continue;
                 }

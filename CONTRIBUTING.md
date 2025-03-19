@@ -645,9 +645,6 @@ your local branch, and then once everything looks good, push the change. You
 should not rebase your origin branch. That way, if anything goes wrong, you can
 use origin to restore your branch to a good state.
 
-Note: Before rebasing, remember to change your default comment character, which
-is mentioned earlier in [Setting up Git](#setting-up-git).
-
 Note: for very small changes where you don't expect to create a second commit
 it might be okay to use the UI to rebase origin. However, in general, it's
 better to avoid that.
@@ -657,7 +654,9 @@ You should first make sure main is up to date:
 ```
 git checkout main
 git fetch origin
+git submodule sync
 git pull --rebase --prune
+git submodule update --init --recursive
 ```
 
 Then you can
@@ -785,6 +784,11 @@ After that, the UI will usually delete your branch.
   review and start running pipelines. This is because we don't want to clog
   our pipelines with unnecessary runs that developers may know will fail
   anyways.
+
+### A recommended development flow for model writers
+
+Please refer to documentation for [adding a model](./models/MODEL_ADD.md) and
+for [graduating](./models/MODEL_GRADUATION.md) it.
 
 ### New feature and design specifications
 

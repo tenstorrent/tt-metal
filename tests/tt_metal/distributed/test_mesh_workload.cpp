@@ -4,18 +4,25 @@
 
 #include <random>
 
-#include "env_lib.hpp"
+#include <stdexcept>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/allocator.hpp>
 
+#include "env_lib.hpp"
+
+#include "gmock/gmock.h"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/distributed/utils.hpp"
 
 namespace tt::tt_metal::distributed::test {
 namespace {
+
+using ::testing::HasSubstr;
+using ::testing::ThrowsMessage;
 
 struct CBConfig {
     uint32_t cb_id = 0;
@@ -140,6 +147,10 @@ using MeshWorkloadTestTG = TGMeshDeviceFixture;
 using MeshWorkloadTestSuite = GenericMeshDeviceFixture;
 
 TEST_F(MeshWorkloadTestSuite, MeshWorkloadOnActiveEthAsserts) {
+    if (mesh_device_->num_devices() == 1) {
+        // Unit mesh devices (such as N150) do not have ethernet cores.
+        GTEST_SKIP() << "Skipping test for a unit-size mesh device";
+    }
     // A MeshWorkload cannot be run on ethernet core - Runtime should assert if the
     // user tries this. Verify this functionality here.
     std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
@@ -154,6 +165,23 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadOnActiveEthAsserts) {
         AddProgramToMeshWorkload(*workload, std::move(*programs[0]), MeshCoordinateRange(coord, coord));
     }
     EXPECT_THROW(EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false), std::exception);
+}
+
+TEST_F(MeshWorkloadTestSuite, OverlappingProgramRanges) {
+    MeshWorkload workload;
+
+    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+        /*num_programs=*/2, mesh_device_->compute_with_storage_grid_size(), /*seed=*/0);
+    uint32_t num_rows_in_workload = mesh_device_->num_rows() / 2;
+    auto mesh_workload = CreateMeshWorkload();
+
+    MeshCoordinate zero_coord = MeshCoordinate::zero_coordinate(mesh_device_->shape().dims());
+    MeshCoordinateRange devices_range = MeshCoordinateRange(zero_coord, zero_coord);
+
+    AddProgramToMeshWorkload(mesh_workload, std::move(*programs[0]), devices_range);
+    EXPECT_THAT(
+        ([&]() { AddProgramToMeshWorkload(mesh_workload, std::move(*programs[1]), devices_range); }),
+        ThrowsMessage<std::runtime_error>(HasSubstr("overlaps with the previously added range")));
 }
 
 // Test running different configurations of heterogenous MeshWorkloads on T3000.
@@ -335,7 +363,6 @@ TEST_F(MeshWorkloadTestTG, SimultaneousMeshWorkloads) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
-// MeshWorkload tests on N300 and T3000
 TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkload) {
     uint32_t num_programs = 60;
     uint32_t num_iterations = 1500;
@@ -375,6 +402,9 @@ TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkload) {
 }
 
 TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
+    if (mesh_device_->num_devices() == 1) {
+        GTEST_SKIP() << "Skipping test for a unit-size mesh device";
+    }
     std::vector<std::shared_ptr<MeshBuffer>> src0_bufs = {};
     std::vector<std::shared_ptr<MeshBuffer>> src1_bufs = {};
     std::vector<std::shared_ptr<MeshBuffer>> output_bufs = {};
@@ -433,6 +463,9 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
 }
 
 TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
+    if (mesh_device_->num_devices() == 1) {
+        GTEST_SKIP() << "Skipping test for a unit-size mesh device";
+    }
     CoreCoord worker_grid_size = mesh_device_->compute_with_storage_grid_size();
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::Float16_b);
 
@@ -604,6 +637,9 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreSanity) {
 }
 
 TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreDifferentPrograms) {
+    if (mesh_device_->num_devices() == 1) {
+        GTEST_SKIP() << "Skipping test for a unit-size mesh device";
+    }
     auto worker_grid_size = mesh_device_->compute_with_storage_grid_size();
     auto full_grid = CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     Program program0;
