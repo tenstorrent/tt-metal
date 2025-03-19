@@ -44,14 +44,18 @@ void kernel_main() {
 
     uint32_t num_tiles_read = 0;
     for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
+        // DeviceZoneScopedN("reader_row_n");
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_th = 0) {
+            // DeviceZoneScopedN("reader_row_c");
             for (uint32_t th = start_th; th < Ht && num_tiles_read < num_tiles; ++th, start_tw = 0) {
+                // DeviceZoneScopedN("reader_row_th");
                 for (uint32_t tw = start_tw; tw < Wt && num_tiles_read < num_tiles; ++tw) {
+                    // DeviceZoneScopedN("reader_row_tw");
                     cb_reserve_back(cb_id_src, onetile);
                     uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
                     noc_async_read_tile(tile_offset + tw, src, l1_write_addr_src);
                     noc_async_read_barrier();
-                    fill_tile_with_first_row_bfloat16(cb_id_src);
+                    // fill_tile_with_first_row_bfloat16(cb_id_src);
                     cb_push_back(cb_id_src, onetile);
                     ++num_tiles_read;
                 }
