@@ -1,24 +1,23 @@
 ChipSpec: {
-  arch: wormhole_b0,
+  arch: blackhole,
   ethernet_ports: {
-    N: 4,
-    E: 4,
-    S: 4,
-    W: 4,
+    N: 0,
+    E: 0,
+    S: 0,
+    W: 0,
   }
 }
 
-
 Board: [
-  { name: Galaxy,
+  { name: P150,
     type: Mesh,
-    topology: [8, 4]}
- ]
+    topology: [2, 2]}
+]
 
 Mesh: [
 {
   id: 0,
-  board: Galaxy,
+  board: P150,
   topology: [1, 1],
   host_mapping: [[]]}
 ]

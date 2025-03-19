@@ -120,7 +120,7 @@ int main(int argc, char** argv) {
     constexpr uint32_t SUBTRACT_OP_ID = 2;
     // Create a 2x4 MeshDevice with 2 MeshCQs, 16MB allocated to the trace region and Ethernet Dispatch enabled
     auto mesh_device = MeshDevice::create(
-        MeshDeviceConfig{.mesh_shape = MeshShape(2, 4)}, // Shape of MeshDevice
+        MeshDeviceConfig(MeshShape(2, 4)),  // Shape of MeshDevice
         0,  // l1 small size
         16 << 20, // trace region size
         2, // num MeshCQs

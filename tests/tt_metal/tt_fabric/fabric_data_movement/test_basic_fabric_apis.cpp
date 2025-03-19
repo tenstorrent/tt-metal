@@ -10,6 +10,7 @@
 #include "tt_metal/llrt/tt_cluster.hpp"
 
 namespace tt::tt_fabric {
+namespace fabric_router_tests {
 
 TEST_F(Fabric2DFixture, TestAsyncWrite) {
     using tt::tt_metal::ShardedBufferConfig;
@@ -1723,4 +1724,5 @@ TEST_F(Fabric2DFixture, TestAsyncRawWriteMulticastMultidirectional) {
     }
 }
 
+}  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric
