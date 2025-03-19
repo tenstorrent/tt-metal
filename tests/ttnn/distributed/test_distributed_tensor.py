@@ -286,9 +286,7 @@ def test_shard_to_tensor_mesh(mesh_device, dtype):
 
     mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3)
 
-    shards = ttnn.get_device_tensors(ttnn.distribute_tensor(to_shard, mapper, mesh_device))
-
-    out_tensor = ttnn.aggregate_as_tensor(shards)
+    out_tensor = ttnn.distribute_tensor(to_shard, mapper, mesh_device)
 
     out_pass, out_pcc = comp_pcc(torch_tensor, ttnn.to_torch(out_tensor), pcc=0.99)
     logger.info(f"PCC value: {out_pcc}")
