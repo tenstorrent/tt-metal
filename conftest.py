@@ -8,9 +8,11 @@ import random
 import os
 import numpy as np
 from functools import partial
+from itertools import chain
 from operator import contains, eq, getitem
 from pathlib import Path
 import json
+import copy
 import multiprocess
 import signal
 import time
@@ -117,6 +119,7 @@ def device(request, device_params):
 
     ttnn.DumpDeviceProfiler(device)
 
+    ttnn.synchronize_device(device)
     ttnn.close_device(device)
 
 
