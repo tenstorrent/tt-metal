@@ -30,7 +30,7 @@ struct GenericOpDeviceOperation {
     struct tensor_args_t {
         const Tensor& input_tensor;
         // std::vector<std::reference_wrapper<Tensor>> io_tensors;
-        std::vector<Tensor> io_tensors;
+        // std::vector<Tensor> io_tensors;
         // std::vector<Tensor> input_tensors; // this might not be the best thing?
         // const std::vector<Tensor>& input_tensors;
         // const Tensor& input_tensor;
@@ -65,9 +65,9 @@ struct GenericOpDeviceOperation {
 
     // Mandatory methods
 
-    spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&) const;
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&) const;
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     // Select the program factory based on the operation attributes and tensor args
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
@@ -81,9 +81,15 @@ struct GenericOpDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor&, const operation_attributes_t&, const std::vector<Tensor>& = {});
+        // const Tensor&, const operation_attributes_t&, const std::vector<Tensor>& = {});
+        const Tensor&, const operation_attributes_t&);
 
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    // static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };  // struct GenericOpDeviceOperation
 
 }  // namespace ttnn::operations::generic
+
+namespace ttnn::prim {
+constexpr auto generic_op = 
+    ttnn::register_operation<"ttnn::prim::generic_op", ttnn::operations::generic::GenericOpDeviceOperation>();
+}  // namespace ttnn::prim
