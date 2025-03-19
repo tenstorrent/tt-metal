@@ -14,26 +14,36 @@ TTMETALIUM_CHANGED=false
 TTNN_CHANGED=false
 TTMETALIUM_OR_TTNN_TESTS_CHANGED=false
 TTTRAIN_CHANGED=false
+ANY_CODE_CHANGED=false
 
 while IFS= read -r FILE; do
     case "$FILE" in
-        **/CMakeLists.txt|**/*.cmake)
+        CMakeLists.txt|**/CMakeLists.txt|**/*.cmake)
             CMAKE_CHANGED=true
             ;;
-        **/.clang-tidy)
+        .clang-tidy|**/.clang-tidy)
             CLANG_TIDY_CONFIG_CHANGED=true
+            ;;
+        tt_stl/**/*.h|tt_stl/**/*.hpp|tt_stl/**/*.c|tt_stl/**/*.cpp)
+            # TT-STL is so small; not going to be so fine grained; just treat it as a TT-Metalium change
+            TTMETALIUM_CHANGED=true
+            ANY_CODE_CHANGED=true
             ;;
         tt_metal/**/*.h|tt_metal/**/*.hpp|tt_metal/**/*.c|tt_metal/**/*.cpp)
             TTMETALIUM_CHANGED=true
+            ANY_CODE_CHANGED=true
             ;;
         ttnn/**/*.h|ttnn/**/*.hpp|ttnn/**/*.c|ttnn/**/*.cpp)
             TTNN_CHANGED=true
+            ANY_CODE_CHANGED=true
             ;;
         tests/**/*.h|tests/**/*.hpp|tests/**/*.c|tests/**/*.cpp)
             TTMETALIUM_OR_TTNN_TESTS_CHANGED=true
+            ANY_CODE_CHANGED=true
             ;;
         tt-train/**/*.h|tt-train/**/*.hpp|tt-train/**/*.c|tt-train/**/*.cpp)
             TTTRAIN_CHANGED=true
+            ANY_CODE_CHANGED=true
             ;;
     esac
 done <<< "$CHANGED_FILES"
@@ -53,6 +63,7 @@ if [[ "$SUBMODULE_CHANGED" = true ]]; then
     TTNN_CHANGED=true
     TTMETALIUM_OR_TTNN_TESTS_CHANGED=true
     TTTRAIN_CHANGED=true
+    ANY_CODE_CHANGED=true
 fi
 
 declare -A changes=(
@@ -63,6 +74,7 @@ declare -A changes=(
     [tt-metalium-or-tt-nn-tests-changed]=$TTMETALIUM_OR_TTNN_TESTS_CHANGED
     [tt-train-changed]=$TTTRAIN_CHANGED
     [submodule-changed]=$SUBMODULE_CHANGED
+    [any-code-changed]=$ANY_CODE_CHANGED
 )
 
 for var in "${!changes[@]}"; do

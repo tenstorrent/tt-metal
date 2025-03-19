@@ -506,7 +506,7 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
         } else {
             // TODO: determine whether dispatch_s is inserted at this level, instead of inside
             // Device::dispatch_s_enabled().
-            if (dispatch_core_manager::instance().get_dispatch_core_type(0) == CoreType::WORKER) {
+            if (dispatch_core_manager::instance().get_dispatch_core_type() == CoreType::WORKER) {
                 return single_chip_arch_2cq_dispatch_s;
             } else {
                 return single_chip_arch_2cq;
@@ -819,7 +819,7 @@ std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
 void configure_dispatch_cores(IDevice* device) {
     // Set up completion_queue_writer core. This doesn't actually have a kernel so keep it out of the struct and config
     // it here. TODO: should this be in the struct?
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
     auto& my_dispatch_constants = DispatchMemMap::get(dispatch_core_type);
     uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
     uint32_t cq_size = device->sysmem_manager().get_cq_size();
@@ -955,7 +955,7 @@ void configure_2d_fabric_cores(IDevice* device) {
 std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, bool wrap_around_mesh = true) {
     using namespace tt_fabric;
     std::unique_ptr<Program> fabric_program_ptr;
-    auto control_plane = tt::DevicePool::instance().get_control_plane();
+    auto control_plane = tt::Cluster::instance().get_control_plane();
     std::pair<mesh_id_t, chip_id_t> mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
     std::unordered_map<RoutingDirection, std::vector<chan_id_t>> active_fabric_eth_channels;
     std::unordered_map<RoutingDirection, chip_id_t> chip_neighbors;

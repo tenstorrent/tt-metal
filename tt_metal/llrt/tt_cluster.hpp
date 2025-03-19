@@ -10,6 +10,7 @@
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/fabric_host_interface.h>
+#include <tt-metalium/control_plane.hpp>
 #include "umd/device/device_api_metal.h"
 #include "umd/device/tt_cluster_descriptor.h"
 #include "umd/device/tt_xy_pair.h"
@@ -35,11 +36,15 @@ enum class TargetDevice : std::uint8_t {
 
 enum class ClusterType : std::uint8_t {
     INVALID = 0,
-    N150 = 1,    // Production N150
-    N300 = 2,    // Production N300
-    T3K = 3,     // Production T3K, built with 4 N300s
-    GALAXY = 4,  // Production Galaxy, all chips with mmio
-    TG = 5,      // Will be deprecated
+    N150 = 1,     // Production N150
+    N300 = 2,     // Production N300
+    T3K = 3,      // Production T3K, built with 4 N300s
+    GALAXY = 4,   // Production Galaxy, all chips with mmio
+    TG = 5,       // Will be deprecated
+    P100 = 6,     // Blackhole single card, ethernet disabled
+    P150 = 7,     // Blackhole single card, ethernet enabled
+    P150_X2 = 8,  // 2 Blackhole single card, ethernet connected
+    P150_X4 = 9,  // 4 Blackhole single card, ethernet connected
 };
 
 enum class EthRouterMode : uint32_t {
@@ -48,7 +53,7 @@ enum class EthRouterMode : uint32_t {
     FABRIC_ROUTER = 2,
 };
 
-enum class FabricConfig { DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, FABRIC_2D_PUSH = 3, CUSTOM = 4 };
+enum class FabricConfig : uint32_t { DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, FABRIC_2D_PUSH = 3, CUSTOM = 4 };
 
 class Cluster {
 public:
@@ -250,6 +255,8 @@ public:
         return this->tunnels_from_mmio_device.at(mmio_chip_id);
     }
 
+    tt::tt_fabric::ControlPlane* get_control_plane();
+
     void initialize_fabric_config(FabricConfig fabric_config);
 
     // Returns whether we are running on Galaxy.
@@ -296,6 +303,9 @@ private:
 
     void initialize_ethernet_sockets();
 
+    // Initialize control plane, which has mapping of physical device id to MeshGraph config
+    void initialize_control_plane();
+
     // Set tunnels from mmio
     void set_tunnels_from_mmio_device();
 
@@ -336,6 +346,8 @@ private:
     void release_ethernet_cores_for_fabric_routers();
 
     FabricConfig fabric_config_ = FabricConfig::DISABLED;
+
+    std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
 
     // Tunnels setup in cluster
     std::map<chip_id_t, std::vector<std::vector<chip_id_t>>> tunnels_from_mmio_device = {};

@@ -20,6 +20,7 @@ class LMHead(LightweightModule):
         weight_cache_path,
         max_columns_per_device=128256 // 4,  # larger values per device lead to OOM or hangs
         tt_ccl=None,
+        prefetcher_setup=None,
     ):
         super().__init__()
         self.args = args
@@ -29,6 +30,7 @@ class LMHead(LightweightModule):
         self.padded_vocab_size = args.padded_vocab_size
         self.num_devices = args.num_devices
         self.tt_ccl = tt_ccl
+        self.worker_sub_device_id = prefetcher_setup.worker_sub_device_id
 
         size_per_device = self.vocab_size // self.num_devices
 
@@ -189,6 +191,7 @@ class LMHead(LightweightModule):
                 program_config=pc,
                 memory_config=self.output_memory_config,
                 dtype=ttnn.bfloat8_b,
+                sub_device_id=self.worker_sub_device_id,
             )
 
             # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.tt_ccl.worker_sub_device_id])

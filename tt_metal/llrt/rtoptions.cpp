@@ -79,7 +79,19 @@ RunTimeOptions::RunTimeOptions() {
             profiler_sync_enabled = true;
         }
     }
-    const char* profile_buffer_usage_str = std::getenv("TT_METAL_MEM_PROFILER");
+
+    const char *profiler_noc_events_str = std::getenv("TT_METAL_DEVICE_PROFILER_NOC_EVENTS");
+    if (profiler_noc_events_str != nullptr && profiler_noc_events_str[0] == '1') {
+        profiler_enabled = true;
+        profiler_noc_events_enabled = true;
+    }
+
+    const char *profiler_noc_events_report_path_str = std::getenv("TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH");
+    if (profiler_noc_events_report_path_str != nullptr) {
+        profiler_noc_events_report_path = profiler_noc_events_report_path_str;
+    }
+
+    const char *profile_buffer_usage_str = std::getenv("TT_METAL_MEM_PROFILER");
     if (profile_buffer_usage_str != nullptr && profile_buffer_usage_str[0] == '1') {
         profiler_buffer_usage_enabled = true;
     }
@@ -89,6 +101,8 @@ RunTimeOptions::RunTimeOptions() {
         "Cannot enable both debug printing and profiling");
 
     null_kernels = (std::getenv("TT_METAL_NULL_KERNELS") != nullptr);
+
+    kernels_early_return = (std::getenv("TT_METAL_KERNELS_EARLY_RETURN") != nullptr);
 
     clear_l1 = false;
     const char* clear_l1_enabled_str = std::getenv("TT_METAL_CLEAR_L1");

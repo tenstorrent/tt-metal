@@ -19,14 +19,24 @@
 
 template <uint32_t num_output_tiles, bool is_partial_tile, uint32_t split_reader, uint32_t unpA_face_r_dim>
 inline void reduce_h_fused(
-    const uint32_t in_cb_id, const uint32_t in_scalar_cb_id, const uint32_t in_stick_index, const uint32_t out_cb_id) {
+    const uint32_t in_cb_id_0,
+    const uint32_t in_cb_id_1,
+    const uint32_t in_scalar_cb_id,
+    const uint32_t in_stick_index,
+    const uint32_t out_cb_id) {
     constexpr uint32_t num_faces_in_tile = is_partial_tile ? 1 : 2;
     constexpr uint32_t num_out_rows = 1;
 
     cb_reserve_back(out_cb_id, num_output_tiles);
-    const uint32_t curr_in_cb_id = split_reader ? (in_cb_id + (in_stick_index & 0x1)) : in_cb_id;
-    cb_wait_front(curr_in_cb_id, 1);  // paired with cb_pop_front(curr_in_cb_id, 1);
-    tile_regs_acquire();              // paired with tile_regs_release(). Acquire lock on the dest register.
+    // <<<<<<< HEAD:ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/pool_2d_multi_core.cpp
+    // const uint32_t curr_in_cb_id = split_reader ? (in_cb_id + (in_stick_index & 0x1)) : in_cb_id;
+    // cb_wait_front(curr_in_cb_id, 1);  // paired with cb_pop_front(curr_in_cb_id, 1);
+    // tile_regs_acquire();              // paired with tile_regs_release(). Acquire lock on the dest register.
+    // =======
+    const uint32_t curr_in_cb_id = (split_reader && (in_stick_index & 0x1)) ? in_cb_id_1 : in_cb_id_0;
+    cb_wait_front(curr_in_cb_id, 1);
+    tile_regs_acquire();
+    // >>>>>>> origin/main:ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/max_pool_multi_core.cpp
     unpack_tilizeA_B_block(
         curr_in_cb_id,
         in_scalar_cb_id,
@@ -64,9 +74,10 @@ void MAIN {
     constexpr uint32_t in_c = get_compile_time_arg_val(14);
     constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(15);
 
-    constexpr uint32_t in_cb_id = tt::CBIndex::c_0;  // and CBIndex::c_1 for split reader
-    constexpr uint32_t in_scalar_cb_id = tt::CBIndex::c_4;
-    constexpr uint32_t out_cb_id = tt::CBIndex::c_16;
+    const uint32_t in_cb_id_0 = get_compile_time_arg_val(17);
+    const uint32_t in_cb_id_1 = get_compile_time_arg_val(18);
+    const uint32_t in_scalar_cb_id = get_compile_time_arg_val(19);
+    const uint32_t out_cb_id = get_compile_time_arg_val(20);
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
@@ -78,25 +89,33 @@ void MAIN {
         in_ntiles_c < MAX_TILES_PER_REDUCTION ? in_ntiles_c : MAX_TILES_PER_REDUCTION;
     constexpr uint32_t partial_iter_output_tiles =
         in_ntiles_c % MAX_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : in_ntiles_c % MAX_TILES_PER_REDUCTION;
+    // <<<<<<< HEAD:ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/pool_2d_multi_core.cpp
 
     static_assert(REDUCE_OP == PoolType::MAX || REDUCE_OP == PoolType::SUM, "Only supports REDUCE_OP = MAX or Sum");
     constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
     constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::SUM) ? true : false;
 
+    // tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
+    //     in_cb_id, in_scalar_cb_id, max_tiles_per_iter, out_cb_id, num_faces_in_tile, window_size_hw);
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
-        in_cb_id, in_scalar_cb_id, max_tiles_per_iter, out_cb_id, num_faces_in_tile, window_size_hw);
+        in_cb_id_0, in_scalar_cb_id, max_tiles_per_iter, out_cb_id, num_faces_in_tile, window_size_hw);
     pack_untilize_dst_init_short<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_tile);
+    // =======
+    //     tilizeA_B_reduce_init(
+    //         in_cb_id_0, in_scalar_cb_id, max_tiles_per_iter, out_cb_id, num_faces_in_tile, window_size_hw);
+    //     pack_untilize_dst_init_short<in_ntiles_c>(out_cb_id, num_out_rows, num_faces_in_tile);
+    // >>>>>>> origin/main:ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/max_pool_multi_core.cpp
 
     cb_wait_front(in_scalar_cb_id, 1);
     for (uint32_t i = 0; i < nsticks_per_core; ++i) {
         // perform the reduction over the first N - 1 whole chunks
         for (uint32_t b_i = 0; b_i < in_nblocks_c - 1; ++b_i) {
             reduce_h_fused<max_tiles_per_iter, is_partial_tile, split_reader, window_size_hw>(
-                in_cb_id, in_scalar_cb_id, i, out_cb_id);
+                in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, out_cb_id);
         }
         // perform the reduction over the either whole or partial chunk N
         reduce_h_fused<partial_iter_output_tiles, is_partial_tile, split_reader, window_size_hw>(
-            in_cb_id, in_scalar_cb_id, i, out_cb_id);
+            in_cb_id_0, in_cb_id_1, in_scalar_cb_id, i, out_cb_id);
     }
     cb_pop_front(in_scalar_cb_id, 1);
 }

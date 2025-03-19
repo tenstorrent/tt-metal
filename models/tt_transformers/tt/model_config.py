@@ -23,7 +23,6 @@ from models.tt_transformers.tt.common import (
 from typing import Tuple
 from models.utility_functions import nearest_32
 from pathlib import Path
-from dataclasses import dataclass
 from enum import Enum, auto
 from models.tt_transformers.tt.load_checkpoints import (
     load_meta_state_dict,
@@ -35,28 +34,208 @@ from models.tt_transformers.tt.load_checkpoints import (
 )
 
 
-@dataclass
-class ModelOptimizations:
-    bfp4_mlp: bool
-    # Future fields will go here:
-    # bfp8_activations: bool
-    # bfp8_layernorm: bool
-    # bfp8_ccl: bool
+class TensorGroup(Enum):
+    FF1_FF3 = "ff1_3"
+    FF2 = "ff2"
+    WQKV = "wqkv"
+    WO = "wo"
+    KV_CACHE = "kv_cache"
+    ACTIVATION = "activation"
 
+
+class PrecisionSetting(Enum):
+    BFP4 = "bfp4"
+    BFP8 = "bfp8"
+    BF16 = "bf16"
+
+
+class OpGroup(Enum):
+    """
+    LI_* are linear operator groups
+    SDPA_* are scaled_dot_product_attention operator groups
+    """
+
+    LI_FF1_FF3 = "li_ff1_3"
+    LI_FF2 = "li_ff2"
+    LI_QKV_DECODE = "li_qkv_decode"
+    LI_O_DECODE = "li_o_decode"
+    SDPA_DECODE = "sdpa_decode"
+    LI_QKV_PREFILL = "li_qkv_prefill"
+    LI_O_PREFILL = "li_o_prefill"
+    SDPA_PREFILL = "sdpa_prefill"
+
+
+class MathFidelitySetting(Enum):
+    LOFI = "lofi"
+    HIFI2 = "hifi2"
+    HIFI2_NA = "hifi2na"  # na specified `packer_l1_acc=False` and `fp32_dest_acc_en=False` in compute kernel config
+    HIFI2_FP16 = "hifi2fp16"  # fp16 specified `fp32_dest_acc_en=False` in compute kernel config
+    HIFI4 = "hifi4"
+
+
+class ModelOptimizations:
     @classmethod
     def accuracy(cls, model_name):
         """Configuration optimized for accuracy
         Only 70B models uses bfp4 MLPs in this configuration
         """
-        bfp4 = model_name in ["Llama3.1-70B", "DeepSeek-R1-Distill-Llama-70B", "Qwen2.5-72B"]
-        return cls(bfp4_mlp=bfp4)
+        if model_name in ["Llama3.1-70B", "DeepSeek-R1-Distill-Llama-70B", "Qwen2.5-72B"]:
+            inst = ModelOptimizations.performance(model_name)
+        else:
+            inst = cls()
+        inst.__name__ = "accuracy"
+        return inst
 
     @classmethod
     def performance(cls, model_name):
         """Configuration optimized for performance
-        All models use bfp4 MLPs in this configuration
+        All models use bfp4 in FF1 and FF3 MLPs in this configuration
         """
-        return cls(bfp4_mlp=True)
+        inst = cls(
+            {
+                "TensorPrecision": {TensorGroup.FF1_FF3: PrecisionSetting.BFP4},
+                "OpFidelity": {OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI},
+            }
+        )
+        inst.__name__ = "performance"
+        return inst
+
+    def __init__(self, settings: dict = None):
+        if settings:
+            self._validate_settings(settings)
+
+        self._opt_settings = self._default_settings()
+        self._names = {}
+        for key, enum_type in (("TensorPrecision", TensorGroup), ("OpFidelity", OpGroup)):
+            self._opt_settings[key].update((settings or {}).get(key, {}))
+            curr = self._opt_settings[key]
+            self._names[key] = ", ".join(
+                [f"{k.value}: {curr[k].value if curr[k] else 'mixed'}" for k in list(enum_type)]
+            )
+
+        self._full_name = (
+            "precision_cfg = {"
+            + self._names["TensorPrecision"]
+            + "}, fidelity_cfg = {"
+            + self._names["OpFidelity"]
+            + "}"
+        )
+        # NOTE: self.__name__ is used as section header in PERF.md; It is also used by, for example test_llama_accuracy.py to look for comparative results in PERF.md
+        self.__name__ = self._full_name
+
+        # TODO: maybe we could warn about some unwanted settings here
+
+    def _validate_settings(self, settings: dict):
+        # Check that only valid top-level keys are used
+        valid_keys = {"TensorPrecision", "OpFidelity"}
+        invalid_keys = set(settings.keys()) - valid_keys
+        if invalid_keys:
+            raise ValueError(f"Invalid settings keys: {invalid_keys}. Must be one of {valid_keys}")
+
+        # Validate TensorPrecision settings
+        if "TensorPrecision" in settings:
+            for key, value in settings["TensorPrecision"].items():
+                if not isinstance(key, TensorGroup):
+                    raise ValueError(f"Invalid TensorPrecision key: {key}. Must be a TensorGroup enum value")
+                if not isinstance(value, PrecisionSetting):
+                    raise ValueError(f"Invalid TensorPrecision value: {value}. Must be a PrecisionSetting enum value")
+
+        # Validate OpFidelity settings
+        if "OpFidelity" in settings:
+            for key, value in settings["OpFidelity"].items():
+                if not isinstance(key, OpGroup):
+                    raise ValueError(f"Invalid OpFidelity key: {key}. Must be an OpGroup enum value")
+                if not isinstance(value, MathFidelitySetting):
+                    raise ValueError(f"Invalid OpFidelity value: {value}. Must be a MathFidelitySetting enum value")
+
+    def _default_settings(self):
+        return {
+            "TensorPrecision": {
+                # MLP
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                TensorGroup.FF2: PrecisionSetting.BFP8,
+                # Attention
+                TensorGroup.WQKV: PrecisionSetting.BFP8,
+                TensorGroup.WO: PrecisionSetting.BFP8,
+                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                # Activation across whole model
+                TensorGroup.ACTIVATION: None,  # this signals that original dtype should be used
+            },
+            "OpFidelity": {
+                # MLP linear operators
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2_FP16,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
+                # Attention operators -- linear and scaled_dot_product_attention, in decode and prefill modes
+                OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2_NA,
+                OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2,
+                OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2_FP16,
+            },
+        }
+
+    @property
+    def tensor_dtype_settings(self):
+        return self._opt_settings["TensorPrecision"]
+
+    @property
+    def op_fidelity_settings(self):
+        return self._opt_settings["OpFidelity"]
+
+
+def parse_optimizations(string):
+    """
+    Parse the optimizations full name and return a ModelOptimizations instance.
+    """
+    # Find the precision and fidelity config sections
+    precision_start = string.find("precision_cfg")
+    fidelity_start = string.find("fidelity_cfg")
+
+    if precision_start == -1 and fidelity_start == -1:
+        raise ValueError("String must contain either precision_cfg or fidelity_cfg")
+
+    # Extract the config dictionaries between { }
+    def extract_config(start_idx, cfg_name):
+        open_brace = string.find("{", start_idx)
+        if open_brace == -1:
+            raise ValueError(f"Missing opening brace for {cfg_name}")
+
+        close_brace = string.find("}", open_brace)
+        if close_brace == -1:
+            raise ValueError(f"Missing closing brace for {cfg_name}")
+
+        return string[open_brace + 1 : close_brace].strip()
+
+    precision_dict = extract_config(precision_start, "precision_cfg") if precision_start != -1 else {}
+    fidelity_dict = extract_config(fidelity_start, "fidelity_cfg") if fidelity_start != -1 else {}
+
+    # Create ModelOptimizations instance with the parsed configs
+    settings = {"TensorPrecision": {}, "OpFidelity": {}}
+
+    # Parse precision config
+    for pair in precision_dict.split(","):
+        if ":" not in pair:
+            raise ValueError("Invalid format - missing ':' separator")
+        key, value = pair.split(":")
+        key = TensorGroup(key.strip())
+        value = value.strip()
+        if key == TensorGroup.ACTIVATION and value == "mixed":
+            # special case for activation's mixed precision, which is the default configuration
+            continue
+
+        settings["TensorPrecision"][key] = PrecisionSetting(value)
+
+    # Parse fidelity config
+    for pair in fidelity_dict.split(","):
+        if ":" not in pair:
+            raise ValueError("Invalid format - missing ':' separator")
+        key, value = pair.split(":")
+        key = OpGroup(key.strip())
+        value = MathFidelitySetting(value.strip())
+        settings["OpFidelity"][key] = value
+
+    return ModelOptimizations(settings)
 
 
 class CheckpointType(Enum):
@@ -109,13 +288,24 @@ class ModelArgs:
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
-        self.device_name = {0: "CPU", 1: "N150", 2: "N300", 4: "N150x4", 8: "T3K", 32: "TG"}[self.num_devices]
+        self.arch_name = ttnn.get_arch_name()
+        self.device_name = {
+            0: "CPU",
+            1: "P150" if self.arch_name == "blackhole" else "N150",
+            2: "P300" if self.arch_name == "blackhole" else "N300",
+            4: "P150x4",  # Config only exists in BH at the moment
+            8: "T3K",
+            32: "TG",
+        }[self.num_devices]
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
         self.max_batch_size = max_batch_size
         self.tile_size = 32
         self.is_70b = False
         self.from_hf_url = False  # updated below if true
+        self.prefill_len_cutoff = 512 if self.arch_name == "blackhole" else 1024
+        # TODO the following is parametrized for a vocab size of 128256 (used in LLama3). Should generalize for other models
+        self.max_columns_per_device_lm_head = 128256 // 8 if self.arch_name == "blackhole" else 128256 // 4
 
         assert not os.getenv(
             "FAKE_DEVICE"
@@ -125,13 +315,13 @@ class ModelArgs:
         HF_MODEL = os.getenv("HF_MODEL")
         assert not (LLAMA_DIR and HF_MODEL), "Only one of LLAMA_DIR or HF_MODEL should be set"
         if LLAMA_DIR:
-            if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH"), os.getenv("TT_CACHE_PATH")]):
-                logger.warning(
-                    "LLAMA_DIR is set and will override LLAMA_CKPT_DIR, LLAMA_TOKENIZER_PATH, and TT_CACHE_PATH"
-                )
+            if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH")]):
+                logger.warning("LLAMA_DIR will override LLAMA_CKPT_DIR and LLAMA_TOKENIZER_PATH")
             self.CKPT_DIR = LLAMA_DIR
             self.TOKENIZER_PATH = LLAMA_DIR
-            self.CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
+            self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
+            if not self.CACHE_PATH:
+                self.CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
             self.model_name = os.path.basename(LLAMA_DIR)  # May be overridden by config
         elif HF_MODEL:
             self.CKPT_DIR = HF_MODEL
@@ -152,10 +342,6 @@ class ModelArgs:
                 self.CKPT_DIR
             ), f"Checkpoint directory {self.CKPT_DIR} does not exist, please set LLAMA_DIR=... or LLAMA_CKPT_DIR=..."
             os.makedirs(self.CACHE_PATH, exist_ok=True)
-            # Check if weights exist in the specified folder. If not warn the user to run the download and untar script.
-        #            assert os.path.isfile(
-        #                self.CKPT_DIR + "/consolidated.00.pth"
-        #            ), f"weights consolidated.00.pth file does not exist. Please use the script `models/tt_transformers/scripts/get_weights.py` to download and untar the weights."
 
         logger.info(f"Checkpoint directory: {self.CKPT_DIR}")
         logger.info(f"Tokenizer file: {self.TOKENIZER_PATH + '/tokenizer.model'}")
@@ -171,8 +357,13 @@ class ModelArgs:
 
         self.instruct = instruct
         # If the weights file contain the keyword `instruct` also set self.instruct to true
-        if "instruct" in self.CACHE_PATH.lower():
+        if "instruct" in self.CKPT_DIR.lower():
             self.instruct = True
+
+        # Check for supported batches since previous logic that contained the check was removed because it was unused
+        supported_batches = {1, 2, 4, 8, 16, 32}
+        if self.max_batch_size not in supported_batches:
+            raise ValueError(f"Batch size {self.max_batch_size} not supported")
 
         # Load model params
         if HF_MODEL:
@@ -202,17 +393,18 @@ class ModelArgs:
         # Set the max number of tokens for each prefill chunk based on the model and device
         max_prefill_chunk_size_div1024 = os.getenv("MAX_PREFILL_CHUNK_SIZE")
         if max_prefill_chunk_size_div1024 is None:
+            # TODO Improve this to be more general to more devices and models
             MAX_PREFILL_CHUNK_SIZES_DIV1024 = {
-                "Llama3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128},
-                "Llama3.2-3B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128},
-                "Llama3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
-                "Llama3.2-11B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
-                "Llama3.1-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
-                "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
-                "Qwen2.5-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
-                "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
-                "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128},
-                "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128},
+                "Llama3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Llama3.2-3B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Llama3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Llama3.2-11B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Llama3.1-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
+                "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
+                "Qwen2.5-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
+                "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -305,6 +497,12 @@ class ModelArgs:
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
             )
+            self.compute_kernel_config_hifi2_na = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
             self.compute_kernel_config_sdpa = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
@@ -312,8 +510,29 @@ class ModelArgs:
                 packer_l1_acc=False,
             )
 
+            # Configure data precision and math fidelity for tensors and kernels
             self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
+            precision_setting_lookup = {
+                PrecisionSetting.BFP4: ttnn.bfloat4_b,
+                PrecisionSetting.BFP8: ttnn.bfloat8_b,
+                PrecisionSetting.BF16: ttnn.bfloat16,
+                None: None,  # this signals that original dtype should be used
+            }
+            for tensor_group, precision in self.optimizations.tensor_dtype_settings.items():
+                dtype = precision_setting_lookup[precision]
+                self.model_config[f"{tensor_group.value.upper()}_DTYPE"] = dtype
+            math_fidelity_setting_lookup = {
+                MathFidelitySetting.LOFI: self.compute_kernel_config_lofi,
+                MathFidelitySetting.HIFI2: self.compute_kernel_config_hifi2,
+                MathFidelitySetting.HIFI2_NA: self.compute_kernel_config_hifi2_na,
+                MathFidelitySetting.HIFI2_FP16: self.compute_kernel_config_hifi2_fp16,
+                MathFidelitySetting.HIFI4: self.compute_kernel_config_hifi4,
+            }
+            for op_group, math_fidelity in self.optimizations.op_fidelity_settings.items():
+                math_cfg = math_fidelity_setting_lookup[math_fidelity]
+                self.model_config[f"{op_group.value.upper()}_COMPUTE_KERNEL_CFG"] = math_cfg
 
+            # Create memory config for sharded tensors
             residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
             self.model_config["DECODE_RESIDUAL_MEMCFG"] = (
                 ttnn.L1_MEMORY_CONFIG  # FIXME: when residual add support typecasting for sharded tensors
@@ -389,7 +608,7 @@ class ModelArgs:
 
             # For maximum performance, set the prefill grid row to 8, even if it can fit in a smaller grid
             # prefill_rows = lambda seq_len: min(seq_len, 1024) // self.tile_size
-            prefill_rows = 8
+            prefill_rows = 8  # TODO if BH = 10, if wh = 8
             mlp1_3_grid = lambda seq_len: (
                 (8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
@@ -402,13 +621,13 @@ class ModelArgs:
             )
 
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, 1024),
+                m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
                 k=self.dim // self.cluster_shape[0],
                 n=self.hidden_dim // self.cluster_shape[1],
                 grid_size=mlp1_3_grid(seq_len),
             )
             self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, 1024),
+                m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
                 k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
                 n=self.dim,
                 grid_size=mlp2_grid(seq_len),
@@ -504,30 +723,6 @@ class ModelArgs:
                 packer_l1_acc=False,
             )
 
-            # Useful core grid based on batch size
-            if self.max_batch_size == 32:
-                grid_by_batch = (8, 4)
-            elif self.max_batch_size == 16:
-                grid_by_batch = (8, 2)
-            elif self.max_batch_size == 8:
-                grid_by_batch = (8, 1)
-            elif self.max_batch_size == 4:
-                grid_by_batch = (4, 1)
-            elif self.max_batch_size == 2:
-                grid_by_batch = (2, 1)
-            elif self.max_batch_size == 1:
-                grid_by_batch = (1, 1)
-            else:
-                raise ValueError(f"Batch size {self.max_batch_size} not supported")
-            core_range_set_by_batch = ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(
-                        ttnn.CoreCoord(0, 0),
-                        ttnn.CoreCoord(grid_by_batch[0] - 1, grid_by_batch[1] - 1),
-                    ),
-                }
-            )
-
             self.model_config[
                 "SCORES_BATCHED_MM_OUTPUT_MEMCFG"
             ] = lambda batch_size_per_device_group: ttnn.create_sharded_memory_config(
@@ -536,18 +731,6 @@ class ModelArgs:
                 strategy=ttnn.ShardStrategy.HEIGHT,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
-            )
-            self.model_config["ROT_MAT_MEMCONFIG"] = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    core_range_set_by_batch,
-                    [
-                        128,
-                        128,
-                    ],
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
             )
 
             # MLP configs
@@ -1123,19 +1306,19 @@ class ModelArgs:
         # Meta-style config dicts don't specity model name or rope_scaling_factor so hard-code these
         # Set the model name based on the checkpoint directory being loaded
         if "3.2-1B" in checkpoint_dir:
-            self.model_name = "Llama3.2-1B" + "-Instruct" if self.instruct else ""
+            self.model_name = "Llama3.2-1B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 32
         elif "3.2-3B" in checkpoint_dir:
-            self.model_name = "Llama3.2-3B" + "-Instruct" if self.instruct else ""
+            self.model_name = "Llama3.2-3B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 32
         elif "3.1-8B" in checkpoint_dir:
-            self.model_name = "Llama3.1-8B" + "-Instruct" if self.instruct else ""
+            self.model_name = "Llama3.1-8B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
         elif "3.2-11B" in checkpoint_dir:
-            self.model_name = "Llama3.2-11B" + "-Instruct" if self.instruct else ""
+            self.model_name = "Llama3.2-11B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8  # shared with 3.1-8B
         elif "3.1-70B" in checkpoint_dir:
-            self.model_name = "Llama3.1-70B" + "-Instruct" if self.instruct else ""
+            self.model_name = "Llama3.1-70B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
         else:
@@ -1232,7 +1415,7 @@ class ModelArgs:
 
     def create_dram_sharded_mem_config(self, k, n):
         """Create DRAM-sharded memory config for width-sharded tensors"""
-        dram_cores = 12
+        dram_cores = 8 if self.arch_name == "blackhole" else 12  # WH has 12 dram cores
         padded_size = math.ceil(n / (self.tile_size * dram_cores)) * (self.tile_size * dram_cores)
         shard_spec = ttnn.ShardSpec(
             self.dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR
@@ -1320,6 +1503,7 @@ class ModelArgs:
         """
         max_rows = 8
         max_cols = 8
+        # TODO Improve configuration for BH (higher core grid than WH)
 
         # Find number of cols that evenly divides into the number of columns
         cols = None

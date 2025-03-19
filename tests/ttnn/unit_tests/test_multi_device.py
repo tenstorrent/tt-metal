@@ -731,3 +731,33 @@ def test_distribute_api(mesh_device):
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
         )
+
+
+def test_heterogenous_operation_dispatch():
+    if ttnn.get_num_devices() < 8:
+        pytest.skip()
+
+    a = torch.rand((1, 1, 32, 128), dtype=torch.bfloat16)
+    torch_gelu = torch.nn.functional.gelu(a)
+    torch_silu = torch.nn.functional.silu(a)
+
+    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
+    submesh_0 = mesh_device.create_submesh(ttnn.MeshShape(1, 4))
+    submesh_1 = mesh_device.create_submesh(ttnn.MeshShape(1, 1), offset=ttnn.MeshCoordinate(1, 1))
+
+    ttnn_input_0 = ttnn.from_torch(
+        a, device=submesh_0, mesh_mapper=ttnn.ShardTensorToMesh(submesh_0, dim=-1), layout=ttnn.TILE_LAYOUT
+    )
+    ttnn_input_1 = ttnn.from_torch(
+        a, device=submesh_1, mesh_mapper=ttnn.ShardTensorToMesh(submesh_1, dim=-1), layout=ttnn.TILE_LAYOUT
+    )
+
+    ttnn_gelu = ttnn.gelu(ttnn_input_0)
+    ttnn_silu = ttnn.silu(ttnn_input_1)
+
+    assert_with_pcc(
+        ttnn.to_torch(ttnn_gelu, mesh_composer=ttnn.ConcatMeshToTensor(submesh_0, dim=-1)), torch_gelu, pcc=0.9999
+    )
+    assert_with_pcc(
+        ttnn.to_torch(ttnn_silu, mesh_composer=ttnn.ConcatMeshToTensor(submesh_1, dim=-1)), torch_silu, pcc=0.9999
+    )

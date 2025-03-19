@@ -10,6 +10,8 @@
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/allocator.hpp>
+
 #include "noc/noc_parameters.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 

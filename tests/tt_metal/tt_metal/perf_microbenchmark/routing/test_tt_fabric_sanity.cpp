@@ -6,7 +6,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/rtoptions.hpp>
+#include "rtoptions.hpp"
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/control_plane.hpp>
 //#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
@@ -147,10 +147,10 @@ typedef struct test_board {
         }
         device_handle_map = tt::tt_metal::detail::CreateDevices(available_chip_ids);
         if (metal_fabric_init_level == 0) {
-            _init_control_plane(mesh_graph_descriptor);
-            control_plane->configure_routing_tables();
+            control_plane = tt::Cluster::instance().get_control_plane();
+            control_plane->write_routing_tables_to_all_chips();
         } else {
-            control_plane = tt::DevicePool::instance().get_control_plane();
+            control_plane = tt::Cluster::instance().get_control_plane();
         }
 
         if (num_chips_to_use != available_chip_ids.size()) {

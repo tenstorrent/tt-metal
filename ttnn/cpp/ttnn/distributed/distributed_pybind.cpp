@@ -123,11 +123,7 @@ void py_module(py::module& module) {
                         const std::optional<MeshCoordinate>& offset,
                         const std::vector<chip_id_t>& physical_device_ids) {
                 return MeshDevice::create(
-                    MeshDeviceConfig{
-                        .mesh_shape = mesh_shape,
-                        .offset = offset,
-                        .physical_device_ids = physical_device_ids,
-                    },
+                    MeshDeviceConfig(mesh_shape, offset, physical_device_ids),
                     l1_small_size,
                     trace_region_size,
                     num_command_queues,
@@ -167,7 +163,7 @@ void py_module(py::module& module) {
             "create_submesh",
             &MeshDevice::create_submesh,
             py::arg("submesh_shape"),
-            py::arg("offset"),
+            py::arg("offset") = std::nullopt,
             py::keep_alive<1, 0>())  // Keep MeshDevice alive as long as SubmeshDevice is alive
         .def(
             "create_submeshes",

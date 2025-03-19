@@ -1,6 +1,8 @@
 name: "Code analysis"
 
 on:
+  schedule:
+    - cron: "0 */3 * * *" # This cron schedule runs the workflow every 3 hours
   workflow_call:
     inputs:
       distro:
@@ -15,10 +17,6 @@ on:
         required: false
         type: string
         default: "amd64"
-      full-scan:
-        required: false
-        type: boolean
-        default: false
   workflow_dispatch:
     inputs:
       distro:
@@ -33,12 +31,27 @@ on:
         required: false
         type: string
         default: "amd64"
-      full-scan:
-        required: false
-        type: boolean
-        default: false
 
 jobs:
+  determine-scan-type:
+    runs-on: ubuntu-latest
+    outputs:
+      do-full-scan: ${{ steps.compute-outputs.outputs.do-full-scan }}
+      do-scan: ${{ steps.compute-outputs.outputs.do-scan }}
+    steps:
+      - id: find-changes
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
+
+      - id: compute-outputs
+        shell: bash
+        run: |
+          do_full_scan=$([[ "${{ github.ref_name }}" == "main" || "${{ steps.find-changes.outputs.clang-tidy-config-changed }}" == "true" ]] && echo "true" || echo "false")
+          do_scan=$([[ "$do_full_scan" == "true" || "${{ steps.find-changes.outputs.any-code-changed }}" == "true" || "${{ steps.find-changes.outputs.cmake-changed }}" == "true" ]] && echo "true" || echo "false")
+          echo "Do a scan: $do_scan"
+          echo "Do a full scan: $do_full_scan"
+          echo "do-full-scan=$do_full_scan" >> "$GITHUB_OUTPUT"
+          echo "do-scan=$do_scan" >> "$GITHUB_OUTPUT"
+
   build-docker-image:
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
@@ -46,9 +59,11 @@ jobs:
       distro: ${{ inputs.distro }}
       version: ${{ inputs.version }}
       architecture: ${{ inputs.architecture }}
+
   clang-tidy:
     name: 🤖 Clang Tidy
-    needs: build-docker-image
+    needs: [ build-docker-image, determine-scan-type ]
+    if: ${{ needs.determine-scan-type.outputs.do-scan == 'true' }}
     runs-on:
       - build
       - in-service
@@ -97,7 +112,7 @@ jobs:
           clean: true
 
       - name: Determine merge base
-        if: github.ref_name != 'main' && !inputs.full-scan
+        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
         run: |
           echo "Current branch: ${{ github.ref_name }}"
           MERGE_BASE=$(git merge-base ${{ github.ref_name }} origin/main)
@@ -105,7 +120,7 @@ jobs:
           echo "MERGE_BASE=$MERGE_BASE" >> $GITHUB_ENV
 
       - name: Check out baseline
-        if: github.ref_name != 'main' && !inputs.full-scan
+        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
         uses: actions/checkout@v4
         with:
           ref: ${{ env.MERGE_BASE }}
@@ -125,19 +140,19 @@ jobs:
           cmake --preset clang-tidy -DCMAKE_CXX_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*" -DCMAKE_C_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*"
 
       - name: Prepare baseline ccache summary
-        if: github.ref_name != 'main' && !inputs.full-scan
+        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
         run: |
           # Zero out the stats so we can see how we did this build
           # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
           ccache -z
 
       - name: 🛠️ Baseline Build
-        if: github.ref_name != 'main' && !inputs.full-scan
+        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
         run: |
           nice -n 19 cmake --build --preset clang-tidy
 
       - name: Publish Ccache summary
-        if: github.ref_name != 'main' && !inputs.full-scan
+        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
         run: |
           echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
@@ -176,13 +191,5 @@ jobs:
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
-      - name: Cleanup
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
-        run: |
-          # We are forced to checkout the repo into a subdir of the host's workdir; this pollutes the host
-          # with root-owned files.  Be sure to clean up after ourselves in case we're on a non-ephemeral runner.
-          echo "pre rm"
-          ls -al /__w/tt-metal/tt-metal
-          rm -rf /__w/tt-metal/tt-metal/docker-job
-          echo "post rm"
-          ls -al /__w/tt-metal/tt-metal

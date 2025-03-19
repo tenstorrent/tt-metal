@@ -153,26 +153,45 @@ void Cluster::generate_cluster_descriptor() {
                 break;
             }
         }
-        bool all_n300 = true;
-        bool all_n150 = true;
+        TT_ASSERT(this->cluster_desc_->get_all_chips().size() > 0, "No chips detected in the cluster");
+        const auto board_type = this->cluster_desc_->get_board_type(*this->cluster_desc_->get_all_chips().begin());
+        bool all_same_board = true;
         for (const auto& chip_id : this->cluster_desc_->get_all_chips()) {
-            all_n300 &= (this->cluster_desc_->get_board_type(chip_id) == BoardType::N300);
-            all_n150 &= (this->cluster_desc_->get_board_type(chip_id) == BoardType::N150);
-        }
-        if (all_n300) {
-            if (this->cluster_desc_->get_all_chips().size() == 2) {
-                this->cluster_type_ = ClusterType::N300;
-            } else if (this->cluster_desc_->get_all_chips().size() == 8) {
-                this->cluster_type_ = ClusterType::T3K;
+            if (this->cluster_desc_->get_board_type(chip_id) != board_type) {
+                all_same_board = false;
+                break;
             }
-        } else if (all_n150) {
-            if (this->cluster_desc_->get_all_chips().size() == 1) {
-                this->cluster_type_ = ClusterType::N150;
+        }
+
+        if (all_same_board) {
+            if (board_type == BoardType::N300) {
+                if (this->cluster_desc_->get_all_chips().size() == 2) {
+                    this->cluster_type_ = ClusterType::N300;
+                } else if (this->cluster_desc_->get_all_chips().size() == 8) {
+                    this->cluster_type_ = ClusterType::T3K;
+                }
+            } else if (board_type == BoardType::N150) {
+                if (this->cluster_desc_->get_all_chips().size() == 1) {
+                    this->cluster_type_ = ClusterType::N150;
+                }
+            } else if (board_type == BoardType::P100) {
+                if (this->cluster_desc_->get_all_chips().size() == 1) {
+                    this->cluster_type_ = ClusterType::P100;
+                }
+            } else if (board_type == BoardType::P150) {
+                if (this->cluster_desc_->get_all_chips().size() == 1) {
+                    this->cluster_type_ = ClusterType::P150;
+                } else if (this->cluster_desc_->get_all_chips().size() == 2) {
+                    this->cluster_type_ = ClusterType::P150_X2;
+                } else if (this->cluster_desc_->get_all_chips().size() == 4) {
+                    this->cluster_type_ = ClusterType::P150_X4;
+                }
             }
         }
 
         if ((this->cluster_desc_->get_all_chips().size() == this->cluster_desc_->get_chips_with_mmio().size()) and
             (this->cluster_desc_->get_all_chips().size() == 32)) {
+            //TODO: need to get this from umd, for now UBB has null set as board type
             this->cluster_type_ = ClusterType::GALAXY;
         }
     }
@@ -272,8 +291,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_);
         // umd::Cluster::detect_available_device_ids only lists MMIO device ids, since we need remote chip ids
         // generate the cluster desc and pull chip ids from there
-        auto temp_cluster_desc =
-            tt_ClusterDescriptor::create_from_yaml(tt_ClusterDescriptor::get_cluster_descriptor_file_path());
+        auto temp_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
         std::unordered_set<chip_id_t> all_chips = temp_cluster_desc->get_all_chips();
         std::set<chip_id_t> all_chips_set(all_chips.begin(), all_chips.end());
         // This is the target/desired number of mem channels per arch/device.
@@ -969,6 +987,13 @@ std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
     return active_ethernet_cores;
 }
 
+tt::tt_fabric::ControlPlane* Cluster::get_control_plane() {
+    if (control_plane_.get() == nullptr) {
+        this->initialize_control_plane();
+    }
+    return control_plane_.get();
+}
+
 void Cluster::initialize_fabric_config(FabricConfig fabric_config) {
     this->fabric_config_ = fabric_config;
     if (fabric_config != FabricConfig::DISABLED) {
@@ -976,6 +1001,7 @@ void Cluster::initialize_fabric_config(FabricConfig fabric_config) {
     } else {
         this->release_ethernet_cores_for_fabric_routers();
     }
+    tt::Cluster::instance().get_control_plane()->configure_routing_tables_for_fabric_ethernet_channels();
 }
 
 void Cluster::reserve_ethernet_cores_for_fabric_routers() {
@@ -1208,6 +1234,29 @@ uint32_t Cluster::get_mmio_device_tunnel_count(chip_id_t mmio_device) const {
 uint32_t Cluster::get_device_tunnel_depth(chip_id_t chip_id) const {
     chip_id_t mmio_device_id = this->get_associated_mmio_device(chip_id);
     return (mmio_device_id == chip_id) ? 0 : this->cluster_desc_->get_ethernet_link_distance(chip_id, mmio_device_id);
+}
+
+void Cluster::initialize_control_plane() {
+    // Default mode, auto select mesh graph descriptor. In future, we can add a way for user to specify custom
+    // descriptors
+    std::string mesh_graph_descriptor;
+    switch (this->cluster_type_) {
+        case tt::ClusterType::N150: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::N300: mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::T3K: mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::GALAXY: mesh_graph_descriptor = "quanta_galaxy_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::TG: mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::P100: mesh_graph_descriptor = "p100_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::P150: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::P150_X2: mesh_graph_descriptor = "p150_x2_mesh_graph_descriptor.yaml"; break;
+        case tt::ClusterType::P150_X4: mesh_graph_descriptor = "p150_x4_mesh_graph_descriptor.yaml"; break;
+        default: TT_THROW("Unknown cluster type"); // TODO: we could expose this as a custom mesh graph option
+    }
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
+
+    control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
 }
 
 }  // namespace tt

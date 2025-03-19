@@ -14,6 +14,40 @@ import time
 import signal
 import psutil
 import json
+import matplotlib.pyplot as plt
+import numpy as np
+
+from models.tt_transformers.tt.model_config import parse_optimizations
+
+# default setting: precision_cfg = {ff1_3: bfp8, ff2: bfp8, wqkv: bfp8, wo: bfp8, kv_cache: bfp8, activation: mixed}, fidelity_cfg = {li_ff1_3: hifi2, li_ff2: hifi2, li_qkv_decode: hifi2, sdpa_decode: hifi2na, li_o_decode: hifi2, li_qkv_prefill: hifi2, sdpa_prefill: hifi4, li_o_prefill: hifi2_fp16}
+# NOTE: the following settings are used to override the default settings for Pareto analysis
+dtype_mf_settings = [
+    "precision_cfg = {ff1_3: bfp4, ff2: bfp4}, fidelity_cfg = {li_ff1_3: lofi, li_ff2: lofi}",
+    "precision_cfg = {ff1_3: bfp4, ff2: bfp8}, fidelity_cfg = {li_ff1_3: lofi, li_ff2: hifi2}",
+    "precision_cfg = {ff1_3: bfp4, ff2: bf16}, fidelity_cfg = {li_ff1_3: lofi, li_ff2: hifi4}",
+    "precision_cfg = {ff1_3: bfp8, ff2: bfp4}, fidelity_cfg = {li_ff1_3: hifi2, li_ff2: lofi}",
+    "precision_cfg = {ff1_3: bfp8, ff2: bfp8}, fidelity_cfg = {li_ff1_3: hifi2, li_ff2: hifi2}",
+    "precision_cfg = {ff1_3: bfp8, ff2: bf16}, fidelity_cfg = {li_ff1_3: hifi2, li_ff2: hifi4}",
+    "precision_cfg = {ff1_3: bf16, ff2: bfp4}, fidelity_cfg = {li_ff1_3: hifi4, li_ff2: lofi}",
+    "precision_cfg = {ff1_3: bf16, ff2: bfp8}, fidelity_cfg = {li_ff1_3: hifi4, li_ff2: hifi2}",
+    "precision_cfg = {ff1_3: bf16, ff2: bf16}, fidelity_cfg = {li_ff1_3: hifi4, li_ff2: hifi4}",
+    "precision_cfg = {ff1_3: bfp8, ff2: bfp8, wqkv: bfp8, wo: bfp4, kv_cache: bfp8, activation: bf16}, fidelity_cfg = {li_ff1_3: hifi2, sdpa_decode: hifi2na, li_o_decode: lofi, li_qkv_prefill: hifi2, sdpa_prefill: hifi4, li_o_prefill: lofi}",
+    "precision_cfg = {ff1_3: bfp8, ff2: bfp8, wqkv: bfp8, wo: bfp4, kv_cache: bfp8, activation: bfp8}, fidelity_cfg = {li_ff1_3: hifi2, sdpa_decode: hifi2na, li_o_decode: lofi, li_qkv_prefill: hifi2, sdpa_prefill: hifi4, li_o_prefill: lofi}",
+    "precision_cfg = {ff1_3: bfp8, ff2: bfp8, wqkv: bfp8, wo: bfp4, kv_cache: bfp8}, fidelity_cfg = {li_ff1_3: hifi2, li_ff2: hifi2, li_o_decode: lofi, li_qkv_prefill: hifi2, sdpa_prefill: hifi4, li_o_prefill: lofi}",
+]
+
+pareto_commands = {
+    k: v
+    for cmd in [
+        {
+            # dmf is short for "dtype and math fidelity"
+            f"accuracy-dmf-{i}": f"pytest models/tt_transformers/tests/test_accuracy.py -k 'attention-accuracy and file' --optimizations '{setting}'",
+            f"demo-dmf-{i}": f"pytest models/tt_transformers/demo/simple_text_demo.py -k 'params0-performance and batch-1' --optimizations '{setting}'",
+        }
+        for i, setting in enumerate(dtype_mf_settings)
+    ]
+    for k, v in cmd.items()
+}
 
 
 def ensure_less_installed():
@@ -81,9 +115,9 @@ def get_device():
     total_devices = count_devices(smi_ls_output)
 
     if total_devices == 1:
-        device = "N150"
+        device = "N150" if "Wormhole" in smi_ls_output else "P150"  # Blackhole
     elif total_devices == 2:
-        device = "N150"
+        device = "N300" if "Wormhole" in smi_ls_output else "P300"  # Blackhole
     elif total_devices == 8:
         device = "T3K"
     else:  # TG has 36 devices
@@ -106,7 +140,11 @@ def list_supported_devices(device):
         return "n150, n300, t3k"
     elif device == "N300":
         return "n150, n300"
-    else:  # N150
+    elif device == "P300":
+        return "p150, p300"
+    elif device == "P150":
+        return "p150"
+    else:
         return "n150"
 
 
@@ -118,7 +156,7 @@ def count_devices(output):
 
     # Count total PCI devices (ignoring N/A)
     total_pci_devices = len(
-        [line for line in available_boards.split("\n") if ("Wormhole" or "Grayskull" or "Blackhole") in line]
+        [line for line in available_boards.split("\n") if any(word in line for word in ["Blackhole", "Wormhole"])]
     )
 
     return total_pci_devices
@@ -477,6 +515,9 @@ def main(stdscr):
                         if command_input == "vision":
                             command_input = "vision-mlp,vision-attn,vision-block,vision-xfmr,vision-xattn,vision-xblock,vision-conv,vision-class,vision-tile-pos,vision-pos,vision-encoder,vision-text-xfmr,vision-vision-xfmr"
 
+                        if command_input == "pareto":
+                            command_input = ",".join(pareto_commands.keys())
+
                         # Parse models, devices, and commands
                         models = parse_list(model_input)
                         devices = parse_list(device_input)
@@ -484,10 +525,10 @@ def main(stdscr):
 
                         # Generate combinations (reordered)
                         # Ignore invalid combinations:
-                        # - 11b and 11b-b models on n150 device
-                        # - 70b and 70b-r1 model on n150 and n300 devices
-                        # - 72b model on n150 and n300 devices
-                        # - q7b on anything other than N300
+                        # - 11b and 11b-b models on n150/p150 device
+                        # - 70b and 70b-r1 model on n150/n300 & p150/p300 devices
+                        # - 72b model on n150/n300 and p150/p300 devices
+                        # - q7b on anything other than n300/p300
                         # - Vision commands on non-vision (11b) models
                         combinations = [
                             (c, m, d)
@@ -495,11 +536,11 @@ def main(stdscr):
                             for m in models
                             for d in devices
                             if not (
-                                (m in ["11b", "11b-b"] and d == "n150")
-                                or (m == "70b" and d in ["n150", "n300"])
-                                or (m == "70b-r1" and d in ["n150", "n300"])
-                                or (m == "q72b" and d in ["n150", "n300"])
-                                or (m == "q7b" and d != "n300")
+                                (m in ["11b", "11b-b"] and d in ["n150", "p150"])
+                                or (m == "70b" and d in ["n150", "n300", "p150", "p300"])
+                                or (m == "70b-r1" and d in ["n150", "n300", "p150", "p300"])
+                                or (m == "q72b" and d in ["n150", "n300", "p150", "p300"])
+                                or (m == "q7b" and d in ["n300", "p300"])
                                 or ("vision" in c and m not in ["11b", "11b-b"])
                             )
                         ]
@@ -858,6 +899,11 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         "demo-long": "pytest models/tt_transformers/demo/simple_text_demo.py -k performance-long",
         "demo-ci-1": "pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1",
         "demo-ci-32": "pytest models/tt_transformers/demo/simple_text_demo.py -k performance-ci-32",
+        "demo-dp-4": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'performance and DP-4-b1'",
+        "demo-dp-8": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'performance and DP-8-b1'",
+        "demo-32-dp-4": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'performance and DP-4-b32'",
+        "demo-ci-dp-4": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'performance and ci-b1-DP-4'",
+        "demo-ci-dp-8": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'performance and ci-b1-DP-8'",
         "attention": "pytest models/tt_transformers/tests/test_attention.py",
         "attention-prefill": "pytest models/tt_transformers/tests/test_attention_prefill.py",
         "mlp": "pytest models/tt_transformers/tests/test_mlp.py",
@@ -869,6 +915,8 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         "model": "pytest models/tt_transformers/tests/test_model.py -k 'performance-256 and full'",
         "model-quick": "pytest models/tt_transformers/tests/test_model.py -k 'performance-256 and quick'",
         "model-prefill": "pytest models/tt_transformers/tests/test_model_prefill.py -k performance-4096",
+        # Precision and Math Fidelity tests for Pareto analysis
+        **pareto_commands,
         # Vision tests (require 11B weights)
         "vision-mlp": "pytest models/tt_transformers/tests/multimodal/test_image_mlp.py",
         "vision-attn": "pytest models/tt_transformers/tests/multimodal/test_image_attention.py",
@@ -1213,7 +1261,7 @@ def get_help_text(current_line, num_input_fields, num_output_entries):
     elif current_line <= num_input_fields - 1:
         return "Enter: Next field | ↑↓: Navigate fields | Esc: Exit"
     else:
-        return "Enter: View log | Backspace/x: Cancel entry | X: Cancel all | r: Restart entry | p: Reparse log | ↑↓: Navigate entries | Esc: Exit"
+        return "Enter: View log | Backspace/x: Cancel entry | X: Cancel all | r: Restart entry | p: Reparse log | m: Export markdown | ↑↓: Navigate entries | Esc: Exit"
 
 
 def cancel_entry(entry):
@@ -1237,6 +1285,7 @@ def export_results_to_markdown(output_entries, stdscr):
     # Initialize ordered lists to maintain entry order
     perf_entries = []
     acc_entries = []
+    dmf_entries = {}
 
     # Collect results from entries in their original order
     for entry in output_entries:
@@ -1287,49 +1336,114 @@ def export_results_to_markdown(output_entries, stdscr):
                 else:
                     acc_entries.append([key, top1, top5, speed or "N/A", ttft])
 
-    # Create markdown content
-    markdown_lines = [
-        "## ModelOptimizations.performance",
-        "",
-        "This configuration uses bfp4 MLP FF1+FF3 for all models.",
-        "",
-        "| Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |",
-        "|-------|--------|-----------|-----------|---------------|-----------|",
-    ]
+            elif entry.command_name.startswith("demo-dmf"):
+                # get speed from demo-precision entries
+                speed = entry.speed
+                ttft = entry.ttft
 
+                setting_idx = int(entry.command_name[len("demo-dmf-") :])
+                if setting_idx not in dmf_entries:
+                    dmf_entries[setting_idx] = {key: ["N/A", "N/A", speed or "N/A", ttft]}
+                else:
+                    dmf_entries[setting_idx][key][2] = speed or "N/A"
+                    dmf_entries[setting_idx][key][3] = ttft or "N/A"
+
+            elif entry.command_name.startswith("accuracy-dmf"):
+                # get accuracy from accuracy-precision entries
+                top1, top5 = "N/A", "N/A"
+                if entry.pcc:
+                    match = re.match(r"(\d+)\s*\|\s*(\d+)", entry.pcc)
+                    if match:
+                        top1, top5 = match.group(1), match.group(2)
+
+                setting_idx = int(entry.command_name[len("accuracy-dmf-") :])
+                if setting_idx not in dmf_entries:
+                    dmf_entries[setting_idx] = {key: [top1, top5, "N/A", "N/A"]}
+                else:
+                    dmf_entries[setting_idx][key][0:2] = [top1, top5]
+
+    # Create markdown content
     fullname = {
-        "1b": "Llama-3.2-1B",
-        "3b": "Llama-3.2-3B",
-        "8b": "Llama-3.1-8B",
-        "11b": "Llama-3.2-11B",
-        "70b": "Llama-3.1-70B",
+        "1b": "Llama3.2-1B",
+        "3b": "Llama3.2-3B",
+        "8b": "Llama3.1-8B",
+        "11b": "Llama3.2-11B",
+        "70b": "Llama3.1-70B",
         "70b-r1": "DeepSeek-R1-Llama-70B",
-        "q7b": "Qwen-2.5-7B",
-        "q72b": "Qwen-2.5-72B",
+        "q7b": "Qwen2.5-7B",
+        "q72b": "Qwen2.5-72B",
     }
 
-    # Add rows for performance table in original order
-    for entry in perf_entries:
-        (model, device), top1, top5, speed, ttft = entry
-        markdown_lines.append(f"| {model} | {device} | {top1} | {top5} | {speed} | {ttft} |")
+    markdown_lines = []
+    if perf_entries:
+        markdown_lines.extend(
+            [
+                "## LlamaOptimizations.performance",
+                "",
+                "This configuration uses bfp4 MLP FF1+FF3 for all models.",
+                "",
+                "| Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |",
+                "|-------|--------|-----------|-----------|---------------|-----------|",
+            ]
+        )
+        # Add rows for performance table in original order
+        for entry in perf_entries:
+            (model, device), top1, top5, speed, ttft = entry
+            markdown_lines.append(f"| {fullname[model]} | {device} | {top1} | {top5} | {speed} | {ttft} |")
 
     # Add accuracy table
-    markdown_lines.extend(
-        [
-            "",
-            "## ModelOptimizations.accuracy",
-            "",
-            "This configuration uses bfp4 MLP FF1+FF3 only for the 3.1-70B model.",
-            "",
-            "| Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |",
-            "|-------|--------|-----------|-----------|---------------|-----------|",
-        ]
-    )
+    if acc_entries:
+        markdown_lines.extend(
+            [
+                "",
+                "## LlamaOptimizations.accuracy",
+                "",
+                "This configuration uses bfp4 MLP FF1+FF3 only for the 3.1-70B model.",
+                "",
+                "| Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |",
+                "|-------|--------|-----------|-----------|---------------|-----------|",
+            ]
+        )
 
-    # Add rows for accuracy table in original order
-    for entry in acc_entries:
-        (model, device), top1, top5, speed, ttft = entry
-        markdown_lines.append(f"| {fullname[model]} | {device} | {top1} | {top5} | {speed} | {ttft} |")
+        # Add rows for accuracy table in original order
+        for entry in acc_entries:
+            (model, device), top1, top5, speed, ttft = entry
+            markdown_lines.append(f"| {fullname[model]} | {device} | {top1} | {top5} | {speed} | {ttft} |")
+
+    # add precision tables
+    def gen_description(setting_idx: int) -> str:
+        return parse_optimizations(dtype_mf_settings[setting_idx]).__name__
+
+    if dmf_entries:
+        data_to_plot = {}
+        for setting_idx, entries in dmf_entries.items():
+            desc = gen_description(setting_idx)
+            markdown_lines.extend(
+                [
+                    "",
+                    f"## {desc}",
+                    "",
+                    "| Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |",
+                    "|-------|--------|-----------|-----------|---------------|-----------|",
+                ]
+            )
+            for key, entry in entries.items():
+                model, device = key
+                top1, top5, speed, ttft = entry
+                markdown_lines.append(f"| {fullname[model]} | {device} | {top1} | {top5} | {speed} | {ttft} |")
+
+                model_device_name = fullname[model] + "_" + device
+                if model_device_name in data_to_plot:
+                    data_to_plot[model_device_name][0].append(float(speed))
+                    data_to_plot[model_device_name][1].append(float(top1))
+                    data_to_plot[model_device_name][2].append(desc)
+                else:
+                    data_to_plot[model_device_name] = ([float(speed)], [float(top1)], [desc])
+
+        # plot the data between speed and top1 for each mode-device pair
+        for model_device_name, data in data_to_plot.items():
+            speed, top1, desc = data
+            plot_data_with_desc(speed, top1, "Speed (t/s/u)", "Top-1 (%)", desc, model_device_name)
 
     # Write to PERF.md
     with open("PERF.md", "w") as f:
@@ -1337,9 +1451,22 @@ def export_results_to_markdown(output_entries, stdscr):
 
     # Clear screen and show message
     stdscr.clear()
-    stdscr.addstr(0, 0, "\n".join(markdown_lines))
-    stdscr.addstr(len(markdown_lines) + 2, 0, f"Table written to {os.path.abspath('PERF.md')}")
-    stdscr.addstr(len(markdown_lines) + 3, 0, "Press any key to return...")
+
+    # display 'PERF.md' using less
+    # Save current terminal state
+    curses.def_prog_mode()
+    # Exit curses temporarily
+    curses.endwin()
+    # Run less command
+    os.system(f"less -R PERF.md")
+    # Resume curses
+    curses.reset_prog_mode()
+    stdscr.refresh()
+
+    # display helpful message at the bottom of the screen
+    stdscr.addstr(0, 0, f"Table written to {os.path.abspath('PERF.md')}")
+    stdscr.addstr(1, 0, f"Plots written to .svg files in {os.path.abspath('data_plots/')}")
+    stdscr.addstr(2, 0, "Press any key to return...")
     stdscr.refresh()
 
     # Temporarily make getch() blocking
@@ -1387,6 +1514,112 @@ def reparse_log_file(entry, screen_needs_update):
 
     except FileNotFoundError:
         pass  # Log file doesn't exist
+
+
+def get_pareto_front(objective1: np.ndarray, objective2: np.ndarray) -> np.ndarray:
+    # Compute the Pareto front where larger is better for both objectives.
+    # A point is Pareto optimal if no other point is strictly better in both objectives.
+    # One simple method for 2D data: sort by objective1 from largest to smallest
+    # and then select points that have the largest objective2 value seen so far.
+    indices = np.argsort(objective1)[::-1]
+
+    pareto_indices = []
+    current_best = -1.0  # smaller than both objectives' smallest possible values
+    for idx in indices:
+        if objective2[idx] > current_best:
+            pareto_indices.append(idx)
+            current_best = objective2[idx]
+    return np.array(pareto_indices)
+
+
+def plot_data_with_desc(objective1, objective2, objective1_label, objective2_label, point_desc, model_device_name):
+    # Plot all data points but highlight the Pareto points
+    objective1 = np.array(objective1)
+    objective2 = np.array(objective2)
+    plt.scatter(objective1, objective2, label="Data Points", color="blue")
+    # add point_desc to all the points near the bottom of the plot
+    for i, (x, y) in enumerate(zip(objective1, objective2)):
+        plt.annotate(f"{i}", (x, y), textcoords="offset points", xytext=(0, -10), ha="center")
+    # Get one Pareto point for each objective
+    pareto_indices = get_pareto_front(objective1, objective2)
+    pareto_obj1 = objective1[pareto_indices]
+    pareto_obj2 = objective2[pareto_indices]
+    # Plot the Pareto front as a connected red line.
+    plt.plot(pareto_obj1, pareto_obj2, "r-", label="Pareto Front")
+    plt.scatter(pareto_obj1, pareto_obj2, color="red")
+
+    # write point_desc to a csv file in the same directory as the plot
+    os.makedirs("data_plots", exist_ok=True)
+    with open(f"data_plots/{model_device_name}_point_desc.csv", "w") as f:
+        f.write(f"index,{objective1_label},{objective2_label},point_desc\n")
+        for i, (x, y) in enumerate(zip(objective1, objective2)):
+            f.write(f"{i},{x},{y},{point_desc[i]}\n")
+
+    plt.xlabel(objective1_label)
+    plt.ylabel(objective2_label)
+    model_name = model_device_name.split("_")[0]
+    device_name = model_device_name.split("_")[1]
+    plt.title(f"Pareto Analysis between {objective1_label} and {objective2_label}\n of {model_name} on {device_name}")
+    plt.legend()
+
+    # Get figure size
+    fig = plt.gcf()
+    fig_width, fig_height = fig.get_size_inches()
+    height_incr = 0.7
+    height_incr_total = height_incr * len(pareto_indices)
+    new_fig_height = fig_height + height_incr_total
+    fig.set_size_inches(fig_width, new_fig_height)
+
+    # Add more bottom margin
+    plt.subplots_adjust(bottom=height_incr_total / fig_height)
+
+    # Calculate x,y position for footnote relative to figure size
+    # relative to the bottom left corner of the plot with normalized coordinates (0-1)
+    x = 0.1
+    y = height_incr / 4
+
+    # add footnote to the plot
+    for i in pareto_indices:
+        desc_splits = point_desc[i].split("}")
+        fidelity_desc = desc_splits[1][2:] + "}"  # 2: slice to remove the leading ", "
+        # find substring "li_qkv_prefill" in fidelity_desc and insert a new line before it so the text fits in the plot
+        idx = fidelity_desc.find("li_qkv_prefill")
+        assert idx != -1, f"li_qkv_prefill not found in {fidelity_desc}"
+        fidelity_desc_part2 = " " * len("fidelity_cfg = {") + fidelity_desc[idx:]
+        plt.figtext(
+            x, y, f"{fidelity_desc_part2}", ha="left", transform=fig.dpi_scale_trans, family="monospace", fontsize=6
+        )
+        y += height_incr / 8
+        fidelity_desc_part1 = fidelity_desc[:idx]
+        plt.figtext(
+            x, y, f"{fidelity_desc_part1}", ha="left", transform=fig.dpi_scale_trans, family="monospace", fontsize=6
+        )
+        y += height_incr / 8
+        dtype_desc = desc_splits[0] + "}"
+        plt.figtext(x, y, f"{dtype_desc}", ha="left", transform=fig.dpi_scale_trans, family="monospace", fontsize=6)
+        y += height_incr / 8
+        plt.figtext(
+            x,
+            y,
+            f"{i}: {objective1_label}={objective1[i]}, {objective2_label}={objective2[i]}",
+            ha="left",
+            transform=fig.dpi_scale_trans,
+            fontsize=10,
+        )
+        y += height_incr / 3
+
+    x = fig_width / 2
+    plt.figtext(
+        x,
+        y,
+        f"(use data-point id for details in {model_device_name}_point_desc.csv)",
+        ha="center",
+        transform=fig.dpi_scale_trans,
+        fontsize=10,
+    )
+    plt.grid(True)
+    plt.savefig(f"data_plots/{model_device_name}_pareto.svg")
+    plt.close()
 
 
 if __name__ == "__main__":

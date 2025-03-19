@@ -7,6 +7,7 @@
 #include <program_impl.hpp>
 #include "core_coord.hpp"
 #include "mesh_graph.hpp"
+#include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tt_cluster.hpp"
 
@@ -91,9 +92,7 @@ public:
     void AddUpstreamKernel(FDKernel* upstream) { upstream_kernels_.push_back(upstream); }
     void AddDownstreamKernel(FDKernel* downstream) { downstream_kernels_.push_back(downstream); }
 
-    virtual CoreType GetCoreType() {
-        return tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(device_->id());
-    }
+    virtual CoreType GetCoreType() { return tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(); }
     tt_cxy_pair GetLogicalCore() { return logical_core_; }
     tt_cxy_pair GetVirtualCore() {
         return tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(logical_core_, GetCoreType());

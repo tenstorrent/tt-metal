@@ -12,6 +12,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 
 namespace tt::tt_fabric {
+namespace fabric_router_tests {
 
 TEST_F(Fabric1DFixture, TestUnicast) {
     CoreCoord sender_logical_core = {0, 0};
@@ -21,7 +22,7 @@ TEST_F(Fabric1DFixture, TestUnicast) {
     std::pair<mesh_id_t, chip_id_t> dst_mesh_chip_id;
     chip_id_t dst_physical_device_id;
 
-    auto control_plane = tt::DevicePool::instance().get_control_plane();
+    auto control_plane = tt::Cluster::instance().get_control_plane();
 
     // Find a device with a neighbour in the East direction
     bool connection_found = false;
@@ -108,13 +109,13 @@ TEST_F(Fabric1DFixture, TestUnicast) {
     tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
         .edm_noc_x = edm_eth_core.x,
         .edm_noc_y = edm_eth_core.y,
-        .edm_buffer_base_addr = edm_config.sender_0_channel_base_address,
-        .num_buffers_per_channel = edm_config.sender_0_num_buffers,
-        .edm_l1_sem_addr = edm_config.sender_channel_0_local_flow_control_semaphore_address,
-        .edm_connection_handshake_addr = edm_config.sender_channel_0_connection_semaphore_address,
-        .edm_worker_location_info_addr = edm_config.sender_channel_0_worker_conn_info_base_address,
+        .edm_buffer_base_addr = edm_config.sender_channels_base_address[0],
+        .num_buffers_per_channel = edm_config.sender_channels_num_buffers[0],
+        .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[0],
+        .edm_connection_handshake_addr = edm_config.sender_channels_connection_semaphore_address[0],
+        .edm_worker_location_info_addr = edm_config.sender_channels_worker_conn_info_base_address[0],
         .buffer_size_bytes = edm_config.channel_buffer_size_bytes,
-        .buffer_index_semaphore_id = edm_config.sender_channel_0_buffer_index_semaphore_address,
+        .buffer_index_semaphore_id = edm_config.sender_channels_buffer_index_semaphore_address[0],
         .persistent_fabric = true};
 
     auto worker_flow_control_semaphore_id = tt_metal::CreateSemaphore(sender_program, sender_logical_core, 0);
@@ -181,4 +182,5 @@ TEST_F(Fabric1DFixture, TestUnicast) {
     EXPECT_EQ(sender_bytes, receiver_bytes);
 }
 
+}  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric

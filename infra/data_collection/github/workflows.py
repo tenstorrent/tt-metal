@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pathlib
+import re
 import json
 from datetime import datetime, timedelta
 from functools import partial
@@ -11,6 +12,42 @@ from typing import List
 from loguru import logger
 
 from infra.data_collection import junit_xml_utils, pydantic_models
+
+
+smi_pattern = re.compile(r'.*"tt_smi":\s*"([a-zA-Z0-9\-\.]+)"')
+
+
+def search_for_tt_smi_version_in_log_file_(log_file):
+    with open(log_file, "r") as log_f:
+        for line in log_f:
+            regex_match = smi_pattern.match(line)
+            if regex_match:
+                return regex_match.group(1)
+    return None
+
+
+def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id: int):
+    """
+    Read the job output log for the tt-smi version. The tt-smi version is printed in the
+    Set up runner step, where we call tt-smi-metal -s to dump the smi output.
+    The tt-smi version stored in the "host_sw_vers" dict is only available in
+    higher versions of tt-smi (3.0.4+). For older versions we will not be able to extract
+    the smi version directly from the smi output log dump.
+    See: https://github.com/tenstorrent/tt-metal/issues/19095
+    """
+    logs_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
+
+    log_files = logs_dir.glob("*.log")
+
+    github_job_ids_to_tt_smi_versions = {}
+    for log_file in log_files:
+        tt_smi_version = search_for_tt_smi_version_in_log_file_(log_file)
+        if tt_smi_version:
+            github_job_id = log_file.name.replace(".log", "")
+            assert github_job_id.isnumeric(), f"{github_job_id}"
+            github_job_id = int(github_job_id)
+            github_job_ids_to_tt_smi_versions[github_job_id] = tt_smi_version
+    return github_job_ids_to_tt_smi_versions
 
 
 def get_workflow_run_uuids_to_test_reports_paths_(workflow_outputs_dir, workflow_run_id: int):
@@ -174,7 +211,7 @@ def get_pydantic_test_from_testcase_(testcase, default_timestamp=datetime.now(),
         filepath_no_ext = testcase.attrib["classname"].replace(".", "/")
         filepath = f"{filepath_no_ext}.py"
     else:
-        filepath = testcase.attrib["file"]
+        filepath = testcase.attrib.get("file", "")
         if filepath.startswith("/work/"):
             filepath = filepath.lstrip("/work/")
 
@@ -182,7 +219,7 @@ def get_pydantic_test_from_testcase_(testcase, default_timestamp=datetime.now(),
         categories = ["models", "ttnn", "tt_eager", "tt_metal"]
         for category in categories:
             identifier_attrib = "classname" if is_pytest else "file"
-            if category in testcase_.attrib[identifier_attrib]:
+            if category in testcase_.attrib.get(identifier_attrib, ""):
                 return category
         return "other"
 
@@ -241,6 +278,21 @@ def get_tests_from_test_report_path(test_report_path):
     report_root_tree = junit_xml_utils.get_xml_file_root_element_tree(test_report_path)
 
     report_root = report_root_tree.getroot()
+
+    # Special case: Handle ctest: the report root is <testsuite>, not <testsuites>
+    if report_root.tag == "testsuite":
+        logger.info("Root tag is testsuite, found ctest xml")
+        tests = []
+        # ctest timestamp format is not the same as pytest/gtest
+        default_timestamp = datetime.strptime(report_root.attrib["timestamp"], "%Y-%m-%dT%H:%M:%S")
+        for testcase in report_root.findall("testcase"):
+            if is_valid_testcase_(testcase):
+                # Process ctest testcase
+                pyd_test_info = get_pydantic_test_from_testcase_(
+                    default_timestamp=default_timestamp, is_pytest=False, testsuite_name=None, testcase=testcase
+                )
+                tests.append(pyd_test_info)
+        return tests
 
     is_pytest = junit_xml_utils.is_pytest_junit_xml(report_root)
     is_gtest = junit_xml_utils.is_gtest_xml(report_root)
