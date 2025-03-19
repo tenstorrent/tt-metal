@@ -4,7 +4,6 @@
 
 #include "rmsnorm_fw_program_factory.hpp"
 
-#include <algorithm>
 #include <bit>
 #include <cstdint>
 #include <tt-metalium/constants.hpp>
@@ -79,8 +78,6 @@ uint32_t get_block_size(uint32_t num_inner) {
 
 namespace ttnn::operations::experimental::rmsnorm_fw::program {
 
-using namespace tt::constants;
-
 /**
  *   Helper struct to hold references to all kernels we create,
  *        used during runtime argument setup.
@@ -102,10 +99,9 @@ inline tt::tt_metal::CBHandle create_circular_buffer(
     tt::DataFormat data_format,
     uint32_t single_tile_size,
     uint32_t num_tiles) {
-    using namespace tt::tt_metal;
-
-    CircularBufferConfig cb_config = CircularBufferConfig(num_tiles * single_tile_size, {{cb_index, data_format}})
-                                         .set_page_size(cb_index, single_tile_size);
+    tt::tt_metal::CircularBufferConfig cb_config =
+        tt::tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{cb_index, data_format}})
+            .set_page_size(cb_index, single_tile_size);
 
     auto cb_handle = CreateCircularBuffer(program, core_ranges, cb_config);
     return cb_handle;
@@ -120,9 +116,8 @@ inline tt::tt_metal::KernelHandle create_reader_kernel(
     const std::vector<uint32_t>& compile_time_args,
     const std::map<std::string, std::string>& defines,
     const std::string& kernel_path) {
-    using namespace tt::tt_metal;
-
-    return CreateKernel(program, kernel_path, core_ranges, ReaderDataMovementConfig(compile_time_args, defines));
+    return tt::tt_metal::CreateKernel(
+        program, kernel_path, core_ranges, tt::tt_metal::ReaderDataMovementConfig(compile_time_args, defines));
 }
 
 /**
@@ -134,9 +129,8 @@ inline tt::tt_metal::KernelHandle create_writer_kernel(
     const std::vector<uint32_t>& compile_time_args,
     const std::map<std::string, std::string>& defines,
     const std::string& kernel_path) {
-    using namespace tt::tt_metal;
-
-    return CreateKernel(program, kernel_path, core_ranges, WriterDataMovementConfig(compile_time_args, defines));
+    return tt::tt_metal::CreateKernel(
+        program, kernel_path, core_ranges, tt::tt_metal::WriterDataMovementConfig(compile_time_args, defines));
 }
 
 /**
@@ -148,13 +142,11 @@ inline tt::tt_metal::KernelHandle create_compute_kernel(
     const std::vector<uint32_t>& compile_time_args,
     const std::map<std::string, std::string>& defines,
     const std::string& kernel_path) {
-    using namespace tt::tt_metal;
-
-    return CreateKernel(
+    return tt::tt_metal::CreateKernel(
         program,
         kernel_path,
         core_ranges,
-        ComputeConfig{
+        tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = true,
             .math_approx_mode = false,
@@ -179,8 +171,6 @@ inline void assign_per_core_runtime_args(
     uint32_t num_rows_per_core_group_2,
     const tt::tt_metal::CoreRangeSet& core_group_1,
     const tt::tt_metal::CoreRangeSet& core_group_2) {
-    using namespace tt::tt_metal;
-
     for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -339,16 +329,28 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
     auto* input_buffer = input.buffer();
-    TT_FATAL(input_buffer->buffer_type() == BufferType::DRAM, "Input buffer must be in DRAM");
+    TT_FATAL(
+        input_buffer->buffer_type() == BufferType::DRAM,
+        "Input buffer must be in DRAM. Input buffer of type {}",
+        magic_enum::enum_name(input_buffer->buffer_type()));
 
     auto* gamma_buffer = gamma.buffer();
-    TT_FATAL(gamma_buffer->buffer_type() == BufferType::DRAM, "Gamma buffer must be in DRAM");
+    TT_FATAL(
+        gamma_buffer->buffer_type() == BufferType::DRAM,
+        "Gamma buffer must be in DRAM. Gamma buffer of type {}",
+        magic_enum::enum_name(gamma_buffer->buffer_type()));
 
     auto* output_buffer = output.front().buffer();
-    TT_FATAL(output_buffer->buffer_type() == BufferType::DRAM, "Output buffer must be in DRAM");
+    TT_FATAL(
+        output_buffer->buffer_type() == BufferType::DRAM,
+        "Output buffer must be in DRAM. Output buffer of type {}",
+        magic_enum::enum_name(output_buffer->buffer_type()));
 
     auto* rms_output_buffer = output.back().buffer();
-    TT_FATAL(rms_output_buffer->buffer_type() == BufferType::DRAM, "RMS output buffer must be in DRAM");
+    TT_FATAL(
+        rms_output_buffer->buffer_type() == BufferType::DRAM,
+        "RMS output buffer must be in DRAM. RMS output buffer of type {}",
+        magic_enum::enum_name(rms_output_buffer->buffer_type()));
 
     // configure defines
     std::map<std::string, std::string> defines;
@@ -446,8 +448,6 @@ void RMSNormForwardProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    using namespace tt::tt_metal;
-
     auto& shared_vars = cached_program.shared_variables;
     auto& rmsnorm_fw_reader_kernel = shared_vars.rmsnorm_fw_reader_kernel_id;
     auto& rmsnorm_fw_writer_kernel = shared_vars.rmsnorm_fw_writer_kernel_id;
