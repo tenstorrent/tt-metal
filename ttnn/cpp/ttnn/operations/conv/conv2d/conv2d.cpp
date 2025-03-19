@@ -52,7 +52,7 @@ Result conv2d(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    sliding_window::SlidingWindowPadding padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
@@ -117,7 +117,7 @@ Result conv2d_DRAM(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    sliding_window::SlidingWindowPadding _padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
@@ -125,10 +125,15 @@ Result conv2d_DRAM(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
     const ConvSliceConfig& dram_slice_config) {
-    uint32_t output_height =
-        ((input_height - kernel_size[0] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
-    uint32_t output_width =
-        ((input_width - kernel_size[1] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[1]) / stride[1]) + 1;
+    auto padding = sliding_window::get_pair_n4_padding(_padding);
+    const uint32_t output_height =
+        ((input_height - kernel_size[0] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + (padding[0] + padding[1])) /
+         stride[0]) +
+        1;
+    const uint32_t output_width =
+        ((input_width - kernel_size[1] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + (padding[2] + padding[3])) /
+         stride[1]) +
+        1;
 
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     ttnn::Tensor input_tensor_on_device;
@@ -242,19 +247,20 @@ Result conv2d_DRAM(
                         1,
                         1,
                         1,
-                    },  // Step,
-                    input_memory_config);
+                    }  // Step,
+                );
+                //,input_memory_config);
                 log_debug(tt::LogOp, "Sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
-                if (pad_top > 0 || pad_bottom > 0) {
-                    auto pad_top_tensor = ttnn::pad(
-                        queue_id,
-                        sliced_input_tensor,
-                        std::vector<std::pair<uint32_t, uint32_t>>{{0, 0}, {pad_top, pad_bottom}, {0, 0}, {0, 0}},
-                        0,
-                        true,
-                        std::nullopt);
-                    sliced_input_tensor = pad_top_tensor;
-                }
+                // if (pad_top > 0 || pad_bottom > 0) {
+                //     auto pad_top_tensor = ttnn::pad(
+                //         queue_id,
+                //         sliced_input_tensor,
+                //         std::vector<std::pair<uint32_t, uint32_t>>{{0, 0}, {pad_top, pad_bottom}, {0, 0}, {0, 0}},
+                //         0,
+                //         true,
+                //         std::nullopt);
+                //     sliced_input_tensor = pad_top_tensor;
+                // }
                 log_debug(tt::LogOp, "Padded sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
                 auto conv_config_l1 = conv_config;
                 conv_config_l1.reshard_if_not_optimal = true;
@@ -274,7 +280,7 @@ Result conv2d_DRAM(
                         input_width,
                         kernel_size,
                         stride,
-                        {0, padding[1]},
+                        std::array<uint32_t, 4>({pad_top, pad_bottom, padding[2], padding[3]}),
                         dilation,
                         groups,
                         first_run ? bias_tensor : (std::optional<const ttnn::Tensor>)(bias_tensor_on_device),
@@ -313,8 +319,8 @@ Result conv2d_DRAM(
             if (output_slice_width == 0) {
                 continue;
             }
-            int input_slice_width_start = (output_slice_width_start * stride[1]) - padding[1];
-            int input_slice_width_end = ((output_slice_width_end - 1) * stride[1]) - padding[1] +
+            int input_slice_width_start = (output_slice_width_start * stride[1]) - padding[2];
+            int input_slice_width_end = ((output_slice_width_end - 1) * stride[1]) - padding[2] +
                                         ((kernel_size[1] - 1) * (dilation[1] - 1)) + kernel_size[1];
 
             int pad_left = std::max(0, -input_slice_width_start);
@@ -375,19 +381,20 @@ Result conv2d_DRAM(
                     1,
                     1,
                     1,
-                },  // Step
-                input_memory_config);
+                }  // Step
+            );
+            // ,input_memory_config);
             log_debug(tt::LogOp, "Sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
-            if (pad_left > 0 || pad_right > 0) {
-                auto pad_top_tensor = ttnn::pad(
-                    queue_id,
-                    sliced_input_tensor,
-                    std::vector<std::pair<uint32_t, uint32_t>>{{0, 0}, {0, 0}, {pad_left, pad_right}, {0, 0}},
-                    0,
-                    true,
-                    std::nullopt);
-                sliced_input_tensor = pad_top_tensor;
-            }
+            // if (pad_left > 0 || pad_right > 0) {
+            //     auto pad_top_tensor = ttnn::pad(
+            //         queue_id,
+            //         sliced_input_tensor,
+            //         std::vector<std::pair<uint32_t, uint32_t>>{{0, 0}, {0, 0}, {pad_left, pad_right}, {0, 0}},
+            //         0,
+            //         true,
+            //         std::nullopt);
+            //     sliced_input_tensor = pad_top_tensor;
+            // }
             log_debug(tt::LogOp, "Padded sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
             auto conv_config_l1 = conv_config;
             conv_config_l1.reshard_if_not_optimal = true;
@@ -406,7 +413,7 @@ Result conv2d_DRAM(
                     input_slice_width + pad_left + pad_right,
                     kernel_size,
                     stride,
-                    {padding[0], 0},
+                    std::array<uint32_t, 4>({padding[0], padding[1], pad_left, pad_right}),
                     dilation,
                     groups,
                     first_run ? bias_tensor : (std::optional<const ttnn::Tensor>)(bias_tensor_on_device),

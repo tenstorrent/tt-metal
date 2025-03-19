@@ -317,21 +317,6 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
         num_cores_total = total_cores.num_cores();
     }
 
-    uint32_t input_row_size_bytes = a.get_logical_shape()[-1] * a.element_size();
-    uint32_t output_row_size_bytes = output_shape[-1] * a.element_size();
-    auto output_shard_spec = output.shard_spec();
-    bool is_output_sharded = output.is_sharded();
-    bool rm_orientation = true;
-    std::vector<CoreCoord> iter_cores;
-    if (is_output_sharded) {
-        output_row_size_bytes = output_shard_spec.value().shape[1] * output.element_size();
-        total_cores = output.shard_spec().value().grid;
-        rm_orientation = output_shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
-        iter_cores = corerange_to_cores(total_cores, std::nullopt, rm_orientation);
-        num_cores_total = total_cores.num_cores();
-    }
-    tt::log_debug("Core Grid {}, num_cores_total: {}", total_cores, num_cores_total);
-
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     // TT_FATAL(!output.is_sharded(),"Output tensor should not be sharded!");
