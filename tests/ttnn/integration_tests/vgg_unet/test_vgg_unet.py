@@ -48,7 +48,8 @@ def test_vgg_unet(device, reset_seeds, model_location_generator):
 
     result_ttnn = ttnn_model(ttnn_input)
 
-    # result = ttnn.to_torch(result_ttnn)
-    # result = result.permute(0, 3, 1, 2)
-    # result = result.reshape(ref.shape)
-    # assert_with_pcc(result, ref, 0.99)
+    result = ttnn.to_torch(result_ttnn)
+    result = result.permute(0, 3, 1, 2)
+    result = result.reshape(ref.shape)
+    pcc_passed, pcc_message = assert_with_pcc(result, ref, 0.99)  # PCC = 0.99
+    logger.info(pcc_message)
