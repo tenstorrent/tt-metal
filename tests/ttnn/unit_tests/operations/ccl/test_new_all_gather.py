@@ -246,12 +246,10 @@ def run_all_gather_impl(
         input_tensors = torch.chunk(output_tensor, num_devices, dim)
         tt_input_tensors = []
         for i, t in enumerate(input_tensors):
-            tt_input_tensors.append(
-                ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], input_mem_config)
-            )
+            tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout), input_mem_config)
             logger.info(f"using device {mesh_device.get_devices()[i].id()}")
 
-        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device)
 
         input_tensor_mesh_list.append(input_tensor_mesh)
 

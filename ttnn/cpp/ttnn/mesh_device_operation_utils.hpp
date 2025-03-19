@@ -19,21 +19,25 @@ namespace ttnn::mesh_device_operation_utils {
 template <typename T>
 using CachedMeshWorkload = tt::tt_metal::program_cache::detail::CachedMeshWorkload<T>;
 
-// If all tensors span the entire mesh of devices, returns nullopt.
-// Otherwise, verifies all tensors span the same set of coordinates, and returns them in a vector.
+// Returns true if all tensors have uniform storage, false otherwise.
 template <typename TensorArgs>
-std::optional<std::vector<ttnn::MeshCoordinate>> extract_tensor_coordinates(const TensorArgs& tensor_args) {
+bool all_tensors_have_uniform_storage(const TensorArgs& tensor_args) {
     Tensor first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
-    const bool expect_uniform_storage = first_tensor.device_storage().is_uniform_storage();
-    if (expect_uniform_storage) {
-        tt::stl::reflection::visit_object_of_type<Tensor>(
-            [&](const Tensor& tensor) {
-                TT_FATAL(tensor.device_storage().is_uniform_storage(), "Expected all tensors to have uniform storage.");
-            },
-            tensor_args);
-        return std::nullopt;
-    }
+    const bool first_uniform = first_tensor.device_storage().is_uniform_storage();
+    tt::stl::reflection::visit_object_of_type<Tensor>(
+        [&](const Tensor& tensor) {
+            TT_FATAL(
+                tensor.device_storage().is_uniform_storage() == first_uniform,
+                "Expected either all or none of the tensors to have uniform storage.");
+        },
+        tensor_args);
+    return first_uniform;
+}
 
+// Verifies all tensors span the same set of coordinates, and returns them in a vector.
+template <typename TensorArgs>
+std::vector<ttnn::MeshCoordinate> extract_tensor_coordinates(const TensorArgs& tensor_args) {
+    Tensor first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
     std::vector<ttnn::MeshCoordinate> tensor_coordinates;
     std::transform(
         first_tensor.device_storage().specs.begin(),
@@ -86,40 +90,40 @@ CachedMeshWorkload<typename ProgramFactoryT::shared_variables_t> create_mesh_wor
     ttnn::MeshDevice* mesh_device,
     const AttributesT& attrs,
     const TensorArgsT& tensor_args,
-    ReturnValueT& tensor_return_value,
-    std::function<AttributesT(const AttributesT&, const ttnn::MeshCoordinate&, ttnn::MeshDevice*)>
-        per_device_attribute_customizer = nullptr) {
+    ReturnValueT& tensor_return_value) {
     using shared_vars_t = typename ProgramFactoryT::shared_variables_t;
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     ProgramFactoryT program_factory;
+    constexpr bool has_create = requires { &ProgramFactoryT::create; };
+
     std::unordered_map<ttnn::MeshCoordinateRange, shared_vars_t> coordinate_range_to_shared_variables;
 
-    auto tensor_coordinates = extract_tensor_coordinates(tensor_args);
-    if (per_device_attribute_customizer || tensor_coordinates.has_value()) {
-        // Create separate programs for each device with customized attributes
-        if (!tensor_coordinates.has_value()) {
-            std::vector<ttnn::MeshCoordinate> coords;
-            coords.reserve(mesh_device->shape().mesh_size());
-            const ttnn::MeshCoordinateRange r(mesh_device->shape());
-            std::transform(r.begin(), r.end(), std::back_inserter(coords), [](const auto& c) { return c; });
-            tensor_coordinates = std::move(coords);
-        }
-        for (const auto& coord : *tensor_coordinates) {
-            auto cached_program = program_factory.create(
-                per_device_attribute_customizer ? per_device_attribute_customizer(attrs, coord, mesh_device) : attrs,
-                tensor_args,
-                tensor_return_value);
-            const ttnn::MeshCoordinateRange coordinate_range(coord, coord);
-            mesh_workload.add_program(coordinate_range, std::move(cached_program.program));
-            coordinate_range_to_shared_variables[coordinate_range] = std::move(cached_program.shared_variables);
-        }
-    } else {
-        // Create a single program for all devices
-        const ttnn::MeshCoordinateRange mesh_coordinate_range(mesh_device->shape());
-        auto cached_program = program_factory.create(attrs, tensor_args, tensor_return_value);
+    // Fast path - create a single program for all devices.
+    // No customization and uniform tensor storage spanning all devices.
+    if constexpr (has_create) {
+        if (all_tensors_have_uniform_storage(tensor_args)) {
+            const ttnn::MeshCoordinateRange mesh_coordinate_range(mesh_device->shape());
+            auto cached_program = program_factory.create(attrs, tensor_args, tensor_return_value);
 
-        mesh_workload.add_program(mesh_coordinate_range, std::move(cached_program.program));
-        coordinate_range_to_shared_variables[mesh_coordinate_range] = std::move(cached_program.shared_variables);
+            mesh_workload.add_program(mesh_coordinate_range, std::move(cached_program.program));
+            coordinate_range_to_shared_variables[mesh_coordinate_range] = std::move(cached_program.shared_variables);
+            return CachedMeshWorkload<shared_vars_t>{
+                std::move(mesh_workload), std::move(coordinate_range_to_shared_variables)};
+        }
+    }
+
+    // Create separate programs for each device.
+    for (const auto& coord : extract_tensor_coordinates(tensor_args)) {
+        auto cached_program = [&]() {
+            if constexpr (has_create) {
+                return program_factory.create(attrs, tensor_args, tensor_return_value);
+            } else {
+                return program_factory.create_at(attrs, coord, tensor_args, tensor_return_value);
+            }
+        }();
+        const ttnn::MeshCoordinateRange coordinate_range(coord, coord);
+        mesh_workload.add_program(coordinate_range, std::move(cached_program.program));
+        coordinate_range_to_shared_variables[coordinate_range] = std::move(cached_program.shared_variables);
     }
 
     return CachedMeshWorkload<shared_vars_t>{std::move(mesh_workload), std::move(coordinate_range_to_shared_variables)};
@@ -131,25 +135,14 @@ void override_mesh_runtime_arguments(
     ttnn::MeshDevice* mesh_device,
     const AttributesT& attrs,
     const TensorArgsT& tensor_args,
-    ReturnValueT& tensor_return_value,
-    std::function<AttributesT(const AttributesT&, const ttnn::MeshCoordinate&, ttnn::MeshDevice*)>
-        attribute_customizer = nullptr) {
+    ReturnValueT& tensor_return_value) {
     ProgramFactoryT program_factory;
 
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_variables = cached_workload.coordinate_range_to_shared_variables[coordinate_range];
 
-        if (attribute_customizer) {
-            for (auto coordinate : coordinate_range) {
-                auto device_attrs = attribute_customizer(attrs, coordinate, mesh_device);
-
-                apply_override_runtime_arguments(
-                    program_factory, program, shared_variables, device_attrs, tensor_args, tensor_return_value);
-            }
-        } else {
-            apply_override_runtime_arguments(
-                program_factory, program, shared_variables, attrs, tensor_args, tensor_return_value);
-        }
+        apply_override_runtime_arguments(
+            program_factory, program, shared_variables, attrs, tensor_args, tensor_return_value);
     }
 }
 

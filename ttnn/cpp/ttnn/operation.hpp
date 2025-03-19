@@ -12,6 +12,7 @@
 #include <tt-metalium/device_impl.hpp>
 #include <tt_stl/reflection.hpp>
 #include "ttnn/config.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace tt {
 
@@ -317,10 +318,25 @@ constexpr bool implements_create_output_tensors_with_optional_output_tensors() {
 template <class T, class... Args>
 using has_create_program_t = decltype(std::declval<T>().create_program(std::declval<Args>()...));
 
+template <class T, class... Args>
+using has_create_program_at_t = decltype(std::declval<T>().create_program_at(std::declval<Args>()...));
+
 template <class T>
 constexpr bool implements_create_program() {
     return std::experimental::is_detected_v<has_create_program_t, T, const Tensors&, Tensors&> or
            std::experimental::is_detected_v<has_create_program_t, T, const Tensors&, OptionalTensors&>;
+}
+
+template <class T>
+constexpr bool implements_create_program_at() {
+    return std::experimental::is_detected_v<
+               has_create_program_at_t,
+               T,
+               const ttnn::MeshCoordinate&,
+               const Tensors&,
+               OptionalTensors&> or
+           std::experimental::
+               is_detected_v<has_create_program_at_t, T, const ttnn::MeshCoordinate&, const Tensors&, OptionalTensors&>;
 }
 
 template <class T, class... Args>
@@ -380,7 +396,8 @@ constexpr bool implements_compute_program_hash_with_optional_input_tensors() {
 
 template <class T>
 constexpr bool is_device_operation() {
-    return implements_create_program<T>() or implements_create_program_with_optional_input_tensors<T>();
+    return implements_create_program<T>() || implements_create_program_at<T>() ||
+           implements_create_program_with_optional_input_tensors<T>();
 }
 
 template <class T, class... Args>
@@ -447,12 +464,13 @@ struct DeviceOperation final {
         return this->create_output_tensors_impl_(this->type_erased_storage, input_tensors, output_tensors);
     }
 
-    inline CacheableProgram<OutputTensors> create_program(
+    inline CacheableProgram<OutputTensors> create_program_at(
+        const ttnn::MeshCoordinate& mesh_coord,
         const Tensors& input_tensors,
         const OptionalConstTensors& optional_input_tensors,
         OutputTensors& output_tensors) const {
-        return this->create_program_impl_(
-            this->type_erased_storage, input_tensors, optional_input_tensors, output_tensors);
+        return this->create_program_at_impl_(
+            this->type_erased_storage, mesh_coord, input_tensors, optional_input_tensors, output_tensors);
     }
 
     inline OpPerformanceModelGeneral<OutputTensors> create_op_performance_model(
@@ -544,7 +562,9 @@ struct DeviceOperation final {
                     static_assert(
                         tt::stl::concepts::always_false_v<T>,
                         "You cannot implement both validate and validate_with_output_tensors");
-                } else if constexpr (detail::implements_validate<T>() and not detail::implements_create_program<T>()) {
+                } else if constexpr (
+                    detail::implements_validate<T>() and
+                    not(detail::implements_create_program<T>() || detail::implements_create_program_at<T>())) {
                     static_assert(
                         tt::stl::concepts::always_false_v<T>,
                         "Operation doesn't implement both the validate and the correct create_program methods");
@@ -615,13 +635,18 @@ struct DeviceOperation final {
                         "Operation must implement either create_output_tensors or compute_output_specs");
                 }
             }},
-        create_program_impl_{
+        create_program_at_impl_{
             [](const storage_t& storage,
+               const ttnn::MeshCoordinate& mesh_coord,
                const Tensors& input_tensors,
                const OptionalConstTensors& optional_input_tensors,
                OutputTensors& output_tensors) -> CacheableProgram<OutputTensors> {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
-                if constexpr (detail::implements_create_program<T>()) {
+                // TODO: extend `program_at` to support optional input tensors?
+                if constexpr (detail::implements_create_program_at<T>()) {
+                    TT_ASSERT(optional_input_tensors.empty());
+                    return operation.create_program_at(mesh_coord, input_tensors, output_tensors);
+                } else if constexpr (detail::implements_create_program<T>()) {
                     TT_ASSERT(optional_input_tensors.empty());
                     return operation.create_program(input_tensors, output_tensors);
                 } else if constexpr (detail::implements_create_program_with_optional_input_tensors<T>()) {
@@ -662,14 +687,15 @@ struct DeviceOperation final {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
 
                 if constexpr (detail::implements_compute_program_hash<T>()) {
-                    static_assert(detail::implements_create_program<T>());
+                    static_assert(detail::implements_create_program<T>() || detail::implements_create_program_at<T>());
                     TT_ASSERT(optional_input_tensors.empty());
                     return operation.compute_program_hash(input_tensors);
                 } else if constexpr (detail::implements_compute_program_hash_with_optional_input_tensors<T>()) {
                     static_assert(detail::implements_create_program_with_optional_input_tensors<T>());
                     TT_ASSERT(not optional_input_tensors.empty());
                     return operation.compute_program_hash(input_tensors, optional_input_tensors);
-                } else if constexpr (detail::implements_create_program<T>()) {
+                } else if constexpr (
+                    detail::implements_create_program<T>() || detail::implements_create_program_at<T>()) {
                     TT_ASSERT(optional_input_tensors.empty());
                     return hash_operation<T>(operation, input_tensors);
                 } else if constexpr (detail::implements_create_program_with_optional_input_tensors<T>()) {
@@ -714,7 +740,7 @@ struct DeviceOperation final {
         validate_impl_{other.validate_impl_},
         compute_output_specs_impl_{other.compute_output_specs_impl_},
         create_output_tensors_impl_{other.create_output_tensors_impl_},
-        create_program_impl_{other.create_program_impl_},
+        create_program_at_impl_{other.create_program_at_impl_},
         create_op_performance_model_impl_{other.create_op_performance_model_impl_},
         override_runtime_arguments_impl_{other.override_runtime_arguments_impl_},
         uses_custom_program_hash_impl_{other.uses_custom_program_hash_impl_},
@@ -736,7 +762,7 @@ struct DeviceOperation final {
             this->validate_impl_ = other.validate_impl_;
             this->compute_output_specs_impl_ = other.compute_output_specs_impl_;
             this->create_output_tensors_impl_ = other.create_output_tensors_impl_;
-            this->create_program_impl_ = other.create_program_impl_;
+            this->create_program_at_impl_ = other.create_program_at_impl_;
             this->create_op_performance_model_impl_ = other.create_op_performance_model_impl_;
             this->override_runtime_arguments_impl_ = other.override_runtime_arguments_impl_;
             this->uses_custom_program_hash_impl_ = other.uses_custom_program_hash_impl_;
@@ -756,7 +782,7 @@ struct DeviceOperation final {
         validate_impl_{other.validate_impl_},
         compute_output_specs_impl_{other.compute_output_specs_impl_},
         create_output_tensors_impl_{other.create_output_tensors_impl_},
-        create_program_impl_{other.create_program_impl_},
+        create_program_at_impl_{other.create_program_at_impl_},
         create_op_performance_model_impl_{other.create_op_performance_model_impl_},
         override_runtime_arguments_impl_{other.override_runtime_arguments_impl_},
         uses_custom_program_hash_impl_{other.uses_custom_program_hash_impl_},
@@ -808,8 +834,12 @@ private:
     const ComputedSpecs (*compute_output_specs_impl_)(const storage_t& value, const Tensors&, const OptionalTensors&);
     const OutputTensors (*create_output_tensors_impl_)(const storage_t& value, const Tensors&, const OptionalTensors&);
 
-    CacheableProgram<OutputTensors> (*create_program_impl_)(
-        const storage_t& value, const Tensors&, const std::vector<std::optional<const Tensor>>&, OutputTensors&);
+    CacheableProgram<OutputTensors> (*create_program_at_impl_)(
+        const storage_t& value,
+        const ttnn::MeshCoordinate&,
+        const Tensors&,
+        const std::vector<std::optional<const Tensor>>&,
+        OutputTensors&);
     OpPerformanceModelGeneral<OutputTensors> (*create_op_performance_model_impl_)(
         const storage_t& value, const Tensors&, const std::vector<std::optional<const Tensor>>&, OutputTensors&);
     void (*override_runtime_arguments_impl_)(

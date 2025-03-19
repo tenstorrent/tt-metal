@@ -160,8 +160,15 @@ inline void assign_per_core_runtime_args(
     }
 }
 
-DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
+DropoutProgramFactory::cached_program_t DropoutProgramFactory::create_at(
+    const operation_attributes_t& args,
+    const ttnn::MeshCoordinate& mesh_coord,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    const int seed = args.use_per_device_seed
+                         ? (args.seed + tensor_args.input.mesh_device()->get_device(mesh_coord)->id())
+                         : args.seed;
+
     using namespace tt;
     using namespace tt::tt_metal;
 

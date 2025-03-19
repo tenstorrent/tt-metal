@@ -22,8 +22,9 @@ struct DropoutProgramFactory {
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-    static cached_program_t create(
+    static cached_program_t create_at(
         const operation_attributes_t& operation_attributes,
+        const ttnn::MeshCoordinate& mesh_coord,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
 

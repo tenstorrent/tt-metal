@@ -154,12 +154,13 @@ struct OldInfraDeviceOperation {
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-        static cached_program_t create(
+        static cached_program_t create_at(
             const operation_attributes_t& operation_attributes,
+            const ttnn::MeshCoordinate& mesh_coord,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
-            auto program_with_callbacks = operation_attributes.create_program(
-                tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_return_value);
+            auto program_with_callbacks = operation_attributes.create_program_at(
+                mesh_coord, tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_return_value);
             return cached_program_t{
                 std::move(program_with_callbacks.program),
                 shared_variables_t{

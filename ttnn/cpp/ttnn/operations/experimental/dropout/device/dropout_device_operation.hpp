@@ -43,6 +43,7 @@ struct DropoutDeviceOperation {
         float prob,
         float scale,
         uint32_t seed,
+        bool use_per_device_seed,
         DataType output_dtype,
         const MemoryConfig& output_memory_config = MemoryConfig(),
         const std::optional<Tensor>& preallocated_output = std::nullopt);

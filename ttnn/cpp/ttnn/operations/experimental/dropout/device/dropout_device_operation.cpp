@@ -138,6 +138,7 @@ DropoutDeviceOperation::invoke(
     float prob,
     float scale,
     uint32_t seed,
+    bool use_per_device_seed,
     DataType output_dtype,
     const MemoryConfig& output_memory_config,
     const std::optional<Tensor>& preallocated_output) {
@@ -146,6 +147,7 @@ DropoutDeviceOperation::invoke(
             .output_dtype = output_dtype,
             .output_memory_config = output_memory_config,
             .seed = seed,
+            .use_per_device_seed = use_per_device_seed,
             .prob = prob,
             .scale = scale,
         },
