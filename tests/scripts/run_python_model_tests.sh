@@ -72,4 +72,5 @@ run_python_model_tests_slow_runtime_mode_wormhole_b0() {
 
 run_python_model_tests_blackhole() {
     SLOW_MATMULS=1 pytest models/demos/blackhole/stable_diffusion/tests
+    pytest tests/ttnn/integration_tests/resnet/test_ttnn_functional_resnet50_batch_16.py
 }
