@@ -445,6 +445,11 @@ std::vector<DestinationTransferPair> flatten_gather_config(const GatherConfig& i
 // Rebuild config by grouping consecutive transfers that share (noc_x, noc_y)
 GatherConfig reduce_flattened_transfers(const std::vector<DestinationTransferPair>& transfers) {
     GatherConfig output;
+
+    if (transfers.size() == 0) {
+        return output;
+    }
+
     GatherRoute current_route;
     current_route.header.noc_x = transfers[0].noc_x;
     current_route.header.noc_y = transfers[0].noc_y;
@@ -528,7 +533,21 @@ std::pair<GatherConfig, GatherConfig> divide_blocks_between_cores(const GatherCo
     std::vector<DestinationTransferPair> second;
     for (const auto& transfer : all) {
         const auto block_id = transfer.src_id / block_size;
+        tt::log_info("block id = {}", block_id);
         (block_id % 2 == 0 ? first : second).push_back(transfer);
+        tt::log_info("done block id = {}", block_id);
+    }
+    tt::log_info("got some {} {}", first.size(), second.size());
+    return std::make_pair(reduce_flattened_transfers(first), reduce_flattened_transfers(second));
+}
+
+std::pair<GatherConfig, GatherConfig> divide_transfers_between_cores(const GatherConfig& input) {
+    std::vector<DestinationTransferPair> all = flatten_gather_config(input);
+    TT_FATAL(!all.empty(), "Expected to have at least one transfer during reorder");
+    std::vector<DestinationTransferPair> first;
+    std::vector<DestinationTransferPair> second;
+    for (int transfer_id = 0; transfer_id < all.size(); transfer_id++) {
+        (transfer_id % 2 == 0 ? first : second).push_back(all[transfer_id]);
     }
     return std::make_pair(reduce_flattened_transfers(first), reduce_flattened_transfers(second));
 }
@@ -657,14 +676,23 @@ generate_halo_kernel_config_tensors(
         }
     }
 
-    const int block_size = 32;  // TODO: pass this in
+    bool use_blocking = true;
+    const int block_size = 256;  // TODO: pass this in
     std::vector<GatherConfig> ordered_gather_configs0;
     std::vector<GatherConfig> ordered_gather_configs1;
     for (const auto& config : gather_configs) {
-        const auto ordered = reorder_transfers_globally(split_into_blocks(config, block_size));
-        const auto [first, second] = divide_blocks_between_cores(ordered, block_size);
-        ordered_gather_configs0.push_back(first);
-        ordered_gather_configs1.push_back(second);
+        if (use_blocking) {
+            const auto ordered = reorder_transfers_globally(split_into_blocks(config, block_size));
+            tt::log_info("generated ordered config = {}", ordered);
+            const auto [first, second] = divide_blocks_between_cores(ordered, block_size);
+            tt::log_info("divi ordered config = {} {}", first, second);
+            ordered_gather_configs0.push_back(first);
+            ordered_gather_configs1.push_back(second);
+        } else {
+            const auto [first, second] = divide_transfers_between_cores(config);
+            ordered_gather_configs0.push_back(first);
+            ordered_gather_configs1.push_back(second);
+        }
     }
 
     const auto serialized_gather_configs = serialize_gather_configs(ordered_gather_configs0);

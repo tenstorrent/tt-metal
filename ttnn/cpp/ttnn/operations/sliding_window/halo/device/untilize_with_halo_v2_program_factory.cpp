@@ -87,7 +87,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     auto src_cb = CreateCircularBuffer(program, all_cores, src_cb_config);
     log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", src_cb_id, input_npages, in_page_size);
 
-    const uint32_t block_size_height = 32;  // TODO: Get this from a parameter
+    const uint32_t block_size_height = 256;  // TODO: Get this from a parameter
 
     // We need to clamp to avoid crashing in the case that the block size used was larger than the input
     const uint32_t clamped_block_size_height = std::min(block_size_height, input_npages * TILE_HEIGHT);
@@ -155,7 +155,12 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     if (!skip_untilize) {
         // compute kernel
         std::vector<uint32_t> compute_ct_args = {
-            input_nblocks_per_core, ntiles_per_block, src_cb_id, input_to_writer_cb_id0, input_to_writer_cb_id1};
+            input_nblocks_per_core,
+            ntiles_per_block,
+            src_cb_id,
+            input_to_writer_cb_id0,
+            input_to_writer_cb_id1,
+            clamped_block_size_height / TILE_HEIGHT};
         tt::log_info("ct args for compute={}", compute_ct_args);
         std::string compute_kernel(
             "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/compute/pack_untilize.cpp");

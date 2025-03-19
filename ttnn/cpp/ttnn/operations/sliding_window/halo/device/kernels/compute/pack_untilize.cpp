@@ -14,13 +14,14 @@ void MAIN {
     constexpr uint32_t src_cb_id = get_compile_time_arg_val(2);
     constexpr uint32_t out_cb_id0 = get_compile_time_arg_val(3);
     constexpr uint32_t out_cb_id1 = get_compile_time_arg_val(4);
+    constexpr uint32_t block_size = get_compile_time_arg_val(5);
 
     pack_untilize_init<per_core_block_tile_cnt>(src_cb_id, out_cb_id0);
 
     for (uint32_t b = 0; b < per_core_block_cnt; ++b) {
-        const uint32_t out_cb_id = (b % 2 == 0) ? out_cb_id0 : out_cb_id1;
+        const uint32_t out_cb_id = ((b / block_size) % 2 == 0) ? out_cb_id0 : out_cb_id1;
 
-        //.DPRINT << "pushing to  " << out_cb_id << ENDL();
+        DPRINT << "pushing to  " << out_cb_id << ENDL();
 
         cb_wait_front(src_cb_id, per_core_block_tile_cnt);
         cb_reserve_back(out_cb_id, per_core_block_tile_cnt);

@@ -60,6 +60,7 @@ static inline void write_stick_async(
     const uint32_t size = transfer_size * StickSizeBytes;
     const uint32_t src_addr = in_base_l1_addr + src_offset;
     const uint64_t dst_addr = out_base_l1_addr + dst_offset;
+    DPRINT << "write src_offset=" << src_offset << " dst_offset=" << dst_offset << " size=" << size << ENDL();
     noc_async_write(src_addr, dst_addr, size);
 }
 
@@ -90,6 +91,13 @@ static inline void run_halo_gather(
     uint16_t current_config_index = 0;
     uint16_t number_of_segments_remaining = config[current_config_index++];
 
+    if (number_of_segments_remaining == 0) {
+        DPRINT << "nothing to do - skippingl halo gather..." << ENDL();
+        return;
+    }
+
+    DPRINT << "run halo gather..." << ENDL();
+
     // Assume input is already ready when !EnableBlocking (like when using RM)
     if constexpr (EnableBlocking) {
         cb_wait_front(InputCBIndex, total_tiles_in_single_block);
@@ -99,6 +107,7 @@ static inline void run_halo_gather(
     uint16_t block_id = BlockStartOffset;
     uint16_t block_boundary_offset = BlockSizeHeight + (BlockSizeHeight * BlockStartOffset);
     while (number_of_segments_remaining) {
+        DPRINT << "segment=" << number_of_segments_remaining << ENDL();
         // Read header for to get destination for this route
         const uint16_t destination_noc_x = config[current_config_index++];
         const uint16_t destination_noc_y = config[current_config_index++];
@@ -109,11 +118,12 @@ static inline void run_halo_gather(
 
         // Perform all transfers in this route
         while (transfers_remaining > 0) {
+            DPRINT << "transfers=" << transfers_remaining << ENDL();
             const uint16_t src_offset = config[current_config_index++];
             const uint16_t dst_offset = config[current_config_index++];
             const uint16_t transfer_size = config[current_config_index++];
-            // DPRINT << "num_transfers=" << transfers_remaining << " src_offset=" << src_offset
-            //<< " dst_offset=" << dst_offset << " size=" << transfer_size << ENDL();
+            DPRINT << "num_transfers=" << transfers_remaining << " src_offset=" << src_offset
+                   << " dst_offset=" << dst_offset << " size=" << transfer_size << ENDL();
             if constexpr (EnableBlocking) {
                 // Pop blocks until we have the right one - this works because transfers are globally ordered by
                 // ascending block IDs
@@ -138,6 +148,7 @@ static inline void run_halo_gather(
     if constexpr (EnableBlocking) {
         cb_pop_front(InputCBIndex, total_tiles_in_single_block);
     }
+    DPRINT << "done  halo gather..." << ENDL();
 }
 
 void kernel_main() {
