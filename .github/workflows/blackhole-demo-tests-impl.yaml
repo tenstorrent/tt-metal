@@ -62,8 +62,6 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e GITHUB_ACTIONS=true
-            -e CI=true
           install_wheel: true
           run_args: ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
