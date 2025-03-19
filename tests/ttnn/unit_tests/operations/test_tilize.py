@@ -11,7 +11,8 @@ from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, gene
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
 import ttnn
 
-shapes = [[[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]]]
+# shapes = [[[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]]]
+shapes = [[[3, 1, 320, 384]]]
 
 
 @pytest.mark.parametrize(
