@@ -97,9 +97,11 @@ class TtSD3Transformer2DModel:
     ) -> ttnn.Tensor:
         height, width = list(spatial.shape)[-2:]
         spatial = self._pos_embed(spatial)
+        # to avoid OOM inside the first transformer block
+        spatial = ttnn.to_memory_config(spatial, ttnn.DRAM_MEMORY_CONFIG)
+
         time_embed = self._time_text_embed(timestep=timestep, pooled_projection=pooled_projection)
         prompt = self._context_embedder(prompt)
-
         # time_embed = time_embed.unsqueeze(1)
         time_embed = time_embed.reshape([time_embed.shape[0], 1, time_embed.shape[1]])
 

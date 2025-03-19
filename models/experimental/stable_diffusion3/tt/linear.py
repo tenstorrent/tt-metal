@@ -49,7 +49,8 @@ class TtLinearParameters:
                     weight = weight.reshape(weight_h_mult, hidden_dim, weight_w)
                     weight = torch.nn.functional.pad(weight, pad=(0, 0, 0, hidden_dim_pad), mode="constant", value=0)
                     weight = weight.reshape(weight_h_mult * hidden_dim_new, weight_w)
-                weight_h, weight_w = weight.shape
+            weight_h, weight_w = weight.shape
+            if weight_w % hidden_dim == 0:
                 if weight_w_mult == 1:
                     weight = torch.nn.functional.pad(weight, pad=(0, hidden_dim_pad), mode="constant", value=0)
                 elif weight_w_mult > 1:
@@ -57,9 +58,10 @@ class TtLinearParameters:
                     weight = torch.nn.functional.pad(weight, pad=(0, hidden_dim_pad), mode="constant", value=0)
                     weight = weight.reshape(weight_h, weight_w_mult * hidden_dim_new)
 
-                if not bias == None:
-                    bias_h, bias_w = bias.shape
-                    bias_w_mult = bias_w // hidden_dim
+            if not bias == None:
+                bias_h, bias_w = bias.shape
+                bias_w_mult = bias_w // hidden_dim
+                if bias_w % hidden_dim == 0:
                     if bias_w_mult == 1:
                         bias = torch.nn.functional.pad(bias, pad=(0, hidden_dim_pad), mode="constant", value=0)
                     elif bias_w_mult > 1:
@@ -114,17 +116,18 @@ class TtLinearParameters:
                     weight = weight.reshape(weight_h_mult, hidden_dim, weight_w)
                     weight = torch.nn.functional.pad(weight, pad=(0, 0, 0, hidden_dim_pad), mode="constant", value=0)
                     weight = weight.reshape(weight_h_mult * hidden_dim_new, weight_w)
-                weight_h, weight_w = weight.shape
+            weight_h, weight_w = weight.shape
+            if weight_w % hidden_dim == 0:
                 if weight_w_mult == 1:
                     weight = torch.nn.functional.pad(weight, pad=(0, hidden_dim_pad), mode="constant", value=0)
                 elif weight_w_mult > 1:
                     weight = weight.reshape(weight_h, weight_w_mult, hidden_dim)
                     weight = torch.nn.functional.pad(weight, pad=(0, hidden_dim_pad), mode="constant", value=0)
                     weight = weight.reshape(weight_h, weight_w_mult * hidden_dim_new)
-
-                if not torch_bias == None:
-                    bias_h, bias_w = torch_bias.shape
-                    bias_w_mult = bias_w // hidden_dim
+            if not torch_bias == None:
+                bias_h, bias_w = torch_bias.shape
+                bias_w_mult = bias_w // hidden_dim
+                if bias_w % hidden_dim == 0:
                     if bias_w_mult == 1:
                         torch_bias = torch.nn.functional.pad(
                             torch_bias, pad=(0, hidden_dim_pad), mode="constant", value=0
@@ -194,7 +197,8 @@ class TtLinearParameters:
                     weight = weight.reshape(weight_h_mult, hidden_dim, weight_w)
                     weight = torch.nn.functional.pad(weight, pad=(0, 0, 0, hidden_dim_pad), mode="constant", value=0)
                     weight = weight.reshape(weight_h_mult * hidden_dim_new, weight_w)
-                weight_h, weight_w = weight.shape
+            weight_h, weight_w = weight.shape
+            if weight_w % hidden_dim == 0:
                 if weight_w_mult == 1:
                     weight = torch.nn.functional.pad(weight, pad=(0, hidden_dim_pad), mode="constant", value=0)
                 elif weight_w_mult > 1:
@@ -202,9 +206,10 @@ class TtLinearParameters:
                     weight = torch.nn.functional.pad(weight, pad=(0, hidden_dim_pad), mode="constant", value=0)
                     weight = weight.reshape(weight_h, weight_w_mult * hidden_dim_new)
 
-                if not torch_bias == None:
-                    bias_h, bias_w = torch_bias.shape
-                    bias_w_mult = bias_w // hidden_dim
+            if not torch_bias == None:
+                bias_h, bias_w = torch_bias.shape
+                bias_w_mult = bias_w // hidden_dim
+                if bias_w % hidden_dim == 0:
                     if bias_w_mult == 1:
                         torch_bias = torch.nn.functional.pad(
                             torch_bias, pad=(0, hidden_dim_pad), mode="constant", value=0

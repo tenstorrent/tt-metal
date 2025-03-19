@@ -13,6 +13,7 @@ from models.utility_functions import (
 )
 
 import torch
+import os
 
 
 @dataclass
@@ -41,7 +42,35 @@ class TtConv2dParameters:
         out_channels, in_c, kh, kw = weight.shape
         weight = torch.permute(weight, (2, 3, 1, 0))
         weight = torch.reshape(weight, (kh * kw * in_c, out_channels))
-        # print("w_mod", weight.shape)
+
+        if "bias" in state:
+            bias = state["bias"].unsqueeze(0)
+        else:
+            bias = None
+
+        if os.environ["FAKE_DEVICE"] == "T3K":
+            hidden_dim = 2432
+            hidden_dim_pad = 128
+            hidden_dim_new = 2560
+            weight_h, weight_w = weight.shape
+            weight_w_mult = weight_w // hidden_dim
+            if weight_w % hidden_dim == 0:
+                if weight_w_mult == 1:
+                    weight = torch.nn.functional.pad(weight, pad=(0, hidden_dim_pad), mode="constant", value=0)
+                elif weight_w_mult > 1:
+                    weight = weight.reshape(weight_h, weight_w_mult, hidden_dim)
+                    weight = torch.nn.functional.pad(weight, pad=(0, hidden_dim_pad), mode="constant", value=0)
+                    weight = weight.reshape(weight_h, weight_w_mult * hidden_dim_new)
+            if not bias == None:
+                bias_w = bias.shape[-1]
+                bias_w_mult = bias_w // hidden_dim
+                if bias_w % hidden_dim == 0:
+                    if bias_w_mult == 1:
+                        bias = torch.nn.functional.pad(bias, pad=(0, hidden_dim_pad), mode="constant", value=0)
+                    elif bias_w_mult > 1:
+                        bias = bias.reshape(bias_w_mult, hidden_dim)
+                        bias = torch.nn.functional.pad(bias, pad=(0, hidden_dim_pad), mode="constant", value=0)
+                        bias = bias.reshape(bias_w_mult * hidden_dim_new)
 
         return cls(
             weight=ttnn.as_tensor(
@@ -54,7 +83,7 @@ class TtConv2dParameters:
             ),
             bias=(
                 ttnn.as_tensor(
-                    state["bias"].reshape((1, 1, 1, -1)),
+                    bias.reshape((1, 1, 1, -1)),
                     dtype=dtype,
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
@@ -96,18 +125,19 @@ class TtConv2d:
         folded_shape = unfolded_permuted_x.shape
         unfolded_permuted_x = ttnn.to_layout(unfolded_permuted_x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
+        ttnn.deallocate(x)
+
         out = ttnn.linear(
             unfolded_permuted_x,
             self._weight,
             bias=self._bias,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
             core_grid=ttnn.CoreGrid(y=8, x=8),
         )
-
-        out = ttnn.to_layout(out, layout=ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(unfolded_permuted_x)
         seq_len = out.shape[-2] // batch_size
-        out = ttnn.reshape(out, (batch_size, 1, seq_len, -1))
+        out = ttnn.reshape(out, (batch_size, seq_len, -1))
 
         return out

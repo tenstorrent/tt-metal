@@ -15,8 +15,8 @@ from .substate import substate
 
 from .utils import from_torch
 
-if TYPE_CHECKING:
-    import torch
+import torch
+import os
 
 
 @dataclass
@@ -32,12 +32,25 @@ class TtPatchEmbedParameters:
         device: ttnn.Device,
         out_channels: int,
     ) -> TtPatchEmbedParameters:
+        pos_embed_param = state["pos_embed"]
+        if os.environ["FAKE_DEVICE"] == "T3K":
+            hidden_dim = 2432
+            hidden_dim_pad = 128
+            hidden_dim_new = 2560
+            pos_embed_w = pos_embed_param.shape[-1]
+            pos_embed_w_mult = pos_embed_w // hidden_dim
+            if pos_embed_w % hidden_dim == 0:
+                if pos_embed_w_mult == 1:
+                    pos_embed_param = torch.nn.functional.pad(
+                        pos_embed_param, pad=(0, hidden_dim_pad), mode="constant", value=0
+                    )
+
         return cls(
             proj=TtConv2dParameters.from_torch(
                 substate(state, "proj"), dtype=ttnn.bfloat16, out_channels=out_channels, device=device
             ),
             pos_embed=from_torch(
-                state["pos_embed"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_device=device, shard_dim=None
+                pos_embed_param, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_device=device, shard_dim=None
             ),
         )
 

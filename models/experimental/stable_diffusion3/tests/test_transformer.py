@@ -61,7 +61,16 @@ def test_transformer(
         dtype=ttnn_dtype,
     )
 
-    tt_model = TtSD3Transformer2DModel(parameters, num_heads=torch_model.config.num_attention_heads, device=mesh_device)
+    ## heads padding for T3K TP
+    pad_40_heads = 0
+    if os.environ["FAKE_DEVICE"] == "T3K" and embedding_dim == 2432:
+        pad_40_heads = 1
+        embedding_dim_padding = 128
+        num_heads = 40
+    else:
+        num_heads = torch_model.config.num_attention_heads
+
+    tt_model = TtSD3Transformer2DModel(parameters, num_heads=num_heads, device=mesh_device)
 
     torch.manual_seed(0)
     spatial = torch.randn((batch_size, 16, height // 8, width // 8))
@@ -69,6 +78,12 @@ def test_transformer(
     pooled_projection = torch.randn((batch_size, 2048))
     timestep = torch.randint(1000, (batch_size,), dtype=torch_dtype)
 
+    with torch.no_grad():
+        torch_output = torch_model(
+            spatial=spatial, prompt_embed=prompt, pooled_projections=pooled_projection, timestep=timestep
+        )
+
+    """
     tt_spatial = ttnn.from_torch(
         spatial.permute([0, 2, 3, 1]),  # BCYX -> BYXC
         device=mesh_device,
@@ -76,6 +91,38 @@ def test_transformer(
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn_dtype,
     )
+    """
+    ## Pre-processing for the ttnn.fold
+    spatial = torch.permute(spatial, (0, 2, 3, 1))  # BCYX -> BYXC
+    batch_size, img_h, img_w, img_c = spatial.shape  # permuted input NHWC
+    patch_size = 2
+    spatial = spatial.reshape(batch_size, img_h, img_w // patch_size, patch_size, img_c)
+    spatial = spatial.reshape(batch_size, img_h, img_w // patch_size, patch_size * img_c)
+    N, H, W, C = spatial.shape
+    shard_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(7, 7),
+            ),
+        }
+    )
+    n_cores = 64
+    shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
+
+    tt_spatial = ttnn.from_torch(
+        spatial,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            shard_spec,
+        ),
+    )
+
     TILE_SIZE = 32
     prompt_extra = prompt_sequence_length % TILE_SIZE
     if prompt_extra > 0:
@@ -105,11 +152,6 @@ def test_transformer(
         dtype=ttnn.float32,
     )
 
-    with torch.no_grad():
-        torch_output = torch_model(
-            spatial=spatial, prompt_embed=prompt, pooled_projections=pooled_projection, timestep=timestep
-        )
-
     # tt_spatial = allocate_tensor_on_device_like(tt_spatial_host, device=device)
     # tt_prompt = allocate_tensor_on_device_like(tt_prompt_host, device=device)
     # tt_pooled_projection = allocate_tensor_on_device_like(tt_pooled_projection_host, device=device)
@@ -130,4 +172,5 @@ def test_transformer(
 
     print(f"tt_output shape {tt_output.shape} torch_output {torch_output.shape}")
     tt_output = ttnn.squeeze(tt_output, 0)
-    assert_quality(torch_output, tt_output, mse=0.1, pcc=0.999_500)
+    assert_quality(torch_output, tt_output, pcc=0.999_500, shard_dim=0, num_devices=mesh_device.get_num_devices())
+    #  mse=0.1,

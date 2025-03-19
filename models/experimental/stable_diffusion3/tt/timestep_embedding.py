@@ -8,6 +8,7 @@ import math
 from dataclasses import dataclass
 
 import torch
+import os
 import ttnn
 from models.experimental.stable_diffusion3.tt.linear import TtLinear, TtLinearParameters
 
