@@ -34,14 +34,14 @@ void bind_experimental_gelu_backward_operation(py::module& module) {
             Supported dtypes, layouts, and ranks:
 
             .. list-table::
-            :header-rows: 1
+                :header-rows: 1
 
-            * - Dtypes
-                - Layouts
-                - Ranks
-            * - BFLOAT16
-                - TILE
-                - 2, 3, 4
+                * - Dtypes
+                    - Layouts
+                    - Ranks
+                * - BFLOAT16
+                    - TILE
+                    - 2, 3, 4
 
 
         Example:
