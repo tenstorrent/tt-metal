@@ -667,9 +667,8 @@ void DebugPrintServerContext::AttachDevice(IDevice* device) {
                 tt::tt_metal::get_core_type_name(core_type));
         } else {
             // No "all cores" option provided, which means print from the cores specified by the user
-            const std::vector<CoreCoord>& print_cores = tt::llrt::RunTimeOptions::get_instance()
-                                                            .get_feature_cores(tt::llrt::RunTimeDebugFeatureDprint)
-                                                            .at(core_type);
+            std::vector<CoreCoord>& print_cores = tt::llrt::RunTimeOptions::get_instance().get_feature_cores(
+                tt::llrt::RunTimeDebugFeatureDprint)[core_type];
 
             // We should also validate that the cores the user specified are valid worker cores.
             for (auto& logical_core : print_cores) {

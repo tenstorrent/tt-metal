@@ -32,10 +32,10 @@
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 
 namespace tt::tt_metal::distributed {
-
 namespace {
-MeshDeviceID generate_unique_mesh_id() {
-    static std::atomic<MeshDeviceID> next_id{0};
+
+int generate_unique_mesh_id() {
+    static std::atomic<int> next_id{0};
     return next_id++;
 }
 
@@ -86,7 +86,9 @@ MeshDevice::ScopedDevices::ScopedDevices(
     const DispatchCoreConfig& dispatch_core_config,
     const MeshDeviceConfig& config) :
     ScopedDevices(
-        SystemMesh::instance().request_available_devices(config),
+        config.physical_device_ids().empty()
+            ? SystemMesh::instance().get_mapped_physical_device_ids(config.mesh_shape(), config.offset())
+            : config.physical_device_ids(),
         l1_small_size,
         trace_region_size,
         num_command_queues,
@@ -164,7 +166,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     tt::stl::Span<const std::uint32_t> l1_bank_remap) {
     auto scoped_devices = std::make_shared<ScopedDevices>(
         l1_small_size, trace_region_size, num_command_queues, dispatch_core_config, config);
-    MeshContainer<IDevice*> devices(config.mesh_shape, scoped_devices->root_devices());
+    MeshContainer<IDevice*> devices(config.mesh_shape(), scoped_devices->root_devices());
     auto mesh_device = std::make_shared<MeshDevice>(
         std::move(scoped_devices), std::make_unique<MeshDeviceView>(devices), std::shared_ptr<MeshDevice>());
 
@@ -372,8 +374,7 @@ std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_sha
         return view_->get_line_devices();
     }
 
-    auto new_physical_device_ids =
-        SystemMesh::instance().request_available_devices(MeshDeviceConfig{.mesh_shape = new_shape});
+    auto new_physical_device_ids = SystemMesh::instance().get_mapped_physical_device_ids(new_shape);
 
     for (size_t i = 0; i < new_physical_device_ids.size(); i++) {
         if (physical_device_id_to_linearized_index.find(new_physical_device_ids[i]) ==
@@ -420,7 +421,7 @@ const MeshDeviceView& MeshDevice::get_view() const {
     return *view_;
 }
 
-MeshDeviceID MeshDevice::id() const { return mesh_id_; }
+int MeshDevice::id() const { return mesh_id_; }
 // For a mesh, build id is the same as the device id for the reference device
 chip_id_t MeshDevice::build_id() const { return reference_device()->id(); }
 
