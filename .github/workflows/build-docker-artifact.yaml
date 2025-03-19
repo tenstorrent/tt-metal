@@ -161,7 +161,7 @@ jobs:
           build-args: |
             UBUNTU_VERSION=${{ inputs.version }}
             IMAGE_ARCH=${{ inputs.architecture }}
-            BASE_IMAGE_TAG=${{ needs.check-docker-images.outputs.ci-build-tag }}
+            BASE_IMAGE=${{ needs.check-docker-images.outputs.ci-build-tag }}
           cache-to: type=inline
           pull: true
 
