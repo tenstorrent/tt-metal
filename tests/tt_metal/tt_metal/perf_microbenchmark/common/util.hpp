@@ -11,7 +11,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/dprint_common.h"
-#include <tt-metalium/hal.hpp>
+#include "hal.hpp"
 #include "llrt.hpp"
 
 inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, const tt::tt_metal::Program& program) {
