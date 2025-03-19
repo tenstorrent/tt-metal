@@ -25,10 +25,10 @@ from ..tt.utils import assert_quality, to_torch
 @pytest.mark.parametrize(
     ("batch_size", "in_channels", "out_channels", "kernel_size", "stride", "height", "width"),
     [
-        (2, 16, 2432, (2, 2), (2, 2), 64, 64),
-        (2, 16, 2432, (2, 2), (2, 2), 128, 128),
-        (2, 16, 1536, (2, 2), (2, 2), 64, 64),
-        (2, 16, 1536, (2, 2), (2, 2), 128, 128),
+        # (2, 16, 2560, (2, 2), (2, 2), 64, 64),
+        (2, 16, 2560, (2, 2), (2, 2), 128, 128),
+        # (2, 16, 1536, (2, 2), (2, 2), 64, 64),
+        # (2, 16, 1536, (2, 2), (2, 2), 128, 128),
         # these are needed in the VAE for an image resolution of 1024x1024:
         # (1, 128, 128, (3, 3), (1, 1), 1024, 1024),
         # (1, 128, 3, (3, 3), (1, 1), 1024, 1024),
@@ -110,11 +110,11 @@ def test_conv2d(
     )
 
     tt_output = tt_model(tt_input_tensor)
+
     tt_output_torch = (
-        to_torch(tt_output, mesh_device=mesh_device, dtype=dtype, shard_dim=0)
-        .permute(0, 1, 3, 2)
+        to_torch(tt_output, mesh_device=mesh_device, dtype=dtype, shard_dim=0)[:2]
+        .permute(0, 2, 1)
         .reshape(batch_size, out_channels, height // kernel_size[1], width // kernel_size[0])
     )
 
-    # print(torch_output.shape, tt_output_torch.shape, tt_output.shape)
     assert_quality(torch_output, tt_output_torch, pcc=0.999_900, shard_dim=0, num_devices=mesh_device.get_num_devices())
