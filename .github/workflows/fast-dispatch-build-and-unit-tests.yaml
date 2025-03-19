@@ -84,7 +84,7 @@ jobs:
             -e ARCH_NAME=${{ inputs.arch }}
             -e GITHUB_ACTIONS=true
           run_args: |
-            ${{ matrix.test-group.cmd }} | tee /home/ubuntu/eager_logs/output.txt
+            ${{ matrix.test-group.cmd }} | tee -a /home/ubuntu/eager_logs/output.txt
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
