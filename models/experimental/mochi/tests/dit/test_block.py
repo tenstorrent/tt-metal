@@ -14,7 +14,7 @@ from models.experimental.mochi.tt.common import (
     stack_cos_sin,
     pad_vision_seq_parallel,
 )
-from models.demos.llama3.tt.llama_common import get_rot_transformation_mat
+from models.tt_transformers.tt.common import get_rot_transformation_mat
 from models.experimental.mochi.tests.dit.common import (
     load_model_weights,
     NUM_HEADS,

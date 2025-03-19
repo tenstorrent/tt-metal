@@ -20,7 +20,7 @@ from models.experimental.mochi.tests.dit.common import (
     NUM_HEADS,
     HEAD_DIM,
 )
-from models.demos.llama3.tt.llama_common import get_rot_transformation_mat
+from models.tt_transformers.tt.common import get_rot_transformation_mat
 
 from genmo.mochi_preview.dit.joint_model.asymm_models_joint import AsymmetricAttention as RefAsymmetricAttention
 
