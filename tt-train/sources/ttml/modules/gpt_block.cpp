@@ -5,8 +5,6 @@
 #include "gpt_block.hpp"
 
 #include "core/tt_tensor_utils.hpp"
-#include "modules/layer_norm_module.hpp"
-#include "modules/rms_norm_module.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
 

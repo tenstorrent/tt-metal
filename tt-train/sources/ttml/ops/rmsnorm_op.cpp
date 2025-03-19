@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
-// #include <ttnn/operations/experimental/rmsnorm_fw/rmsnorm_fw.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
