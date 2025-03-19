@@ -11,6 +11,7 @@ jobs:
       version: 22.04
 
   umd-unit-tests:
+    needs: build-artifact
     secrets: inherit
     strategy:
       fail-fast: false
