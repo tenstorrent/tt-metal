@@ -24,7 +24,7 @@ jobs:
     name: ${{ matrix.test-group.name }}
     runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "pipeline-functional"]
     container:
-      image: ${{ inputs.docker-image }}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
