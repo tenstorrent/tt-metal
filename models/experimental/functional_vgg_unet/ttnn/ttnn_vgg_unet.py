@@ -1,0 +1,279 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import ttnn
+
+
+# shard concat function
+def sharded_concat(input_tensors, num_cores=64, dim=3):  # expected input tensors to be in fp16, RM, same (h*w)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+    in_shard_width = input_tensors[0].shape[-1]
+    shard_height = ((input_tensors[0].shape[2]) + num_cores - 1) // num_cores
+    input_sharded_memory_config = ttnn.create_sharded_memory_config(
+        (shard_height, in_shard_width),
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+    out_shard_width = 0
+    for i in range(len(input_tensors)):
+        out_shard_width += input_tensors[i].shape[-1]
+        input_tensors[i] = ttnn.to_memory_config(input_tensors[i], input_sharded_memory_config)
+    output_sharded_memory_config = ttnn.create_sharded_memory_config(
+        (shard_height, out_shard_width),
+        core_grid=shard_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+    output = ttnn.concat(input_tensors, dim, memory_config=output_sharded_memory_config)
+
+    return output
+
+
+# TTNN conv class
+class Conv:
+    def __init__(
+        self,
+        device,
+        conv_param,
+        conv_pth,
+    ) -> None:
+        self.conv_param = conv_param
+        self.conv_pth = conv_pth
+        self.device = device
+        self.cache = {}
+
+        self.compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+            math_approx_mode=False,
+        )
+        self.conv_config = ttnn.Conv2dConfig(
+            dtype=conv_param.dtype,
+            weights_dtype=ttnn.bfloat8_b,
+            activation=conv_param.activation,
+            shard_layout=conv_param.shard_layout,
+            input_channels_alignment=16 if conv_param.in_channels < 16 else 32,
+            reshard_if_not_optimal=conv_param.reshard_if_not_optimal,
+            deallocate_activation=conv_param.deallocate_activation,
+            enable_act_double_buffer=conv_param.enable_act_double_buffer,
+            enable_split_reader=conv_param.enable_split_reader,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT,
+            transpose_shards=conv_param.transpose_shards,
+        )
+        config_override = None
+        if conv_param.act_block_h is not None:
+            self.conv_config.act_block_h_override = conv_param.act_block_h
+
+        if "bias" in conv_pth:
+            bias = ttnn.from_device(conv_pth.bias)
+            self.bias = bias
+        else:
+            self.bias = None
+
+        weight = ttnn.from_device(conv_pth.weight)
+        self.weight = weight
+
+        if conv_param.shard_layout is None:
+            self.input_memory_config = ttnn.L1_MEMORY_CONFIG
+        elif (
+            conv_param.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            and conv_param.shard_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED
+        ):
+            self.input_memory_config = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+        else:
+            self.input_memory_config = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+
+        self.conv_kwargs = {
+            "in_channels": conv_param.in_channels,
+            "out_channels": conv_param.out_channels,
+            "batch_size": conv_param.batch_size,
+            "input_height": conv_param.input_height,
+            "input_width": conv_param.input_width,
+            "kernel_size": conv_param.kernel_size,
+            "stride": conv_param.stride,
+            "padding": conv_param.padding,
+            "dilation": conv_param.dilation,
+            "groups": conv_param.groups,
+            "device": device,
+            "conv_config": self.conv_config,
+        }
+
+        if not ttnn.is_tensor_storage_on_device(self.weight):
+            self.weight = ttnn.prepare_conv_weights(
+                weight_tensor=self.weight,
+                weights_format="OIHW",
+                input_memory_config=self.input_memory_config,
+                input_layout=ttnn.TILE_LAYOUT,
+                has_bias=True,
+                **self.conv_kwargs,
+            )
+
+            self.bias = ttnn.prepare_conv_bias(
+                bias_tensor=self.bias,
+                input_memory_config=self.input_memory_config,
+                input_layout=ttnn.TILE_LAYOUT,
+                **self.conv_kwargs,
+            )
+            self.weight = ttnn.to_device(self.weight, device)
+            self.bias = ttnn.to_device(self.bias, device)
+
+    def __str__(self) -> str:
+        return f"Conv: {self.weights.shape} {self.bias.shape} {self.kernel_size}"
+
+    def __call__(self, x):
+        [x, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
+            input_tensor=x,
+            weight_tensor=self.weight,
+            bias_tensor=self.bias,
+            **self.conv_kwargs,
+            compute_config=self.compute_config,
+            return_output_dim=True,
+            return_weights_and_bias=True,
+        )
+        return x
+
+
+# TTNN Conv Transpose class
+class Conv_transpose:
+    def __init__(
+        self,
+        device,
+        conv_param,
+        conv_pth,
+    ) -> None:
+        self.conv_param = conv_param
+        self.conv_pth = conv_pth
+        self.device = device
+        self.cache = {}
+
+        self.compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+            math_approx_mode=False,
+        )
+        self.conv_config = ttnn.Conv2dConfig(
+            dtype=conv_param.dtype,
+            weights_dtype=ttnn.bfloat8_b,
+            shard_layout=conv_param.shard_layout,
+            input_channels_alignment=16 if conv_param.in_channels < 16 else 32,
+            reshard_if_not_optimal=conv_param.reshard_if_not_optimal,
+            deallocate_activation=conv_param.deallocate_activation,
+            enable_act_double_buffer=conv_param.enable_act_double_buffer,
+            enable_split_reader=conv_param.enable_split_reader,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT,
+            transpose_shards=conv_param.transpose_shards,
+        )
+        config_override = None
+        if conv_param.act_block_h is not None:
+            self.conv_config.act_block_h_override = conv_param.act_block_h
+
+        if "bias" in conv_pth:
+            bias = ttnn.from_device(conv_pth.bias)
+            self.bias = bias
+        else:
+            self.bias = None
+
+        weight = ttnn.from_device(conv_pth.weight)
+        self.weight = weight
+
+        if conv_param.shard_layout is None:
+            self.input_memory_config = ttnn.L1_MEMORY_CONFIG
+        elif (
+            conv_param.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            and conv_param.shard_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED
+        ):
+            self.input_memory_config = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+        else:
+            self.input_memory_config = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+
+        self.conv_kwargs = {
+            "in_channels": conv_param.in_channels,
+            "out_channels": conv_param.out_channels,
+            "batch_size": conv_param.batch_size,
+            "input_height": conv_param.input_height,
+            "input_width": conv_param.input_width,
+            "kernel_size": conv_param.kernel_size,
+            "stride": conv_param.stride,
+            "padding": conv_param.padding,
+            "dilation": conv_param.dilation,
+            "groups": conv_param.groups,
+            "device": device,
+            "conv_config": self.conv_config,
+            "output_padding": conv_param.output_padding,
+        }
+
+        if not ttnn.is_tensor_storage_on_device(self.weight):
+            self.weight = ttnn.prepare_conv_weights(
+                weight_tensor=self.weight,
+                weights_format="OIHW",
+                input_memory_config=self.input_memory_config,
+                input_layout=ttnn.TILE_LAYOUT,
+                has_bias=True,
+                **self.conv_kwargs,
+            )
+
+            self.bias = ttnn.prepare_conv_bias(
+                bias_tensor=self.bias,
+                input_memory_config=self.input_memory_config,
+                input_layout=ttnn.TILE_LAYOUT,
+                **self.conv_kwargs,
+            )
+            self.weight = ttnn.to_device(self.weight, device)
+            self.bias = ttnn.to_device(self.bias, device)
+
+    def __str__(self) -> str:
+        return f"Conv: {self.weights.shape} {self.bias.shape} {self.kernel_size}"
+
+    def __call__(self, x):
+        [x, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv_transpose2d(
+            input_tensor=x,
+            weight_tensor=self.weight,
+            bias_tensor=self.bias,
+            **self.conv_kwargs,
+            compute_config=self.compute_config,
+            return_output_dim=True,
+            return_weights_and_bias=True,
+            mirror_kernel=True,
+        )
+        return x
+
+
+class Tt_decoder_block:
+    def __init__(self, device, parameters, conv_args) -> None:
+        self.up = Conv_transpose(device, conv_args.up, parameters.up)
+        self.conv1 = Conv(device, conv_args.conv1, parameters.conv1)
+        self.conv2 = Conv(device, conv_args.conv2, parameters.conv2)
+
+    # def __call__(self, x, cat_in):
+
+
+class Tt_vgg_unet:
+    def __init__(self, device, parameters, conv_args) -> None:
+        self.conv_args = conv_args
+        self.parameters = parameters
+        self.s1_0 = Conv(device, conv_args.s1["0"], parameters["0"])
+        self.s1_2 = Conv(device, conv_args.s1["2"], parameters["2"])
+        self.s2_5 = Conv(device, conv_args.s2["5"], parameters["5"])
+        self.s2_7 = Conv(device, conv_args.s2["7"], parameters["7"])
+        self.s3_10 = Conv(device, conv_args.s3["10"], parameters["10"])
+        self.s3_12 = Conv(device, conv_args.s3["12"], parameters["12"])
+        self.s3_14 = Conv(device, conv_args.s3["14"], parameters["14"])
+        self.s3_16 = Conv(device, conv_args.s3["16"], parameters["16"])
+        self.s4_19 = Conv(device, conv_args.s4["19"], parameters["19"])
+        self.s4_21 = Conv(device, conv_args.s4["21"], parameters["21"])
+        self.s4_23 = Conv(device, conv_args.s4["23"], parameters["23"])
+        self.s4_25 = Conv(device, conv_args.s4["25"], parameters["25"])
+        self.b1_28 = Conv(device, conv_args.b1["28"], parameters["28"])
+        self.b1_30 = Conv(device, conv_args.b1["30"], parameters["30"])
+        self.b1_32 = Conv(device, conv_args.b1["32"], parameters["32"])
+        self.b1_34 = Conv(device, conv_args.b1["34"], parameters["34"])
+
+    def __call__(self, x):
+        x = self.s1_0(x)
+        return x
