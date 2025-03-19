@@ -17,8 +17,8 @@ struct RMSNormForwardProgramFactory {
         tt::tt_metal::KernelHandle rmsnorm_fw_kernel_group_2_id;
         CoreRangeSet core_group_1;
         CoreRangeSet core_group_2;
-        uint32_t num_cores;
-        uint32_t num_cores_y;
+        uint32_t num_cores{};
+        uint32_t num_cores_y{};
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 

@@ -51,7 +51,7 @@ constexpr bool return_rms = false;
 // calculate x = sum(y^2)
 #if defined(EVERYTHING_FITS_IN_L1) || defined(EVERYTHING_EXCEPT_GAMMA_FITS_IN_L1)
 
-ALWI void calculate_sum_x_squared() {
+void calculate_sum_x_squared() {
     cb_wait_front(cb_input, num_inner);
     cb_reserve_back(cb_rms_before_reduction_intermediate, onetile);
 
@@ -96,7 +96,7 @@ ALWI void calculate_sum_x_squared() {
 
 #else
 
-ALWI void calculate_sum_x_squared() {
+void calculate_sum_x_squared() {
     cb_reserve_back(cb_rms_before_reduction_intermediate, onetile);
 
     const uint32_t accum_register = 0;
@@ -149,7 +149,7 @@ ALWI void calculate_sum_x_squared() {
 
 #ifdef EVERYTHING_FITS_IN_L1
 
-ALWI void calculate_input_multiplied_by_gamma_and_divided_by_rms() {
+void calculate_input_multiplied_by_gamma_and_divided_by_rms() {
     cb_wait_front(cb_gamma, num_inner);
     cb_wait_front(cb_inverse_rms_after_reduction_intermediate, onetile);
 
@@ -206,7 +206,7 @@ ALWI void calculate_input_multiplied_by_gamma_and_divided_by_rms() {
 
 #else
 
-ALWI void calculate_input_multiplied_by_gamma_and_divided_by_rms() {
+void calculate_input_multiplied_by_gamma_and_divided_by_rms() {
     cb_wait_front(cb_inverse_rms_after_reduction_intermediate, onetile);
 
     constexpr uint32_t mask_register = block_size;
