@@ -41,7 +41,6 @@ def test_replicate_to_tensor_mesh_equality(mesh_device, dtype):
         torch_tensor,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
     )
 
     mapper = ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
@@ -75,7 +74,6 @@ def test_shard_to_tensor_mesh_equality(mesh_device, dtype):
         torch_tensor,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
     )
 
     mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3)
@@ -128,7 +126,6 @@ def test_shard2d_to_tensor_mesh_equality(M, K, N, dtype, mesh_shape, mesh_device
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        device=mesh_device,
     )
 
     mapper = ttnn.shard_tensor_to_2d_mesh_mapper(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
@@ -167,7 +164,6 @@ def test_concat_to_tensor_mesh_equality(mesh_device, dtype):
         torch_tensor,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
     )
 
     mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3)
@@ -228,7 +224,6 @@ def test_concat2d_to_tensor_mesh_equality(M, K, N, dtype, mesh_shape, mesh_devic
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        device=mesh_device,
     )
 
     mapper = ttnn.shard_tensor_to_2d_mesh_mapper(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
@@ -264,7 +259,6 @@ def test_replicate_to_tensor_mesh(mesh_device, dtype):
         torch_tensor,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
     )
 
     mapper = ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
@@ -288,7 +282,6 @@ def test_shard_to_tensor_mesh(mesh_device, dtype):
         torch_tensor,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
     )
 
     mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3)
@@ -314,7 +307,6 @@ def test_concat_to_tensor(mesh_device, dtype):
         torch_tensor,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
     )
 
     mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3)
@@ -340,7 +332,6 @@ def test_concat_slice_to_tensor(mesh_device, dtype):
         torch_tensor,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
     )
 
     mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3)
@@ -386,7 +377,6 @@ def test_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        device=mesh_device,
     )
 
     mapper = ttnn.shard_tensor_to_2d_mesh_mapper(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
@@ -429,7 +419,6 @@ def test_concat2d_to_tensor(M, K, N, dtype, mesh_shape, mesh_device):
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        device=mesh_device,
     )
 
     mapper = ttnn.shard_tensor_to_2d_mesh_mapper(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
