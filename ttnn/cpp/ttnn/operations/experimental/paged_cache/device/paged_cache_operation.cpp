@@ -174,8 +174,16 @@ void PagedUpdateCacheDeviceOperation::validate(
     };
 
     const auto validateFusedUpdateTensors = [](const Tensor& input_tensor1, const Tensor& input_tensor2) {
-        bool is_overlap = input_tensor1.shard_spec()->grid.intersects(input_tensor2.shard_spec()->grid);
-        TT_FATAL(!is_overlap, "input_tensor1 and input_tensor2 must not overlap");
+        CoreRangeSet input1_cores = input_tensor1.shard_spec().value().grid;
+        CoreRangeSet input2_cores = input_tensor2.shard_spec().value().grid;
+
+        bool is_overlap = input1_cores.intersects(input2_cores);
+        TT_FATAL(!is_overlap, "input_tensor1 ({}) and input_tensor2 ({}) must not overlap", input1_cores, input2_cores);
+        TT_FATAL(
+            input1_cores.num_cores() == input2_cores.num_cores(),
+            "input_tensor1 ({}) and input_tensor2 ({}) must have same number of cores",
+            input1_cores,
+            input2_cores);
     };
 
     // Validate number of input tensors based on operation type
