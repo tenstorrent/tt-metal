@@ -1,2 +1,2 @@
-moviepy
-protobuf
+moviepy==1.0.3
+protobuf==3.20
