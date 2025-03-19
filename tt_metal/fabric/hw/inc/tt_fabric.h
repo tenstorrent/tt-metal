@@ -34,6 +34,9 @@ extern volatile tt_l1_ptr fabric_router_l1_config_t* routing_table;
 extern chan_payload_ptr inbound_rdptr_ack;
 extern volatile chan_payload_ptr remote_rdptr;
 
+void tt_fabric_reserve_pull_request_slot(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request);
+template <bool blocking_mode>
+bool tt_fabric_check_pull_request_slot(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request);
 uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request);
 uint32_t num_words_available_to_pull(volatile pull_request_t* pull_request);
 uint32_t words_before_pull_buffer_wrap(uint32_t buffer_size, uint32_t rd_ptr);
@@ -970,6 +973,9 @@ typedef struct fvc_inbound_pull_state {
     uint32_t* words_received_local_update;
     uint32_t update_sender_buffer_space;
     uint32_t update_receiver_buffer_space;
+    uint64_t pull_req_dest_address;
+    bool pull_request_pending;
+    uint8_t padding[3];
 
     inline void reset_words_received() {
         // Setting STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX resets the credit register
@@ -1210,37 +1216,35 @@ typedef struct fvc_inbound_pull_state {
     inline uint32_t pull_data_from_fvc_buffer() {
         uint32_t words_available = get_num_words_available<fvc_mode>();
         words_available = std::min(words_available, packet_words_remaining);
+        bool try_sending_pull_request = false;
         if (packet_in_progress == 0) {
             if (current_packet_header.routing.flags == INLINE_FORWARD) {
                 copy_header((pull_request_t*)&local_pull_request->pull_request);
-                words_cleared = words_available;
             } else {
                 local_pull_request->pull_request.rd_ptr = fvc_out_rdptr;
                 local_pull_request->pull_request.size = current_packet_header.routing.packet_size_bytes;
                 local_pull_request->pull_request.buffer_size = buffer_size;
                 local_pull_request->pull_request.buffer_start = xy_local_addr + buffer_start;
-                local_pull_request->pull_request.words_written = words_available;
+                local_pull_request->pull_request.words_written = 0;
                 local_pull_request->pull_request.words_read = 0;
-                words_cleared = 0;
                 local_pull_request->pull_request.ack_addr =
                     xy_local_addr + (uint32_t)&local_pull_request->pull_request.words_read;
                 local_pull_request->pull_request.flags = FORWARD;
-                packet_in_progress = 1;
             }
-            packet_words_remaining -= words_available;
-            advance_out_rdptr<fvc_mode>(words_available);
+
+            words_cleared = 0;
+            packet_in_progress = 1;
+
             // issue noc write to noc target of pull request.
-            uint64_t dest_addr =
+            this->pull_req_dest_address =
                 socket_mode == false
                     ? get_noc_addr_helper(get_next_hop_router_noc_xy(), FABRIC_ROUTER_REQ_QUEUE_START)
                     : get_noc_addr_helper(
                           current_packet_header.session.target_offset_h, current_packet_header.session.target_offset_l);
-            hop_dest = tt_fabric_send_pull_request(dest_addr, local_pull_request);
-            if (current_packet_header.routing.flags == INLINE_FORWARD) {
-                curr_packet_valid = false;
-                flush_async_writes<fvc_mode>();
-                return words_available;
-            }
+            tt_fabric_reserve_pull_request_slot(this->pull_req_dest_address, local_pull_request);
+            try_sending_pull_request = true;
+        } else if (this->pull_request_pending) {
+            try_sending_pull_request = true;
         } else {
             // pull_request.rd_ptr is updated by remote puller when data is read out of producer's local buffer.
             // it is used to determine when it it safe to reclaim local buffer memory for more data.
@@ -1265,6 +1269,34 @@ typedef struct fvc_inbound_pull_state {
                 curr_packet_valid = false;
             }
         }
+
+        if (try_sending_pull_request) {
+            bool can_send_pull_request =
+                tt_fabric_check_pull_request_slot<false>(this->pull_req_dest_address, local_pull_request);
+            if (!can_send_pull_request) {
+                this->pull_request_pending = true;
+                return 0;
+            }
+
+            if (current_packet_header.routing.flags == INLINE_FORWARD) {
+                words_cleared = words_available;
+            } else {
+                local_pull_request->pull_request.words_written = words_available;
+            }
+
+            hop_dest = tt_fabric_send_pull_request(this->pull_req_dest_address, local_pull_request);
+            this->pull_request_pending = false;
+
+            packet_words_remaining -= words_available;
+            advance_out_rdptr<fvc_mode>(words_available);
+
+            if (current_packet_header.routing.flags == INLINE_FORWARD) {
+                curr_packet_valid = false;
+                packet_in_progress = 0;
+                flush_async_writes<fvc_mode>();
+            }
+        }
+
         return words_available;
     }
 
@@ -1341,55 +1373,34 @@ typedef struct fvc_inbound_pull_state {
     template <uint8_t fvc_mode = FVC_MODE_ROUTER>
     inline uint32_t process_mcast_packet() {
         uint32_t words_processed = 0;
+        uint32_t words_available = get_num_words_available();
+        words_available = std::min(words_available, packet_words_remaining);
+        bool try_sending_pull_request = false;
         if (current_packet_header.session.command & ASYNC_WR) {
-            uint32_t words_available = get_num_words_available();
-            words_available = std::min(words_available, packet_words_remaining);
             words_processed = words_available;
             if (packet_in_progress == 0) {
                 local_pull_request->pull_request.rd_ptr = fvc_out_rdptr;
                 local_pull_request->pull_request.size = current_packet_header.routing.packet_size_bytes;
                 local_pull_request->pull_request.buffer_size = buffer_size;
                 local_pull_request->pull_request.buffer_start = xy_local_addr + buffer_start;
-                local_pull_request->pull_request.words_written = words_available;
+                local_pull_request->pull_request.words_written = 0;
                 local_pull_request->pull_request.words_read = 0;
                 words_cleared = 0;
                 local_pull_request->pull_request.ack_addr =
                     xy_local_addr + (uint32_t)&local_pull_request->pull_request.words_read;
                 local_pull_request->pull_request.flags = FORWARD;
 
-                packet_words_remaining -= words_available;
-                // issue noc write to noc target of pull request.
-                // figure out next hop for mcast forwarding
-                uint64_t dest_addr = get_noc_addr_helper(mcast_router_noc_xy, FABRIC_ROUTER_REQ_QUEUE_START);
-                hop_dest = tt_fabric_send_pull_request(dest_addr, local_pull_request);
-
-                packet_dest = get_noc_addr_helper(
-                    current_packet_header.session.target_offset_h, current_packet_header.session.target_offset_l);
-
-                advance_out_rdptr(PACKET_HEADER_SIZE_WORDS);
-                words_available -= PACKET_HEADER_SIZE_WORDS;
-
-                uint32_t local_words_available = std::min(words_available, words_before_buffer_wrap(fvc_out_rdptr));
-                // write available data till end of input buffer
-                if (local_words_available) {
-                    // need to check local_words_available > 0 since it is possible that we only received the packet
-                    // header so far, and words_available == 0 after words_available -= PACKET_HEADER_SIZE_WORDS above.
-                    noc_async_write(
-                        get_local_buffer_read_addr(), packet_dest, local_words_available * PACKET_WORD_SIZE_BYTES);
-                    advance_out_rdptr(local_words_available);
-                    packet_dest += local_words_available * PACKET_WORD_SIZE_BYTES;
-                }
-                local_words_available = words_available - local_words_available;
-                // write remaining available data from beginning of buffer
-                if (local_words_available) {
-                    noc_async_write(
-                        get_local_buffer_read_addr(), packet_dest, local_words_available * PACKET_WORD_SIZE_BYTES);
-                    advance_out_rdptr(local_words_available);
-                    packet_dest += local_words_available * PACKET_WORD_SIZE_BYTES;
-                }
                 // subtract the header words. Remaining words are the data to be written to packet_dest.
                 // Remember to account for trailing bytes which may not be a full packet word.
                 packet_in_progress = 1;
+
+                // issue noc write to noc target of pull request.
+                // figure out next hop for mcast forwarding
+                this->pull_req_dest_address = get_noc_addr_helper(mcast_router_noc_xy, FABRIC_ROUTER_REQ_QUEUE_START);
+                tt_fabric_reserve_pull_request_slot(this->pull_req_dest_address, local_pull_request);
+                try_sending_pull_request = true;
+            } else if (this->pull_request_pending) {
+                try_sending_pull_request = true;
             } else {
                 noc_async_writes_flushed();
                 // pull_request.rd_ptr is updated by remote puller when data is read out of producer's local buffer.
@@ -1446,6 +1457,45 @@ typedef struct fvc_inbound_pull_state {
                     packet_in_progress = 0;
                     curr_packet_valid = false;
                     packet_timestamp = get_timestamp();
+                }
+            }
+
+            if (try_sending_pull_request) {
+                bool can_send_pull_request =
+                    tt_fabric_check_pull_request_slot<false>(this->pull_req_dest_address, local_pull_request);
+                if (!can_send_pull_request) {
+                    this->pull_request_pending = true;
+                    return 0;
+                }
+
+                local_pull_request->pull_request.words_written = words_available;
+                hop_dest = tt_fabric_send_pull_request(this->pull_req_dest_address, local_pull_request);
+                this->pull_request_pending = false;
+
+                packet_words_remaining -= words_available;
+                packet_dest = get_noc_addr_helper(
+                    current_packet_header.session.target_offset_h, current_packet_header.session.target_offset_l);
+
+                advance_out_rdptr(PACKET_HEADER_SIZE_WORDS);
+                words_available -= PACKET_HEADER_SIZE_WORDS;
+
+                uint32_t local_words_available = std::min(words_available, words_before_buffer_wrap(fvc_out_rdptr));
+                // write available data till end of input buffer
+                if (local_words_available) {
+                    // need to check local_words_available > 0 since it is possible that we only received the packet
+                    // header so far, and words_available == 0 after words_available -= PACKET_HEADER_SIZE_WORDS above.
+                    noc_async_write(
+                        get_local_buffer_read_addr(), packet_dest, local_words_available * PACKET_WORD_SIZE_BYTES);
+                    advance_out_rdptr(local_words_available);
+                    packet_dest += local_words_available * PACKET_WORD_SIZE_BYTES;
+                }
+                local_words_available = words_available - local_words_available;
+                // write remaining available data from beginning of buffer
+                if (local_words_available) {
+                    noc_async_write(
+                        get_local_buffer_read_addr(), packet_dest, local_words_available * PACKET_WORD_SIZE_BYTES);
+                    advance_out_rdptr(local_words_available);
+                    packet_dest += local_words_available * PACKET_WORD_SIZE_BYTES;
                 }
             }
         }
@@ -2202,11 +2252,8 @@ bool wait_all_src_dest_ready(volatile router_state_t* router_state, uint32_t tim
     return true;
 }
 
-// issue a pull request.
-// currently blocks till the request queue has space.
-// This needs to be non blocking, so that if one fvc pull request queue is full,
-// we can process other fvcs and come back to check status of this pull request later.
-inline uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request) {
+// reserve a slot in the req queue for sending the pull request
+inline void tt_fabric_reserve_pull_request_slot(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request) {
     uint64_t noc_addr = dest_addr + offsetof(chan_req_buf, wrptr);
     noc_fast_atomic_increment<DM_DEDICATED_NOC, true>(
         noc_index,
@@ -2219,25 +2266,29 @@ inline uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_p
         false,
         (uint32_t)&local_pull_request->wrptr.ptr);
     while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
+}
+
+// check if the pull request can be sent
+// issuing this in a blocking mode on routers can result in deadlocks, use carefully
+template <bool blocking_mode = false>
+inline bool tt_fabric_check_pull_request_slot(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request) {
+    uint64_t noc_addr = dest_addr + offsetof(chan_req_buf, rdptr);
     uint32_t wrptr = local_pull_request->wrptr.ptr;
-    noc_addr = dest_addr + offsetof(chan_req_buf, rdptr);
-    while (1) {
+    do {
         noc_async_read_one_packet(noc_addr, (uint32_t)(&local_pull_request->rdptr.ptr), 4);
         noc_async_read_barrier();
         if (!req_buf_ptrs_full(wrptr, local_pull_request->rdptr.ptr)) {
-            break;
+            return true;
         }
-#if defined(COMPILE_FOR_ERISC)
-        else {
-            // Consumer pull request buffer is full
-            // Context switch to enable base firmware routing
-            // as it might be handling slow dispatch traffic
-            internal_::risc_context_switch();
-        }
-#endif
-    }
-    uint32_t dest_wr_index = wrptr & CHAN_REQ_BUF_SIZE_MASK;
-    noc_addr = dest_addr + offsetof(chan_req_buf, chan_req) + dest_wr_index * sizeof(pull_request_t);
+    } while (blocking_mode);
+
+    return false;
+}
+
+// issue a pull request.
+inline uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request) {
+    uint32_t dest_wr_index = (local_pull_request->wrptr.ptr) & CHAN_REQ_BUF_SIZE_MASK;
+    uint64_t noc_addr = dest_addr + offsetof(chan_req_buf, chan_req) + dest_wr_index * sizeof(pull_request_t);
     noc_async_write_one_packet(
         (uint32_t)(&local_pull_request->pull_request), noc_addr, sizeof(pull_request_t), noc_index);
 
