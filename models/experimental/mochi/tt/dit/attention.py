@@ -1,6 +1,7 @@
 import torch
 from typing import Tuple
 from functools import partial
+import math
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -12,7 +13,8 @@ from models.experimental.mochi.tt.common import (
     as_replicated_tensor,
     col_parallel_linear,
     load_linear,
-    matmul_2d_config,
+    matmul_config,
+    get_padded_vision_seq_len,
 )
 from functools import partial
 from ttnn import ConcatMeshToTensor
@@ -27,7 +29,6 @@ class AsymmetricAttention(LightweightModule):
         weight_cache_path,
         layer_num,
         dtype,
-        vision_seq_len: int,
         dim_x: int,
         dim_y: int,
         num_heads: int = 8,
@@ -61,8 +62,6 @@ class AsymmetricAttention(LightweightModule):
         self.weight_cache_path = weight_cache_path
         self.layer_num = layer_num
         self.dtype = dtype
-        self.vision_seq_len = vision_seq_len
-        self.local_vision_seq_len = self.vision_seq_len // self.num_devices
         self.dim_x = dim_x
         self.dim_y = dim_y
         self.num_heads = num_heads
@@ -101,7 +100,7 @@ class AsymmetricAttention(LightweightModule):
         self.k_norm_y = self._create_rmsmorn(".k_norm_y")
 
         # TODO: using qkv_x program config leads to worse PCC
-        self.qkv_x_config = matmul_config(self.local_vision_seq_len, dim_x, 3 * self.num_heads * self.head_dim, (8, 8))
+        self.qkv_x_config = partial(matmul_config, k=dim_x, n=3 * self.num_heads * self.head_dim, grid_size=(8, 8))
         self.proj_x_config = partial(matmul_config, k=dim_x, n=dim_x, in0_block_w=4, grid_size=(8, 8))
         self.mm_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -165,35 +164,45 @@ class AsymmetricAttention(LightweightModule):
         )
         if b is not None:
             b = as_replicated_tensor(
-                b,
+                b.reshape(1, -1),
                 mesh_device=self.mesh_device,
                 cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.bias"),
             )
         return w, b
 
-    def _seq_to_col_parallel_tensor(self, seq_parallel_tensor):
-        seq_parallel_host_tensor = ttnn.from_device(seq_parallel_tensor)
-        torch_tensor = ttnn.to_torch(
-            seq_parallel_host_tensor, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=-2)
-        )
-        col_parallel_tensor = as_sharded_tensor(
-            torch_tensor,
-            self.mesh_device,
-            dim=-3,
-        )
-        return col_parallel_tensor
+    def _seq_to_head_parallel_tensor(self, seq_parallel_tensor, N):
+        num_heads = seq_parallel_tensor.shape[1]
+        local_heads = num_heads // self.num_devices
+        replicated_tensor = ttnn.all_gather(seq_parallel_tensor, dim=2)
+        tensors = ttnn.get_device_tensors(replicated_tensor)
+        tile_padded_seqlen = math.ceil(N / 32) * 32
+        for i in range(len(tensors)):
+            # Slice out local head and slice sequence padding
+            tensors[i] = tensors[i][:, i * local_heads : (i + 1) * local_heads, :tile_padded_seqlen]
+            # Add padding information
+            tensors[i] = ttnn.reshape(
+                tensors[i], [tensors[i].shape[0], tensors[i].shape[1], N, tensors[i].shape[3]], tensors[i].shape
+            )
+        return ttnn.aggregate_as_tensor(tensors)
 
-    def _col_to_seq_parallel_tensor(self, col_parallel_tensor, col_dim, seq_dim):
-        col_parallel_host_tensor = ttnn.from_device(col_parallel_tensor)
-        torch_tensor = ttnn.to_torch(
-            col_parallel_host_tensor, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=col_dim)
-        )
-        seq_parallel_tensor = as_sharded_tensor(
-            torch_tensor,
-            self.mesh_device,
-            dim=seq_dim,
-        )
-        return seq_parallel_tensor
+    def _col_to_seq_parallel_tensor(self, col_parallel_tensor, N):
+        padded_seq_len = get_padded_vision_seq_len(N, self.num_devices)
+        if padded_seq_len > N:
+            col_parallel_tensor = ttnn.reshape(
+                col_parallel_tensor,
+                col_parallel_tensor.padded_shape,
+            )
+            padded_N = col_parallel_tensor.shape[2]
+
+            if padded_seq_len > padded_N:
+                col_parallel_tensor = ttnn.pad(col_parallel_tensor, [(0, 0), (0, padded_seq_len - padded_N)], 0.0)
+        replicated_tensor = ttnn.all_gather(col_parallel_tensor, dim=3)
+        tensors = ttnn.get_device_tensors(replicated_tensor)
+
+        padded_M = padded_seq_len // self.num_devices
+        for i in range(len(tensors)):
+            tensors[i] = tensors[i][:, :, i * padded_M : (i + 1) * padded_M]
+        return ttnn.aggregate_as_tensor(tensors)
 
     def run_qkv_y(self, y):
         # Compute QKV projection
@@ -224,6 +233,7 @@ class AsymmetricAttention(LightweightModule):
         x_1BNX: ttnn.Tensor,  # (B, M, dim_x)
         y_1BLY: ttnn.Tensor,  # (B, L, dim_y)
         *,
+        N: int,
         scale_x: ttnn.Tensor,  # TODO: add shape metadata
         scale_y: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
@@ -247,7 +257,7 @@ class AsymmetricAttention(LightweightModule):
             q, k, v: Query, key and value tensors prepared for attention
             joint_q, joint_k, joint_v: Query, key and value tensors prepared for joint attention
         """
-        B = x_1BNX.shape[1]
+        B, M = x_1BNX.shape[1], x_1BNX.shape[2]
         assert B == 1, f"Batch size must be 1, got {B}"
         assert x_1BNX.shape[0] == 1, f"x dim0 must be 1, got {x_1BNX.shape[0]}"
         # NOTE: I removed this check because with unpadded input reshape fails
@@ -264,7 +274,7 @@ class AsymmetricAttention(LightweightModule):
             compute_kernel_config=self.mm_compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.qkv_x_config,
+            program_config=self.qkv_x_config(m=M),
         )
 
         # Split qkv_x into q, k, v
@@ -284,9 +294,9 @@ class AsymmetricAttention(LightweightModule):
         k_x_BHND = ttnn.experimental.rotary_embedding_llama(k_x_BHND, rope_cos, rope_sin, trans_mat)
 
         # TODO remove this once we have an optimized conversion
-        q_x_BHND = self._seq_to_col_parallel_tensor(q_x_BHND)
-        k_x_BHND = self._seq_to_col_parallel_tensor(k_x_BHND)
-        v_x_BHND = self._seq_to_col_parallel_tensor(v_x_BHND)
+        q_x_BHND = self._seq_to_head_parallel_tensor(q_x_BHND, N=N)
+        k_x_BHND = self._seq_to_head_parallel_tensor(k_x_BHND, N=N)
+        v_x_BHND = self._seq_to_head_parallel_tensor(v_x_BHND, N=N)
 
         # Process text features if present
         if B == 1:
@@ -383,6 +393,7 @@ class AsymmetricAttention(LightweightModule):
         out_1BNX: ttnn.Tensor,
         out_joint_1BLX: ttnn.Tensor,
         B: int,
+        N: int,
         dtype: ttnn.bfloat16,
         uncond: bool = False,
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -403,12 +414,11 @@ class AsymmetricAttention(LightweightModule):
         assert B == 1, "Batch size must be 1"
         assert out_1BNX.shape[1] == B, "Batch size must be 1"
         assert (out_joint_1BLX is None) == uncond
-        local_dim = self.dim_x  # No head parallel support yet
 
         if self.num_devices > 1:
-            out_1BNX = self._col_to_seq_parallel_tensor(out_1BNX, col_dim=3, seq_dim=2)
+            out_1BNX = self._col_to_seq_parallel_tensor(out_1BNX, N=N)
 
-        N = out_1BNX.shape[2]
+        M = out_1BNX.shape[2]
 
         # BUG: This linear clobbers `out_joint_1BLX` if padded and certain program configs are used
         out_1BNX = ttnn.linear(
@@ -418,7 +428,7 @@ class AsymmetricAttention(LightweightModule):
             compute_kernel_config=self.mm_compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.proj_x_config(m=N),
+            program_config=self.proj_x_config(m=M),
         )
 
         out_joint = None  # Default None if uncond
@@ -449,6 +459,7 @@ class AsymmetricAttention(LightweightModule):
         x_1BNX: ttnn.Tensor,
         y_1BLY: ttnn.Tensor,
         *,
+        N: int,
         scale_x: ttnn.Tensor,
         scale_y: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
@@ -463,6 +474,7 @@ class AsymmetricAttention(LightweightModule):
         q_x_BHND, k_x_BHND, v_x_BHND, q_y_BHLD, k_y_BHLD, v_y_BHLD = self.prepare_qkv(
             x_1BNX,
             y_1BLY,
+            N=N,
             scale_x=scale_x,
             scale_y=scale_y,
             rope_cos=rope_cos,
@@ -487,6 +499,7 @@ class AsymmetricAttention(LightweightModule):
             out_1BNX,
             out_joint_1BLX,
             B=B,
+            N=N,
             dtype=out_1BNX.dtype,
             uncond=uncond,
         )

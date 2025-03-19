@@ -19,7 +19,7 @@ from genmo.mochi_preview.pipelines import (
 from transformers import T5EncoderModel
 
 
-def create_models(mesh_device, vision_seq_len, n_layers: int = 48):
+def create_models(mesh_device, n_layers: int = 48):
     """Create and initialize both reference and TT models.
 
     Args:
@@ -73,7 +73,6 @@ def create_models(mesh_device, vision_seq_len, n_layers: int = 48):
     weight_cache_path = get_cache_path(os.environ.get("FAKE_DEVICE"))
     tt_model = TtAsymmDiTJoint(
         mesh_device=mesh_device,
-        vision_seq_len=vision_seq_len,
         state_dict=state_dict,
         weight_cache_path=weight_cache_path,
         **config,
@@ -108,7 +107,7 @@ def test_tt_asymm_dit_joint_inference(mesh_device, n_layers, use_program_cache, 
     num_visual_tokens = time_steps * height * width // (PATCH_SIZE**2)
 
     # Create models using common function
-    reference_model, tt_model, _ = create_models(mesh_device, num_visual_tokens, n_layers)
+    reference_model, tt_model, _ = create_models(mesh_device, n_layers)
 
     max_seqlen_in_batch_kv = num_visual_tokens + tt_model.t5_token_length
 
@@ -186,7 +185,7 @@ def test_tt_asymm_dit_joint_prepare(mesh_device, use_program_cache, reset_seeds)
     num_visual_tokens = time_steps * height * width // (PATCH_SIZE**2)
 
     # Create models using common function with 0 layers since we only need prepare()
-    reference_model, tt_model, _ = create_models(mesh_device, num_visual_tokens, n_layers=0)
+    reference_model, tt_model, _ = create_models(mesh_device, n_layers=0)
 
     x = torch.randn(batch_size, tt_model.in_channels, time_steps, height, width)
     sigma = torch.ones(batch_size)
@@ -355,7 +354,7 @@ def test_tt_asymm_dit_joint_model_fn(mesh_device, use_program_cache, reset_seeds
     num_visual_tokens = latent_t * latent_h * latent_w // (PATCH_SIZE**2)
 
     # Create models using common function
-    reference_model, tt_model, _ = create_models(mesh_device, num_visual_tokens, n_layers)
+    reference_model, tt_model, _ = create_models(mesh_device, n_layers)
 
     # Create input latents
     z = torch.randn(
@@ -449,7 +448,7 @@ def test_tt_asymm_dit_joint_preprocess(mesh_device, use_program_cache, reset_see
     B, C, T, H, W = 1, 12, 28, 60, 106
     PATCH_SIZE = 2
     num_visual_tokens = T * H * W // (PATCH_SIZE**2)
-    _, tt_model, _ = create_models(mesh_device, num_visual_tokens, n_layers=0)
+    _, tt_model, _ = create_models(mesh_device, n_layers=0)
     x = torch.randn(B, C, T, H, W)
     x_1BNI = tt_model.preprocess_input(x)
     if mesh_device.get_num_devices() > 1:

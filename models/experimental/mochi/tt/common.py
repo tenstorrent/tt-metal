@@ -290,7 +290,7 @@ def load_linear(name, bias, weight_cache_path, state_dict, state_dict_prefix, me
     )
     if b is not None:
         b = as_replicated_tensor(
-            b,
+            b.reshape(1, -1),
             mesh_device,
             cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.bias"),
         )
@@ -348,3 +348,28 @@ def create_linear_layer(
         )
 
     return weight_tensor, bias_tensor
+
+
+def get_padded_vision_seq_len(N, num_devices):
+    TILE_SIZE = 32
+    divisor = TILE_SIZE * num_devices
+
+    # Calculate padding needed to make seq_len divisible by both tile size and num_devices
+    padded_seq_len = math.ceil(N / divisor) * divisor
+    return padded_seq_len
+
+
+def pad_vision_seq_parallel(tensor, num_devices):
+    """
+    Sequence parallelism shards the vision tensor in dim2.
+    dim2 must be divisible by tile size and num_devices.
+    """
+    seq_len = tensor.shape[2]
+    padded_seq_len = get_padded_vision_seq_len(seq_len, num_devices)
+    pad_len = padded_seq_len - seq_len
+
+    # Pad the sequence length dimension (dim2) on the right
+    if pad_len > 0:
+        tensor = torch.nn.functional.pad(tensor, (0, 0, 0, pad_len))
+
+    return tensor

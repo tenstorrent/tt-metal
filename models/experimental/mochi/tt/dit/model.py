@@ -27,7 +27,6 @@ class AsymmDiTJoint(LightweightModule):
     def __init__(
         self,
         mesh_device,
-        vision_seq_len,
         state_dict,
         weight_cache_path: Path,
         *,
@@ -66,7 +65,6 @@ class AsymmDiTJoint(LightweightModule):
         self.t5_token_length = t5_token_length
         self.t5_feat_dim = t5_feat_dim
         self.rope_theta = rope_theta
-        self.vision_seq_len = vision_seq_len
 
         # Create PyTorch embedders (these run on CPU) and load their weights
         self.x_embedder = PatchEmbed(
@@ -112,7 +110,6 @@ class AsymmDiTJoint(LightweightModule):
                 weight_cache_path=weight_cache_path,
                 layer_num=b,
                 dtype=ttnn.bfloat16,
-                vision_seq_len=vision_seq_len,
                 hidden_size_x=hidden_size_x,
                 hidden_size_y=hidden_size_y,
                 num_heads=num_heads,

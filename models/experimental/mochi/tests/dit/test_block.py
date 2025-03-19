@@ -12,6 +12,7 @@ from models.experimental.mochi.tt.common import (
     to_tt_tensor,
     to_torch_tensor,
     stack_cos_sin,
+    pad_vision_seq_parallel,
 )
 from models.demos.llama3.tt.llama_common import get_rot_transformation_mat
 from models.experimental.mochi.tests.dit.common import (
@@ -38,7 +39,7 @@ multiple_of = 256
 ffn_dim_multiplier = None
 
 
-def create_models(mesh_device, state_dict, partial_state_dict, block_path, vision_seq_len, dim_x, dim_y, update_y=True):
+def create_models(mesh_device, state_dict, partial_state_dict, block_path, dim_x, dim_y, update_y=True):
     """Initialize both reference and TT models."""
     reference_model = AsymmetricJointBlock(
         hidden_size_x=dim_x,
@@ -59,7 +60,6 @@ def create_models(mesh_device, state_dict, partial_state_dict, block_path, visio
         weight_cache_path=get_cache_path(os.environ.get("FAKE_DEVICE")),
         layer_num=0,
         dtype=ttnn.bfloat16,
-        vision_seq_len=vision_seq_len,
         hidden_size_x=dim_x,
         hidden_size_y=dim_y,
         num_heads=NUM_HEADS,
@@ -78,6 +78,7 @@ def create_models(mesh_device, state_dict, partial_state_dict, block_path, visio
     "vision_seq_len, text_seq_len",
     [
         (22 * 256 * 8, 256),
+        (44520, 118),
     ],
     #    [(43 * 1024, 256), (44520, 118)],
 )
@@ -106,7 +107,7 @@ def test_tt_block(mesh_device, vision_seq_len, text_seq_len, use_program_cache, 
 
     # Create reference model
     reference_model, tt_model = create_models(
-        mesh_device, state_dict, partial_state_dict, block_path, vision_seq_len, dim_x, dim_y, update_y
+        mesh_device, state_dict, partial_state_dict, block_path, dim_x, dim_y, update_y
     )
     # Create input tensors
     batch_size = 1
@@ -133,11 +134,16 @@ def test_tt_block(mesh_device, vision_seq_len, text_seq_len, use_program_cache, 
     max_seqlen_in_batch = total_seq_len
 
     # Convert inputs to TT tensors
-    tt_x = to_tt_tensor(x_input.view(1, batch_size, vision_seq_len, dim_x), mesh_device, shard_dim=-2)
+    x_padded = pad_vision_seq_parallel(
+        x_input.view(1, batch_size, vision_seq_len, dim_x), mesh_device.get_num_devices()
+    )
+    cos_padded = pad_vision_seq_parallel(rope_cos_stack, mesh_device.get_num_devices())
+    sin_padded = pad_vision_seq_parallel(rope_sin_stack, mesh_device.get_num_devices())
+    tt_x = to_tt_tensor(x_padded, mesh_device, shard_dim=-2)
     tt_y = to_tt_tensor(y_input.view(1, batch_size, text_seq_len, dim_y), mesh_device)
     tt_c = to_tt_tensor(c_input.view(batch_size, 1, 1, dim_x), mesh_device)
-    tt_rope_cos = to_tt_tensor(rope_cos_stack, mesh_device, shard_dim=-2)
-    tt_rope_sin = to_tt_tensor(rope_sin_stack, mesh_device, shard_dim=-2)
+    tt_rope_cos = to_tt_tensor(cos_padded, mesh_device, shard_dim=-2)
+    tt_rope_sin = to_tt_tensor(sin_padded, mesh_device, shard_dim=-2)
     tt_trans_mat = to_tt_tensor(trans_mat, mesh_device)
 
     # Create packed indices
@@ -152,16 +158,15 @@ def test_tt_block(mesh_device, vision_seq_len, text_seq_len, use_program_cache, 
         tt_x,
         tt_c,
         tt_y,
+        N=vision_seq_len,
         rope_cos=tt_rope_cos,
         rope_sin=tt_rope_sin,
         trans_mat=tt_trans_mat,
     )
 
-    tt_x_out = ttnn.all_gather(tt_x_out, dim=2)
-
     # Convert TT outputs to torch tensors
     # extract from replicated tensors
-    tt_x_torch = to_torch_tensor(tt_x_out, mesh_device, dim=0)[0:1]
+    tt_x_torch = to_torch_tensor(tt_x_out, mesh_device, dim=2)[:, :, :vision_seq_len, :]
     tt_y_torch = to_torch_tensor(tt_y_out, mesh_device, dim=0)[0:1]
 
     # Get reference outputs
@@ -247,7 +252,7 @@ def test_tt_block_with_saved_tensors(mesh_device, use_program_cache, reset_seeds
 
     # Create models
     reference_model, tt_model = create_models(
-        mesh_device, state_dict, partial_state_dict, block_path, x_shape[1], dim_x, dim_y, update_y
+        mesh_device, state_dict, partial_state_dict, block_path, dim_x, dim_y, update_y
     )
 
     # Print tensor shapes

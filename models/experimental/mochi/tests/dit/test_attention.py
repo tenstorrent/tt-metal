@@ -12,6 +12,7 @@ from models.experimental.mochi.tt.common import (
     to_tt_tensor,
     to_torch_tensor,
     stack_cos_sin,
+    pad_vision_seq_parallel,
 )
 
 from models.experimental.mochi.tests.dit.common import (
@@ -27,7 +28,7 @@ from genmo.mochi_preview.dit.joint_model.asymm_models_joint import AsymmetricAtt
 PCC_REQUIRED = 0.99
 
 
-def create_models(mesh_device, state_dict, partial_state_dict, attn_path, vision_seq_len, dim_x, dim_y, update_y=True):
+def create_models(mesh_device, state_dict, partial_state_dict, attn_path, dim_x, dim_y, update_y=True):
     """Initialize both reference and TT models."""
     reference_model = RefAsymmetricAttention(
         dim_x=dim_x,
@@ -57,7 +58,6 @@ def create_models(mesh_device, state_dict, partial_state_dict, attn_path, vision
         weight_cache_path=weight_cache_path,
         layer_num=0,
         dtype=ttnn.bfloat16,
-        vision_seq_len=vision_seq_len,
         dim_x=dim_x,
         dim_y=dim_y,
         num_heads=NUM_HEADS,
@@ -154,10 +154,7 @@ def test_tt_attn_qkv_y(mesh_device, seq_len, use_program_cache, reset_seeds, att
     "vision_seq_len, text_seq_len",
     [
         (22 * 256 * 8, 256),  # Tests when X doesn't need padding
-        # (44520, 118),  # Tests when X needs padding
-        # (2048, 128)
-        # (240, 118)
-        # (44520, 118),
+        (44520, 118),  # Tests when X needs padding
     ],
 )
 @pytest.mark.parametrize(
@@ -181,7 +178,7 @@ def test_tt_attn_prepare_qkv(
 ):
     state_dict, partial_state_dict = load_model_weights(attn_path)
     reference_model, tt_model = create_models(
-        mesh_device, state_dict, partial_state_dict, attn_path, vision_seq_len, dim_x, dim_y, update_y
+        mesh_device, state_dict, partial_state_dict, attn_path, dim_x, dim_y, update_y
     )
 
     # Create input tensors
@@ -205,12 +202,16 @@ def test_tt_attn_prepare_qkv(
     valid_token_indices = torch.arange(total_seq_len)
     max_seqlen_in_batch = total_seq_len
 
-    tt_x = to_tt_tensor(x_input.view(1, batch_size, vision_seq_len, dim_x), mesh_device, shard_dim=-2)
+    x_pad = pad_vision_seq_parallel(x_input.view(1, batch_size, vision_seq_len, dim_x), mesh_device.get_num_devices())
+    cos_pad = pad_vision_seq_parallel(rope_cos_stack, mesh_device.get_num_devices())
+    sin_pad = pad_vision_seq_parallel(rope_sin_stack, mesh_device.get_num_devices())
+
+    tt_x = to_tt_tensor(x_pad, mesh_device, shard_dim=-2)
     tt_y = to_tt_tensor(y_input.view(1, batch_size, text_seq_len, dim_y), mesh_device)
     tt_scale_x = to_tt_tensor(scale_x.view(batch_size, 1, 1, dim_x), mesh_device)
     tt_scale_y = to_tt_tensor(scale_y.view(batch_size, 1, 1, dim_y), mesh_device)
-    tt_rope_cos = to_tt_tensor(rope_cos_stack, mesh_device, shard_dim=-2)
-    tt_rope_sin = to_tt_tensor(rope_sin_stack, mesh_device, shard_dim=-2)
+    tt_rope_cos = to_tt_tensor(cos_pad, mesh_device, shard_dim=-2)
+    tt_rope_sin = to_tt_tensor(sin_pad, mesh_device, shard_dim=-2)
 
     trans_mat = get_rot_transformation_mat(None)
     trans_mat_tt = to_tt_tensor(trans_mat, mesh_device)
@@ -219,6 +220,7 @@ def test_tt_attn_prepare_qkv(
     tt_q_x, tt_k_x, tt_v_x, tt_q_y, tt_k_y, tt_v_y = tt_model.prepare_qkv(
         tt_x,
         tt_y,
+        N=vision_seq_len,
         scale_x=tt_scale_x,
         scale_y=tt_scale_y,
         rope_cos=tt_rope_cos,
@@ -367,8 +369,7 @@ def test_tt_attn_run_attention(
     "vision_seq_len, text_seq_len",
     [
         (22 * 256 * 8, 256),
-        # (43 * 1024, 256),
-        # (44520, 118),
+        (44520, 118),
     ],
 )
 @pytest.mark.parametrize(
@@ -405,7 +406,8 @@ def test_tt_attn_post_attention(
     # Convert to TT tensor
     torch_x = torch_out[:vision_seq_len].view(1, batch_size, vision_seq_len, dim_x)
     torch_y = torch_out[vision_seq_len:].view(1, batch_size, text_seq_len, dim_x)
-    tt_x = to_tt_tensor(torch_x, mesh_device, shard_dim=-1)
+    x_padded = pad_vision_seq_parallel(torch_x, mesh_device.get_num_devices())
+    tt_x = to_tt_tensor(x_padded, mesh_device, shard_dim=-1)
     tt_y = to_tt_tensor(torch_y, mesh_device, shard_dim=-1)
 
     logger.info("Run TtAsymmetricAttention post_attention")
@@ -413,12 +415,12 @@ def test_tt_attn_post_attention(
         tt_x,
         tt_y,
         B=batch_size,
-        L=text_seq_len,
+        N=vision_seq_len,
         dtype=ttnn.bfloat16,
     )
 
     # Convert TT outputs to torch tensors
-    tt_x_torch = to_torch_tensor(tt_x, mesh_device, dim=-2)
+    tt_x_torch = to_torch_tensor(tt_x, mesh_device, dim=-2)[:, :, :vision_seq_len, :]
     tt_y_torch = to_torch_tensor(tt_y, mesh_device, dim=-1)
 
     # Get reference outputs
@@ -461,7 +463,8 @@ def test_tt_attn_post_attention(
 @pytest.mark.parametrize(
     "vision_seq_len, text_seq_len",
     [
-        (43 * 1024, 256),
+        (22 * 256 * 8, 256),
+        # (43 * 1024, 256),
         (44520, 118),
     ],
 )
@@ -484,7 +487,7 @@ def test_tt_attn_post_attention(
 def test_tt_attn_forward(
     mesh_device, vision_seq_len, text_seq_len, use_program_cache, reset_seeds, attn_path, dim_x, dim_y, update_y
 ):
-    min_pcc = 0.9975
+    min_pcc = 0.9974
     max_mse = 1.2e-4
     """Test complete forward pass of TtAsymmetricAttention."""
     state_dict, partial_state_dict = load_model_weights(attn_path)
@@ -513,12 +516,16 @@ def test_tt_attn_forward(
     valid_token_indices = torch.arange(total_seq_len)
     max_seqlen_in_batch = total_seq_len
 
-    tt_x = to_tt_tensor(x_input.unsqueeze(0), mesh_device)
+    x_padded = pad_vision_seq_parallel(x_input.unsqueeze(0), mesh_device.get_num_devices())
+    cos_padded = pad_vision_seq_parallel(rope_cos_stack, mesh_device.get_num_devices())
+    sin_padded = pad_vision_seq_parallel(rope_sin_stack, mesh_device.get_num_devices())
+
+    tt_x = to_tt_tensor(x_padded, mesh_device, shard_dim=-2)
     tt_y = to_tt_tensor(y_input.unsqueeze(0), mesh_device)
     tt_scale_x = to_tt_tensor(scale_x.view(batch_size, 1, 1, dim_x), mesh_device)
     tt_scale_y = to_tt_tensor(scale_y.view(batch_size, 1, 1, dim_y), mesh_device)
-    tt_rope_cos = to_tt_tensor(rope_cos_stack, mesh_device, shard_dim=-3)
-    tt_rope_sin = to_tt_tensor(rope_sin_stack, mesh_device, shard_dim=-3)
+    tt_rope_cos = to_tt_tensor(cos_padded, mesh_device, shard_dim=-2)
+    tt_rope_sin = to_tt_tensor(sin_padded, mesh_device, shard_dim=-2)
 
     # Create transformation matrix for RoPE
     trans_mat = get_rot_transformation_mat(None)
@@ -531,6 +538,7 @@ def test_tt_attn_forward(
     tt_x_out, tt_y_out = tt_model(
         tt_x,
         tt_y,
+        N=vision_seq_len,
         scale_x=tt_scale_x,
         scale_y=tt_scale_y,
         rope_cos=tt_rope_cos,

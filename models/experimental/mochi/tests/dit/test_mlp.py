@@ -9,7 +9,12 @@ from models.utility_functions import (
 )
 from models.utility_functions import skip_for_grayskull
 from genmo.mochi_preview.dit.joint_model.layers import FeedForward as RefFeedForward
-from models.experimental.mochi.tt.common import get_mochi_dir, get_cache_path, compute_metrics
+from models.experimental.mochi.tt.common import (
+    get_mochi_dir,
+    get_cache_path,
+    compute_metrics,
+    pad_vision_seq_parallel,
+)
 
 
 @torch.no_grad()
@@ -26,10 +31,8 @@ from models.experimental.mochi.tt.common import get_mochi_dir, get_cache_path, c
 @pytest.mark.parametrize(
     "ff_path, in_feat, seq_len, seq_shard",
     [
-        ("blocks.0.mlp_x", 3072, 44 * 1024, True),
-        # ("blocks.0.mlp_x", 3072, 44520),
-        ("blocks.0.mlp_y", 1536, 256, False),
-        # ("blocks.0.mlp_y", 1536, 118),
+        ("blocks.0.mlp_x", 3072, 44520, True),
+        ("blocks.0.mlp_y", 1536, 118, False),
     ],
 )
 def test_tt_feedforward_inference(mesh_device, seq_len, use_program_cache, reset_seeds, ff_path, in_feat, seq_shard):
@@ -72,10 +75,12 @@ def test_tt_feedforward_inference(mesh_device, seq_len, use_program_cache, reset
     torch_input = torch.randn(1, 1, seq_len, in_feat)
     if seq_shard:
         mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-2)
+        tt_input = pad_vision_seq_parallel(torch_input, mesh_device.get_num_devices())
     else:
         mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+        tt_input = torch_input
     tt_input = ttnn.from_torch(
-        torch_input,
+        tt_input,
         device=mesh_device,
         mesh_mapper=mapper,
         dtype=ttnn.bfloat16,
@@ -87,7 +92,9 @@ def test_tt_feedforward_inference(mesh_device, seq_len, use_program_cache, reset
     tt_output = tt_model(tt_input)
 
     if seq_shard:
-        tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-2))
+        tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-2))[
+            :, :, :seq_len, :
+        ]
     else:
         tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
 
