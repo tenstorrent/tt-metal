@@ -5,13 +5,9 @@
 #pragma once
 #include "llk_math_eltwise_unary_sfpu_common_includes.h"
 
-template <bool APPROXIMATE, class F, class ... ARGS>
+template <bool APPROXIMATE, class F, class... ARGS>
 inline void llk_math_eltwise_unary_sfpu_params(
-    F&& sfpu_func,
-    uint dst_index,
-    int vector_mode = VectorMode::RC,
-    ARGS&& ... args) {
-
+    F&& sfpu_func, uint dst_index, int vector_mode = VectorMode::RC, ARGS&&... args) {
     math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
 
     if (vector_mode == VectorMode::R) {

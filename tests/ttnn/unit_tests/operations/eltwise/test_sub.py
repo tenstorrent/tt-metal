@@ -72,6 +72,21 @@ def test_sub(device, h, w):
     assert_with_pcc(torch_output_tensor, output, 0.9999)
 
 
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [64])
+def test_rsub(device, h, w):
+    torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.sub(torch_input_tensor_b, torch_input_tensor_a)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.rsub(input_tensor_a, input_tensor_b)
+    output = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_output_tensor, output, 0.9999)
+
+
 @pytest.mark.parametrize("n", [2])
 @pytest.mark.parametrize("c", [3])
 @pytest.mark.parametrize("h", [128])
@@ -85,6 +100,24 @@ def test_sub_4D(device, n, c, h, w):
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
 
     output = ttnn.sub(input_tensor_a, input_tensor_b)
+    output = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_output_tensor, output, 0.9999)
+
+
+@pytest.mark.parametrize("n", [2])
+@pytest.mark.parametrize("c", [3])
+@pytest.mark.parametrize("h", [128])
+@pytest.mark.parametrize("w", [128])
+def test_rsub_4D(device, n, c, h, w):
+    torch_input_tensor_a = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch.sub(torch_input_tensor_b, torch_input_tensor_a)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.rsub(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output_tensor, output, 0.9999)

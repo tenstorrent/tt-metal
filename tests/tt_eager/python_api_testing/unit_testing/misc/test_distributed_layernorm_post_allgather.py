@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from models.utility_functions import tt2torch_tensor, torch2tt_tensor, skip_for_grayskull, skip_for_blackhole
+from models.utility_functions import tt2torch_tensor, torch2tt_tensor, skip_for_grayskull
 
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
@@ -21,7 +21,7 @@ def reference_layernorm(x, gamma, beta, epsilon, is_rmsnorm):
         return torch.nn.functional.layer_norm(x, x.shape[-1:], gamma, beta, epsilon)
 
 
-def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, dtype, device, fp32_enabled=False):
+def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device, fp32_enabled=False):
     kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity
         math_approx_mode=False,
@@ -63,7 +63,7 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, dtype, device, fp32_e
     for d in range(n_devices):
         tt_inp = torch2tt_tensor(
             inp_chunked[d],
-            tt_dtype=dtype,
+            tt_dtype=input_dtype,
             tt_device=device,
             tt_layout=ttnn.TILE_LAYOUT,
             tt_memory_config=dram_memcfg,
@@ -92,11 +92,22 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, dtype, device, fp32_e
 
         if is_rmsnorm:
             tt_lnp2_out = ttnn.rms_norm_post_all_gather(
-                tt_inp, tt_stats, epsilon=epsilon, weight=tt_gamma, compute_kernel_config=kernel_config
+                tt_inp,
+                tt_stats,
+                epsilon=epsilon,
+                weight=tt_gamma,
+                compute_kernel_config=kernel_config,
+                dtype=output_dtype,
             )
         else:
             tt_lnp2_out = ttnn.layer_norm_post_all_gather(
-                tt_inp, tt_stats, epsilon=epsilon, weight=tt_gamma, bias=tt_beta, compute_kernel_config=kernel_config
+                tt_inp,
+                tt_stats,
+                epsilon=epsilon,
+                weight=tt_gamma,
+                bias=tt_beta,
+                compute_kernel_config=kernel_config,
+                dtype=output_dtype,
             )
 
         tt_lnp2_out_cpu = tt2torch_tensor(tt_lnp2_out)
@@ -107,12 +118,15 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, dtype, device, fp32_e
     assert all_pass
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @skip_for_grayskull("Requires wormhole")
 @pytest.mark.parametrize(
-    "dtype",
-    (ttnn.bfloat16, ttnn.bfloat8_b),
-    ids=["BFLOAT16", "BFLOAT8_B"],
+    "input_dtype, output_dtype",
+    [
+        (ttnn.bfloat16, ttnn.bfloat16),
+        (ttnn.bfloat8_b, ttnn.bfloat8_b),
+        (ttnn.bfloat16, ttnn.bfloat8_b),
+    ],
+    ids=["BFLOAT16", "BFLOAT8_B", "BFLOAT16_BFLOAT8_B"],
 )
 @pytest.mark.parametrize(
     "inp_shape",
@@ -137,12 +151,11 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, dtype, device, fp32_e
     ids=["fp32_enabled", "fp32_disabled"],
 )
 def test_layernorm_part_2_with_program_cache(
-    inp_shape, n_devices, is_rmsnorm, dtype, fp32_enabled, device, use_program_cache
+    inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, fp32_enabled, device, use_program_cache
 ):
-    run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, dtype, device, fp32_enabled)
+    run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device, fp32_enabled)
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @skip_for_grayskull("Requires wormhole")
 @pytest.mark.parametrize(
     "dtype",
@@ -180,7 +193,7 @@ def test_layernorm_part_2_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
                     tt_memory_config=dram_memcfg,
                 )
             )
-        run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, dtype, device)
+        run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, dtype, dtype, device)
 
     assert device.num_program_cache_entries() == 1, "Program cache should have only one entry" + str(
         device.num_program_cache_entries()

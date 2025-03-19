@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 namespace NAMESPACE {
 void MAIN {
     // compile-time args
@@ -10,9 +10,9 @@ void MAIN {
     constexpr bool wt_need_bcast = (get_compile_time_arg_val(1) == 1);
     constexpr bool ht_need_bcast = (get_compile_time_arg_val(2) == 1);
 
-    constexpr auto cb_in0 = tt::CB::c_in0;  // input
-    constexpr auto cb_in1 = tt::CB::c_in1;  // zero tile
-    constexpr auto cb_out0 = tt::CB::c_out0;
+    constexpr auto cb_in0 = tt::CBIndex::c_0;  // input
+    constexpr auto cb_in1 = tt::CBIndex::c_1;  // zero tile
+    constexpr auto cb_out0 = tt::CBIndex::c_16;
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
 

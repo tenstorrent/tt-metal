@@ -19,7 +19,7 @@ struct MorehMeanBackwardOperation {
     struct operation_attributes_t {
         const ttnn::SmallVector<int64_t> dims;
         const bool keepdim;
-        const std::optional<Shape> input_grad_shape;
+        const std::optional<ttnn::Shape> input_grad_shape;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
     };
@@ -28,13 +28,13 @@ struct MorehMeanBackwardOperation {
         const std::optional<Tensor>& input_grad;
     };
 
-    using shape_return_value_t = Shape;
+    using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct MorehMeanBackwardFactory {
         struct shared_variables_t {
-            KernelHandle unary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
             std::uint32_t num_cores_to_be_used;
             std::uint32_t num_cores_y;
         };
@@ -59,13 +59,13 @@ struct MorehMeanBackwardOperation {
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
-    static shape_return_value_t compute_output_shapes(const operation_attributes_t&, const tensor_args_t&);
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& output_grad,
-        const ttnn::SmallVector<int64_t> dims,
+        const ttnn::SmallVector<int64_t>& dims,
         const bool keepdim,
-        const std::optional<Shape>& input_grad_shape,
+        const std::optional<ttnn::Shape>& input_grad_shape,
         const std::optional<Tensor>& input_grad,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);

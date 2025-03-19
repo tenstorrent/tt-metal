@@ -21,12 +21,14 @@ struct ExecuteRMSNormPostAllGather {
         const std::optional<const ttnn::Tensor>& bias = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        const std::optional<const LayerNormProgramConfig>& program_config = std::nullopt);
+        const std::optional<const LayerNormProgramConfig>& program_config = std::nullopt,
+        const std::optional<const DataType>& dtype = std::nullopt);
 };
 
 }  // namespace operations::normalization
 
-constexpr auto rms_norm_post_all_gather =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::rms_norm_post_all_gather", ttnn::operations::normalization::ExecuteRMSNormPostAllGather>();
+constexpr auto rms_norm_post_all_gather = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::rms_norm_post_all_gather",
+    ttnn::operations::normalization::ExecuteRMSNormPostAllGather>();
 
 }  // namespace ttnn

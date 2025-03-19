@@ -15,11 +15,9 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 4>
-inline void calculate_expm1()
-{
+inline void calculate_expm1() {
     // SFPU microcode
-    for (int d = 0; d < ITERATIONS; d++)
-    {
+    for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
         vFloat out = calculate_exponential_body_improved<APPROXIMATION_MODE, true>(v);
         dst_reg[0] = out - 1.0f;
@@ -28,9 +26,8 @@ inline void calculate_expm1()
 }
 
 template <bool APPROXIMATION_MODE>
-inline void expm1_init()
-{
-    if constexpr(APPROXIMATION_MODE) {
+inline void expm1_init() {
+    if constexpr (APPROXIMATION_MODE) {
         TTI_SFPLOADI(p_sfpu::LREG0, 0, p_exp::C23_73);
         TTI_SFPLOADI(p_sfpu::LREG2, 0, p_exp::ADJ_EXP);
     }

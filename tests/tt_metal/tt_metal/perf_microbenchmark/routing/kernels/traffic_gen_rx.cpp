@@ -7,7 +7,9 @@
 #include "tt_metal/impl/dispatch/kernels/packet_queue.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen.hpp"
 
-packet_input_queue_state_t input_queues[MAX_SWITCH_FAN_IN];
+using tt::packet_queue::PACKET_WORD_SIZE_BYTES;
+using tt::packet_queue::dispatch_packet_header_t;
+using tt::packet_queue::DispatchRemoteNetworkType;
 
 constexpr uint32_t endpoint_id = get_compile_time_arg_val(0);
 
@@ -55,8 +57,12 @@ constexpr uint32_t disable_header_check = get_compile_time_arg_val(18);
 // the same random seed as the corresponding traffic_gen_tx
 input_queue_rnd_state_t src_rnd_state[num_src_endpoints];
 
+tt::packet_queue::packet_input_queue_state_t input_queues[tt::packet_queue::MAX_SWITCH_FAN_IN];
+using input_queue_network_sequence = tt::packet_queue::NetworkTypeSequence<rx_rptr_update_network_type>;
+using input_queue_cb_mode_sequence = tt::packet_queue::CBModeTypeSequence<false>;
 
 void kernel_main() {
+    using namespace tt::packet_queue;
 
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_STARTED;
@@ -76,7 +82,7 @@ void kernel_main() {
                       remote_tx_x, remote_tx_y, remote_tx_queue_id,
                       rx_rptr_update_network_type);
 
-    if (!wait_all_src_dest_ready(input_queue, 1, NULL, 0, timeout_cycles)) {
+    if (!wait_all_input_output_ready<input_queue_network_sequence, input_queue_cb_mode_sequence, NoNetworkTypeSequence, NoCBModeTypeSequence>(input_queues, NULL, timeout_cycles)) {
         test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_TIMEOUT;
         return;
     }
@@ -121,7 +127,7 @@ void kernel_main() {
                 // Mark works as "sent" immediately to keep pipeline from stalling.
                 // This is OK since num_words_available comes from the call above, so
                 // it's guaranteed to be smaller than the full next packet.
-                input_queue->input_queue_advance_words_sent(num_words_available);
+                input_queue->input_queue_advance_words_sent<rx_rptr_update_network_type, false>(num_words_available);
                 words_sent += num_words_available;
             }
         }
@@ -180,13 +186,13 @@ void kernel_main() {
             }
         }
 
-        uint32_t num_words_available = input_queue->input_queue_curr_packet_num_words_available_to_send();
+        uint32_t num_words_available = input_queue->input_queue_curr_packet_num_words_available_to_send<false>();
         // we have the packet header info for checking, input queue can now switch to the next packet
-        input_queue->input_queue_advance_words_sent(num_words_available);
+        input_queue->input_queue_advance_words_sent<rx_rptr_update_network_type, false>(num_words_available);
         words_sent += num_words_available;
 
         // move rptr_cleared to the packet payload
-        input_queue->input_queue_advance_words_cleared(1);
+        input_queue->input_queue_advance_words_cleared<rx_rptr_update_network_type, false>(1);
         words_cleared++;
 
         // === parse packet payload ===
@@ -209,7 +215,7 @@ void kernel_main() {
                 test_results[PQ_TEST_MISC_INDEX+5] = words_after_wrap;
                 break;
             }
-            input_queue->input_queue_advance_words_cleared(words_before_wrap);
+            input_queue->input_queue_advance_words_cleared<rx_rptr_update_network_type, false>(words_before_wrap);
             words_cleared += words_before_wrap;
             if (words_after_wrap > 0) {
                 if (!check_packet_data(reinterpret_cast<tt_l1_ptr uint32_t*>(input_queue->get_queue_rptr_cleared_addr_bytes()),
@@ -222,11 +228,11 @@ void kernel_main() {
                     test_results[PQ_TEST_MISC_INDEX+5] = words_after_wrap;
                     break;
                 }
-                input_queue->input_queue_advance_words_cleared(words_after_wrap);
+                input_queue->input_queue_advance_words_cleared<rx_rptr_update_network_type, false>(words_after_wrap);
                 words_cleared += words_after_wrap;
             }
         } else {
-            input_queue->input_queue_advance_words_cleared(curr_packet_payload_words);
+            input_queue->input_queue_advance_words_cleared<rx_rptr_update_network_type, false>(curr_packet_payload_words);
             words_cleared += curr_packet_payload_words;
         }
         progress_timestamp = get_timestamp_32b();
@@ -246,7 +252,7 @@ void kernel_main() {
 
     if (!timeout && !check_failed) {
         test_results[PQ_TEST_MISC_INDEX] = 0xff000002;
-        input_queue->send_remote_finished_notification();
+        input_queue->send_remote_finished_notification<rx_rptr_update_network_type, false>();
     }
 
     set_64b_result(test_results, num_words_checked, PQ_TEST_WORD_CNT_INDEX);

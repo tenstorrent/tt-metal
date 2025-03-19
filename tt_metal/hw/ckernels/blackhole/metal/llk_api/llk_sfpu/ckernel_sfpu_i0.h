@@ -22,11 +22,11 @@ namespace sfpu {
            t4) *                                                                                                  \
           t4) *                                                                                                   \
      t4)
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_i0() {
 #pragma GCC unroll 0
 
-    for (int d = 0; d < 8; d++) {
+    for (int d = 0; d < ITERATIONS; d++) {
         vFloat result = 0.0f;
         vFloat input = dst_reg[0];
         vFloat x = input * input;

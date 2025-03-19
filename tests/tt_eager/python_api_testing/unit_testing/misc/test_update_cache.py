@@ -44,11 +44,10 @@ class TestUpdateCache:
                 input_shard_spec = ttnn.ShardSpec(
                     shard_grid,
                     [
-                        xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
-                        xt.shape.with_tile_padding()[-1],
+                        xt.volume() // xt.padded_shape[-1] // num_cores,
+                        xt.padded_shape[-1],
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 )
                 input_mem_config = ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
@@ -112,11 +111,10 @@ class TestUpdateCache:
             input_shard_spec = ttnn.ShardSpec(
                 shard_grid,
                 [
-                    xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
-                    xt.shape.with_tile_padding()[-1],
+                    xt.volume() // xt.padded_shape[-1] // num_cores,
+                    xt.padded_shape[-1],
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             )
             input_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
@@ -179,11 +177,10 @@ class TestUpdateCacheFP32:
                 input_shard_spec = ttnn.ShardSpec(
                     shard_grid,
                     [
-                        xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
-                        xt.shape.with_tile_padding()[-1],
+                        xt.volume() // xt.padded_shape[-1] // num_cores,
+                        xt.padded_shape[-1],
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 )
                 input_mem_config = ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
@@ -245,11 +242,10 @@ class TestUpdateCacheFP32:
             input_shard_spec = ttnn.ShardSpec(
                 shard_grid,
                 [
-                    xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
-                    xt.shape.with_tile_padding()[-1],
+                    xt.volume() // xt.padded_shape[-1] // num_cores,
+                    xt.padded_shape[-1],
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             )
             input_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec

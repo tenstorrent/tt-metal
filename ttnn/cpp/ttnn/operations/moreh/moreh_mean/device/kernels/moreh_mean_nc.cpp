@@ -7,24 +7,24 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
     const auto num_input_tiles = get_arg_val<uint32_t>(0);
     const auto num_output_tiles = get_arg_val<uint32_t>(1);
 
-    constexpr auto cb_in0 = tt::CB::c_in0;
-    constexpr auto cb_in1 = tt::CB::c_in1;
-    constexpr auto cb_scalar = tt::CB::c_in2;
-    constexpr auto cb_out0 = tt::CB::c_out0;
-    constexpr auto cb_intermed0 = tt::CB::c_intermed0;
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto cb_in1 = tt::CBIndex::c_1;
+    constexpr auto cb_scalar = tt::CBIndex::c_2;
+    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    constexpr auto cb_intermed0 = tt::CBIndex::c_24;
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t first_tile = 0;
 
-    binary_op_init_common(tt::CB::c_in0, tt::CB::c_in1);
+    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
 
     cb_wait_front(cb_in1, onetile);
     cb_wait_front(cb_scalar, 1);  // scalar tile from the reader

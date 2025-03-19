@@ -18,12 +18,11 @@ namespace detail {
 
 void bind_complex_tensor_type(py::module& m) {
     py::class_<ComplexTensor>(m, "ComplexTensor")
-        .def(py::init<std::array<Tensor, 2>>())
+        .def(py::init<std::tuple<const Tensor&, const Tensor&>>())
         .def_property_readonly("real", &ComplexTensor::real)
         .def_property_readonly("imag", &ComplexTensor::imag)
         .def("deallocate", &ComplexTensor::deallocate)
         .def("__getitem__", &ComplexTensor::operator[]);
-
 }
 
 void bind_complex_tensor(py::module& module) {
@@ -45,21 +44,14 @@ void bind_complex_tensor(py::module& module) {
         ttnn::complex_tensor.base_name());
 
     bind_registered_operation(
-        module,
-        ttnn::complex_tensor,
-        doc,
-        ttnn::pybind_arguments_t{
-            py::arg("real"),
-            py::arg("imag")}
-    );
+        module, ttnn::complex_tensor, doc, ttnn::pybind_arguments_t{py::arg("real"), py::arg("imag")});
 }
 
-} // detail
-
+}  // namespace detail
 
 void py_module(py::module& module) {
-   detail::bind_complex_tensor_type(module);
-   detail::bind_complex_tensor(module);
+    detail::bind_complex_tensor_type(module);
+    detail::bind_complex_tensor(module);
 }
 
-} // ttnn::operations::complex
+}  // namespace ttnn::operations::complex

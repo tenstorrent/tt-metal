@@ -2,19 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/device.hpp>
+#include "rtoptions.hpp"
+#include <tt-metalium/allocator.hpp>
+
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "kernels/traffic_gen_test.hpp"
+#include "test_common.hpp"
+#include "routing_test_common.hpp"
 #include "utils.hpp"
-
-using std::vector;
-using namespace tt;
-
+#include "llrt.hpp"
 
 int main(int argc, char **argv) {
+    using std::vector;
+    using namespace tt;
+    using namespace tt::packet_queue;
 
     bool pass = true;
     try {
@@ -28,8 +31,8 @@ int main(int argc, char **argv) {
         constexpr uint32_t default_max_packet_size_words = 0x100;
 
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
-        uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t default_test_result_buf_addr = l1_unreserved_base;
         constexpr uint32_t default_test_result_buf_size = 1024;
         uint32_t default_tx_queue_start_addr = l1_unreserved_base + default_test_result_buf_size;
@@ -244,7 +247,7 @@ int main(int argc, char **argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::OptionsG.set_kernels_nullified(false);
+    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

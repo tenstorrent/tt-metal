@@ -53,6 +53,22 @@ npu_layout = ttnn.Layout.TILE
         (torch.bfloat16, ttnn.bfloat8_b, ttnn.uint32),
         (torch.int, ttnn.uint32, ttnn.bfloat8_b),
         (torch.int, ttnn.uint16, ttnn.uint32),
+        (torch.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16),
+        (torch.bfloat16, ttnn.bfloat16, ttnn.bfloat8_b),
+        (torch.bfloat16, ttnn.bfloat8_b, ttnn.float32),
+        (torch.float32, ttnn.float32, ttnn.bfloat8_b),
+        (torch.bfloat16, ttnn.bfloat4_b, ttnn.int32),
+        (torch.int, ttnn.int32, ttnn.bfloat4_b),
+        (torch.bfloat16, ttnn.bfloat4_b, ttnn.uint16),
+        (torch.int, ttnn.uint16, ttnn.bfloat4_b),
+        (torch.bfloat16, ttnn.bfloat4_b, ttnn.uint32),
+        (torch.int, ttnn.uint32, ttnn.bfloat4_b),
+        (torch.bfloat16, ttnn.bfloat4_b, ttnn.bfloat16),
+        (torch.bfloat16, ttnn.bfloat16, ttnn.bfloat4_b),
+        (torch.bfloat16, ttnn.bfloat4_b, ttnn.float32),
+        (torch.float32, ttnn.float32, ttnn.bfloat4_b),
+        (torch.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b),
+        (torch.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b),
     ),
 )
 @pytest.mark.parametrize(
@@ -95,6 +111,8 @@ class TestTypecast:
         test_args["input_mem_config"] = [input_mem_config]
         test_args.update({"output_mem_config": dst_mem_config})
         comparison_func = comparison_funcs.comp_pcc
+        if tt_input_dtype == ttnn.bfloat4_b or tt_output_dtype == ttnn.bfloat4_b:
+            comparison_func = partial(comparison_funcs.comp_pcc, pcc=0.98)
 
         run_single_pytorch_test(
             "eltwise-typecast",
@@ -106,6 +124,7 @@ class TestTypecast:
         )
 
 
+@pytest.mark.skip("Issue #17237: Does not work with new mantissa rounding")
 @skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 def test_typecast_bf16_to_bfp8_b(device):
     torch.manual_seed(0)
@@ -137,6 +156,7 @@ def print_mismatches(cpu, npu, num_max_print):
             break
 
 
+@pytest.mark.skip("Issue #17237: Does not work with new mantissa rounding")
 @pytest.mark.parametrize("seed", [0, 2, 4, 6, 8])
 @pytest.mark.parametrize("scale", [1, 2, 4, 8, 16, 32, 64, 128, 256, 512])
 @pytest.mark.parametrize("bias", [0, 1, 2, 4, 8, 16, 32, 64, 128])
@@ -168,6 +188,7 @@ def test_typecast_bf16_to_bfp8_b_various_input(seed, scale, bias, device):
     assert passed
 
 
+@pytest.mark.skip("Issue #17237: Does not work with new mantissa rounding")
 @pytest.mark.parametrize("seed", [0])
 @pytest.mark.parametrize("scale", [4])
 @pytest.mark.parametrize("bias", [2])

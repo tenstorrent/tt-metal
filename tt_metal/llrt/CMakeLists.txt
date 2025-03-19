@@ -8,23 +8,6 @@ set(HAL_INCLUDE_DIRS
     ${PROJECT_SOURCE_DIR}/tt_metal
 )
 
-add_library(gs_hal OBJECT)
-add_library(HAL::grayskull ALIAS gs_hal)
-target_sources(gs_hal PRIVATE grayskull/gs_hal.cpp)
-target_include_directories(
-    gs_hal
-    PRIVATE
-        ${HAL_INCLUDE_DIRS}
-        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/grayskull
-)
-target_link_libraries(
-    gs_hal
-    PRIVATE
-        hw
-        fmt::fmt-header-only
-        umd::device
-)
-
 add_library(wh_hal OBJECT)
 add_library(HAL::wormhole ALIAS wh_hal)
 target_sources(
@@ -37,10 +20,12 @@ target_sources(
 )
 target_include_directories(
     wh_hal
+    BEFORE
     PRIVATE
         ${HAL_INCLUDE_DIRS}
         ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole
         ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole/wormhole_b0_defines
+        ${PROJECT_SOURCE_DIR}/tt_metal/api/wormhole/tt-metalium
 )
 target_link_libraries(
     wh_hal
@@ -62,9 +47,11 @@ target_sources(
 )
 target_include_directories(
     bh_hal
+    BEFORE
     PRIVATE
         ${HAL_INCLUDE_DIRS}
         ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/blackhole
+        ${PROJECT_SOURCE_DIR}/tt_metal/api/blackhole/tt-metalium
 )
 target_link_libraries(
     bh_hal
@@ -75,27 +62,35 @@ target_link_libraries(
 )
 
 set(LLRT_SRC
-    ${CMAKE_CURRENT_SOURCE_DIR}/llrt.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/rtoptions.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tlb_config.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tt_cluster.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tt_elffile.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tt_memory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/hal.cpp
+    llrt.cpp
+    core_descriptor.cpp
+    rtoptions.cpp
+    tlb_config.cpp
+    tt_cluster.cpp
+    tt_elffile.cpp
+    tt_memory.cpp
+    hal.cpp
+    utils.cpp
 )
 
-add_library(llrt STATIC ${LLRT_SRC}) # FIXME(14541): Should be OBJECT, but can't handle circular deps between Object libs
+add_library(llrt OBJECT ${LLRT_SRC})
 add_library(Metalium::Metal::LLRT ALIAS llrt)
 
 target_link_libraries(
     llrt
     PUBLIC
-        Metalium::Metal::Common
         umd::device
         Metalium::Metal::Hardware
     PRIVATE
-        HAL::grayskull
         HAL::wormhole
         HAL::blackhole
+        Tracy::TracyClient
+        nlohmann_json::nlohmann_json
+        Reflect::Reflect
+        yaml-cpp::yaml-cpp
+        magic_enum::magic_enum
+        span
+        TT::Metalium::Common
 )
+target_include_directories(llrt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(llrt PRIVATE -Wno-int-to-pointer-cast)

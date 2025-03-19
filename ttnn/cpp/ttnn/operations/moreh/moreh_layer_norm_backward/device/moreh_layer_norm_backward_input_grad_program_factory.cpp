@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_layer_norm_backward_input_grad_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -30,14 +30,14 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    Device* device = output_grad.device();
+    IDevice* device = output_grad.device();
     Program program = Program();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto output_grad_shape = output_grad.get_shape().value;
-    const auto output_grad_shape_without_padding = output_grad_shape.without_padding();
+    const auto output_grad_shape = output_grad.get_padded_shape();
+    const auto output_grad_shape_without_padding = output_grad.get_logical_shape();
     const auto output_grad_rank = output_grad_shape.rank();
 
     const bool is_lastdim_layer_norm = normalized_dims == 1;
@@ -52,8 +52,8 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     const bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
     const uint32_t mask_w = do_mask_w ? origin_W % TILE_WIDTH : TILE_WIDTH;
 
-    const auto mean_rstd_shape = mean.get_shape().value;
-    const auto mean_rstd_shape_without_padding = mean_rstd_shape.without_padding();
+    const auto mean_rstd_shape = mean.get_padded_shape();
+    const auto mean_rstd_shape_without_padding = mean.get_logical_shape();
     auto mean_rstd_height = mean_rstd_shape_without_padding[-2];
     auto mean_rstd_width = mean_rstd_shape_without_padding[-1];
 
@@ -117,7 +117,8 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     const uint32_t cb_usage =
         (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + in7_t + out0_t) * single_tile_size +
         (im0_t + im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) * intermed_single_tile_size;
-    const uint32_t available_L1 = device->l1_size_per_core() - device->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t available_L1 =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const bool use_large_algorithm = cb_usage >= available_L1;
 
     if (use_large_algorithm) {
@@ -134,23 +135,23 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
         all_cores,
         cb_data_format,
         {
-            {tt::CB::c_in0, in0_t},                            // output_grad(==dy)
-            {tt::CB::c_in1, in1_t},                            // input(==x)
-            {tt::CB::c_in2, in2_t},                            // mean
-            {tt::CB::c_in3, in3_t},                            // rstd
-            {tt::CB::c_in4, in4_t},                            // scaler
-            {tt::CB::c_in5, in5_t},                            // n_recip_n
-            {tt::CB::c_in6, in6_t},                            // gamma
-            {tt::CB::c_in7, in7_t},                            // mask_h_w
-            {tt::CB::c_out0, out0_t},                          // input_grad(==dx)
-            {tt::CB::c_intermed0, im0_t, intermed_cb_format},  // copy output_grad(==dy or dy * gamma)
-            {tt::CB::c_intermed1, im1_t, intermed_cb_format},  // output(==y)
-            {tt::CB::c_intermed2, im2_t, intermed_cb_format},  // Sum[dy]
-            {tt::CB::c_intermed3, im3_t, intermed_cb_format},  // Sum[y * dy]
-            {tt::CB::c_intermed4, im4_t, intermed_cb_format},  // rstd / n
-            {tt::CB::c_intermed5, im5_t, intermed_cb_format},
-            {tt::CB::c_intermed6, im6_t, intermed_cb_format},
-            {tt::CB::c_intermed7, im7_t, intermed_cb_format},
+            {tt::CBIndex::c_0, in0_t},                       // output_grad(==dy)
+            {tt::CBIndex::c_1, in1_t},                       // input(==x)
+            {tt::CBIndex::c_2, in2_t},                       // mean
+            {tt::CBIndex::c_3, in3_t},                       // rstd
+            {tt::CBIndex::c_4, in4_t},                       // scaler
+            {tt::CBIndex::c_5, in5_t},                       // n_recip_n
+            {tt::CBIndex::c_6, in6_t},                       // gamma
+            {tt::CBIndex::c_7, in7_t},                       // mask_h_w
+            {tt::CBIndex::c_16, out0_t},                     // input_grad(==dx)
+            {tt::CBIndex::c_24, im0_t, intermed_cb_format},  // copy output_grad(==dy or dy * gamma)
+            {tt::CBIndex::c_25, im1_t, intermed_cb_format},  // output(==y)
+            {tt::CBIndex::c_26, im2_t, intermed_cb_format},  // Sum[dy]
+            {tt::CBIndex::c_27, im3_t, intermed_cb_format},  // Sum[y * dy]
+            {tt::CBIndex::c_28, im4_t, intermed_cb_format},  // rstd / n
+            {tt::CBIndex::c_29, im5_t, intermed_cb_format},
+            {tt::CBIndex::c_30, im6_t, intermed_cb_format},
+            {tt::CBIndex::c_31, im7_t, intermed_cb_format},
         });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -166,8 +167,7 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
         static_cast<uint32_t>(do_mask_h),
         static_cast<uint32_t>(do_mask_w)};
 
-    const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(is_dram(input_grad))};
+    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(input_grad))};
 
     std::map<string, string> reader_defines{};
     std::map<std::string, std::string> compute_defines{};
@@ -191,10 +191,9 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
         "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
         "writer_moreh_layer_norm_backward_input_grad.cpp";
 
-    const auto reader_kernels_id = CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    const auto writer_kernels_id =
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    const auto reader_kernels_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     const std::vector<uint32_t> compute_args_group_1{
         num_rows_per_core_group_1,

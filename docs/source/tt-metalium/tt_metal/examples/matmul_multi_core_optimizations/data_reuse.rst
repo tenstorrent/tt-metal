@@ -40,8 +40,8 @@ In addition to our double-buffer config, we introduce a third circular buffer de
 
 .. code-block:: cpp
 
-    uint32_t output_cb_index = CB::c_out0; // output operands start at index 16
-    uint32_t interm0_cb_index = 24; // Index for the intermediate circular buffer
+    uint32_t output_cb_index = CBIndex::c_16;
+    uint32_t interm0_cb_index = CBIndex::c_24; // Index for the intermediate circular buffer
     std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec {
         {output_cb_index, cb_data_format}, // Output buffer configuration
         {interm0_cb_index, cb_data_format} // Intermediate buffer configuration
@@ -49,7 +49,7 @@ In addition to our double-buffer config, we introduce a third circular buffer de
     CircularBufferConfig cb_output_config = CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
         .set_page_size(output_cb_index, single_tile_size)
         .set_page_size(interm0_cb_index, single_tile_size);
-    auto cb_output = tt_metal::v0::CreateCircularBuffer(program, all_cores, cb_output_config);
+    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
 Stride Kernel Arguments
 -----------------------
@@ -173,16 +173,16 @@ a. **Preparing the Intermediate Buffer**:
 
     .. code-block:: cpp
 
-        cb_reserve_back(tt::CB::c_intermed0, out_subblock_num_tiles);
+        cb_reserve_back(tt::CBIndex::c_24, out_subblock_num_tiles);
 
     - **Storing Partial Results**: Partial results are stored via a packing mechanism with ``pack_tile(...)`` into the above reserved space.
 
     .. code-block:: cpp
 
         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-            pack_tile(i, tt::CB::c_intermed0);
+            pack_tile(i, tt::CBIndex::c_24);
         }
-        cb_push_back(tt::CB::c_intermed0, out_subblock_num_tiles);
+        cb_push_back(tt::CBIndex::c_24, out_subblock_num_tiles);
 
 b. **Computing with Partial Results**:
 
@@ -191,11 +191,11 @@ b. **Computing with Partial Results**:
     .. code-block:: cpp
 
         if (enable_reload) {
-            cb_wait_front(tt::CB::c_intermed0, out_subblock_num_tiles);
+            cb_wait_front(tt::CBIndex::c_24, out_subblock_num_tiles);
             for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                copy_tile(tt::CB::c_intermed0, i, i);
+                copy_tile(tt::CBIndex::c_24, i, i);
             }
-            cb_pop_front(tt::CB::c_intermed0, out_subblock_num_tiles);
+            cb_pop_front(tt::CBIndex::c_24, out_subblock_num_tiles);
         }
 
     - **Execution with `matmul_tiles`**: Now we are ready to compute partial results and integrate them back into the computation stream (or for the last block of computation, culminate our data reuse to produce the final output tensor).  We call the ``matmul_tiles(...)`` function to execute our matmul on the core's subblocks of tiles.
@@ -211,7 +211,7 @@ b. **Computing with Partial Results**:
                 for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
                     int in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
                     int in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                    matmul_tiles(tt::CB::c_in0, tt::CB::c_in1, in0_index, in1_index, dst_index, false /* transpose */);
+                    matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, in0_index, in1_index, dst_index, false /* transpose */);
                     in1_index_inner_dim_offset += in1_per_core_w;
                 }
                 dst_index++;

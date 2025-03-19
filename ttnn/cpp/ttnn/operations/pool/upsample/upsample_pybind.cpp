@@ -5,7 +5,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 #include "upsample.hpp"
 
@@ -25,7 +25,7 @@ void bind_upsample(py::module& module) {
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            scale_factor (int or tt::tt_metal::Array2D or tt::tt_metal::Array3D or tt::tt_metal::Array4D): multiplier for spatial size. Has to match input size if it is a tuple.
+            scale_factor (int or tt::tt_metal::Array2D): multiplier for spatial size.
 
 
         Keyword args:
@@ -44,11 +44,14 @@ void bind_upsample(py::module& module) {
         ttnn::upsample,
         doc,
         ttnn::pybind_arguments_t{
-            py::arg("input_tensor"), py::arg("scale_factor"), py::kw_only(), py::arg("mode") = "nearest",
-            py::arg("memory_config") = std::nullopt, py::arg("compute_kernel_config") = std::nullopt});
+            py::arg("input_tensor"),
+            py::arg("scale_factor"),
+            py::kw_only(),
+            py::arg("mode") = "nearest",
+            py::arg("memory_config") = std::nullopt,
+            py::arg("compute_kernel_config") = std::nullopt});
 }
 
-
-} //detail
+}  // namespace detail
 void py_module(py::module& module) { detail::bind_upsample(module); }
-} //namespace ttnn::operations::upsample
+}  // namespace ttnn::operations::upsample

@@ -9,12 +9,11 @@ import pathlib
 import datetime
 import os
 import hashlib
+import json
 
 from framework.permutations import *
 from framework.serialize import serialize
-from elasticsearch import Elasticsearch, NotFoundError
 from framework.statuses import VectorValidity, VectorStatus
-from framework.elastic_config import *
 from framework.sweeps_logger import sweeps_logger as logger
 
 SWEEPS_DIR = pathlib.Path(__file__).parent
@@ -37,7 +36,10 @@ def generate_vectors(module_name):
             v["sweep_name"] = module_name
 
         invalidate_vectors(test_module, suite_vectors)
-        export_suite_vectors(module_name, suite, suite_vectors)
+        if DUMP_FILE:
+            export_suite_vectors_json(module_name, suite, suite_vectors)
+        else:
+            export_suite_vectors(module_name, suite, suite_vectors)
 
 
 # Perform any post-gen validation to the resulting vectors.
@@ -49,6 +51,37 @@ def invalidate_vectors(test_module, vectors) -> None:
         if invalid:
             vector["validity"] = VectorValidity.INVALID
             vector["invalid_reason"] = reason
+
+
+def export_suite_vectors_json(module_name, suite_name, vectors):
+    EXPORT_DIR_PATH = SWEEPS_DIR / "vectors_export"
+    EXPORT_PATH = EXPORT_DIR_PATH / str(module_name + ".json")
+    if not EXPORT_DIR_PATH.exists():
+        EXPORT_DIR_PATH.mkdir()
+
+    current_time = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    serialized_vectors = dict()
+    warnings = []
+    for i in range(len(vectors)):
+        vector = dict()
+        for elem in vectors[i].keys():
+            vector[elem] = serialize(vectors[i][elem], warnings)
+        input_hash = hashlib.sha224(str(vector).encode("utf-8")).hexdigest()
+        vector["timestamp"] = current_time
+        vector["input_hash"] = input_hash
+        vector["tag"] = SWEEPS_TAG
+        serialized_vectors[input_hash] = vector
+
+    if EXPORT_PATH.exists():
+        with open(EXPORT_PATH, "r") as file:
+            data = json.load(file)
+        with open(EXPORT_PATH, "w") as file:
+            data[suite_name] = serialized_vectors
+            json.dump(data, file, indent=2)
+    else:
+        with open(EXPORT_PATH, "w") as file:
+            json.dump({suite_name: serialized_vectors}, file, indent=2)
+    logger.info(f"SWEEPS: Generated {len(vectors)} test vectors for suite {suite_name}.")
 
 
 # Output the individual test vectors.
@@ -178,11 +211,25 @@ if __name__ == "__main__":
         help="Custom tag for the vectors you are generating. This is to keep copies seperate from other people's test vectors. By default, this will be your username. You are able to specify a tag when running tests using the runner.",
     )
     parser.add_argument("--explicit", required=False, action="store_true")
+    parser.add_argument(
+        "--dump-file",
+        required=False,
+        action="store_true",
+        help="If set, dumps the results to disk in JSON instead of using ES",
+    )
 
     args = parser.parse_args(sys.argv[1:])
 
-    global ELASTIC_CONNECTION_STRING
-    ELASTIC_CONNECTION_STRING = get_elastic_url(args.elastic)
+    global DUMP_FILE
+    if not args.dump_file:
+        from elasticsearch import Elasticsearch, NotFoundError
+        from framework.elastic_config import *
+
+        global ELASTIC_CONNECTION_STRING
+        ELASTIC_CONNECTION_STRING = get_elastic_url(args.elastic)
+        DUMP_FILE = False
+    else:
+        DUMP_FILE = True
 
     global SWEEPS_TAG
     SWEEPS_TAG = args.tag

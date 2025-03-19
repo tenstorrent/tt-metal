@@ -8,7 +8,7 @@
 #include "compute_kernel_api/mask.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -17,15 +17,15 @@ void MAIN {
     uint32_t NC = get_compile_time_arg_val(2);
     constexpr uint32_t origin_H = get_compile_time_arg_val(3);
 
-    auto cb_input = tt::CB::c_in0;
-    constexpr auto cb_scaler = tt::CB::c_in2;
-    constexpr auto cb_mask_h = tt::CB::c_in3;
-    constexpr auto cb_accum_dst = tt::CB::c_intermed0;
-    constexpr auto cb_masked_input = tt::CB::c_intermed1;
-    constexpr auto cb_out = tt::CB::c_out0;
+    auto cb_input = tt::CBIndex::c_0;
+    constexpr auto cb_scaler = tt::CBIndex::c_2;
+    constexpr auto cb_mask_h = tt::CBIndex::c_3;
+    constexpr auto cb_accum_dst = tt::CBIndex::c_24;
+    constexpr auto cb_masked_input = tt::CBIndex::c_25;
+    constexpr auto cb_out = tt::CBIndex::c_16;
     constexpr bool do_mask_h = (origin_H % TILE_HEIGHT) != 0;
 
-    binary_op_init_common(cb_input, cb_input);
+    binary_op_init_common(cb_input, cb_input, cb_out);
 
     cb_wait_front(cb_scaler, 1);  // scaler tile from the reader
 
@@ -43,7 +43,7 @@ void MAIN {
             // tiles are expected to be coming in in NCWH order (H-contiguous)
             // reducing in W means out[0][w] = sum(h=0..H-1, in[h][w])
             // in this case we just sequentially add to accumulator all the H-tiles in a column
-            cb_input = tt::CB::c_in0;
+            cb_input = tt::CBIndex::c_0;
             bool is_h_single_tile = (Ht == 1);
 
             if (!is_h_single_tile) {

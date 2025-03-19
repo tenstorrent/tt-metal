@@ -8,10 +8,18 @@
 
 namespace ttnn::operations::data_movement::detail {
 
-operation::ProgramWithCallbacks untilize_multi_core(
+
+tt::tt_metal::operation::ProgramWithCallbacks untilize_multi_core(
+    const Tensor& a,
+    Tensor& output,
+    bool use_pack_untilize,
+    bool fp32_dest_acc_en,
+    const std::optional<CoreRangeSet>& sub_core_grids);
+
+tt::tt_metal::operation::ProgramWithCallbacks untilize_multi_core_block(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en);
 
-operation::ProgramWithCallbacks untilize_single_core(
+tt::tt_metal::operation::ProgramWithCallbacks untilize_single_core(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en);
 
 }  // namespace ttnn::operations::data_movement::detail

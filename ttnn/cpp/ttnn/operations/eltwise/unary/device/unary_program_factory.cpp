@@ -6,10 +6,10 @@
 
 #include "unary_program_factory.hpp"
 
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 namespace ttnn::operations::unary::program {
@@ -17,10 +17,7 @@ namespace ttnn::operations::unary::program {
 using namespace tt::constants;
 
 UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
-    const operation_attributes_t& args,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-
+    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -36,7 +33,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
 
     uint32_t num_tiles = input.volume() / tt::constants::TILE_HW;
 
-    tt::tt_metal::Device *device = input.device();
+    tt::tt_metal::IDevice* device = input.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -44,14 +41,14 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
 
-    uint32_t src0_cb_index = 0;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = 2;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    uint32_t output_cb_index = 16;  // output operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_2;
     uint32_t num_output_tiles = 2;
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(
@@ -91,11 +88,11 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     }
 
     bool math_approx_mode = std::all_of(
-        args.op_chain.begin(), args.op_chain.end(), [](const auto &u) { return utils::get_op_approx_mode(u.op_type); });
+        args.op_chain.begin(), args.op_chain.end(), [](const auto& u) { return utils::get_op_approx_mode(u.op_type); });
     std::map<string, string> unary_defines = utils::get_block_defines(args.op_chain);
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
-        "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
         core_group_1,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
@@ -114,7 +111,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
 
         auto eltwise_unary_kernel_group_2_id = tt::tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
             core_group_2,
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,
@@ -145,7 +142,8 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
         num_tiles_written += num_tiles_per_core;
     }
 
-    return cached_program_t{std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, num_cores, num_cores_y}};
+    return cached_program_t{
+        std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id, num_cores, num_cores_y}};
 }
 
 void UnaryProgramFactory::override_runtime_arguments(
@@ -153,7 +151,6 @@ void UnaryProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-
     auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     const uint32_t num_cores = cached_program.shared_variables.num_cores;
@@ -169,12 +166,12 @@ void UnaryProgramFactory::override_runtime_arguments(
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
         }
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
         }
     }

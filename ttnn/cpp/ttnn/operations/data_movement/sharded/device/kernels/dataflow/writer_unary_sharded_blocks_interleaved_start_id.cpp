@@ -5,13 +5,13 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    const uint32_t dst_addr  = get_arg_val<uint32_t>(0);
+    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t block_height_tiles = get_arg_val<uint32_t>(1);
     const uint32_t block_width_tiles = get_arg_val<uint32_t>(2);
     const uint32_t unpadded_block_height_tiles = get_arg_val<uint32_t>(3);
     const uint32_t unpadded_block_width_tiles = get_arg_val<uint32_t>(4);
-    const uint32_t output_width_tiles = get_arg_val<uint32_t>(5); // input width in tiles - block width in tiles
-    const uint32_t block_num_tiles = get_arg_val<uint32_t>(6); // block_height_tiles * block_width_tiles
+    const uint32_t output_width_tiles = get_arg_val<uint32_t>(5);  // input width in tiles - block width in tiles
+    const uint32_t block_num_tiles = get_arg_val<uint32_t>(6);     // block_height_tiles * block_width_tiles
     const uint32_t start_id_offset = get_arg_val<uint32_t>(7);
     const uint32_t start_id_base = get_arg_val<uint32_t>(8);
     const uint32_t start_id = start_id_base + start_id_offset;
@@ -24,10 +24,7 @@ void kernel_main() {
     const DataFormat data_format = get_dataformat(cb_id_out);
 
     const InterleavedAddrGenFast<dst_is_dram> s = {
-        .bank_base_address = dst_addr,
-        .page_size = tile_bytes,
-        .data_format = data_format
-    };
+        .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
 
     const uint32_t padded_width_diff = (block_width_tiles - unpadded_block_width_tiles) * tile_bytes;
 

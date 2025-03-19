@@ -8,7 +8,10 @@ inputs:
   docker_os_arch:
     description: 'Docker image architecture'
     required: false
-    default: ubuntu-20.04-amd64
+    default: tt-metalium/ubuntu-22.04-amd64
+  docker_image:
+    description: 'Specify Docker image to use.'
+    required: false
   docker_username:
     description: docker login username
     required: true
@@ -34,10 +37,16 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Set docker image tag
+      if: ${{ inputs.docker_image }}
+      shell: bash
+      run: |
+        echo "TT_METAL_DOCKER_IMAGE_TAG=${{ inputs.docker_image }}" >> $GITHUB_ENV
     - name: Determine docker image tag
+      if: ${{ ! inputs.docker_image }}
       uses: ./.github/actions/generate-docker-tag
       with:
-        image: ${{ inputs.docker_os_arch }}
+        image: ${{ inputs.docker_os_arch || 'docker-image-unresolved!'}}
     - name: Set
       shell: bash
       run: |
@@ -53,13 +62,13 @@ runs:
       shell: bash
       run: |
         docker pull ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
-    - uses: addnab/docker-run-action@v3
+    - uses: tenstorrent/docker-run-action@v5
       with:
         shell: bash
         username: ${{ inputs.docker_username }}
         password: ${{ inputs.docker_password }}
         registry: ghcr.io
-        image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
+        image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG || 'docker-image-unresolved!'}}
         # The most important option below is `--rm`. Otherwise, the machines will fill up with undeleted containers.
         # The mounting of /etc/passwd, /etc/shadow, and /etc/bashrc is required in order for the correct file permissions
         # for newly created files.
@@ -80,14 +89,20 @@ runs:
           --log-driver local
           --log-opt max-size=50m
           ${{ inputs.docker_opts }}
-          -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL }}
+          -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL || 'INFO' }}
           -e PYTHONPATH=${{ github.workspace }}
           -e HOME=${{ github.workspace }}
+          -e GITHUB_ACTIONS=true
+          -e CI=true
           ${{ inputs.device }}
           -w ${{ github.workspace }}
         run: |
-          if [ ${{ inputs.install_wheel }} ]; then
+          set -eu
+
+          install_wheel=${{ inputs.install_wheel }}
+          if [ "${install_wheel,,}" == "true" ]; then
             WHEEL_FILENAME=$(ls -1 *.whl)
-            pip3 install $WHEEL_FILENAME
+            pip3 install "$WHEEL_FILENAME"
           fi
+
           ${{ inputs.run_args }}

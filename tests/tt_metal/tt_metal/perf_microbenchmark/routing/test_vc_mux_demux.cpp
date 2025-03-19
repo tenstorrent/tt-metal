@@ -2,20 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/impl/dispatch/cq_commands.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "rtoptions.hpp"
+#include <tt-metalium/device.hpp>
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "kernels/traffic_gen_test.hpp"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_common.hpp"
-
-using std::vector;
-using namespace tt;
-using json = nlohmann::json;
+#include "test_common.hpp"
+#include "routing_test_common.hpp"
 
 int main(int argc, char **argv) {
+    using std::vector;
+    using namespace tt;
+    using namespace tt::packet_queue;
+    using json = nlohmann::json;
 
     constexpr uint32_t default_tx_x = 0;
     constexpr uint32_t default_tx_y = 0;
@@ -147,7 +147,7 @@ int main(int argc, char **argv) {
 
     try {
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -594,10 +594,10 @@ int main(int argc, char **argv) {
                 && (demux_queue_size_bytes >= 0x20000)) {
                     double target_bandwidth = 0;
                     if (max_packet_size_words >= 1024) {
-                        target_bandwidth = 11;
+                        target_bandwidth = 17;
                         log_info(LogTest, "Perf check for pkt size >= 1024 words");
                     } else if (max_packet_size_words >= 256) {
-                        target_bandwidth = 3;
+                        target_bandwidth = 7;
                         log_info(LogTest, "Perf check for pkt size >= 256 words");
                     }
                     if (mux_bw < target_bandwidth) {
@@ -619,7 +619,7 @@ int main(int argc, char **argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::OptionsG.set_kernels_nullified(false);
+    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

@@ -6,7 +6,7 @@
 
 #include "moreh_sum_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::moreh::moreh_sum {
@@ -19,7 +19,7 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
     auto dim = operation_attributes.dim;
 
     auto memory_config = operation_attributes.memory_config;
-    const DeviceComputeKernelConfig &compute_kernel_config = operation_attributes.compute_kernel_config;
+    const DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     auto* device = input.device();
     auto program = Program();
@@ -74,10 +74,10 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
         all_cores,
         cb_data_format,
         {
-            {tt::CB::c_in0, in0_t},  // input
-            {tt::CB::c_in1, in1_t},  // zero
-            {tt::CB::c_intermed0, intermed0_t, (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format},
-            {tt::CB::c_out0, out0_t},  // output
+            {tt::CBIndex::c_0, in0_t},  // input
+            {tt::CBIndex::c_1, in1_t},  // zero
+            {tt::CBIndex::c_24, intermed0_t, (fp32_dest_acc_en) ? tt::DataFormat::Float32 : cb_data_format},
+            {tt::CBIndex::c_16, out0_t},  // output
         });
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -90,10 +90,9 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/reader_moreh_sum_nc.cpp";
     const auto writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/writer_moreh_sum_nc.cpp";
-    const auto reader_kernel_id = CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    const auto writer_kernel_id =
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    const auto reader_kernel_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp

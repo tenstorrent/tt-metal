@@ -22,7 +22,7 @@ from models.utility_functions import is_grayskull
 
 
 def get_expected_times(vgg):
-    return (16, 10.5)
+    return (17, 10.5)
 
 
 @pytest.mark.models_performance_bare_metal
@@ -79,17 +79,6 @@ def test_vgg(
         "ACTIVATIONS_DTYPE": act_dtype,
     }
 
-    conv_config = ttnn.Conv2dConfig(
-        dtype=model_config["ACTIVATIONS_DTYPE"],
-        weights_dtype=model_config["WEIGHTS_DTYPE"],
-        math_fidelity=model_config["MATH_FIDELITY"],
-        activation="relu",
-        deallocate_activation=True,
-        input_channels_alignment=16,
-        act_block_h_override=0,
-        transpose_shards=True,
-    )
-
     torch_batched_tensor = torch_input_tensor_nchw.repeat(batch_size, 1, 1, 1)
     torch_input_tensor = torch.permute(torch_batched_tensor, (0, 2, 3, 1))
     tt_batched_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
@@ -137,10 +126,10 @@ def test_perf_device_bare_metal_vgg(batch_size, model_name):
     margin = 0.03
 
     if model_name == "ttnn_vgg11":
-        expected_perf = 132.2436 if is_grayskull() else 283.289
+        expected_perf = 150 if is_grayskull() else 288
         command = f"pytest tests/ttnn/integration_tests/vgg/test_ttnn_vgg11.py"
     else:
-        expected_perf = 116.1459 if is_grayskull() else 201.3867
+        expected_perf = 138 if is_grayskull() else 230
         command = f"pytest tests/ttnn/integration_tests/vgg/test_ttnn_vgg16.py"
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

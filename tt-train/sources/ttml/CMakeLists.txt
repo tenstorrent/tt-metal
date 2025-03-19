@@ -5,7 +5,7 @@ file(
     LIST_DIRECTORIES true
     *.hpp
     *.cpp
-) # I am a bad person
+) # I am a really bad person
 
 # Check if Metalium::Metal target exists
 # If it does not exist, assume that we are building with tt-train as top level project
@@ -19,12 +19,17 @@ if(NOT TARGET Metalium::Metal)
         "$ENV{TT_METAL_HOME}"
         "$ENV{TT_METAL_HOME}/tt_metal"
         "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd"
+        "$ENV{TT_METAL_HOME}/tt_metal/third_party/tracy/public"
         "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/wormhole"
         "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/wormhole/wormhole_b0_defines"
         "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/"
-        "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd/src/firmware/riscv/wormhole"
-        "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd/device"
+        "$ENV{TT_METAL_HOME}/tt_metal/api/"
+        "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd/device/api"
+        "$ENV{TT_METAL_HOME}/tt_metal/hostdevcommon/api"
+        "$ENV{TT_METAL_HOME}/tt_metal/include"
+        "$ENV{TT_METAL_HOME}/tt_stl"
         # TTNN
+        "$ENV{TT_METAL_HOME}/ttnn"
         "$ENV{TT_METAL_HOME}/ttnn/cpp"
         "$ENV{TT_METAL_HOME}/ttnn/cpp/ttnn/deprecated"
         "${reflect_SOURCE_DIR}"
@@ -38,6 +43,7 @@ if(NOT TARGET Metalium::Metal)
     # Try to find the library
     find_library(TT_METAL_LIBRARY NAMES "tt_metal" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
     find_library(TTNN_LIBRARY NAMES "_ttnn.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
+    find_library(DEVICE_LIBRARY NAMES "device" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
 
     if(TT_METAL_LIBRARY)
         add_library(Metalium::Metal SHARED IMPORTED)
@@ -48,6 +54,12 @@ if(NOT TARGET Metalium::Metal)
                     "${TT_METAL_LIBRARY}"
                 INTERFACE_INCLUDE_DIRECTORIES
                     "${METALIUM_INCLUDE_DIRS}"
+        )
+        target_link_libraries(
+            Metalium::Metal
+            INTERFACE
+                ${DEVICE_LIBRARY}
+                nlohmann_json::nlohmann_json
         )
         message(STATUS "Successfully found libtt_metal.so at ${TT_METAL_LIBRARY}")
     else()
@@ -92,9 +104,10 @@ target_link_libraries(
         Metalium::TTNN
         Python::Python
         fmt::fmt-header-only
-        magic_enum
+        magic_enum::magic_enum
         yaml-cpp::yaml-cpp
         xtensor
+        xtensor-blas
         xtl
         tokenizers_cpp
         wandbcpp
@@ -128,4 +141,20 @@ target_link_libraries(
 )
 target_compile_options(wandbcpp PUBLIC -stdlib=libc++)
 
-add_definitions(-DTOKENIZERS_DATA_PATH="${CMAKE_CURRENT_SOURCE_DIR}/data/tokenizers")
+add_definitions(-DTOKENIZERS_DATA_PATH="${CMAKE_SOURCE_DIR}/data")
+
+set(TOKENIZER_URL "https://huggingface.co/togethercomputer/RedPajama-INCITE-Chat-3B-v1/resolve/main/tokenizer.json")
+set(TOKENIZER_FILE "${CMAKE_SOURCE_DIR}/data/gpt2-tokenizer.json")
+
+# Check if the file already exists before downloading
+if(NOT EXISTS "${TOKENIZER_FILE}")
+    message(STATUS "Downloading Tokenizer text file to ${TOKENIZER_FILE}")
+    file(
+        DOWNLOAD
+            ${TOKENIZER_URL}
+            ${TOKENIZER_FILE}
+        SHOW_PROGRESS
+    )
+else()
+    message(STATUS "Tokenizer text file already exists at ${TOKENIZER_FILE}, skipping download.")
+endif()

@@ -6,13 +6,15 @@
 
 #include <fmt/format.h>
 
+#include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
 #include "core/debug.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "serialization/serializable.hpp"
 
 namespace ttml::optimizers {
 
-SGD::SGD(ttml::autograd::NamedParameters parameters, const SGDConfig& config) :
+SGD::SGD(ttml::serialization::NamedParameters parameters, const SGDConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
@@ -46,6 +48,7 @@ void SGD::step() {
         }
 
         auto gradients = tensor_ptr->get_grad();
+
         if (m_config.weight_decay != 0.0F) {
             gradients = ttnn::add(
                 ttnn::multiply(tensor_ptr->get_value(autograd::PreferredPrecision::FULL), m_config.weight_decay),
@@ -53,7 +56,7 @@ void SGD::step() {
         }
 
         if (m_config.momentum != 0.0F) {
-            if (steps != 0) {
+            if (m_steps != 0) {
                 // apply momentum
                 theta = ttnn::multiply(theta, m_config.momentum);
                 // dampening
@@ -76,23 +79,27 @@ void SGD::step() {
         tensor_ptr->set_value(ttnn::subtract(
             tensor_ptr->get_value(autograd::PreferredPrecision::FULL), ttnn::multiply(gradients, m_config.lr)));
     }
-    steps++;
+    m_steps++;
 }
 
-autograd::NamedParameters SGD::get_state_dict() const {
-    return m_theta;
+serialization::StateDict SGD::get_state_dict() const {
+    serialization::StateDict dict;
+    dict["theta"] = m_theta;
+    dict["steps"] = m_steps;
+    return dict;
 }
 
-void SGD::set_state_dict(const autograd::NamedParameters& dict) {
-    m_theta = dict;
+void SGD::set_state_dict(const serialization::StateDict& dict) {
+    m_theta = std::get<serialization::NamedParameters>(dict.at("theta"));
+    m_steps = serialization::get_value_type<size_t>(dict, "steps");
 }
 
 size_t SGD::get_steps() const {
-    return steps;
+    return m_steps;
 }
 
 void SGD::set_steps(size_t steps) {
-    this->steps = steps;
+    this->m_steps = steps;
 }
 
 }  // namespace ttml::optimizers

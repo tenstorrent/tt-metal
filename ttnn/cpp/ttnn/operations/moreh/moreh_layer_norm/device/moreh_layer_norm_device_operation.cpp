@@ -38,9 +38,9 @@ void MorehLayerNormOperation::validate_inputs(
 
     TT_FATAL(normalized_dims > 0, "normalized_dims should > 0. Got {}", normalized_dims);
     TT_FATAL(
-        normalized_dims <= input.get_legacy_shape().rank(),
+        normalized_dims <= input.get_padded_shape().rank(),
         "normalized_dims should <= input rank ({}). Got: {}",
-        input.get_legacy_shape().rank(),
+        input.get_padded_shape().rank(),
         normalized_dims);
 
     if (gamma.has_value()) {
@@ -80,68 +80,51 @@ void MorehLayerNormOperation::validate_on_program_cache_hit(
     validate_inputs(operation_attributes, tensor_args);
 };
 
-MorehLayerNormOperation::shape_return_value_t MorehLayerNormOperation::compute_output_shapes(
+MorehLayerNormOperation::spec_return_value_t MorehLayerNormOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto input = tensor_args.input;
-    auto normalized_dims = operation_attributes.normalized_dims;
-    auto input_shape = input.get_shape();
-    auto input_shape_without_padding = input_shape.value.without_padding();
-    auto input_rank = input_shape.rank();
-    auto output_rank = input_rank - normalized_dims;
+    std::vector<std::optional<TensorSpec>> result(3);
 
-    ttnn::SmallVector<uint32_t> output_size_vec;
-    ttnn::SmallVector<Padding::PadDimension> dimensions_pads;
-
-    if (output_rank == 1) {
-        output_size_vec.push_back(32);
-        dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = 31});
+    if (tensor_args.output.has_value()) {
+        result[0] = tensor_args.output->get_tensor_spec();
+    } else {
+        result[0] = TensorSpec(
+            input.get_logical_shape(),
+            TensorLayout(input.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
     }
 
-    for (uint32_t dim = 0; dim < output_rank; dim++) {
-        auto input_shape_without_padding_size = input_shape_without_padding[dim];
-        if (is_hw_dim(dim, output_rank)) {
-            output_size_vec.push_back(round_up_to_mul32(input_shape_without_padding_size));
-            auto padding_back = output_size_vec[dim] - input_shape_without_padding_size;
-            dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = padding_back});
-        } else {
-            output_size_vec.push_back(input_shape_without_padding_size);
-            dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = 0});
-        }
+    if (tensor_args.mean.has_value()) {
+        result[1] = tensor_args.mean->get_tensor_spec();
     }
 
-    const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-    auto mean_rstd_output_shape = Shape{tt::tt_metal::LegacyShape(output_size_vec, padding)};
-    return {input_shape, mean_rstd_output_shape, mean_rstd_output_shape};
-};
+    if (tensor_args.rstd.has_value()) {
+        result[2] = tensor_args.rstd->get_tensor_spec();
+    }
+
+    return result;
+}
 
 MorehLayerNormOperation::tensor_return_value_t MorehLayerNormOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& output_shapes = compute_output_shapes(operation_attributes, tensor_args);
-    auto input = tensor_args.input;
-    auto dtype = input.get_dtype();
-    Layout layout{Layout::TILE};
-    auto device = input.device();
+    const auto output_specs = compute_output_specs(operation_attributes, tensor_args);
 
-    std::vector<std::optional<Tensor>> result;
-    result.reserve(3);
+    std::vector<std::optional<Tensor>> result(3);
 
-    if (tensor_args.output.has_value())
-        result.push_back(tensor_args.output.value());
-    else
-        result.push_back(
-            create_device_tensor(output_shapes.at(0).value, dtype, layout, device, operation_attributes.memory_config));
+    if (tensor_args.output.has_value()) {
+        result[0] = tensor_args.output.value();
+    } else {
+        result[0] = create_device_tensor(*output_specs.at(0), tensor_args.input.device());
+    }
 
-    if (tensor_args.mean.has_value())
-        result.push_back(tensor_args.mean.value());
-    else
-        result.push_back(std::nullopt);
+    if (tensor_args.mean.has_value()) {
+        result[1] = tensor_args.mean.value();
+    }
 
-    if (tensor_args.rstd.has_value())
-        result.push_back(tensor_args.rstd.value());
-    else
-        result.push_back(std::nullopt);
+    if (tensor_args.rstd.has_value()) {
+        result[2] = tensor_args.rstd.value();
+    }
 
-    return std::move(result);
+    return result;
 }
 
 std::tuple<MorehLayerNormOperation::operation_attributes_t, MorehLayerNormOperation::tensor_args_t>

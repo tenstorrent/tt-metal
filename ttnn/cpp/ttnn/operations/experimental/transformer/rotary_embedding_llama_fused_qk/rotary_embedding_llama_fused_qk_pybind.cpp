@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 #include "rotary_embedding_llama_fused_qk.hpp"
 
@@ -37,7 +37,7 @@ void py_bind_rotary_embedding_llama_fused_qk(pybind11::module& module) {
                 ttnn.Tensor, ttnn.Tensor: q and k output tensors with rotary embeddings applied.
 
         )doc",
-        ttnn::pybind_arguments_t {
+        ttnn::pybind_arguments_t{
             py::arg("q_input_tensor"),
             py::arg("k_input_tensor"),
             py::arg("cos_cache"),

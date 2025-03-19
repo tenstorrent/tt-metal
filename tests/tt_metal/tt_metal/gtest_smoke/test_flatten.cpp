@@ -1,1 +1,0 @@
-../unit_tests_common/compute/test_flatten.cpp

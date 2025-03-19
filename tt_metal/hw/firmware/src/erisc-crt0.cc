@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <stdint.h>
+
 void Application();
 
 static void *stack;  // saved stack pointer
@@ -13,6 +15,8 @@ static void do_erisc_exit();
 // use. (Because we LTO the firmware, it would otherwise look
 // removable.)
 [[gnu::noreturn, gnu::used]] void (*erisc_exit)() = do_erisc_exit;
+
+extern "C" void wzerorange(uint32_t *start, uint32_t *end);
 
 // This is a bespoke setjmp/longjmp implementation. We do not use
 // regular setjmp/longjmp as that uses a 304 byte buffer. We only need
@@ -40,6 +44,11 @@ extern "C" [[gnu::section(".start"), gnu::naked, gnu::optimize("Os")]] void _sta
         "sw s10, 11 * 4(sp)\n\t"
         "sw s11, 12 * 4(sp)\n\t" ::
             : "memory");
+
+    // Clear bss, we write to 'stack' just below.
+    extern uint32_t __ldm_bss_start[];
+    extern uint32_t __ldm_bss_end[];
+    wzerorange(__ldm_bss_start, __ldm_bss_end);
 
     // Record sp in the save slot.
     __asm__ volatile("sw sp, %[sp]\n\t" : [sp] "=m"(stack));

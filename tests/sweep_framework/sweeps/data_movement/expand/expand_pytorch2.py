@@ -309,4 +309,18 @@ def run(
     *,
     device,
 ):
-    raise Exception("Expand is not supported, TODO: implement via recursive concat with itself")
+    torch_tensor = torch_random(expand_specs["shape"], -10, 10, dtype=torch.bfloat16)
+    expanded_tensor = torch_tensor.expand(expand_specs["size"])
+
+    ttnn_tensor = ttnn.from_torch(torch_tensor, device=device, layout=layout, dtype=dtype)
+
+    start_time = start_measuring_time()
+    expanded_ttnn_tensor = ttnn.expand(ttnn_tensor, expand_specs["size"])
+    e2e_perf = stop_measuring_time(start_time)
+
+    ttnn_output_tensor = ttnn.to_torch(expanded_ttnn_tensor)
+
+    result = check_with_pcc(expanded_tensor, ttnn_output_tensor, 0.999)
+
+    return [result, e2e_perf]
+    # raise Exception("Expand is not supported, TODO: implement via recursive concat with itself")

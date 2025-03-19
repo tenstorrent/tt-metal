@@ -5,12 +5,10 @@ In this example, we will build a TT-Metal program that will add two vectors cont
 This program can be found in
 [add_2_integers_in_compute.cpp](../../../tt_metal/programming_examples/add_2_integers_in_compute/add_2_integers_in_compute.cpp).
 
-To build and execute, you may use the following commands. Note that we include the necessary environment variables here, but you may possibly need more depending on the most up-to-date installation methods.
-
+To build and execute, you may use the following commands:
 ```bash
-    export ARCH_NAME=<arch name>
-    export TT_METAL_HOME=<this repo dir>
-    ./build_metal.sh --build-tests
+    export TT_METAL_HOME=$(pwd)
+    ./build_metal.sh --build-programming-examples
     ./build/programming_examples/add_2_integers_in_compute
 ```
 ## Set up device and program/collaboration mechanisms
@@ -47,30 +45,24 @@ std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config
 Next, we allocate memory for each buffer with the specified configuration for each of the input vectors and another buffer for the output vector. The source data will be sent to the corresponding DRAM buffers to be accessed by the cores, and the results of the computation will be sent to the DRAM to be read by the destination vector.
 
 ``` cpp
-auto src0_dram_noc_coord = src0_dram_buffer->noc_coordinates();
-auto src1_dram_noc_coord = src1_dram_buffer->noc_coordinates();
-auto dst_dram_noc_coord = dst_dram_buffer->noc_coordinates();
-uint32_t src0_dram_noc_x = src0_dram_noc_coord.x;
-uint32_t src0_dram_noc_y = src0_dram_noc_coord.y;
-uint32_t src1_dram_noc_x = src1_dram_noc_coord.x;
-uint32_t src1_dram_noc_y = src1_dram_noc_coord.y;
-uint32_t dst_dram_noc_x = dst_dram_noc_coord.x;
-uint32_t dst_dram_noc_y = dst_dram_noc_coord.y;
+uint32_t src0_bank_id = 0;
+uint32_t src1_bank_id = 0;
+uint32_t dst_bank_id = 0;
 ```
 
-For this example, we will also specify the NoC coordinates to pass into the kernel functions as runtime arguments. We will use this to ensure that the kernels will access the data at the correct NoC addresses.
+For this example, we will also specify the Buffer Bank IDs to pass into the kernel functions as runtime arguments. We will use this to ensure that the kernels will access the data from the correct DRAM Memory Banks corresponding to each buffer.
 
 ``` cpp
-constexpr uint32_t src0_cb_index = CB::c_in0;
+constexpr uint32_t src0_cb_index = CBIndex::c_0;
 constexpr uint32_t num_input_tiles = 1;
 CircularBufferConfig cb_src0_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src0_cb_index, single_tile_size);
 CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-constexpr uint32_t src1_cb_index = CB::c_in1;
+constexpr uint32_t src1_cb_index = CBIndex::c_1;
 CircularBufferConfig cb_src1_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src1_cb_index, single_tile_size);
 CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
-constexpr uint32_t output_cb_index = CB::c_out0;
+constexpr uint32_t output_cb_index = CBIndex::c_16;
 constexpr uint32_t num_output_tiles = 1;
 CircularBufferConfig cb_output_config = CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}}).set_page_size(output_cb_index, single_tile_size);
 CBHandle cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
@@ -129,9 +121,9 @@ EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
 Next, we create two source vectors, each loaded with a constant value, before queueing the command to feed it to the corresponding DRAM buffers using `EnqueueWriteBuffer`.
 
 ``` cpp
-SetRuntimeArgs(program, binary_reader_kernel_id, core, { src0_dram_buffer->address(), src1_dram_buffer->address(), src0_dram_noc_x, src0_dram_noc_y, src1_dram_noc_x, src1_dram_noc_y});
+SetRuntimeArgs(program, binary_reader_kernel_id, core, { src0_dram_buffer->address(), src1_dram_buffer->address(), src0_bank_id, src1_bank_id});
 SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
-SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address(), dst_dram_noc_x, dst_dram_noc_y});
+SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address(), dst_bank_id});
 
 EnqueueProgram(cq, program, false);
 Finish(cq);
@@ -165,7 +157,7 @@ The reader kernel reads in a one tile from each of the two source vectors that a
 
 ``` cpp
 binary_op_init_common(cb_in0, cb_in1, cb_out0);
-add_tiles_init();
+add_tiles_init(cb_in0, cb_in1);
 
 // wait for a block of tiles in each of input CBs
 cb_wait_front(cb_in0, 1);
@@ -192,9 +184,9 @@ In the compute kernel, a single tile is read from each of the circular buffers c
 ## Writer kernel function
 
 ``` cpp
-uint64_t dst_noc_addr = get_noc_addr(dst_dram_noc_x, dst_dram_noc_y, dst_addr);
+uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(dst_bank_id, dst_dram);
 
-constexpr uint32_t cb_id_out0 = tt::CB::c_out0;
+constexpr uint32_t cb_id_out0 = tt::CBIndex::c_16;
 uint32_t ublock_size_bytes = get_tile_size(cb_id_out0);
 uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 

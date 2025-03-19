@@ -8,12 +8,12 @@
 #include <pybind11/stl.h>
 
 #include "tilize_with_val_padding.hpp"
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
-void bind_tilize_with_val_padding(py::module &module) {
+void bind_tilize_with_val_padding(py::module& module) {
     auto doc =
         R"doc(
             Changes data layout of input tensor to TILE. Pads to specified shape with a user-provided value.
@@ -44,16 +44,16 @@ void bind_tilize_with_val_padding(py::module &module) {
         ttnn::tilize_with_val_padding,
         doc,
         ttnn::pybind_overload_t{
-            [](const OperationType &self,
-               const ttnn::Tensor &input_tensor,
-               const tt::tt_metal::LegacyShape &output_tensor_shape,
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const ttnn::Shape& output_padded_shape,
                const PadValue value,
-               const std::optional<MemoryConfig> &memory_config,
+               const std::optional<MemoryConfig>& memory_config,
                std::optional<DataType> output_dtype,
                bool use_multicore,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
-                    queue_id, input_tensor, output_tensor_shape, value, memory_config, output_dtype, use_multicore);
+                    queue_id, input_tensor, output_padded_shape, value, memory_config, output_dtype, use_multicore);
             },
             py::arg("input_tensor"),
             py::arg("output_tensor_shape"),
@@ -61,14 +61,14 @@ void bind_tilize_with_val_padding(py::module &module) {
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
-            py::arg("use_multicore") = false,
-            py::arg("queue_id") = 0,
+            py::arg("use_multicore") = true,
+            py::arg("queue_id") = DefaultQueueId,
         }
 
-        );
+    );
 }
 
-void bind_tilize_with_zero_padding(py::module &module) {
+void bind_tilize_with_zero_padding(py::module& module) {
     auto doc =
         R"doc(
             tilize_with_zero_padding(input_tensor: ttnn.Tensor, *, memory_config: Optional[MemoryConfig] = None, dtype: Optional[DataType] = None, use_multicore: bool = False, queue_id: int = 0) -> ttnn.Tensor
@@ -95,18 +95,18 @@ void bind_tilize_with_zero_padding(py::module &module) {
         ttnn::tilize_with_zero_padding,
         doc,
         ttnn::pybind_overload_t{
-            [](const OperationType &self,
-               const ttnn::Tensor &input_tensor,
-               const std::optional<MemoryConfig> &memory_config,
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const std::optional<MemoryConfig>& memory_config,
                std::optional<DataType> output_dtype,
                bool use_multicore,
-               uint8_t queue_id) { return self(queue_id, input_tensor, memory_config, output_dtype, use_multicore); },
+               QueueId queue_id) { return self(queue_id, input_tensor, memory_config, output_dtype, use_multicore); },
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_dtype") = std::nullopt,
-            py::arg("use_multicore") = false,
-            py::arg("queue_id") = 0,
+            py::arg("use_multicore") = true,
+            py::arg("queue_id") = DefaultQueueId,
         });
 }
 

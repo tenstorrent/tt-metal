@@ -1,7 +1,3 @@
-# soc-descriptor yaml
-# Anything using [#-#] is noc coordinates
-# Anything using [[#, #]] is logical coordinates (Can be relative)
-# relative index: 0 means first row, -1 means last row of functional grid...
 grid:
   x_size: 10
   y_size: 12
@@ -15,27 +11,94 @@ pcie:
 dram:
   [
     [0-0, 0-1, 0-11],
-    [0-0, 0-1, 0-11],
-    [0-5, 0-6, 0-7],
     [0-5, 0-6, 0-7],
     [5-0, 5-1, 5-11],
-    [5-0, 5-1, 5-11],
-    [5-2, 5-9, 5-10],
     [5-2, 5-9, 5-10],
     [5-3, 5-4, 5-8],
-    [5-3, 5-4, 5-8],
-    [5-5, 5-6, 5-7],
     [5-5, 5-6, 5-7]
   ]
 
-dram_preferred_eth_endpoint:
-  [ 0-0, 0-0, 0-6, 0-6, 5-0, 5-0, 5-10, 5-10, 5-4, 5-4, 5-6, 5-6 ]
+# Dram view parameters are used by tt-metal and are not recognized by UMD.
+# Eth and worker dram endpoints represent subchannel id from dram array.
+# For example, a dram view where channel is 0 and worker_endpoint is 2 would resolve to dram core at position [0,2] which is 0-11.
+dram_views:
+  [
+    {
+      channel: 0,
+      eth_endpoint: 0,
+      worker_endpoint: 2,
+      address_offset: 0
+    },
+    {
+      channel: 0,
+      eth_endpoint: 0,
+      worker_endpoint: 1,
+      address_offset: 1073741824
+    },
+    {
+      channel: 1,
+      eth_endpoint: 1,
+      worker_endpoint: 0,
+      address_offset: 0
+    },
+    {
+      channel: 1,
+      eth_endpoint: 1,
+      worker_endpoint: 2,
+      address_offset: 1073741824
+    },
+    {
+      channel: 2,
+      eth_endpoint: 0,
+      worker_endpoint: 1,
+      address_offset: 0
+    },
+    {
+      channel: 2,
+      eth_endpoint: 0,
+      worker_endpoint: 2,
+      address_offset: 1073741824
+    },
+    {
+      channel: 3,
+      eth_endpoint: 2,
+      worker_endpoint: 0,
+      address_offset: 0
+    },
+    {
+      channel: 3,
+      eth_endpoint: 2,
+      worker_endpoint: 1,
+      address_offset: 1073741824
+    },
+    {
+      channel: 4,
+      eth_endpoint: 1,
+      worker_endpoint: 2,
+      address_offset: 0
+    },
+    {
+      channel: 4,
+      eth_endpoint: 1,
+      worker_endpoint: 0,
+      address_offset: 1073741824
+    },
+    {
+      channel: 5,
+      eth_endpoint: 1,
+      worker_endpoint: 0,
+      address_offset: 0
+    },
+    {
+      channel: 5,
+      eth_endpoint: 1,
+      worker_endpoint: 2,
+      address_offset: 1073741824
+    }
+  ]
 
-dram_preferred_worker_endpoint:
-  [ 0-11, 0-1, 0-5, 0-7, 5-1, 5-11, 5-2, 5-9, 5-8, 5-3, 5-5, 5-7 ]
-
-dram_address_offsets:
-  [ 0, 1073741824, 0, 1073741824, 0, 1073741824, 0, 1073741824, 0, 1073741824, 0, 1073741824 ]
+dram_view_size:
+  1073741824
 
 eth:
   [
@@ -69,7 +132,7 @@ worker_l1_size:
   1499136
 
 dram_bank_size:
-  1073741824
+  2147483648
 
 eth_l1_size:
   262144

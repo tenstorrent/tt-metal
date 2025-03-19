@@ -32,22 +32,25 @@ void MorehNormBackwardOperation::validate_on_program_cache_hit(
     validate_inputs(operation_attributes, tensor_args);
 };
 
-MorehNormBackwardOperation::shape_return_value_t MorehNormBackwardOperation::compute_output_shapes(
+MorehNormBackwardOperation::spec_return_value_t MorehNormBackwardOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return tensor_args.input.get_shape();
+    if (tensor_args.input_grad.has_value()) {
+        return tensor_args.input_grad->get_tensor_spec();
+    }
+    return TensorSpec(
+        tensor_args.input.get_logical_shape(),
+        TensorLayout(
+            tensor_args.input.get_dtype(),
+            PageConfig(tensor_args.input.get_layout()),
+            operation_attributes.memory_config));
 };
 
 MorehNormBackwardOperation::tensor_return_value_t MorehNormBackwardOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.input_grad.has_value())
+    if (tensor_args.input_grad.has_value()) {
         return tensor_args.input_grad.value();
-    const auto& input = tensor_args.input;
-    return create_device_tensor(
-        compute_output_shapes(operation_attributes, tensor_args),
-        input.get_dtype(),
-        input.get_layout(),
-        input.device(),
-        operation_attributes.memory_config);
+    }
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
 std::tuple<MorehNormBackwardOperation::operation_attributes_t, MorehNormBackwardOperation::tensor_args_t>
@@ -56,12 +59,12 @@ MorehNormBackwardOperation::invoke(
     const Tensor& output,
     const Tensor& output_grad,
     float p,
-    std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>> dim,
+    const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dim,
     bool keepdim,
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::SmallVector<int64_t> dims = get_dim(dim, input.get_legacy_shape().rank());
+    ttnn::SmallVector<int64_t> dims = get_dim(dim, input.get_padded_shape().rank());
     std::sort(dims.begin(), dims.end());
     return {
         operation_attributes_t{

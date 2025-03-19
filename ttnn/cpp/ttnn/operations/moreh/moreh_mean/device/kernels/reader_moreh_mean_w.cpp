@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_mm_scaler.hpp"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_mm_scaler.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -13,15 +13,15 @@ void kernel_main() {
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t scaler = get_compile_time_arg_val(1);
 
-    constexpr uint32_t cb_id_in2 = tt::CB::c_in2;
+    constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
     generate_mm_scaler(cb_id_in2, scaler);
 
-    constexpr uint32_t cb_id_mask_w = tt::CB::c_in3;
+    constexpr uint32_t cb_id_mask_w = tt::CBIndex::c_3;
 #ifdef DO_MASK_W
     generate_mask_w(cb_id_mask_w, mask_w);
 #endif
 
-    constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;

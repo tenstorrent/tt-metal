@@ -7,13 +7,13 @@
 #include <pybind11/pybind11.h>
 
 #include "moreh_nll_loss.hpp"
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 namespace py = pybind11;
 
 namespace ttnn::operations::moreh::moreh_nll_loss {
 
-void bind_moreh_nll_loss_operation(py::module &module) {
+void bind_moreh_nll_loss_operation(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::moreh_nll_loss,

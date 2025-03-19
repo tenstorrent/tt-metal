@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tests/tt_metal/tt_metal/unit_tests_common/common/common_fixture.hpp"
+#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -20,13 +20,12 @@ struct Add1DTensorAndScalarParam {
     uint32_t w;
 };
 
-class Add1DTensorAndScalarFixture : public TTNNFixture,
+class Add1DTensorAndScalarFixture : public TTNNFixtureWithDevice,
                                     public testing::WithParamInterface<Add1DTensorAndScalarParam> {};
 
 TEST_P(Add1DTensorAndScalarFixture, AddsScalarCorrectly) {
     auto param = GetParam();
-    const auto device_id = 0;
-    auto& device = ttnn::open_device(device_id);
+    auto& device = *device_;
     std::array<uint32_t, 2> dimensions = {param.h, param.w};
     ttnn::Shape shape(dimensions);
 
@@ -35,7 +34,8 @@ TEST_P(Add1DTensorAndScalarFixture, AddsScalarCorrectly) {
         const auto output_tensor = input_tensor + param.scalar;
         const auto expected_tensor =
             ttnn::operations::creation::full(shape, param.scalar, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
-        TT_FATAL(ttnn::numpy::allclose<::bfloat16>(ttnn::from_device(expected_tensor), ttnn::from_device(output_tensor)), "Error");
+        TT_FATAL(
+            ttnn::allclose<::bfloat16>(ttnn::from_device(expected_tensor), ttnn::from_device(output_tensor)), "Error");
     }
     ttnn::close_device(device);
 }

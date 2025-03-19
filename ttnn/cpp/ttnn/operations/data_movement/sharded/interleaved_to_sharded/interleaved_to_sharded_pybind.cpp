@@ -2,21 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "interleaved_to_sharded.hpp"
 #include "ttnn/types.hpp"
-#include "tt_metal/common/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::operations::data_movement {
 
 namespace detail {
 
 template <typename data_movement_sharded_operation_t>
-void bind_interleaved_to_sharded(pybind11::module& module, const data_movement_sharded_operation_t& operation, const char* doc) {
+void bind_interleaved_to_sharded(
+    pybind11::module& module, const data_movement_sharded_operation_t& operation, const char* doc) {
     bind_registered_operation(
         module,
         operation,
@@ -24,13 +24,22 @@ void bind_interleaved_to_sharded(pybind11::module& module, const data_movement_s
         ttnn::pybind_overload_t{
             [](const data_movement_sharded_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const std::variant<CoreCoord, CoreRangeSet> & grid,
-               const std::array<uint32_t,2> & shard_shape,
+               const std::variant<CoreCoord, CoreRangeSet>& grid,
+               const std::array<uint32_t, 2>& shard_shape,
                tt::tt_metal::TensorMemoryLayout shard_scheme,
                tt::tt_metal::ShardOrientation shard_orientation,
-               const std::optional<ttnn::DataType> & output_dtype,
-               uint8_t queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, grid, shard_shape, shard_scheme, shard_orientation, output_dtype);
+               const std::optional<ttnn::DataType>& output_dtype,
+               QueueId queue_id,
+               const std::optional<bool>& keep_l1_aligned) -> ttnn::Tensor {
+                return self(
+                    queue_id,
+                    input_tensor,
+                    grid,
+                    shard_shape,
+                    shard_scheme,
+                    shard_orientation,
+                    output_dtype,
+                    keep_l1_aligned);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("grid"),
@@ -39,30 +48,32 @@ void bind_interleaved_to_sharded(pybind11::module& module, const data_movement_s
             py::arg("shard_orientation"),
             py::arg("output_dtype") = std::nullopt,
             py::kw_only(),
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
+            py::arg("keep_l1_aligned") = false,
 
-            },
+        },
         ttnn::pybind_overload_t{
             [](const data_movement_sharded_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const MemoryConfig & sharded_memory_config,
-               const std::optional<ttnn::DataType> & output_dtype,
-               uint8_t queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, sharded_memory_config, output_dtype);
+               const MemoryConfig& sharded_memory_config,
+               const std::optional<ttnn::DataType>& output_dtype,
+               QueueId queue_id,
+               const std::optional<bool>& keep_l1_aligned) -> ttnn::Tensor {
+                return self(queue_id, input_tensor, sharded_memory_config, output_dtype, keep_l1_aligned);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("sharded_memory_config"),
             py::arg("output_dtype") = std::nullopt,
             py::kw_only(),
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
+            py::arg("keep_l1_aligned") = false,
 
-            }
-        );
+        });
 }
 
 }  // namespace detail
 
-//TODO: Add more descriptions to the arguments
+// TODO: Add more descriptions to the arguments
 void py_bind_interleaved_to_sharded(pybind11::module& module) {
     detail::bind_interleaved_to_sharded(
         module,

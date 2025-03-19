@@ -53,7 +53,7 @@ def test_rotary_embedding_prefill(W, Z, Y, X, cache_size, in_sharded, out_sharde
         out_mem_config = ttnn.MemoryConfig()
 
     xt = ttnn.Tensor(x, input_dtype)
-    if xt.shape.with_tile_padding()[-2] % 32 == 0 and xt.shape.with_tile_padding()[-1] % 32 == 0:
+    if xt.padded_shape[-2] % 32 == 0 and xt.padded_shape[-1] % 32 == 0:
         xt = xt.to(ttnn.TILE_LAYOUT)
     elif input_dtype == ttnn.bfloat8_b:
         pytest.skip()
@@ -61,7 +61,7 @@ def test_rotary_embedding_prefill(W, Z, Y, X, cache_size, in_sharded, out_sharde
     if in_sharded or out_sharded:
         if xt.get_layout() != ttnn.TILE_LAYOUT:
             pytest.skip("Sharding support required tile size")
-        num_blocks = xt.volume() // xt.shape.with_tile_padding()[-1] // 32
+        num_blocks = xt.volume() // xt.padded_shape[-1] // 32
         compute_grid_size = device.compute_with_storage_grid_size()
         for i in range(compute_grid_size.x * compute_grid_size.y, 0, -1):
             if num_blocks % i == 0:
@@ -75,15 +75,16 @@ def test_rotary_embedding_prefill(W, Z, Y, X, cache_size, in_sharded, out_sharde
                 shard_grid,
                 [
                     Ht * 32,
-                    xt.shape.with_tile_padding()[-1],
+                    xt.padded_shape[-1],
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             )
             input_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
             )
             xt = xt.to(device, input_mem_config)
+        else:
+            xt = xt.to(device)
     else:
         xt = xt.to(device)
 
@@ -100,7 +101,6 @@ def test_rotary_embedding_prefill(W, Z, Y, X, cache_size, in_sharded, out_sharde
     assert p
 
 
-@skip_for_blackhole("Mismatching on Blackhole, see #12349")
 @pytest.mark.parametrize(
     "W, Z, Y, X",
     ([1, 1, 32, 64], [1, 71, 32, 64], [1, 1, 64, 64], [1, 71, 64, 64], [1, 32, 32, 64], [1, 2, 32, 64]),
@@ -126,7 +126,7 @@ def test_rotary_embedding_decode(
         out_mem_config = ttnn.MemoryConfig()
 
     xt = ttnn.Tensor(x, input_dtype)
-    if xt.shape.with_tile_padding()[-2] % 32 == 0 and xt.shape.with_tile_padding()[-1] % 32 == 0:
+    if xt.padded_shape[-2] % 32 == 0 and xt.padded_shape[-1] % 32 == 0:
         xt = xt.to(ttnn.TILE_LAYOUT)
     elif input_dtype == ttnn.bfloat8_b:
         pytest.skip()
@@ -134,7 +134,7 @@ def test_rotary_embedding_decode(
     if in_sharded or out_sharded:
         if xt.get_layout() != ttnn.TILE_LAYOUT:
             pytest.skip("Sharding support required tile size")
-        num_blocks = xt.volume() // xt.shape.with_tile_padding()[-1] // 32
+        num_blocks = xt.volume() // xt.padded_shape[-1] // 32
         compute_grid_size = device.compute_with_storage_grid_size()
         for i in range(compute_grid_size.x * compute_grid_size.y, 0, -1):
             if num_blocks % i == 0:
@@ -148,15 +148,16 @@ def test_rotary_embedding_decode(
                 shard_grid,
                 [
                     Ht * 32,
-                    xt.shape.with_tile_padding()[-1],
+                    xt.padded_shape[-1],
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             )
             input_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
             )
             xt = xt.to(device, input_mem_config)
+        else:
+            xt = xt.to(device)
     else:
         xt = xt.to(device)
 
@@ -199,7 +200,7 @@ def test_rotary_embedding_prefill_fp32(
         out_mem_config = ttnn.MemoryConfig()
 
     xt = ttnn.Tensor(x, input_dtype)
-    if xt.shape.with_tile_padding()[-2] % 32 == 0 and xt.shape.with_tile_padding()[-1] % 32 == 0:
+    if xt.padded_shape[-2] % 32 == 0 and xt.padded_shape[-1] % 32 == 0:
         xt = xt.to(ttnn.TILE_LAYOUT)
     elif input_dtype == ttnn.bfloat8_b:
         pytest.skip()
@@ -207,7 +208,7 @@ def test_rotary_embedding_prefill_fp32(
     if in_sharded or out_sharded:
         if xt.get_layout() != ttnn.TILE_LAYOUT:
             pytest.skip("Sharding support required tile size")
-        num_blocks = xt.volume() // xt.shape.with_tile_padding()[-1] // 32
+        num_blocks = xt.volume() // xt.padded_shape[-1] // 32
         compute_grid_size = device.compute_with_storage_grid_size()
         for i in range(compute_grid_size.x * compute_grid_size.y, 0, -1):
             if num_blocks % i == 0:
@@ -221,15 +222,16 @@ def test_rotary_embedding_prefill_fp32(
                 shard_grid,
                 [
                     Ht * 32,
-                    xt.shape.with_tile_padding()[-1],
+                    xt.padded_shape[-1],
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             )
             input_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
             )
             xt = xt.to(device, input_mem_config)
+        else:
+            xt = xt.to(device)
     else:
         xt = xt.to(device)
 
@@ -246,7 +248,6 @@ def test_rotary_embedding_prefill_fp32(
     assert p
 
 
-@skip_for_blackhole("Mismatching on Blackhole, see #12349")
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("W, Z, Y, X", [(1, 1, 32, 64)])
 @pytest.mark.parametrize("cache_size", [2048])
@@ -270,7 +271,7 @@ def test_rotary_embedding_decode_fp32(
         out_mem_config = ttnn.MemoryConfig()
 
     xt = ttnn.Tensor(x, input_dtype)
-    if xt.shape.with_tile_padding()[-2] % 32 == 0 and xt.shape.with_tile_padding()[-1] % 32 == 0:
+    if xt.padded_shape[-2] % 32 == 0 and xt.padded_shape[-1] % 32 == 0:
         xt = xt.to(ttnn.TILE_LAYOUT)
     elif input_dtype == ttnn.bfloat8_b:
         pytest.skip()
@@ -278,7 +279,7 @@ def test_rotary_embedding_decode_fp32(
     if in_sharded or out_sharded:
         if xt.get_layout() != ttnn.TILE_LAYOUT:
             pytest.skip("Sharding support required tile size")
-        num_blocks = xt.volume() // xt.shape.with_tile_padding()[-1] // 32
+        num_blocks = xt.volume() // xt.padded_shape[-1] // 32
         compute_grid_size = device.compute_with_storage_grid_size()
         for i in range(compute_grid_size.x * compute_grid_size.y, 0, -1):
             if num_blocks % i == 0:
@@ -292,15 +293,16 @@ def test_rotary_embedding_decode_fp32(
                 shard_grid,
                 [
                     Ht * 32,
-                    xt.shape.with_tile_padding()[-1],
+                    xt.padded_shape[-1],
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             )
             input_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
             )
             xt = xt.to(device, input_mem_config)
+        else:
+            xt = xt.to(device)
     else:
         xt = xt.to(device)
 

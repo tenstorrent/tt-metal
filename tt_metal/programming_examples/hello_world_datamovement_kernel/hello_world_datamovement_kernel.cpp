@@ -2,19 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device.hpp>
 
-using namespace tt;
-using namespace tt::tt_metal;
-
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
+    using namespace tt;
+    using namespace tt::tt_metal;
 
     // Initialize Program and Device
 
     constexpr CoreCoord core = {0, 0};
     int device_id = 0;
-    Device *device = CreateDevice(device_id);
+    IDevice* device = CreateDevice(device_id);
     CommandQueue& cq = device->command_queue();
     Program program = CreateProgram();
 
@@ -46,5 +45,4 @@ int main(int argc, char **argv) {
     CloseDevice(device);
 
     return 0;
-
 }

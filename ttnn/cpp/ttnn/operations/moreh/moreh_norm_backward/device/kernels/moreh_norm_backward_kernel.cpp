@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -19,16 +19,16 @@ void MAIN {
     const auto p_minus_one = get_arg_val<uint32_t>(i++);
     const bool p_minus_one_is_negative = get_arg_val<uint32_t>(i++) == 1;
 
-    std::uint8_t input_id{tt::CB::c_in0};
+    std::uint8_t input_id{tt::CBIndex::c_0};
     const auto cb_x = input_id++;        // input(==x)
     const auto cb_y = input_id++;        // output(==y)
     const auto cb_dy = input_id++;       // output_grad(==dy)
     const auto cb_decimal = input_id++;  // decimal
 
-    std::uint8_t output_id{tt::CB::c_out0};
+    std::uint8_t output_id{tt::CBIndex::c_16};
     const auto cb_dx = output_id++;  // input_grad(==dx)
 
-    std::uint8_t intermed_id{tt::CB::c_intermed0};
+    std::uint8_t intermed_id{tt::CBIndex::c_24};
     const auto cb_tmp0 = intermed_id++;
     const auto cb_tmp1 = intermed_id++;
     const auto cb_tmp2 = intermed_id++;
@@ -48,7 +48,7 @@ void MAIN {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
 
-    binary_op_init_common(tt::CB::c_in0, tt::CB::c_in0);
+    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
     cb_wait_front(cb_decimal, onetile);  // comes from the reader
 
     for (uint32_t idx = 0; idx < num_input_tiles_per_core; ++idx) {

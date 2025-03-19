@@ -4,7 +4,7 @@
 
 #include "moreh_clip_grad_norm_step1_device_operation.hpp"
 
-#include "common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -36,9 +36,9 @@ void MorehClipGradNormStep1Operation::validate_on_program_cache_hit(
     validate_inputs(operation_attributes, tensor_args);
 };
 
-MorehClipGradNormStep1Operation::shape_return_value_t MorehClipGradNormStep1Operation::compute_output_shapes(
+MorehClipGradNormStep1Operation::spec_return_value_t MorehClipGradNormStep1Operation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return {};
+    return tensor_args.tmp_pow_sum.get_tensor_spec();
 };
 
 MorehClipGradNormStep1Operation::tensor_return_value_t MorehClipGradNormStep1Operation::create_output_tensors(

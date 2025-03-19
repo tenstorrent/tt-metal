@@ -9,6 +9,61 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import skip_for_grayskull
+
+
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ((10, 20), (20, 10)),
+    ],
+)
+@pytest.mark.parametrize("enable_cache", [True])
+def test_ttnn_reshape_with_cache(device, enable_cache, input_shape, output_shape):
+    if enable_cache:
+        ttnn.enable_program_cache(device)
+
+    a = torch.randn(input_shape, dtype=torch.bfloat16)
+    b = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    tt_a = ttnn.from_torch(a, device=device)
+    tt_b = ttnn.from_torch(b, device=device)
+
+    a = a.reshape(output_shape)
+    b = b.reshape(output_shape)
+
+    tt_a = ttnn.reshape(tt_a, output_shape)
+    tt_b = ttnn.reshape(tt_b, output_shape)
+
+    assert torch.allclose(a, ttnn.to_torch(tt_a))
+    assert torch.allclose(b, ttnn.to_torch(tt_b))
+
+
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ((10, 20), (20, 10)),
+    ],
+)
+@pytest.mark.parametrize("enable_cache", [True])
+def test_tensor_reshape_with_cache(device, enable_cache, input_shape, output_shape):
+    if enable_cache:
+        ttnn.enable_program_cache(device)
+
+    a = torch.randn(input_shape, dtype=torch.bfloat16)
+    b = torch.randn(output_shape, dtype=torch.bfloat16)
+
+    tt_a = ttnn.from_torch(a, device=device)
+    tt_b = ttnn.from_torch(b, device=device)
+
+    a = a.reshape(output_shape)
+    b = b.reshape(output_shape)
+
+    tt_a = tt_a.reshape(output_shape)
+    tt_b = tt_b.reshape(output_shape)
+
+    assert torch.allclose(a, ttnn.to_torch(tt_a))
+    assert torch.allclose(b, ttnn.to_torch(tt_b))
 
 
 @pytest.mark.parametrize("n", [16])
@@ -16,6 +71,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [64])
 def test_reshape_sharded_rm(device, n, c, h, w):
+    pytest.skip("skipped to unblock P0 issue 16975 but needs to be fixed and removed for issue 17030")
+
     if device.core_grid.y < 8:
         pytest.skip("n300 does not have 8x8 grid")
 
@@ -35,7 +92,7 @@ def test_reshape_sharded_rm(device, n, c, h, w):
         torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=sharded_mem_config
     )
 
-    tt_output_tensor = tt_input_tensor.reshape(n, c, h * 2, w // 2)
+    tt_output_tensor = ttnn.experimental.view(tt_input_tensor, n, c, h * 2, w // 2)
 
     sharded_mem_config = ttnn.create_sharded_memory_config(
         tt_output_tensor.shape,
@@ -293,6 +350,10 @@ def test_reshape_tile_layout_only_change_shape(device):
         ((1, 1445, 192), (1445, 192)),
         ((1, 256), (1, 1, 256)),
         ((16, 1, 32), (16, 1, 32)),
+        ((1, 32, 4608), (1, 32, 16, 3, 96)),  # issue 13889
+        ((2888, 49, 96), (8, 19, 19, 7, 7, 96)),  # issue 12153
+        ((128, 1, 1, 128), (128, 128)),  # issue 14676
+        ((5, 4, 208, 156), (3, 13, 8, 2080)),  # issue 14513
     ],
 )
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
@@ -303,6 +364,26 @@ def test_reshape_tile_with_padding(input_shape, output_shape, layout, device):
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, dtype=ttnn.bfloat16, device=device)
     ttnn_output = ttnn.reshape(input_tensor, output_shape)
     assert layout == ttnn_output.layout
+    output = ttnn.to_torch(ttnn_output)
+    assert_with_pcc(torch_result, output, 0.9999)
+
+
+# issue 15048
+def test_previously_failing_test(device):
+    src_shape = (1, 56, 56, 64)
+    target_shape = (1, 1, 56 * 56, 64)
+    torch_input_tensor = torch.randn(src_shape, dtype=torch.bfloat16)
+    torch_result = torch_input_tensor.reshape(target_shape)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    ttnn_output = ttnn.reshape(input_tensor, target_shape)
     output = ttnn.to_torch(ttnn_output)
 
     assert_with_pcc(torch_result, output, 0.9999)
@@ -330,6 +411,7 @@ def test_reshape_host(input_shape, output_shape, device):
 
 
 # required for Embedding
+@skip_for_grayskull("avoid this test while issue 15702 is resolved")
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
@@ -384,3 +466,92 @@ def test_fp32_support(input_shape, output_shape, device):
     output = ttnn.to_torch(ttnn_output)
 
     assert_with_pcc(torch_result, output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ((1, 1, 864, 128), (1, 27, 32, 128)),
+        ((1, 256, 32), (32, 256)),
+        ((1, 256, 1024), (1, 128, 32, 64)),
+        ((64, 32), (32, 64)),
+        ((1, 1445, 192), (1445, 192)),
+        ((1, 256), (1, 1, 256)),
+        ((16, 1, 32), (16, 1, 32)),
+    ],
+)
+def test_bf8_support(input_shape, output_shape, device):
+    torch_input_tensor = torch.randint(0, 100, input_shape)
+    torch_result = torch_input_tensor.reshape(output_shape)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    ttnn_output = ttnn.reshape(input_tensor, output_shape)
+
+    output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_result, output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ([0], [0, 1]),
+        ([0], [1, 0]),
+        ([0, 5], [0, 0, 5]),
+        ([5, 0], [0, 5, 0]),
+    ],
+)
+@pytest.mark.parametrize(
+    "layout",
+    [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+)
+@pytest.mark.parametrize(
+    "ttnn_reshape",
+    [True, False],
+)
+@pytest.mark.parametrize(
+    "use_device, memory_config",
+    [(True, None), (True, ttnn.L1_MEMORY_CONFIG), (False, None)],
+)
+def test_reshape_zero_element(input_shape, output_shape, layout, ttnn_reshape, use_device, memory_config, device):
+    torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
+    if use_device:
+        tt_input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, memory_config=memory_config)
+    else:
+        tt_input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout)
+    if ttnn_reshape:
+        tt_output_tensor = ttnn.reshape(tt_input_tensor, output_shape)
+    else:
+        tt_output_tensor = ttnn.experimental.view(tt_input_tensor, output_shape)
+    tt_output_tensor = ttnn.from_device(tt_output_tensor)
+    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+    assert tt_output_tensor.shape == torch.Size(output_shape)
+
+
+@pytest.mark.xfail(
+    reason="Test that the previously supported reshape accounting for the physical shape is no longer possible"
+)
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ([32, 256], [1, 256]),
+    ],
+)
+def test_reshape_replicated_tensor(mesh_device, input_shape, output_shape):
+    torch_input_tensor = torch.randn(input_shape)
+    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mesh_mapper, device=mesh_device
+    )
+    tt_output_tensor = ttnn.reshape(tt_input_tensor, ttnn.Shape(output_shape))
+
+    for tensor_shard in ttnn.get_device_tensors(tt_output_tensor):
+        tt_output_tensor = ttnn.to_torch(tensor_shard)
+        assert tt_output_tensor.shape == torch.Size(output_shape)

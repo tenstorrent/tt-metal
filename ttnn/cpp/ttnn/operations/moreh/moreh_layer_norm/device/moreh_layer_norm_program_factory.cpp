@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "moreh_layer_norm_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -58,14 +58,14 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    Device* device = input.device();
+    IDevice* device = input.device();
     Program program = Program();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto input_shape = input.get_shape().value;
-    const auto input_shape_without_padding = input.get_shape().value.without_padding();
+    const auto input_shape = input.get_padded_shape();
+    const auto input_shape_without_padding = input.get_logical_shape();
     const auto input_rank = input_shape.rank();
 
     const bool is_lastdim_layer_norm = normalized_dims == 1;
@@ -86,8 +86,7 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     uint32_t mean_rstd_width = 0;
 
     if (mean_has_value) {
-        const auto mean_rstd_shape = mean->get_shape().value;
-        const auto mean_rstd_shape_without_padding = mean_rstd_shape.without_padding();
+        const auto mean_rstd_shape_without_padding = mean->get_logical_shape();
         mean_rstd_height = mean_rstd_shape_without_padding[-2];
         mean_rstd_width = mean_rstd_shape_without_padding[-1];
     }
@@ -156,7 +155,8 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     const uint32_t cb_usage =
         (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + out0_t + out1_t + out2_t) * single_tile_size +
         (im0_t + im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) * intermed_single_tile_size;
-    const uint32_t available_L1 = device->l1_size_per_core() - device->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t available_L1 =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const bool use_large_algorithm = cb_usage >= available_L1;
 
     if (use_large_algorithm) {
@@ -173,24 +173,24 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
         all_cores,
         cb_data_format,
         {
-            {tt::CB::c_in0, in0_t},                            // input
-            {tt::CB::c_in1, in1_t},                            // scaler
-            {tt::CB::c_in2, in2_t},                            // epsilon
-            {tt::CB::c_in3, in3_t},                            // gamma
-            {tt::CB::c_in4, in4_t},                            // beta
-            {tt::CB::c_in5, in5_t},                            // mask_h
-            {tt::CB::c_in6, in6_t},                            // mask_w
-            {tt::CB::c_out0, out0_t},                          // output
-            {tt::CB::c_out1, out1_t},                          // mean
-            {tt::CB::c_out2, out2_t},                          // rstd
-            {tt::CB::c_intermed0, im0_t, intermed_cb_format},  // E[x]
-            {tt::CB::c_intermed1, im1_t, intermed_cb_format},  // x - E[x]
-            {tt::CB::c_intermed2, im2_t, intermed_cb_format},  // (x - E[x])^2
-            {tt::CB::c_intermed3, im3_t, intermed_cb_format},  // Sum[(x - E[x])^2]
-            {tt::CB::c_intermed4, im4_t, intermed_cb_format},  // E[(x - E[x])^2] = Var[x]
-            {tt::CB::c_intermed5, im5_t, intermed_cb_format},  // 1.0/(sqrt(Var[x] + eps))
-            {tt::CB::c_intermed6, im6_t, intermed_cb_format},  // y * gamm + beta
-            {tt::CB::c_intermed7, im7_t, intermed_cb_format},  // Sum[x]
+            {tt::CBIndex::c_0, in0_t},                       // input
+            {tt::CBIndex::c_1, in1_t},                       // scaler
+            {tt::CBIndex::c_2, in2_t},                       // epsilon
+            {tt::CBIndex::c_3, in3_t},                       // gamma
+            {tt::CBIndex::c_4, in4_t},                       // beta
+            {tt::CBIndex::c_5, in5_t},                       // mask_h
+            {tt::CBIndex::c_6, in6_t},                       // mask_w
+            {tt::CBIndex::c_16, out0_t},                     // output
+            {tt::CBIndex::c_17, out1_t},                     // mean
+            {tt::CBIndex::c_18, out2_t},                     // rstd
+            {tt::CBIndex::c_24, im0_t, intermed_cb_format},  // E[x]
+            {tt::CBIndex::c_25, im1_t, intermed_cb_format},  // x - E[x]
+            {tt::CBIndex::c_26, im2_t, intermed_cb_format},  // (x - E[x])^2
+            {tt::CBIndex::c_27, im3_t, intermed_cb_format},  // Sum[(x - E[x])^2]
+            {tt::CBIndex::c_28, im4_t, intermed_cb_format},  // E[(x - E[x])^2] = Var[x]
+            {tt::CBIndex::c_29, im5_t, intermed_cb_format},  // 1.0/(sqrt(Var[x] + eps))
+            {tt::CBIndex::c_30, im6_t, intermed_cb_format},  // y * gamm + beta
+            {tt::CBIndex::c_31, im7_t, intermed_cb_format},  // Sum[x]
         });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -242,10 +242,9 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     const auto writer_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/writer_moreh_layer_norm.cpp";
 
-    const auto reader_kernels_id = CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    const auto writer_kernels_id =
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    const auto reader_kernels_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     const std::vector<uint32_t> compute_args_group_1{
         num_rows_per_core_group_1,

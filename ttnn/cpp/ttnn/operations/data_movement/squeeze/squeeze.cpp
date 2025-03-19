@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 #include "squeeze.hpp"
 #include "ttnn/operations/core/core.hpp"
 
@@ -13,7 +12,7 @@ ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const in
     const auto padded_shape = input_tensor.get_padded_shape();
     const auto input_tensor_rank = original_logical_shape.rank();
 
-    int normal_dim =  dim;
+    int normal_dim = dim;
     if (dim < 0) {
         // Handle negative dimension by converting it to positive
         normal_dim += input_tensor_rank;
@@ -29,7 +28,10 @@ ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const in
     original_logical_shape_vector.erase(original_logical_shape_vector.begin() + normal_dim);
     padded_shape_vector.erase(padded_shape_vector.begin() + normal_dim);
 
-    return ttnn::reshape(input_tensor, ttnn::Shape(original_logical_shape_vector, padded_shape_vector));
+    return ttnn::reshape(
+        input_tensor,
+        ttnn::Shape(std::move(original_logical_shape_vector)),
+        ttnn::Shape(std::move(padded_shape_vector)));
 }
 
-} // ttnn::operations::data_movement namespace
+}  // namespace ttnn::operations::data_movement

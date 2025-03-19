@@ -12,13 +12,10 @@
 #include <vector>
 
 // clang-format off
-#include "llrt/tt_cluster.hpp"
-#include "tt_metal/third_party/umd/device/tt_xy_pair.h"
-#include "llrt/tt_memory.h"
+#include "tt_cluster.hpp"
+#include "umd/device/tt_xy_pair.h"
+#include "tt_memory.h"
 // clang-format on
-
-// FIXME: ARCH_NAME specific include
-#include "dev_mem_map.h" // MEM_LOCAL_BASE
 
 namespace tt {
 
@@ -51,64 +48,54 @@ using NUM_REPETITIONS = std::uint32_t;
 using WorkerCore = tt_cxy_pair;
 using WorkerCores = std::vector<WorkerCore>;
 
-ll_api::memory get_risc_binary(string const &path,
-    uint32_t core_type_idx, uint32_t processor_class_idx, uint32_t processor_type_idx,
-    ll_api::memory::PackSpans span_type = ll_api::memory::PackSpans::NO_PACK,
-    ll_api::memory::Relocate relo_type = ll_api::memory::Relocate::NONE);
-
+// Return a reference to a potentially shared binary image.
+// The images are cached by path name.
+const ll_api::memory& get_risc_binary(
+    const string& path, ll_api::memory::Loading loading = ll_api::memory::Loading::DISCRETE);
 
 // TODO: try using "stop" method from device instead, it's the proper way of asserting reset
 
 // CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
 // NOC coord is also synonymous to routing / physical coord
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
-template<typename DType>
+template <typename DType>
 void write_hex_vec_to_core(
     chip_id_t chip,
-    const CoreCoord &core,
+    const CoreCoord& core,
     const std::vector<DType>& hex_vec,
     uint64_t addr,
     bool small_access = false) {
-    tt::Cluster::instance().write_core(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr, small_access);
+    tt::Cluster::instance().write_core(
+        hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr, small_access);
 }
-template<typename DType>
+template <typename DType>
 void write_hex_vec_to_core(
     chip_id_t chip,
-    const CoreCoord &core,
+    const CoreCoord& core,
     tt::stl::Span<const DType> hex_vec,
     uint64_t addr,
     bool small_access = false) {
-    tt::Cluster::instance().write_core(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr, small_access);
+    tt::Cluster::instance().write_core(
+        hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr, small_access);
 }
 
-std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t size);
+std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord& core, uint64_t addr, uint32_t size);
 
-CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, CoreCoord &physical_core);
+CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, CoreCoord& ethernet_core);
 
-void write_launch_msg_to_core(chip_id_t chip, CoreCoord core, launch_msg_t *msg, go_msg_t * go_msg, uint64_t addr, bool send_go = true);
-
-void launch_erisc_app_fw_on_core(chip_id_t chip, CoreCoord core);
+void write_launch_msg_to_core(
+    chip_id_t chip, CoreCoord core, launch_msg_t* msg, go_msg_t* go_msg, uint64_t addr, bool send_go = true);
 
 void print_worker_cores(chip_id_t chip_id = 0);
 
-inline bool is_worker_core(const CoreCoord &core, chip_id_t chip_id) {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
-    return std::find(soc_desc.physical_workers.begin(), soc_desc.physical_workers.end(), core) !=
-           soc_desc.physical_workers.end();
-}
-
-inline bool is_ethernet_core(const CoreCoord &core, chip_id_t chip_id) {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
-    return std::find(soc_desc.physical_ethernet_cores.begin(), soc_desc.physical_ethernet_cores.end(), core) !=
-           soc_desc.physical_ethernet_cores.end();
-}
-
-uint32_t generate_risc_startup_addr(bool is_eth_core);
-void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core);
-
 bool test_load_write_read_risc_binary(
-    ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, uint32_t core_type_idx, uint32_t processor_class_idx, uint32_t processor_type_idx);
-void write_binary_to_address(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, uint32_t address);
+    const ll_api::memory& mem,
+    chip_id_t chip_id,
+    const CoreCoord& core,
+    uint32_t core_type_idx,
+    uint32_t processor_class_idx,
+    uint32_t processor_type_idx);
+void write_binary_to_address(const ll_api::memory& mem, chip_id_t chip_id, const CoreCoord& core, uint32_t address);
 
 // subchannel hard-coded to 0 for now
 CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id = 0);
@@ -116,27 +103,9 @@ CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id = 0);
 namespace internal_ {
 
 void wait_until_cores_done(
-    chip_id_t device_id, int run_state, std::unordered_set<CoreCoord> &not_done_phys_cores, int timeout_ms = 0);
+    chip_id_t device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms = 0);
 
 }  // namespace internal_
-
-inline uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0) {
-    uint64_t relo_addr;
-    if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
-        // Move addresses in the local memory range to l1 (copied by kernel)
-        relo_addr = (addr & ~MEM_LOCAL_BASE) + local_init_addr;
-    }
-#ifdef NCRISC_HAS_IRAM
-    else if ((addr & MEM_NCRISC_IRAM_BASE) == MEM_NCRISC_IRAM_BASE) {
-        // Move addresses in the trisc memory range to l1 (copied by kernel)
-        relo_addr = (addr & ~MEM_NCRISC_IRAM_BASE) + MEM_NCRISC_INIT_IRAM_L1_BASE;
-    }
-#endif
-    else {
-        relo_addr = addr;
-    }
-    return relo_addr;
-}
 
 }  // namespace llrt
 

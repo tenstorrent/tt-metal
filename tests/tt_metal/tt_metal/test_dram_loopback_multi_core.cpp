@@ -7,8 +7,9 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include "tt_metal.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -22,22 +23,18 @@
 //////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     bool pass = true;
 
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
     try {
-
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
-        int device_id
-        tt_metal::Device *device =
-            tt_metal::CreateDevice(device_id);
-
-
+        int device_id = 0;
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Input Data Setup
@@ -45,8 +42,8 @@ int main(int argc, char **argv) {
         std::array<uint32_t, 4> shape = {1, 1, 32, 1024 * 32};
 
         uint32_t seed_from_systime = std::chrono::system_clock::now().time_since_epoch().count();
-        Tensor<bfloat16> tensor = initialize_tensor<bfloat16>(
-            shape, Initialize::RANDOM, 0, 100, seed_from_systime);  // TODO: make randomized!
+        tt::deprecated::Tensor<bfloat16> tensor = initialize_tensor<bfloat16>(
+            shape, tt::deprecated::Initialize::RANDOM, 0, 100, seed_from_systime);  // TODO: make randomized!
         auto golden = tensor.get_values();
         auto src_vec = pack_bfloat16_vec_into_uint32_vec(golden);
 
@@ -74,11 +71,10 @@ int main(int argc, char **argv) {
         TT_FATAL(num_output_tiles % transient_buffer_size_tiles == 0, "Error");
 
         tt_metal::InterleavedBufferConfig dram_config{
-                                .device=device,
-                                .size = dram_buffer_size,
-                                .page_size = dram_buffer_size,
-                                .buffer_type = tt_metal::BufferType::DRAM
-                                };
+            .device = device,
+            .size = dram_buffer_size,
+            .page_size = dram_buffer_size,
+            .buffer_type = tt_metal::BufferType::DRAM};
 
         auto input_dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_src_addr = input_dram_buffer->address();
@@ -86,42 +82,37 @@ int main(int argc, char **argv) {
         auto output_dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_dst_addr = output_dram_buffer->address();
 
-        auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
-        auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
-
         // Loader (producer kernel) running on BRISC on logical core {0, 0}
         auto producer_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_loader_sync.cpp",
             loader_logical_core,
-            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
         // Writer (consumer kernel) running on NCRISC on logical core {0, 1}
         auto consumer_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/remote_read_remote_write_sync.cpp",
             writer_logical_core,
-            tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Compile Application
         ////////////////////////////////////////////////////////////////////////////
-
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
         pass &= tt_metal::detail::WriteToBuffer(input_dram_buffer, src_vec);
 
-
-
         tt_metal::SetRuntimeArgs(
             program,
             producer_kernel,
             loader_logical_core,
             {dram_buffer_src_addr,
-            (uint32_t)input_dram_noc_xy.x,
-            (uint32_t)input_dram_noc_xy.y,
+            0,
             loader_buffer_address,
             (uint32_t)writer_worker_core.x,
             (uint32_t)writer_worker_core.y,
@@ -138,14 +129,12 @@ int main(int argc, char **argv) {
             (uint32_t)loader_worker_core.x,
             (uint32_t)loader_worker_core.y,
             dram_buffer_dst_addr,
-            (uint32_t)output_dram_noc_xy.x,
-            (uint32_t)output_dram_noc_xy.y,
+            0,
             writer_buffer_address,
             stream_register_address,
             num_output_tiles,
             transient_buffer_size_tiles,
             transient_buffer_size_bytes});
-
 
         tt_metal::detail::LaunchProgram(device, program);
 
@@ -160,7 +149,7 @@ int main(int argc, char **argv) {
 
         pass &= tt_metal::CloseDevice(device);
 
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());

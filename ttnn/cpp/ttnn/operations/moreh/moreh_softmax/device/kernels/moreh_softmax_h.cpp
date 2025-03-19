@@ -7,25 +7,25 @@
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_COL
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
-    constexpr auto cb_in0 = tt::CB::c_in0;
-    constexpr auto cb_mask = tt::CB::c_in1;
-    constexpr auto cb_bcast_scaler = tt::CB::c_in2;
-    constexpr auto cb_out0 = tt::CB::c_out0;
-    constexpr auto cb_exps = tt::CB::c_intermed0;
-    constexpr auto cb_recipsumexps = tt::CB::c_intermed1;
-    constexpr auto cb_max = tt::CB::c_intermed2;
-    constexpr auto cb_x_m_max = tt::CB::c_intermed3;
-    constexpr auto cb_tmp = tt::CB::c_intermed4;
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto cb_mask = tt::CBIndex::c_1;
+    constexpr auto cb_bcast_scaler = tt::CBIndex::c_2;
+    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    constexpr auto cb_exps = tt::CBIndex::c_24;
+    constexpr auto cb_recipsumexps = tt::CBIndex::c_25;
+    constexpr auto cb_max = tt::CBIndex::c_26;
+    constexpr auto cb_x_m_max = tt::CBIndex::c_27;
+    constexpr auto cb_tmp = tt::CBIndex::c_28;
 
     constexpr int dst0 = 0;
     constexpr int dst1 = 1;
     constexpr uint32_t onetile = 1;
 
-    binary_op_init_common(cb_in0, cb_bcast_scaler);
+    binary_op_init_common(cb_in0, cb_bcast_scaler, cb_out0);
 
     uint32_t N = get_compile_time_arg_val(0);
     uint32_t Ht = get_compile_time_arg_val(1);

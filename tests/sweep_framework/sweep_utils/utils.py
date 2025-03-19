@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
 import random
 from loguru import logger
 from itertools import product
@@ -220,6 +221,28 @@ def gen_split_qkv_heads_spec(
         }
 
 
+def gen_rotary_embedding_spec(
+    input_shape_list,
+    cache_size_list,
+    use_token_idx_list=[True, False],
+):
+    for input_shape, cache_size, use_token_idx in itertools.product(
+        input_shape_list, cache_size_list, use_token_idx_list
+    ):
+        input_shape_ = input_shape.copy()
+        if use_token_idx is True:
+            token_idx = random.randint(1, cache_size - 1)
+            input_shape_[0] = 1
+        else:
+            token_idx = None
+
+        yield {
+            "input_shape": input_shape_,
+            "cache_size": cache_size,
+            "token_idx": token_idx,
+        }
+
+
 def gen_complex_tensor(input_shape, low, high, dtype=ttnn.bfloat16):
     torch_real = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), dtype)(
         input_shape
@@ -247,3 +270,55 @@ def complex_from_torch(torch_tensor, dtype, layout, memory_config, device):
         memory_config=memory_config,
     )
     return ttnn.complex_tensor(tt_real, tt_imag)
+
+
+def get_device_grid_size():
+    device = ttnn.open_device(device_id=0)
+    if ttnn.device.is_wormhole_b0(device):
+        y, x = 8, 8
+    elif ttnn.device.is_grayskull(device):
+        y, x = 9, 12
+    else:
+        y, x = 8, 8
+    ttnn.close_device(device)
+    del device
+    return y, x
+
+
+def gen_pytest_parametrize_args(parameters: dict) -> dict:
+    """Generate pytest parametrize arguments from a dictionary of parameters."
+    Args:
+        parameters: A dictionary of parameters. The keys are the config names and the values are dictionaries of parameter values.
+                    The keys of the inner dictionaries are the function argument names.
+                    The values of the inner dictionaries are lists of parameter values to be used for sweep.
+    Returns:
+        A dictionary of pytest parametrize arguments.
+    Example:
+        parameters = {
+            "cfg1": {
+                "arg1": [1, 2],
+                "arg2": [3, 4],
+            },
+            "cfg2": {
+                "arg1": [5, 6],
+                "arg2": [7],
+            },
+        }
+        The function returns:
+        {'argnames': ['arg1', 'arg2'], 'argvalues': { ... }, 'ids': { ... }} where
+        argvalues = [(1, 3), (1, 4), (2, 3), (2, 4), (5, 7), (6, 7)]
+        ids = ['cfg1-arg1_1-arg2_3', 'cfg1-arg1_1-arg2_4', ... , 'cfg2-arg1_6-arg2_7']
+    """
+    test_argnames, test_id2values = [], {}
+    for param_name, values_dict in parameters.items():
+        test_argnames = list(values_dict)
+        all_arg_combs = itertools.product(*[values_dict[arg_name] for arg_name in test_argnames])
+
+        for arg_vals in all_arg_combs:
+            id_str = (
+                str(param_name)
+                + "-"
+                + "-".join(str(name) + "_" + str(val) for name, val in zip(test_argnames, arg_vals))
+            )
+            test_id2values[id_str] = arg_vals
+    return {"argnames": test_argnames, "argvalues": test_id2values.values(), "ids": test_id2values.keys()}

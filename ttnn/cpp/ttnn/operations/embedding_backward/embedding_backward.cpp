@@ -4,7 +4,9 @@
 
 #include "ttnn/operations/embedding_backward/embedding_backward.hpp"
 
-#include "ttnn/cpp/ttnn/common/constants.hpp"
+#include <utility>
+
+#include "cpp/ttnn/common/constants.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/embedding_backward/device/embedding_backward_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
@@ -12,22 +14,22 @@
 namespace ttnn::operations::embedding_backward {
 
 Tensor EmbeddingBackwardOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor_arg,
     const Tensor& weight_tensor_arg,
     const Tensor& output_gradient_tensor_arg,
     const std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
-    auto num_embeddings = weight_tensor_arg.get_shape()[-2];
+    const std::optional<Tensor>& optional_output_tensor) {
+    auto num_embeddings = weight_tensor_arg.get_logical_shape()[-2];
 
-    auto batch_size = input_tensor_arg.get_shape()[0];
-    auto sentence_size = input_tensor_arg.get_shape()[-1];
-    auto input_tensor =
-        ttnn::reshape(input_tensor_arg, ttnn::SimpleShape{std::array<uint32_t, 4>{batch_size, 1, 1, sentence_size}});
+    const auto& input_shape = input_tensor_arg.get_logical_shape();
+    auto batch_size = input_shape[0];
+    auto sentence_size = input_shape[-1];
+    auto input_tensor = ttnn::reshape(input_tensor_arg, ttnn::Shape({batch_size, 1, 1, sentence_size}));
 
     auto input_gradient =
-        operation::run(
+        tt::tt_metal::operation::run(
             EmbeddingBackward{
                 .output_mem_config = memory_config.value_or(output_gradient_tensor_arg.memory_config()),
                 .output_dtype = dtype.value_or(output_gradient_tensor_arg.get_dtype()),
@@ -44,7 +46,7 @@ Tensor EmbeddingBackwardOperation::invoke(
     const Tensor& output_gradient_tensor_arg,
     const std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor) {
     return invoke(
         ttnn::DefaultQueueId,
         input_tensor_arg,
@@ -52,7 +54,7 @@ Tensor EmbeddingBackwardOperation::invoke(
         output_gradient_tensor_arg,
         dtype,
         memory_config,
-        optional_output_tensor);
+        std::move(optional_output_tensor));
 }
 
 }  // namespace ttnn::operations::embedding_backward

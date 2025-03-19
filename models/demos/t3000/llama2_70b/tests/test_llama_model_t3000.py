@@ -71,6 +71,7 @@ def test_LlamaModel_inference(
         t3k_mesh_device,
         batch,
         seq_len,
+        max_batch_size,
         max_context_len,
         N_LAYERS_TO_PCC[n_layers],
         model_config,

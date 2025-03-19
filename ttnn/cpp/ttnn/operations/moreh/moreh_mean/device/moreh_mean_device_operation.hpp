@@ -28,13 +28,13 @@ struct MorehMeanOperation {
         const std::optional<Tensor>& output;
     };
 
-    using shape_return_value_t = Shape;
+    using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct MorehMeanHFactory {
         struct shared_variables_t {
-            KernelHandle unary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
             std::uint32_t num_cores;
             std::uint32_t core_h;
         };
@@ -55,8 +55,8 @@ struct MorehMeanOperation {
 
     struct MorehMeanNCFactory {
         struct shared_variables_t {
-            KernelHandle unary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
             std::uint32_t num_cores;
             std::uint32_t core_h;
         };
@@ -77,8 +77,8 @@ struct MorehMeanOperation {
 
     struct MorehMeanWFactory {
         struct shared_variables_t {
-            KernelHandle unary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
             std::uint32_t num_cores;
             std::uint32_t core_h;
         };
@@ -103,7 +103,7 @@ struct MorehMeanOperation {
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
-    static shape_return_value_t compute_output_shapes(const operation_attributes_t&, const tensor_args_t&);
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,

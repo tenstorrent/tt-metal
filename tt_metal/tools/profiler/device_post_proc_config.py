@@ -24,6 +24,28 @@ class default_setup(metaclass=MergeMetaclass):
     ]
 
     timerAnalysis = {
+        "device_kernel_first_to_last_start": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {
+                "core": "ANY",
+                "risc": "ANY",
+                "zone_phase": "ZONE_START",
+                "zone_name": [f"{risc}-KERNEL" for risc in riscTypes],
+            },
+            "end": {
+                "core": "ANY",
+                "risc": "ANY",
+                "zone_phase": "ZONE_START",
+                "zone_name": [f"{risc}-KERNEL" for risc in riscTypes],
+            },
+        },
+        "device_kernel_duration_per_core": {
+            "across": "ops",
+            "type": "op_core_first_last",
+            "start": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
+            "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
+        },
         "device_fw_duration": {
             "across": "ops",
             "type": "op_first_last",
@@ -93,6 +115,22 @@ class default_setup(metaclass=MergeMetaclass):
     deviceAnalysisData = "device_analysis_data.json"
     deviceStatsTXT = "device_stats.txt"
     deviceTarball = "device_perf_results.tgz"
+
+
+class test_timestamped_events(default_setup):
+    timerAnalysis = {
+        "erisc_events": {
+            "across": "device",
+            "type": "event",
+            "marker": {"risc": "ERISC"},
+        },
+        "all_events": {
+            "across": "device",
+            "type": "event",
+            "marker": {"risc": "ANY"},
+        },
+    }
+    detectOps = False
 
 
 class test_multi_op(default_setup):
@@ -211,6 +249,12 @@ class test_dispatch_cores(default_setup):
             "start": {"risc": "NCRISC", "zone_name": "KERNEL-MAIN-HD"},
             "end": {"risc": "NCRISC", "zone_name": "KERNEL-MAIN-HD"},
         },
+    }
+    detectOps = False
+
+
+class test_ethernet_dispatch_cores(default_setup):
+    timerAnalysis = {
         "Ethernet CQ Dispatch": {
             "across": "core",
             "type": "adjacent",

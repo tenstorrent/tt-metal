@@ -10,19 +10,24 @@
 #include "core/debug.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "optimizers/optimizer_base.hpp"
+#include "serialization/serializable.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
-
 namespace {
 
-const std::string kFirstMoment = "first_moment/";
-const std::string kSecondMoment = "second_moment/";
-
+const std::string kFirstMoment = "first_moment";
+const std::string kSecondMoment = "second_moment";
+const std::string kKahanCompensation = "kahan_compensation";
+const std::string kSteps = "steps";
 }  // namespace
 
 namespace ttml::optimizers {
 
-MorehAdamW::MorehAdamW(autograd::NamedParameters parameters, const AdamWConfig& config) :
+MorehAdamW::MorehAdamW(serialization::NamedParameters parameters, const AdamWConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
+    if (m_config.use_kahan_summation) {
+        throw std::runtime_error("MorehAdamW: Kahan summation is not supported. Use default AdamW instead.");
+    }
+
     for (const auto& [key, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
             m_first_moment.emplace(
@@ -63,7 +68,8 @@ void MorehAdamW::step() {
         const auto& first_moment = first_moment_ptr->get_value(autograd::PreferredPrecision::FULL);
         const auto& second_moment = second_moment_ptr->get_value(autograd::PreferredPrecision::FULL);
 
-        const auto& gradients = tensor_ptr->get_grad();
+        auto gradients = tensor_ptr->get_grad();
+
         auto output_tensor = tensor_ptr->get_value(autograd::PreferredPrecision::FULL);
         ttnn::moreh_adamw(
             tensor_ptr->get_value(autograd::PreferredPrecision::FULL),
@@ -90,29 +96,19 @@ void MorehAdamW::step() {
     }
 }
 
-[[nodiscard]] autograd::NamedParameters MorehAdamW::get_state_dict() const {
-    autograd::NamedParameters state_dict;
-    for (const auto& [key, first_moment] : m_first_moment) {
-        state_dict.emplace(kFirstMoment + key, first_moment);
-    }
-
-    for (const auto& [key, second_moment] : m_second_moment) {
-        state_dict.emplace(kSecondMoment + key, second_moment);
-    }
+[[nodiscard]] serialization::StateDict MorehAdamW::get_state_dict() const {
+    serialization::StateDict state_dict;
+    state_dict[kFirstMoment] = m_first_moment;
+    state_dict[kSecondMoment] = m_second_moment;
+    state_dict[kSteps] = m_steps;
 
     return state_dict;
 }
 
-void MorehAdamW::set_state_dict(const autograd::NamedParameters& dict) {
-    for (const auto& [key, tensor] : dict) {
-        if (key.starts_with(kFirstMoment)) {
-            m_first_moment[key.substr(kFirstMoment.size())] = tensor;
-        } else if (key.starts_with(kSecondMoment)) {
-            m_second_moment[key.substr(kSecondMoment.size())] = tensor;
-        } else {
-            throw std::runtime_error(fmt::format("AdamW: Invalid key in state dict. Key = {}", key));
-        }
-    }
+void MorehAdamW::set_state_dict(const serialization::StateDict& dict) {
+    m_first_moment = std::get<serialization::NamedParameters>(dict.at(kFirstMoment));
+    m_second_moment = std::get<serialization::NamedParameters>(dict.at(kSecondMoment));
+    m_steps = serialization::get_value_type<size_t>(dict, kSteps);
 }
 
 [[nodiscard]] size_t MorehAdamW::get_steps() const {
@@ -123,7 +119,14 @@ void MorehAdamW::set_steps(size_t steps) {
     m_steps = steps;
 }
 
-AdamW::AdamW(autograd::NamedParameters parameters, const AdamWConfig& config) :
+float MorehAdamW::get_lr() const {
+    return m_config.lr;
+}
+void MorehAdamW::set_lr(float lr) {
+    m_config.lr = lr;
+}
+
+AdamW::AdamW(serialization::NamedParameters parameters, const AdamWConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
     for (const auto& [key, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
@@ -137,6 +140,13 @@ AdamW::AdamW(autograd::NamedParameters parameters, const AdamWConfig& config) :
                 autograd::create_tensor(
                     core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::FULL)),
                     /* requires_grad */ false));
+            if (m_config.use_kahan_summation) {
+                m_kahan_compensation.emplace(
+                    key,
+                    autograd::create_tensor(
+                        core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::FULL)),
+                        /* requires_grad */ false));
+            }
         }
     }
 }
@@ -165,7 +175,8 @@ void AdamW::step() {
         auto first_moment = first_moment_ptr->get_value(autograd::PreferredPrecision::FULL);
         auto second_moment = second_moment_ptr->get_value(autograd::PreferredPrecision::FULL);
 
-        const auto& gradients = tensor_ptr->get_grad();
+        auto gradients = tensor_ptr->get_grad();
+
         if (m_config.weight_decay != 0.0F) {
             auto weight_decay_update = ttnn::multiply(
                 tensor_ptr->get_value(autograd::PreferredPrecision::FULL), m_config.weight_decay * m_config.lr);
@@ -188,37 +199,47 @@ void AdamW::step() {
         // weights -= lr * first_moment_hat / (sqrt(second_moment_hat) + epsilon)
         first_moment_ptr->set_value(first_moment);
         second_moment_ptr->set_value(second_moment);
-        tensor_ptr->set_value(ttnn::subtract(
-            tensor_ptr->get_value(autograd::PreferredPrecision::FULL),
-            ttnn_fixed::divide(
-                ttnn::multiply(first_moment_hat, m_config.lr),
-                ttnn::add(ttnn::sqrt(second_moment_hat), m_config.epsilon))));
+
+        auto update_tensor = ttnn_fixed::divide(
+            ttnn::multiply(first_moment_hat, -m_config.lr), ttnn::add(ttnn::sqrt(second_moment_hat), m_config.epsilon));
+
+        if (!m_config.use_kahan_summation) {
+            tensor_ptr->set_value(ttnn::add(tensor_ptr->get_value(autograd::PreferredPrecision::FULL), update_tensor));
+        } else {
+            auto value_tensor = tensor_ptr->get_value(autograd::PreferredPrecision::FULL);
+
+            const auto& kahan_compensation_ptr = m_kahan_compensation.at(key);
+            // A running compensation for lost low-order bits
+            auto compensation_tensor = kahan_compensation_ptr->get_value(autograd::PreferredPrecision::FULL);
+            // Adjust the update with the compensation
+            auto adjusted_update = ttnn::subtract(update_tensor, compensation_tensor);
+            // Update the value with the adjusted update
+            auto result = ttnn::add(value_tensor, adjusted_update);
+            // (result - value_tensor) cancels the high-order part of adjusted_update;
+            // subtracting adjusted_update recovers negative (low part of adjusted_update)
+            compensation_tensor = ttnn::subtract(ttnn::subtract(result, value_tensor), adjusted_update);
+
+            tensor_ptr->set_value(result);
+            kahan_compensation_ptr->set_value(compensation_tensor);
+        }
     }
 }
 
-[[nodiscard]] autograd::NamedParameters AdamW::get_state_dict() const {
-    autograd::NamedParameters state_dict;
-    for (const auto& [key, first_moment] : m_first_moment) {
-        state_dict.emplace(kFirstMoment + key, first_moment);
-    }
-
-    for (const auto& [key, second_moment] : m_second_moment) {
-        state_dict.emplace(kSecondMoment + key, second_moment);
-    }
+[[nodiscard]] serialization::StateDict AdamW::get_state_dict() const {
+    serialization::StateDict state_dict;
+    state_dict[kFirstMoment] = m_first_moment;
+    state_dict[kSecondMoment] = m_second_moment;
+    state_dict[kKahanCompensation] = m_kahan_compensation;
+    state_dict[kSteps] = m_steps;
 
     return state_dict;
 }
 
-void AdamW::set_state_dict(const autograd::NamedParameters& dict) {
-    for (const auto& [key, tensor] : dict) {
-        if (key.starts_with(kFirstMoment)) {
-            m_first_moment[key.substr(kFirstMoment.size())] = tensor;
-        } else if (key.starts_with(kSecondMoment)) {
-            m_second_moment[key.substr(kSecondMoment.size())] = tensor;
-        } else {
-            throw std::runtime_error(fmt::format("AdamW: Invalid key in state dict. Key = {}", key));
-        }
-    }
+void AdamW::set_state_dict(const serialization::StateDict& dict) {
+    m_first_moment = std::get<serialization::NamedParameters>(dict.at(kFirstMoment));
+    m_second_moment = std::get<serialization::NamedParameters>(dict.at(kSecondMoment));
+    m_kahan_compensation = std::get<serialization::NamedParameters>(dict.at(kKahanCompensation));
+    m_steps = serialization::get_value_type<size_t>(dict, kSteps);
 }
 
 [[nodiscard]] size_t AdamW::get_steps() const {
@@ -229,4 +250,10 @@ void AdamW::set_steps(size_t steps) {
     m_steps = steps;
 }
 
+float AdamW::get_lr() const {
+    return m_config.lr;
+}
+void AdamW::set_lr(float lr) {
+    m_config.lr = lr;
+}
 }  // namespace ttml::optimizers

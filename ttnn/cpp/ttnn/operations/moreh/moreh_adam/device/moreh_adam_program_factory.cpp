@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "moreh_adam_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
@@ -45,7 +45,7 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::tt_metal::Device* device = param_in.device();
+    tt::tt_metal::IDevice* device = param_in.device();
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
 
@@ -66,27 +66,27 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
         all_cores,
         data_format,
         {
-            {tt::CB::c_in0, 1},                      // param_in
-            {tt::CB::c_in1, 1},                      // grad
-            {tt::CB::c_in2, 1},                      // exp_avg_in
-            {tt::CB::c_in3, 1},                      // exp_avg_sq_in
-            {tt::CB::c_in4, 1},                      // max_exp_avg_sq_in (optional)
-            {tt::CB::c_in5, 5, intermed_cb_format},  // lr, beta1, beta2, eps, weight_decay
-            {tt::CB::c_in6, 1, intermed_cb_format},  // 1.0f
+            {tt::CBIndex::c_0, 1},                      // param_in
+            {tt::CBIndex::c_1, 1},                      // grad
+            {tt::CBIndex::c_2, 1},                      // exp_avg_in
+            {tt::CBIndex::c_3, 1},                      // exp_avg_sq_in
+            {tt::CBIndex::c_4, 1},                      // max_exp_avg_sq_in (optional)
+            {tt::CBIndex::c_5, 5, intermed_cb_format},  // lr, beta1, beta2, eps, weight_decay
+            {tt::CBIndex::c_6, 1, intermed_cb_format},  // 1.0f
 
-            {tt::CB::c_intermed0, 1, intermed_cb_format},  // tmp_grad
-            {tt::CB::c_intermed1, 1, intermed_cb_format},  // tmp_exp_avg
-            {tt::CB::c_intermed2, 1, intermed_cb_format},  // tmp_exp_avg_sq
-            {tt::CB::c_intermed3, 1, intermed_cb_format},  // tmp_max_exp_avg_sq
-            {tt::CB::c_intermed4, 1, intermed_cb_format},  //
-            {tt::CB::c_intermed5, 1, intermed_cb_format},  //
-            {tt::CB::c_intermed6, 1, intermed_cb_format},  // tmp1
-            {tt::CB::c_intermed7, 1, intermed_cb_format},  // tmp2
+            {tt::CBIndex::c_24, 1, intermed_cb_format},  // tmp_grad
+            {tt::CBIndex::c_25, 1, intermed_cb_format},  // tmp_exp_avg
+            {tt::CBIndex::c_26, 1, intermed_cb_format},  // tmp_exp_avg_sq
+            {tt::CBIndex::c_27, 1, intermed_cb_format},  // tmp_max_exp_avg_sq
+            {tt::CBIndex::c_28, 1, intermed_cb_format},  //
+            {tt::CBIndex::c_29, 1, intermed_cb_format},  //
+            {tt::CBIndex::c_30, 1, intermed_cb_format},  // tmp1
+            {tt::CBIndex::c_31, 1, intermed_cb_format},  // tmp2
 
-            {tt::CB::c_out0, 1},  // param_out
-            {tt::CB::c_out1, 1},  // exp_avg_out
-            {tt::CB::c_out2, 1},  // exp_avg_sq_out
-            {tt::CB::c_out3, 1},  // max_exp_avg_sq_out (optional)
+            {tt::CBIndex::c_16, 1},  // param_out
+            {tt::CBIndex::c_17, 1},  // exp_avg_out
+            {tt::CBIndex::c_18, 1},  // exp_avg_sq_out
+            {tt::CBIndex::c_19, 1},  // max_exp_avg_sq_out (optional)
         });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -104,7 +104,7 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
         static_cast<uint32_t>(is_dram(param_out)),
         static_cast<uint32_t>(is_dram(exp_avg_out)),
         static_cast<uint32_t>(is_dram(exp_avg_sq_out)),
-        static_cast<uint32_t>(is_dram(max_exp_avg_sq_out.value()))};
+        static_cast<uint32_t>(max_exp_avg_sq_out.has_value() ? is_dram(max_exp_avg_sq_out.value()) : false)};
 
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/"
@@ -120,10 +120,10 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     if (fp32_dest_acc_en) {
         data_movement_defines["FP32_DEST_ACC_EN"] = "1";
     }
-    const auto reader_kernel_id = CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, data_movement_defines);
-    const auto writer_kernel_id = CreateWriteKernel(
-        program, writer_kernel_file, all_cores, writer_compile_time_args, data_movement_defines);
+    const auto reader_kernel_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, data_movement_defines);
+    const auto writer_kernel_id =
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args, data_movement_defines);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -272,7 +272,7 @@ void MorehAdamOperation::ProgramFactory::override_runtime_arguments(
     auto param_out_buffer = tensor_return_value.at(0)->buffer();
     auto exp_avg_out_buffer = tensor_return_value.at(1)->buffer();
     auto exp_avg_sq_out_buffer = tensor_return_value.at(2)->buffer();
-    auto max_exp_avg_sq_out_buffer = tensor_return_value.at(3)->buffer();
+    auto max_exp_avg_sq_out_buffer = operation_attributes.amsgrad ? tensor_return_value.at(3)->buffer() : nullptr;
 
     auto& core_group_1 = cached_program.shared_variables.core_group_1;
     auto& core_group_2 = cached_program.shared_variables.core_group_2;

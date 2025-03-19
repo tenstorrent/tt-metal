@@ -4,19 +4,19 @@
 
 #pragma once
 
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
 namespace tt::tt_metal {
 
 template <size_t N>
-std::tuple<std::array<CB, N>, CBHandle> create_cb(
-    const CB (&cbs)[N],
-    Program &program,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+std::tuple<std::array<uint32_t, N>, CBHandle> create_cb(
+    const uint32_t (&cbs)[N],
+    Program& program,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     uint32_t page_size,
     uint32_t num_pages,
     const tt::DataFormat data_format,
-    Buffer *buffer = nullptr) {
+    Buffer* buffer = nullptr) {
     std::map<uint8_t, tt::DataFormat> data_format_spec = {};
     for (auto cb : cbs) {
         data_format_spec[cb] = data_format;
@@ -31,20 +31,20 @@ std::tuple<std::array<CB, N>, CBHandle> create_cb(
         cb_config.set_globally_allocated_address(*buffer);
     }
 
-    std::array<CB, N> cbs_out;
+    std::array<uint32_t, N> cbs_out;
     std::copy(cbs, cbs + N, cbs_out.begin());
     return std::make_tuple(cbs_out, tt_metal::CreateCircularBuffer(program, core_spec, cb_config));
 }
 
-inline std::tuple<CB, CBHandle> create_cb(
-    CB cb,
-    Program &program,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet> &core_spec,
+inline std::tuple<uint32_t, CBHandle> create_cb(
+    uint32_t cb,
+    Program& program,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     uint32_t page_size,
     uint32_t num_pages,
     const tt::DataFormat data_format,
-    Buffer *buffer = nullptr) {
-    CB cbs[] = {cb};
+    Buffer* buffer = nullptr) {
+    uint32_t cbs[] = {cb};
     auto [_, handle] = create_cb(cbs, program, core_spec, page_size, num_pages, data_format, buffer);
     return std::make_tuple(cb, handle);
 }

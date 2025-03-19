@@ -4,7 +4,7 @@
 
 #include "moreh_clip_grad_norm_step2_device_operation.hpp"
 
-#include "common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -15,8 +15,9 @@ void MorehClipGradNormStep2Operation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     check_tensor(tensor_args.tmp_pow_sum, "moreh_clip_grad_norm_step2", "tmp_pow_sum");
 
-    if (tensor_args.total_norm.has_value())
+    if (tensor_args.total_norm.has_value()) {
         check_tensor(tensor_args.total_norm, "moreh_clip_grad_norm_step2", "total_norm");
+    }
 };
 
 MorehClipGradNormStep2Operation::program_factory_t MorehClipGradNormStep2Operation::select_program_factory(
@@ -34,9 +35,17 @@ void MorehClipGradNormStep2Operation::validate_on_program_cache_hit(
     validate_inputs(operation_attributes, tensor_args);
 };
 
-MorehClipGradNormStep2Operation::shape_return_value_t MorehClipGradNormStep2Operation::compute_output_shapes(
+MorehClipGradNormStep2Operation::spec_return_value_t MorehClipGradNormStep2Operation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return SimpleShape{tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+    if (tensor_args.total_norm.has_value()) {
+        return tensor_args.total_norm->get_tensor_spec();
+    }
+
+    // output total_norm 1 element
+    return TensorSpec(
+        Shape{1, 1},
+        TensorLayout(
+            tensor_args.tmp_pow_sum.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 };
 
 MorehClipGradNormStep2Operation::tensor_return_value_t MorehClipGradNormStep2Operation::create_output_tensors(
@@ -44,14 +53,9 @@ MorehClipGradNormStep2Operation::tensor_return_value_t MorehClipGradNormStep2Ope
     if (tensor_args.total_norm.has_value()) {
         return tensor_args.total_norm.value();
     }
-    const auto& total_norm_shape = compute_output_shapes(operation_attributes, tensor_args);
 
     return create_device_tensor(
-        total_norm_shape,
-        tensor_args.tmp_pow_sum.get_dtype(),
-        Layout::TILE,
-        tensor_args.tmp_pow_sum.device(),
-        operation_attributes.memory_config);
+        compute_output_specs(operation_attributes, tensor_args), tensor_args.tmp_pow_sum.device());
 };
 
 std::tuple<MorehClipGradNormStep2Operation::operation_attributes_t, MorehClipGradNormStep2Operation::tensor_args_t>

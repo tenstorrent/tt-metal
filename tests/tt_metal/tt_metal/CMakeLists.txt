@@ -14,6 +14,7 @@ set(TT_METAL_TESTS_SRCS
     # test_eltwise_unary.cpp        <- not tested in run_tt_metal.py
     test_matmul_single_tile_bfp8b.cpp
     test_matmul_single_tile_output_in_l1.cpp
+    test_stress_noc_mcast.cpp
     test_dram_loopback_single_core.cpp
     test_datacopy_bfp8b.cpp
     test_datacopy.cpp
@@ -35,9 +36,7 @@ set(TT_METAL_TESTS_SRCS
     test_core_range_set.cpp
     test_compile_sets_kernel_binaries.cpp
     test_compile_program.cpp
-    test_kernel_path_env_var.cpp
     test_clean_init.cpp
-    test_create_kernel_from_string.cpp
 )
 
 foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
@@ -47,10 +46,9 @@ foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
     target_include_directories(
         ${TEST}
         PRIVATE
-            ${PROJECT_SOURCE_DIR}
-            ${PROJECT_SOURCE_DIR}/tt_metal
-            ${PROJECT_SOURCE_DIR}/tt_metal/common
+            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
             ${PROJECT_SOURCE_DIR}/tests
+            ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
             ${CMAKE_CURRENT_SOURCE_DIR}
     )
     set_target_properties(
@@ -62,21 +60,96 @@ foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
     list(APPEND METAL_TEST_TARGETS ${TEST})
 endforeach()
 
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests_common)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests_fast_dispatch)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests_fast_dispatch_single_chip_multi_queue)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/unit_tests_frequent)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/api)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/debug_tools)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/device)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dispatch)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/eth)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/integration)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/llk)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/perf_microbenchmark)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/stl)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/noc)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/lightmetal)
 
 add_custom_target(
     metal_tests
     DEPENDS
         ${METAL_TEST_TARGETS}
-        unit_tests
-        unit_tests_fast_dispatch
-        unit_tests_fast_dispatch_single_chip_multi_queue
-        unit_tests_frequent
         metal_perf_microbenchmark_tests
-        unit_tests_galaxy
+        unit_tests_api_wormhole_b0
+        unit_tests_api_blackhole
+        unit_tests_debug_tools_wormhole_b0
+        unit_tests_debug_tools_blackhole
+        unit_tests_device
+        unit_tests_dispatch
+        unit_tests_eth_wormhole_b0
+        unit_tests_eth_blackhole
+        unit_tests_integration
+        unit_tests_llk
+        unit_tests_stl
+        unit_tests_noc
+        unit_tests_lightmetal
+)
+
+add_library(metalium_test_files INTERFACE)
+target_sources(
+    metalium_test_files
+    PUBLIC
+        FILE_SET jit_api
+        TYPE HEADERS
+        BASE_DIRS
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../.. # FIXME
+        FILES
+            test_kernels/compute/increment_runtime_arg.cpp
+            test_kernels/dataflow/semaphore_across_core_types.cpp
+            test_kernels/dataflow/unit_tests/command_queue/arbiter_hang.cpp
+            test_kernels/dataflow/unit_tests/command_queue/dispatcher_kernel_size_and_runtime.cpp
+            test_kernels/dataflow/unit_tests/command_queue/pcie_write_16b.cpp
+            test_kernels/dataflow/unit_tests/command_queue/random_program.cpp
+            test_kernels/misc/add_two_ints.cpp
+            test_kernels/misc/brisc_print.cpp
+            test_kernels/misc/circular_buffer/cb_non_blocking_master_test_kernel.cpp
+            test_kernels/misc/circular_buffer/cb_non_blocking_slave_test_kernel.cpp
+            test_kernels/misc/dprint_raise_wait_brisc.cpp
+            test_kernels/misc/dprint_raise_wait_ncrisc.cpp
+            test_kernels/misc/erisc_print.cpp
+            test_kernels/misc/full_grid_eltwise_device_reuse.cpp
+            test_kernels/misc/global_circular_buffer/validate_receiver_config.cpp
+            test_kernels/misc/global_circular_buffer/validate_sender_config.cpp
+            test_kernels/misc/increment_runtime_arg.cpp
+            test_kernels/misc/local_mem.cpp
+            test_kernels/misc/ncrisc_print.cpp
+            test_kernels/misc/ping_legal_l1s.cpp
+            test_kernels/misc/print_buffering.cpp
+            test_kernels/misc/print_hang.cpp
+            test_kernels/misc/print_one_int.cpp
+            test_kernels/misc/print_simple.cpp
+            test_kernels/misc/print_tile_brisc.cpp
+            test_kernels/misc/print_tile_ncrisc.cpp
+            test_kernels/misc/print_tile_trisc.cpp
+            test_kernels/misc/print_with_wait.cpp
+            test_kernels/misc/runtime_args_kernel.cpp
+            test_kernels/misc/sub_device/incrementer.cpp
+            test_kernels/misc/sub_device/persistent_remote_waiter.cpp
+            test_kernels/misc/sub_device/persistent_waiter.cpp
+            test_kernels/misc/sub_device/sync_and_datacopy.cpp
+            test_kernels/misc/sub_device/sync_and_increment.cpp
+            test_kernels/misc/sub_device/syncer.cpp
+            test_kernels/misc/trisc_print.cpp
+            test_kernels/misc/watcher_asserts.cpp
+            test_kernels/misc/watcher_pause.cpp
+            test_kernels/misc/watcher_ringbuf.cpp
+            test_kernels/misc/watcher_waypoints.cpp
+            test_kernels/misc/read_my_coordinates.cpp
+)
+
+install(
+    TARGETS
+        metalium_test_files
+    FILE_SET
+    jit_api
+        DESTINATION
+            ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium # FIXME: fix the include paths for jit_build
+        COMPONENT metalium-runtime
 )

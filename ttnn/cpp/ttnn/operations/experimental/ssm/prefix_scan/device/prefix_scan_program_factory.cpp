@@ -6,6 +6,8 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::ssm::detail {
 
 using namespace tt::constants;
@@ -29,6 +31,7 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
     const uint32_t input_tile_size = tt::tt_metal::detail::TileSize(input_format);
 
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
+    const uint32_t intermediary_row_size = tt::datum_size(intermediary_format) * TILE_WIDTH;
     const uint32_t intermediary_tile_size = tt::tt_metal::detail::TileSize(intermediary_format);
 
     const auto all_cores = a.shard_spec()->grid;
@@ -53,46 +56,46 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
     const uint32_t total_tiles = total_tiles_per_row * total_tiles_per_col;
 
     // One chunk is a row of 32 tiles where an untilize call will move each row into a seperate tile
-    const uint32_t num_tiles_in_chunk = 32;
+    constexpr uint32_t num_tiles_in_chunk = 32;
     const uint32_t num_chunks_per_row = tt::div_up(total_tiles_per_row, num_tiles_in_chunk);
 
-    const uint32_t cb_a_in_id = tt::CB::c_in0;
+    const uint32_t cb_a_in_id = tt::CBIndex::c_0;
     const auto cb_a_in = create_circular_buffer(cb_a_in_id, total_tiles, input_tile_size, input_format, a_buffer);
 
-    const uint32_t cb_bx_in_id = tt::CB::c_in1;
+    const uint32_t cb_bx_in_id = tt::CBIndex::c_1;
     const auto cb_bx_in = create_circular_buffer(cb_bx_in_id, total_tiles, input_tile_size, input_format, bx_buffer);
 
     // Hidden state is in row-major so must be bfloat16
-    const uint32_t cb_h_in_id = tt::CB::c_in2;
+    const uint32_t cb_h_in_id = tt::CBIndex::c_2;
     const auto cb_h_in =
-        create_circular_buffer(cb_h_in_id, num_chunks_per_row, intermediary_tile_size, intermediary_format, h_buffer);
+        create_circular_buffer(cb_h_in_id, total_tiles_per_row, intermediary_row_size, intermediary_format, h_buffer);
 
-    const uint32_t cb_out_id = tt::CB::c_out0;
+    const uint32_t cb_out_id = tt::CBIndex::c_16;
     const auto cb_out = create_circular_buffer(cb_out_id, total_tiles, input_tile_size, input_format, output_buffer);
 
     const uint32_t num_tiles_in_row_to_tile_cb = 32;  // Tilizing 32 tiles will pack tensor rows into seperate tiles
-    const uint32_t cb_a_tilize_in_id = tt::CB::c_intermed0;
+    const uint32_t cb_a_tilize_in_id = tt::CBIndex::c_24;
     const auto cb_a_tilize_in = create_circular_buffer(
         cb_a_tilize_in_id, num_tiles_in_row_to_tile_cb, intermediary_tile_size, intermediary_format);
 
-    const uint32_t cb_bx_tilize_in_id = tt::CB::c_intermed1;
+    const uint32_t cb_bx_tilize_in_id = tt::CBIndex::c_25;
     const auto cb_b_tilize_in = create_circular_buffer(
         cb_bx_tilize_in_id, num_tiles_in_row_to_tile_cb, intermediary_tile_size, intermediary_format);
 
-    const uint32_t cb_tilize_out_id = tt::CB::c_intermed2;
+    const uint32_t cb_tilize_out_id = tt::CBIndex::c_26;
     const auto cb_tilize_out = create_circular_buffer(
         cb_tilize_out_id, num_tiles_in_row_to_tile_cb, intermediary_tile_size, intermediary_format);
 
-    const uint32_t cb_h_prev_id = tt::CB::c_intermed3;
+    const uint32_t cb_h_prev_id = tt::CBIndex::c_27;
     const auto cb_h_prev = create_circular_buffer(cb_h_prev_id, 2, intermediary_tile_size, intermediary_format);
 
-    const uint32_t cb_ah_id = tt::CB::c_intermed4;
+    const uint32_t cb_ah_id = tt::CBIndex::c_28;
     const auto cb_ah = create_circular_buffer(cb_ah_id, 2, intermediary_tile_size, intermediary_format);
 
-    const uint32_t cb_h_id = tt::CB::c_intermed5;
+    const uint32_t cb_h_id = tt::CBIndex::c_29;
     const auto cb_h = create_circular_buffer(cb_h_id, 2, intermediary_tile_size, intermediary_format);
 
-    const uint32_t cb_h_acc_id = tt::CB::c_intermed7;
+    const uint32_t cb_h_acc_id = tt::CBIndex::c_31;
     const auto cb_h_acc =
         create_circular_buffer(cb_h_acc_id, num_chunks_per_row, intermediary_tile_size, intermediary_format);
 
@@ -162,7 +165,7 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
             UpdateDynamicCircularBufferAddress(program, cb_out, *output_buffer);
 
             std::vector<std::vector<uint32_t>> reader_runtime_args = {
-                cores.size(), {0, 0}};  // (num_tiles_per_core, num_chunks_per_row)
+                cores.size(), {0, 0}};  // (num_tiles_per_core, total_tiles_per_row)
             std::vector<std::vector<uint32_t>> writer_runtime_args = {
                 cores.size(), {0, 0}};  // (num_tiles_per_core, hidden_state_len)
             std::vector<std::vector<uint32_t>> compute_runtime_args = {
@@ -173,7 +176,7 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
                 const CoreCoord& core = cores.at(i);
 
                 reader_runtime_args[i][0] = total_tiles;
-                reader_runtime_args[i][1] = num_chunks_per_row;
+                reader_runtime_args[i][1] = total_tiles_per_row;
 
                 writer_runtime_args[i][0] = total_tiles;
                 writer_runtime_args[i][1] = sharded_hidden_state_length;

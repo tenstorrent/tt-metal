@@ -9,5 +9,5 @@
 namespace py = pybind11;
 
 namespace ttnn::operations::bernoulli {
-void bind_bernoulli_operation(py::module &module);
+void bind_bernoulli_operation(py::module& module);
 }  // namespace ttnn::operations::bernoulli

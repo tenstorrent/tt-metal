@@ -4,27 +4,27 @@
 
 #include <cstdint>
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
 
-    constexpr uint32_t cb_weight = tt::CB::c_in2;
-    constexpr uint32_t cb_divisor = tt::CB::c_in3;
+    constexpr uint32_t cb_weight = tt::CBIndex::c_2;
+    constexpr uint32_t cb_divisor = tt::CBIndex::c_3;
 
-    constexpr uint32_t cb_tmp_weight = tt::CB::c_intermed0;
-    constexpr uint32_t cb_tmp_input = tt::CB::c_intermed1;
-    constexpr uint32_t cb_tmp1 = tt::CB::c_intermed2;
-    constexpr uint32_t cb_divisor_recip = tt::CB::c_intermed3;  // 1/divisor
-    constexpr uint32_t cb_tmp3 = tt::CB::c_intermed4;
+    constexpr uint32_t cb_tmp_weight = tt::CBIndex::c_24;
+    constexpr uint32_t cb_tmp_input = tt::CBIndex::c_25;
+    constexpr uint32_t cb_tmp1 = tt::CBIndex::c_26;
+    constexpr uint32_t cb_divisor_recip = tt::CBIndex::c_27;  // 1/divisor
+    constexpr uint32_t cb_tmp3 = tt::CBIndex::c_28;
 
-    constexpr uint32_t cb_output = tt::CB::c_out0;
+    constexpr uint32_t cb_output = tt::CBIndex::c_16;
 
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t onetile = 1;
 
-    binary_op_init_common(cb_tmp_weight, cb_tmp_input);
+    binary_op_init_common(cb_tmp_weight, cb_tmp_input, cb_output);
 
 #if defined(DIVISOR)
     cb_wait_front(cb_divisor, onetile);
@@ -121,7 +121,7 @@ void MAIN {
 #if defined FP32_DEST_ACC_EN
         reconfig_data_format(cb_tmp1, cb_divisor_recip);
 #endif
-        mul_tiles_bcast_scalar_init_short();
+        mul_tiles_bcast_scalar_init_short(cb_tmp1, cb_divisor_recip);
         mul_tiles_bcast_scalar(cb_tmp1, cb_divisor_recip, 0, 0, dst0);
         tile_regs_commit();
 

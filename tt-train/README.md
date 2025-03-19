@@ -53,7 +53,7 @@ cmake --build build --config Release --clean-first
 ### Training
 ```
 # Navigate to the root directory of the repository
-TT_METAL_LOGGER_LEVEL=FATAL ./build/sources/examples/nano_gpt/nano_gpt --model_path nano_gpt.msgpack --data_path sources/examples/nano_gpt/data/shakespeare.txt
+TT_METAL_LOGGER_LEVEL=FATAL ./build/sources/examples/nano_gpt/nano_gpt
 ```
 
 Training loss example from [wandb project](https://wandb.ai/tenstorrent-ml/tt_train_nano_gpt):
@@ -66,6 +66,12 @@ Training loss example from [wandb project](https://wandb.ai/tenstorrent-ml/tt_tr
 TT_METAL_LOGGER_LEVEL=FATAL ./build/sources/examples/nano_gpt/nano_gpt --model_path nano_gpt.msgpack -e 1 --data_path sources/examples/nano_gpt/data/shakespeare.txt
 
 ```
+
+### CI only tests
+If CI fails, but local tests pass as expected, please consider changing ENABLE_CI_ONLY_TT_TRAIN_TESTS definition in tests/CMakeLists.txt
+
+### wandb support
+If you don't have an account to wandb (or don't want to use it), use `-w 0` argument or run `wandb offline` beforehand (creates `wandb/settings` file)
 
 # Contributing
 * Create a new branch.

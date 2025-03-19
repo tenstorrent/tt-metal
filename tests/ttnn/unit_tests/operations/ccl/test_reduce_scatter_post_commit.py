@@ -10,7 +10,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from models.utility_functions import skip_for_grayskull
 
 
-def is_unsupported_case(input_shape, scatter_dim, math_op, mem_config, num_devices, num_links, input_dtype, layout):
+def is_unsupported_case(input_shape, dim, math_op, mem_config, num_devices, num_links, input_dtype, layout):
     elem_size = 2 if input_dtype == ttnn.bfloat16 else 1
     tensor_size_bytes = elem_size
     for i in input_shape:
@@ -19,7 +19,7 @@ def is_unsupported_case(input_shape, scatter_dim, math_op, mem_config, num_devic
     if mem_config.buffer_type == ttnn.BufferType.L1 and tensor_size_bytes > num_l1_banks * 50 * 1024:
         return True, "L1 buffer can't support large tensor sizes"
 
-    # if input_dtype == ttnn.bfloat8_b and tuple(input_shape) == (1, 1, 2048, 1024) and scatter_dim == 3:
+    # if input_dtype == ttnn.bfloat8_b and tuple(input_shape) == (1, 1, 2048, 1024) and dim == 3:
     #     return True, "Known failure with bfp8_b data format"
 
     return False, ""
@@ -28,7 +28,7 @@ def is_unsupported_case(input_shape, scatter_dim, math_op, mem_config, num_devic
 def run_with_trace(
     t3k_mesh_device,
     input_tensor_mesh,
-    scatter_dim,
+    dim,
     num_links,
     math_op,
     output_mem_config,
@@ -41,7 +41,7 @@ def run_with_trace(
     logger.info("Compiling model")
     output_tensor_mesh = ttnn.reduce_scatter(
         input_tensor_mesh,
-        scatter_dim=scatter_dim,
+        dim=dim,
         math_op=math_op,
         num_links=num_links,
         memory_config=output_mem_config,
@@ -49,8 +49,7 @@ def run_with_trace(
         num_buffers_per_channel=n_buffer,
         topology=topology,
     )
-    for device_id in t3k_mesh_device.get_device_ids():
-        ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
+    ttnn.synchronize_device(t3k_mesh_device)
 
     # Capture trace
     logger.info("Capturing trace")
@@ -58,7 +57,7 @@ def run_with_trace(
     for i in range(num_iters):
         output_tensor_mesh = ttnn.reduce_scatter(
             input_tensor_mesh,
-            scatter_dim=scatter_dim,
+            dim=dim,
             math_op=math_op,
             num_links=num_links,
             memory_config=output_mem_config,
@@ -67,15 +66,13 @@ def run_with_trace(
             topology=topology,
         )
     ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
-    for device_id in t3k_mesh_device.get_device_ids():
-        ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
+    ttnn.synchronize_device(t3k_mesh_device)
 
     # Run the op
     logger.info("Starting Trace perf test...")
     ttnn.execute_trace(t3k_mesh_device, trace_id, blocking=False)
     ttnn.release_trace(t3k_mesh_device, trace_id)
-    for device_id in t3k_mesh_device.get_device_ids():
-        ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
+    ttnn.synchronize_device(t3k_mesh_device)
 
     return output_tensor_mesh
 
@@ -84,7 +81,7 @@ def run_reduce_scatter_test(
     mesh_device,
     num_devices,
     per_chip_output_shape,
-    scatter_dim,
+    dim,
     num_links,
     math_op,
     input_dtype,
@@ -105,7 +102,7 @@ def run_reduce_scatter_test(
     debug = False
 
     (is_known_failure, message) = is_unsupported_case(
-        per_chip_output_shape, scatter_dim, math_op, mem_config, num_devices, num_links, input_dtype, layout
+        per_chip_output_shape, dim, math_op, mem_config, num_devices, num_links, input_dtype, layout
     )
     if is_known_failure:
         pytest.skip(f"Skipping unsupported case {message}.")
@@ -114,36 +111,31 @@ def run_reduce_scatter_test(
     if enable_async:
         logger.info(f"Using Async Mode for Reduce Scatter Op Dispatch")
 
-    logger.info(f"Per chip output shape: {per_chip_output_shape}, devices: {num_devices}, scatter_dim: {scatter_dim}")
+    logger.info(f"Per chip output shape: {per_chip_output_shape}, devices: {num_devices}, dim: {dim}")
 
     # Generate input tensors
     canonical_input_shape = per_chip_output_shape.copy()
-    canonical_input_shape[scatter_dim] *= num_devices
-    tt_input_tensors = []
+    canonical_input_shape[dim] *= num_devices
+    torch_tensor_shape = canonical_input_shape.copy()
+    torch_tensor_shape[dim] *= num_devices
 
-    numel = canonical_input_shape[0] * canonical_input_shape[1] * canonical_input_shape[2] * canonical_input_shape[3]
-    input_tensors = [
-        torch.rand(canonical_input_shape).bfloat16() if not debug else torch.ones(canonical_input_shape).bfloat16()
-        for _ in range(num_devices)
-    ]
+    torch_tensor = torch.rand(torch_tensor_shape).bfloat16()
     if debug:
-        input_tensors[-1] = torch.arange(numel).reshape(canonical_input_shape).bfloat16()
-    for i, canonical_input_tensor in enumerate(input_tensors):
-        tt_input_tensors.append(
-            ttnn.Tensor(canonical_input_tensor, input_dtype)
-            .to(layout)
-            .to(mesh_device.get_device(mesh_device.get_device_ids()[i]), mem_config)
-        )
-
-    assert len(tt_input_tensors) == num_devices
-
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+        torch_tensor = torch.arange(torch_tensor.numel()).reshape(canonical_input_shape).bfloat16()
+    input_tensors = torch.chunk(torch_tensor, num_devices, dim)
+    input_tensor_mesh = ttnn.from_torch(
+        torch_tensor,
+        dtype=input_dtype,
+        layout=layout,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim),
+        device=mesh_device,
+    )
     # Run the op
     if trace_mode:
         output_tensor_mesh = run_with_trace(
             mesh_device,
             input_tensor_mesh,
-            scatter_dim,
+            dim,
             num_links,
             math_op,
             mem_config,
@@ -154,15 +146,14 @@ def run_reduce_scatter_test(
         for i in range(num_iters):
             output_tensor_mesh = ttnn.reduce_scatter(
                 input_tensor_mesh,
-                scatter_dim=scatter_dim,
+                dim=dim,
                 math_op=math_op,
                 num_links=num_links,
                 memory_config=mem_config,
                 topology=topology,
             )
 
-            for device_id in mesh_device.get_device_ids():
-                ttnn.synchronize_device(mesh_device.get_device(device_id))
+            ttnn.synchronize_device(mesh_device)
             logger.info(f"Done iteration {i}")
 
     # ttnn.visualize_mesh_device(t3k_mesh_device, tensor=output_tensor_mesh)
@@ -172,7 +163,7 @@ def run_reduce_scatter_test(
     for i, t in enumerate(input_tensors):
         golden_canonical_out_tensor = torch.add(golden_canonical_out_tensor, t).bfloat16()
 
-    golden_output_tensors = torch.chunk(golden_canonical_out_tensor, num_devices, scatter_dim)
+    golden_output_tensors = torch.chunk(golden_canonical_out_tensor, num_devices, dim)
 
     tt_out_tensors = ttnn.get_device_tensors(output_tensor_mesh)
     logger.info(f"Compare")
@@ -211,7 +202,7 @@ def run_reduce_scatter_test(
     ],
 )
 @pytest.mark.parametrize(
-    "per_chip_output_shape, scatter_dim, layout",
+    "per_chip_output_shape, dim, layout",
     [
         ([1, 2, 256, 32 * 8], 3, ttnn.TILE_LAYOUT),  # Input tensor is (16*32) x (64*32) = 8 * input tensor shape
         ([1, 1, 32, 32 * 8], 3, ttnn.TILE_LAYOUT),
@@ -241,7 +232,7 @@ def test_ring_reduce_scatter_post_commit(
     t3k_mesh_device,
     num_devices,
     per_chip_output_shape,
-    scatter_dim,
+    dim,
     num_links,
     math_op,
     input_dtype,
@@ -256,7 +247,7 @@ def test_ring_reduce_scatter_post_commit(
         t3k_mesh_device,
         num_devices,
         per_chip_output_shape,
-        scatter_dim,
+        dim,
         num_links,
         math_op,
         input_dtype,
@@ -279,7 +270,7 @@ def test_ring_reduce_scatter_post_commit(
     ],
 )
 @pytest.mark.parametrize(
-    "per_chip_output_shape, scatter_dim, layout",
+    "per_chip_output_shape, dim, layout",
     [
         ([1, 1, 32, 32 * 8], 3, ttnn.TILE_LAYOUT),
         ([1, 2, 224, 32 * 8], 3, ttnn.TILE_LAYOUT),
@@ -306,7 +297,7 @@ def test_line_reduce_scatter_post_commit(
     t3k_mesh_device,
     num_devices,
     per_chip_output_shape,
-    scatter_dim,
+    dim,
     num_links,
     math_op,
     input_dtype,
@@ -321,7 +312,7 @@ def test_line_reduce_scatter_post_commit(
         t3k_mesh_device,
         num_devices,
         per_chip_output_shape,
-        scatter_dim,
+        dim,
         num_links,
         math_op,
         input_dtype,
@@ -345,7 +336,7 @@ def test_line_reduce_scatter_post_commit(
     ],
 )
 @pytest.mark.parametrize(
-    "per_chip_output_shape, scatter_dim, layout",
+    "per_chip_output_shape, dim, layout",
     [
         ([1, 1, 32, 1280], 1, ttnn.TILE_LAYOUT),
         ([1, 1, 32, 1024], 1, ttnn.TILE_LAYOUT),
@@ -369,7 +360,7 @@ def test_line_reduce_scatter_post_commit_4chip(
     pcie_mesh_device,
     num_devices,
     per_chip_output_shape,
-    scatter_dim,
+    dim,
     num_links,
     math_op,
     input_dtype,
@@ -384,7 +375,7 @@ def test_line_reduce_scatter_post_commit_4chip(
         pcie_mesh_device,
         num_devices,
         per_chip_output_shape,
-        scatter_dim,
+        dim,
         num_links,
         math_op,
         input_dtype,
@@ -403,7 +394,7 @@ def run_reduce_scatter_sharded_test(
     num_devices,
     per_chip_output_shape,
     output_shard_shape,
-    scatter_dim,
+    dim,
     num_links,
     math_op,
     shard_grid,
@@ -427,7 +418,7 @@ def run_reduce_scatter_sharded_test(
             f"Not enough devices on machine to implement test case. Wanted {num_devices} but found {len(t3k_mesh_device.get_device_ids())}"
         )
 
-    logger.info(f"Per chip output shape: {per_chip_output_shape}, devices: {num_devices}, scatter_dim: {scatter_dim}")
+    logger.info(f"Per chip output shape: {per_chip_output_shape}, devices: {num_devices}, dim: {dim}")
 
     debug = False
 
@@ -438,7 +429,7 @@ def run_reduce_scatter_sharded_test(
         assert in_shard_override is None
         in_shard_grid = shard_grid
         input_shard_shape = list(output_shard_shape)
-        if scatter_dim == 3:
+        if dim == 3:
             input_shard_shape[1] *= num_devices
         else:
             input_shard_shape[0] *= num_devices
@@ -453,14 +444,12 @@ def run_reduce_scatter_sharded_test(
         in_shard_grid,
         tuple(input_shard_shape),
         orientation,
-        False,
     )
 
     output_shard_spec = ttnn.ShardSpec(
         shard_grid,
         output_shard_shape,
         orientation,
-        False,
     )
     input_mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
     output_mem_config = ttnn.MemoryConfig(
@@ -468,7 +457,7 @@ def run_reduce_scatter_sharded_test(
     )
 
     canonical_input_shape = list(per_chip_output_shape)
-    canonical_input_shape[scatter_dim] *= num_devices
+    canonical_input_shape[dim] *= num_devices
 
     numel = canonical_input_shape[0] * canonical_input_shape[1] * canonical_input_shape[2] * canonical_input_shape[3]
     input_tensors = [
@@ -492,7 +481,7 @@ def run_reduce_scatter_sharded_test(
         output_tensor_mesh = run_with_trace(
             t3k_mesh_device,
             input_tensor_mesh,
-            scatter_dim,
+            dim,
             num_links,
             math_op,
             output_mem_config,
@@ -504,15 +493,14 @@ def run_reduce_scatter_sharded_test(
         for i in range(num_iters):
             output_tensor_mesh = ttnn.reduce_scatter(
                 input_tensor_mesh,
-                scatter_dim=scatter_dim,
+                dim=dim,
                 math_op=math_op,
                 num_links=num_links,
                 memory_config=output_mem_config,
                 topology=topology,
             )
 
-            for device_id in t3k_mesh_device.get_device_ids():
-                ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
+            ttnn.synchronize_device(t3k_mesh_device)
             logger.info(f"Done iteration {i}")
 
     # Compute golden
@@ -521,7 +509,7 @@ def run_reduce_scatter_sharded_test(
     for i, t in enumerate(input_tensors):
         golden_canonical_out_tensor = torch.add(golden_canonical_out_tensor, t).bfloat16()
 
-    golden_output_tensors = torch.chunk(golden_canonical_out_tensor, num_devices, scatter_dim)
+    golden_output_tensors = torch.chunk(golden_canonical_out_tensor, num_devices, dim)
 
     tt_out_tensors = ttnn.get_device_tensors(output_tensor_mesh)
     logger.info(f"Compare")

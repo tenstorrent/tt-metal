@@ -89,10 +89,10 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
     # 1D variant
     # TODO(AP): merge with 2d? refactor.
     def layernorm_1d_(x, overrideH=None, refx=None, refgamma=None, refbeta=None):
-        N = x.shape.with_tile_padding()[0]
-        C = x.shape.with_tile_padding()[1]
-        H = x.shape.with_tile_padding()[2]
-        W = x.shape.with_tile_padding()[3]
+        N = x.padded_shape[0]
+        C = x.padded_shape[1]
+        H = x.padded_shape[2]
+        W = x.padded_shape[3]
 
         H_ = 1
         if overrideH is not None:
@@ -132,10 +132,10 @@ def Layernorm(gamma: float, beta: float, epsilon: float, H, W, device, num_dims=
             return x_gamma
 
     def layernorm_2d_(x):
-        N = x.shape.with_tile_padding()[0]
-        C = x.shape.with_tile_padding()[1]
-        H = x.shape.with_tile_padding()[2]
-        W = x.shape.with_tile_padding()[3]
+        N = x.padded_shape[0]
+        C = x.padded_shape[1]
+        H = x.padded_shape[2]
+        W = x.padded_shape[3]
 
         # first compute the mean (m)
         redW = ttnn.sum(x, 3, scalar=1.0 / W)  # -> NCH1

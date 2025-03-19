@@ -8,13 +8,14 @@
 #include <random>
 #include <thread>
 
-#include "common/bfloat16.hpp"
-#include "test_tiles.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/debug/dprint_server.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "test_common.hpp"
+#include <tt-metalium/host_api.hpp>
+#include "dprint_server.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include <tt-metalium/device.hpp>
 
 using namespace tt;
 using std::chrono::duration_cast;
@@ -22,7 +23,7 @@ using std::chrono::microseconds;
 using std::chrono::steady_clock;
 
 template <typename T>
-std::vector<T> slice_vec(std::vector<T> const &v, int m, int n) {
+std::vector<T> slice_vec(std::vector<T> const& v, int m, int n) {
     auto first = v.cbegin() + m;
     auto last = v.cbegin() + n + 1;
 
@@ -30,7 +31,7 @@ std::vector<T> slice_vec(std::vector<T> const &v, int m, int n) {
     return vec;
 }
 
-void print_vec(std::vector<bfloat16> data, int rows, int cols, string name) {
+void print_vec(const std::vector<bfloat16>& data, int rows, int cols, const string& name) {
     std::cout << name << ": " << std::endl;
     int index = 0;
     for (int i = 0; i < rows; i++) {
@@ -43,7 +44,7 @@ void print_vec(std::vector<bfloat16> data, int rows, int cols, string name) {
     std::cout << std::endl;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         TT_THROW("Test not supported w/ slow dispatch, exiting");
     }
@@ -77,7 +78,7 @@ int main(int argc, char **argv) {
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--c", 12);
             std::tie(validation, input_args) =
                 test_args::get_command_option_uint32_and_remaining_args(input_args, "--validation", 1);
-        } catch (const std::exception &e) {
+        } catch (const std::exception& e) {
             TT_THROW("Command line arguments found exception", e.what());
         }
 
@@ -85,7 +86,7 @@ int main(int argc, char **argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -270,7 +271,7 @@ int main(int argc, char **argv) {
 
         pass &= tt_metal::CloseDevice(device);
 
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());

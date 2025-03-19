@@ -7,25 +7,25 @@
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 
 void MAIN {
     constexpr uint32_t onetile = 1;
 
-    constexpr auto cb_y = tt::CB::c_in0;
-    constexpr auto cb_dy = tt::CB::c_in1;
-    constexpr auto cb_dx = tt::CB::c_out0;
+    constexpr auto cb_y = tt::CBIndex::c_0;
+    constexpr auto cb_dy = tt::CBIndex::c_1;
+    constexpr auto cb_dx = tt::CBIndex::c_16;
 
-    constexpr auto cb_ydy = tt::CB::c_intermed0;  // y * dy
-    constexpr auto cb_sum = tt::CB::c_intermed1;
-    constexpr auto cb_dy_m_sum = tt::CB::c_intermed2;  // dy - sum
+    constexpr auto cb_ydy = tt::CBIndex::c_24;  // y * dy
+    constexpr auto cb_sum = tt::CBIndex::c_25;
+    constexpr auto cb_dy_m_sum = tt::CBIndex::c_26;  // dy - sum
 
     uint32_t N = get_compile_time_arg_val(0);
     uint32_t dim_size = get_compile_time_arg_val(1);
 
-    binary_op_init_common(cb_dy, cb_y);
+    binary_op_init_common(cb_dy, cb_y, cb_dx);
 
     constexpr int dst0 = 0;
     for (uint32_t n = 0; n < N; ++n) {
@@ -40,11 +40,11 @@ void MAIN {
 
         for (uint32_t i = 0; i < dim_size; ++i) {
             // exp(y)
-            constexpr auto cb_exp = tt::CB::c_intermed0;
+            constexpr auto cb_exp = tt::CBIndex::c_24;
             exp_tile_to_cb(cb_y, cb_exp);
 
             // sum * exp(y)
-            constexpr auto cb_inter2 = tt::CB::c_intermed2;
+            constexpr auto cb_inter2 = tt::CBIndex::c_26;
             mul_tiles_to_cb(cb_sum, cb_exp, cb_inter2, 0, 0, /*pop0=*/0, /*pop1=*/1);
 
             // dy - sum * exp(y)

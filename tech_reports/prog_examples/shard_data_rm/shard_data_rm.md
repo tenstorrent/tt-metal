@@ -3,13 +3,10 @@
 In this example, we will implement a simple TT-Metalium program to demonstrate how sharding works for untilized data. The code for this program can be found in
 [shard_data_rm.cpp](../../../tt_metal/programming_examples/sharding/shard_data_rm.cpp).
 
-The following commands will build and execute the code for this example.
-Environment variables may be modified based on the latest
-specifications.
+To build and execute, you may use the following commands:
 ```bash
-    export ARCH_NAME=<arch name>
-    export TT_METAL_HOME=<this repo dir>
-    ./build_metal.sh --build-tests
+    export TT_METAL_HOME=$(pwd)
+    ./build_metal.sh --build-programming-examples
     ./build/programming_examples/shard_data_rm
 ```
 # Device setup
@@ -63,12 +60,12 @@ uint32_t shard_size = shard_height * shard_width;
 uint32_t input_unit_size = sizeof(uint32_t);
 uint32_t shard_width_bytes = shard_width * data_size;
 uint32_t num_units_per_row = shard_width * input_unit_size;
-uint32_t padded_offset_bytes = align(input_unit_size, device->get_allocator_alignment());
+uint32_t padded_offset_bytes = align(input_unit_size, device->allocator()->get_alignment(BufferType::L1));
 ```
 
 In order to shard the correct data segments to the respective core, we indicate the shard height, width, size, and other data for the kernel function.
 For this situation, 16 units of data will be sharded across 4 cores; each core will have 4 units of data in their corresponding circular buffer.
-The `padded_offset_bytes` is set to ensure that the correct address is read from the kernel function when moving data to the circular buffer; in this case, the addresses are aligned to L1 memory.
+The `padded_offset_bytes` is set to ensure that the correct address is read from the kernel function when moving data to the circular buffer; in this case, the addresses are aligned to L1 memory with explicit referencing to BufferType::L1.
 This example demonstrates height sharding; the shard height is therefore set to evenly distribute the number of vector values across the cores.
 If the sharding strategy was different (i.e. width sharding or block sharding), the appropriate values for both the shard height and width would need to be set.
 
@@ -94,13 +91,13 @@ Data will be read to the circular buffers on each core through the DRAM buffer, 
 
 ``` cpp
 bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-uint32_t input_cb_index = CB::c_in0;
+uint32_t input_cb_index = CBIndex::c_0;
 CircularBufferConfig input_cb_config = CircularBufferConfig(shard_size * input_unit_size, {{input_cb_index, cb_data_format}})
     .set_page_size(input_cb_index, input_unit_size);
 auto cb_input = tt_metal::CreateCircularBuffer(program, cores, input_cb_config);
 ```
 
-Across each core, the `CircularBuffer` indicated by the index corresponding to `CB::c_in0` will be used to store the data. Through the `CircularBufferConfig` object, we specify the total size of the buffer, which is dependent on the shard and data size, and we also specify the page size.
+Across each core, the `CircularBuffer` indicated by the index corresponding to `CBIndex::c_0` will be used to store the data. Through the `CircularBufferConfig` object, we specify the total size of the buffer, which is dependent on the shard and data size, and we also specify the page size.
 The corresponding `CircularBuffer` objects are then allocated with this configuration across each of the designated cores.
 
 # Create data movement kernels for sharding

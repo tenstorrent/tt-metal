@@ -3,7 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
 #include <vector>
+
+#include "core/xtensor_utils.hpp"
 
 namespace ttml::init {
 
@@ -21,6 +24,9 @@ struct FanParams {
     uint32_t fan_in = 1;
     uint32_t fan_out = 1;
 };
+
+xt::xarray<float> uniform_init(const ttnn::Shape& shape, UniformRange range);
+xt::xarray<float> normal_init(const ttnn::Shape& shape, NormalParams params);
 
 void uniform_init(std::vector<float>& vec, UniformRange range);
 

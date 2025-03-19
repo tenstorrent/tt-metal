@@ -20,8 +20,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(other_sem_id));
 #endif
 #ifdef COMPILE_FOR_BRISC
-    volatile tt_l1_ptr uint32_t* my_sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(my_sem_id));
+    volatile tt_l1_ptr uint32_t* my_sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(my_sem_id));
     volatile tt_l1_ptr uint32_t* other_sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<eth_core_type>(other_sem_id));
 #endif
@@ -30,5 +29,8 @@ void kernel_main() {
     noc_semaphore_inc(dst_addr, 1);
 
     // Spin until other core updates the local semaphore confirming the addresses are correct
-    while (*my_sem_addr == sem_init_value);
+    while (*my_sem_addr == sem_init_value) {
+        invalidate_l1_cache();
+    }
+    noc_async_atomic_barrier();
 }

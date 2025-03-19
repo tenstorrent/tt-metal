@@ -12,7 +12,7 @@ namespace ttnn::operations::moreh::moreh_matmul {
 
 inline bool is_dot_forward(const Tensor& input, const Tensor& other, bool transpose_input, bool transpose_other) {
     // TODO: non-4d support for dot.
-    if (input.get_legacy_shape().rank() != 4 || other.get_legacy_shape().rank() != 4) {
+    if (input.get_padded_shape().rank() != 4 || other.get_padded_shape().rank() != 4) {
         return false;
     }
 
@@ -20,8 +20,7 @@ inline bool is_dot_forward(const Tensor& input, const Tensor& other, bool transp
         return false;
     }
 
-    return is_1d_tensor(input) && is_1d_tensor(other) &&
-           is_same_shape(input, other);
+    return is_1d_tensor(input) && is_1d_tensor(other) && is_same_shape(input, other);
 }
 
 Tensor MorehMatmul::invoke(
@@ -30,7 +29,7 @@ Tensor MorehMatmul::invoke(
     bool transpose_input,
     bool transpose_other,
     const std::optional<Tensor>& output,
-    const std::optional<const Tensor> bias,
+    const std::optional<const Tensor>& bias,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     if (is_dot_forward(input, other, transpose_input, transpose_other)) {

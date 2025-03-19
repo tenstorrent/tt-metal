@@ -27,13 +27,58 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 1, 1], [2, 6, 128, 128], [1, 1, 32, 32], 32),
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_layout": [ttnn.TILE_LAYOUT],
+        "input_shape": gen_shapes([1, 1, 1, 1], [2, 6, 128, 128], [1, 1, 32, 32], 32)
+        + gen_shapes([1, 1, 1, 1], [2, 6, 110, 130], [1, 1, 32, 32], 31)
+        + gen_shapes([1, 1, 1, 1], [2, 6, 120, 140], [1, 1, 32, 32], 17)
+        + gen_shapes([1, 1, 1], [2, 6, 128], [1, 1, 32], 8)
+        + gen_shapes([1, 1, 1], [2, 7, 100], [1, 1, 64], 16)
+        + gen_shapes([1, 1, 1], [2, 8, 255], [1, 1, 122], 17)
+        + gen_shapes([1, 1], [2, 26], [1, 11], 2)
+        + gen_shapes([1, 1], [2, 36], [1, 12], 3)
+        + gen_shapes([1, 1], [2, 46], [1, 13], 4)
+        + gen_shapes([1], [2, 6], [1, 1], 2)
+        + gen_shapes([1], [2, 6], [1, 1], 2)
+        + gen_shapes([1], [10, 10], [2, 3], 2),
+        "dim": [
+            0,
+            1,
+            2,
+            3,
+            None,
+            [0, 1],
+            [0, 2],
+            [0, 3],
+            [1, 2],
+            [1, 3],
+            [2, 3],
+            [0, 1, 2],
+            [0, 1, 3],
+            [0, 1, 3],
+            [0, 2, 3],
+            [1, 2, 3],
+            [0, 1, 2, 3],
+        ],
+        "keepdim": [True, False],
+        "input_a_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
 }
+
+
+# Invalidate vector is called during the generation phase where each vector will be passed in.
+# If invalidated, the vector will still be stored but will be skipped.
+# Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and not (
+        test_vector["input_a_dtype"] == ttnn.float32 or test_vector["input_a_dtype"] == ttnn.bfloat16
+    ):
+        return True, "Row major is only supported for fp32 & fp16"
+    if not test_vector["keepdim"]:
+        return True, "keepdim = false is not supported"
+
+    return False, None
 
 
 # This is the run instructions for the test, defined by the developer.
@@ -42,6 +87,8 @@ parameters = {
 # If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_shape,
+    dim,
+    keepdim,
     input_a_dtype,
     input_layout,
     input_a_memory_config,
@@ -52,6 +99,9 @@ def run(
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
+    if input_a_dtype == ttnn.float32 and ttnn.device.is_grayskull(device):
+        return [(False, "Dest Fp32 mode is not supported for arch grayskull"), 0]
+
     if input_layout == ttnn.ROW_MAJOR_LAYOUT:
         input_shape = sanitize_shape_rm(input_shape)
 
@@ -60,7 +110,7 @@ def run(
     )(input_shape)
 
     golden_function = ttnn.get_golden_function(ttnn.mean)
-    torch_output_tensor = golden_function(torch_input_tensor_a, dim=-1, keepdim=True)
+    torch_output_tensor = golden_function(torch_input_tensor_a, dim=dim, keepdim=keepdim)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -71,7 +121,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.mean(input_tensor_a, dim=-1, memory_config=output_memory_config)
+    output_tensor = ttnn.mean(input_tensor_a, dim=dim, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
 
     e2e_perf = stop_measuring_time(start_time)

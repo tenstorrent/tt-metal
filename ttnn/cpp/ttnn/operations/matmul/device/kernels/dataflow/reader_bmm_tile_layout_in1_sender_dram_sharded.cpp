@@ -23,9 +23,9 @@ void kernel_main() {
     const uint32_t vc = get_arg_val<uint32_t>(4);
     const uint32_t num_shard_to_write_back = get_arg_val<uint32_t>(5);
     const uint32_t reshard_tensor_start_offset = get_arg_val<uint32_t>(6);
-    tt_l1_ptr uint32_t *per_core_N_reshard_bytes = (tt_l1_ptr uint32_t *)(get_arg_addr(7));
-    tt_l1_ptr uint32_t *in0_mcast_sender_noc_x = (tt_l1_ptr uint32_t *)(get_arg_addr(8));
-    tt_l1_ptr uint32_t *in0_mcast_sender_noc_y = (tt_l1_ptr uint32_t *)(get_arg_addr(9));
+    tt_l1_ptr uint32_t* per_core_N_reshard_bytes = (tt_l1_ptr uint32_t*)(get_arg_addr(7));
+    tt_l1_ptr uint32_t* in0_mcast_sender_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(8));
+    tt_l1_ptr uint32_t* in0_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
 
     // COMPILE TIME ARGS
     constexpr uint32_t in1_page_size = get_compile_time_arg_val(0);
@@ -50,8 +50,8 @@ void kernel_main() {
 #endif
 
     constexpr uint32_t cb_id_in1 = 1;
-    constexpr uint32_t cb_id_out = 16;
-    constexpr uint32_t cb_id_out_reshard = 17;
+    constexpr uint32_t cb_id_out = tt::CBIndex::c_4;
+    constexpr uint32_t cb_id_out_reshard = tt::CBIndex::c_6;
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
 

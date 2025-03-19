@@ -49,10 +49,12 @@ class RMSNorm(LightweightModule):
         eps: float = 1e-05,
         sharded_program_config=None,
         sharded_output_config=None,
+        ccl_topology=ttnn.Topology.Ring,
     ):
         super().__init__()
         self.eps = eps
         self.is_distributed = is_distributed
+        self.ccl_topology = ccl_topology
 
         if state_dict_prefix:
             weight_name = f"{state_dict_prefix}{weight_key}.weight"
@@ -81,15 +83,18 @@ class RMSNorm(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         )
 
-        self.weight_distributed = ttnn.as_tensor(
-            torch_weight,
-            device=device,
-            dtype=weight_dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=weight_memory_config,
-            cache_file_name=cache_name,
-            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2) if is_mesh_device else None,
-        )
+        if self.is_distributed:
+            self.weight_distributed = ttnn.as_tensor(
+                torch_weight,
+                device=device,
+                dtype=weight_dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=weight_memory_config,
+                cache_file_name=cache_name,
+                mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, 2), mesh_shape=list(device.shape))
+                if is_mesh_device
+                else None,
+            )
 
         self.sharded_output_config = sharded_output_config
         self.sharded_program_config = sharded_program_config
@@ -141,6 +146,7 @@ class RMSNorm(LightweightModule):
             tt_stats,
             dim=3,
             num_links=1,
+            topology=self.ccl_topology,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         # Run distributed rmsnorm part 2

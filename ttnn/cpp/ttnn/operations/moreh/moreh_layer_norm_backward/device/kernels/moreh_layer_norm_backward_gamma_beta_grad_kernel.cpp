@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -16,26 +16,26 @@ void MAIN {
     constexpr bool is_lastdim_layernorm = get_compile_time_arg_val(7) == 1;
     constexpr bool is_groupnorm = get_compile_time_arg_val(8) == 1;
 
-    constexpr auto cb_dy = tt::CB::c_in0;      // output_grad(==dy)
-    constexpr auto cb_x = tt::CB::c_in1;       // input(==x)
-    constexpr auto cb_mean = tt::CB::c_in2;    // mean
-    constexpr auto cb_rstd = tt::CB::c_in3;    // rstd
-    constexpr auto cb_scaler = tt::CB::c_in4;  // scaler
-    constexpr auto cb_mask_h = tt::CB::c_in5;  // mask_h
-    constexpr auto cb_mask_w = tt::CB::c_in6;  // mask_w
+    constexpr auto cb_dy = tt::CBIndex::c_0;      // output_grad(==dy)
+    constexpr auto cb_x = tt::CBIndex::c_1;       // input(==x)
+    constexpr auto cb_mean = tt::CBIndex::c_2;    // mean
+    constexpr auto cb_rstd = tt::CBIndex::c_3;    // rstd
+    constexpr auto cb_scaler = tt::CBIndex::c_4;  // scaler
+    constexpr auto cb_mask_h = tt::CBIndex::c_5;  // mask_h
+    constexpr auto cb_mask_w = tt::CBIndex::c_6;  // mask_w
 
     // Sum[y * dy]
-    constexpr auto cb_dgamma = tt::CB::c_out0;  // gamma_grad(==dgamma)
+    constexpr auto cb_dgamma = tt::CBIndex::c_16;  // gamma_grad(==dgamma)
     // Sum[dy]
-    constexpr auto cb_dbeta = tt::CB::c_out1;  // beta_grad(==dbeta)
+    constexpr auto cb_dbeta = tt::CBIndex::c_17;  // beta_grad(==dbeta)
 
     // y = (x - mean) * rstd
-    constexpr auto cb_y = tt::CB::c_intermed0;       // output(==y)
-    constexpr auto cb_ydy = tt::CB::c_intermed1;     // y * dy
-    constexpr auto cb_dyadd = tt::CB::c_intermed2;   // Add[dy]
-    constexpr auto cb_ydyadd = tt::CB::c_intermed3;  // Add[y * dy]
-    constexpr auto cb_xmm = tt::CB::c_intermed4;     // x - mean
-    constexpr auto cb_dycopy = tt::CB::c_intermed5;  // dycopy
+    constexpr auto cb_y = tt::CBIndex::c_24;       // output(==y)
+    constexpr auto cb_ydy = tt::CBIndex::c_25;     // y * dy
+    constexpr auto cb_dyadd = tt::CBIndex::c_26;   // Add[dy]
+    constexpr auto cb_ydyadd = tt::CBIndex::c_27;  // Add[y * dy]
+    constexpr auto cb_xmm = tt::CBIndex::c_28;     // x - mean
+    constexpr auto cb_dycopy = tt::CBIndex::c_29;  // dycopy
 
     constexpr uint32_t onetile = 1;
 
@@ -54,7 +54,8 @@ void MAIN {
 
     constexpr uint32_t HtWt = Ht * Wt;
 
-    binary_op_init_common(tt::CB::c_in0, tt::CB::c_in0);
+    constexpr auto cb_out_init = gamma_grad_has_value ? cb_dgamma : cb_dbeta;
+    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_0, cb_out_init);
 
     cb_wait_front(cb_scaler, onetile);  // comes from the reader
 

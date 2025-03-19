@@ -5,58 +5,116 @@
 #include "transpose_op.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal_exp.hpp>
 
 #include "transpose_program_factory.hpp"
-using namespace tt::constants;
 
+using namespace tt::constants;
+using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement {
 
-void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
+void Transpose::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to transpose need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr , "Operands to transpose need to be allocated in buffers on device!");
-    TT_FATAL(!(this->dim != TransposeOpDim::HC && this->pad_value.has_value() && this->pad_value != 0.0f), "Non-zero padding is not supported for any transpose other than HC.");
+    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to transpose need to be allocated in buffers on device!");
+    TT_FATAL(
+        !(this->dim != TransposeOpDim::HC && this->pad_value.has_value() && this->pad_value != 0.0f),
+        "Non-zero padding {} is not supported for any transpose other than HC.",
+        this->pad_value.value());
+    TT_FATAL(
+        this->dim == TransposeOpDim::HC || this->dim == TransposeOpDim::WH || this->dim == TransposeOpDim::CN,
+        "Transpose HC, WH, CN are the only supported transpose operations. Transpose {} is not supported.",
+        (int)this->dim);
     const auto shape = input_tensor.get_padded_shape();
     bool row_major = input_tensor.get_layout() == Layout::ROW_MAJOR;
     uint32_t W = shape[3], H = shape[2], C = shape[1], N = shape[0];
-    uint32_t HW = H*W;
+    uint32_t HW = H * W;
     if (not row_major) {
-        TT_FATAL(W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0, "Error");
-        TT_FATAL(input_tensor.volume() % TILE_HW == 0, "Error");
+        TT_FATAL(
+            W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0,
+            "Tiled tensor H {} W {} must be a multiple of TILE HEIGHT {} and TILE WIDTH",
+            H,
+            W,
+            TILE_HEIGHT,
+            TILE_WIDTH);
+        TT_FATAL(
+            input_tensor.volume() % TILE_HW == 0,
+            "Tiled tensor volume {} must be a multiple of TILE HEIGHT * TILE WIDTH",
+            input_tensor.volume(),
+            TILE_HW);
     }
     uint32_t ROW_MAJOR_STICK_WIDTH = 16;
     if (this->dim == TransposeOpDim::WH) {
         if (row_major) {
-            TT_FATAL((W * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH == 0 && (H * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH == 0, "Error");
+            TT_FATAL(
+                (W * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH == 0 &&
+                    (H * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH == 0,
+                "Row major tensor W {} H {} must be a multiple of ROW_MAJOR_STICK_WIDTH for transpose wh",
+                W,
+                H,
+                ROW_MAJOR_STICK_WIDTH);
         }
         if (input_tensor.is_sharded()) {
-            TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED, "Error");
+            TT_FATAL(
+                input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED,
+                "Only height and block sharding is supported for transpose wh");
             const auto shard_spec = input_tensor.shard_spec().value();
-            TT_FATAL(shard_spec.shape[1] == W, "Error");
-            TT_FATAL(shard_spec.shape[0] % H == 0, "Error");
-            TT_FATAL(this->output_mem_config.is_sharded(), "Error");
-            TT_FATAL(this->output_mem_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED, "Error");
+            TT_FATAL(
+                (shard_spec.shape[0] % H == 0) || (H % shard_spec.shape[0] == 0),
+                "Only a multiple of H {} or a factor of H is allows for the shard height {} for transpose WH",
+                H,
+                shard_spec.shape[0]);
+            TT_FATAL(shard_spec.shape[1] == W, "Only height sharding is supported");
+            if (H > shard_spec.shape[0]) {
+                TT_FATAL(
+                    N == 1,
+                    "Transpose WH does not support sharded inputs when shard height {} is less than H {} and N {} > 1",
+                    shard_spec.shape[0],
+                    H,
+                    N);
+                TT_FATAL(
+                    C == 1,
+                    "Transpose WH does not support sharded inputs when  shard height {} is less than H {} and C {} > 1",
+                    shard_spec.shape[0],
+                    H,
+                    N);
+            }
+            TT_FATAL(this->output_mem_config.is_sharded(), "Output must be sharded for transpose WH");
+            TT_FATAL(
+                this->output_mem_config.memory_layout != TensorMemoryLayout::BLOCK_SHARDED,
+                "Only height and width sharding output is supported for transpose wh");
         } else {
-            TT_FATAL(!this->output_mem_config.is_sharded(), "Error");
+            TT_FATAL(!this->output_mem_config.is_sharded(), "Interleaved input tensors cannot output sharded outputs");
         }
     } else {
         if (input_tensor.is_sharded()) {
-            TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+            TT_FATAL(
+                input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+                "Only height sharding is supported for transpose hc");
             const auto shard_spec = input_tensor.shard_spec().value();
-            TT_FATAL(shard_spec.shape[1] == W, "Error");
-            TT_FATAL(this->output_mem_config.is_sharded(), "Error");
-            TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+            TT_FATAL(shard_spec.shape[1] == W, "Block/Width sharding is not supported");
+            TT_FATAL(
+                this->output_mem_config.is_sharded(), "Sharded input can only output sharded tensors for transpose hc");
+            TT_FATAL(
+                this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+                "Only height sharding is supported for the ouput of sharded transpose hc");
         } else {
-            TT_FATAL(!this->output_mem_config.is_sharded(), "Error");
+            TT_FATAL(!this->output_mem_config.is_sharded(), "Interleaved inputs cannot output sharded outputs");
         }
     }
     if (this->dim == TransposeOpDim::HC) {
         if (row_major) {
-            auto BUFFER_ALIGNMENT = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? DRAM_ALIGNMENT : L1_ALIGNMENT;
-            TT_FATAL((W * input_tensor.element_size()) % BUFFER_ALIGNMENT == 0, "Buffer is not aligned for this implementation row_size_bytes {} buffer_alignment {}", W * input_tensor.element_size(), BUFFER_ALIGNMENT);
+            auto BUFFER_ALIGNMENT = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+                                        ? hal::get_dram_alignment()
+                                        : hal::get_l1_alignment();
+            TT_FATAL(
+                (W * input_tensor.element_size()) % BUFFER_ALIGNMENT == 0,
+                "Buffer is not aligned for this implementation row_size_bytes {} buffer_alignment {}",
+                W * input_tensor.element_size(),
+                BUFFER_ALIGNMENT);
         }
         TT_FATAL(
             input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32, "Error");
@@ -65,21 +123,12 @@ void Transpose::validate(const std::vector<Tensor> &input_tensors) const {
             "HC transpose does not support sharded+tilized inputs");
         TT_FATAL(
             !(input_tensor.is_sharded() && pad_value.has_value() && pad_value.value() != 0.0f),
-            "Sharded HC transpose does not support non-zero padding");
-    } else if (this->dim == TransposeOpDim::CW) {
-        TT_FATAL(C % TILE_WIDTH == 0, "Error");
-        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32, "Error");
-    } else if (this->dim == TransposeOpDim::NH) {
-        TT_FATAL(N % TILE_HEIGHT == 0, "Error");
-        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32, "Error");
-    } else if (this->dim == TransposeOpDim::NW) {
-        TT_FATAL(N % TILE_WIDTH == 0, "Error");
-        TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32, "Error");
+            "Sharded HC transpose does not support non-zero padding {}",
+            pad_value.value());
     }
 }
 
-
-std::vector<ttnn::TensorSpec> Transpose::compute_output_specs(const std::vector<Tensor> &input_tensors) const {
+std::vector<ttnn::TensorSpec> Transpose::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
 
     // TODO: Remove usage of input/output padded shape
@@ -88,7 +137,7 @@ std::vector<ttnn::TensorSpec> Transpose::compute_output_specs(const std::vector<
     auto output_shape = input_tensor.get_logical_shape();
     auto output_padded_shape = input_tensor.get_padded_shape();
 
-    switch (this->dim){
+    switch (this->dim) {
         case TransposeOpDim::CN:
             std::swap(output_shape[0], output_shape[1]);
             std::swap(output_padded_shape[0], output_padded_shape[1]);
@@ -132,19 +181,33 @@ std::vector<ttnn::TensorSpec> Transpose::compute_output_specs(const std::vector<
         if (this->dim == TransposeOpDim::WH) {
             const auto& input_padded_shape = input_tensor.get_padded_shape();
             ShardSpec shard_spec = input_tensor.shard_spec().value();
-            shard_spec.shape[0] = shard_spec.shape[0] / input_padded_shape[-2] * input_padded_shape[-1];
-            shard_spec.shape[1] = input_padded_shape[-2];
-            output_mem_config.shard_spec = shard_spec;
+            if (shard_spec.shape[0] >= input_padded_shape[-2]) {
+                shard_spec.shape[0] = shard_spec.shape[0] / input_padded_shape[-2] * input_padded_shape[-1];
+                shard_spec.shape[1] = input_padded_shape[-2];
+                output_mem_config.shard_spec = shard_spec;
+            } else {
+                std::swap(shard_spec.shape[0], shard_spec.shape[1]);
+                output_mem_config.shard_spec = shard_spec;
+                output_mem_config.memory_layout = TensorMemoryLayout::WIDTH_SHARDED;
+            }
         } else if (this->dim == TransposeOpDim::HC) {
             output_mem_config.shard_spec = input_tensor.shard_spec().value();
         } else {
             TT_ASSERT(false, "Unsupported sharding");
         }
     }
-    return {ttnn::TensorSpec(output_shape, TensorLayout::fromLegacyPaddedShape(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), output_mem_config, ttnn::Shape(output_shape.view(), output_padded_shape.view())))};
+    return {ttnn::TensorSpec(
+        output_shape,
+        TensorLayout::fromPaddedShape(
+            input_tensor.get_dtype(),
+            PageConfig(input_tensor.get_layout()),
+            output_mem_config,
+            output_shape,
+            output_padded_shape))};
 }
 
-operation::ProgramWithCallbacks Transpose::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {
+operation::ProgramWithCallbacks Transpose::create_program(
+    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
 
@@ -170,15 +233,16 @@ operation::ProgramWithCallbacks Transpose::create_program(const std::vector<Tens
             }
         case TransposeOpParallelizationStrategy::MULTI_CORE_CN:
             return detail::transpose_cn_multi_core(input_tensor, output_tensor);
-        default:
-            TT_THROW("Unsupported parallelization strategy");
+        default: TT_THROW("Unsupported parallelization strategy");
     }
 }
 
-TransposeOpParallelizationStrategy Transpose::get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const {
+TransposeOpParallelizationStrategy Transpose::get_parallelization_strategy(
+    const std::vector<Tensor>& input_tensors) const {
     if (this->dim == TransposeOpDim::WH) {
         return TransposeOpParallelizationStrategy::MULTI_CORE_WH;
-    } else if (this->dim == TransposeOpDim::HC) { // Always true for legal shape until requirement on tile size IO is no longer required
+    } else if (this->dim == TransposeOpDim::HC) {  // Always true for legal shape until requirement on tile size IO is
+                                                   // no longer required
         return TransposeOpParallelizationStrategy::MULTI_CORE_HC;
     } else if (this->dim == TransposeOpDim::CN) {
         return TransposeOpParallelizationStrategy::MULTI_CORE_CN;
@@ -187,7 +251,4 @@ TransposeOpParallelizationStrategy Transpose::get_parallelization_strategy(const
     }
 }
 
-
-
-
-}
+}  // namespace ttnn::operations::data_movement

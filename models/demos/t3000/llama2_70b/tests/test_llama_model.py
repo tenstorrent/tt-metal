@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 import torch
 import ttnn
-from ttnn import ConcatMeshToTensor
+from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 import os
 
 import scipy
@@ -31,6 +31,7 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     check_kv_cache,
 )
 
+from models.demos.t3000.llama2_70b.tests.test_llama_attention import PagedAttentionConfig
 
 DEVICE_PERF_START_SIGNPOST = "START_PERF_RUN"
 DEVICE_PERF_END_SIGNPOST = "END_PERF_RUN"
@@ -64,6 +65,7 @@ def run_test_LlamaModel_inference(
     t3k_mesh_device,
     batch,
     seq_len,
+    max_batch_size,
     max_context_len,
     pcc,
     model_config,
@@ -75,6 +77,8 @@ def run_test_LlamaModel_inference(
     prompt_file=None,
     generation_start_pos=0,
     device_perf=False,  # set to True when measuring device perf
+    paged_attention=False,
+    chunk_size=None,
 ):
     if device_perf:  # Enable tracy signpost support in device perf runs only
         from tracy import signpost
@@ -108,6 +112,20 @@ def run_test_LlamaModel_inference(
     # PyTorch model --------------------------------------------------------------------
     pytorch_model = PytorchLlamaModel(hugging_face_reference_model)
     # TT model -------------------------------------------------------------------------
+
+    page_table = None
+    paged_attention_config = None
+    if paged_attention:
+        paged_attention_config = PagedAttentionConfig()
+
+        # Implied shuffling of blocks
+        permutation = torch.randperm(paged_attention_config.max_num_blocks)
+        # Page table which maps virtua blocks to physical
+        reverse_permutation = torch.argsort(permutation)
+        page_table = reverse_permutation.reshape(
+            max_batch_size, paged_attention_config.max_num_blocks // max_batch_size
+        )
+
     tt_model = TtLlamaModel_optimized(
         t3k_mesh_device,
         state_dict,
@@ -116,6 +134,7 @@ def run_test_LlamaModel_inference(
         model_config,
         configuration,
         cache_path=cache_path,
+        paged_attention_config=paged_attention_config,
     )
 
     mode = "prefill" if seq_len > 1 else "decode"
@@ -155,36 +174,96 @@ def run_test_LlamaModel_inference(
             pt_inp_ids,
             start_pos,
         )
-
-        if device_perf:
-            signpost(DEVICE_PERF_START_SIGNPOST)  # start for device perf measurement
-        # TT hardware execution -------------------------------------------------------------
-        tt_inp_emb, start_pos, rot_mat, cache_idxs, _ = tt_model.prepare_device_inputs(tt_inp_ids, start_pos, mode=mode)
-
-        tt_out = tt_model(
-            tt_inp_emb,
-            rot_mat,
-            start_pos,
-            cache_idxs=cache_idxs,
-            mode=mode,
-        )
-        del tt_inp_emb, rot_mat
-
-        tt_out = ttnn.from_device(tt_out)
-        tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
-
-        if device_perf:
-            signpost(DEVICE_PERF_END_SIGNPOST)  # end for device perf measurement
-
-        tt_out = tt_out[..., : configuration.vocab_size]
-        tt_out = tt_out.permute(2, 1, 0, 3).squeeze()  # [batch, hidden_dim]
-        if mode == "decode":
-            tt_out = tt_out[:batch]
-        tt_out = tt_out.float()
         if mode == "decode":
             pytorch_out = pytorch_out.squeeze().reshape(batch, -1)  # [batch, hidden_dim]
         else:
             pytorch_out = pytorch_out.squeeze().reshape(seq_len, -1)  # [seq, hidden_dim]
+
+        if device_perf:
+            signpost(DEVICE_PERF_START_SIGNPOST)  # start for device perf measurement
+        # TT hardware execution -------------------------------------------------------------
+        if chunk_size is not None:
+            tt_out = []
+            assert mode == "prefill"
+            for chunk_start in range(0, seq_len, chunk_size):
+                logger.info(f"Chunk start: {chunk_start}")
+                chunk_end = chunk_start + chunk_size
+                assert chunk_end <= seq_len, "Chunk end should be less than seq_len"
+                chunk_page_table = page_table[
+                    :,
+                    chunk_start // paged_attention_config.block_size : chunk_end // paged_attention_config.block_size,
+                ]
+                # SDPA requires that the page table batch dim matches the input batch dim, which must be 1 in prefill
+                prefill_page_table = page_table[0:1, :]
+
+                chunk_tt_input = tt_inp_ids[:, chunk_start:chunk_end]
+                # TT hardware execution -------------------------------------------------------------
+                (
+                    tt_inp_emb,
+                    start_pos,
+                    rot_mat,
+                    rot_idxs_tt,
+                    cache_idxs,
+                    page_table_tt,
+                    chunk_page_table_tt,
+                ) = tt_model.prepare_inputs(
+                    chunk_tt_input,
+                    chunk_start,
+                    mode=mode,
+                    page_table=prefill_page_table,
+                    chunk_page_table=chunk_page_table,
+                )
+
+                tt_chunk_out = tt_model(
+                    tt_inp_emb,
+                    rot_mat,
+                    start_pos,
+                    cache_idxs=cache_idxs,
+                    mode=mode,
+                    page_table=page_table_tt,
+                    chunk_page_table=chunk_page_table_tt,
+                    chunk_start_idx=chunk_start,
+                )
+
+                tt_chunk_out = ttnn.from_device(tt_chunk_out)
+                tt_chunk_out = ttnn.to_torch(tt_chunk_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
+                tt_chunk_out = tt_chunk_out[..., : configuration.vocab_size]
+                tt_chunk_out = tt_chunk_out.permute(2, 1, 0, 3).squeeze()  # [batch, seq_len, hidden_dim]
+
+                tt_out.append(tt_chunk_out)
+
+            tt_out = torch.cat(tt_out, dim=0).float()
+
+        else:
+            if mode == "decode":
+                tt_inp_emb, start_pos, rot_mat, cache_idxs, *_ = tt_model.prepare_device_inputs_decode(
+                    tt_inp_ids, start_pos, mode=mode
+                )
+            else:
+                tt_inp_emb, start_pos, rot_mat, cache_idxs, *_ = tt_model.prepare_inputs(
+                    tt_inp_ids, start_pos, mode=mode
+                )
+
+            tt_out = tt_model(
+                tt_inp_emb,
+                rot_mat,
+                start_pos,
+                cache_idxs=cache_idxs,
+                mode=mode,
+            )
+            del tt_inp_emb, rot_mat
+
+            tt_out = ttnn.from_device(tt_out)
+            tt_out = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
+
+            if device_perf:
+                signpost(DEVICE_PERF_END_SIGNPOST)  # end for device perf measurement
+
+            tt_out = tt_out[..., : configuration.vocab_size]
+            tt_out = tt_out.permute(2, 1, 0, 3).squeeze()  # [batch, hidden_dim]
+            if mode == "decode":
+                tt_out = tt_out[:batch]
+            tt_out = tt_out.float()
 
         # check outputs ----------------------------------------------------------------------
         does_pass, output_pcc = comp_pcc(pytorch_out, tt_out, pcc)
@@ -219,6 +298,29 @@ def run_test_LlamaModel_inference(
     logger.info(f"Average Top-5 over {len(all_top5)} tokens: {sum(all_top5) / len(all_top5)}")
     # Check kv cache
     # PyTorch output --------------------------------------------------------------------
+    tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_model.layers[0].attention.layer_past]
+    if paged_attention:
+        tt_layer_present_all = [
+            (
+                ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=1))[reverse_permutation]
+                .reshape(
+                    max_batch_size,
+                    paged_attention_config.max_num_blocks // max_batch_size,
+                    configuration.n_kv_heads,
+                    paged_attention_config.block_size,
+                    tt_model.head_dim,
+                )
+                .transpose(1, 2)
+                .reshape(max_batch_size, configuration.n_kv_heads, -1, tt_model.head_dim)[:batch, ...]
+            )
+            for lp in tt_layer_present_all
+        ]
+    else:
+        tt_layer_present_all = [
+            ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=1))[:batch, ...]
+            for lp in tt_layer_present_all
+        ]
+
     pytorch_layer_present = [
         pytorch_model.model.layers[0]
         .attention.cache_k.clone()
@@ -226,12 +328,6 @@ def run_test_LlamaModel_inference(
         pytorch_model.model.layers[0]
         .attention.cache_v.clone()
         .permute(0, 2, 1, 3)[:batch, ...],  # [batch, n_kv_heads, seq, head_dim]
-    ]
-
-    tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_model.layers[0].attention.layer_past]
-    tt_layer_present_all = [
-        ttnn.to_torch(lp, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=1))[:batch, ...]
-        for lp in tt_layer_present_all
     ]
 
     cache_test_pass = check_kv_cache(
@@ -298,6 +394,14 @@ def run_test_LlamaModel_inference(
     ("models/demos/t3000/llama2_70b/demo/data/a_tale_of_two_cities.txt", None),
     ids=("prompt_input", "rand_input"),
 )
+@pytest.mark.parametrize(
+    "paged_attention, chunk_size",
+    (
+        (True, 128),
+        (False, None),
+    ),
+    ids=("chunked_paged_attention", "unpaged_attention"),
+)
 def test_LlamaModel_inference(
     batch,
     seq_len,
@@ -308,8 +412,18 @@ def test_LlamaModel_inference(
     max_context_len,
     llama_version,
     prompt_file,
+    paged_attention,
+    chunk_size,
     use_program_cache,
 ):
+    if chunk_size is not None and seq_len == 1:
+        pytest.skip("Chunked prefill is not valid for decode mode tests")
+
+    if chunk_size is not None:
+        assert paged_attention, "Chunked prefill is only valid for paged attention"
+        assert chunk_size > 0, "Chunk size must be greater than 0"
+        assert seq_len % chunk_size == 0, "Sequence length must be divisible by chunk size"
+
     is_decode = seq_len == 1
     if is_decode and batch != max_batch_size:
         pytest.skip(f"Input batch size should match max_batch_size")
@@ -332,6 +446,7 @@ def test_LlamaModel_inference(
         t3k_mesh_device,
         batch,
         seq_len,
+        max_batch_size,
         max_context_len,
         pcc,
         model_config,
@@ -341,4 +456,6 @@ def test_LlamaModel_inference(
         tokenizer_path,
         cache_path,
         prompt_file=prompt_file,
+        paged_attention=paged_attention,
+        chunk_size=chunk_size,
     )

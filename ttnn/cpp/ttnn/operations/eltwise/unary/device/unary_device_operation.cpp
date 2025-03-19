@@ -4,12 +4,13 @@
 
 #include "unary_device_operation.hpp"
 
-#include <magic_enum.hpp>
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
+#include <magic_enum/magic_enum.hpp>
+#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "tools/profiler/op_profiler.hpp"
+
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::unary {
 
@@ -20,6 +21,7 @@ void validate_supported_arch_dtype(
         case UnaryOpType::REMAINDER:
         case UnaryOpType::FLOOR:
         case UnaryOpType::CEIL:
+        case UnaryOpType::ROUND:
         case UnaryOpType::LEFT_SHIFT:
         case UnaryOpType::RIGHT_SHIFT:
             TT_FATAL(
@@ -67,6 +69,13 @@ void validate_supported_arch_dtype(
                 output_datatype == DataType::BFLOAT16,
                 "Unsupported output data type '{}' for UnaryOpType '{}' (FMOD operation).",
                 static_cast<int>(output_datatype),
+                static_cast<int>(op_type));
+            break;
+        case UnaryOpType::ABS:
+        case UnaryOpType::ABS_INT32:
+            TT_FATAL(
+                !(arch == tt::ARCH::GRAYSKULL && input_datatype == DataType::INT32),
+                "UnaryOpType '{}' (ABS int32 operation) is not supported on Grayskull architecture.",
                 static_cast<int>(op_type));
             break;
         default: return;
@@ -136,7 +145,7 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (preallocated_output_tensor.has_value()) {
-        const auto computed_output_shape = compute_output_shapes(args, tensor_args);
+        const auto computed_output_shape = compute_output_specs(args, tensor_args).logical_shape();
         const auto preallocated_output_shape = preallocated_output_tensor.value().get_logical_shape();
         TT_FATAL(
             preallocated_output_shape == computed_output_shape,
@@ -153,15 +162,10 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-shape_return_value_t UnaryDeviceOperation::compute_output_shapes(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    return {tensor_args.input.get_logical_shape()};
-}
-
-tensor_return_value_t UnaryDeviceOperation::create_output_tensors(
+spec_return_value_t UnaryDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
-        return tensor_args.preallocated_output.value();
+        return tensor_args.preallocated_output->get_tensor_spec();
     }
 
     auto output_layout = Layout::TILE;
@@ -169,15 +173,22 @@ tensor_return_value_t UnaryDeviceOperation::create_output_tensors(
         output_layout = tensor_args.input.get_layout();
     }
 
-    const auto output_shape = tensor_args.input.shape();
-    return create_device_tensor(
-        output_shape, args.output_dtype, output_layout, tensor_args.input.device(), args.output_memory_config);
+    const auto output_shape = tensor_args.input.logical_shape();
+    return TensorSpec(output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
+}
+
+tensor_return_value_t UnaryDeviceOperation::create_output_tensors(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (tensor_args.preallocated_output.has_value()) {
+        return *tensor_args.preallocated_output;
+    }
+    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
 tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    const auto& input_shape = input_tensor.legacy_shape();
+    const auto& input_shape = input_tensor.get_padded_shape();
 
     auto program_factory = select_program_factory(args, tensor_args);
     operation::Hash hash = operation::hash_operation<UnaryDeviceOperation>(
@@ -185,9 +196,16 @@ tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         program_factory.index(),
         input_tensor.dtype(),
         std::get<DeviceStorage>(input_tensor.storage()).memory_config(),
-        compute_volume(input_shape));
+        input_shape.volume());
 
     return hash;
+}
+
+bool UnaryDeviceOperation::skip_launch(
+    const operation_attributes_t& attributes,
+    const tensor_args_t& tensor_args,
+    const tensor_return_value_t& tensor_return_value) {
+    return tensor_return_value.logical_shape().volume() == 0;
 }
 
 std::tuple<UnaryDeviceOperation::operation_attributes_t, UnaryDeviceOperation::tensor_args_t>

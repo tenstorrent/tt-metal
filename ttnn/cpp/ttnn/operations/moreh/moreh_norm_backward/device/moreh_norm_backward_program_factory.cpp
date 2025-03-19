@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_norm_backward_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_norm_backward {
@@ -12,40 +12,37 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
     auto floored_p = std::floor(p);
     auto decimal = p - floored_p;
     bool p_is_negative = floored_p < 0.0f;
-    if (p_is_negative)
+    if (p_is_negative) {
         floored_p = -floored_p;
+    }
     return std::make_tuple(static_cast<uint32_t>(floored_p), decimal, p_is_negative);
 }
 
-void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const tt::tt_metal::LegacyShape& shape) {
+void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
-        if (idx == rank - 1 || idx == rank - 2)
-            dim[i] = shape[idx] / tt::constants::TILE_HEIGHT;
-        else
+        if (idx == rank - 1 || idx == rank - 2) {
+            dim[i] = (shape[idx] + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
+        } else {
             dim[i] = shape[idx];
+        }
     }
 }
 
-tt::tt_metal::LegacyShape get_output_grad_shape(
+ttnn::Shape get_output_grad_shape(
     const Tensor& output_grad, const Tensor& input_grad, const ttnn::SmallVector<int64_t>& dims, const bool& keepdim) {
-    if (keepdim)
-        return output_grad.get_legacy_shape();
+    if (keepdim) {
+        return output_grad.get_logical_shape();
+    }
 
-    auto shape = input_grad.get_legacy_shape();
+    auto shape = input_grad.get_logical_shape();
     auto rank = shape.rank();
-    auto padding = shape.padding();
     for (auto dim : dims) {
         TT_FATAL(dim < rank, "dim {} < rank {}", dim, rank);
-        bool is_tile_dim = (dim == rank - 1 || dim == rank - 2);
-        if (is_tile_dim) {
-            shape[dim] = tt::constants::TILE_HEIGHT;
-            padding[dim] = Padding::PadDimension{0, 31};
-        } else
-            shape[dim] = 1;
+        shape[dim] = 1;
     }
-    return tt::tt_metal::LegacyShape(shape, padding);
+    return shape;
 }
 
 MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOperation::ProgramFactory::create(
@@ -65,15 +62,13 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto& input_grad_shape = input_grad.get_legacy_shape();
-    const auto& input_grad_shape_wo_padding = input_grad_shape.without_padding();
+    const auto& input_grad_shape = input_grad.get_logical_shape();
     const auto input_grad_rank = input_grad_shape.rank();
 
     ttnn::SmallVector<uint32_t> input_grad_dim(input_grad_rank, 1);
     get_tensor_dim(input_grad_dim, input_grad_shape);
-    tt::tt_metal::LegacyShape output_grad_shape =
+    auto output_grad_shape =
         get_output_grad_shape(output_grad, input_grad, operation_attributes.dims, operation_attributes.keepdim);
-    const auto output_grad_shape_wo_padding = output_grad_shape.without_padding();
 
     ttnn::SmallVector<uint32_t> output_grad_dim(input_grad_rank, 1);
     get_tensor_dim(output_grad_dim, output_grad_shape);
@@ -84,7 +79,7 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
         bool is_tile_dim = (idx == input_grad_rank - 1 || idx == input_grad_rank - 2);
 
         if (is_tile_dim) {
-            need_bcast_dim[i] = (output_grad_shape_wo_padding[idx] != input_grad_shape_wo_padding[idx]);
+            need_bcast_dim[i] = (output_grad_shape[idx] != input_grad_shape[idx]);
         } else {
             need_bcast_dim[i] = (output_grad_shape[idx] != input_grad_shape[idx]);
         }
@@ -140,19 +135,19 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
         all_cores,
         cb_data_format,
         {
-            {tt::CB::c_in0, in0_t},    // input
-            {tt::CB::c_in1, in1_t},    // output
-            {tt::CB::c_in2, in2_t},    // output_grad
-            {tt::CB::c_in3, in3_t},    // decimal
-            {tt::CB::c_out0, out0_t},  // input_grad
-            {tt::CB::c_intermed0, im0_t, intermed_data_format},
-            {tt::CB::c_intermed1, im1_t, intermed_data_format},
-            {tt::CB::c_intermed2, im2_t, intermed_data_format},
-            {tt::CB::c_intermed3, im3_t, intermed_data_format},
-            {tt::CB::c_intermed4, im4_t, intermed_data_format},
-            {tt::CB::c_intermed5, im5_t, intermed_data_format},
-            {tt::CB::c_intermed6, im6_t, intermed_data_format},
-            {tt::CB::c_intermed7, im7_t, intermed_data_format},
+            {tt::CBIndex::c_0, in0_t},    // input
+            {tt::CBIndex::c_1, in1_t},    // output
+            {tt::CBIndex::c_2, in2_t},    // output_grad
+            {tt::CBIndex::c_3, in3_t},    // decimal
+            {tt::CBIndex::c_16, out0_t},  // input_grad
+            {tt::CBIndex::c_24, im0_t, intermed_data_format},
+            {tt::CBIndex::c_25, im1_t, intermed_data_format},
+            {tt::CBIndex::c_26, im2_t, intermed_data_format},
+            {tt::CBIndex::c_27, im3_t, intermed_data_format},
+            {tt::CBIndex::c_28, im4_t, intermed_data_format},
+            {tt::CBIndex::c_29, im5_t, intermed_data_format},
+            {tt::CBIndex::c_30, im6_t, intermed_data_format},
+            {tt::CBIndex::c_31, im7_t, intermed_data_format},
         });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -174,12 +169,9 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
         static_cast<uint32_t>(is_dram(output)),
         static_cast<uint32_t>(is_dram(output_grad)),
         static_cast<uint32_t>(input_grad_rank)};
-    std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(is_dram(input_grad))};
-    const auto reader_kernels_id =
-        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
-    const auto writer_kernels_id =
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(is_dram(input_grad))};
+    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp

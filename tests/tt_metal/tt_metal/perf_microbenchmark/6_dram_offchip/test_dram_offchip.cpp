@@ -11,13 +11,16 @@
 #include <string>
 #include <vector>
 
-#include "common/bfloat16.hpp"
-#include "common/tt_backend_api_types.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/allocator.hpp>
+
+#include "test_common.hpp"
 
 using namespace tt;
 using std::chrono::duration_cast;
@@ -49,51 +52,51 @@ inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(
     uint64_t num_bytes, int rand_max_float, int seed, float offset = 0.0f);
 
 template <typename T>
-std::vector<T> slice_vec(std::vector<T> const &v, int m, int n);
+std::vector<T> slice_vec(std::vector<T> const& v, int m, int n);
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
-    tt_metal::Device *device,
-    const CoreRangeSet &all_cores,
-    const uint32_t &num_reqs_at_a_time,
-    const uint32_t &single_tile_size,
-    const tt::DataFormat &tile_format,
-    const uint32_t &access_type);
+    tt_metal::IDevice* device,
+    const CoreRangeSet& all_cores,
+    const uint32_t& num_reqs_at_a_time,
+    const uint32_t& single_tile_size,
+    const tt::DataFormat& tile_format,
+    const uint32_t& access_type);
 
 bool assign_runtime_args_to_program(
-    tt_metal::Device *device,
-    tt_metal::Program &program,
-    const uint32_t &num_cores,
-    const uint32_t &num_cores_y,
-    const uint32_t &num_cores_x,
-    const CoreRangeSet &core_group_1,
-    const CoreRangeSet &core_group_2,
-    const uint32_t &num_tiles_per_core_group_1,
-    const uint32_t &num_tiles_per_core_group_2,
-    const tt_metal::KernelHandle &kernel,
-    const uint32_t &input_buffer_addr,
-    const uint32_t &num_reqs_at_a_time,
-    const uint32_t &single_tile_size,
-    const tt::DataFormat &tile_format);
+    tt_metal::IDevice* device,
+    tt_metal::Program& program,
+    const uint32_t& num_cores,
+    const uint32_t& num_cores_y,
+    const uint32_t& num_cores_x,
+    const CoreRangeSet& core_group_1,
+    const CoreRangeSet& core_group_2,
+    const uint32_t& num_tiles_per_core_group_1,
+    const uint32_t& num_tiles_per_core_group_2,
+    const tt_metal::KernelHandle& kernel,
+    const uint32_t& input_buffer_addr,
+    const uint32_t& num_reqs_at_a_time,
+    const uint32_t& single_tile_size,
+    const tt::DataFormat& tile_format);
 
 bool validation(
-    tt_metal::Device *device,
-    tt_metal::Buffer &input_buffer,
-    std::vector<uint32_t> &input_vec,
-    const uint32_t &num_cores,
-    const uint32_t &num_cores_y,
-    const uint32_t &num_cores_x,
-    const CoreRangeSet &core_group_1,
-    const CoreRangeSet &core_group_2,
-    const uint32_t &num_tiles_per_core_group_1,
-    const uint32_t &num_tiles_per_core_group_2,
-    const uint32_t &cb_addr,
-    const uint32_t &num_reqs_at_a_time,
-    const uint32_t &single_tile_size,
-    const uint32_t &access_type);
+    tt_metal::IDevice* device,
+    tt_metal::Buffer& input_buffer,
+    std::vector<uint32_t>& input_vec,
+    const uint32_t& num_cores,
+    const uint32_t& num_cores_y,
+    const uint32_t& num_cores_x,
+    const CoreRangeSet& core_group_1,
+    const CoreRangeSet& core_group_2,
+    const uint32_t& num_tiles_per_core_group_1,
+    const uint32_t& num_tiles_per_core_group_2,
+    const uint32_t& cb_addr,
+    const uint32_t& num_reqs_at_a_time,
+    const uint32_t& single_tile_size,
+    const uint32_t& access_type);
 
 uint32_t get_dram_bandwidth(tt::ARCH arch);
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
         log_error("Test not supported w/ slow dispatch, exiting");
     }
@@ -129,7 +132,7 @@ int main(int argc, char **argv) {
                 test_args::has_command_option_and_remaining_args(input_args, "--bypass-check");
 
             test_args::validate_remaining_args(input_args);
-        } catch (const std::exception &e) {
+        } catch (const std::exception& e) {
             log_error(tt::LogTest, "Command line arguments found exception", e.what());
             TT_ASSERT(false);
         }
@@ -165,7 +168,7 @@ int main(int argc, char **argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
         dram_bandwidth_spec = get_dram_bandwidth(device->arch());
 
         int clock_freq_mhz = get_tt_npu_clock(device);
@@ -192,8 +195,8 @@ int main(int argc, char **argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
             input_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        auto input_buffer = Buffer::create(
-            device, input_vec.size() * sizeof(uint32_t), single_tile_size, tt_metal::BufferType::DRAM);
+        auto input_buffer =
+            Buffer::create(device, input_vec.size() * sizeof(uint32_t), single_tile_size, tt_metal::BufferType::DRAM);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -291,7 +294,7 @@ int main(int argc, char **argv) {
             access_type);
 
         pass &= tt_metal::CloseDevice(device);
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
         log_error(LogTest, "{}", e.what());
@@ -353,7 +356,7 @@ inline std::vector<std::uint32_t> create_random_vector_of_bfloat16(
 }
 
 template <typename T>
-std::vector<T> slice_vec(std::vector<T> const &v, int m, int n) {
+std::vector<T> slice_vec(std::vector<T> const& v, int m, int n) {
     auto first = v.cbegin() + m;
     auto last = v.cbegin() + n + 1;
 
@@ -362,17 +365,17 @@ std::vector<T> slice_vec(std::vector<T> const &v, int m, int n) {
 }
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
-    tt_metal::Device *device,
-    const CoreRangeSet &all_cores,
-    const uint32_t &num_reqs_at_a_time,
-    const uint32_t &single_tile_size,
-    const tt::DataFormat &tile_format,
-    const uint32_t &access_type) {
+    tt_metal::IDevice* device,
+    const CoreRangeSet& all_cores,
+    const uint32_t& num_reqs_at_a_time,
+    const uint32_t& single_tile_size,
+    const tt::DataFormat& tile_format,
+    const uint32_t& access_type) {
     tt_metal::Program program = tt_metal::Program();
 
     uint32_t cb_index = 0;
     uint32_t cb_tiles = num_reqs_at_a_time;
-    uint32_t cb_addr = device->get_base_allocator_addr(HalMemType::L1);
+    uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     tt_metal::CircularBufferConfig cb_config =
         tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{cb_index, tile_format}})
             .set_page_size(cb_index, single_tile_size);
@@ -393,20 +396,20 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 }
 
 bool assign_runtime_args_to_program(
-    tt_metal::Device *device,
-    tt_metal::Program &program,
-    const uint32_t &num_cores,
-    const uint32_t &num_cores_y,
-    const uint32_t &num_cores_x,
-    const CoreRangeSet &core_group_1,
-    const CoreRangeSet &core_group_2,
-    const uint32_t &num_tiles_per_core_group_1,
-    const uint32_t &num_tiles_per_core_group_2,
-    const tt_metal::KernelHandle &kernel,
-    const uint32_t &input_buffer_addr,
-    const uint32_t &num_reqs_at_a_time,
-    const uint32_t &single_tile_size,
-    const tt::DataFormat &tile_format) {
+    tt_metal::IDevice* device,
+    tt_metal::Program& program,
+    const uint32_t& num_cores,
+    const uint32_t& num_cores_y,
+    const uint32_t& num_cores_x,
+    const CoreRangeSet& core_group_1,
+    const CoreRangeSet& core_group_2,
+    const uint32_t& num_tiles_per_core_group_1,
+    const uint32_t& num_tiles_per_core_group_2,
+    const tt_metal::KernelHandle& kernel,
+    const uint32_t& input_buffer_addr,
+    const uint32_t& num_reqs_at_a_time,
+    const uint32_t& single_tile_size,
+    const tt::DataFormat& tile_format) {
     bool pass = true;
     for (uint32_t i = 0, num_tiles_used = 0; i < num_cores; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -432,20 +435,20 @@ bool assign_runtime_args_to_program(
 }
 
 bool validation(
-    tt_metal::Device *device,
-    tt_metal::Buffer &input_buffer,
-    std::vector<uint32_t> &input_vec,
-    const uint32_t &num_cores,
-    const uint32_t &num_cores_y,
-    const uint32_t &num_cores_x,
-    const CoreRangeSet &core_group_1,
-    const CoreRangeSet &core_group_2,
-    const uint32_t &num_tiles_per_core_group_1,
-    const uint32_t &num_tiles_per_core_group_2,
-    const uint32_t &cb_addr,
-    const uint32_t &num_reqs_at_a_time,
-    const uint32_t &single_tile_size,
-    const uint32_t &access_type) {
+    tt_metal::IDevice* device,
+    tt_metal::Buffer& input_buffer,
+    std::vector<uint32_t>& input_vec,
+    const uint32_t& num_cores,
+    const uint32_t& num_cores_y,
+    const uint32_t& num_cores_x,
+    const CoreRangeSet& core_group_1,
+    const CoreRangeSet& core_group_2,
+    const uint32_t& num_tiles_per_core_group_1,
+    const uint32_t& num_tiles_per_core_group_2,
+    const uint32_t& cb_addr,
+    const uint32_t& num_reqs_at_a_time,
+    const uint32_t& single_tile_size,
+    const uint32_t& access_type) {
     if (access_type == 0) {
         auto input_bf16 = unpack_uint32_vec_into_bfloat16_vec(input_vec);
         for (uint32_t i = 0, input_offset = 0; i < num_cores; ++i) {

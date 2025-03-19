@@ -35,8 +35,8 @@ parameters = {
 # If invalidated, the vector will still be stored but will be skipped.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT or test_vector["input_dtype"] == ttnn.bfloat8_b:
-        return True, "ROW_MAJOR_LAYOUT and ttnn.bfloat8_b are not supported"
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
+        return True, "ROW_MAJOR_LAYOUT is not supported"
     return False, None
 
 

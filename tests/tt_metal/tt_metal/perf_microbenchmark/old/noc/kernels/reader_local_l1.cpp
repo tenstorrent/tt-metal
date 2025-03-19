@@ -6,11 +6,11 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    uint32_t l1_buffer_addr  = get_arg_val<uint32_t>(0);
+    uint32_t l1_buffer_addr = get_arg_val<uint32_t>(0);
     uint32_t l1_buffer_noc_x = get_arg_val<uint32_t>(1);
     uint32_t l1_buffer_noc_y = get_arg_val<uint32_t>(2);
     uint32_t iter_cnt = get_arg_val<uint32_t>(3);
-    uint32_t cb_tile_cnt  = get_arg_val<uint32_t>(4);
+    uint32_t cb_tile_cnt = get_arg_val<uint32_t>(4);
 
     constexpr uint32_t cb_id = 0;
     uint32_t single_tile_size_bytes = get_tile_size(cb_id);
@@ -30,5 +30,4 @@ void kernel_main() {
             noc_async_read_barrier();
         }
     }
-
 }

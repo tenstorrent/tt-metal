@@ -21,8 +21,8 @@ void MorehDotOperation::validate(const operation_attributes_t& operation_attribu
     TT_FATAL(is_1d_tensor(input_a), "Invalid input tensor dimensions.");
     TT_FATAL(is_1d_tensor(input_b), "Invalid input tensor dimensions.");
 
-    const auto& a_shape_wo_padding = input_a.get_legacy_shape().without_padding();
-    const auto& b_shape_wo_padding = input_b.get_legacy_shape().without_padding();
+    const auto& a_shape_wo_padding = input_a.get_logical_shape();
+    const auto& b_shape_wo_padding = input_b.get_logical_shape();
     TT_FATAL(a_shape_wo_padding[3] == b_shape_wo_padding[3], "Shape without padding must be the same.");
 
     TT_FATAL(
@@ -47,15 +47,16 @@ void MorehDotOperation::validate_on_program_cache_hit(
     validate(operation_attributes, tensor_args);
 }
 
-MorehDotOperation::shape_return_value_t MorehDotOperation::compute_output_shapes(
+MorehDotOperation::spec_return_value_t MorehDotOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {
-        return tensor_args.output.value().get_logical_shape();
+        return tensor_args.output->get_tensor_spec();
     }
     const auto& input = tensor_args.input_a;
     auto output_shape = input.get_logical_shape();
     output_shape[3] = 1;
-    return ttnn::SimpleShape{std::move(output_shape)};
+    return TensorSpec(
+        output_shape, TensorLayout(input.dtype(), PageConfig(input.layout()), operation_attributes.memory_config));
 }
 
 MorehDotOperation::tensor_return_value_t MorehDotOperation::create_output_tensors(
@@ -63,14 +64,7 @@ MorehDotOperation::tensor_return_value_t MorehDotOperation::create_output_tensor
     if (tensor_args.output.has_value()) {
         return tensor_args.output.value();
     }
-    const auto output_shape = compute_output_shapes(operation_attributes, tensor_args);
-    const auto& input_tensor = tensor_args.input_a;
-    return create_device_tensor(
-        output_shape,
-        input_tensor.dtype(),
-        input_tensor.layout(),
-        input_tensor.device(),
-        operation_attributes.memory_config);
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input_a.device());
 }
 
 std::tuple<MorehDotOperation::operation_attributes_t, MorehDotOperation::tensor_args_t> MorehDotOperation::invoke(
@@ -84,8 +78,7 @@ std::tuple<MorehDotOperation::operation_attributes_t, MorehDotOperation::tensor_
         operation_attributes_t{
             dtype.value_or(input_a.dtype()),
             memory_config.value_or(input_a.memory_config()),
-            init_device_compute_kernel_config(
-                input_a.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
+            init_device_compute_kernel_config(input_a.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
         tensor_args_t{input_a, input_b, output}};
 }
 

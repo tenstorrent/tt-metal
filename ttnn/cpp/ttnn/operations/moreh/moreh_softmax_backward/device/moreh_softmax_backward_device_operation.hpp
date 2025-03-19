@@ -42,14 +42,14 @@ struct MorehSoftmaxBackwardOperation {
         const std::optional<Tensor>& input_grad_tensor;
     };
 
-    using shape_return_value_t = Shape;
+    using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
 #define DEFINE_SOFTMAX_BACKWARD_FACTORY(factory_name)                                       \
     struct factory_name {                                                                   \
         struct shared_variables_t {                                                         \
-            KernelHandle unary_reader_kernel_id;                                            \
-            KernelHandle unary_writer_kernel_id;                                            \
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;                              \
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;                              \
             std::size_t num_cores;                                                          \
             std::size_t num_cores_y;                                                        \
         };                                                                                  \
@@ -85,7 +85,7 @@ struct MorehSoftmaxBackwardOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_inputs(const operation_attributes_t&, const tensor_args_t&);
-    static shape_return_value_t compute_output_shapes(const operation_attributes_t&, const tensor_args_t&);
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static MorehSoftmaxBackwardOpParallelizationStrategy get_parallelization_strategy(
         const operation_attributes_t&, const tensor_args_t&);

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -16,11 +16,11 @@ void kernel_main() {
     auto Ct = get_arg_val<uint32_t>(i++);
     auto Wt = get_arg_val<uint32_t>(i++);
 
-    constexpr uint32_t cb_target = tt::CB::c_in0;
-    constexpr uint32_t cb_output_grad = tt::CB::c_in1;
-    constexpr uint32_t cb_weight = tt::CB::c_in2;
+    constexpr uint32_t cb_target = tt::CBIndex::c_0;
+    constexpr uint32_t cb_output_grad = tt::CBIndex::c_1;
+    constexpr uint32_t cb_weight = tt::CBIndex::c_2;
 
-    constexpr uint32_t cb_input_grad = tt::CB::c_out0;
+    constexpr uint32_t cb_input_grad = tt::CBIndex::c_16;
 
     // ublocks size defined in tiles
     const uint32_t target_tile_bytes = get_tile_size(cb_target);
@@ -85,11 +85,11 @@ void kernel_main() {
 
         for (uint32_t h = 0; h < TILE_HEIGHT; h++) {
             for (uint32_t w = 0; w < TILE_WIDTH; w++) {
-                uint32_t nw_tilized_idx = get_tilized_idx(n % TILE_HEIGHT, w); // target(n, w)
+                uint32_t nw_tilized_idx = get_tilized_idx(n % TILE_HEIGHT, w);  // target(n, w)
                 int32_t target_val = target_l1_ptr[nw_tilized_idx];
 
                 uint32_t c = ct * TILE_HEIGHT + h;
-                uint32_t input_grad_idx = get_tilized_idx(h, w); // input_grad(c, w)
+                uint32_t input_grad_idx = get_tilized_idx(h, w);  // input_grad(c, w)
 
                 uint16_t input_grad_val;
 

@@ -20,7 +20,6 @@ params += [
 ]
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("input_shapes, permute_args", params)
 def test_run_permute_test(input_shapes, permute_args, device, function_level_defaults):
     datagen_func = [

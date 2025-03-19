@@ -10,7 +10,8 @@ on:
           - Release
           - Debug
           - RelWithDebInfo
-          - CI
+          - ASan
+          - TSan
         default: "Release"
       extra-tag:
         required: true
@@ -45,6 +46,10 @@ on:
         required: false
         type: boolean
         default: false
+      t3000-perplexity:
+        required: false
+        type: boolean
+        default: false
 
 run-name: ${{ inputs.description }}
 jobs:
@@ -53,6 +58,7 @@ jobs:
     with:
       build-type: ${{ inputs.build-type }}
       tracy: ${{ inputs.build-with-tracy }}
+      build-wheel: true
     secrets: inherit
   t3000-unit-tests:
     needs: build-artifact
@@ -60,6 +66,9 @@ jobs:
     uses: ./.github/workflows/t3000-unit-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     if: ${{ inputs.t3000-unit }}
   t3000-demo-tests:
     needs: build-artifact
@@ -74,6 +83,9 @@ jobs:
     uses: ./.github/workflows/t3000-frequent-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     if: ${{ inputs.t3000-frequent }}
   t3000-nightly-tests:
     needs: build-artifact
@@ -95,4 +107,14 @@ jobs:
     uses: ./.github/workflows/t3000-profiler-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     if: ${{ inputs.t3000-profiler }}
+  t3000-perplexity-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/t3000-perplexity-tests-impl.yaml
+    with:
+      extra-tag: ${{ inputs.extra-tag }}
+    if: ${{ inputs.t3000-perplexity }}

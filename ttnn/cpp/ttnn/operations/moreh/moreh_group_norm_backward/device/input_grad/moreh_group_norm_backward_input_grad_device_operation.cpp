@@ -30,26 +30,26 @@ void MorehGroupNormBackwardInputGradOperation::validate_tensors(
     check_tensor(gamma, "moreh_group_norm_backward_input_grad", "gamma");
 
     // output_grad (N, C, H, W)
-    auto C = output_grad.get_shape().value[1];
+    auto C = output_grad.get_padded_shape()[1];
     TT_FATAL(C % num_groups == 0, "output_grad_shape[1] must be divisible by num_groups.");
     // input (N, C, H, W)
-    C = input.get_shape().value[1];
+    C = input.get_padded_shape()[1];
     TT_FATAL(C % num_groups == 0, "input_shape[1] must be divisible by num_groups.");
     // input_grad (N, C, H, W)
     if (input_grad.has_value()) {
-        C = input_grad.value().get_shape().value[1];
+        C = input_grad.value().get_padded_shape()[1];
         TT_FATAL(C % num_groups == 0, "input_grad_shape[1] must be divisible by num_groups.");
     }
     // gamma_grad (1, 1, 1, C)
     if (gamma.has_value()) {
-        C = gamma.value().get_shape().value.without_padding()[-1];
+        C = gamma.value().get_logical_shape()[-1];
         TT_FATAL(C % num_groups == 0, "gamma_shape[-1] must be divisible by num_groups.");
     }
 
     // mean (1, 1, N, num_groups)
-    TT_FATAL(mean.get_shape().value.without_padding()[-1] == num_groups, "mean_shape[-1] must match num_groups.");
+    TT_FATAL(mean.get_logical_shape()[-1] == num_groups, "mean_shape[-1] must match num_groups.");
     // rstd (1, 1, N, num_groups)
-    TT_FATAL(rstd.get_shape().value.without_padding()[-1] == num_groups, "rstd_shape[-1] must match num_groups.");
+    TT_FATAL(rstd.get_logical_shape()[-1] == num_groups, "rstd_shape[-1] must match num_groups.");
 }
 
 MorehGroupNormBackwardInputGradOperation::program_factory_t
@@ -68,10 +68,18 @@ void MorehGroupNormBackwardInputGradOperation::validate_on_program_cache_hit(
     validate_tensors(operation_attributes, tensor_args);
 }
 
-MorehGroupNormBackwardInputGradOperation::shape_return_value_t
-MorehGroupNormBackwardInputGradOperation::compute_output_shapes(
+MorehGroupNormBackwardInputGradOperation::spec_return_value_t
+MorehGroupNormBackwardInputGradOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return tensor_args.output_grad.get_shape();
+    if (tensor_args.input_grad.has_value()) {
+        return {tensor_args.input_grad->get_tensor_spec()};
+    }
+    return TensorSpec(
+        tensor_args.output_grad.get_logical_shape(),
+        TensorLayout(
+            tensor_args.output_grad.get_dtype(),
+            PageConfig(Layout::TILE),
+            operation_attributes.input_grad_memory_config));
 }
 
 MorehGroupNormBackwardInputGradOperation::tensor_return_value_t
@@ -82,11 +90,7 @@ MorehGroupNormBackwardInputGradOperation::create_output_tensors(
     }
 
     return create_device_tensor(
-        tensor_args.output_grad.get_shape(),
-        tensor_args.output_grad.get_dtype(),
-        Layout::TILE,
-        tensor_args.output_grad.device(),
-        operation_attributes.input_grad_memory_config);
+        compute_output_specs(operation_attributes, tensor_args), tensor_args.output_grad.device());
 }
 
 std::tuple<
@@ -98,8 +102,8 @@ MorehGroupNormBackwardInputGradOperation::invoke(
     const Tensor& mean,
     const Tensor& rstd,
     uint32_t num_groups,
-    const std::optional<const Tensor> gamma,
-    const std::optional<const Tensor> input_grad,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& input_grad,
     const std::optional<MemoryConfig>& input_grad_memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     operation_attributes_t operation_attributes{

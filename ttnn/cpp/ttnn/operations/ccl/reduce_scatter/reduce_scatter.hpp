@@ -8,7 +8,7 @@
 
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
-#include "ttnn/cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+#include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -16,20 +16,21 @@ namespace ccl {
 
 struct ExecuteReduceScatter {
     static ttnn::Tensor invoke(
-        const Tensor &input_tensor,
-        const uint32_t scatter_dim,
+        const Tensor& input_tensor,
+        const int32_t dim,
         const uint32_t cluster_axis,
         const MeshDevice& mesh_device,
         ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
         const uint32_t num_links = 1,
-        const std::optional<ttnn::MemoryConfig>& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        const std::optional<ttnn::MemoryConfig>& output_mem_config =
+            tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
         const std::optional<size_t> user_defined_num_workers = std::nullopt,
         const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const uint32_t scatter_dim,
+        const int32_t dim,
         ttnn::operations::reduction::ReduceType math_op,
         const uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,

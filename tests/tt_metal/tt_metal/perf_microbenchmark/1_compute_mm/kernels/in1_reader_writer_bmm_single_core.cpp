@@ -12,7 +12,6 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in1 = 1;
 
-
     for (uint32_t block = 0; block < num_blocks; block++) {
         cb_reserve_back(cb_id_in1, in1_block_tiles);
         cb_push_back(cb_id_in1, in1_block_tiles);

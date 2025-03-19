@@ -8,7 +8,7 @@
 #include "pybind11/decorators.hpp"
 
 namespace ttnn::operations::bernoulli {
-void bind_bernoulli_operation(py::module &module) {
+void bind_bernoulli_operation(py::module& module) {
     std::string doc =
         R"doc(
         Generates a tensor to draw binary random numbers (0 or 1) from a Bernoulli distribution.
@@ -37,6 +37,7 @@ void bind_bernoulli_operation(py::module &module) {
         doc,
         ttnn::pybind_arguments_t{
             py::arg("input"),
+            py::arg("seed") = 0,
             py::kw_only(),
             py::arg("output") = std::nullopt,
             py::arg("dtype") = std::nullopt,

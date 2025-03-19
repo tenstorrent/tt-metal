@@ -5,7 +5,7 @@
 #include <iostream>
 
 #include "moreh_group_norm_backward_input_grad_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_group_norm_backward {
@@ -34,14 +34,14 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto output_grad_shape = output_grad.get_shape();
+    const auto output_grad_shape = output_grad.get_padded_shape();
 
-    const auto n = output_grad_shape.value[0];
-    const auto c = output_grad_shape.value[1];
-    const auto h = output_grad_shape.value[2];
-    const auto w = output_grad_shape.value[3];
+    const auto n = output_grad_shape[0];
+    const auto c = output_grad_shape[1];
+    const auto h = output_grad_shape[2];
+    const auto w = output_grad_shape[3];
 
-    const auto origin_output_grad_shape = output_grad_shape.value.without_padding();
+    const auto origin_output_grad_shape = output_grad.get_logical_shape();
 
     const auto origin_h = origin_output_grad_shape[2];
     const auto origin_w = origin_output_grad_shape[3];
@@ -108,7 +108,7 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
     const auto cb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + in7_t + out0_t + im0_t + im1_t +
                            im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) *
                           single_tile_size;
-    const auto available_L1 = device->l1_size_per_core() - device->get_base_allocator_addr(HalMemType::L1);
+    const auto available_L1 = device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const bool use_large_algorithm = cb_usage >= available_L1;
 
     if (use_large_algorithm) {
@@ -125,23 +125,23 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
         all_cores,
         cb_data_format,
         {
-            {CB::c_in0, in0_t},  // output_grad
-            {CB::c_in1, in1_t},  // input
-            {CB::c_in2, in2_t},  // mean
-            {CB::c_in3, in3_t},  // rstd
-            {CB::c_in4, in4_t},  // one
-            {CB::c_in5, in5_t},  // inner_size(==n)
-            {CB::c_in6, in6_t},
-            {CB::c_in7, in7_t},
-            {CB::c_out0, out0_t},  // input_grad
-            {CB::c_intermed0, im0_t},
-            {CB::c_intermed1, im1_t},
-            {CB::c_intermed2, im2_t},
-            {CB::c_intermed3, im3_t},
-            {CB::c_intermed4, im4_t},
-            {CB::c_intermed5, im5_t},
-            {CB::c_intermed6, im6_t},
-            {CB::c_intermed7, im7_t},
+            {CBIndex::c_0, in0_t},  // output_grad
+            {CBIndex::c_1, in1_t},  // input
+            {CBIndex::c_2, in2_t},  // mean
+            {CBIndex::c_3, in3_t},  // rstd
+            {CBIndex::c_4, in4_t},  // one
+            {CBIndex::c_5, in5_t},  // inner_size(==n)
+            {CBIndex::c_6, in6_t},
+            {CBIndex::c_7, in7_t},
+            {CBIndex::c_16, out0_t},  // input_grad
+            {CBIndex::c_24, im0_t},
+            {CBIndex::c_25, im1_t},
+            {CBIndex::c_26, im2_t},
+            {CBIndex::c_27, im3_t},
+            {CBIndex::c_28, im4_t},
+            {CBIndex::c_29, im5_t},
+            {CBIndex::c_30, im6_t},
+            {CBIndex::c_31, im7_t},
         });
 
     ////////////////////////////////////////////////////////////////////////////

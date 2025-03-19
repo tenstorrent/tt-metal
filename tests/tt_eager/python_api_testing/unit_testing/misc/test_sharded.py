@@ -64,21 +64,17 @@ def test_sharded_tile(
 
     x = torch.arange(input_size.numel()).reshape(input_size).bfloat16().float()
 
-    xt = (
-        ttnn.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            input_dtype,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(
-            device,
-            ttnn.MemoryConfig(
-                memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
-                buffer_type=ttnn.BufferType.L1,
-            ),
-        )
+    xt = ttnn.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        input_dtype,
+        ttnn.TILE_LAYOUT,
+    ).to(
+        device,
+        ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+            buffer_type=ttnn.BufferType.L1,
+        ),
     )
 
     yt = ttnn.interleaved_to_sharded(
@@ -168,7 +164,7 @@ def test_sharded_rm(
         ),
     )
 
-    yt = ttnn.interleaved_to_sharded(xt, grid_size, shard_size, shard_scheme, shard_orientation)
+    yt = ttnn.interleaved_to_sharded(xt, grid_size, shard_size, shard_scheme, shard_orientation, keep_l1_aligned=True)
 
     zt = ttnn.sharded_to_interleaved(
         yt,
@@ -176,6 +172,7 @@ def test_sharded_rm(
             memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
             buffer_type=ttnn.BufferType.L1,
         ),
+        is_l1_aligned=True,
     )
 
     tt_og = xt.cpu().to_torch()
@@ -218,18 +215,14 @@ def test_sharded_untilize(H, num_cores, in_sharded, out_sharded, dtype, device, 
 
     x = torch.randn((N, C, H, W)).bfloat16()
 
-    xt = (
-        ttnn.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            dtype,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(
-            device,
-            interleaved_mem_config,
-        )
+    xt = ttnn.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttnn.TILE_LAYOUT,
+    ).to(
+        device,
+        interleaved_mem_config,
     )
 
     if in_sharded:
@@ -991,21 +984,17 @@ def test_sharded_program_cache(device, use_program_cache, function_level_default
     x = torch.ones((N, C, H, W)).bfloat16().float()
     x2 = torch.zeros((N, C, H, W)).bfloat16().float()
 
-    xt = (
-        ttnn.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            ttnn.bfloat16,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(
-            device,
-            ttnn.MemoryConfig(
-                memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
-                buffer_type=ttnn.BufferType.L1,
-            ),
-        )
+    xt = ttnn.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+    ).to(
+        device,
+        ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+            buffer_type=ttnn.BufferType.L1,
+        ),
     )
 
     yt = ttnn.interleaved_to_sharded(
@@ -1024,21 +1013,17 @@ def test_sharded_program_cache(device, use_program_cache, function_level_default
         ),
     )
 
-    xt2 = (
-        ttnn.Tensor(
-            x2.reshape(-1).tolist(),
-            x2.shape,
-            ttnn.bfloat16,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(
-            device,
-            ttnn.MemoryConfig(
-                memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
-                buffer_type=ttnn.BufferType.L1,
-            ),
-        )
+    xt2 = ttnn.Tensor(
+        x2.reshape(-1).tolist(),
+        x2.shape,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+    ).to(
+        device,
+        ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
+            buffer_type=ttnn.BufferType.L1,
+        ),
     )
 
     yt2 = ttnn.interleaved_to_sharded(
@@ -1462,18 +1447,14 @@ def test_sharded_untilize_padded_shard(in_sharded, out_sharded, dtype, device, f
 
     x = torch.arange(N * C * H * W).reshape((N, C, H, W)).bfloat16()
 
-    xt = (
-        ttnn.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            dtype,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(
-            device,
-            interleaved_mem_config,
-        )
+    xt = ttnn.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttnn.TILE_LAYOUT,
+    ).to(
+        device,
+        interleaved_mem_config,
     )
 
     if in_sharded:
@@ -1481,8 +1462,8 @@ def test_sharded_untilize_padded_shard(in_sharded, out_sharded, dtype, device, f
             xt,
             grid_size,
             [
-                math.ceil((xt.shape.with_tile_padding()[-2] // 32) / grid_size[0]) * 32,
-                xt.shape.with_tile_padding()[-1] // grid_size[1],
+                math.ceil((xt.padded_shape[-2] // 32) / grid_size[0]) * 32,
+                xt.padded_shape[-1] // grid_size[1],
             ],
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             ttnn.ShardOrientation.COL_MAJOR,
@@ -1542,32 +1523,24 @@ def test_sharded_binary_padded_shard(
     x = torch.ones((N, C, H, W)).bfloat16()
     y = torch.ones((N, C, H, W)).bfloat16() * 2
 
-    xt = (
-        ttnn.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            activations_dtype,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(
-            device,
-            interleaved_mem_config,
-        )
+    xt = ttnn.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        activations_dtype,
+        ttnn.TILE_LAYOUT,
+    ).to(
+        device,
+        interleaved_mem_config,
     )
 
-    yt = (
-        ttnn.Tensor(
-            y.reshape(-1).tolist(),
-            y.shape,
-            activations_dtype,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(
-            device,
-            interleaved_mem_config,
-        )
+    yt = ttnn.Tensor(
+        y.reshape(-1).tolist(),
+        y.shape,
+        activations_dtype,
+        ttnn.TILE_LAYOUT,
+    ).to(
+        device,
+        interleaved_mem_config,
     )
 
     if in_sharded:
@@ -1575,8 +1548,8 @@ def test_sharded_binary_padded_shard(
             xt,
             grid_size,
             [
-                math.ceil((xt.shape.with_tile_padding()[-2] // 32) / grid_size[0]) * 32,
-                xt.shape.with_tile_padding()[-1] // grid_size[1],
+                math.ceil((xt.padded_shape[-2] // 32) / grid_size[0]) * 32,
+                xt.padded_shape[-1] // grid_size[1],
             ],
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             ttnn.ShardOrientation.COL_MAJOR,
@@ -1585,8 +1558,8 @@ def test_sharded_binary_padded_shard(
             yt,
             grid_size,
             [
-                math.ceil((xt.shape.with_tile_padding()[-2] // 32) / grid_size[0]) * 32,
-                xt.shape.with_tile_padding()[-1] // grid_size[1],
+                math.ceil((xt.padded_shape[-2] // 32) / grid_size[0]) * 32,
+                xt.padded_shape[-1] // grid_size[1],
             ],
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             ttnn.ShardOrientation.COL_MAJOR,
@@ -1634,18 +1607,14 @@ def test_block_sharded_untilize_with_unpadding(in_sharded, out_sharded, dtype, d
 
     x = torch.randn((N, C, H, W)).bfloat16()
 
-    xt = (
-        ttnn.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            dtype,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(
-            device,
-            interleaved_mem_config,
-        )
+    xt = ttnn.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttnn.TILE_LAYOUT,
+    ).to(
+        device,
+        interleaved_mem_config,
     )
 
     if in_sharded:
@@ -1653,8 +1622,8 @@ def test_block_sharded_untilize_with_unpadding(in_sharded, out_sharded, dtype, d
             xt,
             grid_size,
             [
-                math.ceil((xt.shape.with_tile_padding()[-2] // 32) / grid_size[0]) * 32,
-                xt.shape.with_tile_padding()[-1] // grid_size[1],
+                math.ceil((xt.padded_shape[-2] // 32) / grid_size[0]) * 32,
+                xt.padded_shape[-1] // grid_size[1],
             ],
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             ttnn.ShardOrientation.COL_MAJOR,
@@ -1726,18 +1695,14 @@ def test_width_sharded_untilize_with_unpadding(
 
     x = torch.randn((N, C, H, W)).bfloat16()
 
-    xt = (
-        ttnn.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            dtype,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(
-            device,
-            interleaved_mem_config,
-        )
+    xt = ttnn.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttnn.TILE_LAYOUT,
+    ).to(
+        device,
+        interleaved_mem_config,
     )
 
     if in_sharded:
@@ -1832,7 +1797,7 @@ def test_sharded_tilize_with_val_padding(input_shape, sharding_config, output_dt
             interleaved_mem_config,
         )
 
-    tt_got_back = yt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    tt_got_back = yt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch_with_padded_shape()
 
     y = torch.nn.functional.pad(x, [0, 0, 0, roundup32(H) - H], "constant", 1.0)
 
@@ -1845,7 +1810,6 @@ def test_sharded_tilize_with_val_padding(input_shape, sharding_config, output_dt
     assert passing
 
 
-@skip_for_blackhole("GH #15234")
 @pytest.mark.parametrize("N", [8, 16])
 @pytest.mark.parametrize("in_sharded", [True], ids=["in0_sharded"])
 @pytest.mark.parametrize("out_sharded", [True], ids=["out_sharded"])
@@ -1872,18 +1836,14 @@ def test_sharded_reduce_h(N, in_sharded, out_sharded, dtype, device, function_le
 
     x = torch.randn((N, C, H, W)).bfloat16()
 
-    xt = (
-        ttnn.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            dtype,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(
-            device,
-            interleaved_mem_config,
-        )
+    xt = ttnn.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        dtype,
+        ttnn.TILE_LAYOUT,
+    ).to(
+        device,
+        interleaved_mem_config,
     )
 
     if in_sharded:
@@ -2252,7 +2212,7 @@ def run_reshard_test(
 
     compute_grid = ttnn.CoreCoord(output_shard_grid[0], output_shard_grid[1])
     output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), compute_grid)})
-    output_shard_spec = ttnn.ShardSpec(output_shard_grid, output_shard_shape, output_shard_orientation, False)
+    output_shard_spec = ttnn.ShardSpec(output_shard_grid, output_shard_shape, output_shard_orientation)
     output_mem_config = ttnn.MemoryConfig(output_sharding_scheme, ttnn.BufferType.L1, output_shard_spec)
     if input_layout == ttnn.ROW_MAJOR_LAYOUT and tt_dtype == ttnn.bfloat8_b:
         pytest.skip("Illegal layout/dtype config")
@@ -2323,8 +2283,7 @@ def test_sharded_to_from_l1(device, input_shape, shard_scheme, shard_orientation
         assert False, f"Unsupported {shard_scheme}"
 
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))})
-    shard_halo = False
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
     mem_config = ttnn.MemoryConfig(shard_scheme, ttnn.BufferType.L1, shard_spec)
 
     volume = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3]
@@ -2367,18 +2326,14 @@ def test_interleaved_2_sharded_L1(device, dtype, y):
 
     x = torch.randn((1, 1, y, 144 * 32)).bfloat16().float()
 
-    xt = (
-        ttnn.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            input_dtype,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(
-            device,
-            interleaved_mem_config,
-        )
+    xt = ttnn.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        input_dtype,
+        ttnn.TILE_LAYOUT,
+    ).to(
+        device,
+        interleaved_mem_config,
     )
 
     yt = ttnn.interleaved_to_sharded(xt, shard_grid, (y // 8, 18 * 32), shard_scheme, ttnn.ShardOrientation.ROW_MAJOR)
@@ -2409,24 +2364,20 @@ def test_interleaved_2_sharded_DRAM(device, dtype, y):
 
     x = torch.randn((1, 1, y, 144 * 32)).bfloat16().float()
 
-    xt = (
-        ttnn.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            input_dtype,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(
-            device,
-            interleaved_mem_config,
-        )
+    xt = ttnn.Tensor(
+        x.reshape(-1).tolist(),
+        x.shape,
+        input_dtype,
+        ttnn.TILE_LAYOUT,
+    ).to(
+        device,
+        interleaved_mem_config,
     )
 
     yt = ttnn.interleaved_to_sharded(xt, shard_grid, (y // 8, 18 * 32), shard_scheme, ttnn.ShardOrientation.ROW_MAJOR)
 
 
-@run_for_wormhole_b0()
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "seq_len",
     (32,),
@@ -2472,19 +2423,30 @@ def test_llama_mlp_width_sharded_to_interleaved_pcc_err(device, seq_len, use_pro
         {
             ttnn.CoreRange(
                 ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(11, 0),
+                ttnn.CoreCoord(11, 0) if is_wormhole_b0() else ttnn.CoreCoord(7, 0),  # Blackhole coord
             ),
         }
     )
+    if is_wormhole_b0():
+        w1_w3_shard_spec = ttnn.ShardSpec(dram_core_range_set, (4096, 320), ttnn.ShardOrientation.ROW_MAJOR)
+    else:
+        assert is_blackhole()
+        w1_w3_shard_spec = ttnn.ShardSpec(dram_core_range_set, (4096, 448), ttnn.ShardOrientation.ROW_MAJOR)
     w1_w3_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.DRAM,
-        ttnn.ShardSpec(dram_core_range_set, (4096, 320), ttnn.ShardOrientation.ROW_MAJOR, False),
+        w1_w3_shard_spec,
     )
+
+    if is_wormhole_b0():
+        w2_shard_spec = ttnn.ShardSpec(dram_core_range_set, (3584, 352), ttnn.ShardOrientation.ROW_MAJOR)
+    else:
+        assert is_blackhole()
+        w2_shard_spec = ttnn.ShardSpec(dram_core_range_set, (3584, 512), ttnn.ShardOrientation.ROW_MAJOR)
     w2_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.DRAM,
-        ttnn.ShardSpec(dram_core_range_set, (3584, 352), ttnn.ShardOrientation.ROW_MAJOR, False),
+        w2_shard_spec,
     )
     pc_1 = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=4,

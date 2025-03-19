@@ -14,15 +14,11 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 4>
-inline void calculate_min()
-{
-    for (int d = 0; d < ITERATIONS; d++)
-    {
+inline void calculate_min() {
+    for (int d = 0; d < ITERATIONS; d++) {
         vFloat a = dst_reg[0];
         vFloat b = dst_reg[16];
-        v_if(a > b) {
-            dst_reg[0] = b;
-        }
+        v_if(a > b) { dst_reg[0] = b; }
         v_endif;
 
         dst_reg++;

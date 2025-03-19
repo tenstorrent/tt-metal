@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "tt_metal/impl/device/device.hpp"
+#include <device.hpp>
 
 namespace tt {
-void ClearNocData(tt_metal::Device *device);
-void DumpNocData(std::vector<tt_metal::Device *> devices);
-}
+void ClearNocData(tt_metal::IDevice* device);
+void DumpNocData(const std::vector<tt_metal::IDevice*>& devices);
+}  // namespace tt

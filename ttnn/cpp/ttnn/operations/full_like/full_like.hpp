@@ -11,11 +11,11 @@ namespace ttnn::operations::full_like {
 
 struct FullLike {
     static Tensor invoke(
-        const Tensor &input,
+        const Tensor& input,
         const std::variant<float, int> fill_value,
-        const std::optional<DataType> &dtype,
-        const std::optional<Layout> &layout,
-        const std::optional<MemoryConfig> &memory_config);
+        const std::optional<DataType>& dtype,
+        const std::optional<Layout>& layout,
+        const std::optional<MemoryConfig>& memory_config);
 };
 }  // namespace ttnn::operations::full_like
 

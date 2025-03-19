@@ -8,13 +8,12 @@
 
 namespace NAMESPACE {
 void MAIN {
-
     uint32_t num_tiles = get_compile_time_arg_val(0);
 
-    transpose_wh_init(tt::CB::c_intermed0);
+    transpose_wh_init(tt::CBIndex::c_24, tt::CBIndex::c_17);
 
-    constexpr uint32_t cb_im0 = tt::CB::c_intermed0;
-    constexpr uint32_t cb_out1 = tt::CB::c_out1;
+    constexpr uint32_t cb_im0 = tt::CBIndex::c_24;
+    constexpr uint32_t cb_out1 = tt::CBIndex::c_17;
 
     // transpose a row-major block:
     // - assumes the tiles come in in column major order from reader
@@ -31,8 +30,6 @@ void MAIN {
 
         cb_push_back(cb_out1, 1);
         cb_pop_front(cb_im0, 1);
-
-
     }
 }
-}
+}  // namespace NAMESPACE

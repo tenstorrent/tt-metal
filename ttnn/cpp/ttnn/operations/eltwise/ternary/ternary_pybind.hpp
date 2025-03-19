@@ -7,13 +7,12 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
-
 
 namespace ttnn {
 namespace operations {
@@ -22,7 +21,11 @@ namespace ternary {
 namespace detail {
 
 template <typename ternary_operation_t>
-void bind_ternary_composite_float(py::module& module, const ternary_operation_t& operation, const std::string& description, const std::string& supported_dtype = "BFLOAT16") {
+void bind_ternary_composite_float(
+    py::module& module,
+    const ternary_operation_t& operation,
+    const std::string& description,
+    const std::string& supported_dtype = "BFLOAT16") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -78,8 +81,8 @@ void bind_ternary_composite_float(py::module& module, const ternary_operation_t&
                const Tensor& input_tensor_c,
                float value,
                const std::optional<MemoryConfig>& memory_config) {
-                    return self(input_tensor_a, input_tensor_b, input_tensor_c, value, memory_config);
-                },
+                return self(input_tensor_a, input_tensor_b, input_tensor_c, value, memory_config);
+            },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
             py::arg("input_tensor_c"),
@@ -142,7 +145,7 @@ void bind_ternary_where(py::module& module, const ternary_operation_t& operation
                const Tensor& false_value,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(queue_id, predicate, true_value, false_value, memory_config, output_tensor);
             },
             py::arg("predicate"),
@@ -151,7 +154,7 @@ void bind_ternary_where(py::module& module, const ternary_operation_t& operation
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0},
+            py::arg("queue_id") = DefaultQueueId},
         ttnn::pybind_overload_t{
             [](const ternary_operation_t& self,
                const Tensor& predicate,
@@ -159,7 +162,7 @@ void bind_ternary_where(py::module& module, const ternary_operation_t& operation
                const Tensor& false_value,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(queue_id, predicate, true_value, false_value, memory_config, output_tensor);
             },
             py::arg("predicate"),
@@ -168,7 +171,7 @@ void bind_ternary_where(py::module& module, const ternary_operation_t& operation
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0},
+            py::arg("queue_id") = DefaultQueueId},
         ttnn::pybind_overload_t{
             [](const ternary_operation_t& self,
                const Tensor& predicate,
@@ -176,7 +179,7 @@ void bind_ternary_where(py::module& module, const ternary_operation_t& operation
                const float false_value,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(queue_id, predicate, true_value, false_value, memory_config, output_tensor);
             },
             py::arg("predicate"),
@@ -185,7 +188,7 @@ void bind_ternary_where(py::module& module, const ternary_operation_t& operation
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0},
+            py::arg("queue_id") = DefaultQueueId},
         ttnn::pybind_overload_t{
             [](const ternary_operation_t& self,
                const Tensor& predicate,
@@ -193,7 +196,7 @@ void bind_ternary_where(py::module& module, const ternary_operation_t& operation
                const float false_value,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(queue_id, predicate, true_value, false_value, memory_config, output_tensor);
             },
             py::arg("predicate"),
@@ -202,7 +205,7 @@ void bind_ternary_where(py::module& module, const ternary_operation_t& operation
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 template <typename ternary_operation_t>
@@ -258,12 +261,10 @@ void bind_ternary_lerp(py::module& module, const ternary_operation_t& operation,
         doc,
         ttnn::pybind_overload_t{
             [](const ternary_operation_t& self,
-            const Tensor& input,
-            const Tensor& end,
-            const Tensor& weight,
-            const std::optional<MemoryConfig>& memory_config) {
-                    return self(input, end, weight, memory_config);
-                },
+               const Tensor& input,
+               const Tensor& end,
+               const Tensor& weight,
+               const std::optional<MemoryConfig>& memory_config) { return self(input, end, weight, memory_config); },
             py::arg("input"),
             py::arg("end"),
             py::arg("weight"),
@@ -272,12 +273,10 @@ void bind_ternary_lerp(py::module& module, const ternary_operation_t& operation,
 
         ttnn::pybind_overload_t{
             [](const ternary_operation_t& self,
-            const Tensor& input,
-            const Tensor& end,
-            float weight,
-            const std::optional<MemoryConfig>& memory_config) {
-                    return self(input, end, weight, memory_config);
-                },
+               const Tensor& input,
+               const Tensor& end,
+               float weight,
+               const std::optional<MemoryConfig>& memory_config) { return self(input, end, weight, memory_config); },
             py::arg("input"),
             py::arg("end"),
             py::arg("weight"),
@@ -333,12 +332,12 @@ void bind_ternary_mac(py::module& module, const ternary_operation_t& operation, 
         doc,
         ttnn::pybind_overload_t{
             [](const ternary_operation_t& self,
-            const Tensor& input_tensor_a,
-            const Tensor& input_tensor_b,
-            const Tensor& input_tensor_c,
-            const std::optional<MemoryConfig>& memory_config) {
-                    return self(input_tensor_a, input_tensor_b, input_tensor_c, memory_config);
-                },
+               const Tensor& input_tensor_a,
+               const Tensor& input_tensor_b,
+               const Tensor& input_tensor_c,
+               const std::optional<MemoryConfig>& memory_config) {
+                return self(input_tensor_a, input_tensor_b, input_tensor_c, memory_config);
+            },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
             py::arg("input_tensor_c"),
@@ -347,12 +346,12 @@ void bind_ternary_mac(py::module& module, const ternary_operation_t& operation, 
 
         ttnn::pybind_overload_t{
             [](const ternary_operation_t& self,
-            const Tensor& input_tensor_a,
-            float value1,
-            float value2,
-            const std::optional<MemoryConfig>& memory_config) {
-                    return self(input_tensor_a, value1, value2, memory_config);
-                },
+               const Tensor& input_tensor_a,
+               float value1,
+               float value2,
+               const std::optional<MemoryConfig>& memory_config) {
+                return self(input_tensor_a, value1, value2, memory_config);
+            },
             py::arg("input_tensor_a"),
             py::arg("value1"),
             py::arg("value2"),

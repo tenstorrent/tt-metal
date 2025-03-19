@@ -4,12 +4,50 @@
 
 #include "binary_device_operation.hpp"
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/host_api.hpp"
+#include <utility>
+
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::binary {
+
+namespace utils {
+    bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
+    switch (val) {
+        case BinaryOpType::ADD:
+        case BinaryOpType::SUB:
+            return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32));
+        case BinaryOpType::MUL:
+        case BinaryOpType::DIV_FAST:
+        case BinaryOpType::RSUB:
+        case BinaryOpType::LOGADDEXP:
+        case BinaryOpType::LOGADDEXP2:
+        case BinaryOpType::LDEXP:
+        case BinaryOpType::SQUARED_DIFFERENCE:
+        case BinaryOpType::LOGICAL_OR:
+        case BinaryOpType::LOGICAL_XOR:
+        case BinaryOpType::LOGICAL_AND:
+        case BinaryOpType::BIAS_GELU:
+        case BinaryOpType::GT:
+        case BinaryOpType::LT:
+        case BinaryOpType::GTE:
+        case BinaryOpType::LTE:
+        case BinaryOpType::EQ:
+        case BinaryOpType::NE: return (a == DataType::FLOAT32 && b == DataType::FLOAT32);
+        case BinaryOpType::LEFT_SHIFT:
+        case BinaryOpType::RIGHT_SHIFT:
+        case BinaryOpType::BITWISE_XOR:
+        case BinaryOpType::BITWISE_AND:
+        case BinaryOpType::BITWISE_OR: return (a == DataType::INT32 && b == DataType::INT32);
+        case BinaryOpType::POWER: return true;
+        default: return false;
+    }
+    return false;
+}
+} // utils
 
 BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -29,7 +67,17 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
     auto width_b = input_shape_b[-1];
 
     if (height_a == height_b and width_a == width_b) {
-        return ElementWiseMultiCore{};
+        bool device_check = tensor_args.input_tensor_a.device()->arch() != tt::ARCH::GRAYSKULL;
+        BinaryOpType op = operation_attributes.binary_op_type;
+        DataType dtype1 = tensor_args.input_tensor_a.get_dtype();
+        DataType dtype2 = tensor_args.input_tensor_b->get_dtype();
+        bool sfpu_op_check = utils::is_binary_sfpu_op(op, dtype1, dtype2);
+
+        if(device_check && sfpu_op_check){
+            return ElementWiseMultiCoreSfpu{};
+        } else {
+            return ElementWiseMultiCore{};
+        }
     }
     if (height_b == 1 or width_b == 1) {
         if (height_b == 1 and width_b == 1) {
@@ -37,10 +85,10 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
         }
         if (height_b == 1) {
             if (tensor_args.input_tensor_a.is_sharded()) {
-                if (tensor_args.input_tensor_a.get_padded_shape()[0] ==
-                        tensor_args.input_tensor_b->get_padded_shape()[0] ||
-                    tensor_args.input_tensor_a.get_padded_shape()[0] > 1 and
-                        tensor_args.input_tensor_b->get_padded_shape()[0] == 1) {
+                if (tensor_args.input_tensor_a.padded_shape()[0] ==
+                        tensor_args.input_tensor_b->padded_shape()[0] ||
+                    tensor_args.input_tensor_a.padded_shape()[0] > 1 and
+                        tensor_args.input_tensor_b->padded_shape()[0] == 1) {
                     return BroadcastHeightMultiCoreShardedOptimized{};
                 }
                 return BroadcastHeightMultiCoreSharded{};
@@ -128,7 +176,7 @@ void BinaryDeviceOperation::validate_on_program_cache_hit(
     auto width_a = input_shape_a[-1];
 
     const auto input_shape_b =
-        tensor_args.input_tensor_b.has_value() ? tensor_args.input_tensor_b->get_logical_shape() : ttnn::SimpleShape{1, 1};
+        tensor_args.input_tensor_b.has_value() ? tensor_args.input_tensor_b->get_logical_shape() : ttnn::Shape{1, 1};
     auto batch_size_0_b = input_shape_b.rank() >= 4 ? input_shape_b[-4] : 1;
     auto batch_size_1_b = input_shape_b.rank() >= 3 ? input_shape_b[-3] : 1;
     auto height_b = input_shape_b[-2];
@@ -150,11 +198,17 @@ void BinaryDeviceOperation::validate_on_program_cache_hit(
     TT_FATAL(width_a == width_b || width_a == 1 || width_b == 1, "ttnn::operations::binary::BinaryDeviceOperation: width mismatch");
 }
 
-BinaryDeviceOperation::shape_return_value_t BinaryDeviceOperation::compute_output_shapes(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    const auto input_shape_a = tensor_args.input_tensor_a.shape();
+BinaryDeviceOperation::spec_return_value_t BinaryDeviceOperation::compute_output_specs(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& output_tensor = tensor_args.output_tensor;
+    if (output_tensor.has_value()) {
+        return output_tensor->get_tensor_spec();
+    }
+
+    const auto& input_tensor_a = tensor_args.input_tensor_a;
+    const auto input_shape_a = input_tensor_a.logical_shape();
     const auto& tensor_b = tensor_args.input_tensor_b;
-    const auto input_shape_b = tensor_b.has_value() ? tensor_b->shape() : ttnn::Shape{1, 1};
+    const auto input_shape_b = tensor_b.has_value() ? tensor_b->logical_shape() : ttnn::Shape{};
 
     const int rank_a = input_shape_a.rank();
     const int rank_b = input_shape_b.rank();
@@ -179,27 +233,12 @@ BinaryDeviceOperation::shape_return_value_t BinaryDeviceOperation::compute_outpu
                 output_shape[i + larger_rank] = dim_a + dim_b - 1;
             }
         }
-        return output_shape;
+        return ttnn::Shape(output_shape);
     };
-
-    const auto logical_shape_a = input_shape_a.logical_shape();
-    const auto logical_shape_b = input_shape_b.logical_shape();
-    return ttnn::SimpleShape(compute_broadcasted_output(logical_shape_a, logical_shape_b));
-}
-
-BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    using namespace tt::constants;
-    auto output_shape = compute_output_shapes(operation_attributes, tensor_args);
-    const auto& input_tensor_a = tensor_args.input_tensor_a;
-    const auto& output_tensor = tensor_args.output_tensor;
-
-    if (output_tensor.has_value()) {
-        return output_tensor.value();
-    }
+    auto output_shape = compute_broadcasted_output(input_shape_a, input_shape_b);
 
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
-    if (std::holds_alternative<ElementWiseMultiCore>(program_factory)) {
+    if (std::holds_alternative<ElementWiseMultiCore>(program_factory) or std::holds_alternative<ElementWiseMultiCoreSfpu>(program_factory)) {
         const auto& input_tensor_b = *tensor_args.input_tensor_b;
         if (operation_attributes.memory_config.is_sharded()) {
             ShardSpec shard_spec{CoreRangeSet(), {0, 0}};
@@ -212,8 +251,7 @@ BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_outpu
             }
             auto memory_config = operation_attributes.memory_config;
             memory_config.shard_spec = shard_spec;
-            return create_device_tensor(
-                output_shape, operation_attributes.dtype, Layout::TILE, input_tensor_a.device(), memory_config);
+            return TensorSpec(output_shape, TensorLayout(operation_attributes.dtype, PageConfig(Layout::TILE), memory_config));
         }
     } else {
         if (operation_attributes.memory_config.is_sharded()) {
@@ -224,16 +262,18 @@ BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_outpu
             }
             auto memory_config = operation_attributes.memory_config;
             memory_config.shard_spec = shard_spec;
-            return create_device_tensor(
-                output_shape, operation_attributes.dtype, Layout::TILE, input_tensor_a.device(), memory_config);
+            return TensorSpec(output_shape, TensorLayout(operation_attributes.dtype, PageConfig(Layout::TILE), memory_config));
         }
     }
-    return create_device_tensor(
-        output_shape,
-        operation_attributes.dtype,
-        Layout::TILE,
-        input_tensor_a.device(),
-        operation_attributes.memory_config);
+    return TensorSpec(output_shape, TensorLayout(operation_attributes.dtype, PageConfig(Layout::TILE), operation_attributes.memory_config));
+}
+
+BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.output_tensor.has_value()) {
+        return *tensor_args.output_tensor;
+    }
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor_a.device());
 }
 
 tt::stl::hash::hash_t BinaryDeviceOperation::compute_program_hash(
@@ -300,6 +340,13 @@ operation::OpPerformanceModel BinaryDeviceOperation::create_op_performance_model
     return result;
 }
 
+bool BinaryDeviceOperation::skip_launch(
+    const operation_attributes_t& attributes,
+    const tensor_args_t& tensor_args,
+    const tensor_return_value_t& tensor_return_value) {
+    return tensor_return_value.logical_shape().volume() == 0;
+}
+
 std::tuple<BinaryDeviceOperation::operation_attributes_t, BinaryDeviceOperation::tensor_args_t>
 BinaryDeviceOperation::invoke(
     const Tensor& input_tensor_a_arg,
@@ -315,15 +362,55 @@ BinaryDeviceOperation::invoke(
             output_dtype.value() == optional_output_tensor.value().get_dtype(),
             "If both output dtype and output tensor provided dtype should match");
     }
+    CoreRangeSet worker_grid;
+    // We assert all shard specs are the same if sharded, so only need to check the first shard spec
+    // This will create the worker grid based on the used sub-devices when sharded
+    // Otherwise this will use all cores of the sub-devices
+    // TODO #13655: Note that the current program ingfrastructure still only supports a single sub-device per program
+    if (input_tensor_a_arg.is_sharded()) {
+        const auto& input_grid = input_tensor_a_arg.shard_spec().value().grid;
+        auto device = input_tensor_a_arg.device();
+        for (const auto& sub_device_id : device->get_sub_device_ids()) {
+            const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+            if (sub_device_workers.intersects(input_grid)) {
+                worker_grid = worker_grid.merge(sub_device_workers);
+            }
+        }
+    } else if (input_tensor_b_arg.is_sharded()) {
+        const auto& input_grid = input_tensor_b_arg.shard_spec().value().grid;
+        auto device = input_tensor_b_arg.device();
+        for (const auto& sub_device_id : device->get_sub_device_ids()) {
+            const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+            if (sub_device_workers.intersects(input_grid)) {
+                worker_grid = worker_grid.merge(sub_device_workers);
+            }
+        }
+    } else if (optional_output_tensor.has_value() && optional_output_tensor->is_sharded()) {
+        const auto& output_grid = optional_output_tensor->shard_spec().value().grid;
+        auto device = optional_output_tensor->device();
+        for (const auto& sub_device_id : device->get_sub_device_ids()) {
+            const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+            if (sub_device_workers.intersects(output_grid)) {
+                worker_grid = worker_grid.merge(sub_device_workers);
+            }
+        }
+    } else {
+        auto device = input_tensor_a_arg.device();
+        for (const auto& sub_device_id : device->get_sub_device_ids()) {
+            const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+            worker_grid = worker_grid.merge(sub_device_workers);
+        }
+    }
 
     return {
         operation_attributes_t{
             binary_op_type,
-            activations,
-            input_tensor_a_activation,
+            std::move(activations),
+            std::move(input_tensor_a_activation),
             std::nullopt,
-            memory_config.value_or(input_tensor_a_arg.memory_config()),
+            memory_config.value_or(optional_output_tensor.has_value() ? optional_output_tensor->memory_config() : input_tensor_a_arg.memory_config()),
             output_dtype.value_or(input_tensor_a_arg.get_dtype()),
+            std::move(worker_grid),
             std::nullopt},
         tensor_args_t{input_tensor_a_arg, input_tensor_b_arg, optional_output_tensor}};
 }
@@ -344,14 +431,17 @@ BinaryDeviceOperation::invoke(
             "If both output dtype and output tensor provided dtype should match");
     }
 
+    // Currently unused/unsupported
+    CoreRangeSet worker_grid = CoreRangeSet();
     return {
         operation_attributes_t{
             binary_op_type,
-            activations,
-            input_tensor_a_activation,
+            std::move(activations),
+            std::move(input_tensor_a_activation),
             scalar,
             memory_config.value_or(input_tensor_a_arg.memory_config()),
             output_dtype.value_or(input_tensor_a_arg.get_dtype()),
+            std::move(worker_grid),
             std::nullopt},
         tensor_args_t{input_tensor_a_arg, std::nullopt, optional_output_tensor}};
 }

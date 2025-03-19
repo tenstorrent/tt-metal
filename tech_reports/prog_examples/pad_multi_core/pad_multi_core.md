@@ -13,11 +13,11 @@ In this example, we will implement a basic TT-Metalium program for padding an in
 
 The code for this program can be found in [pad_multi_core.cpp](../../../tt_metal/programming_examples/pad/pad_multi_core.cpp).
 
-The following commands will build and execute the code for this example. Environment variables may be modified based on the latest specifications.
+To build and execute, you may use the following commands:
+Then run the following:
 ```bash
-    export ARCH_NAME=<arch name>
-    export TT_METAL_HOME=<this repo dir>
-    ./build_metal.sh --build-tests
+    export TT_METAL_HOME=$(pwd)
+    ./build_metal.sh --build-programming-examples
     ./build/programming_examples/pad_multi_core
 ```
 ## Device setup
@@ -134,7 +134,7 @@ The DRAM buffer configuration for the output tensor is similar to that for the i
 # Configure and create CircularBuffer
 
 ``` cpp
-uint32_t cb_id = CB::c_in0;
+uint32_t cb_id = CBIndex::c_0;
 tt::DataFormat cb_data_format = tt::DataFormat::UInt32;
 CircularBufferConfig cb_config = tt::tt_metal::CircularBufferConfig(dst_N * packed_data_size * 2, {{cb_id, cb_data_format}})
     .set_page_size(cb_id, packed_data_size);

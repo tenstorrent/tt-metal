@@ -10,7 +10,7 @@ void kernel_main() {
     auto num_tiles_per_core = get_arg_val<uint32_t>(i++);
     auto start_id = get_arg_val<uint32_t>(i++);
 
-    constexpr uint32_t cb_input_grad = tt::CB::c_out0;
+    constexpr uint32_t cb_input_grad = tt::CBIndex::c_16;
 
     const uint32_t input_grad_tile_bytes = get_tile_size(cb_input_grad);
     const auto input_grad_data_format = get_dataformat(cb_input_grad);
@@ -25,7 +25,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     uint32_t end_id = start_id + num_tiles_per_core;
-    for (uint32_t i = start_id; i < end_id; ++ i) {
+    for (uint32_t i = start_id; i < end_id; ++i) {
         cb_wait_front(cb_input_grad, onetile);
         uint32_t input_grad_l1_write_addr = get_read_ptr(cb_input_grad);
         noc_async_write_tile(i, input_grad_addrg, input_grad_l1_write_addr);

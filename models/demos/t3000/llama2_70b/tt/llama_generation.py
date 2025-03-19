@@ -7,17 +7,11 @@ import torch
 import ttnn
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
-from dataclasses import dataclass
 from loguru import logger
 
 import copy
 from models.demos.t3000.llama2_70b.tt.llama_model_optimized import TtLlamaModel_optimized as TtLlamaModel
-from models.demos.t3000.llama2_70b.tt.llama_common import (
-    BASE_URL,
-    load_llama_state_dict,
-    setup_llama_env,
-    check_mesh_device,
-)
+from models.demos.t3000.llama2_70b.tt.llama_common import BASE_URL
 from models.demos.t3000.llama2_70b.tt.model_config import (
     get_model_config,
 )
@@ -61,57 +55,6 @@ class TtLlamaModelForGeneration:
 
         del state_dict
 
-    @classmethod
-    def initialize_vllm_model(cls, hf_config, t3k_mesh_device, max_batch_size):
-        # TODO: pass in model args and tt args as parameters from vllm
-        @dataclass
-        class ModelArgs:
-            llama_version: str = None
-            ckpt_dir: str = None
-            max_batch_size: int = 32  # overwritten by max_num_seqs from vllm
-            num_layers: int = 80
-            max_kv_context_len: int = 131072
-
-        @dataclass
-        class TTArgs:
-            mesh_device: object = None
-            cache_path: str = None
-
-        # setup configs
-        llama_version = "llama3"
-        model_config, ckpt_dir, _, cache_path = setup_llama_env(
-            llama_version=llama_version,
-        )
-        check_mesh_device(t3k_mesh_device, model_config)
-
-        # initialize arg classes
-        model_args = ModelArgs(llama_version=llama_version, ckpt_dir=ckpt_dir, max_batch_size=max_batch_size)
-        tt_args = TTArgs(mesh_device=t3k_mesh_device, cache_path=cache_path)
-
-        # load state dict
-        state_dict = load_llama_state_dict(model_args.ckpt_dir, n_layers=model_args.num_layers)
-
-        # TODO: delete this configuration setup once llama can directly accept hf_config
-        from models.demos.t3000.llama2_70b.reference.llama.llama.model import ModelArgs as ReferenceModelArgs
-        from pathlib import Path
-        import json
-
-        with open(Path(ckpt_dir) / "params.json", "r") as f:
-            params = json.loads(f.read())
-        configuration = ReferenceModelArgs(
-            max_seq_len=model_args.max_kv_context_len,
-            max_batch_size=model_args.max_batch_size,
-            **params,
-        )
-
-        return cls(
-            configuration=configuration, state_dict=state_dict, model_args=model_args, tt_args=tt_args, vllm=True
-        )
-
-    @property
-    def cache_path(self):
-        return self.tt_model.cache_path
-
     def forward(self, tokens: torch.Tensor, start_pos: int, page_table=None, kv_cache=None, prompt_lens=None):
         _, seq_len = tokens.shape
         if seq_len == 1:
@@ -131,7 +74,7 @@ class TtLlamaModelForGeneration:
             tt_page_table,
             tt_inp,
             rot_idxs_tt,
-        ) = self.tt_model.prepare_device_inputs(
+        ) = self.tt_model.prepare_device_inputs_decode(
             tokens,
             start_pos,
             mode="decode",
@@ -210,12 +153,12 @@ class TtLlamaModelForGeneration:
         # Run TT model
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
         if read_from_device:
-            logits = self.read_forward_trace(tt_logits, unpadded_batch=batch)
+            logits = self.read_decode_output(tt_logits, unpadded_batch=batch)
             return logits
         else:
             return tt_logits
 
-    def read_forward_trace(self, tt_logits, unpadded_batch=None):
+    def read_decode_output(self, tt_logits, unpadded_batch=None):
         updated_tt_logits = ttnn.from_device(tt_logits)
 
         logits = self._process_logits(updated_tt_logits)
@@ -226,34 +169,71 @@ class TtLlamaModelForGeneration:
 
         return logits
 
-    def decode_forward(self, tokens: torch.Tensor, start_pos: int, page_table=None, kv_cache=None):
+    def decode_forward(
+        self,
+        tokens: torch.Tensor,
+        start_pos: int,
+        page_table=None,
+        kv_cache=None,
+        enable_trace=False,
+        read_from_device=True,
+    ):
         batch = tokens.shape[0]
 
-        # Get inputs on device
-        tt_inp_emb, start_pos, rot_mat, cache_idxs_tt, tt_page_table = self.tt_model.prepare_device_inputs(
-            tokens, start_pos, mode="decode", page_table=page_table
-        )
+        if not enable_trace:
+            # Get inputs on device
+            tt_inp_emb, start_pos, rot_mat, cache_idxs_tt, tt_page_table = self.tt_model.prepare_device_inputs_decode(
+                tokens, start_pos, mode="decode", page_table=page_table
+            )
 
-        tt_logits = self.tt_model(
-            tt_inp_emb,
-            rot_mat,
+            tt_logits = self.tt_model(
+                tt_inp_emb,
+                rot_mat,
+                start_pos,
+                cache_idxs=cache_idxs_tt,
+                page_table=tt_page_table,
+                kv_cache=kv_cache,
+                mode="decode",
+            )
+        else:
+            tt_logits = self._easy_trace(tokens, start_pos, page_table, kv_cache)
+
+        if read_from_device:
+            return self.read_decode_output(tt_logits, unpadded_batch=batch)
+        else:
+            return tt_logits
+
+    def _easy_trace(self, tokens, start_pos, page_table=None, kv_cache=None):
+        """
+        Tracing is easy! Just call this method and we'll handle tracing for you.
+        """
+        if not hasattr(self, "trace_id"):
+            trace_id, tt_inp, rot_idxs_tt, cache_idxs_tt, tt_logits, tt_page_table = self.capture_trace(
+                tokens, start_pos, page_table=page_table, kv_cache=kv_cache
+            )
+            self.trace_id = trace_id
+            self.trace_inputs = {
+                "tt_inp": tt_inp,
+                "rot_idxs_tt": rot_idxs_tt,
+                "cache_idxs_tt": cache_idxs_tt,
+                "tt_page_table": tt_page_table,
+            }
+            self.trace_output = tt_logits
+
+        trace_logits_rm = self.decode_forward_trace(
+            tokens,
             start_pos,
-            cache_idxs=cache_idxs_tt,
-            page_table=tt_page_table,
-            kv_cache=kv_cache,
-            mode="decode",
+            self.trace_id,
+            self.trace_inputs["tt_inp"],
+            self.trace_inputs["rot_idxs_tt"],
+            self.trace_inputs["cache_idxs_tt"],
+            self.trace_output,
+            page_table=page_table,
+            tt_page_table=self.trace_inputs["tt_page_table"],
+            read_from_device=False,
         )
 
-        # del tt_inp_emb
-        # del rot_mat
-
-        logits = self._process_logits(tt_logits)
-
-        logits = logits.permute(2, 1, 0, 3).squeeze().unsqueeze(1)  # [batch, 1, vocab_size]
-        logits = logits[:batch]  # Remove padded users
-        # del tt_logits
-
-        return logits
+        return trace_logits_rm
 
     def prefill_forward_single_user(
         self, tokens: torch.Tensor, start_pos: int, user_id: int, last_token_idx=None, page_table=None, kv_cache=None
@@ -262,29 +242,116 @@ class TtLlamaModelForGeneration:
         assert batch == 1
         assert start_pos == 0, "start_pos must be 0 for prefill_forward_single_user"
 
-        tt_inp_emb, start_pos, rot_mat, _, tt_page_table = self.tt_model.prepare_device_inputs(
-            tokens, start_pos=start_pos, valid_seq_len=seq_len, mode="prefill", page_table=page_table
-        )
+        use_chunked_prefill = seq_len > self.tt_model.model_config["MAX_PREFILL_SEQ_LEN"]
+        if use_chunked_prefill:
+            """
+            Chunked prefill requires paged attention. There are some strange constraints which we must meet:
+             - page_table, which is used in SDPA, must match batch size of inputs, which is 1. This is because SDPA
+             checks that page table batch dim matches input batch dim. Therefore we must slice the page table for the current user.
+             - page_table must also have enough entries in each chunk, so it will be padded with zeros if necessary.
+             - chunked_page_table is the slice of the page table for the current chunk. This is used by paged_fill_cache
+             to keep it otherwise unaware that it is operating on a chunk.
+             - due to the above point, we must always set user_id to 0 for chunked prefill.
+            """
+            assert page_table is not None, "page_table must be provided for chunked prefill"
+            assert kv_cache is not None, "kv_cache must be provided for chunked prefill"
+            chunk_size = get_max_prefill_chunk_size(seq_len, self.tt_model.model_config["MAX_PREFILL_SEQ_LEN"])
+            block_size = get_block_size(kv_cache)
+            last_token_idx_in_chunk = last_token_idx % chunk_size if last_token_idx is not None else None
+            # Calculate which chunk contains the last_token_idx
+            last_chunk_start = (last_token_idx // chunk_size) * chunk_size if last_token_idx is not None else None
+            page_table_user = page_table[user_id : user_id + 1, :]
+            # Pad page table to match number of blocks in seq_len
+            num_padding_blocks = num_blocks_in_seq(seq_len, block_size) - page_table_user.shape[1]
+            page_table_user_padded = torch.cat(
+                [page_table_user, torch.zeros(1, num_padding_blocks, dtype=torch.int32)], dim=-1
+            )
+            CHUNK_USER_ID = 0
 
-        tt_logits = self.tt_model(
-            tt_inp_emb,
-            rot_mat,
-            start_pos,
-            user_id=user_id,
-            last_token_idx=last_token_idx,
-            page_table=tt_page_table,
-            kv_cache=kv_cache,
-            mode="prefill",
-        )
+            logits_list = []
+            for chunk_start in range(0, seq_len, chunk_size):
+                chunk_end = chunk_start + chunk_size
+                assert (
+                    chunk_end <= seq_len
+                ), f"Chunk end should be less than seq_len, got chunk_end={chunk_end} and seq_len={seq_len}"
+                chunk_tokens = tokens[:, chunk_start:chunk_end]
+                chunk_page_table = page_table_user[:, chunk_start // block_size : chunk_end // block_size]
 
-        del tt_inp_emb
-        del rot_mat
-        del tt_page_table
+                (
+                    tt_inp_emb,
+                    start_pos,
+                    rot_mat,
+                    _rot_idxs_tt,
+                    _cache_idxs_tt,
+                    page_table_tt,
+                    chunk_page_table_tt,
+                ) = self.tt_model.prepare_inputs(
+                    chunk_tokens,
+                    start_pos=chunk_start,
+                    mode="prefill",
+                    page_table=page_table_user_padded,
+                    chunk_page_table=chunk_page_table,
+                )
+                tt_logits = self.tt_model(
+                    tt_inp_emb,
+                    rot_mat,
+                    start_pos,
+                    user_id=CHUNK_USER_ID,
+                    last_token_idx=last_token_idx_in_chunk,
+                    page_table=page_table_tt,
+                    kv_cache=kv_cache,
+                    mode="prefill",
+                    chunk_page_table=chunk_page_table_tt,
+                    chunk_start_idx=chunk_start,
+                )
 
-        logits = self._process_logits(tt_logits)
-        logits = logits.squeeze(1)
-        del tt_logits
-        return logits
+                logits = self._process_logits(tt_logits)
+                logits = logits.squeeze(1)
+                ttnn.deallocate(tt_logits)
+
+                if last_token_idx is not None:
+                    # If this was the chunk containing last_token_idx, we're done
+                    if chunk_start == last_chunk_start:
+                        return logits
+                else:
+                    logits_list.append(logits)
+
+            # Concatenate all logits
+            logits = torch.cat(logits_list, dim=-2)
+            return logits
+
+        else:
+            (
+                tt_inp_emb,
+                start_pos,
+                rot_mat,
+                _rot_idxs_tt,
+                _cache_idxs_tt,
+                tt_page_table,
+                _chunk_page_table,
+            ) = self.tt_model.prepare_inputs(
+                tokens, start_pos=start_pos, valid_seq_len=seq_len, mode="prefill", page_table=page_table
+            )
+
+            tt_logits = self.tt_model(
+                tt_inp_emb,
+                rot_mat,
+                start_pos,
+                user_id=user_id,
+                last_token_idx=last_token_idx,
+                page_table=tt_page_table,
+                kv_cache=kv_cache,
+                mode="prefill",
+            )
+
+            del tt_inp_emb
+            del rot_mat
+            del tt_page_table
+
+            logits = self._process_logits(tt_logits)
+            logits = logits.squeeze(1)
+            del tt_logits
+            return logits
 
     def prefill_forward(self, tokens: torch.Tensor, start_pos: int, page_table=None, kv_cache=None, prompt_lens=None):
         batch, batch_seq_len = tokens.shape
@@ -305,13 +372,7 @@ class TtLlamaModelForGeneration:
                 [tokens[user_id : user_id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
             if page_table is not None:
-                block_size = get_block_size(kv_cache)
-                num_padding_blocks = num_blocks_in_seq(prefill_seq_len, block_size) - num_blocks_in_seq(
-                    seq_len, block_size
-                )
-                page_table_user = torch.cat(
-                    [page_table, torch.zeros(batch, num_padding_blocks, dtype=torch.int32)], dim=-1
-                )
+                page_table_user = _get_prefill_user_page_table(page_table, kv_cache, seq_len)
 
             logger.info(f"Filling kv cache for user {user_id + 1}")
 
@@ -336,6 +397,22 @@ class TtLlamaModelForGeneration:
             tt_logits, device=self.mesh_device, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=3)
         )
         return logits[..., : self.params.vocab_size].float()
+
+    ## Destructor (used to delete ttnn trace if exists)
+
+    def __del__(self):
+        if hasattr(self, "trace_id"):
+            self.delete_trace(self.trace_id)
+
+        if hasattr(super(TtLlamaModelForGeneration, self), "__del__"):
+            super().__del__()
+
+
+def _get_prefill_user_page_table(page_table, kv_cache, prefill_len):
+    # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
+    block_size = get_block_size(kv_cache)
+    num_blocks = num_blocks_in_seq(prefill_len, block_size)
+    return page_table[:, :num_blocks]
 
 
 def get_padded_prefill_len(seq_len):
@@ -362,3 +439,34 @@ def num_blocks_in_seq(seq_len, block_size):
 
 def nearest_pow_2(x):
     return 2 ** math.ceil(math.log2(x))
+
+
+def get_max_prefill_chunk_size(seq_len, max_prefill_seq_len):
+    """
+    Determine the largest multiple of 1024 that divides `seq_len` and is less than or equal to `max_prefill_seq_len`.
+
+    **Assumptions**:
+    - `seq_len` is a multiple of 1024.
+    - `max_prefill_seq_len` is a multiple of 1024.
+    """
+
+    if not isinstance(seq_len, int) or not isinstance(max_prefill_seq_len, int):
+        raise TypeError("Both seq_len and max_prefill_seq_len must be integers.")
+    if seq_len <= 0 or max_prefill_seq_len <= 0:
+        raise ValueError("Both seq_len and max_prefill_seq_len must be positive integers.")
+
+    if seq_len % 1024 != 0:
+        raise ValueError("seq_len must be a multiple of 1024.")
+    if max_prefill_seq_len % 1024 != 0:
+        raise ValueError("max_prefill_seq_len must be a multiple of 1024.")
+
+    # Calculate the maximum possible chunk size
+    # It cannot exceed either max_prefill_seq_len or seq_len
+    max_possible_chunk = min(max_prefill_seq_len, seq_len)
+
+    # Iterate from the largest possible multiple of 1024 down to 1024
+    for chunk_size in range(max_possible_chunk, 0, -1024):
+        if seq_len % chunk_size == 0:
+            return chunk_size
+
+    raise ValueError("No valid chunk size found")

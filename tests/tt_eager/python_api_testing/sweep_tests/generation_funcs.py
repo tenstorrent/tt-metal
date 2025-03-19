@@ -716,6 +716,10 @@ def _gen_reshape_args_from_volume(volume, step, out_dims=4):
         for c in _get_factors(volume, 1):
             b = volume // c
             shapes.append({"reshape_dims": (b, c)})
+    elif out_dims == 1:
+        shapes.append({"reshape_dims": (volume,)})
+    else:
+        shapes.append({"reshape_dims": []})
 
     return shapes
 
@@ -976,20 +980,6 @@ def gen_scalar_args(
                 scalar = torch.tensor(1, dtype=dtype).random_(low, high).item()
             input_info.update({arg_name: scalar})
             yield input_info
-
-
-def gen_conv2d_args(
-    input_shapes,
-    dtypes,
-    layouts,
-    mem_configs,
-    do_sanitize_args=True,
-    coregrid=[],
-):
-    for input_info in gen_conv_scalar_args(
-        input_shapes, dtypes, layouts, mem_configs, "conv_params", torch.int, do_sanitize_args=do_sanitize_args
-    ):
-        yield input_info
 
 
 def gen_conv_scalar_args(
@@ -1516,7 +1506,7 @@ def gen_polyval_args(
             yield input_info
 
 
-def gen_arange_args(input_shapes, dtypes, layouts, mem_configs, low=-100, high=100, do_sanitize_args=True):
+def gen_arange_args(input_shapes, dtypes, layouts, mem_configs, low=-100, high=100, do_sanitize_args=True, coregrid=[]):
     for input_info in gen_two_scalar_args(
         input_shapes,
         dtypes,

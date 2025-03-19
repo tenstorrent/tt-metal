@@ -66,7 +66,6 @@ def run_move_op(shape, device):
         shard_grid,
         shard_shape,
         shard_orientation,
-        False,
     )
     # make dummy shape half of shape, so we will test move sharded with overlap
     dummy_shape = [shape[0], shape[1], (int)(shape[2] / 2), shape[3]]
@@ -75,7 +74,6 @@ def run_move_op(shape, device):
         shard_grid,
         dummy_shard_shape,
         shard_orientation,
-        False,
     )
     dummy_tensor = torch.zeros(dummy_shape)
     tt_dummy_tensor = ttnn.Tensor(dummy_tensor, dtype)

@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Description: Initialize the repository with the necessary configurations
-git lfs install
 sudo apt install clang-tidy-17
 sudo apt install clang-format-17
 sudo ln -sf /usr/bin/clang-tidy-17 /usr/bin/clang-tidy
@@ -13,6 +12,6 @@ pre-commit install
 chmod +x init_tt_metal.sh
 source ./init_tt_metal.sh
 
-sudo apt-get install python3-dev python3-numpy
+sudo apt-get install python3-dev python3-numpy cargo
 pip install wandb
 pip install numpy

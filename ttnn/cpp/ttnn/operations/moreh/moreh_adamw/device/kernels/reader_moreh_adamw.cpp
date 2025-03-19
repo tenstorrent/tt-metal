@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -28,17 +28,17 @@ void kernel_main() {
     const auto num_tiles_per_core = get_arg_val<uint32_t>(i++);
     const auto start_id = get_arg_val<uint32_t>(i++);
 
-    constexpr uint32_t cb_id_param = tt::CB::c_in0;
-    constexpr uint32_t cb_id_grad = tt::CB::c_in1;
-    constexpr uint32_t cb_id_exp_avg = tt::CB::c_in2;
-    constexpr uint32_t cb_id_exp_avg_sq = tt::CB::c_in3;
+    constexpr uint32_t cb_id_param = tt::CBIndex::c_0;
+    constexpr uint32_t cb_id_grad = tt::CBIndex::c_1;
+    constexpr uint32_t cb_id_exp_avg = tt::CBIndex::c_2;
+    constexpr uint32_t cb_id_exp_avg_sq = tt::CBIndex::c_3;
 
     // lr, beta1, beta2, eps, weight_decay
-    constexpr uint32_t cb_scalar_args = tt::CB::c_in5;
-    constexpr uint32_t cb_id_one = tt::CB::c_in6;
+    constexpr uint32_t cb_scalar_args = tt::CBIndex::c_5;
+    constexpr uint32_t cb_id_one = tt::CBIndex::c_6;
 
-    constexpr uint32_t cb_beta1_exponent = tt::CB::c_intermed4;
-    constexpr uint32_t cb_beta2_exponent = tt::CB::c_intermed5;
+    constexpr uint32_t cb_beta1_exponent = tt::CBIndex::c_28;
+    constexpr uint32_t cb_beta2_exponent = tt::CBIndex::c_29;
 
     const uint32_t param_tile_bytes = get_tile_size(cb_id_param);
     const auto param_data_format = get_dataformat(cb_id_param);
@@ -73,7 +73,7 @@ void kernel_main() {
         .data_format = exp_avg_sq_data_format};
 
 #ifdef AMSGRAD
-    constexpr uint32_t cb_id_max_exp_avg_sq = tt::CB::c_in4;
+    constexpr uint32_t cb_id_max_exp_avg_sq = tt::CBIndex::c_4;
     const uint32_t max_exp_avg_sq_tile_bytes = get_tile_size(cb_id_max_exp_avg_sq);
     const auto max_exp_avg_sq_data_format = get_dataformat(cb_id_max_exp_avg_sq);
     const InterleavedAddrGenFast<max_exp_avg_sq_is_dram> max_exp_avg_sq_addrg = {

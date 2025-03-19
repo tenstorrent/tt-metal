@@ -11,8 +11,8 @@
 #include <string_view>
 #include <tuple>
 
-#include "tt_metal/common/logger.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt_stl/reflection.hpp>
 
 namespace ttnn {
 
@@ -31,15 +31,16 @@ struct Config {
         bool enable_detailed_buffer_report = false;
         bool enable_detailed_tensor_report = false;
         bool enable_comparison_mode = false;
+        bool comparison_mode_should_raise_exception = false;
         float comparison_mode_pcc = 0.9999;
         std::filesystem::path root_report_path = "generated/ttnn/reports";
         std::optional<std::filesystem::path> report_name = std::nullopt;
     };
 
-   private:
+private:
     attributes_t attributes;
 
-   public:
+public:
     Config(auto&&... args) : attributes{std::forward<decltype(args)>(args)...} {}
 
     template <reflect::fixed_string name>
@@ -78,8 +79,7 @@ struct Config {
     }
 
     void validate(std::string_view name) {
-        if (
-            name == "enable_fast_runtime_mode" or name == "enable_logging") {
+        if (name == "enable_fast_runtime_mode" or name == "enable_logging") {
             if (this->attributes.enable_fast_runtime_mode) {
                 if (this->attributes.enable_logging) {
                     tt::log_warning(
@@ -90,8 +90,16 @@ struct Config {
             }
         }
 
-        if (
-            name == "enable_fast_runtime_mode" or name == "enable_graph_report" or
+        if (name == "enable_comparison_mode") {
+            if (this->attributes.enable_fast_runtime_mode && this->attributes.enable_comparison_mode) {
+                tt::log_warning(
+                    tt::LogAlways,
+                    "Comparison mode is currently not supported with fast runtime mode enabled. Please disable fast "
+                    "runtime mode ('enable_fast_runtime_mode = false') to use tensor comparison mode.");
+            }
+        }
+
+        if (name == "enable_fast_runtime_mode" or name == "enable_graph_report" or
             name == "enable_detailed_buffer_report" or name == "enable_detailed_tensor_report") {
             if (not this->attributes.enable_logging) {
                 if (this->attributes.enable_graph_report) {

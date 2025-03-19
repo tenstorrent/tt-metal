@@ -6,12 +6,10 @@ We'll go through this code section by section. Note that we have this exact, ful
 [add_2_integers_in_riscv.cpp](../../../tt_metal/programming_examples/add_2_integers_in_riscv/add_2_integers_in_riscv.cpp),
 so you can follow along.
 
-To build and execute, you may use the following commands. Note that we include the necessary environment variables here, but you may possibly need more depending on the most up-to-date installation methods.
-
+To build and execute, you may use the following commands:
 ```bash
-    export ARCH_NAME=<arch name>
-    export TT_METAL_HOME=<this repo dir>
-    ./build_metal.sh  --build-tests
+    export TT_METAL_HOME=$(pwd)
+    ./build_metal.sh --build-programming-examples
     ./build/programming_examples/add_2_integers_in_riscv
 ```
 ## Set up device and program/collaboration mechanisms
@@ -62,11 +60,11 @@ On the host side, we set initialize the source data. In this case, they are repr
 ## Set up circular buffers for input
 
 ``` cpp
-constexpr uint32_t src0_cb_index = CB::c_in0;
+constexpr uint32_t src0_cb_index = CBIndex::c_0;
 CircularBufferConfig cb_src0_config = CircularBufferConfig(single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src0_cb_index, single_tile_size);
 CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
-constexpr uint32_t src1_cb_index = CB::c_in1;
+constexpr uint32_t src1_cb_index = CBIndex::c_1;
 CircularBufferConfig cb_src1_config = CircularBufferConfig(single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src1_cb_index, single_tile_size);
 CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 ```
@@ -88,7 +86,7 @@ In this example, we are using data movement processors for basic computation. As
 ## Configure and execute program
 
 ``` cpp
-SetRuntimeArgs(program, binary_reader_kernel_id, core, {src0_dram_buffer->address(), src1_dram_buffer->address(), dst_dram_buffer->address(),});
+SetRuntimeArgs(program, binary_reader_kernel_id, core, {src0_dram_buffer->address(), src1_dram_buffer->address(), dst_dram_buffer->address(), src0_bank_id, src1_bank_id, dst_bank_id});
 
 EnqueueProgram(cq, program, false);
 Finish(cq);
@@ -100,12 +98,12 @@ In order to execute the program, we need to load the runtime arguments for the k
 
 ``` cpp
 // NoC coords (x,y) depending on DRAM location on-chip
-uint64_t src0_dram_noc_addr = get_noc_addr(src0_dram_noc_x, src0_dram_noc_y, src0_dram);
-uint64_t src1_dram_noc_addr = get_noc_addr(src1_dram_noc_x, src1_dram_noc_y, src1_dram);
-uint64_t dst_dram_noc_addr = get_noc_addr(dst_dram_noc_x, dst_dram_noc_y, dst_dram);
+uint64_t src0_dram_noc_addr = get_noc_addr_from_bank_id<true>(src0_bank_id, src0_dram);
+uint64_t src1_dram_noc_addr = get_noc_addr_from_bank_id<true>(src1_bank_id, src1_dram);
+uint64_t dst_dram_noc_addr = get_noc_addr_from_bank_id<true>(dst_bank_id, dst_dram);
 
-constexpr uint32_t cb_id_in0 = tt::CB::c_in0; // index=0
-constexpr uint32_t cb_id_in1 = tt::CB::c_in1; // index=1
+constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0; // index=0
+constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1; // index=1
 
 // single-tile ublocks
 uint32_t ublock_size_bytes_0 = get_tile_size(cb_id_in0);

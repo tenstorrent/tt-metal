@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "groupnorm.hpp"
 
 namespace ttnn::operations::normalization::detail {
@@ -56,9 +56,7 @@ void bind_normalization_group_norm(pybind11::module& module) {
             py::arg("dtype") = std::nullopt,
             py::arg("core_grid") = std::nullopt,
             py::arg("inplace") = true,
-            py::arg("output_layout") = std::nullopt
-        }
-    );
+            py::arg("output_layout") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::normalization::detail

@@ -2,11 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "host_api.hpp"
-#include "impl/buffers/circular_buffer_types.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
 #include "index_fill_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/types.hpp"
 
 using namespace tt;
@@ -47,7 +46,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
 
     auto num_rows = input.volume() / input.get_logical_shape()[-1];
     Program program{};
-    Device* device = input.device();
+    IDevice* device = input.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -69,7 +68,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
     uint32_t output_unit_size = output.get_logical_shape()[-1] * output.element_size();
     uint32_t rounded_output_unit_size = round_up_to_mul32(output_unit_size);
 
-    auto src_cb_index = CB::c_in0;
+    auto src_cb_index = CBIndex::c_0;
     CircularBufferConfig cb_src_config =
         CircularBufferConfig(rounded_input_unit_size, {{src_cb_index, input_data_format}})
             .set_page_size(src_cb_index, rounded_input_unit_size);
@@ -80,18 +79,16 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         case DataType::BFLOAT16: reader_defines["OUTPUT_DTYPE_BFLOAT16"] = "1"; break;
         case DataType::INT32: reader_defines["OUTPUT_DTYPE_INT32"] = "1"; break;
         case DataType::FLOAT32: reader_defines["OUTPUT_DTYPE_FLOAT32"] = "1"; break;
-        default:
-            TT_FATAL(false, "Unsupported datatype");
-            break;
+        default: TT_FATAL(false, "Unsupported datatype"); break;
     }
 
-    auto index_cb_index = CB::c_in1;
+    auto index_cb_index = CBIndex::c_1;
     CircularBufferConfig cb_index_config =
         CircularBufferConfig(rounded_index_unit_size, {{index_cb_index, index_data_format}})
             .set_page_size(index_cb_index, rounded_index_unit_size);
     auto cb_index = CreateCircularBuffer(program, all_cores, cb_index_config);
 
-    auto dst_cb_index = CB::c_out0;
+    auto dst_cb_index = CBIndex::c_16;
     CircularBufferConfig dst_cb_config =
         CircularBufferConfig(rounded_output_unit_size, {{dst_cb_index, output_data_format}})
             .set_page_size(dst_cb_index, rounded_output_unit_size);

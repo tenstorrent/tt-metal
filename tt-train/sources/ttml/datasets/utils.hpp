@@ -10,11 +10,12 @@
 #include "autograd/auto_context.hpp"
 #include "dataset_subset.hpp"
 #include "in_memory_token_dataset.hpp"
+#include "tokenizers/tokenizer_base.hpp"
 
 namespace ttml::datasets {
 
 template <typename Tokenizer>
-std::tuple<InMemoryTokenDataset, Tokenizer> create_in_memory_token_dataset(
+std::tuple<InMemoryTokenDataset, std::unique_ptr<tokenizers::TokenizerBase>> create_in_memory_token_dataset(
     const std::string& text, uint32_t seq_length);
 
 template <typename DatasetType>

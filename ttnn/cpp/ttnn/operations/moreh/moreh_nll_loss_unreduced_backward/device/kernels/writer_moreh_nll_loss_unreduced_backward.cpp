@@ -10,7 +10,7 @@ void kernel_main() {
     auto num_tiles_per_core = get_arg_val<uint32_t>(i++);
     auto start_id = get_arg_val<uint32_t>(i++);
 
-    constexpr uint32_t cb_input_grad = tt::CB::c_out0;
+    constexpr uint32_t cb_input_grad = tt::CBIndex::c_16;
 
     const uint32_t input_grad_tile_bytes = get_tile_size(cb_input_grad);
     const auto input_grad_data_format = get_dataformat(cb_input_grad);

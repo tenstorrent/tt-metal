@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "moreh_layer_norm_backward_gamma_beta_grad_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -45,14 +45,14 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    Device* device = output_grad.device();
+    IDevice* device = output_grad.device();
     Program program = Program();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto output_grad_shape = output_grad.get_shape().value;
-    const auto output_grad_shape_without_padding = output_grad_shape.without_padding();
+    const auto output_grad_shape = output_grad.get_padded_shape();
+    const auto output_grad_shape_without_padding = output_grad.get_logical_shape();
     const auto output_grad_rank = output_grad_shape.rank();
 
     const bool is_lastdim_layer_norm = normalized_dims == 1;
@@ -64,8 +64,8 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     const bool do_mask_h = (origin_H % TILE_HEIGHT) != 0 && is_lastdim_layer_norm;
     const uint32_t mask_h = do_mask_h ? origin_H % TILE_HEIGHT : TILE_HEIGHT;
 
-    const auto mean_rstd_shape = mean.get_shape().value;
-    const auto mean_rstd_shape_without_padding = mean_rstd_shape.without_padding();
+    const auto mean_rstd_shape = mean.get_padded_shape();
+    const auto mean_rstd_shape_without_padding = mean.get_logical_shape();
     auto mean_rstd_height = mean_rstd_shape_without_padding[-2];
     auto mean_rstd_width = mean_rstd_shape_without_padding[-1];
 
@@ -118,20 +118,20 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
         all_cores,
         cb_data_format,
         {
-            {tt::CB::c_in0, in0_t},                            // output_grad(==dy)
-            {tt::CB::c_in1, in1_t},                            // input(==x)
-            {tt::CB::c_in2, in2_t},                            // mean
-            {tt::CB::c_in3, in3_t},                            // rstd
-            {tt::CB::c_in4, in4_t},                            // scaler
-            {tt::CB::c_in5, in5_t},                            // mask_h
-            {tt::CB::c_out0, out0_t},                          // gamma_grad(==dgamma)
-            {tt::CB::c_out1, out1_t},                          // beta_grad(==dbeta)
-            {tt::CB::c_intermed0, im0_t, intermed_cb_format},  // output(==y)
-            {tt::CB::c_intermed1, im1_t, intermed_cb_format},  // y * dy
-            {tt::CB::c_intermed2, im2_t, intermed_cb_format},  // Add[dy]
-            {tt::CB::c_intermed3, im3_t, intermed_cb_format},  // Add[y * dy]
-            {tt::CB::c_intermed4, im4_t, intermed_cb_format},  // x - mean
-            {tt::CB::c_intermed5, im5_t, intermed_cb_format},  // dycopy
+            {tt::CBIndex::c_0, in0_t},                       // output_grad(==dy)
+            {tt::CBIndex::c_1, in1_t},                       // input(==x)
+            {tt::CBIndex::c_2, in2_t},                       // mean
+            {tt::CBIndex::c_3, in3_t},                       // rstd
+            {tt::CBIndex::c_4, in4_t},                       // scaler
+            {tt::CBIndex::c_5, in5_t},                       // mask_h
+            {tt::CBIndex::c_16, out0_t},                     // gamma_grad(==dgamma)
+            {tt::CBIndex::c_17, out1_t},                     // beta_grad(==dbeta)
+            {tt::CBIndex::c_24, im0_t, intermed_cb_format},  // output(==y)
+            {tt::CBIndex::c_25, im1_t, intermed_cb_format},  // y * dy
+            {tt::CBIndex::c_26, im2_t, intermed_cb_format},  // Add[dy]
+            {tt::CBIndex::c_27, im3_t, intermed_cb_format},  // Add[y * dy]
+            {tt::CBIndex::c_28, im4_t, intermed_cb_format},  // x - mean
+            {tt::CBIndex::c_29, im5_t, intermed_cb_format},  // dycopy
         });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -167,10 +167,9 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
         "ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/"
         "writer_moreh_layer_norm_backward_gamma_beta_grad.cpp";
 
-    const auto reader_kernels_id = CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    const auto writer_kernels_id =
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    const auto reader_kernels_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     const std::vector<uint32_t> compute_args_group_1{
         num_cols_per_core_group_1,

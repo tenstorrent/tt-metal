@@ -10,12 +10,12 @@ void fill_cb_with_value(uint32_t cb_id, uint32_t value) {
     cb_reserve_back(cb_id, 1);
 
 #if defined FP32_DEST_ACC_EN
-    auto ptr = reinterpret_cast<uint32_t *>(get_write_ptr(cb_id));
+    auto ptr = reinterpret_cast<uint32_t*>(get_write_ptr(cb_id));
     for (int j = 0; j < 1024; j++) {
         ptr[j] = value;
     }
 #else
-    auto ptr = reinterpret_cast<uint16_t *>(get_write_ptr(cb_id));
+    auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_id));
     for (int j = 0; j < 1024; j++) {
         ptr[j] = uint16_t(value >> 16);
     }
@@ -41,14 +41,14 @@ void kernel_main() {
     const auto num_tiles_per_core = get_arg_val<uint32_t>(12);
     const auto start_id = get_arg_val<uint32_t>(13);
 
-    constexpr uint32_t cb_id_param = tt::CB::c_in0;
-    constexpr uint32_t cb_id_grad = tt::CB::c_in1;
-    constexpr uint32_t cb_id_exp_avg = tt::CB::c_in2;
-    constexpr uint32_t cb_id_exp_avg_sq = tt::CB::c_in3;
+    constexpr uint32_t cb_id_param = tt::CBIndex::c_0;
+    constexpr uint32_t cb_id_grad = tt::CBIndex::c_1;
+    constexpr uint32_t cb_id_exp_avg = tt::CBIndex::c_2;
+    constexpr uint32_t cb_id_exp_avg_sq = tt::CBIndex::c_3;
 
     // lr, beta1, beta2, eps, weight_decay
-    constexpr uint32_t cb_scalar_args = tt::CB::c_in5;
-    constexpr uint32_t cb_id_one = tt::CB::c_in6;
+    constexpr uint32_t cb_scalar_args = tt::CBIndex::c_5;
+    constexpr uint32_t cb_id_one = tt::CBIndex::c_6;
 
     const uint32_t param_tile_bytes = get_tile_size(cb_id_param);
     const auto param_data_format = get_dataformat(cb_id_param);
@@ -83,7 +83,7 @@ void kernel_main() {
         .data_format = exp_avg_sq_data_format};
 
 #ifdef AMSGRAD
-    constexpr uint32_t cb_id_max_exp_avg_sq = tt::CB::c_in4;
+    constexpr uint32_t cb_id_max_exp_avg_sq = tt::CBIndex::c_4;
     const auto max_exp_avg_sq_addr = get_arg_val<uint32_t>(4);
     const uint32_t max_exp_avg_sq_tile_bytes = get_tile_size(cb_id_max_exp_avg_sq);
     const auto max_exp_avg_sq_data_format = get_dataformat(cb_id_max_exp_avg_sq);

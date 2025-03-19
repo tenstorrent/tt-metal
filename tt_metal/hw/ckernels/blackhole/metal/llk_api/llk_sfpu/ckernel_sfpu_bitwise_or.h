@@ -16,13 +16,11 @@ inline void calculate_bitwise_or(const uint value) {
         vInt input = dst_reg[0];
         vInt scalar_value = value;
         vInt res = input | scalar_value;
-        v_if(res > INT_MIN && res < 0)
-        {
+        v_if(res > INT_MIN && res < 0) {
             res = 0 - res;
             res = setsgn(res, scalar_value);
         }
-        v_endif
-        dst_reg[0] = res;
+        v_endif dst_reg[0] = res;
         dst_reg++;
     }
 }

@@ -11,13 +11,13 @@ namespace ttnn::operations::moreh::moreh_clip_grad_norm {
 
 struct MorehClipGradNorm {
     static Tensor invoke(
-        const std::vector<Tensor> &inputs,
+        const std::vector<Tensor>& inputs,
         float max_norm,
         float norm_type,
         bool error_if_nonfinite,
-        const std::optional<const Tensor> &total_norm,
-        const std::optional<MemoryConfig> &memory_config,
-        const std::optional<DeviceComputeKernelConfig> &compute_kernel_config);
+        const std::optional<const Tensor>& total_norm,
+        const std::optional<MemoryConfig>& memory_config,
+        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 
 }  // namespace ttnn::operations::moreh::moreh_clip_grad_norm

@@ -10,8 +10,8 @@
 #define DEFINE_PROGRAM_FACTORY(FactoryName)                                                 \
     struct FactoryName {                                                                    \
         struct shared_variables_t {                                                         \
-            KernelHandle reader_kernels_id;                                                 \
-            KernelHandle writer_kernels_id;                                                 \
+            tt::tt_metal::KernelHandle reader_kernels_id;                                   \
+            tt::tt_metal::KernelHandle writer_kernels_id;                                   \
             std::size_t num_cores_to_be_used;                                               \
             std::size_t num_cores_y;                                                        \
         };                                                                                  \
@@ -45,20 +45,20 @@ struct MorehNormOperation {
         const std::optional<Tensor>& output;
     };
 
-    using shape_return_value_t = Shape;
+    using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    DEFINE_PROGRAM_FACTORY(ProgramFactoryW)
-    DEFINE_PROGRAM_FACTORY(ProgramFactoryH)
-    DEFINE_PROGRAM_FACTORY(ProgramFactoryOther)
+    DEFINE_PROGRAM_FACTORY(ProgramFactoryWOther)
+    DEFINE_PROGRAM_FACTORY(ProgramFactoryHOther)
+    DEFINE_PROGRAM_FACTORY(ProgramFactoryNCOther)
 
-    using program_factory_t = std::variant<ProgramFactoryW, ProgramFactoryH, ProgramFactoryOther>;
+    using program_factory_t = std::variant<ProgramFactoryWOther, ProgramFactoryHOther, ProgramFactoryNCOther>;
 
     static void validate_inputs(const operation_attributes_t&, const tensor_args_t&);
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
-    static shape_return_value_t compute_output_shapes(const operation_attributes_t&, const tensor_args_t&);
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(

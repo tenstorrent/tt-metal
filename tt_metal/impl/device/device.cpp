@@ -2,43 +2,68 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <device_impl.hpp>
+
 #include <string>
 #include <thread>
-#include "tt_metal/device.hpp"
-#include "common/core_coord.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/jit_build/genfiles.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/trace/trace.hpp"
-#include "tt_metal/common/core_descriptor.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "impl/debug/dprint_server.hpp"
-#include "impl/debug/watcher_server.hpp"
-#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "common/utils.hpp"
-#include "llrt/llrt.hpp"
-#include "dev_msgs.h"
-#include "noc/noc_parameters.h"
-#include "tt_metal/impl/device/device_pool.hpp"
-#include "tt_metal/detail/persistent_kernel_cache.hpp"
+#include <tt_align.hpp>
+#include <tt-metalium/dispatch_mem_map.hpp>
+#include <tt-metalium/program_cache.hpp>
+
+#include "common/core_assignment.hpp"
+#include <host_api.hpp>
+#include <trace.hpp>
+#include <core_descriptor.hpp>
+#include <tt_metal.hpp>
+#include <utils.hpp>
+#include <dev_msgs.h>
+#include <device_pool.hpp>
+#include <persistent_kernel_cache.hpp>
+
+#include <hal.hpp>
+#include <hal_exp.hpp>
+#include <sub_device.hpp>
+#include <sub_device_manager_tracker.hpp>
+#include <sub_device_types.hpp>
+#include <tt_stl/span.hpp>
+
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
-#include "llrt/hal.hpp"
-#include "tt_metal/impl/sub_device/sub_device.hpp"
+
+#include "tt_metal/impl/debug/watcher_server.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
-#include "tt_metal/impl/sub_device/sub_device_types.hpp"
-#include "tt_metal/tt_stl/span.hpp"
-#include "tt_metal/types.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
+#include "tt_metal/jit_build/build_env_manager.hpp"
+
+#include "lightmetal/lightmetal_capture.hpp"
+#include "tracy/Tracy.hpp"
+#include "dprint_server.hpp"
+#include "llrt.hpp"
+#include "work_executor.hpp"
 
 namespace tt {
 
 namespace tt_metal {
 
+Device::Device(Device&& other) = default;
+Device& Device::operator=(Device&& other) = default;
+
 Device::Device(
-    chip_id_t device_id, const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap, bool minimal, uint32_t worker_core, uint32_t completion_queue_reader_core) :
-    id_(device_id), worker_thread_core(worker_core), completion_queue_reader_core(completion_queue_reader_core), work_executor(worker_core, device_id) {
+    chip_id_t device_id,
+    const uint8_t num_hw_cqs,
+    size_t l1_small_size,
+    size_t trace_region_size,
+    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    bool minimal,
+    uint32_t worker_thread_core,
+    uint32_t completion_queue_reader_core) :
+    id_(device_id),
+    worker_thread_core_(worker_thread_core),
+    completion_queue_reader_core_(completion_queue_reader_core),
+    work_executor_(std::make_unique<WorkExecutor>(worker_thread_core, device_id)) {
     ZoneScoped;
-    tunnel_device_dispatch_workers_ = {};
     this->initialize(num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, minimal);
 }
 
@@ -60,88 +85,91 @@ bool Device::is_inactive_ethernet_core(CoreCoord logical_core) const {
     return inactive_ethernet_cores.find(logical_core) != inactive_ethernet_cores.end();
 }
 
+std::tuple<chip_id_t, CoreCoord> Device::get_connected_ethernet_core(CoreCoord eth_core) const {
+    return tt::Cluster::instance().get_connected_ethernet_core(std::make_tuple(this->id_, eth_core));
+}
+
+std::vector<CoreCoord> Device::get_ethernet_sockets(chip_id_t connected_chip_id) const {
+    return tt::Cluster::instance().get_ethernet_sockets(this->id_, connected_chip_id);
+}
+
+bool Device::is_mmio_capable() const {
+    return tt::Cluster::instance().get_associated_mmio_device(this->id_) == this->id_;
+}
+
 CoreRangeSet Device::worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
-    return this->active_sub_device_manager_->sub_device(sub_device_id).cores(core_type);
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->sub_device(sub_device_id).cores(core_type);
 }
 
 uint32_t Device::num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
-    return this->active_sub_device_manager_->sub_device(sub_device_id).num_cores(core_type);
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->sub_device(sub_device_id).num_cores(core_type);
 }
 
-std::vector<uint32_t> Device::get_noc_encoding_for_active_eth_cores(NOC noc_index) {
-    auto active_ethernet_cores = this->get_active_ethernet_cores(true);
-    std::vector<uint32_t> noc_encodings = {};
-    noc_encodings.reserve(active_ethernet_cores.size());
-    for (const auto& core : active_ethernet_cores) {
-        noc_encodings.push_back(this->get_noc_unicast_encoding(noc_index, ethernet_core_from_logical_core(core)));
-    }
-    return noc_encodings;
-}
 /* Get all dispatch cores associated with this device. On return, my_dispatch_cores contains dispatch cores used by
  * this device (split between cores on this device itself and if this is a remote device, the mmio device dispatch
  * cores being used by this device). On return, other_dispatch_cores contains dispatch cores on this device that are
  * used by other (remote) devices.
 */
-void Device::get_associated_dispatch_phys_cores(
+void Device::get_associated_dispatch_virtual_cores(
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> &my_dispatch_cores,
     std::unordered_map<chip_id_t,std::unordered_set<CoreCoord>> &other_dispatch_cores) {
     if (this->is_mmio_capable()) {
         for (const chip_id_t &device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(this->id_)) {
             uint8_t num_hw_cqs = this->num_hw_cqs();
             uint16_t curr_channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
-            CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
+            CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
             for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
                 if (device_id == this->id_) {
                     //mmio device.
                     bool dispatch_hd_allocated = false;
-                    CoreCoord phys_core_dispatch_hd;
+                    CoreCoord virtual_core_dispatch_hd;
                     if (dispatch_core_manager::instance().is_dispatcher_core_allocated(device_id, curr_channel, cq_id)) {
                         tt_cxy_pair dispatch_location = dispatch_core_manager::instance().dispatcher_core(device_id, curr_channel, cq_id);
-                        phys_core_dispatch_hd = get_physical_core_coordinate(dispatch_location, dispatch_core_type);
-                        my_dispatch_cores[this->id_].insert(phys_core_dispatch_hd);
+                        virtual_core_dispatch_hd = this->virtual_core_from_logical_core(dispatch_location, dispatch_core_type);
+                        my_dispatch_cores[this->id_].insert(virtual_core_dispatch_hd);
                         dispatch_hd_allocated = true;
-                        log_debug(tt::LogMetal, "MMIO Device Dispatch core: Logical: {} - Physical: {}", dispatch_location.str(), phys_core_dispatch_hd.str());
+                        log_debug(tt::LogMetal, "MMIO Device Dispatch core: Logical: {} - Physical: {}", dispatch_location.str(), virtual_core_dispatch_hd.str());
                     }
                     // Include dispatch_s in the dispatch core location set, if its not on the same core as dispatch_hd
                     if (dispatch_core_manager::instance().is_dispatcher_s_core_allocated(device_id, curr_channel, cq_id)) {
                         tt_cxy_pair dispatch_s_location = dispatch_core_manager::instance().dispatcher_s_core(device_id, curr_channel, cq_id);
-                        CoreCoord phys_core_dispatch_s = get_physical_core_coordinate(dispatch_s_location, dispatch_core_type);
-                        if ((!dispatch_hd_allocated) or (phys_core_dispatch_s != phys_core_dispatch_hd)) {
-                            my_dispatch_cores[dispatch_s_location.chip].insert(phys_core_dispatch_s);
+                        CoreCoord virtual_core_dispatch_s = this->virtual_core_from_logical_core(dispatch_s_location, dispatch_core_type);
+                        if ((!dispatch_hd_allocated) or (virtual_core_dispatch_s != virtual_core_dispatch_hd)) {
+                            my_dispatch_cores[dispatch_s_location.chip].insert(virtual_core_dispatch_s);
                         }
                     }
                     if (dispatch_core_manager::instance().is_prefetcher_core_allocated(device_id, curr_channel, cq_id)) {
                         tt_cxy_pair prefetch_location = dispatch_core_manager::instance().prefetcher_core(device_id, curr_channel, cq_id);
-                        CoreCoord phys_core = get_physical_core_coordinate(prefetch_location, dispatch_core_type);
-                        my_dispatch_cores[this->id_].insert(phys_core);
-                        log_debug(tt::LogMetal, "MMIO Device Prefetch core: Logical: {} - Physical: {}", prefetch_location.str(), phys_core.str());
+                        CoreCoord virtual_core = this->virtual_core_from_logical_core(prefetch_location, dispatch_core_type);
+                        my_dispatch_cores[this->id_].insert(virtual_core);
+                        log_debug(tt::LogMetal, "MMIO Device Prefetch core: Logical: {} - Physical: {}", prefetch_location.str(), virtual_core.str());
                     }
                 } else if (tt::DevicePool::instance().is_device_active(device_id)) {
                     //non mmio devices serviced by this mmio capable device.
                     //skip remote dispatch cores only if respective remote device is active.
                     if (dispatch_core_manager::instance().is_dispatcher_core_allocated(device_id, curr_channel, cq_id)) {
                         tt_cxy_pair dispatch_location = dispatch_core_manager::instance().dispatcher_core(device_id, curr_channel, cq_id);
-                        CoreCoord phys_core = get_physical_core_coordinate(dispatch_location, dispatch_core_type);
-                        other_dispatch_cores[this->id_].insert(phys_core);
-                        log_debug(tt::LogMetal, "Remote Device Dispatch core: Logical: {} - Physical: {} will keep running on MMIO Device.", dispatch_location.str(), phys_core.str());
+                        CoreCoord virtual_core = this->virtual_core_from_logical_core(dispatch_location, dispatch_core_type);
+                        other_dispatch_cores[this->id_].insert(virtual_core);
+                        log_debug(tt::LogMetal, "Remote Device Dispatch core: Logical: {} - Physical: {} will keep running on MMIO Device.", dispatch_location.str(), virtual_core.str());
                     }
                     if (dispatch_core_manager::instance().is_prefetcher_core_allocated(device_id, curr_channel, cq_id)) {
                         tt_cxy_pair prefetch_location = dispatch_core_manager::instance().prefetcher_core(device_id, curr_channel, cq_id);
-                        CoreCoord phys_core = get_physical_core_coordinate(prefetch_location, dispatch_core_type);
-                        other_dispatch_cores[this->id_].insert(phys_core);
-                        log_debug(tt::LogMetal, "Remote Device Prefetch core: Logical: {} - Physical: {} will keep running on MMIO Device.", prefetch_location.str(), phys_core.str());
+                        CoreCoord virtual_core = this->virtual_core_from_logical_core(prefetch_location, dispatch_core_type);
+                        other_dispatch_cores[this->id_].insert(virtual_core);
+                        log_debug(tt::LogMetal, "Remote Device Prefetch core: Logical: {} - Physical: {} will keep running on MMIO Device.", prefetch_location.str(), virtual_core.str());
                     }
                     if (dispatch_core_manager::instance().is_mux_core_allocated(device_id, curr_channel, cq_id)) {
                         tt_cxy_pair mux_location = dispatch_core_manager::instance().mux_core(device_id, curr_channel, cq_id);
-                        CoreCoord phys_core = get_physical_core_coordinate(mux_location, dispatch_core_type);
-                        other_dispatch_cores[this->id_].insert(phys_core);
-                        log_debug(tt::LogMetal, "Remote Device Mux core: Logical: {} - Physical: {} will keep running on MMIO Device.", mux_location.str(), phys_core.str());
+                        CoreCoord virtual_core = this->virtual_core_from_logical_core(mux_location, dispatch_core_type);
+                        other_dispatch_cores[this->id_].insert(virtual_core);
+                        log_debug(tt::LogMetal, "Remote Device Mux core: Logical: {} - Physical: {} will keep running on MMIO Device.", mux_location.str(), virtual_core.str());
                     }
                     if (dispatch_core_manager::instance().is_demux_core_allocated(device_id, curr_channel, cq_id)) {
                         tt_cxy_pair demux_location = dispatch_core_manager::instance().demux_core(device_id, curr_channel, cq_id);
-                        CoreCoord phys_core = get_physical_core_coordinate(demux_location, dispatch_core_type);
-                        other_dispatch_cores[this->id_].insert(phys_core);
-                        log_debug(tt::LogMetal, "Remote Device Demux core: Logical: {} - Physical: {} will keep running on MMIO Device.", demux_location.str(), phys_core.str());
+                        CoreCoord virtual_core = this->virtual_core_from_logical_core(demux_location, dispatch_core_type);
+                        other_dispatch_cores[this->id_].insert(virtual_core);
+                        log_debug(tt::LogMetal, "Remote Device Demux core: Logical: {} - Physical: {} will keep running on MMIO Device.", demux_location.str(), virtual_core.str());
                     }
                 }
             }
@@ -151,58 +179,70 @@ void Device::get_associated_dispatch_phys_cores(
         uint8_t num_hw_cqs = this->num_hw_cqs();
         auto device_id = this->id_;
         uint16_t curr_channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
+        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
             if (dispatch_core_manager::instance().is_dispatcher_core_allocated(device_id, curr_channel, cq_id)) {
                 tt_cxy_pair dispatch_location = dispatch_core_manager::instance().dispatcher_core(device_id, curr_channel, cq_id);
-                CoreCoord phys_core = get_physical_core_coordinate(dispatch_location, dispatch_core_type);
-                my_dispatch_cores[dispatch_location.chip].insert(phys_core);
-                log_debug(tt::LogMetal, "Remote Device Dispatch core: Logical: {} - Physical: {} will be reset on MMIO Device.", dispatch_location.str(), phys_core.str());
+                CoreCoord virtual_core = this->virtual_core_from_logical_core(dispatch_location, dispatch_core_type);
+                my_dispatch_cores[dispatch_location.chip].insert(virtual_core);
+                log_debug(tt::LogMetal, "Remote Device Dispatch core: Logical: {} - Physical: {} will be reset on MMIO Device.", dispatch_location.str(), virtual_core.str());
             }
             if (dispatch_core_manager::instance().is_prefetcher_core_allocated(device_id, curr_channel, cq_id)) {
                 tt_cxy_pair prefetch_location = dispatch_core_manager::instance().prefetcher_core(device_id, curr_channel, cq_id);
-                CoreCoord phys_core = get_physical_core_coordinate(prefetch_location, dispatch_core_type);
-                my_dispatch_cores[prefetch_location.chip].insert(phys_core);
-                log_debug(tt::LogMetal, "Remote Device Prefetch core: Logical: {} - Physical: {} will be reset on MMIO Device.", prefetch_location.str(), phys_core.str());
+                CoreCoord virtual_core = this->virtual_core_from_logical_core(prefetch_location, dispatch_core_type);
+                my_dispatch_cores[prefetch_location.chip].insert(virtual_core);
+                log_debug(tt::LogMetal, "Remote Device Prefetch core: Logical: {} - Physical: {} will be reset on MMIO Device.", prefetch_location.str(), virtual_core.str());
             }
             if (dispatch_core_manager::instance().is_mux_core_allocated(device_id, curr_channel, cq_id)) {
                 tt_cxy_pair mux_location = dispatch_core_manager::instance().mux_core(device_id, curr_channel, cq_id);
-                CoreCoord phys_core = get_physical_core_coordinate(mux_location, dispatch_core_type);
-                my_dispatch_cores[mux_location.chip].insert(phys_core);
-                log_debug(tt::LogMetal, "Remote Device Mux core: Logical: {} - Physical: {} will be reset on MMIO Device.", mux_location.str(), phys_core.str());
+                CoreCoord virtual_core = this->virtual_core_from_logical_core(mux_location, dispatch_core_type);
+                my_dispatch_cores[mux_location.chip].insert(virtual_core);
+                log_debug(tt::LogMetal, "Remote Device Mux core: Logical: {} - Physical: {} will be reset on MMIO Device.", mux_location.str(), virtual_core.str());
             }
             if (dispatch_core_manager::instance().is_demux_core_allocated(device_id, curr_channel, cq_id)) {
                 tt_cxy_pair demux_location = dispatch_core_manager::instance().demux_core(device_id, curr_channel, cq_id);
-                CoreCoord phys_core = get_physical_core_coordinate(demux_location, dispatch_core_type);
-                my_dispatch_cores[demux_location.chip].insert(phys_core);
-                log_debug(tt::LogMetal, "Remote Device Demux core: Logical: {} - Physical: {} will be reset on MMIO Device.", demux_location.str(), phys_core.str());
+                CoreCoord virtual_core = this->virtual_core_from_logical_core(demux_location, dispatch_core_type);
+                my_dispatch_cores[demux_location.chip].insert(virtual_core);
+                log_debug(tt::LogMetal, "Remote Device Demux core: Logical: {} - Physical: {} will be reset on MMIO Device.", demux_location.str(), virtual_core.str());
             }
-                CoreCoord phys_core;
-                tt_cxy_pair dispatch_location = dispatch_core_manager::instance().dispatcher_d_core(device_id, curr_channel, cq_id);
-                phys_core = get_physical_core_coordinate(dispatch_location, dispatch_core_type);
-                my_dispatch_cores[dispatch_location.chip].insert(phys_core);
-                // Include dispatch_s in the dispatch core location set, if its not on the same core as dispatch_d
-                tt_cxy_pair dispatch_s_location = dispatch_core_manager::instance().dispatcher_s_core(device_id, curr_channel, cq_id);
-                CoreCoord phys_core_dispatch_s = get_physical_core_coordinate(dispatch_s_location, dispatch_core_type);
-                if (phys_core_dispatch_s != phys_core) {
-                    my_dispatch_cores[dispatch_s_location.chip].insert(phys_core_dispatch_s);
-                }
-                tt_cxy_pair prefetch_location = dispatch_core_manager::instance().prefetcher_d_core(device_id, curr_channel, cq_id);
-                phys_core = get_physical_core_coordinate(prefetch_location, dispatch_core_type);
-                my_dispatch_cores[dispatch_location.chip].insert(phys_core);
-                tt_cxy_pair mux_location = dispatch_core_manager::instance().mux_d_core(device_id, curr_channel, cq_id);
-                phys_core = get_physical_core_coordinate(mux_location, dispatch_core_type);
-                my_dispatch_cores[dispatch_location.chip].insert(phys_core);
-                tt_cxy_pair demux_location = dispatch_core_manager::instance().demux_d_core(device_id, curr_channel, cq_id);
-                phys_core = get_physical_core_coordinate(demux_location, dispatch_core_type);
-                my_dispatch_cores[dispatch_location.chip].insert(phys_core);
+        }
+        CoreCoord virtual_core;
+        tt_cxy_pair mux_location = dispatch_core_manager::instance().mux_d_core(device_id, curr_channel, 0);
+        virtual_core = this->virtual_core_from_logical_core(mux_location, dispatch_core_type);
+        my_dispatch_cores[mux_location.chip].insert(virtual_core);
+        tt_cxy_pair demux_location = dispatch_core_manager::instance().demux_d_core(device_id, curr_channel, 0);
+        virtual_core = this->virtual_core_from_logical_core(demux_location, dispatch_core_type);
+        my_dispatch_cores[demux_location.chip].insert(virtual_core);
+        for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+            tt_cxy_pair prefetch_location =
+                dispatch_core_manager::instance().prefetcher_d_core(device_id, curr_channel, cq_id);
+            virtual_core = this->virtual_core_from_logical_core(prefetch_location, dispatch_core_type);
+            my_dispatch_cores[prefetch_location.chip].insert(virtual_core);
+        }
+        for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+            tt_cxy_pair dispatch_location =
+                dispatch_core_manager::instance().dispatcher_d_core(device_id, curr_channel, cq_id);
+            virtual_core = this->virtual_core_from_logical_core(dispatch_location, dispatch_core_type);
+            my_dispatch_cores[dispatch_location.chip].insert(virtual_core);
+        }
+        for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+            // Include dispatch_s in the dispatch core location set, if its not on the same core as dispatch_d
+            tt_cxy_pair dispatch_location =
+                dispatch_core_manager::instance().dispatcher_d_core(device_id, curr_channel, cq_id);
+            virtual_core = this->virtual_core_from_logical_core(dispatch_location, dispatch_core_type);
+            tt_cxy_pair dispatch_s_location =
+                dispatch_core_manager::instance().dispatcher_s_core(device_id, curr_channel, cq_id);
+            CoreCoord virtual_core_dispatch_s = this->virtual_core_from_logical_core(dispatch_s_location, dispatch_core_type);
+            if (virtual_core_dispatch_s != virtual_core) {
+                my_dispatch_cores[dispatch_s_location.chip].insert(virtual_core_dispatch_s);
+            }
         }
     }
 }
 
 void Device::initialize_cluster() {
     ZoneScoped;
-    if (llrt::OptionsG.get_clear_l1()) {
+    if (llrt::RunTimeOptions::get_instance().get_clear_l1()) {
         this->clear_l1_state();
     }
     int ai_clk = tt::Cluster::instance().get_device_aiclk(this->id_);
@@ -211,20 +251,27 @@ void Device::initialize_cluster() {
 
 void Device::initialize_default_sub_device_state(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap) {
     // Create the default sub-device manager representing the entire chip
-    this->next_sub_device_manager_id_ = {0};
-    auto [sub_device_manager, _] = this->sub_device_managers_.insert_or_assign(this->get_next_sub_device_manager_id(), std::make_unique<detail::SubDeviceManager>(this, this->initialize_allocator(l1_small_size, trace_region_size, l1_bank_remap)));
-    this->default_sub_device_manager_id_ = sub_device_manager->first;
-    this->default_sub_device_manager_ = sub_device_manager->second.get();
-    this->active_sub_device_manager_id_ = this->default_sub_device_manager_id_;
-    this->active_sub_device_manager_ = this->default_sub_device_manager_;
-    this->allocator_ = this->get_initialized_allocator().get();
+    const auto& compute_grid_size = this->compute_with_storage_grid_size();
+    const auto& active_eth_cores = this->get_active_ethernet_cores(true);
+    std::vector<CoreRange> active_eth_core_ranges;
+    active_eth_core_ranges.reserve(active_eth_cores.size());
+    for (const auto& core : active_eth_cores) {
+        active_eth_core_ranges.emplace_back(core, core);
+    }
 
+    auto sub_devices = {SubDevice(std::array{
+        CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1})),
+        CoreRangeSet(std::move(active_eth_core_ranges))})};
+
+    sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
+        this, this->initialize_allocator(l1_small_size, trace_region_size, l1_bank_remap), sub_devices);
 }
 
 std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap) {
     ZoneScoped;
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->id_);
+    const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
+    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
     // Construct allocator config from soc_desc
     // Take max alignment to satisfy NoC rd/wr constraints
     // Tensix/Eth -> PCIe/DRAM src and dst addrs must be L1_ALIGNMENT aligned
@@ -233,55 +280,63 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
     const auto &logical_size = this->logical_grid_size();
     const auto &compute_size = this->compute_with_storage_grid_size();
     AllocatorConfig config(
-        {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_channels()),
-         .dram_bank_size = soc_desc.dram_bank_size,
+        {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_views()),
+         .dram_bank_size = soc_desc.dram_view_size,
          .dram_bank_offsets = {},
-         .dram_unreserved_base = hal.get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) + \
-                                 hal.get_dev_size(HalDramMemAddrType::DRAM_BARRIER),
-         .l1_unreserved_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
+         .dram_unreserved_base =
+             hal.get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) + hal.get_dev_size(HalDramMemAddrType::DRAM_BARRIER),
+         .dram_alignment = hal.get_alignment(HalMemType::DRAM),
+         .l1_unreserved_base = align(
+             hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
+             hal.get_alignment(HalMemType::DRAM)),
          .worker_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(logical_size.x - 1, logical_size.y - 1))),
          .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
-         .storage_core_bank_size = get_storage_core_bank_size(id_, num_hw_cqs_, dispatch_core_type),
-         .l1_small_size = align(l1_small_size, hal.get_alignment(HalMemType::L1)),
+         .storage_core_bank_size = get_storage_core_bank_size(id_, num_hw_cqs_, dispatch_core_config),
+         .l1_small_size = align(l1_small_size, hal.get_alignment(HalMemType::DRAM)),
          .trace_region_size = align(trace_region_size, hal.get_alignment(HalMemType::DRAM)),
          .core_type_from_noc_coord_table = {},  // Populated later
-         .worker_log_to_physical_routing_x = soc_desc.worker_log_to_physical_routing_x,
-         .worker_log_to_physical_routing_y = soc_desc.worker_log_to_physical_routing_y,
+         .worker_log_to_virtual_routing_x = tt::Cluster::instance().get_worker_logical_to_virtual_x(this->id()),
+         .worker_log_to_virtual_routing_y = tt::Cluster::instance().get_worker_logical_to_virtual_y(this->id()),
          .l1_bank_remap = {l1_bank_remap.begin(), l1_bank_remap.end()},
          .compute_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(compute_size.x - 1, compute_size.y - 1))),
-         .alignment = std::max(hal.get_alignment(HalMemType::DRAM), hal.get_alignment(HalMemType::L1)),
+         .l1_alignment = hal.get_alignment(HalMemType::L1),
          .disable_interleaved = false});
     TT_FATAL(config.l1_small_size < (config.storage_core_bank_size.has_value() ? config.storage_core_bank_size.value() : config.worker_l1_size - config.l1_unreserved_base),
             "Reserved size must be less than bank size");
     TT_FATAL(
-        config.l1_small_size % config.alignment == 0,
-        "Reserved size must be aligned to allocator alignment {}",
-        config.alignment);
+        config.l1_small_size % config.l1_alignment == 0,
+        "Reserved size must be aligned to L1 allocator alignment {}",
+        config.l1_alignment);
     // Initialize dram_offsets from soc_descriptor
-    for (auto channel = 0; channel < soc_desc.get_num_dram_channels(); channel++) {
+    for (auto channel = 0; channel < soc_desc.get_num_dram_views(); channel++) {
         config.dram_bank_offsets.push_back(soc_desc.get_address_offset(channel));
     }
     // Initialize core_type_from_noc_coord_table table
-    for (const auto& core: soc_desc.physical_cores) {
-        config.core_type_from_noc_coord_table.insert({core.first, AllocCoreType::Invalid});
+    for (const CoreCoord& core : soc_desc.get_all_cores(CoordSystem::PHYSICAL)) {
+        config.core_type_from_noc_coord_table.insert(
+            {this->virtual_core_from_physical_core({core.x, core.y}), AllocCoreType::Invalid});
+    }
+    for (const CoreCoord& core : soc_desc.get_all_harvested_cores(CoordSystem::PHYSICAL)) {
+        config.core_type_from_noc_coord_table.insert(
+            {this->virtual_core_from_physical_core({core.x, core.y}), AllocCoreType::Invalid});
     }
 
-    for (const CoreCoord& core : tt::get_logical_compute_cores(id_, num_hw_cqs_, dispatch_core_type)) {
+    for (const CoreCoord& core : tt::get_logical_compute_cores(id_, num_hw_cqs_, dispatch_core_config)) {
         this->compute_cores_.insert(core);
         const auto noc_coord = this->worker_core_from_logical_core(core);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::ComputeAndStore;
     }
-    for (const CoreCoord& core : tt::get_logical_storage_cores(id_, num_hw_cqs_, dispatch_core_type)) {
+    for (const CoreCoord& core : tt::get_logical_storage_cores(id_, num_hw_cqs_, dispatch_core_config)) {
         this->storage_only_cores_.insert(core);
         const auto noc_coord = this->worker_core_from_logical_core(core);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::StorageOnly;
     }
-    for (const CoreCoord &core : tt::get_logical_dispatch_cores(id_, num_hw_cqs_, dispatch_core_type)) {
-        const auto noc_coord = this->physical_core_from_logical_core(core, dispatch_core_type);
+    for (const CoreCoord &core : tt::get_logical_dispatch_cores(id_, num_hw_cqs_, dispatch_core_config)) {
+        const auto noc_coord = this->virtual_core_from_logical_core(core, dispatch_core_type);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
     }
-    for (const auto &core : soc_desc.get_logical_ethernet_cores()) {
-        this->ethernet_cores_.insert(core);
+    for (const tt::umd::CoreCoord& core : soc_desc.get_cores(CoreType::ETH, CoordSystem::LOGICAL)) {
+        this->ethernet_cores_.insert({core.x, core.y});
     }
 
     // L1_BANKING scheme creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
@@ -290,145 +345,57 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
     return std::make_unique<L1BankingAllocator>(config);
 }
 
-void Device::initialize_device_kernel_defines()
+void Device::initialize_device_bank_to_noc_tables(const HalProgrammableCoreType &core_type, CoreCoord virtual_core)
 {
-    // Clear previously stored defines, in case we are running with different configuration this time.
-    // This is needed to handle the case where the number of L1 banks on GS can be changed in each run.
-    this->device_kernel_defines_.clear();
-    const size_t num_dram_banks = this->num_banks(BufferType::DRAM);
-    const size_t num_l1_banks = this->num_banks(BufferType::L1);
+    const uint32_t dram_to_noc_sz_in_bytes = dram_bank_to_noc_xy_.size() * sizeof(uint16_t);
+    const uint32_t l1_to_noc_sz_in_bytes = l1_bank_to_noc_xy_.size() * sizeof(uint16_t);
+    const uint32_t dram_offset_sz_in_bytes = dram_bank_offset_map_.size() * sizeof(int32_t);
+    const uint32_t l1_offset_sz_in_bytes = l1_bank_offset_map_.size() * sizeof(int32_t);
 
-    bool is_dram_pow2 = ceil(log2(num_dram_banks)) == log2(num_dram_banks);
-    bool is_l1_pow2 = ceil(log2(num_l1_banks)) == log2(num_l1_banks);
+    const uint64_t mem_bank_to_noc_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
+    const uint32_t mem_bank_to_noc_size = hal.get_dev_size(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
 
-    this->device_kernel_defines_.emplace("NUM_DRAM_BANKS", std::to_string(num_dram_banks));
-    this->device_kernel_defines_.emplace("NUM_L1_BANKS", std::to_string(num_l1_banks));
+    TT_ASSERT((dram_to_noc_sz_in_bytes + l1_to_noc_sz_in_bytes + dram_offset_sz_in_bytes + l1_offset_sz_in_bytes) <= mem_bank_to_noc_size,
+        "Size of bank_to_noc table is greater than available space");
 
-    if (is_dram_pow2) {
-        this->device_kernel_defines_.emplace("LOG_BASE_2_OF_NUM_DRAM_BANKS", std::to_string(static_cast<size_t>(log2(num_dram_banks))));
-    } else {
-        this->device_kernel_defines_.emplace("IS_NOT_POW2_NUM_DRAM_BANKS", "1");
-    }
-    if (is_l1_pow2) {
-        this->device_kernel_defines_.emplace("LOG_BASE_2_OF_NUM_L1_BANKS", std::to_string(static_cast<size_t>(log2(num_l1_banks))));
-    } else {
-        this->device_kernel_defines_.emplace("IS_NOT_POW2_NUM_L1_BANKS", "1");
-    }
+    tt::Cluster::instance().write_core(&dram_bank_to_noc_xy_[0], dram_to_noc_sz_in_bytes, tt_cxy_pair(this->id(), virtual_core), mem_bank_to_noc_addr);
+    uint64_t l1_noc_addr = mem_bank_to_noc_addr + dram_to_noc_sz_in_bytes;
+    tt::Cluster::instance().write_core(&l1_bank_to_noc_xy_[0], l1_to_noc_sz_in_bytes, tt_cxy_pair(this->id(), virtual_core), l1_noc_addr);
 
-    // TODO (abhullar): Until we switch to virtual coordinates, we need to pass physical PCIe coordinates to device
-    //  because Blackhole PCIe endpoint is dependent on board type
-    const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(this->id());
-    auto pcie_cores = soc_d.get_pcie_cores();
-    auto grid_size = this->grid_size();
-    this->device_kernel_defines_.emplace("PCIE_NOC_X", std::to_string(pcie_cores[0].x));
-    this->device_kernel_defines_.emplace("PCIE_NOC_Y", std::to_string(pcie_cores[0].y));
-    this->device_kernel_defines_.emplace("PCIE_NOC1_X", std::to_string(tt::tt_metal::hal.noc_coordinate(NOC::NOC_1, grid_size.x, pcie_cores[0].x)));
-    this->device_kernel_defines_.emplace("PCIE_NOC1_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(NOC::NOC_1, grid_size.x, pcie_cores[0].y)));
+    uint64_t dram_offset_addr = l1_noc_addr + l1_to_noc_sz_in_bytes;
+    tt::Cluster::instance().write_core(&dram_bank_offset_map_[0], dram_offset_sz_in_bytes, tt_cxy_pair(this->id(), virtual_core), dram_offset_addr);
+    uint64_t l1_offset_addr = dram_offset_addr + dram_offset_sz_in_bytes;
+    tt::Cluster::instance().write_core(&l1_bank_offset_map_[0], l1_offset_sz_in_bytes, tt_cxy_pair(this->id(), virtual_core), l1_offset_addr);
 }
 
-void Device::initialize_build() {
+void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreCoord virtual_core, launch_msg_t *launch_msg, go_msg_t* go_msg) {
     ZoneScoped;
 
-    this->initialize_device_kernel_defines();
-    this->build_env_.init(this->build_key(), this->arch(), this->device_kernel_defines_);
-
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->id());
-    uint32_t dispatch_message_addr =
-        dispatch_constants::get(dispatch_core_type, this->num_hw_cqs_).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
-
-    uint32_t num_build_states = hal.get_num_risc_processors();
-
-    auto init_helper = [this, dispatch_message_addr, num_build_states] (bool is_fw) -> JitBuildStateSet {
-        std::vector<std::shared_ptr<JitBuildState>> build_states;
-
-        build_states.resize(num_build_states);
-        uint32_t programmable_core_type_count = hal.get_programmable_core_type_count();
-        if (is_fw) {
-            this->build_state_indices_.resize(programmable_core_type_count);
-        }
-
-        uint32_t index = 0;
-        for (uint32_t programmable_core = 0; programmable_core < programmable_core_type_count; programmable_core++) {
-            HalProgrammableCoreType core_type = magic_enum::enum_value<HalProgrammableCoreType>(programmable_core);
-            uint32_t processor_class_count = hal.get_processor_classes_count(programmable_core);
-            if (is_fw) {
-                this->build_state_indices_[programmable_core].resize(processor_class_count);
-            }
-            for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
-                auto compute_proc_class = magic_enum::enum_cast<HalProcessorClassType>(processor_class);
-                bool is_compute_processor = compute_proc_class.has_value() and compute_proc_class.value() == HalProcessorClassType::COMPUTE;
-                uint32_t processor_types_count = hal.get_processor_types_count(programmable_core, processor_class);
-                if (is_fw) {
-                    this->build_state_indices_[programmable_core][processor_class] = {index, processor_types_count};
-                }
-                for (uint32_t processor_type = 0; processor_type < processor_types_count; processor_type++) {
-                    switch (core_type) {
-                        case HalProgrammableCoreType::TENSIX: {
-                            if (is_compute_processor) {
-                                build_states[index] = std::make_shared<JitBuildCompute>(
-                                    this->build_env_, JitBuiltStateConfig{.processor_id = processor_type, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
-                            } else {
-                                // TODO: Make .processor_id = processor_type when brisc and ncrisc are considered one processor class
-                                build_states[index] = std::make_shared<JitBuildDataMovement>(
-                                    this->build_env_, JitBuiltStateConfig{.processor_id = processor_class, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
-                            }
-                            break;
-                        }
-                        case HalProgrammableCoreType::ACTIVE_ETH: {
-                            build_states[index] = std::make_shared<JitBuildActiveEthernet>(
-                                this->build_env_, JitBuiltStateConfig{.processor_id = processor_class, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
-                            break;
-                        }
-                        case HalProgrammableCoreType::IDLE_ETH: {
-                            build_states[index] = std::make_shared<JitBuildIdleEthernet>(
-                                this->build_env_, JitBuiltStateConfig{.processor_id = processor_class, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
-                            break;
-                        }
-                        default:
-                            TT_THROW("Unsupported programable core type {} to initialize build states", magic_enum::enum_name(core_type));
-                    }
-                    index++;
-                }
-            }
-        }
-
-       return build_states;
-    };
-
-    this->firmware_build_states_ = init_helper(true);
-    this->kernel_build_states_ = init_helper(false);
-}
-
-void Device::build_firmware() {
-    log_debug(tt::LogMetal, "Building base firmware for device {}", this->id_);
-    ZoneScoped;
-
-    this->generate_device_headers(this->build_env_.get_out_firmware_root_path());
-    jit_build_set(this->firmware_build_states_, nullptr);
-}
-
-void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreCoord phys_core, launch_msg_t *launch_msg, go_msg_t* go_msg) {
-    ZoneScoped;
-
+    this->initialize_device_bank_to_noc_tables(core_type, virtual_core);
     uint32_t core_type_idx = hal.get_programmable_core_type_index(core_type);
     uint32_t processor_class_count = hal.get_processor_classes_count(core_type);
+    auto jit_build_config = hal.get_jit_build_config(core_type_idx, 0, 0); // Only the first risc needs to be programmed
 
     switch (core_type) {
         case HalProgrammableCoreType::TENSIX: {
-            llrt::program_risc_startup_addr(this->id(), phys_core);
             for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
-                auto [build_idx, num_build_states] = this->build_processor_type_to_index(core_type_idx, processor_class);
-                for (uint32_t riscv_id = build_idx; riscv_id < (build_idx + num_build_states); riscv_id++) {
-                    ll_api::memory binary_mem = llrt::get_risc_binary(
-                        firmware_build_states_[riscv_id]->get_target_out_path(""), core_type_idx, processor_class, (riscv_id - build_idx));
+                auto [build_idx, num_build_states] =
+                    BuildEnvManager::get_instance().get_build_index_and_state_count(core_type_idx, processor_class);
+                for (uint32_t riscv_id = 0; riscv_id < num_build_states; riscv_id++) {
+                    auto fw_path = BuildEnvManager::get_instance()
+                                       .get_firmware_build_state(id_, core_type_idx, processor_class, riscv_id)
+                                       .get_target_out_path("");
+                    const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                     uint32_t fw_size = binary_mem.get_text_size();
-                    if (riscv_id == 1) { // TODO: clean up how brisc/ncrisc are handled
+                    if (riscv_id + build_idx == 1) {  // TODO: clean up how brisc/ncrisc are handled
                         // In this context, ncrisc_kernel_size16 is the size of the fw
                         launch_msg->kernel_config.ncrisc_kernel_size16 = (fw_size + 15) >> 4;
                     }
                     log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, fw_size);
-                    if (not llrt::OptionsG.get_skip_loading_fw()) {
-                        llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, core_type_idx, processor_class, (riscv_id - build_idx));
+
+                    if (not llrt::RunTimeOptions::get_instance().get_skip_loading_fw())  {
+                        llrt::test_load_write_read_risc_binary(
+                            binary_mem, this->id(), virtual_core, core_type_idx, processor_class, riscv_id);
                     }
                 }
             }
@@ -438,10 +405,10 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                 launch_msg->kernel_config.mode = DISPATCH_MODE_HOST;
             } else {
                 std::vector<CoreCoord> physical_dispatch_cores = {};
-                if (dispatch_core_manager::instance().get_dispatch_core_type(this->id()) == CoreType::WORKER) {
+                if (dispatch_core_manager::instance().get_dispatch_core_type() == CoreType::WORKER) {
                     physical_dispatch_cores = this->worker_cores_from_logical_cores(dispatch_core_manager::instance().get_all_logical_dispatch_cores(this->id()));
                 }
-                if (std::find(physical_dispatch_cores.begin(), physical_dispatch_cores.end(), phys_core) != physical_dispatch_cores.end()) {
+                if (std::find(physical_dispatch_cores.begin(), physical_dispatch_cores.end(), virtual_core) != physical_dispatch_cores.end()) {
                     // Dispatch cores - Host writes launch messages
                     launch_msg->kernel_config.mode = DISPATCH_MODE_HOST;
                 } else {
@@ -455,25 +422,29 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH: {
             bool is_idle_eth = core_type == HalProgrammableCoreType::IDLE_ETH;
-            if (is_idle_eth) {
-                tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), phys_core));
+            TensixSoftResetOptions reset_val = TENSIX_ASSERT_SOFT_RESET;
+            if (not is_idle_eth) {
+                reset_val =
+                    reset_val & static_cast<TensixSoftResetOptions>(
+                                    ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
             }
-            if (not llrt::OptionsG.get_skip_loading_fw()) {
+            if (is_idle_eth or !hal.get_eth_fw_is_cooperative()) {
+                tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), virtual_core), reset_val);
+            }
+            if (not llrt::RunTimeOptions::get_instance().get_skip_loading_fw()) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
-                    auto [build_idx, num_build_states] = this->build_processor_type_to_index(core_type_idx, processor_class);
-                    for (uint32_t eriscv_id = build_idx; eriscv_id < (build_idx + num_build_states); eriscv_id++) {
-                        ll_api::memory binary_mem = llrt::get_risc_binary(
-                            firmware_build_states_[eriscv_id]->get_target_out_path(""), core_type_idx, processor_class, (eriscv_id - build_idx));
+                    auto num_build_states = hal.get_processor_types_count(core_type_idx, processor_class);
+                    for (uint32_t eriscv_id = 0; eriscv_id < num_build_states; eriscv_id++) {
+                        auto fw_path = BuildEnvManager::get_instance()
+                                           .get_firmware_build_state(id_, core_type_idx, processor_class, eriscv_id)
+                                           .get_target_out_path("");
+                        const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         uint32_t fw_size = binary_mem.get_text_size();
                         log_debug(LogDevice, "ERISC fw binary size: {} in bytes", fw_size);
-                        llrt::test_load_write_read_risc_binary(binary_mem, this->id(), phys_core, core_type_idx, processor_class, (eriscv_id - build_idx));
+                        llrt::test_load_write_read_risc_binary(
+                            binary_mem, this->id(), virtual_core, core_type_idx, processor_class, eriscv_id);
                     }
                 }
-            }
-            if (is_idle_eth) {
-                llrt::program_risc_startup_addr(this->id(), phys_core);
-            } else {
-                llrt::launch_erisc_app_fw_on_core(this->id(), phys_core);
             }
             // Ethernet worker core. Launch messages will be sent by FD infra if it's enabled
             // Idle ethernet core. Used by FD infra. Host will write launch messages during init.
@@ -483,6 +454,9 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
         default:
             TT_THROW("Unsupported programable core type {} to initialize build states", magic_enum::enum_name(core_type));
     }
+
+    tt::Cluster::instance().write_core(
+        &jit_build_config.fw_launch_addr_value, sizeof(uint32_t), tt_cxy_pair(this->id_, virtual_core), jit_build_config.fw_launch_addr);
 
     // Initialize each entry in the launch_msg ring buffer with the correct dispatch mode - Cores that don't get a valid
     // launch_message during program execution need to at least have the correct dispatch mode.
@@ -495,12 +469,12 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
         // worker cores (Tensix and active eth) configured with DISPATCH_MODE_DEV
     // When using Slow Dispatch, all cores initialized with DISPATCH_MODE_HOST
     std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries, *launch_msg);
-    tt::Cluster::instance().write_core(init_launch_msg_data.data(), launch_msg_buffer_num_entries * sizeof(launch_msg_t), tt_cxy_pair(this->id(), phys_core), this->get_dev_addr(phys_core, HalL1MemAddrType::LAUNCH));
-    uint32_t go_addr = this->get_dev_addr(phys_core, HalL1MemAddrType::GO_MSG);
-    tt::Cluster::instance().write_core(go_msg, sizeof(go_msg_t), tt_cxy_pair(this->id(), phys_core), go_addr);
-    uint64_t launch_msg_buffer_read_ptr_addr = this->get_dev_addr(phys_core, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
+    tt::Cluster::instance().write_core(init_launch_msg_data.data(), launch_msg_buffer_num_entries * sizeof(launch_msg_t), tt_cxy_pair(this->id(), virtual_core), this->get_dev_addr(virtual_core, HalL1MemAddrType::LAUNCH));
+    uint32_t go_addr = this->get_dev_addr(virtual_core, HalL1MemAddrType::GO_MSG);
+    tt::Cluster::instance().write_core(go_msg, sizeof(go_msg_t), tt_cxy_pair(this->id(), virtual_core), go_addr);
+    uint64_t launch_msg_buffer_read_ptr_addr = this->get_dev_addr(virtual_core, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
     uint32_t zero = 0;
-    tt::Cluster::instance().write_core(&zero, sizeof(uint32_t), tt_cxy_pair(this->id(), phys_core), launch_msg_buffer_read_ptr_addr);
+    tt::Cluster::instance().write_core(&zero, sizeof(uint32_t), tt_cxy_pair(this->id(), virtual_core), launch_msg_buffer_read_ptr_addr);
 }
 
 void Device::reset_cores() {
@@ -509,66 +483,79 @@ void Device::reset_cores() {
     auto kernel_still_running = [](launch_msg_t* launch_msg, go_msg_t *go_signal) {
         return (go_signal->signal) == RUN_MSG_GO && launch_msg->kernel_config.exit_erisc_kernel == 0;
     };
+    auto erisc_app_still_running = [this](CoreCoord virtual_core) {
+        // Check if the kernel/erisc_app is still running on a ethernet core with context switching enabled
+        // The LAUNCH_ERISC_APP_FLAG is reset to 0 after reset/reboot, and set to 1 when Metal runtime launches erisc
+        // app FW Only applicable to WORMHOLE ethernet cores today, but could in theory extend to other cores, remove
+        // assert if so
+        TT_ASSERT(
+            (this->arch() == ARCH::WORMHOLE_B0) and
+                (tt::Cluster::instance().is_ethernet_core(virtual_core, this->id())),
+            "Invalid core type for context switch check");
+        auto core_type_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+        std::uint32_t launch_erisc_addr = tt::tt_metal::hal.get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr;
+        auto data =
+            tt::llrt::read_hex_vec_from_core(this->id(), virtual_core, launch_erisc_addr, sizeof(std::uint32_t));
+        return (data[0] != 0);
+    };
 
     auto mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id_);
     // Assert worker cores + dispatch cores, in case they were in a bad state from before.
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> dispatch_cores, other_dispatch_cores, device_to_early_exit_cores;
     go_msg_t go_msg;
     std::memset(&go_msg, 0, sizeof(go_msg_t));
-    for (const auto &eth_core : this->get_active_ethernet_cores()) {
-        CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
-        std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
-        std::vector<uint32_t> go_signal_data(sizeof(go_msg_t) / sizeof(uint32_t));
-        DeviceAddr launch_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH);
-        DeviceAddr go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG);
+    if (hal.get_eth_fw_is_cooperative()) {
+        for (const auto& eth_core : this->get_active_ethernet_cores()) {
+            CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
+            if (erisc_app_still_running(virtual_core)) {
+                std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
+                DeviceAddr launch_addr =
+                    hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH);
 
-        data = tt::llrt::read_hex_vec_from_core(
-            this->id(), physical_core, launch_addr, sizeof(launch_msg_t));
-        go_signal_data = tt::llrt::read_hex_vec_from_core(
-            this->id(), physical_core, go_signal_addr, sizeof(go_msg_t));
-        launch_msg_t *launch_msg = (launch_msg_t *)(&data[0]);
-        go_msg_t * go_signal = (go_msg_t *)(&go_signal_data[0]);
-        if (kernel_still_running(launch_msg, go_signal)) {
-            log_info(
-                tt::LogMetal,
-                "While initializing Device {}, ethernet tunneler core {} on Device {} detected as still running, issuing exit signal.",
-                this->id(),
-                physical_core.str(),
-                this->id());
-            launch_msg->kernel_config.exit_erisc_kernel = 1;
-            llrt::write_launch_msg_to_core(this->id(), physical_core, launch_msg, &go_msg, launch_addr, false);
-            device_to_early_exit_cores[this->id()].insert(physical_core);
+                data = tt::llrt::read_hex_vec_from_core(this->id(), virtual_core, launch_addr, sizeof(launch_msg_t));
+                launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
+                log_info(
+                    tt::LogMetal,
+                    "While initializing Device {}, ethernet tunneler core {} on Device {} detected as still running, "
+                    "issuing exit signal.",
+                    this->id(),
+                    virtual_core.str(),
+                    this->id());
+                launch_msg->kernel_config.exit_erisc_kernel = 1;
+                llrt::write_launch_msg_to_core(this->id(), virtual_core, launch_msg, &go_msg, launch_addr, false);
+                device_to_early_exit_cores[this->id()].insert(virtual_core);
+            }
         }
     }
 
-    this->get_associated_dispatch_phys_cores(dispatch_cores, other_dispatch_cores);
+    this->get_associated_dispatch_virtual_cores(dispatch_cores, other_dispatch_cores);
     // Ignore other_dispatch_cores, they will be reset by the devices that use them.
     for (auto &id_and_cores : dispatch_cores) {
         for (auto it = id_and_cores.second.begin(); it != id_and_cores.second.end(); it++) {
-            const auto &phys_core = *it;
+            const auto &virtual_core = *it;
+            // For new FD init, we've already initialized dispatch cores on other devices, so don't reset here.
+            if (id_and_cores.first != this->id())
+                continue;
+
             // Only need to manually reset ethernet dispatch cores, tensix cores are all reset below.
-            if (llrt::is_ethernet_core(phys_core, id_and_cores.first)) {
+            if (tt::Cluster::instance().is_ethernet_core(virtual_core, id_and_cores.first)) {
                 // Ethernet cores won't be reset, so just signal the dispatch cores to early exit.
-                std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
-                std::vector<uint32_t> go_signal_data(sizeof(go_msg_t) / sizeof(uint32_t));
-                DeviceAddr launch_addr = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::LAUNCH);
-                DeviceAddr go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG);
-                data = tt::llrt::read_hex_vec_from_core(
-                    id_and_cores.first, phys_core, launch_addr, sizeof(launch_msg_t));
-                go_signal_data = tt::llrt::read_hex_vec_from_core(
-                    this->id(), phys_core, go_signal_addr, sizeof(go_msg_t));
-                launch_msg_t *launch_msg = (launch_msg_t *)(&data[0]);
-                go_msg_t * go_signal = (go_msg_t *)(&go_signal_data[0]);
-                if (kernel_still_running(launch_msg, go_signal)) {
+                if (erisc_app_still_running(virtual_core)) {
                     log_info(
                         tt::LogMetal,
                         "While initializing device {}, ethernet dispatch core {} on Device {} detected as still running, issuing exit signal.",
                         this->id(),
-                        phys_core.str(),
+                        virtual_core.str(),
                         id_and_cores.first);
+                    std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
+                    DeviceAddr launch_addr =
+                        hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::LAUNCH);
+                    data = tt::llrt::read_hex_vec_from_core(
+                        id_and_cores.first, virtual_core, launch_addr, sizeof(launch_msg_t));
+                    launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
                     launch_msg->kernel_config.exit_erisc_kernel = 1;
-                    llrt::write_launch_msg_to_core(id_and_cores.first, phys_core, launch_msg, &go_msg, launch_addr, false);
-                    device_to_early_exit_cores[id_and_cores.first].insert(phys_core);
+                    llrt::write_launch_msg_to_core(id_and_cores.first, virtual_core, launch_msg, &go_msg, launch_addr, false);
+                    device_to_early_exit_cores[id_and_cores.first].insert(virtual_core);
                 }
             }
         }
@@ -589,6 +576,7 @@ void Device::reset_cores() {
     }
 
     // Reset Tensix cores
+    // TODO: reset BH eth cores as well
     CoreCoord grid_size = this->logical_grid_size();
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
@@ -629,30 +617,49 @@ void Device::initialize_and_launch_firmware() {
     core_info->noc_dram_addr_base = 0;
     core_info->noc_dram_addr_end = soc_d.dram_core_size;
 
-    const std::vector<CoreCoord> &pcie_cores = soc_d.get_pcie_cores();
-    const std::vector<CoreCoord> &dram_cores = soc_d.get_dram_cores();
-    const std::vector<CoreCoord> &eth_cores = soc_d.get_physical_ethernet_cores();
+    const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
+    const std::vector<tt::umd::CoreCoord>& dram_cores = soc_d.get_cores(CoreType::DRAM, soc_d.get_umd_coord_system());
+    const std::vector<tt::umd::CoreCoord>& eth_cores = soc_d.get_cores(CoreType::ETH, CoordSystem::PHYSICAL);
+    // The SOC descriptor can list a dram core multiple times, depending on how GDDR is assigned to banks
+    // Get a list of unique DRAM cores.
+    std::unordered_set<CoreCoord> unique_dram_cores(dram_cores.begin(), dram_cores.end());
     TT_ASSERT(
         pcie_cores.size() + dram_cores.size() + eth_cores.size() <= MAX_NON_WORKER_CORES,
         "Detected more pcie/dram/eth cores than fit in the device mailbox.");
+    TT_ASSERT(
+        eth_cores.size() <= MAX_VIRTUAL_NON_WORKER_CORES,
+        "Detected more eth cores (virtual non-workers) than can fit in device mailbox.");
     for (int idx = 0; idx < MAX_NON_WORKER_CORES; idx++) {
         core_info->non_worker_cores[idx] = {CORE_COORD_INVALID, CORE_COORD_INVALID, AddressableCoreType::UNKNOWN};
     }
+    for (int idx = 0; idx < MAX_VIRTUAL_NON_WORKER_CORES; idx++) {
+        core_info->virtual_non_worker_cores[idx] = {CORE_COORD_INVALID, CORE_COORD_INVALID, AddressableCoreType::UNKNOWN};
+    }
+
     int non_worker_cores_idx = 0;
-    for (const CoreCoord &core : pcie_cores) {
+    for (const tt::umd::CoreCoord& core : pcie_cores) {
         core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::PCIE};
     }
-    for (const CoreCoord &core : dram_cores) {
+    for (const tt::umd::CoreCoord& core : dram_cores) {
         core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::DRAM};
     }
-    for (const CoreCoord &core : eth_cores) {
+    for (const tt::umd::CoreCoord& core : eth_cores) {
         core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::ETH};
+    }
+    if (hal.is_coordinate_virtualization_enabled()) {
+        // Track Virtual Non Worker Cores (In this case only Eth) separately
+        uint32_t virtual_non_worker_cores_idx = 0;
+        for (const tt::umd::CoreCoord& core : eth_cores) {
+            auto virtual_core = this->virtual_core_from_physical_core({core.x, core.y});
+            core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {virtual_core.x, virtual_core.y, AddressableCoreType::ETH};
+        }
     }
 
     // Determine which noc-coords are harvested
     // TODO(PGK/Almeet): fix this w/ new UMD
     std::vector<uint32_t> harvested_rows;
-    uint32_t harvested_noc_rows = tt::Cluster::instance().get_harvested_rows(this->id());
+    uint32_t harvested_noc_rows = CoordinateManager::shuffle_tensix_harvesting_mask_to_noc0_coords(
+        tt::Cluster::instance().get_soc_desc(this->id()).arch, tt::Cluster::instance().get_harvesting_mask(this->id()));
     for (uint32_t y = 0; y < soc_d.grid_size.y; y++) {
         bool row_harvested = (harvested_noc_rows >> y) & 0x1;
         if (row_harvested) {
@@ -662,10 +669,19 @@ void Device::initialize_and_launch_firmware() {
     TT_ASSERT(harvested_rows.size() <= MAX_HARVESTED_ROWS, "Detected more harvested rows than fit in mailbox.");
     for (int idx = 0; idx < MAX_HARVESTED_ROWS; idx++) {
         core_info->harvested_y[idx] = (idx < harvested_rows.size()) ? harvested_rows[idx] : CORE_COORD_INVALID;
+        // Populate harvested rows in virtual coordinate space if virtualization is supported by HW.
+        // Harvested rows in the virtual space are placed at the end of the worker grid,
+        if (hal.is_coordinate_virtualization_enabled() and idx < harvested_rows.size()) {
+            core_info->virtual_harvested_y[idx] = (hal.get_virtual_worker_start_y() + this->logical_grid_size().y + harvested_rows.size() - (idx + 1));
+        } else {
+            core_info->virtual_harvested_y[idx] = CORE_COORD_INVALID;
+        }
     }
 
     core_info->noc_size_x = soc_d.grid_size.x;
     core_info->noc_size_y = soc_d.grid_size.y;
+    core_info->worker_grid_size_x = this->logical_grid_size().x;  // Grid size as virtual coords see it (workers only)
+    core_info->worker_grid_size_y = this->logical_grid_size().y;
 
     // Download to worker cores
     log_debug("Initializing firmware");
@@ -677,6 +693,12 @@ void Device::initialize_and_launch_firmware() {
             CoreCoord logical_core(x, y);
             if (!this->storage_only_cores_.count(logical_core)) {
                 CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
+                // Setup the absolute logical coordinates of this worker which are relative to true origin. not the sub
+                // device. When running the user kernel, which potentially is on a sub device, send that info using the
+                // launch message using dispatch.
+                core_info->absolute_logical_x = logical_core.x;
+                core_info->absolute_logical_y = logical_core.y;
+                // Must write to core before starting it
                 tt::llrt::write_hex_vec_to_core(
                     this->id(), worker_core, core_info_vec, this->get_dev_addr(worker_core, HalL1MemAddrType::CORE_INFO));
                 this->initialize_firmware(HalProgrammableCoreType::TENSIX, worker_core, &launch_msg, &go_msg);
@@ -686,24 +708,35 @@ void Device::initialize_and_launch_firmware() {
     }
 
     // Clear erisc sync info
-    std::vector<uint32_t> zero_vec_erisc_init(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_SIZE / sizeof(uint32_t), 0);
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
-        CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
+
+        static std::vector<uint32_t> zero_vec_erisc_init(hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO) / sizeof(uint32_t), 0);
+
+        CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
 
         llrt::write_hex_vec_to_core(
-            this->id(), physical_core, zero_vec_erisc_init, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
+            this->id(), virtual_core, zero_vec_erisc_init, hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO));
     }
 
-    // Load erisc app base FW to eth cores
+    // Load erisc app base FW to eth cores on WH and active_erisc FW on second risc of BH active eth cores
+    std::unordered_set<CoreCoord> active_eth_cores;
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
         CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
+        core_info->absolute_logical_x = eth_core.x;
+        core_info->absolute_logical_y = eth_core.y;
         tt::llrt::write_hex_vec_to_core(
             this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalL1MemAddrType::CORE_INFO));
         this->initialize_firmware(HalProgrammableCoreType::ACTIVE_ETH, phys_eth_core, &launch_msg, &go_msg);
+        if (!hal.get_eth_fw_is_cooperative()) {
+            active_eth_cores.insert(phys_eth_core);
+            not_done_cores.insert(phys_eth_core);
+        }
     }
 
     for (const auto &eth_core : this->get_inactive_ethernet_cores()) {
         CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
+        core_info->absolute_logical_x = eth_core.x;
+        core_info->absolute_logical_y = eth_core.y;
         tt::llrt::write_hex_vec_to_core(
             this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalL1MemAddrType::CORE_INFO));
         this->initialize_firmware(HalProgrammableCoreType::IDLE_ETH, phys_eth_core, &launch_msg, &go_msg);
@@ -714,8 +747,18 @@ void Device::initialize_and_launch_firmware() {
     tt::Cluster::instance().l1_barrier(this->id());
 
     // Deassert worker cores
-    for(const auto& worker_core : not_done_cores)
-        tt::Cluster::instance().deassert_risc_reset_at_core(tt_cxy_pair(this->id(), worker_core));
+    TensixSoftResetOptions reset_val;
+    for (const auto& worker_core : not_done_cores) {
+        if (active_eth_cores.find(worker_core) != active_eth_cores.end()) {
+            // bit 12 needs to be deasserted to run second erisc on BH
+            reset_val = TENSIX_DEASSERT_SOFT_RESET &
+                        static_cast<TensixSoftResetOptions>(
+                            ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::TRISC0));
+        } else {
+            reset_val = TENSIX_DEASSERT_SOFT_RESET;
+        }
+        tt::Cluster::instance().deassert_risc_reset_at_core(tt_cxy_pair(this->id(), worker_core), reset_val);
+    }
 
     // Wait until fw init is done, ensures the next launch msg doesn't get
     // written while fw is still in init
@@ -745,1975 +788,51 @@ void Device::clear_l1_state() {
 
     // These L1 ranges are restricted becase UMD base routing FW uses L1 below FIRMWARE_BASE and
     // between TILE_HEADER_BUFFER_BASE to COMMAND_Q_BASE
-    std::vector<uint32_t> zero_vec_above_tile_header_buffer(
-        (eth_l1_mem::address_map::ISSUE_CQ_CB_BASE - eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE) / sizeof(uint32_t),
-        0);
-
     // Clear erisc sync info
-    for (const auto &eth_core : this->get_active_ethernet_cores()) {
-        CoreCoord physical_core = this->ethernet_core_from_logical_core(eth_core);
+    for (const auto& eth_core : this->get_active_ethernet_cores()) {
+        static const uint32_t max_l1_loading_size =
+            hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+
+        static uint32_t zero_vec_size = max_l1_loading_size;
+        auto zero_vec_addr = HalL1MemAddrType::UNRESERVED;
+        if (hal.get_eth_fw_is_cooperative()) {
+            zero_vec_size -=
+                hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::TILE_HEADER_BUFFER);
+            zero_vec_addr = HalL1MemAddrType::TILE_HEADER_BUFFER;
+        }
+
+        static std::vector<uint32_t> zero_vec(zero_vec_size / sizeof(uint32_t), 0);
+
+        CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
 
         llrt::write_hex_vec_to_core(
-            this->id(),
-            physical_core,
-            zero_vec_above_tile_header_buffer,
-            eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE);
-
-        /* TODO: removing this section of code fixes the n300 hangs, what's the proper fix?
-        std::vector<uint32_t> zero_vec_below_command_q_base(
-            (eth_l1_mem::address_map::COMMAND_Q_BASE - eth_l1_mem::address_map::FIRMWARE_BASE) / sizeof(uint32_t), 0);
-
-        llrt::write_hex_vec_to_core(
-            this->id(), physical_core, zero_vec_below_command_q_base, eth_l1_mem::address_map::FIRMWARE_BASE);
-        */
+            this->id(), virtual_core, zero_vec, hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, zero_vec_addr));
     }
     // TODO: clear idle eriscs as well
-}
-
-void Device::configure_kernel_variant(
-    Program& program,
-    string path,
-    std::vector<uint32_t> compile_args,
-    CoreCoord kernel_core,
-    CoreCoord kernel_physical_core,
-    CoreType dispatch_core_type,
-    CoreCoord upstream_physical_core,
-    CoreCoord downstream_physical_core,
-    CoreCoord downstream_slave_physical_core,
-    std::map<string, string> defines_in,
-    NOC my_noc_index,
-    NOC upstream_noc_index,
-    NOC downstream_noc_index,
-    bool is_active_eth_core,
-    bool send_to_brisc,
-    bool force_watcher_no_inline) {
-
-    const auto& grid_size = this->grid_size();
-
-    // TODO: just pass in the programmable index
-    uint32_t programmable_core_type_index = (dispatch_core_type == CoreType::WORKER) ?
-        hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX) :
-        is_active_eth_core ? hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) :
-        hal.get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
-
-    std::map<string, string> defines = {
-        {"DISPATCH_KERNEL", "1"},
-        {"MY_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(my_noc_index, grid_size.x, kernel_physical_core.x))},
-        {"MY_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(my_noc_index, grid_size.y, kernel_physical_core.y))},
-        {"UPSTREAM_NOC_INDEX", std::to_string(upstream_noc_index)},
-        {"UPSTREAM_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(upstream_noc_index, grid_size.x, upstream_physical_core.x))},
-        {"UPSTREAM_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(upstream_noc_index, grid_size.y, upstream_physical_core.y))},
-        {"DOWNSTREAM_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.x, downstream_physical_core.x))},
-        {"DOWNSTREAM_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.y, downstream_physical_core.y))},
-        {"DOWNSTREAM_SLAVE_NOC_X", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.x, downstream_slave_physical_core.x))},
-        {"DOWNSTREAM_SLAVE_NOC_Y", std::to_string(tt::tt_metal::hal.noc_coordinate(downstream_noc_index, grid_size.y, downstream_slave_physical_core.y))},
-        {"FD_CORE_TYPE", std::to_string(programmable_core_type_index)},
-    };
-    if (force_watcher_no_inline) {
-        defines.insert({"WATCHER_NOINLINE", std::to_string(force_watcher_no_inline)});
-    }
-    if (llrt::OptionsG.watcher_dispatch_disabled()) {
-        defines["FORCE_WATCHER_OFF"] = "1";
-    }
-    if (!DPrintServerReadsDispatchCores(this)) {
-        defines["FORCE_DPRINT_OFF"] = "1";
-    }
-    defines.insert(defines_in.begin(), defines_in.end());
-
-    if (dispatch_core_type == CoreType::WORKER) {
-        tt::tt_metal::CreateKernel(
-            program,
-            path,
-            kernel_core,
-            tt::tt_metal::DataMovementConfig {
-                .processor = send_to_brisc ? tt::tt_metal::DataMovementProcessor::RISCV_0 : tt::tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = my_noc_index,
-                .compile_args = compile_args,
-                .defines = defines
-            }
-        );
-    } else {
-        tt::tt_metal::CreateKernel(
-            program,
-            path,
-            kernel_core,
-            tt::tt_metal::EthernetConfig{
-                .eth_mode = is_active_eth_core ? Eth::SENDER : Eth::IDLE,
-                .noc = my_noc_index,
-                .compile_args = compile_args,
-                .defines = defines
-            }
-        );
-    }
-}
-
-void Device::update_workers_build_settings(std::vector<std::vector<std::tuple<tt_cxy_pair, dispatch_worker_build_settings_t>>> &device_worker_variants) {
-    uint32_t num_hw_cqs = this->num_hw_cqs();
-    for (uint32_t dwv = 0; dwv < device_worker_variants.size(); dwv++)
-    {
-        if (device_worker_variants[dwv].size() == 0) {
-            continue;
-        }
-        log_debug(tt::LogMetal, "Setting up {} Arguments", magic_enum::enum_name((tt::tt_metal::DispatchWorkerType)dwv));
-        switch(dwv) {
-            case DispatchWorkerType::PREFETCH:
-            {
-                uint32_t num_prefetchers = device_worker_variants[DispatchWorkerType::PREFETCH].size();
-                uint32_t mux_count = device_worker_variants[DispatchWorkerType::MUX].size();
-                TT_ASSERT((num_prefetchers / mux_count) <= MAX_SWITCH_FAN_IN, "Insufficient Mux cores. Expected = {}. Found = {}", num_prefetchers, mux_count);
-                uint32_t mux_index = 0;
-                std::vector<uint32_t>mux_sem(mux_count, 0);
-                for (auto&[core, settings] : device_worker_variants[DispatchWorkerType::PREFETCH]) {
-                    auto dispatch_core_type = settings.dispatch_core_type;
-                    auto mux_settings = std::get<1>(device_worker_variants[DispatchWorkerType::MUX][mux_index]);
-
-                    uint32_t downstream_cb_base = mux_settings.cb_start_address + mux_settings.cb_size_bytes * mux_sem[mux_index];
-                    uint32_t downstream_cb_pages = mux_settings.cb_pages;
-                    settings.upstream_cores.push_back(tt_cxy_pair(0, 0, 0));
-                    settings.downstream_cores.push_back(mux_settings.worker_physical_core);
-                    settings.compile_args.resize(28);
-                    auto& compile_args = settings.compile_args;
-                    compile_args[0]  = downstream_cb_base;
-                    compile_args[1]  = dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-                    compile_args[2]  = downstream_cb_pages;
-                    compile_args[3]  = settings.producer_semaphore_id;
-                    compile_args[4]  = mux_sem[mux_index];
-                    compile_args[5]  = settings.issue_queue_start_addr;
-                    compile_args[6]  = settings.issue_queue_size;
-                    compile_args[7]  = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
-                    compile_args[8]  = dispatch_constants::get(dispatch_core_type).prefetch_q_size();
-                    compile_args[9]  = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
-                    compile_args[10] = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD);
-                    compile_args[11] = dispatch_constants::get(dispatch_core_type).cmddat_q_base();
-                    compile_args[12] = dispatch_constants::get(dispatch_core_type).cmddat_q_size();
-                    compile_args[13] = dispatch_constants::get(dispatch_core_type).scratch_db_base(); // unused for prefetch_h
-                    compile_args[14] = dispatch_constants::get(dispatch_core_type).scratch_db_size(); // unused for prefetch_h
-                    compile_args[15] = 0; //prefetch_sync_sem unused for prefetch_h
-                    compile_args[16] = dispatch_constants::get(dispatch_core_type).prefetch_d_buffer_pages(); // prefetch_d only
-                    compile_args[17] = 0; // prefetch_d only
-                    compile_args[18] = 0; // prefetch_d only
-                    compile_args[19] = dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-                    compile_args[20] = dispatch_constants::PREFETCH_D_BUFFER_BLOCKS; // prefetch_d only
-                    compile_args[21] = 0; // unused: prefetch_d only
-                    compile_args[22] = 0; // unused: prefetch_d only
-                    compile_args[23] = 0; // unused: prefetch_d only
-                    compile_args[24] = 0; // unused: prefetch_d only
-                    compile_args[25] = 0; // unused: prefetch_d only
-                    compile_args[26] = false;  // is_dram_variant
-                    compile_args[27] = true;    // is_host_variant
-                    mux_sem[mux_index]++;
-                    mux_index = (mux_index + 1) % mux_count;
-
-                }
-                break;
-            }
-            case DispatchWorkerType::MUX:
-            {
-                uint32_t num_prefetchers = device_worker_variants[DispatchWorkerType::PREFETCH].size();
-                uint32_t num_muxes = device_worker_variants[DispatchWorkerType::MUX].size();
-
-                TT_ASSERT(num_muxes * MAX_SWITCH_FAN_IN >= num_prefetchers, "Insufficient Mux Cores");
-
-                TT_ASSERT(device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE].size() == 1, "Unexpected number of ethernet tunnelers.");
-                auto &tunneler_settings = std::get<1>(device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE][0]);
-                TT_ASSERT(num_prefetchers == tunneler_settings.vc_count - 1, "Mux did not reserve a VC for each Prefetch H. Needed {}.", num_prefetchers);
-                uint32_t mux_id = 0;
-                for (auto&[mux_core, mux_settings] : device_worker_variants[DispatchWorkerType::MUX]) {
-                    uint32_t mux_fanin = 1 + ((num_prefetchers - 1) % MAX_SWITCH_FAN_IN);
-                    TT_ASSERT(mux_fanin == mux_settings.semaphores.size(), "Mux does not have required number of semaphores for Prefetchers. Exptected = {}. Found = {}", num_prefetchers, mux_settings.semaphores.size());
-                    uint32_t mux_sem = mux_settings.consumer_semaphore_id;
-
-                    auto& compile_args = mux_settings.compile_args;
-                    compile_args.resize(36);
-                    compile_args[0] = 0; // 0: reserved
-                    compile_args[1] = mux_settings.cb_start_address >> 4; // 1: rx_queue_start_addr_words
-                    compile_args[2] = mux_settings.cb_size_bytes >> 4; // 2: rx_queue_size_words
-                    compile_args[3] = mux_fanin; // 3: router_lanes
-
-                    uint32_t connections_remaining = mux_fanin;
-                    for (int i = 0; (i < MAX_SWITCH_FAN_IN) && (connections_remaining); i++) {
-                        compile_args[4 + i] = packet_switch_4B_pack((uint32_t)tunneler_settings.worker_physical_core.x,
-                                                                    (uint32_t)tunneler_settings.worker_physical_core.y,
-                                                                    i + (mux_id * MAX_SWITCH_FAN_IN),
-                                                                    (uint32_t)DispatchRemoteNetworkType::NOC0); // 4, 5, 6, 7: dest x info
-                        compile_args[8 + i * 2] = (tunneler_settings.cb_start_address + (i + mux_id * MAX_SWITCH_FAN_IN) * tunneler_settings.cb_size_bytes) >> 4;
-                        compile_args[9 + i * 2] = tunneler_settings.cb_size_bytes >> 4;
-                        connections_remaining--;
-                    }
-
-                    uint32_t arg_index = 16;
-                    connections_remaining = mux_fanin;
-                    for (int i = 0; (i < MAX_SWITCH_FAN_IN) && (connections_remaining); i++) {
-                        auto&[core, settings] = device_worker_variants[DispatchWorkerType::PREFETCH][i * num_muxes + mux_id];
-                        compile_args[arg_index++] = packet_switch_4B_pack((uint32_t)settings.worker_physical_core.x,
-                                                                        (uint32_t)settings.worker_physical_core.y,
-                                                                        1,
-                                                                        (uint32_t)DispatchRemoteNetworkType::NOC0); // 16,17,18,19: src x info
-                        connections_remaining--;
-                    }
-
-                    compile_args[22] = 0; // 14: test_results_addr (disabled)
-                    compile_args[23] = 0; // 15: test_results_size (disabled)
-                    compile_args[24] = 0; // 16: timeout_cycles
-                    compile_args[25] = 0x0; // 17: output_depacketize
-                    compile_args[26] = 0x0; // 18: output_depacketize info dest 0
-                    compile_args[27] = 0x0; // 19: output_depacketize info dest 1
-                    compile_args[28] = 0x0; // 20: output_depacketize info dest 2
-                    compile_args[29] = 0x0; // 21: output_depacketize info dest 3
-                    arg_index = 30; // 22, 23, 24, 25: input x packetize info:
-
-                    connections_remaining = mux_fanin;
-                    for (int i = 0; (i < MAX_SWITCH_FAN_IN) && (connections_remaining); i++) {
-                        auto&[core, settings] = device_worker_variants[DispatchWorkerType::PREFETCH][i * num_muxes + mux_id];
-                        compile_args[arg_index++] = packet_switch_4B_pack(0x1,
-                                    dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
-                                    settings.producer_semaphore_id,  // upstream sem
-                                    mux_sem++); // local sem
-                        connections_remaining--;
-                    }
-                    uint32_t src_id_start = 0xA1 + mux_id * MAX_SWITCH_FAN_IN;
-                    uint32_t dst_id_start = 0xB1 + mux_id * MAX_SWITCH_FAN_IN;
-                    compile_args[34] = packet_switch_4B_pack(src_id_start, src_id_start + 1, src_id_start + 2, src_id_start + 3); // 26: packetized input src id
-                    compile_args[35] = packet_switch_4B_pack(dst_id_start, dst_id_start + 1, dst_id_start + 2, dst_id_start + 3); // 26: packetized input dest id
-                    mux_id++;
-                }
-                break;
-            }
-            case DispatchWorkerType::US_TUNNELER_REMOTE:
-            {
-                TT_ASSERT(device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE].size() == 1, "Unexpected number of ethernet tunnelers.");
-                auto &tunneler_settings = std::get<1>(device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE][0]);
-                bool is_tunnel_start = tunneler_settings.tunnel_stop == 0;
-                auto &compile_args = tunneler_settings.compile_args;
-                uint32_t fwd_vc_count = tunneler_settings.vc_count - 1;
-                uint32_t return_vc = fwd_vc_count;
-                compile_args.resize(48);
-                compile_args[0] = 0xDACADACA; // 0: endpoint_id_start_index
-                compile_args[1] = tunneler_settings.vc_count; // tunnel_lanes. 1 => Unidirectional. 2 => Bidirectional.
-                compile_args[2] = tunneler_settings.cb_start_address >> 4; // 2: rx_queue_start_addr_words
-                compile_args[3] = tunneler_settings.cb_size_bytes >> 4; // 3: rx_queue_size_words
-
-                for (uint32_t i = 0; i < fwd_vc_count; i++) {
-                    compile_args[4 + i] = packet_switch_4B_pack(tunneler_settings.eth_partner_physical_core.x,
-                                        tunneler_settings.eth_partner_physical_core.y,
-                                        i,
-                                        (uint32_t)DispatchRemoteNetworkType::ETH); // 4 - 13: remote_receiver fwd vcs
-
-                    compile_args[14 + i * 2] = (tunneler_settings.cb_start_address + i * tunneler_settings.cb_size_bytes) >> 4; // 14 - 32: remote_receiver_queue_start_addr_words fwd vcs
-                    compile_args[15 + i * 2] = tunneler_settings.cb_size_bytes >> 4; // 15 - 33: remote_receiver_queue_size_words fwd vcs
-                }
-                if (is_tunnel_start) {
-                    auto &demux_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DEMUX][0]);
-
-                    compile_args[4 + return_vc] = packet_switch_4B_pack(demux_settings.worker_physical_core.x,
-                                        demux_settings.worker_physical_core.y,
-                                        0,//demux input,
-                                        (uint32_t)DispatchRemoteNetworkType::NOC0); // 5: remote_receiver return vc
-                    compile_args[14 + return_vc * 2] = demux_settings.cb_start_address >> 4; // 8: remote_receiver_queue_start_addr_words return vc
-                    compile_args[15 + return_vc * 2] = demux_settings.cb_size_bytes >> 4; // 9: remote_receiver_queue_size_words return vc
-                    uint32_t arg_index = 34;
-                    for (auto&[mux_core, mux_settings] : device_worker_variants[DispatchWorkerType::MUX]) {
-                        uint32_t mux_output_q_id_start = mux_settings.semaphores.size();
-                        uint32_t connections_remaining = mux_settings.semaphores.size();
-                        for (uint32_t i = 0; i < connections_remaining; i++) {
-                            compile_args[arg_index++] = packet_switch_4B_pack(mux_settings.worker_physical_core.x,
-                                                mux_settings.worker_physical_core.y,
-                                                mux_output_q_id_start + i, // mux output queue id
-                                                (uint32_t)DispatchRemoteNetworkType::NOC0); // 10: remote_sender fwd vcs
-                        }
-                    }
-                } else {
-                    auto &mux_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::MUX_D][0]);
-                    uint32_t prefetch_d_count = device_worker_variants[DispatchWorkerType::PREFETCH_D].size();
-                    compile_args[4 + return_vc] = packet_switch_4B_pack(mux_d_settings.worker_physical_core.x,
-                                        mux_d_settings.worker_physical_core.y,
-                                        mux_d_settings.semaphores.size(),//mux_d input. This is return path from next tunnel stop towards mmio device.
-                                          //mux_d iput 0 is driven by local Dispatch D
-                                        (uint32_t)DispatchRemoteNetworkType::NOC0); // 5: remote_receiver return vc
-                    compile_args[14 + return_vc * 2] = (mux_d_settings.cb_start_address + mux_d_settings.semaphores.size() * mux_d_settings.cb_size_bytes) >> 4; // 8: remote_receiver_queue_start_addr_words return vc
-                    compile_args[15 + return_vc * 2] = mux_d_settings.cb_size_bytes >> 4; // 9: remote_receiver_queue_size_words return vc
-
-                    uint32_t arg_index = 34;
-                    uint32_t local_fanout = 1;
-                    uint32_t vcs_per_demux_d = fwd_vc_count + prefetch_d_count - ((fwd_vc_count + prefetch_d_count) / 2);
-
-                    for (auto&[demux_d_core, demux_d_settings] : device_worker_variants[DispatchWorkerType::DEMUX_D]) {
-                        uint32_t demux_d_output_q_id_start = vcs_per_demux_d;
-                        for (uint32_t i = local_fanout; i < vcs_per_demux_d; i++) {
-                            compile_args[arg_index++] = packet_switch_4B_pack(demux_d_settings.worker_physical_core.x,
-                                                demux_d_settings.worker_physical_core.y,
-                                                demux_d_output_q_id_start + i, // demux output queue id. 0=> demux input, 1=> demux_d output to local Prefetch D, 2=> demux_d output to tunneler (to next tunnel stop)
-                                                (uint32_t)DispatchRemoteNetworkType::NOC0); // 10: remote_sender fwd vcs
-                        }
-                        vcs_per_demux_d = (fwd_vc_count + prefetch_d_count) / 2;
-                        local_fanout = prefetch_d_count - 1;
-                    }
-                }
-
-                for (int i = tunneler_settings.vc_count; i < MAX_TUNNEL_LANES; i++) {
-                    compile_args[15 + i * 2] = 2; // dummy size for unused vcs.
-                }
-
-                compile_args[34 + return_vc] = packet_switch_4B_pack(tunneler_settings.eth_partner_physical_core.x,
-                                    tunneler_settings.eth_partner_physical_core.y,
-                                    tunneler_settings.vc_count * 2 - 1, // r tunneler output queue id
-                                    (uint32_t)DispatchRemoteNetworkType::ETH); // 11: remote_sender return vc
-
-                compile_args[44] = 0x39000; // 12: test_results_addr
-                compile_args[45] = 0x7000; // 13: test_results_size
-                compile_args[46] = 0; // 14: timeout_cycles
-
-                break;
-            }
-            case DispatchWorkerType::DEMUX:
-            {
-                if (device_worker_variants[DispatchWorkerType::DEMUX].size() == 1) {
-                    auto &tunneler_settings = std::get<1>(device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE][0]);
-                    auto &demux_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DEMUX][0]);
-                    auto &dispatch_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH][0]);
-
-                    auto &compile_args = demux_settings.compile_args;
-                    compile_args.resize(30);
-
-                    compile_args[0] = 0xD1; // 0: endpoint_id_start_index
-                    compile_args[1] = demux_settings.cb_start_address >> 4; // 1: rx_queue_start_addr_words
-                    compile_args[2] = demux_settings.cb_size_bytes >> 4; // 2: rx_queue_size_words
-                    compile_args[3] = device_worker_variants[DispatchWorkerType::DISPATCH].size(); // 3: demux_fan_out
-
-                    uint32_t arg_index = 4;
-                    for (auto&[core, settings] : device_worker_variants[DispatchWorkerType::DISPATCH]) {
-                        compile_args[arg_index++] = packet_switch_4B_pack((uint32_t)settings.worker_physical_core.x,
-                                                                        (uint32_t)settings.worker_physical_core.y,
-                                                                        0,
-                                                                        (uint32_t)DispatchRemoteNetworkType::NOC0); // 4,5,6,7: remote_tx_x_info
-                    }
-                    arg_index = 8;
-                    for (auto&[core, settings] : device_worker_variants[DispatchWorkerType::DISPATCH]) {
-                        compile_args[arg_index++] = settings.cb_start_address >> 4; // 8, 10, 12, 14: remote_tx_queue_start_addr_words x
-                        compile_args[arg_index++] = settings.cb_size_bytes >> 4; // 9, 11, 13, 15: remote_tx_queue_size_words x
-                    }
-                    compile_args[16] = tunneler_settings.worker_physical_core.x; // 16: remote_rx_x
-                    compile_args[17] = tunneler_settings.worker_physical_core.y; // 17: remote_rx_y
-                    compile_args[18] = tunneler_settings.vc_count * 2 - 1; // 18: remote_rx_queue_id
-                    compile_args[19] = (uint32_t)DispatchRemoteNetworkType::NOC0; // 19: tx_network_type
-                    uint32_t dest_map_array[4] = {0, 1, 2, 3};
-                    uint64_t dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
-                    compile_args[20] = (uint32_t)(dest_endpoint_output_map >> 32); // 20: dest_endpoint_output_map_hi
-                    compile_args[21] = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF); // 21: dest_endpoint_output_map_lo
-                    compile_args[22] = 0; // 22: test_results_addr (disabled)
-                    compile_args[23] = 0; // 23: test_results_size (disabled)
-                    compile_args[24] = 0; // 24: timeout_cycles
-                    compile_args[25] = 0xF; // 25: output_depacketize_mask
-                    arg_index = 26;
-                    uint32_t demux_sem = demux_settings.producer_semaphore_id;
-                    for (auto&[core, settings] : device_worker_variants[DispatchWorkerType::DISPATCH]) {
-                        // 26, 27, 28, 29: output x depacketize info:
-                        compile_args[arg_index++] = packet_switch_4B_pack(settings.cb_log_page_size,
-                                                                            settings.consumer_semaphore_id, // downstream sem
-                                                                            demux_sem++,    // local sem
-                                                                            1); // remove header
-                    }
-                } else if (device_worker_variants[DispatchWorkerType::DEMUX].size() == 3) {
-                    //Galaxy 2CQ requires three demux cores. tunneler->1x2->1x4(2x)->Dispatch(8x)
-                    auto &tunneler_settings = std::get<1>(device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE][0]);
-                    auto &demux_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DEMUX][0]);
-                    auto &demux_1_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DEMUX][1]);
-                    auto &demux_2_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DEMUX][2]);
-
-                    auto &compile_args = demux_settings.compile_args;
-                    compile_args.resize(30);
-                    compile_args[0] = 0xD1; // 0: endpoint_id_start_index
-                    compile_args[1] = demux_settings.cb_start_address >> 4; // 1: rx_queue_start_addr_words
-                    compile_args[2] = demux_settings.cb_size_bytes >> 4; // 2: rx_queue_size_words
-                    compile_args[3] = 2; // 3: demux_fan_out
-
-                    compile_args[4] = packet_switch_4B_pack((uint32_t)demux_1_settings.worker_physical_core.x,
-                                                                    (uint32_t)demux_1_settings.worker_physical_core.y,
-                                                                    0,
-                                                                    (uint32_t)DispatchRemoteNetworkType::NOC0); // 4,5,6,7: remote_tx_x_info
-                    compile_args[5] = packet_switch_4B_pack((uint32_t)demux_2_settings.worker_physical_core.x,
-                                                                    (uint32_t)demux_2_settings.worker_physical_core.y,
-                                                                    0,
-                                                                    (uint32_t)DispatchRemoteNetworkType::NOC0); // 4,5,6,7: remote_tx_x_info
-
-                    compile_args[8] = demux_1_settings.cb_start_address >> 4; // 8: remote_tx_queue_start_addr_words x
-                    compile_args[9] = demux_1_settings.cb_size_bytes >> 4; // 9: remote_tx_queue_size_words x
-                    compile_args[10] = demux_2_settings.cb_start_address >> 4; // 10: remote_tx_queue_start_addr_words x
-                    compile_args[11] = demux_2_settings.cb_size_bytes >> 4; // 11: remote_tx_queue_size_words x
-
-                    compile_args[16] = tunneler_settings.worker_physical_core.x; // 16: remote_rx_x
-                    compile_args[17] = tunneler_settings.worker_physical_core.y; // 17: remote_rx_y
-                    compile_args[18] = tunneler_settings.vc_count * 2 - 1; // 18: remote_rx_queue_id
-                    compile_args[19] = (uint32_t)DispatchRemoteNetworkType::NOC0; // 19: tx_network_type
-
-                    uint64_t dest_endpoint_output_map;
-                    if (device_worker_variants[DispatchWorkerType::DISPATCH].size() == 4) {
-                        uint32_t dest_map_array[4] = {0, 0, 1, 1};
-                        dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
-                    } else {
-                        uint32_t dest_map_array[8] = {0, 0, 0, 0, 1, 1, 1, 1};
-                        dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 8);
-                    }
-                    compile_args[20] = (uint32_t)(dest_endpoint_output_map >> 32); // 20: dest_endpoint_output_map_hi
-                    compile_args[21] = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF); // 21: dest_endpoint_output_map_lo
-
-                    uint32_t demux_1_fanout = device_worker_variants[DispatchWorkerType::DISPATCH].size() / 2;
-                    auto &demux_1_compile_args = demux_1_settings.compile_args;
-                    demux_1_compile_args.resize(30);
-
-                    demux_1_compile_args[0] = 0xD1; // 0: endpoint_id_start_index
-                    demux_1_compile_args[1] = demux_1_settings.cb_start_address >> 4; // 1: rx_queue_start_addr_words
-                    demux_1_compile_args[2] = demux_1_settings.cb_size_bytes >> 4; // 2: rx_queue_size_words
-                    demux_1_compile_args[3] = demux_1_fanout; // 3: demux_fan_out
-
-                    for (int i = 0; i < demux_1_fanout; i++) {
-                        auto &settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH][i]);
-                        demux_1_compile_args[4 + i] = packet_switch_4B_pack((uint32_t)settings.worker_physical_core.x,
-                                                                        (uint32_t)settings.worker_physical_core.y,
-                                                                        0,
-                                                                        (uint32_t)DispatchRemoteNetworkType::NOC0); // 4,5,6,7: remote_tx_x_info
-
-                        demux_1_compile_args[8 + i * 2] = settings.cb_start_address >> 4; // 8, 10, 12, 14: remote_tx_queue_start_addr_words x
-                        demux_1_compile_args[9 + i * 2] = settings.cb_size_bytes >> 4; // 9, 11, 13, 15: remote_tx_queue_size_words x
-                    }
-                    demux_1_compile_args[16] = demux_settings.worker_physical_core.x; // 16: remote_rx_x
-                    demux_1_compile_args[17] = demux_settings.worker_physical_core.y; // 17: remote_rx_y
-                    demux_1_compile_args[18] = 1; // 18: remote_rx_queue_id
-                    demux_1_compile_args[19] = (uint32_t)DispatchRemoteNetworkType::NOC0; // 19: tx_network_type
-                    uint32_t dest_map_array[4] = {0, 1, 2, 3};
-                    dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
-                    demux_1_compile_args[20] = (uint32_t)(dest_endpoint_output_map >> 32); // 20: dest_endpoint_output_map_hi
-                    demux_1_compile_args[21] = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF); // 21: dest_endpoint_output_map_lo
-                    demux_1_compile_args[22] = 0; // 22: test_results_addr (disabled)
-                    demux_1_compile_args[23] = 0; // 23: test_results_size (disabled)
-                    demux_1_compile_args[24] = 0; // 24: timeout_cycles
-                    demux_1_compile_args[25] = 0xF >> (4 - demux_1_fanout); // 25: output_depacketize_mask
-
-                    uint32_t demux_sem = demux_1_settings.producer_semaphore_id;
-                    for (int i = 0; i < demux_1_fanout; i++) {
-                        // 26, 27, 28, 29: output x depacketize info:
-                        auto &settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH][i]);
-                        demux_1_compile_args[26 + i] = packet_switch_4B_pack(settings.cb_log_page_size,
-                                                                            settings.consumer_semaphore_id, // downstream sem
-                                                                            demux_sem++,    // local sem
-                                                                            1); // remove header
-                    }
-
-                    uint32_t demux_2_fanout = device_worker_variants[DispatchWorkerType::DISPATCH].size() / 2;
-                    auto &demux_2_compile_args = demux_2_settings.compile_args;
-                    demux_2_compile_args.resize(30);
-
-                    demux_2_compile_args[0] = 0xD1 + demux_1_fanout; // 0: endpoint_id_start_index
-                    demux_2_compile_args[1] = demux_2_settings.cb_start_address >> 4; // 1: rx_queue_start_addr_words
-                    demux_2_compile_args[2] = demux_2_settings.cb_size_bytes >> 4; // 2: rx_queue_size_words
-                    demux_2_compile_args[3] = demux_2_fanout; // 3: demux_fan_out
-
-                    for (int i = 0; i < demux_2_fanout; i++) {
-                        auto &settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH][i + demux_1_fanout]);
-                        demux_2_compile_args[4 + i] = packet_switch_4B_pack((uint32_t)settings.worker_physical_core.x,
-                                                                        (uint32_t)settings.worker_physical_core.y,
-                                                                        0,
-                                                                        (uint32_t)DispatchRemoteNetworkType::NOC0); // 4,5,6,7: remote_tx_x_info
-
-                        demux_2_compile_args[8 + i * 2] = settings.cb_start_address >> 4; // 8, 10, 12, 14: remote_tx_queue_start_addr_words x
-                        demux_2_compile_args[9 + i * 2] = settings.cb_size_bytes >> 4; // 9, 11, 13, 15: remote_tx_queue_size_words x
-                    }
-                    demux_2_compile_args[16] = demux_settings.worker_physical_core.x; // 16: remote_rx_x
-                    demux_2_compile_args[17] = demux_settings.worker_physical_core.y; // 17: remote_rx_y
-                    demux_2_compile_args[18] = 2; // 18: remote_rx_queue_id
-                    demux_2_compile_args[19] = (uint32_t)DispatchRemoteNetworkType::NOC0; // 19: tx_network_type
-                    dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
-                    demux_2_compile_args[20] = (uint32_t)(dest_endpoint_output_map >> 32); // 20: dest_endpoint_output_map_hi
-                    demux_2_compile_args[21] = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF); // 21: dest_endpoint_output_map_lo
-                    demux_2_compile_args[22] = 0; // 22: test_results_addr (disabled)
-                    demux_2_compile_args[23] = 0; // 23: test_results_size (disabled)
-                    demux_2_compile_args[24] = 0; // 24: timeout_cycles
-                    demux_2_compile_args[25] = 0xF >> (4 - demux_2_fanout); // 25: output_depacketize_mask
-
-                    demux_sem = demux_2_settings.producer_semaphore_id;
-                    for (int i = 0; i < demux_2_fanout; i++) {
-                        // 26, 27, 28, 29: output x depacketize info:
-                        auto &settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH][i + demux_1_fanout]);
-                        demux_2_compile_args[26 + i] = packet_switch_4B_pack(settings.cb_log_page_size,
-                                                                            settings.consumer_semaphore_id, // downstream sem
-                                                                            demux_sem++,    // local sem
-                                                                            1); // remove header
-                    }
-
-                } else {
-                    TT_ASSERT(false, "Unsupported DEMUX core count {}", device_worker_variants[DispatchWorkerType::DEMUX].size());
-                }
-                break;
-            }
-            case DispatchWorkerType::DISPATCH:
-            {
-                uint32_t num_dispatchers = device_worker_variants[DispatchWorkerType::DISPATCH].size();
-                if (num_dispatchers == 1 || num_dispatchers == 2) {
-                    TT_ASSERT(device_worker_variants[DispatchWorkerType::DEMUX].size() == 1, "Cannot have more than one Demux.");
-                    auto demux_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DEMUX][0]);
-                    TT_ASSERT(num_dispatchers == demux_settings.semaphores.size(), "Demux does not have required number of semaphores for Dispatchers. Exptected = {}. Found = {}", num_dispatchers, demux_settings.semaphores.size());
-                    uint32_t demux_sem = demux_settings.producer_semaphore_id;
-                    uint32_t dispatch_idx = 0;
-                    for (auto&[core, settings] : device_worker_variants[DispatchWorkerType::DISPATCH]) {
-                        auto prefetch_h_settings = std::get<1>(device_worker_variants[DispatchWorkerType::PREFETCH][dispatch_idx]);
-                        auto prefetch_physical_core = prefetch_h_settings.worker_physical_core;
-                        auto dispatch_core_type = settings.dispatch_core_type;
-                        uint32_t host_completion_queue_wr_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
-                        uint32_t dev_completion_queue_wr_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
-                        uint32_t dev_completion_queue_rd_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
-                        settings.upstream_cores.push_back(demux_settings.worker_physical_core);
-                        settings.downstream_cores.push_back(tt_cxy_pair(0, 0, 0));
-                        settings.compile_args.resize(31);
-                        auto& compile_args = settings.compile_args;
-                        compile_args[0] = settings.cb_start_address;
-                        compile_args[1] = settings.cb_log_page_size;
-                        compile_args[2] = settings.cb_pages;
-                        compile_args[3] = settings.consumer_semaphore_id;
-                        compile_args[4] = demux_sem++;
-                        compile_args[5] = dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS;
-                        compile_args[6] = 0; //unused prefetch_sync_sem
-                        compile_args[7] = settings.command_queue_start_addr;
-                        compile_args[8] = settings.completion_queue_start_addr;
-                        compile_args[9] = settings.completion_queue_size;
-                        compile_args[10] = dispatch_constants::get(dispatch_core_type).dispatch_buffer_base(); // unused
-                        compile_args[11] = (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages(); // unused
-                        compile_args[12] = 0; // unused: local ds semaphore
-                        compile_args[13] = 0; // unused: remote ds semaphore
-                        compile_args[14] = 0; // preamble size
-                        compile_args[15] = true,    // split_prefetcher
-                        compile_args[16] = NOC_XY_ENCODING(prefetch_physical_core.x, prefetch_physical_core.y),
-                        compile_args[17] = prefetch_h_settings.producer_semaphore_id, // sem_id on prefetch_h that dispatch_d is meant to increment, to resume sending of cmds post exec_buf stall
-                        compile_args[18] = dispatch_constants::get(dispatch_core_type).mux_buffer_pages(num_hw_cqs), // XXXX should this be mux pages?
-                        compile_args[19] = settings.num_compute_cores;
-                        compile_args[20] = 0; // unused: dispatch_d only
-                        compile_args[21] = 1; // max_num_worker_sems is used for array sizing, set to 1 even if array isn't used
-                        compile_args[22] = 1; // max_num_go_signal_noc_data_entries is used for array sizing, set to 1 even if array isn't used
-                        compile_args[23] = 0; // unused: dispatch_d only
-                        compile_args[24] = 0; // unused: dispatch_d only
-                        compile_args[25] = 0;
-                        compile_args[26] = host_completion_queue_wr_ptr;
-                        compile_args[27] = dev_completion_queue_wr_ptr;
-                        compile_args[28] = dev_completion_queue_rd_ptr;
-                        compile_args[29] = false; // is_dram_variant
-                        compile_args[30] = true; // is_host_variant
-
-                        dispatch_idx++;
-                    }
-                } else if (num_dispatchers == 4 || num_dispatchers == 8) {
-                    TT_ASSERT(device_worker_variants[DispatchWorkerType::DEMUX].size() == 3, "Insufficient Demux cores. Expected = 3. Found = {}", device_worker_variants[DispatchWorkerType::DEMUX].size());
-                    uint32_t dispatch_idx = 0;
-                    uint32_t demux_fanout = num_dispatchers / 2;
-                    auto mux_settings = std::get<1>(device_worker_variants[DispatchWorkerType::MUX][0]);
-                    for (int i = 1; i < 3; i++) {
-                        auto demux_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DEMUX][i]);
-                        TT_ASSERT(demux_fanout == demux_settings.semaphores.size(), "Demux does not have required number of semaphores for Dispatchers. Exptected = {}. Found = {}", num_dispatchers / 2, demux_settings.semaphores.size());
-                        uint32_t demux_sem = demux_settings.producer_semaphore_id;
-                        for (int d = 0; d < demux_fanout; d++) {
-                            auto &settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH][dispatch_idx]);
-                            auto prefetch_h_settings = std::get<1>(device_worker_variants[DispatchWorkerType::PREFETCH][dispatch_idx]);
-                            auto prefetch_physical_core = prefetch_h_settings.worker_physical_core;
-                            auto dispatch_core_type = settings.dispatch_core_type;
-                            uint32_t host_completion_queue_wr_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
-                            uint32_t dev_completion_queue_wr_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
-                            uint32_t dev_completion_queue_rd_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
-                            settings.upstream_cores.push_back(demux_settings.worker_physical_core);
-                            settings.downstream_cores.push_back(tt_cxy_pair(0, 0, 0));
-                            settings.compile_args.resize(31);
-                            auto& compile_args = settings.compile_args;
-                            compile_args[0] = settings.cb_start_address;
-                            compile_args[1] = settings.cb_log_page_size;
-                            compile_args[2] = settings.cb_pages;
-                            compile_args[3] = settings.consumer_semaphore_id;
-                            compile_args[4] = demux_sem++;
-                            compile_args[5] = dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS;
-                            compile_args[6] = 0; //unused prefetch_sync_sem
-                            compile_args[7] = settings.command_queue_start_addr;
-                            compile_args[8] = settings.completion_queue_start_addr;
-                            compile_args[9] = settings.completion_queue_size;
-                            compile_args[10] = dispatch_constants::get(dispatch_core_type).dispatch_buffer_base(); // unused
-                            compile_args[11] = (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages(); // unused
-                            compile_args[12] = 0; // unused: local ds semaphore
-                            compile_args[13] = 0; // unused: remote ds semaphore
-                            compile_args[14] = 0; // preamble size
-                            compile_args[15] = true,    // split_prefetcher
-                            compile_args[16] = NOC_XY_ENCODING(prefetch_physical_core.x, prefetch_physical_core.y),
-                            compile_args[17] = prefetch_h_settings.producer_semaphore_id, // sem_id on prefetch_h that dispatch_d is meant to increment, to resume sending of cmds post exec_buf stall
-                            compile_args[18] = mux_settings.cb_pages,
-                            compile_args[19] = settings.num_compute_cores;
-                            compile_args[20] = 0; // unused: dispatch_d only
-                            compile_args[21] = 1; // max_num_worker_sems is used for array sizing, set to 1 even if array isn't used
-                            compile_args[22] = 1; // max_num_go_signal_noc_data_entries is used for array sizing, set to 1 even if array isn't used
-                            compile_args[23] = 0; // unused: dispatch_d only
-                            compile_args[24] = 0; // unused: dispatch_d only
-                            compile_args[25] = 0;
-                            compile_args[26] = host_completion_queue_wr_ptr;
-                            compile_args[27] = dev_completion_queue_wr_ptr;
-                            compile_args[28] = dev_completion_queue_rd_ptr;
-                            compile_args[29] = false; // is_dram_variant
-                            compile_args[30] = true; // is_host_variant
-                            dispatch_idx++;
-                        }
-                    }
-                }
-                break;
-            }
-            case DispatchWorkerType::US_TUNNELER_LOCAL:
-            {
-                bool is_tunnel_end = device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE].size() == 0;
-                TT_ASSERT(device_worker_variants[DispatchWorkerType::US_TUNNELER_LOCAL].size() == 1, "Unexpected number of ethernet tunnelers.");
-                auto &tunneler_settings = std::get<1>(device_worker_variants[DispatchWorkerType::US_TUNNELER_LOCAL][0]);
-                auto &mux_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::MUX_D][0]);
-                uint32_t fwd_vc_count = tunneler_settings.vc_count - 1;
-                uint32_t return_vc = fwd_vc_count;
-                uint32_t local_tunneler_vcs_connected = 0;
-                auto &compile_args = tunneler_settings.compile_args;
-
-                uint32_t num_demux_d = device_worker_variants[DispatchWorkerType::DEMUX_D].size();
-                uint32_t vcs_per_demux_d = num_demux_d == 1 ? fwd_vc_count : fwd_vc_count - (fwd_vc_count / 2);
-
-                compile_args.resize(48);
-                compile_args[0] = 0xDACADACA; // 0: endpoint_id_start_index
-                compile_args[1] = tunneler_settings.vc_count; // tunnel_lanes. 1 => Unidirectional. 2 => Bidirectional.
-                compile_args[2] = tunneler_settings.cb_start_address >> 4; // 2: rx_queue_start_addr_words
-                compile_args[3] = tunneler_settings.cb_size_bytes >> 4; // 3: rx_queue_size_words
-
-                for (auto&[core, demux_d_settings] : device_worker_variants[DispatchWorkerType::DEMUX_D]) {
-                    for (int i = 0; i < vcs_per_demux_d; i++) {
-                        compile_args[4 + i + local_tunneler_vcs_connected] = packet_switch_4B_pack(demux_d_settings.worker_physical_core.x,
-                                            demux_d_settings.worker_physical_core.y,
-                                            i, // input queue id of DEMUX_D
-                                            (uint32_t)DispatchRemoteNetworkType::NOC0); // 4: remote_receiver_0_info
-
-                        compile_args[14 + (i + local_tunneler_vcs_connected) * 2] = (demux_d_settings.cb_start_address + i * demux_d_settings.cb_size_bytes) >> 4; // 14 - 32: remote_receiver_queue_start_addr_words fwd vcs
-                        compile_args[15 + (i + local_tunneler_vcs_connected) * 2] = demux_d_settings.cb_size_bytes >> 4; // 15 - 33: remote_receiver_queue_size_words fwd vcs
-                    }
-                    local_tunneler_vcs_connected += vcs_per_demux_d;
-                    vcs_per_demux_d = fwd_vc_count - vcs_per_demux_d;
-                }
-
-                compile_args[4 + return_vc] = packet_switch_4B_pack(tunneler_settings.eth_partner_physical_core.x,
-                                    tunneler_settings.eth_partner_physical_core.y,
-                                    return_vc, // input q id of remote ethernet tunneler
-                                    (uint32_t)DispatchRemoteNetworkType::ETH); // 5: remote_receiver_1_info
-
-                compile_args[14 + return_vc * 2] = (tunneler_settings.cb_start_address + return_vc * tunneler_settings.cb_size_bytes) >> 4; // 8: remote_receiver_queue_start_addr_words return vc
-                compile_args[15 + return_vc * 2] = tunneler_settings.cb_size_bytes >> 4; // 9: remote_receiver_queue_size_words return vc
-                for (int i = tunneler_settings.vc_count; i < MAX_TUNNEL_LANES; i++) {
-                    compile_args[15 + i * 2] = 2; // dummy size for unused vcs.
-                }
-
-                for (int i = 0; i < fwd_vc_count; i++) {
-                    compile_args[34 + i] = packet_switch_4B_pack(tunneler_settings.eth_partner_physical_core.x,
-                                        tunneler_settings.eth_partner_physical_core.y,
-                                        tunneler_settings.vc_count + i, // queue id of remote eth tunneler sender
-                                        (uint32_t)DispatchRemoteNetworkType::ETH); // 10: remote_sender fwd vcs
-                }
-                compile_args[34 + return_vc] = packet_switch_4B_pack(mux_d_settings.worker_physical_core.x,
-                                    mux_d_settings.worker_physical_core.y,
-                                    device_worker_variants[DispatchWorkerType::DISPATCH_D].size() + device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE].size(), // mux_d output queue id
-                                    (uint32_t)DispatchRemoteNetworkType::NOC0); // 11: remote_sender return vc
-                compile_args[44] = 0x39000; // 12: test_results_addr
-                compile_args[45] = 0x7000; // 13: test_results_size
-                compile_args[46] = 0; // 14: timeout_cycles
-                if (!is_tunnel_end && tunneler_settings.tunnel_stop > 1) {
-                    auto &us_tunneler_remote_settings = std::get<1>(device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE][0]);
-                    auto mux_d_sender = us_tunneler_remote_settings.worker_physical_core;
-                    compile_args[47] = (return_vc << 24) | ((us_tunneler_remote_settings.vc_count * 2 - 1) << 16) | (mux_d_sender.y << 8) | (mux_d_sender.x);
-                    log_debug(tt::LogMetal, "Tunnelr Inner Device {} will send done to {}", tunneler_settings.worker_physical_core.str(), mux_d_sender.str());
-                }
-
-                break;
-            }
-            case DispatchWorkerType::DEMUX_D:
-            {
-                bool is_tunnel_end = device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE].size() == 0;
-                if (!is_tunnel_end) {
-                    TT_ASSERT(device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE].size() == 1, "Unexpected number of ethernet tunnelers.");
-                }
-
-                auto &tunneler_settings = std::get<1>(device_worker_variants[DispatchWorkerType::US_TUNNELER_LOCAL][0]);
-                uint32_t fwd_vc_count = tunneler_settings.vc_count - 1;
-                uint32_t return_vc = fwd_vc_count;
-
-                uint32_t num_demux_d = device_worker_variants[DispatchWorkerType::DEMUX_D].size();
-                uint32_t num_prefetch_d = device_worker_variants[DispatchWorkerType::PREFETCH_D].size();
-                uint32_t num_prefetch_d_per_demux_d = num_demux_d == 1 ? num_prefetch_d : 1;
-                uint32_t vcs_per_demux_d = num_demux_d == 1 ? fwd_vc_count : fwd_vc_count - (fwd_vc_count / 2);
-                uint32_t prefetch_d_connected = 0;
-                uint32_t local_tunneler_vcs_connected = 0;
-                uint32_t remote_tunneler_vcs_connected = 0;
-
-                for (auto&[core, demux_d_settings] : device_worker_variants[DispatchWorkerType::DEMUX_D]) {
-
-                    if (demux_d_settings.tunnel_stop == 1 && demux_d_settings.vc_count <= 3) {
-                        // N300/T3K 1 - 2 CQs
-                        TT_ASSERT(device_worker_variants[DispatchWorkerType::DEMUX_D].size() == 1, "Unexpected number of device demux.");
-                    } else if ( is_tunnel_end && demux_d_settings.vc_count == 2) {
-                        // TG/TGG 1 CQ, last tunnel chip
-                        TT_ASSERT(device_worker_variants[DispatchWorkerType::DEMUX_D].size() == 1, "Unexpected number of device demux.");
-                    } else {
-                        // TG/TGG 1 - 2 CQ all tunnel chips
-                        TT_ASSERT(device_worker_variants[DispatchWorkerType::DEMUX_D].size() == 2, "Unexpected number of device demux.");
-                    }
-
-                    TT_ASSERT(demux_d_settings.tunnel_stop > 0 && demux_d_settings.tunnel_stop <= 4, "Invalid Demux D tunnel stop.");
-
-                    auto &compile_args = demux_d_settings.compile_args;
-                    compile_args.resize(36);
-
-                    compile_args[0] = 0xB1; // 0: endpoint_id_start_index
-                    compile_args[1] = demux_d_settings.cb_start_address >> 4; // 1: rx_queue_start_addr_words
-                    compile_args[2] = demux_d_settings.cb_size_bytes >> 4; // 2: rx_queue_size_words
-                    compile_args[3] = vcs_per_demux_d; // 3: demux_fan_out
-
-                    uint32_t demux_output_idx = 0;
-                    uint32_t demux_output_cb_info_idx = 0;
-                    // Tie DEMUX_D outputs to DEMUX_D output queues (prefetch_d and remote tunnel inputs) and set output CB parameters
-                    for (int p = 0; p < num_prefetch_d_per_demux_d; p++) {
-                        auto prefetch_d_setting = std::get<1>(device_worker_variants[DispatchWorkerType::PREFETCH_D][p + prefetch_d_connected]);
-                        compile_args[4 + demux_output_idx] = packet_switch_4B_pack(prefetch_d_setting.worker_physical_core.x,
-                                                            prefetch_d_setting.worker_physical_core.y,
-                                                            0, // prefetch_d input queue id
-                                                            (uint32_t)DispatchRemoteNetworkType::NOC0); // 4: remote_tx_0_info
-                        compile_args[8 + demux_output_cb_info_idx] = prefetch_d_setting.cb_start_address >> 4;
-                        compile_args[8 + demux_output_cb_info_idx + 1] = prefetch_d_setting.cb_size_bytes >> 4;
-                        demux_output_idx++;
-                        demux_output_cb_info_idx += 2;
-                    }
-
-                    vcs_per_demux_d -= demux_output_idx;
-                    if (!is_tunnel_end) {
-                        auto &us_tunneler_remote_settings = std::get<1>(device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE][0]);
-                        for (int i = 0; i < vcs_per_demux_d; i++) {
-                            compile_args[4 + demux_output_idx + i] = packet_switch_4B_pack((uint32_t)us_tunneler_remote_settings.worker_physical_core.x,
-                                                                (uint32_t)us_tunneler_remote_settings.worker_physical_core.y,
-                                                                remote_tunneler_vcs_connected,
-                                                                (uint32_t)DispatchRemoteNetworkType::NOC0); // 5: remote_tx_1_info
-                            compile_args[8 + (demux_output_idx + i) * 2] = (us_tunneler_remote_settings.cb_start_address + remote_tunneler_vcs_connected * us_tunneler_remote_settings.cb_size_bytes) >> 4;    // 10: remote_tx_queue_start_addr_words 1
-                            compile_args[9 + (demux_output_idx + i) * 2] = us_tunneler_remote_settings.cb_size_bytes >> 4;   // 11: remote_tx_queue_size_words 1
-                            remote_tunneler_vcs_connected++;
-                        }
-                    } else {
-                        TT_ASSERT(vcs_per_demux_d == 0, "Unhandled Forward VCs encountered.");
-                    }
-
-                    //reset vcs per demux d to demux fanout.
-                    //need to connect local tunneler ports to demux ports.
-                    vcs_per_demux_d = compile_args[3];
-                    for (int i = 0; i < vcs_per_demux_d; i++) {
-                        compile_args[16 + i] = packet_switch_4B_pack(tunneler_settings.worker_physical_core.x,
-                                                tunneler_settings.worker_physical_core.y,
-                                                tunneler_settings.vc_count + local_tunneler_vcs_connected++,
-                                                (uint32_t)DispatchRemoteNetworkType::NOC0); // 16: remote_rx_0_info
-                    }
-
-                    uint32_t dest_map_array[4] = {1, 1, 1, 1}; // needs to be based on tunnel stop.
-                    dest_map_array[demux_d_settings.tunnel_stop-1] = 0;
-                    uint64_t dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
-                    compile_args[20] = (uint32_t)(dest_endpoint_output_map >> 32); // 20: dest_endpoint_output_map_hi
-                    compile_args[21] = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF); // 21: dest_endpoint_output_map_lo
-                    compile_args[22] = 0; // 22: test_results_addr (disabled)
-                    compile_args[23] = 0; // 23: test_results_size (disabled)
-                    compile_args[24] = 0; // 24: timeout_cycles
-                    compile_args[25] = 0; // 25: output_depacketize_mask
-                    // Update output_depacketize_mask based on num prefetch_d cores (local demux_d outputs)
-                    for (int prefetch_d_idx = 0; prefetch_d_idx < num_prefetch_d_per_demux_d; prefetch_d_idx++) compile_args[25] |= (1 << (prefetch_d_idx));
-                    // Set downstream and local sem ids, based on number of demux outputs
-                    uint32_t demux_output_sem_idx = 0;
-                    uint32_t demux_sem = demux_d_settings.producer_semaphore_id;
-                    for (int p = 0; p < num_prefetch_d_per_demux_d; p++) {
-                        auto prefetch_d_setting = std::get<1>(device_worker_variants[DispatchWorkerType::PREFETCH_D][p + prefetch_d_connected]);
-                        compile_args[26 + demux_output_sem_idx] = packet_switch_4B_pack(prefetch_d_setting.cb_log_page_size,
-                                                                            prefetch_d_setting.consumer_semaphore_id, // downstream sem
-                                                                            demux_sem++,    // local sem
-                                                                            0); // remove header
-                        demux_output_sem_idx++;
-                    }
-                    prefetch_d_connected += num_prefetch_d_per_demux_d;
-                    vcs_per_demux_d = fwd_vc_count / 2;
-                    num_prefetch_d_per_demux_d = device_worker_variants[DispatchWorkerType::PREFETCH_D].size() - num_prefetch_d_per_demux_d;
-                }
-
-                TT_ASSERT(device_worker_variants[DispatchWorkerType::PREFETCH_D].size() == prefetch_d_connected, "Found unconnected DEMUX_D to PREFETCH_D ports.");
-                TT_ASSERT(fwd_vc_count == local_tunneler_vcs_connected, "Found unconnected forward VCs between US_TUNNELER_LOCAL and DEMUX_D");
-                if (!is_tunnel_end) {
-                    auto &us_tunneler_remote_settings = std::get<1>(device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE][0]);
-                    TT_ASSERT((us_tunneler_remote_settings.vc_count - 1) == remote_tunneler_vcs_connected, "Found unconnected forward VCs between DEMUX_D and US_TUNNELER_REMOTE");
-                }
-                break;
-            }
-            case DispatchWorkerType::PREFETCH_D:
-            {
-
-                uint32_t num_prefetchers = device_worker_variants[DispatchWorkerType::PREFETCH_D].size();
-                uint32_t num_demux_d = device_worker_variants[DispatchWorkerType::DEMUX_D].size();
-
-                int prefetch_d_idx = 0;
-                int demux_d_idx = 0;
-                std::vector<uint32_t>demux_sem(num_demux_d, 0);
-                for (int i = 0; i < num_demux_d; i++) {
-                    auto demux_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DEMUX_D][i]);
-                    demux_sem[i] = demux_d_settings.producer_semaphore_id;
-                }
-
-                for (auto&[core, prefetch_d_settings] : device_worker_variants[DispatchWorkerType::PREFETCH_D]) {
-                    TT_ASSERT(demux_d_idx < num_demux_d , "Demux D index out of bounds. Max = {}. Found = {}", num_demux_d - 1, demux_d_idx);
-                    auto demux_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DEMUX_D][demux_d_idx]);
-                    if (num_demux_d == 1) {
-                        TT_ASSERT(num_prefetchers == demux_d_settings.semaphores.size(), "Demux D does not have required number of semaphores for Prefetcher D. Exptected = {}. Found = {}", num_prefetchers, demux_d_settings.semaphores.size());
-                    }
-                    auto dispatch_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH_D][prefetch_d_idx]); // 1 to 1 mapping bw prefetch_d and dispatch_d
-                    auto dispatch_s_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH_S][prefetch_d_idx]); // 1 to 1 mapping bw prefetch_d and dispatch_s
-                    auto dispatch_core_type = prefetch_d_settings.dispatch_core_type;
-                    prefetch_d_settings.upstream_cores.push_back(demux_d_settings.worker_physical_core);
-                    prefetch_d_settings.downstream_cores.push_back(dispatch_d_settings.worker_physical_core);
-                    prefetch_d_settings.downstream_cores.push_back(dispatch_s_settings.worker_physical_core);
-                    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
-                    uint32_t scratch_db_base = (prefetch_d_settings.cb_start_address + prefetch_d_settings.cb_size_bytes + pcie_alignment - 1) & (~(pcie_alignment - 1));
-                    uint32_t scratch_db_size = dispatch_constants::get(dispatch_core_type).scratch_db_size();
-                    const uint32_t l1_size = dispatch_core_type == CoreType::WORKER ? HAL_MEM_L1_SIZE : HAL_MEM_ETH_SIZE;
-                    uint32_t dispatch_s_buffer_base;
-                    uint32_t dispatch_buffer_base = dispatch_constants::get(dispatch_core_type).dispatch_buffer_base();
-                    if (dispatch_core_type == CoreType::WORKER) {
-                        dispatch_s_buffer_base = dispatch_buffer_base + (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) *  dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages();
-                    }
-                    else {
-                        dispatch_s_buffer_base = dispatch_buffer_base;
-                    }
-                    TT_ASSERT(scratch_db_base + scratch_db_size <= l1_size);
-
-                    auto& compile_args = prefetch_d_settings.compile_args;
-                    compile_args.resize(28);
-                    compile_args[0]  = dispatch_d_settings.cb_start_address;
-                    compile_args[1]  = dispatch_d_settings.cb_log_page_size;
-                    compile_args[2]  = dispatch_d_settings.cb_pages;
-                    compile_args[3]  = prefetch_d_settings.producer_semaphore_id;
-                    compile_args[4]  = dispatch_d_settings.consumer_semaphore_id;
-                    compile_args[5]  = 0;
-                    compile_args[6]  = 0;
-                    compile_args[7]  = 0;
-                    compile_args[8]  = dispatch_constants::get(dispatch_core_type).prefetch_q_size();
-                    compile_args[9]  = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
-                    compile_args[10] = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD);
-                    compile_args[11] = prefetch_d_settings.cb_start_address;
-                    compile_args[12] = prefetch_d_settings.cb_size_bytes;
-                    compile_args[13] = scratch_db_base;
-                    compile_args[14] = scratch_db_size;
-                    compile_args[15] = 0; //prefetch_sync_sem
-                    compile_args[16] = prefetch_d_settings.cb_pages; // prefetch_d only
-                    compile_args[17] = prefetch_d_settings.consumer_semaphore_id; // prefetch_d only
-                    compile_args[18] = demux_sem[demux_d_idx]; //prefetch_downstream_cb_sem, // prefetch_d only
-                    compile_args[19] = prefetch_d_settings.cb_log_page_size;
-                    compile_args[20] = dispatch_constants::PREFETCH_D_BUFFER_BLOCKS; // prefetch_d only
-                    compile_args[21] = dispatch_s_buffer_base;
-                    compile_args[22] = prefetch_d_settings.consumer_slave_semaphore_id; // Semaphore on prefetch to handshake with dispatch_s
-                    compile_args[23] = dispatch_s_settings.producer_semaphore_id; // Semaphore on dispatch_s to handshake with prefetch
-                    compile_args[24] = dispatch_constants::get(dispatch_core_type).dispatch_s_buffer_size();
-                    compile_args[25] = dispatch_s_settings.cb_log_page_size;
-                    compile_args[26] = true;  // is_dram_variant
-                    compile_args[27] = false; // is_host_variant
-                    prefetch_d_idx++; // move on to next prefetcher
-                    if (num_demux_d == 1) {
-                        demux_sem[demux_d_idx]++;
-                    } else {
-                        demux_d_idx++;
-                    }
-                }
-                break;
-            }
-            case DispatchWorkerType::DISPATCH_D:
-            {
-                uint32_t num_dispatchers = device_worker_variants[DispatchWorkerType::DISPATCH_D].size();
-                TT_ASSERT(device_worker_variants[DispatchWorkerType::MUX_D].size() == 1, "Cannot have more than one Mux D.");
-                auto mux_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::MUX_D][0]);
-                TT_ASSERT(num_dispatchers == mux_d_settings.semaphores.size(), "Mux D does not have required number of semaphores for Dispatchers. Exptected = {}. Found = {}", num_dispatchers, mux_d_settings.semaphores.size());
-                uint32_t sem = 0;
-                int dispatch_d_idx = 0;
-                uint32_t mux_sem = mux_d_settings.consumer_semaphore_id;
-                uint32_t tensix_worker_go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
-                uint32_t eth_worker_go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG);
-                constexpr uint32_t max_dispatch_message_entries = dispatch_constants::DISPATCH_MESSAGE_ENTRIES;
-                constexpr uint32_t max_num_go_signal_noc_data_entries = dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
-                for (auto&[core, dispatch_d_settings] : device_worker_variants[DispatchWorkerType::DISPATCH_D]) {
-                    auto prefetch_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::PREFETCH_D][dispatch_d_idx]); // 1 to 1 mapping bw prefetch_d and dispatch_d
-                    auto dispatch_s_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH_S][dispatch_d_idx]); // 1 to 1 mapping bw dispatch_s and dispatch_d
-                    auto dispatch_core_type = dispatch_d_settings.dispatch_core_type;
-                    uint32_t host_completion_queue_wr_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
-                    uint32_t dev_completion_queue_wr_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
-                    uint32_t dev_completion_queue_rd_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
-                    uint32_t dispatch_s_sync_sem_base_addr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
-                    dispatch_d_settings.upstream_cores.push_back(prefetch_d_settings.worker_physical_core);
-                    dispatch_d_settings.downstream_cores.push_back(mux_d_settings.worker_physical_core);
-                    dispatch_d_settings.downstream_cores.push_back(dispatch_s_settings.worker_physical_core);
-                    dispatch_d_settings.compile_args.resize(32);
-                    auto& compile_args = dispatch_d_settings.compile_args;
-                    compile_args[0] = dispatch_d_settings.cb_start_address;
-                    compile_args[1] = dispatch_d_settings.cb_log_page_size;
-                    compile_args[2] = dispatch_d_settings.cb_pages;
-                    compile_args[3] = dispatch_d_settings.consumer_semaphore_id;
-                    compile_args[4] = prefetch_d_settings.producer_semaphore_id;
-                    compile_args[5] = dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS;
-                    compile_args[6] = 0;
-                    compile_args[7] = dispatch_d_settings.command_queue_start_addr;
-                    compile_args[8] = dispatch_d_settings.completion_queue_start_addr;
-                    compile_args[9] = dispatch_d_settings.completion_queue_size;
-                    compile_args[10] = mux_d_settings.cb_start_address + mux_d_settings.cb_size_bytes * dispatch_d_idx; // base address for downstream mux CB
-                    compile_args[11] = mux_d_settings.cb_size_bytes;
-                    compile_args[12] = dispatch_d_settings.producer_semaphore_id; // unused: local ds semaphore
-                    compile_args[13] = mux_sem++; // unused: remote ds semaphore
-                    compile_args[14] = sizeof(dispatch_packet_header_t); // preamble size
-                    compile_args[15] = true,    // split_prefetcher
-                    compile_args[16] = 0;
-                    compile_args[17] = 1; //prefetch_downstream_cb_sem,
-                    compile_args[18] = dispatch_constants::get(dispatch_core_type).mux_buffer_pages(num_hw_cqs), // mux buffer size is a function of num_cqs
-                    compile_args[19] = dispatch_d_settings.num_compute_cores;
-                    compile_args[20] = dispatch_s_sync_sem_base_addr;
-                    compile_args[21] = max_dispatch_message_entries;
-                    compile_args[22] = max_num_go_signal_noc_data_entries;
-                    compile_args[23] = tensix_worker_go_signal_addr;
-                    compile_args[24] = eth_worker_go_signal_addr;
-                    compile_args[25] = (dispatch_core_type == CoreType::ETH);
-                    compile_args[26] = host_completion_queue_wr_ptr;
-                    compile_args[27] = dev_completion_queue_wr_ptr;
-                    compile_args[28] = dev_completion_queue_rd_ptr;
-                    compile_args[29] = true; // is_dram_variant
-                    compile_args[30] = false; // is_host_variant
-                    dispatch_d_idx++; // move on to next dispatcher
-                }
-                break;
-            }
-            case DispatchWorkerType::DISPATCH_S:
-            {
-                if (this->dispatch_s_enabled()) {
-                    uint32_t tensix_worker_go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
-                    uint32_t eth_worker_go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG);
-                    for (auto&[core, dispatch_s_settings] : device_worker_variants[DispatchWorkerType::DISPATCH_S]) {
-                        int dispatch_s_idx = 0;
-                        auto prefetch_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::PREFETCH_D][dispatch_s_idx]); // 1 to 1 mapping bw prefetch_d and dispatch_s
-                        auto dispatch_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::DISPATCH_D][dispatch_s_idx]); // 1 to 1 mapping bw dispatch_d and dispatch_s
-                        dispatch_s_settings.upstream_cores.push_back(prefetch_d_settings.worker_physical_core);
-                        dispatch_s_settings.downstream_cores.push_back(dispatch_d_settings.worker_physical_core);
-                        auto dispatch_core_type = dispatch_s_settings.dispatch_core_type;
-                        uint32_t dispatch_message_base_addr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
-                        uint32_t dispatch_s_sync_sem_base_addr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
-                        constexpr uint32_t max_dispatch_message_entries = dispatch_constants::DISPATCH_MESSAGE_ENTRIES;
-                        constexpr uint32_t max_num_go_signal_noc_data_entries = dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
-                        dispatch_s_settings.compile_args.resize(12);
-                        auto& compile_args = dispatch_s_settings.compile_args;
-                        compile_args[0] = dispatch_s_settings.cb_start_address;
-                        compile_args[1] = dispatch_s_settings.cb_log_page_size;
-                        compile_args[2] = dispatch_constants::get(dispatch_core_type).dispatch_s_buffer_size();
-                        compile_args[3] = dispatch_s_settings.producer_semaphore_id;
-                        compile_args[4] = prefetch_d_settings.consumer_slave_semaphore_id;
-                        compile_args[5] = dispatch_s_sync_sem_base_addr;
-                        compile_args[6] = tensix_worker_go_signal_addr;
-                        compile_args[7] = eth_worker_go_signal_addr;
-                        compile_args[8] = (dispatch_core_type == CoreType::ETH);
-                        compile_args[9] = dispatch_message_base_addr;
-                        compile_args[10] = max_dispatch_message_entries;
-                        compile_args[11] = max_num_go_signal_noc_data_entries;
-                        dispatch_s_idx++;
-                    }
-                }
-                break;
-            }
-            case DispatchWorkerType::MUX_D:
-            {
-                uint32_t num_dispatchers = device_worker_variants[DispatchWorkerType::DISPATCH_D].size();
-                TT_ASSERT(device_worker_variants[DispatchWorkerType::MUX_D].size() == 1, "Cannot have more than one Mux D.");
-                auto &mux_d_settings = std::get<1>(device_worker_variants[DispatchWorkerType::MUX_D][0]);
-                TT_ASSERT(num_dispatchers == mux_d_settings.semaphores.size(), "Mux D does not have required number of semaphores for Dispatchers. Exptected = {}. Found = {}", num_dispatchers, mux_d_settings.semaphores.size());
-                uint32_t sem = 0;
-                bool is_tunnel_end = device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE].size() == 0;
-
-                auto& compile_args = mux_d_settings.compile_args;
-                compile_args.resize(25);
-                compile_args[0] = 0; // 0: reserved
-                compile_args[1] = mux_d_settings.cb_start_address >> 4; // 1: rx_queue_start_addr_words
-                compile_args[2] = mux_d_settings.cb_size_bytes >> 4; // 2: rx_queue_size_words
-                compile_args[3] =  num_dispatchers + device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE].size(); // 3: mux_fan_in
-
-                uint32_t mux_d_input_idx = 0;
-                for (const auto& dispatch_d_settings : device_worker_variants[DispatchWorkerType::DISPATCH_D]) {
-                    auto& dispatch_d_setting = std::get<1>(dispatch_d_settings);
-                    compile_args[4 + mux_d_input_idx] = packet_switch_4B_pack(dispatch_d_setting.worker_physical_core.x,
-                                                        dispatch_d_setting.worker_physical_core.y,
-                                                        1,
-                                                        DispatchRemoteNetworkType::NOC0); // 4,5,6,7: src x info
-                    mux_d_input_idx++;
-                }
-                if (!is_tunnel_end) {
-                    TT_ASSERT(device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE].size() == 1, "Unexpected number of ethernet tunnelers.");
-                }
-                for (const auto& us_tunneler_remote_settings : device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE]) {
-                    auto &us_tunneler_remote_setting = std::get<1>(us_tunneler_remote_settings);
-                    compile_args[4 + mux_d_input_idx] = packet_switch_4B_pack(us_tunneler_remote_setting.worker_physical_core.x,
-                                        us_tunneler_remote_setting.worker_physical_core.y,
-                                        us_tunneler_remote_setting.vc_count * 2 - 1,
-                                        DispatchRemoteNetworkType::NOC0); // 4,5,6,7: src x info
-                    mux_d_input_idx++;
-                }
-
-                TT_ASSERT(device_worker_variants[DispatchWorkerType::US_TUNNELER_LOCAL].size() == 1, "Unexpected number of ethernet tunnelers.");
-                auto &tunneler_settings = std::get<1>(device_worker_variants[DispatchWorkerType::US_TUNNELER_LOCAL][0]);
-
-                compile_args[8] = (tunneler_settings.cb_start_address + ((tunneler_settings.vc_count - 1) * tunneler_settings.cb_size_bytes)) >> 4; // 8: remote_tx_queue_start_addr_words
-                compile_args[9] = tunneler_settings.cb_size_bytes >> 4; // 9: remote_tx_queue_size_words
-                compile_args[10] = tunneler_settings.worker_physical_core.x; // 10: remote_tx_x
-                compile_args[11] = tunneler_settings.worker_physical_core.y; // 11: remote_tx_y
-                compile_args[12] = tunneler_settings.vc_count - 1; // 12: remote_tx_queue_id
-                compile_args[13] = (uint32_t)DispatchRemoteNetworkType::NOC0; // 13: tx_network_type
-                compile_args[14] = 0; // 14: test_results_addr (disabled)
-                compile_args[15] = 0; // 15: test_results_size (disabled)
-                compile_args[16] = 0; // 16: timeout_cycles
-                compile_args[17] = 0x0; // 17: output_depacketize
-                compile_args[18] = 0x0; // 18: output_depacketize info
-                int mux_d_sem_idx = 0;
-                uint32_t mux_sem = mux_d_settings.consumer_semaphore_id;
-                for (const auto& dispatch_d_settings : device_worker_variants[DispatchWorkerType::DISPATCH_D]) {
-                    auto& dispatch_d_setting = std::get<1>(dispatch_d_settings);
-                    compile_args[19 + mux_d_sem_idx] = packet_switch_4B_pack(0x1,
-                            dispatch_d_setting.cb_log_page_size,
-                            dispatch_d_setting.producer_semaphore_id,  // upstream sem
-                            mux_sem++); // local sem
-                    mux_d_sem_idx++;
-                }
-                uint32_t src_id = 0xC1 + (mux_d_settings.tunnel_stop - 1) * num_dispatchers;
-                uint32_t dest_id = 0xD1 + (mux_d_settings.tunnel_stop - 1) * num_dispatchers;
-
-                compile_args[23] = packet_switch_4B_pack(src_id, src_id + 1, src_id + 2, src_id + 3); // 23: packetized input src id
-                compile_args[24] = packet_switch_4B_pack(dest_id, dest_id + 1, dest_id + 2, dest_id + 3); // 24: packetized input dest id
-                break;
-            }
-        }
-    }
-}
-
-void Device::setup_tunnel_for_remote_devices() {
-    chip_id_t mmio_device_id = this->id_;
-    constexpr NOC dispatch_d_noc_index = NOC::NOC_0;
-    constexpr NOC dispatch_s_noc_index = NOC::NOC_1; // Use NOC_1, since when dispatch_s and dispatch_d are on the same tensix, we want to distribute resources
-    static_assert(dispatch_d_noc_index != dispatch_s_noc_index, "Dispatch_s NOC must be different from Dispatch_d NOC");
-    uint32_t num_tunnels = tt::Cluster::instance().get_mmio_device_tunnel_count(mmio_device_id);
-    if (num_tunnels == 0) {
-        //no remote device conected to this mmio device.
-        return;
-    }
-
-
-    tunnels_from_mmio_ = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id);
-    uint32_t index = 0;
-    for (const auto& tunnel : tunnels_from_mmio_) {
-        for (auto remote_dev : tunnel) {
-            log_info(tt::LogMetal, "MMIO Device {} : Tunnel {} : Device {}", mmio_device_id, index, remote_dev);
-        }
-        index++;
-    }
-
-    std::map<uint32_t, std::vector<std::vector<std::tuple<tt_cxy_pair, dispatch_worker_build_settings_t>>>> tunnel_dispatch_core_allocations = {};
-
-    uint32_t tunnel_id = 0;
-    for (auto &tunnel: tunnels_from_mmio_) {
-        std::vector<std::vector<std::tuple<tt_cxy_pair, dispatch_worker_build_settings_t>>> tunnel_core_allocations = {};
-        tunnel_core_allocations.resize(tt::tt_metal::DispatchWorkerType::COUNT);
-
-        for (uint32_t tunnel_stop = 1; tunnel_stop < tunnel.size(); tunnel_stop++) {
-            //tunnel.size() is mmio device + num of remote devices on the tunnel.
-            chip_id_t device_id = tunnel[tunnel_stop];
-            // a remote device.
-            // tunnel_stop hops away.
-            uint8_t num_hw_cqs = this->num_hw_cqs_;
-            uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
-            CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(mmio_device_id);
-            uint32_t cq_start = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-
-            dispatch_worker_build_settings_t settings = {};
-            //allocations below are on mmio chip.
-            settings.tunnel_stop = 0;
-            uint32_t cq_size = this->sysmem_manager().get_cq_size();
-            for (uint32_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-                settings.command_queue_start_addr = get_absolute_cq_offset(channel, cq_id, cq_size);
-                settings.issue_queue_start_addr = settings.command_queue_start_addr + cq_start;
-                settings.issue_queue_size = this->sysmem_manager_->get_issue_queue_size(cq_id);
-                settings.completion_queue_start_addr = settings.issue_queue_start_addr + settings.issue_queue_size;
-                settings.completion_queue_size = this->sysmem_manager_->get_completion_queue_size(cq_id);
-                settings.dispatch_core_type = dispatch_core_type;
-
-                tt_cxy_pair prefetch_location = dispatch_core_manager::instance().prefetcher_core(device_id, channel, cq_id);
-                settings.worker_physical_core = tt_cxy_pair(prefetch_location.chip, get_physical_core_coordinate(prefetch_location, dispatch_core_type));
-                settings.kernel_file = "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp";
-                //prefetch needs three semaphores.
-                settings.semaphores.push_back(0);
-                if (tunnel.size() > 2) {
-                    //Galaxy
-                    settings.semaphores.push_back(dispatch_constants::get(dispatch_core_type).mux_buffer_pages(1));
-                } else {
-                    settings.semaphores.push_back(dispatch_constants::get(dispatch_core_type).mux_buffer_pages(num_hw_cqs));
-                }
-                settings.semaphores.push_back(0);
-                settings.producer_semaphore_id = 1;
-                tunnel_core_allocations[PREFETCH].push_back(std::make_tuple(prefetch_location, settings));
-                settings.semaphores.clear();
-            }
-
-            for (uint32_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-                tt_cxy_pair dispatch_location = dispatch_core_manager::instance().dispatcher_core(device_id, channel, cq_id);
-                settings.worker_physical_core = tt_cxy_pair(dispatch_location.chip, get_physical_core_coordinate(dispatch_location, dispatch_core_type));
-                settings.kernel_file = "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp";
-                //dispatch needs one semaphore.
-                settings.semaphores.push_back(0);
-                settings.producer_semaphore_id = 0;
-                settings.consumer_semaphore_id = 0;
-                settings.command_queue_start_addr = get_absolute_cq_offset(channel, cq_id, cq_size);
-                settings.issue_queue_start_addr = settings.command_queue_start_addr + cq_start;
-                settings.issue_queue_size = this->sysmem_manager_->get_issue_queue_size(cq_id);
-                settings.completion_queue_start_addr = settings.issue_queue_start_addr + settings.issue_queue_size;
-                settings.cb_start_address = dispatch_constants::get(dispatch_core_type).dispatch_buffer_base();
-                settings.cb_log_page_size = dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE;
-                settings.cb_pages = dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages();
-                settings.cb_size_bytes = (1 << settings.cb_log_page_size) * settings.cb_pages;
-                CoreCoord compute_grid_size = this->compute_with_storage_grid_size();
-                settings.num_compute_cores = uint32_t(compute_grid_size.x * compute_grid_size.y);
-                tunnel_core_allocations[DISPATCH].push_back(std::make_tuple(dispatch_location, settings));
-                settings.semaphores.clear();
-                log_debug(LogMetal, "Device {} Channel {} : Dispatch: Issue Q Start Addr: {} - Completion Q Start Addr: {}",  device_id, channel, settings.issue_queue_start_addr, settings.completion_queue_start_addr);
-            }
-        }
-
-        for (uint32_t tunnel_stop = 1; tunnel_stop < tunnel.size(); tunnel_stop++) {
-            //tunnel.size() is mmio device + num of remote devices on the tunnel.
-            chip_id_t device_id = tunnel[tunnel_stop];
-            // a remote device.
-            // tunnel_stop hops away.
-            uint8_t num_hw_cqs = this->num_hw_cqs_;
-            uint32_t vc_count = 1 + (tunnel.size() - 1) * num_hw_cqs; // 1 return vc. outgoing vc count depends on tunnel size and cq size.
-            uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
-            CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(mmio_device_id);
-
-            dispatch_worker_build_settings_t settings = {};
-            //allocations below are on mmio chip.
-            settings.dispatch_core_type = dispatch_core_type;
-            settings.tunnel_stop = 0;
-            uint32_t cq_size = this->sysmem_manager().get_cq_size();
-            uint32_t cq_id = 0;  // 1 mux, demux, local tunneler and remote tunneler per chip. Set cq_id to 0.
-            if (tunnel_stop == 1) {
-                //need to allocate mux/demux on mmio chip only once.
-                //all tunnel stops, share the same mux/demux on mmio chip.
-                //mux/demux need a semaphore per remote device in the tunnel.
-                //Tunnel includes the mmio device as well, so tunnel.size() - 1 is the number of remote devices.
-                uint32_t num_prefetchers = tunnel_core_allocations[PREFETCH].size();
-                settings.producer_semaphore_id = 0;
-                settings.consumer_semaphore_id = 0;
-                if (num_prefetchers == 1 || num_prefetchers == 2) {
-                    //N300, T3K 1, 2 CQ case
-                    settings.semaphores = std::vector<uint32_t>(num_prefetchers);
-                    tt_cxy_pair mux_location = dispatch_core_manager::instance().mux_core(device_id, channel, 0);
-                    settings.worker_physical_core = tt_cxy_pair(mux_location.chip, get_physical_core_coordinate(mux_location, dispatch_core_type));
-                    settings.kernel_file = "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp";
-                    settings.cb_size_bytes = dispatch_constants::get(dispatch_core_type).mux_buffer_size(num_hw_cqs);
-                    settings.cb_start_address = dispatch_constants::get(dispatch_core_type).dispatch_buffer_base();
-                    settings.cb_pages = dispatch_constants::get(dispatch_core_type).mux_buffer_pages(num_hw_cqs);
-                    tunnel_core_allocations[MUX].push_back(std::make_tuple(mux_location, settings));
-
-                    tt_cxy_pair demux_location = dispatch_core_manager::instance().demux_core(device_id, channel, 0);
-                    settings.worker_physical_core = tt_cxy_pair(demux_location.chip, get_physical_core_coordinate(demux_location, dispatch_core_type));
-                    settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_demux.cpp";
-                    settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
-                    settings.cb_size_bytes = 0x10000;
-                    tunnel_core_allocations[DEMUX].push_back(std::make_tuple(demux_location, settings));
-                } else if (num_prefetchers == 4 || num_prefetchers == 8) {
-                    //TG, TGG 1, 2 CQ case
-                    settings.semaphores = std::vector<uint32_t>(MAX_SWITCH_FAN_IN);
-                    tt_cxy_pair mux_location = dispatch_core_manager::instance().mux_core(device_id, channel, 0);
-                    settings.worker_physical_core = tt_cxy_pair(mux_location.chip, get_physical_core_coordinate(mux_location, dispatch_core_type));
-                    settings.kernel_file = "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp";
-                    settings.cb_start_address = dispatch_constants::get(dispatch_core_type).dispatch_buffer_base();
-                    settings.cb_size_bytes = dispatch_constants::get(dispatch_core_type).mux_buffer_size(1);
-                    settings.cb_pages = dispatch_constants::get(dispatch_core_type).mux_buffer_pages(1);
-                    tunnel_core_allocations[MUX].push_back(std::make_tuple(mux_location, settings));
-                    if (num_prefetchers == 8) {
-                        tt_cxy_pair mux_location = dispatch_core_manager::instance().mux_core(device_id, channel, 1);
-                        settings.worker_physical_core = tt_cxy_pair(mux_location.chip, get_physical_core_coordinate(mux_location, dispatch_core_type));
-                        tunnel_core_allocations[MUX].push_back(std::make_tuple(mux_location, settings));
-                    }
-
-                    tt_cxy_pair demux_location = dispatch_core_manager::instance().demux_core(device_id, channel, 0);
-                    settings.worker_physical_core = tt_cxy_pair(demux_location.chip, get_physical_core_coordinate(demux_location, dispatch_core_type));
-                    settings.semaphores.clear();
-                    settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_demux.cpp";
-                    settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
-                    settings.cb_size_bytes = 0x10000;
-                    tunnel_core_allocations[DEMUX].push_back(std::make_tuple(demux_location, settings));
-
-                    settings.semaphores = std::vector<uint32_t>(num_prefetchers / 2);
-                    demux_location = dispatch_core_manager::instance().demux_core(device_id, channel, 1);
-                    settings.worker_physical_core = tt_cxy_pair(demux_location.chip, get_physical_core_coordinate(demux_location, dispatch_core_type));
-                    settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_demux.cpp";
-                    settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
-                    settings.cb_size_bytes = 0x10000;
-                    tunnel_core_allocations[DEMUX].push_back(std::make_tuple(demux_location, settings));
-
-                    demux_location = dispatch_core_manager::instance().demux_core(device_id, channel, 2);
-                    settings.worker_physical_core = tt_cxy_pair(demux_location.chip, get_physical_core_coordinate(demux_location, dispatch_core_type));
-                    settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_demux.cpp";
-                    settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
-                    settings.cb_size_bytes = 0x10000;
-                    tunnel_core_allocations[DEMUX].push_back(std::make_tuple(demux_location, settings));
-
-                }
-            }
-
-            settings.tunnel_stop = tunnel_stop - 1;
-            settings.semaphores.clear();
-            chip_id_t us_device = tunnel[tunnel_stop - 1];
-            tt_cxy_pair us_location = dispatch_core_manager::instance().tunneler_core(us_device, device_id, channel, cq_id);
-            tt_cxy_pair local_location = dispatch_core_manager::instance().us_tunneler_core_local(device_id, channel, cq_id);
-
-            settings.worker_physical_core = tt_cxy_pair(us_location.chip, get_physical_core_coordinate(us_location, CoreType::ETH));
-            settings.eth_partner_physical_core = tt_cxy_pair(local_location.chip, get_physical_core_coordinate(local_location, CoreType::ETH));
-            settings.kernel_file = "tt_metal/impl/dispatch/kernels/vc_eth_tunneler.cpp";
-            settings.cb_start_address = 0x19000;
-            settings.cb_size_bytes = 0x4000;
-            settings.vc_count = vc_count - settings.tunnel_stop * num_hw_cqs; // US_TUNNELER_REMOTE and US_TUNNELER_LOCAL need to have the saem vc count
-            tunnel_core_allocations[US_TUNNELER_REMOTE].push_back(std::make_tuple(us_location, settings));
-            //all allocation below this are on a remote chip.
-            settings.tunnel_stop = tunnel_stop;
-
-            //swap the two etnernet link pair cores for downstream chip on the link pair.
-            tt_cxy_pair temp = settings.worker_physical_core;
-            settings.worker_physical_core = settings.eth_partner_physical_core;
-            settings.eth_partner_physical_core = temp;
-            settings.kernel_file = "tt_metal/impl/dispatch/kernels/vc_eth_tunneler.cpp";
-            tunnel_core_allocations[US_TUNNELER_LOCAL].push_back(std::make_tuple(local_location, settings));
-            TT_ASSERT(us_location.chip == us_device,
-                "Upstream Tunneler is on device {} but it is expected to be on device {}", us_location.chip, us_device);
-            TT_ASSERT(local_location.chip == device_id,
-                "Upstream Local Tunneler is on device {} but it is expected to be on device {}", local_location.chip, device_id);
-
-            dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
-            settings.dispatch_core_type = dispatch_core_type;
-
-            tt_cxy_pair mux_d_location = dispatch_core_manager::instance().mux_d_core(device_id, channel, cq_id);
-            settings.worker_physical_core = tt_cxy_pair(mux_d_location.chip, get_physical_core_coordinate(mux_d_location, dispatch_core_type));
-            settings.kernel_file = "tt_metal/impl/dispatch/kernels/packet_mux.cpp";
-            settings.semaphores = std::vector<uint32_t>(num_hw_cqs);
-            settings.consumer_semaphore_id = 0;
-            settings.cb_start_address = dispatch_constants::get(dispatch_core_type).dispatch_buffer_base();
-            settings.cb_log_page_size = dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE;
-            settings.cb_pages = dispatch_constants::get(dispatch_core_type).mux_buffer_pages(num_hw_cqs);
-            settings.cb_size_bytes = (1 << settings.cb_log_page_size) * settings.cb_pages;
-            tunnel_core_allocations[MUX_D].push_back(std::make_tuple(mux_d_location, settings));
-
-            uint32_t demux_vcs = settings.vc_count - 1;
-            tt_cxy_pair demux_d_location = dispatch_core_manager::instance().demux_d_core(device_id, channel, 0);
-            settings.worker_physical_core = tt_cxy_pair(demux_d_location.chip, get_physical_core_coordinate(demux_d_location, dispatch_core_type));
-            settings.kernel_file = "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp";
-            settings.producer_semaphore_id = 0;
-            settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
-            settings.cb_size_bytes = 0x8000;
-            if (tunnel.size() > 2) {
-                settings.semaphores.resize(1);
-            }
-            tunnel_core_allocations[DEMUX_D].push_back(std::make_tuple(demux_d_location, settings));
-            if (tunnel.size() > 2 && demux_vcs > 1) {
-                //TG/TGG 1-2 CQs
-                demux_d_location = dispatch_core_manager::instance().demux_d_core(device_id, channel, 1);
-                settings.worker_physical_core = tt_cxy_pair(demux_d_location.chip, get_physical_core_coordinate(demux_d_location, dispatch_core_type));
-                settings.kernel_file = "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp";
-                settings.producer_semaphore_id = 0;
-                settings.cb_start_address = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
-                settings.cb_size_bytes = 0x8000;
-                tunnel_core_allocations[DEMUX_D].push_back(std::make_tuple(demux_d_location, settings));
-            }
-            settings.semaphores.clear();
-            uint32_t dispatch_buffer_pages = dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages();
-            for (uint32_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-                settings.semaphores.push_back(0);// prefetch_d_sync_sem
-                settings.semaphores.push_back(0);// prefetch_d_upstream_cb_sem
-                settings.semaphores.push_back(dispatch_buffer_pages);// prefetch_d_downstream_cb_sem
-                settings.semaphores.push_back(dispatch_constants::get(dispatch_core_type).dispatch_s_buffer_pages()); // prefetch_d_dispatch_sync_sem
-                settings.consumer_semaphore_id = 1;
-                settings.producer_semaphore_id = 2;
-                settings.consumer_slave_semaphore_id = 3;
-                tt_cxy_pair prefetch_d_location = dispatch_core_manager::instance().prefetcher_d_core(device_id, channel, cq_id);
-                settings.worker_physical_core = tt_cxy_pair(prefetch_d_location.chip, get_physical_core_coordinate(prefetch_d_location, dispatch_core_type));
-                settings.kernel_file = "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp";
-                settings.cb_start_address = dispatch_constants::get(dispatch_core_type).dispatch_buffer_base();
-                settings.cb_size_bytes = dispatch_constants::get(dispatch_core_type).prefetch_d_buffer_size();
-                settings.cb_pages = dispatch_constants::get(dispatch_core_type).prefetch_d_buffer_pages();
-                settings.cb_log_page_size = dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-                tunnel_core_allocations[PREFETCH_D].push_back(std::make_tuple(prefetch_d_location, settings));
-                settings.semaphores.clear();
-            }
-            for (uint32_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-                settings.semaphores.push_back(0);// dispatch_sem
-                settings.semaphores.push_back(dispatch_constants::get(dispatch_core_type).mux_buffer_pages(num_hw_cqs)); // dispatch_downstream_cb_sem
-                settings.consumer_semaphore_id = 0;
-                settings.producer_semaphore_id = 1;
-                settings.cb_start_address = dispatch_constants::get(dispatch_core_type).dispatch_buffer_base();
-                settings.cb_log_page_size = dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE;
-                settings.cb_pages = dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages();
-                settings.cb_size_bytes = (1 << settings.cb_log_page_size) * settings.cb_pages;
-                CoreCoord compute_grid_size = this->compute_with_storage_grid_size();
-                settings.num_compute_cores = uint32_t(compute_grid_size.x * compute_grid_size.y);
-                tt_cxy_pair dispatch_d_location = dispatch_core_manager::instance().dispatcher_d_core(device_id, channel, cq_id);
-                settings.worker_physical_core = tt_cxy_pair(dispatch_d_location.chip, get_physical_core_coordinate(dispatch_d_location, dispatch_core_type));
-                settings.kernel_file = "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp";
-                tunnel_core_allocations[DISPATCH_D].push_back(std::make_tuple(dispatch_d_location, settings));
-                settings.semaphores.clear();
-            }
-            if (this->dispatch_s_enabled()) {
-                // Populate settings for dispatch_s
-                uint32_t dispatch_buffer_base = dispatch_constants::get(dispatch_core_type).dispatch_buffer_base();
-                for (uint32_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-                    // Initialize dispatch_s settings as invalid values. To be populated if dispatch_s is enabled.
-                    settings.cb_log_page_size = dispatch_constants::DISPATCH_S_BUFFER_LOG_PAGE_SIZE;
-                    settings.semaphores.push_back(0); // used by dispatch_s to sync with prefetch_d
-                    uint32_t dispatch_buffer_base = dispatch_constants::get(dispatch_core_type).dispatch_buffer_base();
-                    if (dispatch_core_type == CoreType::WORKER) {
-                        // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start and sem idx.
-                        settings.cb_start_address = dispatch_buffer_base + (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) *  dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages();
-                        settings.producer_semaphore_id = 2; // sync with producer (prefetcher)
-                    } else {
-                        // dispatch_d and dispatch_s are on different cores. No shared resources: dispatch_s CB and semaphores start at base.
-                        settings.cb_start_address = dispatch_buffer_base;
-                        settings.producer_semaphore_id = 0; // sync with producer (prefetcher)
-                    }
-                    tt_cxy_pair dispatch_s_location = dispatch_core_manager::instance().dispatcher_s_core(device_id, channel, cq_id);
-                    settings.worker_physical_core = tt_cxy_pair(dispatch_s_location.chip, get_physical_core_coordinate(dispatch_s_location, dispatch_core_type));
-                    settings.kernel_file = "tt_metal/impl/dispatch/kernels/cq_dispatch_slave.cpp";
-                    tunnel_core_allocations[DISPATCH_S].push_back(std::make_tuple(dispatch_s_location, settings));
-                    settings.semaphores.clear();
-                }
-            } else {
-                // These settings are invalid and won't be used, since dispatch_s is not enabled
-                tunnel_core_allocations[DISPATCH_S] = tunnel_core_allocations[DISPATCH_D];
-            }
-        }
-        tunnel_dispatch_core_allocations.insert(std::make_pair(tunnel_id, tunnel_core_allocations));
-        tunnel_id++;
-    }
-
-    //separate out all the dispatch workers on the tunnel into individual devices.
-    for (const auto& pair : tunnel_dispatch_core_allocations) {
-        std::map<chip_id_t, std::vector<std::vector<std::tuple<tt_cxy_pair, dispatch_worker_build_settings_t>>>> device_dispatch_workers = {};
-        for (uint32_t i = 0; i < pair.second.size(); i++) {
-            if (pair.second[i].size()) {
-                //some workers of allocated.
-                auto tunnel_workers = pair.second[i];
-                for (auto &[worker, settings] : tunnel_workers) {
-                    if (device_dispatch_workers.find(worker.chip) == device_dispatch_workers.end()) {
-                        std::vector<std::vector<std::tuple<tt_cxy_pair, dispatch_worker_build_settings_t>>> temp = {};
-                        temp.resize(tt::tt_metal::DispatchWorkerType::COUNT);
-                        temp[i].push_back(std::make_tuple(worker, settings));
-                        device_dispatch_workers.insert(std::make_pair(worker.chip, temp));
-                    } else {
-                        device_dispatch_workers[worker.chip][i].push_back(std::make_tuple(worker, settings));
-                    }
-                }
-            }
-        }
-        tunnel_device_dispatch_workers_.insert(std::make_pair(pair.first, device_dispatch_workers));
-    }
-
-    log_debug(LogMetal, "{} tunnels found.",  tunnel_device_dispatch_workers_.size());
-
-    for (const auto& tunnel : tunnel_device_dispatch_workers_) {
-        for (const auto& pair : tunnel.second) {
-            for (uint32_t i = 0; i < pair.second.size(); i++) {
-                for (auto [core, settings] : pair.second[i]) {
-                    log_debug(LogMetal, "Tunnel {} Device {} has {} on core {}.", tunnel.first, pair.first, magic_enum::enum_name((tt::tt_metal::DispatchWorkerType)i), core.str());
-                }
-            }
-        }
-    }
-
-    for (uint32_t t = 0; t < tunnels_from_mmio_.size(); t++) {
-        auto tunnel = tunnels_from_mmio_[t];
-        TT_ASSERT(tunnel_device_dispatch_workers_.find(t) != tunnel_device_dispatch_workers_.end(),
-                "Tunnel {} not found on MMIO Device {}", t, mmio_device_id);
-        auto &tunnel_devices = tunnel_device_dispatch_workers_[t];
-        for (uint32_t tunnel_stop = 0; tunnel_stop < tunnel.size(); tunnel_stop++) {
-            //last iteration is used to loop in tunnel workers that run on mmio device.
-            auto tunnel_device = tunnel[tunnel_stop];
-            TT_ASSERT(tunnel_devices.find(tunnel_device) != tunnel_devices.end(),
-                "Device {} not found in Tunnel {} on MMIO Device {}", tunnel_device, t, mmio_device_id);
-            auto &device_worker_variants = tunnel_devices[tunnel_device];
-            update_workers_build_settings(device_worker_variants);
-
-            for (uint32_t dwv = 0; dwv < device_worker_variants.size(); dwv++)
-            {
-                if (device_worker_variants[dwv].size()) {
-                    for (auto &[core, settings] : device_worker_variants[dwv]) {
-                        log_debug(LogMetal, "Tunnel {} Stop {} is Device {}. Core {} - Physical {} will run {}.", t, tunnel_stop, tunnel_device, core.str(), settings.worker_physical_core.str(), magic_enum::enum_name((tt::tt_metal::DispatchWorkerType)dwv));
-                        for (uint32_t arg = 0; arg < settings.compile_args.size(); arg++) {
-                            log_debug(LogMetal, "CompileArgs[{}] = {}", arg, settings.compile_args[arg]);
-                        }
-
-                    }
-                }
-            }
-        }
-    }
-}
-
-bool Device::dispatch_s_enabled() const {
-    // Dispatch_s is always enabled for Tensix Dispatch
-    // Conditionally enabled for Ethernet Dispatch - If a single CQ is being used
-    // This condition may be modified for BH
-    return (this->num_hw_cqs() == 1 or dispatch_core_manager::instance().get_dispatch_core_type(this->id()) == CoreType::WORKER);
-}
-
-bool Device::distributed_dispatcher() const {
-    // Ethernet dispatch with a single CQ. dispatch_s and dispatch_d are on different cores.
-    return (this->num_hw_cqs() == 1 and dispatch_core_manager::instance().get_dispatch_core_type(this->id())  == CoreType::ETH);
+    tt::Cluster::instance().l1_barrier(this->id());
 }
 
 void Device::compile_command_queue_programs() {
     ZoneScoped;
-    auto command_queue_program_ptr = std::make_unique<Program>();
-    auto mmio_command_queue_program_ptr = std::make_unique<Program>();
-
-    std::string prefetch_kernel_path = "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp";
-    std::string dispatch_kernel_path = "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp";
-
-    // TODO: this->hw_command_queues_[cq_id]->noc_index is also hardcoded to NOC_0 elsewhere, should have one definition and remove assertion
-    constexpr NOC my_noc_index = NOC::NOC_0;
-    constexpr NOC dispatch_upstream_noc_index = NOC::NOC_1;
-    constexpr NOC dispatch_s_noc_index = NOC::NOC_1;
-    static_assert(my_noc_index != dispatch_upstream_noc_index, "Dispatch NOC used to communicate with upstream must be different from NOC used for other transactions");
-    static_assert(my_noc_index != dispatch_s_noc_index, "Dispatch_s NOC must be different from Dispatch_d NOC");
-    for (uint8_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
-        TT_ASSERT(this->hw_command_queues_[cq_id]->noc_index == my_noc_index, "Command Queue NOC index must match");
-    }
-
     if (this->is_mmio_capable()) {
-        auto device_id = this->id();
-        uint32_t num_compute_cores = this->compute_with_storage_grid_size().x * this->compute_with_storage_grid_size().y;
-        uint8_t num_hw_cqs = this->num_hw_cqs();
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
-        uint32_t cq_size = this->sysmem_manager().get_cq_size();
-
-        for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-            CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
-            tt_cxy_pair prefetch_core = dispatch_core_manager::instance().prefetcher_core(device_id, channel, cq_id);
-            tt_cxy_pair dispatch_core = dispatch_core_manager::instance().dispatcher_core(device_id, channel, cq_id);
-            CoreCoord prefetch_physical_core = get_physical_core_coordinate(prefetch_core, dispatch_core_type);
-            CoreCoord dispatch_physical_core = get_physical_core_coordinate(dispatch_core, dispatch_core_type);
-            uint32_t cq_start = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-
-            uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id, cq_size);
-            uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
-            uint32_t issue_queue_size = this->sysmem_manager_->get_issue_queue_size(cq_id);
-            uint32_t completion_queue_start_addr = issue_queue_start_addr + issue_queue_size;
-            uint32_t completion_queue_size = this->sysmem_manager_->get_completion_queue_size(cq_id);
-            uint32_t host_completion_queue_wr_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
-            uint32_t dev_completion_queue_wr_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
-            uint32_t dev_completion_queue_rd_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
-            uint32_t dispatch_message_addr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
-            constexpr uint32_t max_dispatch_message_entries = dispatch_constants::DISPATCH_MESSAGE_ENTRIES;
-            constexpr uint32_t max_num_go_signal_noc_data_entries = dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
-
-            const uint32_t prefetch_sync_sem = tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_core, 0, dispatch_core_type);
-            const uint32_t prefetch_sem = tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_core, dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages(), dispatch_core_type);
-            const uint32_t prefetch_dispatch_s_sync_sem = tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_core, dispatch_constants::get(dispatch_core_type).dispatch_s_buffer_pages(), dispatch_core_type); // sync with dispatch_s
-            const uint32_t dispatch_sem = tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_core, 0, dispatch_core_type);
-
-            // dispatch_s location and flow control vars initialized as invalid. Will be set if dispatch_s is enabled for the given configuration.
-            tt_cxy_pair dispatch_s_core = tt_cxy_pair(0xff, 0xff, 0xff);
-            CoreCoord dispatch_s_physical_core = {0xff, 0xff};
-            uint32_t dispatch_s_buffer_base = 0xff;
-            uint32_t dispatch_s_sem = 0xff; // used by dispatch_s to sync with prefetch
-            uint32_t dispatch_s_sync_sem_base_addr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);; // used by dispatch_d to signal that dispatch_s can send go signal
-            if (this->dispatch_s_enabled()) {
-                // Skip allocating dispatch_s for multi-CQ configurations with ethernet dispatch
-                dispatch_s_core = dispatch_core_manager::instance().dispatcher_s_core(device_id, channel, cq_id);
-                dispatch_s_physical_core = get_physical_core_coordinate(dispatch_s_core, dispatch_core_type);
-                uint32_t dispatch_buffer_base = dispatch_constants::get(dispatch_core_type).dispatch_buffer_base();
-                if (dispatch_core_type == CoreType::WORKER) {
-                    // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
-                    dispatch_s_buffer_base = dispatch_buffer_base + (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) *  dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages();
+        auto command_queue_program_ptr = create_and_compile_cq_program(this);
+        this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));
+        // Since devices could be set up in any order, on mmio device do a pass and populate cores for tunnelers.
+        if (tt::Cluster::instance().get_mmio_device_tunnel_count(this->id_) > 0) {
+            tunnels_from_mmio_ = tt::Cluster::instance().get_tunnels_from_mmio_device(this->id_);
+            for (auto& tunnel : tunnels_from_mmio_) {
+                for (uint32_t tunnel_stop = 0; tunnel_stop < tunnel.size() - 1; tunnel_stop++) {
+                    chip_id_t device_id = tunnel[tunnel_stop];
+                    chip_id_t ds_device_id = tunnel[tunnel_stop + 1];
+                    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(ds_device_id);
+                    // Only one tunneler per connection, use CQ ID 0
+                    dispatch_core_manager::instance().tunneler_core(device_id, ds_device_id, channel, 0);
                 }
-                else {
-                    // dispatch_d and dispatch_s are on different cores. No shared resources: dispatch_s CB starts at base.
-                    dispatch_s_buffer_base = dispatch_buffer_base;
-                }
-                dispatch_s_sem = tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_s_core, 0, dispatch_core_type); // used by dispatch_s to sync with prefetch
-            }
-
-            log_debug(LogDevice, "Dispatching out of {} cores",  magic_enum::enum_name(dispatch_core_type));
-            log_debug(LogDevice, "Prefetch HD logical location: {} physical core: {}", prefetch_core.str(), prefetch_physical_core.str());
-            log_debug(LogDevice, "Dispatch HD logical location: {} physical core {}", dispatch_core.str(), dispatch_physical_core.str());
-            log_debug(LogDevice, "Dispatch S logical location: {} physical core {}", dispatch_s_core.str(), dispatch_s_physical_core.str());
-
-            std::vector<uint32_t> prefetch_compile_args = {
-                dispatch_constants::get(dispatch_core_type).dispatch_buffer_base(),
-                dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
-                dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages(),
-                prefetch_sem,
-                dispatch_sem,
-                issue_queue_start_addr,
-                issue_queue_size,
-                dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED),
-                dispatch_constants::get(dispatch_core_type).prefetch_q_size(),
-                dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD),
-                dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD),
-                dispatch_constants::get(dispatch_core_type).cmddat_q_base(),
-                dispatch_constants::get(dispatch_core_type).cmddat_q_size(),
-                dispatch_constants::get(dispatch_core_type).scratch_db_base(),
-                dispatch_constants::get(dispatch_core_type).scratch_db_size(),
-                prefetch_sync_sem,
-                dispatch_constants::get(dispatch_core_type).prefetch_d_buffer_pages(), // prefetch_d only
-                0, //prefetch_d_upstream_cb_sem, // prefetch_d only
-                0, //prefetch_downstream_cb_sem, // prefetch_d only
-                dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE,
-                dispatch_constants::PREFETCH_D_BUFFER_BLOCKS, // prefetch_d only
-                dispatch_s_buffer_base,
-                prefetch_dispatch_s_sync_sem,
-                dispatch_s_sem,
-                dispatch_constants::get(dispatch_core_type).dispatch_s_buffer_size(),
-                dispatch_constants::DISPATCH_S_BUFFER_LOG_PAGE_SIZE,
-                true,   // is_dram_variant
-                true    // is_host_variant
-            };
-
-            configure_kernel_variant(
-                *command_queue_program_ptr,
-                "tt_metal/impl/dispatch/kernels/cq_prefetch.cpp",
-                prefetch_compile_args,
-                prefetch_core,
-                prefetch_physical_core,
-                dispatch_core_type,
-                CoreCoord{0, 0},
-                dispatch_physical_core,
-                dispatch_s_physical_core,
-                std::map<string, string> {},
-                my_noc_index,
-                my_noc_index,
-                my_noc_index,
-                false,
-                false,
-                // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to respect code space
-                tt::llrt::OptionsG.get_watcher_enabled() && (not tt::llrt::OptionsG.get_watcher_noinline())
-            );
-
-            uint32_t tensix_worker_go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
-            uint32_t eth_worker_go_signal_addr = 0;
-            if (hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1) {
-                eth_worker_go_signal_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG);
-            }
-            std::vector<uint32_t> dispatch_compile_args = {
-                dispatch_constants::get(dispatch_core_type).dispatch_buffer_base(),
-                dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE,
-                dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages(),
-                dispatch_sem,
-                prefetch_sem,
-                dispatch_constants::DISPATCH_BUFFER_SIZE_BLOCKS,
-                prefetch_sync_sem,
-                command_queue_start_addr,
-                completion_queue_start_addr,
-                completion_queue_size,
-                dispatch_constants::get(dispatch_core_type).dispatch_buffer_base(),
-                (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) * dispatch_constants::get(dispatch_core_type).dispatch_buffer_pages(),
-                0, // unused
-                0, // unused
-                0, // unused
-                false,  // split_prefetcher
-                0,      // unused prefetch noc_xy
-                0,      // unused prefetch_local_downstream_sem_addr
-                0,      // unused prefetch_downstream_buffer_pages
-                num_compute_cores, // max_write_packed_cores
-                dispatch_s_sync_sem_base_addr, // used to notify dispatch_s that its safe to send a go signal
-                max_dispatch_message_entries,
-                max_num_go_signal_noc_data_entries,
-                tensix_worker_go_signal_addr, // used by dispatch_d to mcast go signals when dispatch_s is not enabled
-                eth_worker_go_signal_addr, // used by dispatch_d to mcast go signals when dispatch_s is not enabled
-                dispatch_core_type == CoreType::ETH,
-                host_completion_queue_wr_ptr,
-                dev_completion_queue_wr_ptr,
-                dev_completion_queue_rd_ptr,
-                true,   // is_dram_variant
-                true,    // is_host_variant
-            };
-
-            configure_kernel_variant(
-                *command_queue_program_ptr,
-                "tt_metal/impl/dispatch/kernels/cq_dispatch.cpp",
-                dispatch_compile_args,
-                dispatch_core,
-                dispatch_physical_core,
-                dispatch_core_type,
-                prefetch_physical_core,
-                CoreCoord{0, 0},
-                dispatch_s_physical_core,
-                std::map<string, string> {},
-                my_noc_index,
-                dispatch_upstream_noc_index,
-                my_noc_index
-            );
-            if (this->dispatch_s_enabled()) {
-                std::vector<uint32_t> dispatch_s_compile_args = {
-                    dispatch_s_buffer_base,
-                    dispatch_constants::DISPATCH_S_BUFFER_LOG_PAGE_SIZE,
-                    dispatch_constants::get(dispatch_core_type).dispatch_s_buffer_size(),
-                    dispatch_s_sem,
-                    prefetch_dispatch_s_sync_sem,
-                    dispatch_s_sync_sem_base_addr,
-                    tensix_worker_go_signal_addr,
-                    eth_worker_go_signal_addr,
-                    dispatch_core_type == CoreType::ETH,
-                    dispatch_message_addr,
-                    max_dispatch_message_entries,
-                    max_num_go_signal_noc_data_entries,
-                };
-                configure_kernel_variant(
-                    *command_queue_program_ptr,
-                    "tt_metal/impl/dispatch/kernels/cq_dispatch_slave.cpp",
-                    dispatch_s_compile_args,
-                    dispatch_s_core,
-                    dispatch_s_physical_core,
-                    dispatch_core_type,
-                    prefetch_physical_core,
-                    dispatch_physical_core,
-                    CoreCoord{0, 0},
-                    std::map<string, string> {},
-                    dispatch_s_noc_index,
-                    dispatch_s_noc_index,
-                    dispatch_s_noc_index,
-                    false,
-                    true
-                );
             }
         }
-        detail::CompileProgram(this, *command_queue_program_ptr, /*fd_bootloader_mode=*/true);
-        this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
-        this->setup_tunnel_for_remote_devices();
     } else {
-        chip_id_t device_id = this->id();
-        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
-        uint8_t num_hw_cqs = this->num_hw_cqs();
-        Device *mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
-
-        auto &tunnel_device_dispatch_workers = mmio_device->tunnel_device_dispatch_workers_;
-        auto &tunnels_from_mmio = mmio_device->tunnels_from_mmio_;
-
-        std::vector<std::vector<std::tuple<tt_cxy_pair, dispatch_worker_build_settings_t>>> device_worker_variants;
-        std::vector<std::vector<std::tuple<tt_cxy_pair, dispatch_worker_build_settings_t>>> mmio_device_worker_variants;
-
-        uint32_t tunnel_id = 0;
-        for (auto tunnel : tunnel_device_dispatch_workers) {
-            TT_ASSERT(tunnel.second.find(mmio_device_id) != tunnel.second.end(), "MMIO Device {} not found in tunnel map.", mmio_device_id);
-            if (tunnel.second.find(device_id) != tunnel.second.end()) {
-                tunnel_id = tunnel.first;
-                device_worker_variants = tunnel.second[device_id];
-                mmio_device_worker_variants = tunnel.second[mmio_device_id];
-                break;
-            }
-        }
-        TT_ASSERT(device_worker_variants.size() != 0, "No worker variants found for Device {}.", device_id);
-
-        //determine if its first tunnel stop.
-        //FD2 kernels running on mmio device are launched with first tunnel stop.
-        bool first_tunnel_stop = true;
-        auto tunnel = tunnels_from_mmio[tunnel_id];
-        for (uint32_t ts = 1; ts < tunnel.size(); ts++) {
-            if (tunnel[ts] == device_id) {
-                first_tunnel_stop = ts == 1;
-                break;
-            }
-            TT_ASSERT(ts < (tunnel.size() - 1) , "Device {} tunnel stop cannot be determined on tunnel {}.", device_id, tunnel_id);
-        }
-
-        if (first_tunnel_stop) {
-            /////////////////Following section is for mmio device serving Remote Device
-            uint32_t cq_id = 0;
-            for (auto [prefetch_core, prefetch_settings] : mmio_device_worker_variants[DispatchWorkerType::PREFETCH]) {
-                for (auto sem : prefetch_settings.semaphores) {
-                    //size of semaphores vector is number of needed semaphores on the core.
-                    //Value of each vector entry is the initialization value for the semaphore.
-                    tt::tt_metal::CreateSemaphore(*mmio_command_queue_program_ptr, prefetch_core, sem, prefetch_settings.dispatch_core_type);
-                }
-                configure_kernel_variant(
-                    *mmio_command_queue_program_ptr,
-                    prefetch_settings.kernel_file,
-                    prefetch_settings.compile_args,
-                    prefetch_core,
-                    prefetch_settings.worker_physical_core,
-                    prefetch_settings.dispatch_core_type,
-                    prefetch_settings.upstream_cores[0],
-                    prefetch_settings.downstream_cores[0],
-                    CoreCoord{0, 0},
-                    std::map<string, string> {},
-                    my_noc_index,
-                    my_noc_index,
-                    my_noc_index,
-                    false,
-                    false,
-                    // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to respect code space
-                    tt::llrt::OptionsG.get_watcher_enabled() && (not tt::llrt::OptionsG.get_watcher_noinline())
-                );
-                cq_id = (cq_id + 1) % num_hw_cqs;
-            }
-
-            for (auto [mux_core, mux_settings] : mmio_device_worker_variants[DispatchWorkerType::MUX]) {
-                for (auto sem : mux_settings.semaphores) {
-                    //size of semaphores vector is number of needed semaphores on the core.
-                    //Value of each vector entry is the initialization value for the semaphore.
-                    tt::tt_metal::CreateSemaphore(*mmio_command_queue_program_ptr, mux_core, sem, mux_settings.dispatch_core_type);
-                }
-                configure_kernel_variant(
-                    *mmio_command_queue_program_ptr,
-                    mux_settings.kernel_file,
-                    mux_settings.compile_args,
-                    mux_core,
-                    CoreCoord{0, 0},
-                    mux_settings.dispatch_core_type,
-                    CoreCoord{0, 0},
-                    CoreCoord{0, 0},
-                    CoreCoord{0, 0},
-                    std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
-                    my_noc_index, // Only one Mux - use NOC for CQ 0
-                    my_noc_index,
-                    my_noc_index
-                );
-            }
-
-            auto [tunneler_core, tunneler_settings] = mmio_device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE][0];
-            configure_kernel_variant(
-                *mmio_command_queue_program_ptr,
-                tunneler_settings.kernel_file,
-                tunneler_settings.compile_args,
-                tunneler_core,
-                CoreCoord{0, 0},
-                CoreType::ETH,
-                CoreCoord{0, 0},
-                CoreCoord{0, 0},
-                CoreCoord{0, 0},
-                std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
-                my_noc_index, // Only one Remote Tunneler - use NOC for CQ 0
-                my_noc_index,
-                my_noc_index,
-                true
-            );
-
-            for (auto [demux_core, demux_settings] : mmio_device_worker_variants[DispatchWorkerType::DEMUX]) {
-                for (auto sem : demux_settings.semaphores) {
-                    //size of semaphores vector is number of needed semaphores on the core.
-                    //Value of each vector entry is the initialization value for the semaphore.
-                    tt::tt_metal::CreateSemaphore(*mmio_command_queue_program_ptr, demux_core, sem, demux_settings.dispatch_core_type);
-                }
-                configure_kernel_variant(
-                    *mmio_command_queue_program_ptr,
-                    demux_settings.kernel_file,
-                    demux_settings.compile_args,
-                    demux_core,
-                    CoreCoord{0, 0},
-                    demux_settings.dispatch_core_type,
-                    CoreCoord{0, 0},
-                    CoreCoord{0, 0},
-                    CoreCoord{0, 0},
-                    std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
-                    my_noc_index, // Only one Demux - use NOC for CQ 0
-                    my_noc_index,
-                    my_noc_index
-                );
-            }
-            cq_id = 0;
-            for (auto [dispatch_core, dispatch_settings] : mmio_device_worker_variants[DispatchWorkerType::DISPATCH]) {
-                for (auto sem : dispatch_settings.semaphores) {
-                    //size of semaphores vector is number of needed semaphores on the core.
-                    //Value of each vector entry is the initialization value for the semaphore.
-                    tt::tt_metal::CreateSemaphore(*mmio_command_queue_program_ptr, dispatch_core, sem, dispatch_settings.dispatch_core_type);
-                }
-                configure_kernel_variant(
-                    *mmio_command_queue_program_ptr,
-                    dispatch_settings.kernel_file,
-                    dispatch_settings.compile_args,
-                    dispatch_core,
-                    dispatch_settings.worker_physical_core,
-                    dispatch_settings.dispatch_core_type,
-                    dispatch_settings.upstream_cores[0],
-                    CoreCoord{0xffffffff, 0xffffffff},
-                    CoreCoord{0, 0},
-                    std::map<string, string> {},
-                    my_noc_index,
-                    dispatch_upstream_noc_index,
-                    my_noc_index
-                );
-                cq_id = (cq_id + 1) % num_hw_cqs;
-            }
-        }
-        /////////////////Following section is for Remote Device
-
-        //Upstream device tunneler. Goes towards MMIO Device.
-        auto [us_tunneler_core, us_tunneler_settings] = device_worker_variants[DispatchWorkerType::US_TUNNELER_LOCAL][0];
-        configure_kernel_variant(
-            *command_queue_program_ptr,
-            us_tunneler_settings.kernel_file,
-            us_tunneler_settings.compile_args,
-            us_tunneler_core,
-            CoreCoord{0, 0},
-            CoreType::ETH,
-            CoreCoord{0, 0},
-            CoreCoord{0, 0},
-            CoreCoord{0, 0},
-            std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
-            my_noc_index, // Only one Local Tunneler - use NOC for CQ 0
-            my_noc_index,
-            my_noc_index,
-            true
-        );
-
-        //Downstream device tunneler. Goes towards tunnel end.
-        if (device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE].size()) {
-            auto [ds_tunneler_core, ds_tunneler_settings] = device_worker_variants[DispatchWorkerType::US_TUNNELER_REMOTE][0];
-            configure_kernel_variant(
-                *command_queue_program_ptr,
-                ds_tunneler_settings.kernel_file,
-                ds_tunneler_settings.compile_args,
-                ds_tunneler_core,
-                CoreCoord{0, 0},
-                CoreType::ETH,
-                CoreCoord{0, 0},
-                CoreCoord{0, 0},
-                CoreCoord{0, 0},
-                std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
-                my_noc_index, // Only one Remote Tunneler - use NOC for CQ 0
-                my_noc_index,
-                my_noc_index,
-                true
-            );
-        }
-
-        for (auto [demux_d_core, demux_d_settings] : device_worker_variants[DispatchWorkerType::DEMUX_D]){
-            for (auto sem : demux_d_settings.semaphores) {
-                //size of semaphores vector is number of needed semaphores on the core.
-                //Value of each vector entry is the initialization value for the semaphore.
-                tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, demux_d_core, sem, demux_d_settings.dispatch_core_type);
-            }
-            configure_kernel_variant(
-                *command_queue_program_ptr,
-                demux_d_settings.kernel_file,
-                demux_d_settings.compile_args,
-                demux_d_core,
-                CoreCoord{0, 0},
-                demux_d_settings.dispatch_core_type,
-                CoreCoord{0, 0},
-                CoreCoord{0, 0},
-                CoreCoord{0, 0},
-                std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
-                my_noc_index, // Only one Demux - use NOC for CQ 0
-                my_noc_index,
-                my_noc_index
-            );
-        }
-        uint32_t cq_id = 0;
-        for (auto [prefetch_d_core, prefetch_d_settings] : device_worker_variants[DispatchWorkerType::PREFETCH_D]) {
-            for (auto sem : prefetch_d_settings.semaphores) {
-                //size of semaphores vector is number of needed semaphores on the core.
-                //Value of each vector entry is the initialization value for the semaphore.
-                tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, prefetch_d_core, sem, prefetch_d_settings.dispatch_core_type);
-            }
-            configure_kernel_variant(
-                *command_queue_program_ptr,
-                prefetch_d_settings.kernel_file,
-                prefetch_d_settings.compile_args,
-                prefetch_d_core,
-                prefetch_d_settings.worker_physical_core,
-                prefetch_d_settings.dispatch_core_type,
-                prefetch_d_settings.upstream_cores[0],
-                prefetch_d_settings.downstream_cores[0],
-                prefetch_d_settings.downstream_cores[1], // need to update
-                std::map<string, string> {},
-                my_noc_index,
-                my_noc_index,
-                my_noc_index,
-                false,
-                false,
-                // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to respect code space
-                tt::llrt::OptionsG.get_watcher_enabled() && (not tt::llrt::OptionsG.get_watcher_noinline())
-            );
-            cq_id = (cq_id + 1) % num_hw_cqs;
-        }
-        cq_id = 0;
-        for (auto [dispatch_d_core, dispatch_d_settings] : device_worker_variants[DispatchWorkerType::DISPATCH_D]) {
-            for (auto sem : dispatch_d_settings.semaphores) {
-                //size of semaphores vector is number of needed semaphores on the core.
-                //Value of each vector entry is the initialization value for the semaphore.
-                tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_d_core, sem, dispatch_d_settings.dispatch_core_type);
-            }
-            configure_kernel_variant(
-                *command_queue_program_ptr,
-                dispatch_d_settings.kernel_file,
-                dispatch_d_settings.compile_args,
-                dispatch_d_core,
-                dispatch_d_settings.worker_physical_core,
-                dispatch_d_settings.dispatch_core_type,
-                dispatch_d_settings.upstream_cores[0],
-                dispatch_d_settings.downstream_cores[0],
-                dispatch_d_settings.downstream_cores[1], // need to update
-                std::map<string, string> {},
-                my_noc_index,
-                dispatch_upstream_noc_index,
-                my_noc_index
-            );
-            cq_id = (cq_id + 1) % num_hw_cqs;
-        }
-        cq_id = 0;
-        if (this->dispatch_s_enabled()) {
-            for (auto [dispatch_s_core, dispatch_s_settings] : device_worker_variants[DispatchWorkerType::DISPATCH_S]) {
-                for (auto sem : dispatch_s_settings.semaphores) {
-                    tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, dispatch_s_core, sem, dispatch_s_settings.dispatch_core_type);
-                }
-                configure_kernel_variant(
-                    *command_queue_program_ptr,
-                    dispatch_s_settings.kernel_file,
-                    dispatch_s_settings.compile_args,
-                    dispatch_s_core,
-                    dispatch_s_settings.worker_physical_core,
-                    dispatch_s_settings.dispatch_core_type,
-                    dispatch_s_settings.upstream_cores[0],
-                    dispatch_s_settings.downstream_cores[0],
-                    CoreCoord{0, 0},
-                    std::map<string, string> {},
-                    dispatch_s_noc_index,
-                    dispatch_s_noc_index,
-                    dispatch_s_noc_index,
-                    false,
-                    true
-                );
-                cq_id = (cq_id + 1) % num_hw_cqs;
-            }
-        }
-
-        auto [mux_d_core, mux_d_settings] = device_worker_variants[DispatchWorkerType::MUX_D][0];
-        for (auto sem : mux_d_settings.semaphores) {
-            //size of semaphores vector is number of needed semaphores on the core.
-            //Value of each vector entry is the initialization value for the semaphore.
-            tt::tt_metal::CreateSemaphore(*command_queue_program_ptr, mux_d_core, sem, mux_d_settings.dispatch_core_type);
-        }
-        configure_kernel_variant(
-            *command_queue_program_ptr,
-            mux_d_settings.kernel_file,
-            mux_d_settings.compile_args,
-            mux_d_core,
-            CoreCoord{0, 0},
-            mux_d_settings.dispatch_core_type,
-            CoreCoord{0, 0},
-            CoreCoord{0, 0},
-            CoreCoord{0, 0},
-            std::map<string, string> {{"SKIP_NOC_LOGGING", "1"}},
-            my_noc_index, // Only one Mux - use NOC for CQ 0
-            my_noc_index,
-            my_noc_index
-        );
-
-        detail::CompileProgram(this, *command_queue_program_ptr, /*fd_bootloader_mode=*/true);
-        this->command_queue_programs.push_back(std::move(command_queue_program_ptr));
-        if (first_tunnel_stop) {
-            detail::CompileProgram(mmio_device, *mmio_command_queue_program_ptr, /*fd_bootloader_mode=*/true);
-            this->command_queue_programs.push_back(std::move(mmio_command_queue_program_ptr));
-        }
+        auto command_queue_program_ptr = create_and_compile_cq_program(this);
+        this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));
     }
 }
 
@@ -2721,152 +840,70 @@ void Device::compile_command_queue_programs() {
 void Device::configure_command_queue_programs() {
     chip_id_t device_id = this->id();
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
-    Device *mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
-    log_debug(tt::LogMetal, "Device {} - Channel {}", this->id_, channel);
+    IDevice* mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
 
     std::vector<uint32_t> zero = {0x0}; // Reset state in case L1 Clear is disabled.
     std::vector<uint32_t> pointers;
     uint32_t cq_size = this->sysmem_manager().get_cq_size();
+    TT_ASSERT(this->command_queue_programs_.size() == 1);
 
-    if (this->is_mmio_capable()) {
-        TT_ASSERT(this->command_queue_programs.size() == 1);
-    } else {
-        uint32_t program_size = tt::Cluster::instance().get_device_tunnel_depth(device_id) == 1 ? 2 : 1;
-        TT_ASSERT(this->command_queue_programs.size() == program_size);
-    }
-
-    Program& command_queue_program = *this->command_queue_programs[0];
+    Program& command_queue_program = *this->command_queue_programs_[0];
     uint8_t num_hw_cqs = this->num_hw_cqs();
 
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(mmio_device_id);
-    uint32_t host_issue_q_rd_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_RD);
-    uint32_t host_issue_q_wr_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
-    uint32_t host_completion_q_wr_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
-    uint32_t host_completion_q_rd_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
-    uint32_t cq_start = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-    pointers.resize(cq_start/sizeof(uint32_t));
+    // Reset host-side command queue pointers for all channels controlled by this mmio device
+    if (this->is_mmio_capable()) {
+        for (chip_id_t serviced_device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(device_id)) {
+            uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(serviced_device_id);
+            CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
+            uint32_t host_issue_q_rd_ptr = DispatchMemMap::get(dispatch_core_type)
+                                               .get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_RD);
+            uint32_t host_issue_q_wr_ptr = DispatchMemMap::get(dispatch_core_type)
+                                               .get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
+            uint32_t host_completion_q_wr_ptr =
+                DispatchMemMap::get(dispatch_core_type)
+                    .get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
+            uint32_t host_completion_q_rd_ptr =
+                DispatchMemMap::get(dispatch_core_type)
+                    .get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
+            uint32_t cq_start = DispatchMemMap::get(dispatch_core_type)
+                                    .get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+            pointers.resize(cq_start/sizeof(uint32_t));
+            for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
+                // Reset the host manager's pointer for this command queue
+                this->sysmem_manager_->reset(cq_id);
 
-    for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-        // Reset the host manager's pointer for this command queue
-        this->sysmem_manager_->reset(cq_id);
+                pointers[host_issue_q_rd_ptr / sizeof(uint32_t)] = (cq_start + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
+                pointers[host_issue_q_wr_ptr / sizeof(uint32_t)] = (cq_start + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
+                pointers[host_completion_q_wr_ptr / sizeof(uint32_t)] = (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
+                pointers[host_completion_q_rd_ptr / sizeof(uint32_t)] = (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
 
-        pointers[host_issue_q_rd_ptr / sizeof(uint32_t)] = (cq_start + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
-        pointers[host_issue_q_wr_ptr / sizeof(uint32_t)] = (cq_start + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
-        pointers[host_completion_q_wr_ptr / sizeof(uint32_t)] = (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
-        pointers[host_completion_q_rd_ptr / sizeof(uint32_t)] = (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
-
-        tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), get_absolute_cq_offset(channel, cq_id, cq_size), mmio_device_id, get_umd_channel(channel));
-    }
-
-    uint32_t prefetch_q_base = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
-    uint32_t dispatch_message_entries = dispatch_constants::DISPATCH_MESSAGE_ENTRIES;
-    for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-        tt_cxy_pair prefetch_location = dispatch_core_manager::instance().prefetcher_core(device_id, channel, cq_id);
-        tt_cxy_pair completion_q_writer_location = dispatch_core_manager::instance().completion_queue_writer_core(device_id, channel, cq_id);
-        tt_cxy_pair dispatch_location = dispatch_core_manager::instance().dispatcher_core(device_id, channel, cq_id);
-        tt_cxy_pair remote_dispatcher_location;
-        if (not this->is_mmio_capable()) {
-            remote_dispatcher_location = dispatch_core_manager::instance().dispatcher_d_core(device_id, channel, cq_id);
-        }
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(mmio_device_id);
-        TT_ASSERT(prefetch_location.chip == mmio_device_id and completion_q_writer_location.chip == mmio_device_id,
-            "Issue queue interface is on device {} and completion queue interface is on device {} but they are expected to be on device {}", prefetch_location.chip, completion_q_writer_location.chip, mmio_device_id);
-
-        // Initialize the FetchQ
-        std::vector<uint32_t> prefetch_q(dispatch_constants::get(dispatch_core_type).prefetch_q_entries(), 0);
-        std::vector<uint32_t> prefetch_q_rd_ptr_addr_data = {
-            (uint32_t)(prefetch_q_base + dispatch_constants::get(dispatch_core_type).prefetch_q_size())
-        };
-        uint32_t prefetch_q_rd_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
-        uint32_t prefetch_q_pcie_rd_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD);
-        uint32_t completion_q_wr_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
-        uint32_t completion_q_rd_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
-        uint32_t dispatch_s_sync_sem_base_addr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
-        uint32_t dispatch_message_base_addr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
-        uint32_t completion_q0_last_event_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
-        uint32_t completion_q1_last_event_ptr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
-        std::vector<uint32_t> prefetch_q_pcie_rd_ptr_addr_data = {get_absolute_cq_offset(channel, cq_id, cq_size) + cq_start};
-        detail::WriteToDeviceL1(mmio_device, prefetch_location, prefetch_q_rd_ptr, prefetch_q_rd_ptr_addr_data, dispatch_core_type);
-        detail::WriteToDeviceL1(mmio_device, prefetch_location, prefetch_q_pcie_rd_ptr, prefetch_q_pcie_rd_ptr_addr_data, dispatch_core_type);
-        detail::WriteToDeviceL1(mmio_device, prefetch_location, prefetch_q_base, prefetch_q, dispatch_core_type);
-        if (not this->is_mmio_capable()) {
-            // Initialize event counters to 0 on dispatch_d on r-chip
-            detail::WriteToDeviceL1(this, remote_dispatcher_location, completion_q0_last_event_ptr, zero, dispatch_core_type);
-            detail::WriteToDeviceL1(this, remote_dispatcher_location, completion_q1_last_event_ptr, zero, dispatch_core_type);
-        }
-        // Initialize completion queue write pointer and read pointer copy
-        uint32_t issue_queue_size = this->sysmem_manager_->get_issue_queue_size(cq_id);
-        uint32_t completion_queue_start_addr = cq_start + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
-        uint32_t completion_queue_start_addr_16B = completion_queue_start_addr >> 4;
-        std::vector<uint32_t> completion_queue_wr_ptr = {completion_queue_start_addr_16B};
-        detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q_rd_ptr, completion_queue_wr_ptr, dispatch_core_type);
-        detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q_wr_ptr, completion_queue_wr_ptr, dispatch_core_type);
-        detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q0_last_event_ptr, zero, dispatch_core_type);
-        detail::WriteToDeviceL1(mmio_device, completion_q_writer_location, completion_q1_last_event_ptr, zero, dispatch_core_type);
-
-        // Initialize address where workers signal completion to dispatch core(s).
-        // TODO: Should only initialize dispatch_s_sync_sem if this->dispatch_s_enabled()?
-        for (uint32_t i = 0; i < dispatch_message_entries; i++) {
-            uint32_t dispatch_s_sync_sem_addr = dispatch_s_sync_sem_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(i);
-            uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(i);
-            if (this->distributed_dispatcher()) {
-                // Ethernet dispatch with a single CQ. dispatch_s and dispatch_d are on different cores. Initialize counter for both to zero.
-                tt_cxy_pair dispatch_s_location = dispatch_core_manager::instance().dispatcher_s_core(device_id, channel, cq_id);
-                detail::WriteToDeviceL1(this, dispatch_s_location, dispatch_s_sync_sem_addr, zero, dispatch_core_type);
-                detail::WriteToDeviceL1(this, dispatch_s_location, dispatch_message_addr, zero, dispatch_core_type);
-            }
-            detail::WriteToDeviceL1(mmio_device, dispatch_location, dispatch_s_sync_sem_addr, zero, dispatch_core_type);
-            detail::WriteToDeviceL1(mmio_device, dispatch_location, dispatch_message_addr, zero, dispatch_core_type);
-            if (device_id != mmio_device_id) {
-                tt_cxy_pair dispatch_d_location = dispatch_core_manager::instance().dispatcher_d_core(device_id, channel, cq_id);
-                CoreType remote_dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
-                detail::WriteToDeviceL1(this, dispatch_d_location, dispatch_s_sync_sem_addr, zero, remote_dispatch_core_type);
-                detail::WriteToDeviceL1(this, dispatch_d_location, dispatch_message_addr, zero, remote_dispatch_core_type);
+                tt::Cluster::instance().write_sysmem(pointers.data(), pointers.size() * sizeof(uint32_t), get_absolute_cq_offset(channel, cq_id, cq_size), mmio_device_id, get_umd_channel(channel));
             }
         }
     }
 
-    command_queue_program.finalize(this);
+    // Write device-side cq pointers
+    configure_dispatch_cores(this);
+
+    // Run the cq program
+    program_dispatch::finalize_program_offsets(command_queue_program, this);
     detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
     tt::Cluster::instance().l1_barrier(this->id());
-    if (device_id != mmio_device_id) {
-        if (tt::Cluster::instance().get_device_tunnel_depth(device_id) == 1) {
-            //first or only remote device on the tunnel, launch fd2 kernels on mmio device for all remote devices.
-            Program& mmio_command_queue_program = *this->command_queue_programs[1];
-            mmio_command_queue_program.finalize(mmio_device);
-            detail::ConfigureDeviceWithProgram(mmio_device, mmio_command_queue_program, true);
-            tt::Cluster::instance().l1_barrier(mmio_device_id);
-        }
-    }
-}
-
-void Device::update_dispatch_cores_for_multi_cq_eth_dispatch() {
-    // When running Multiple CQs using Ethernet Dispatch, we may need more dispatch cores than those allocated in the
-    // core descriptor (ex: 2 CQs on N300 need 10 dispatch cores and the core descriptor only allocates 6).
-    // Infer the remaining dispatch cores from the idle eth core list (this is device dependent).
-    if (dispatch_core_manager::instance().get_dispatch_core_type(this->id()) == CoreType::ETH) {
-        auto& dispatch_core_manager = dispatch_core_manager::instance();
-        for (const auto& idle_eth_core : this->get_inactive_ethernet_cores()) {
-            dispatch_core_manager.add_dispatch_core_to_device(this->id(), idle_eth_core);
-        }
-    }
 }
 
 void Device::init_command_queue_host() {
-    using_fast_dispatch = true;
-    this->sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
-    hw_command_queues_.resize(num_hw_cqs());
+    using_fast_dispatch_ = true;
+    sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
+    auto worker_launch_message_buffer_state = std::make_shared<DispatchArray<LaunchMessageRingBufferState>>();
+    command_queues_.reserve(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        hw_command_queues_[cq_id] = std::make_unique<HWCommandQueue>(this, cq_id, NOC::NOC_0);
-        // Need to do this since CommandQueue constructor is private
-        sw_command_queues_.push_back(std::unique_ptr<CommandQueue>(new CommandQueue(this, cq_id)));
+        command_queues_.push_back(std::make_unique<HWCommandQueue>(
+            this, worker_launch_message_buffer_state, cq_id, k_dispatch_downstream_noc, completion_queue_reader_core_));
     }
 }
 
 void Device::init_command_queue_device() {
-
-    if (llrt::OptionsG.get_skip_loading_fw()) {
+    if (llrt::RunTimeOptions::get_instance().get_skip_loading_fw()) {
         detail::EnablePersistentKernelCache();
         this->compile_command_queue_programs();
         detail::DisablePersistentKernelCache();
@@ -2874,14 +911,9 @@ void Device::init_command_queue_device() {
         this->compile_command_queue_programs();
     }
 
-    if (this->is_mmio_capable()) {
-        TT_ASSERT(this->command_queue_programs.size() == 1);
-    } else {
-        uint32_t program_size = tt::Cluster::instance().get_device_tunnel_depth(this->id()) == 1 ? 2 : 1;
-        TT_ASSERT(this->command_queue_programs.size() == program_size);
-    }
+    TT_ASSERT(this->command_queue_programs_.size() == 1);
     this->configure_command_queue_programs();
-    Program& command_queue_program = *this->command_queue_programs[0];
+    Program& command_queue_program = *this->command_queue_programs_[0];
 
     // TODO: should get a const ref
     std::vector<std::vector<CoreCoord>>logical_cores = command_queue_program.logical_cores();
@@ -2891,68 +923,85 @@ void Device::init_command_queue_device() {
         for (const CoreCoord &logical_dispatch_core : logical_dispatch_cores) {
             launch_msg_t msg = command_queue_program.kernels_on_core(logical_dispatch_core, index)->launch_msg;
             go_msg_t go_msg = command_queue_program.kernels_on_core(logical_dispatch_core, index)->go_msg;
-            CoreCoord phys_core = this->physical_core_from_logical_core(logical_dispatch_core, core_type);
-            tt::llrt::write_launch_msg_to_core(this->id(), phys_core, &msg, &go_msg, this->get_dev_addr(phys_core, HalL1MemAddrType::LAUNCH));
+            CoreCoord virtual_core = this->virtual_core_from_logical_core(logical_dispatch_core, core_type);
+            tt::llrt::write_launch_msg_to_core(this->id(), virtual_core, &msg, &go_msg, this->get_dev_addr(virtual_core, HalL1MemAddrType::LAUNCH));
         }
     }
-
-    if (!this->is_mmio_capable()) {
-        if (tt::Cluster::instance().get_device_tunnel_depth(this->id()) == 1) {
-            chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id());
-            Device *mmio_device = tt::DevicePool::instance().get_active_device(mmio_device_id);
-            Program& mmio_command_queue_program = *this->command_queue_programs[1];
-            std::vector<std::vector<CoreCoord>>logical_cores = mmio_command_queue_program.logical_cores();
-            for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
-                const auto& logical_dispatch_cores = logical_cores[index];
-                CoreType core_type = hal.get_core_type(index);
-                for (const CoreCoord &logical_dispatch_core : logical_dispatch_cores) {
-                    launch_msg_t msg = mmio_command_queue_program.kernels_on_core(logical_dispatch_core, index)->launch_msg;
-                    go_msg_t go_msg = mmio_command_queue_program.kernels_on_core(logical_dispatch_core, index)->go_msg;
-                    CoreCoord phys_core = mmio_device->physical_core_from_logical_core(logical_dispatch_core, core_type);
-                    tt::llrt::write_launch_msg_to_core(mmio_device_id, phys_core, &msg, &go_msg, mmio_device->get_dev_addr(phys_core, HalL1MemAddrType::LAUNCH));
-                }
-            }
-        }
-    }
-
-    for (auto& hw_cq : this->hw_command_queues_) {
-        hw_cq->set_num_worker_sems_on_dispatch(this->active_sub_device_manager_->num_sub_devices());
-        hw_cq->set_go_signal_noc_data_on_dispatch(this->active_sub_device_manager_->noc_mcast_unicast_data());
+    // Set num_worker_sems and go_signal_noc_data on dispatch for the default sub device config
+    for (auto& hw_cq : this->command_queues_) {
+        hw_cq->set_go_signal_noc_data_and_dispatch_sems(
+            sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices(),
+            sub_device_manager_tracker_->get_active_sub_device_manager()->noc_mcast_unicast_data());
     }
 }
 
-void Device::initialize_synchronous_sw_cmd_queue() {
-    // Initialize a single Software Command Queue for SD, using passthrough mode.
-    // This queue is used for all host bound functions using the Software CQ in SD mode.
-    for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        // Need to do this since CommandQueue constructor is private
-        sw_command_queues_.push_back(std::unique_ptr<CommandQueue>(new CommandQueue(this, cq_id)));
-        sw_command_queues_[cq_id]->set_mode(CommandQueue::CommandQueueMode::PASSTHROUGH);
+void Device::init_fabric() {
+    fabric_program_ = create_and_compile_fabric_program(this);
+    if (fabric_program_ == nullptr) {
+        return;
+    }
+
+    configure_fabric_cores(this);
+
+    program_dispatch::finalize_program_offsets(*fabric_program_, this);
+
+    detail::WriteRuntimeArgsToDevice(this, *fabric_program_, this->using_fast_dispatch());
+    detail::ConfigureDeviceWithProgram(this, *fabric_program_, this->using_fast_dispatch());
+
+    // Note: the l1_barrier below is needed to be sure writes to cores that
+    // don't get the GO mailbox (eg, storage cores) have all landed
+    tt::Cluster::instance().l1_barrier(this->id());
+    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = fabric_program_->logical_cores();
+    for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
+         programmable_core_type_index++) {
+        CoreType core_type = hal.get_core_type(programmable_core_type_index);
+        for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
+            launch_msg_t* msg =
+                &fabric_program_->kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
+            go_msg_t* go_msg = &fabric_program_->kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
+            msg->kernel_config.host_assigned_id = fabric_program_->get_runtime_id();
+
+            auto physical_core = this->virtual_core_from_logical_core(logical_core, core_type);
+            tt::llrt::write_launch_msg_to_core(
+                this->id(), physical_core, msg, go_msg, this->get_dev_addr(physical_core, HalL1MemAddrType::LAUNCH));
+        }
     }
 }
 
 bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap, bool minimal) {
     ZoneScoped;
-    log_info(tt::LogMetal, "Initializing device {}. Program cache is {}enabled", this->id_, this->program_cache.is_enabled() ? "": "NOT ");
+    log_info(tt::LogMetal, "Initializing device {}. Program cache is {}enabled", this->id_, this->program_cache_.is_enabled() ? "": "NOT ");
     log_debug(tt::LogMetal, "Running with {} cqs ", num_hw_cqs);
     TT_FATAL(num_hw_cqs > 0 and num_hw_cqs <= dispatch_core_manager::MAX_NUM_HW_CQS, "num_hw_cqs can be between 1 and {}", dispatch_core_manager::MAX_NUM_HW_CQS);
-    this->using_fast_dispatch = false;
+    this->using_fast_dispatch_ = false;
+    // Trying to preserve logic that was in device_pool.cpp
+    // However, I honestly don't understand it
     this->num_hw_cqs_ = num_hw_cqs;
-    constexpr uint32_t harvesting_map_bits = 12;
-    this->build_key_ = ((uint32_t)this->num_hw_cqs_ << harvesting_map_bits) | tt::Cluster::instance().get_harvesting_mask(this->id());
+    BuildEnvManager::get_instance().add_build_env(this->id(), this->num_hw_cqs());
     this->initialize_cluster();
     this->initialize_default_sub_device_state(l1_small_size, trace_region_size, l1_bank_remap);
-    this->initialize_build();
+    this->generate_device_bank_to_noc_tables();
 
     // For minimal setup, don't initialize FW, watcher, dprint. They won't work if we're attaching to a hung chip.
     if (minimal)
         return true;
 
     // Mark initialized before compiling and sending dispatch kernels to device because compilation expects device to be initialized
-    this->work_executor.initialize();
+    this->work_executor_->initialize();
     this->initialized_ = true;
 
     return true;
+}
+
+void Device::push_work(std::function<void()> work, bool blocking) {
+    if (not this->initialized_) {
+        if (!uninitialized_error_fired_) {
+            log_fatal("Attempting to push work to Device {} which is not initialized. Ignoring...", this->id_);
+            uninitialized_error_fired_ = true;
+        }
+        return;
+    }
+    this->work_executor_->push_work(std::move(work), blocking);
 }
 
 bool Device::close() {
@@ -2961,25 +1010,21 @@ bool Device::close() {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
 
-    for (const std::unique_ptr<HWCommandQueue> &hw_command_queue : hw_command_queues_) {
-        if (hw_command_queue->manager.get_bypass_mode()) {
+    for (const auto& hw_command_queue : command_queues_) {
+        if (hw_command_queue->sysmem_manager().get_bypass_mode()) {
             hw_command_queue->record_end();
         }
         hw_command_queue->terminate();
     }
 
-    this->work_executor.reset();
-    tt_metal::detail::DumpDeviceProfileResults(this, true);
+    this->work_executor_->reset();
+    tt_metal::detail::DumpDeviceProfileResults(this, ProfilerDumpState::LAST_CLOSE_DEVICE);
 
-    this->active_sub_device_manager_ = nullptr;
-    for (auto sub_device_manager = this->sub_device_managers_.begin(); sub_device_manager != this->sub_device_managers_.end();) {
-        this->remove_sub_device_manager((sub_device_manager++)->first);
-    }
-    this->default_sub_device_manager_ = nullptr;
+    sub_device_manager_tracker_.reset(nullptr);
 
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> not_done_dispatch_cores;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> cores_to_skip;
-    this->get_associated_dispatch_phys_cores(not_done_dispatch_cores, cores_to_skip);
+    this->get_associated_dispatch_virtual_cores(not_done_dispatch_cores, cores_to_skip);
 
     auto mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->id_);
     std::unordered_set<CoreCoord> wait_for_cores = not_done_dispatch_cores[mmio_device_id];
@@ -3006,14 +1051,25 @@ bool Device::close() {
         }
     }
 
+    if (!hal.get_eth_fw_is_cooperative()) {
+        for (const auto& eth_core : this->get_active_ethernet_cores()) {
+            CoreCoord virtual_eth_core = this->ethernet_core_from_logical_core(eth_core);
+            TensixSoftResetOptions reset_val =
+                TENSIX_ASSERT_SOFT_RESET &
+                static_cast<TensixSoftResetOptions>(
+                    ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
+            tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), virtual_eth_core), reset_val);
+        }
+    }
+
     if (this->id_ != mmio_device_id) {
         for (auto it = not_done_dispatch_cores[mmio_device_id].begin(); it != not_done_dispatch_cores[mmio_device_id].end(); it++) {
-            const auto &phys_core = *it;
-            if(llrt::is_ethernet_core(phys_core, this->id_)) {
-                log_debug(tt::LogMetal, "Ethernet dispatch core {} on Device {} is idle. Closing Device {}", phys_core.str(), mmio_device_id, this->id());
+            const auto &virtual_core = *it;
+            if(tt::Cluster::instance().is_ethernet_core(virtual_core, this->id_)) {
+                log_debug(tt::LogMetal, "Ethernet dispatch core {} on Device {} is idle. Closing Device {}", virtual_core.str(), mmio_device_id, this->id());
             } else {
-                log_debug(tt::LogMetal, "Resetting core {} on Device {} when closing Device {}", phys_core.str(), mmio_device_id, this->id());
-                tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(mmio_device_id, phys_core));
+                log_debug(tt::LogMetal, "Resetting core {} on Device {} when closing Device {}", virtual_core.str(), mmio_device_id, this->id());
+                tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(mmio_device_id, virtual_core));
             }
         }
     }
@@ -3024,11 +1080,9 @@ bool Device::close() {
     this->storage_only_cores_.clear();
     this->ethernet_cores_.clear();
     this->disable_and_clear_program_cache();
-    this->command_queue_programs.clear();
-    this->sw_command_queues_.clear();
-    this->hw_command_queues_.clear();
+    this->command_queue_programs_.clear();
+    this->command_queues_.clear();
     this->sysmem_manager_.reset();
-    this->tunnel_device_dispatch_workers_.clear();
     this->initialized_ = false;
 
     return true;
@@ -3045,52 +1099,83 @@ tt::ARCH Device::arch() const {
     return tt::Cluster::instance().arch();
 }
 
-int Device::num_dram_channels() const {
-    return tt::Cluster::instance().get_soc_desc(id_).get_num_dram_channels();
-}
+int Device::num_dram_channels() const { return tt::Cluster::instance().get_soc_desc(id_).get_num_dram_views(); }
 
 uint32_t Device::l1_size_per_core() const {
     return tt::Cluster::instance().get_soc_desc(id_).worker_l1_size;
 }
-uint32_t Device::dram_size_per_channel() const {
-    return tt::Cluster::instance().get_soc_desc(id_).dram_bank_size;
-}
+uint32_t Device::dram_size_per_channel() const { return tt::Cluster::instance().get_soc_desc(id_).dram_view_size; }
 
 CoreCoord Device::grid_size() const {
     return tt::Cluster::instance().get_soc_desc(id_).grid_size;
 }
 
 CoreCoord Device::logical_grid_size() const {
-    return tt::Cluster::instance().get_soc_desc(id_).worker_grid_size;
-}
-
-CoreCoord Device::compute_with_storage_grid_size() const {
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(id_);
-    return tt::get_compute_grid_size(id_, num_hw_cqs_, dispatch_core_type);
+    return tt::Cluster::instance().get_soc_desc(id_).get_grid_size(CoreType::TENSIX);
 }
 
 CoreCoord Device::dram_grid_size() const {
     return tt::Cluster::instance().get_soc_desc(id_).get_dram_grid_size();
 }
 
-CoreCoord Device::physical_core_from_logical_core(const CoreCoord &logical_coord, const CoreType &core_type) const {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    return soc_desc.get_physical_core_from_logical_core(logical_coord, core_type);
-}
-
-CoreCoord Device::physical_core_from_logical_core(const CoreDescriptor &logical_core) const {
-    return physical_core_from_logical_core(logical_core.coord, logical_core.type);
+CoreCoord Device::compute_with_storage_grid_size() const {
+    const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
+    return tt::get_compute_grid_size(id_, num_hw_cqs_, dispatch_core_config);
 }
 
 CoreType Device::core_type_from_physical_core(const CoreCoord &physical_coord) const {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    if (soc_desc.physical_cores.find(physical_coord) == soc_desc.physical_cores.end())
-        TT_THROW("Physical core {} doesn't exist in metal_SocDescriptor.", physical_coord);
-
-    return soc_desc.physical_cores.at(physical_coord).type;
+    const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
+    CoreType core_type = soc_desc.translate_coord_to(physical_coord, CoordSystem::PHYSICAL, CoordSystem::PHYSICAL).core_type;
+    if (core_type == CoreType::TENSIX) {
+        core_type = CoreType::WORKER;
+    }
+    return core_type;
 }
 
-CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) const {
+CoreType Device::core_type_from_virtual_core(const CoreCoord &virtual_coord) const {
+    if (tt::Cluster::instance().is_worker_core(virtual_coord, this->id_)) {
+        return CoreType::WORKER;
+    } else if (tt::Cluster::instance().is_ethernet_core(virtual_coord, this->id_)) {
+        return CoreType::ETH;
+    }
+    return this->core_type_from_physical_core(virtual_coord);
+}
+
+CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {
+    if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y) {
+        // Coordinate already in virtual space: NOC0 and NOC1 are the same
+        return coord;
+    } else {
+        const auto& grid_size = this->grid_size();
+        // Coordinate in Physical NOC0 Space. Convert to Virtual.
+        coord = this->virtual_core_from_physical_core(coord);
+        // Derive virtual coord in noc_index space.
+        CoreCoord virtual_coord = {
+            hal.noc_coordinate(noc_index, grid_size.x, coord.x),
+            hal.noc_coordinate(noc_index, grid_size.y, coord.y)
+        };
+        return virtual_coord;
+    }
+}
+
+CoreCoord Device::virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const {
+     if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y) {
+        // Coordinate already in virtual space: NOC0 and NOC1 are the same
+        return coord;
+    } else {
+        const auto& grid_size = this->grid_size();
+        // Coordinate passed in can be NOC0 or NOC1. The noc_index corresponds to
+        // the system this coordinate belongs to.
+        // Use this to convert to NOC0 coordinates and then derive Virtual Coords from it.
+        CoreCoord physical_coord = {
+            hal.noc_coordinate(noc_index, grid_size.x, coord.x),
+            hal.noc_coordinate(noc_index, grid_size.y, coord.y)
+        };
+        return this->virtual_core_from_physical_core(physical_coord);
+    }
+}
+
+CoreCoord Device::physical_worker_core_from_logical_core(const CoreCoord &logical_core) const {
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
     return soc_desc.get_physical_tensix_core_from_logical(logical_core);
 }
@@ -3098,136 +1183,88 @@ CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) c
 std::vector<CoreCoord> Device::worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {
     std::vector<CoreCoord> worker_cores(logical_cores.size());
     for (std::size_t idx = 0; idx < logical_cores.size(); idx++)
-        worker_cores[idx] = worker_core_from_logical_core(logical_cores[idx]);
+        worker_cores[idx] = this->worker_core_from_logical_core(logical_cores[idx]);
 
     return worker_cores;
 }
 
-CoreCoord Device::dram_core_from_logical_core(const CoreCoord &logical_core) const {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    return soc_desc.get_physical_dram_core_from_logical(logical_core);
+std::vector<CoreCoord> Device::ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {
+    std::vector<CoreCoord> eth_cores(logical_cores.size());
+    for (std::size_t idx = 0; idx < logical_cores.size(); idx++) {
+        eth_cores[idx] = this->ethernet_core_from_logical_core(logical_cores[idx]);
+    }
+    return eth_cores;
 }
 
-std::vector<CoreCoord> Device::dram_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {
-    std::vector<CoreCoord> dram_cores(logical_cores.size());
-    for (std::size_t idx = 0; idx < logical_cores.size(); idx++)
-        dram_cores[idx] = dram_core_from_logical_core(logical_cores[idx]);
+CoreCoord Device::virtual_core_from_logical_core(const CoreCoord &logical_coord, const CoreType& core_type) const {
+    return tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(this->id_, logical_coord, core_type);
+}
 
-    return dram_cores;
+CoreCoord Device::virtual_core_from_physical_core(const CoreCoord& physical_coord) const {
+    return tt::Cluster::instance().get_virtual_coordinate_from_physical_coordinates(this->id_, physical_coord);
+}
+
+CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) const {
+    return this->virtual_core_from_logical_core(logical_core, CoreType::WORKER);
 }
 
 CoreCoord Device::ethernet_core_from_logical_core(const CoreCoord &logical_core) const {
-    return tt::Cluster::instance().ethernet_core_from_logical_core(id_, logical_core);
+    return this->virtual_core_from_logical_core(logical_core, CoreType::ETH);
 }
 
-CoreCoord Device::logical_core_from_ethernet_core(const CoreCoord &physical_core) const {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    return soc_desc.get_logical_ethernet_core_from_physical(physical_core);
+CoreCoord Device::logical_core_from_ethernet_core(const CoreCoord &ethernet_core) const {
+    return tt::Cluster::instance().get_logical_ethernet_core_from_virtual(this->id(), ethernet_core);
 }
 
-std::vector<CoreCoord> Device::ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const {
-    std::vector<CoreCoord> ethernet_cores(logical_cores.size());
-
-    for (std::size_t idx = 0; idx < logical_cores.size(); idx++)
-        ethernet_cores[idx] = ethernet_core_from_logical_core(logical_cores[idx]);
-    return ethernet_cores;
-}
-
-uint32_t Device::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& physical_core) const {
-    const auto& grid_size = this->grid_size();
-    return NOC_XY_ENCODING(
-        tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_core.x),
-        tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_core.y)
+uint32_t Device::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const {
+    auto virtual_noc_coord = this->virtual_noc0_coordinate(noc_index, core);
+    return tt::tt_metal::hal.noc_xy_encoding(
+        virtual_noc_coord.x,
+        virtual_noc_coord.y
     );
 }
 
-uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& physical_cores) const {
-    const auto& grid_size = this->grid_size();
+uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const {
+    auto virtual_noc_start = this->virtual_noc0_coordinate(noc_index, cores.start_coord);
+    auto virtual_noc_end = this->virtual_noc0_coordinate(noc_index, cores.end_coord);
 
     // NOC 1 mcasts from bottom left to top right, so we need to reverse the coords
     if (noc_index == 0) {
-        return NOC_MULTICAST_ENCODING(
-            tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.start_coord.x),
-            tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.start_coord.y),
-            tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.end_coord.x),
-            tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.end_coord.y)
+        return tt::tt_metal::hal.noc_multicast_encoding(
+            virtual_noc_start.x,
+            virtual_noc_start.y,
+            virtual_noc_end.x,
+            virtual_noc_end.y
         );
     } else {
-        return NOC_MULTICAST_ENCODING(
-            tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.end_coord.x),
-            tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.end_coord.y),
-            tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.x, physical_cores.start_coord.x),
-            tt::tt_metal::hal.noc_coordinate(noc_index, grid_size.y, physical_cores.start_coord.y)
+        return tt::tt_metal::hal.noc_multicast_encoding(
+            virtual_noc_end.x,
+            virtual_noc_end.y,
+            virtual_noc_start.x,
+            virtual_noc_start.y
         );
     }
 }
 
-const std::unique_ptr<Allocator> &Device::get_initialized_allocator() const {
-    return this->default_sub_device_manager_->get_initialized_allocator(SubDeviceId{0});
+const std::unique_ptr<Allocator>& Device::allocator() const {
+    return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(SubDeviceId{0});
 }
 
-const std::unique_ptr<Allocator> &Device::get_initialized_allocator(SubDeviceId sub_device_id) const {
-    return this->active_sub_device_manager_->get_initialized_allocator(sub_device_id);
-}
-
-void Device::reset_sub_devices_state(const std::unique_ptr<detail::SubDeviceManager> &sub_device_manager) {
-    auto num_sub_devices = sub_device_manager->num_sub_devices();
-
-    // TODO: This could be further optimized by combining all of these into a single prefetch entry
-    // Currently each one will be pushed into its own prefetch entry
-    for (auto& hw_cq : this->hw_command_queues_) {
-        // Only need to reset launch messages once, so reset on cq 0
-        TT_FATAL(!hw_cq->manager.get_bypass_mode(), "Cannot reset worker state during trace capture");
-        hw_cq->reset_worker_state(hw_cq->id == 0);
-        hw_cq->set_num_worker_sems_on_dispatch(num_sub_devices);
-        hw_cq->set_go_signal_noc_data_on_dispatch(sub_device_manager->noc_mcast_unicast_data());
-        hw_cq->reset_config_buffer_mgr(num_sub_devices);
-    }
-    // Reset the launch_message ring buffer state seen on host
-    sub_device_manager->reset_worker_launch_message_buffer_state();
+const std::unique_ptr<Allocator>& Device::allocator(SubDeviceId sub_device_id) const {
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->allocator(sub_device_id);
 }
 
 uint32_t Device::num_sub_devices() const {
-    return this->active_sub_device_manager_->num_sub_devices();
-}
-
-uint32_t Device::num_banks(const BufferType &buffer_type) const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::num_banks(*allocator, buffer_type);
-}
-
-uint32_t Device::num_banks(const BufferType &buffer_type, SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::num_banks(*allocator, buffer_type);
-}
-
-uint32_t Device::bank_size(const BufferType &buffer_type) const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::bank_size(*allocator, buffer_type);
-}
-
-uint32_t Device::bank_size(const BufferType &buffer_type, SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::bank_size(*allocator, buffer_type);
-}
-
-uint32_t Device::dram_channel_from_bank_id(uint32_t bank_id) const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::dram_channel_from_bank_id(*allocator, bank_id);
-}
-
-uint32_t Device::dram_channel_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::dram_channel_from_bank_id(*allocator, bank_id);
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices();
 }
 
 CoreCoord Device::dram_core_from_dram_channel(uint32_t dram_channel) const {
-    return tt::Cluster::instance().get_soc_desc(id_).get_preferred_worker_core_for_dram_channel(dram_channel);
+    return tt::Cluster::instance().get_soc_desc(id_).get_preferred_worker_core_for_dram_view(dram_channel);
 }
 
 CoreCoord Device::logical_core_from_dram_channel(uint32_t dram_channel) const {
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    return tt::Cluster::instance().get_soc_desc(id_).get_logical_core_for_dram_channel(dram_channel);
+    return tt::Cluster::instance().get_soc_desc(id_).get_logical_core_for_dram_view(dram_channel);
 }
 
 uint32_t Device::dram_channel_from_logical_core(const CoreCoord& logical_core) const {
@@ -3235,244 +1272,40 @@ uint32_t Device::dram_channel_from_logical_core(const CoreCoord& logical_core) c
     return tt::Cluster::instance().get_soc_desc(id_).get_dram_channel_from_logical_core(logical_core);
 }
 
-int32_t Device::bank_offset(BufferType buffer_type, uint32_t bank_id) const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::bank_offset(*allocator, buffer_type, bank_id);
-}
-
-int32_t Device::bank_offset(BufferType buffer_type, uint32_t bank_id, SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::bank_offset(*allocator, buffer_type, bank_id);
-}
-
-CoreCoord Device::logical_core_from_bank_id(uint32_t bank_id) const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::logical_core_from_bank_id(*allocator, bank_id);
-}
-
-CoreCoord Device::logical_core_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::logical_core_from_bank_id(*allocator, bank_id);
-}
-
-const std::vector<uint32_t> &Device::bank_ids_from_dram_channel(uint32_t dram_channel) const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::bank_ids_from_dram_channel(*allocator, dram_channel);
-}
-
-const std::vector<uint32_t> &Device::bank_ids_from_dram_channel(uint32_t dram_channel, SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::bank_ids_from_dram_channel(*allocator, dram_channel);
-}
-
-const std::vector<uint32_t> &Device::bank_ids_from_logical_core(
-    BufferType buffer_type, const CoreCoord &logical_core) const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::bank_ids_from_logical_core(*allocator, buffer_type, logical_core);
-}
-
-const std::vector<uint32_t> &Device::bank_ids_from_logical_core(
-    BufferType buffer_type, const CoreCoord &logical_core, SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::bank_ids_from_logical_core(*allocator, buffer_type, logical_core);
-}
-
-allocator::Statistics Device::get_memory_allocation_statistics(const BufferType &buffer_type) const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::get_statistics(*allocator, buffer_type);
-}
-
-allocator::Statistics Device::get_memory_allocation_statistics(const BufferType &buffer_type, SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::get_statistics(*allocator, buffer_type);
-}
-
-uint32_t Device::get_allocator_alignment() const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator->config.alignment;
-}
-
-uint32_t Device::get_allocator_alignment(SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator->config.alignment;
-}
-
-size_t Device::get_l1_small_size() const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator->config.l1_small_size;
-}
-
-size_t Device::get_l1_small_size(SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator->config.l1_small_size;
-}
-
-void Device::dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::dump_memory_blocks(*allocator, buffer_type, out);
-}
-
-void Device::dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out, SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::dump_memory_blocks(*allocator, buffer_type, out);
-}
-
-const std::unordered_set<Buffer *> &Device::get_allocated_buffers() const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::get_allocated_buffers(*allocator);
-}
-
-const std::unordered_set<Buffer *> &Device::get_allocated_buffers(SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::get_allocated_buffers(*allocator);
-}
-
-void Device::deallocate_buffers() {
-    const auto& allocator = this->get_initialized_allocator();
-    allocator::deallocate_buffers(*allocator);
-}
-
-void Device::deallocate_buffers(SubDeviceId sub_device_id) {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    allocator::deallocate_buffers(*allocator);
-}
-
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const {
-    // Global bank id needs to look up a bank from the compute grid (not the storage grid)
-    // Since banks are lockstep in an allocator it doesn't matter if the actual core matches or not
-    auto global_bank_id =
-        this->bank_ids_from_logical_core(BufferType::L1, *this->compute_cores_.begin())[0];
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::lowest_occupied_l1_address(*allocator, global_bank_id);
+    return sub_device_manager_tracker_->lowest_occupied_compute_l1_address();
 }
 
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const {
-    // Sub-device banks are currently all compute banks
-    // Since banks are lockstep in an allocator it doesn't matter which core is used
-    uint32_t sub_device_bank_id = 0;
-    DeviceAddr lowest_addr = std::numeric_limits<DeviceAddr>::max();
-    for (const auto& sub_device_id : sub_device_ids) {
-        const auto& allocator = this->active_sub_device_manager_->sub_device_allocator(sub_device_id);
-        if (allocator) {
-            auto found_addr = allocator::lowest_occupied_l1_address(*allocator, sub_device_bank_id);
-            if (found_addr.has_value()) {
-                lowest_addr = std::min(lowest_addr, *found_addr);
-            }
-        }
-    }
-    // sub-device allocators sit below global allocator. If an address is found for a sub-device, no need to check the global allocator
-    if (lowest_addr != std::numeric_limits<DeviceAddr>::max()) {
-        return lowest_addr;
-    } else {
-        const auto &allocator = this->get_initialized_allocator();
-        // Global bank id needs to look up a bank from the compute grid (not the storage grid)
-        auto global_bank_id =
-            this->bank_ids_from_logical_core(BufferType::L1, *this->compute_cores_.begin())[0];
-        return allocator::lowest_occupied_l1_address(*allocator, global_bank_id);
-    }
+    return sub_device_manager_tracker_->lowest_occupied_compute_l1_address(sub_device_ids);
 }
 
-float Device::sfpu_eps() const {
-    switch (arch()) {
-        case tt::ARCH::GRAYSKULL: return tt::tt_metal::EPS_GS;
-        case tt::ARCH::WORMHOLE_B0: return tt::tt_metal::EPS_WHB0;
-        case tt::ARCH::BLACKHOLE: return tt::tt_metal::EPS_BH;
-        default: return std::numeric_limits<float>::epsilon();
-    }
-
-    return std::numeric_limits<float>::epsilon();
-}
-
-float Device::sfpu_nan() const {
-    switch (arch()) {
-        case tt::ARCH::GRAYSKULL: return tt::tt_metal::NAN_GS;
-        case tt::ARCH::WORMHOLE_B0: return tt::tt_metal::NAN_WHB0;
-        case tt::ARCH::BLACKHOLE: return tt::tt_metal::NAN_BH;
-        default: return std::numeric_limits<float>::quiet_NaN();
-    }
-
-    return std::numeric_limits<float>::quiet_NaN();
-}
-
-// machine inf
-float Device::sfpu_inf() const{
-
-    switch (arch()) {
-        case tt::ARCH::GRAYSKULL:
-            return tt::tt_metal::INF_GS;
-        case tt::ARCH::WORMHOLE_B0:
-            return tt::tt_metal::INF_WHB0;
-        case tt::ARCH::BLACKHOLE:
-            return tt::tt_metal::INF_BH;
-        default:
-            return std::numeric_limits<float>::infinity();
-    }
-    return std::numeric_limits<float>::infinity();
-}
-
-std::pair<int, int> Device::build_processor_type_to_index(uint32_t programmable_core, uint32_t processor_class) const {
-    TT_ASSERT(programmable_core < this->build_state_indices_.size(),
-        "Programmable core type {} is not included in the FW or Kernel build state", programmable_core);
-    TT_ASSERT(processor_class < this->build_state_indices_[programmable_core].size(),
-        "Processor class type {} is not included in the FW or Kernel build state", processor_class);
-    return this->build_state_indices_[programmable_core][processor_class];
-}
-
-// Ideally the firmware getter would be private to the device, however, tests look for this
-const JitBuildState& Device::build_firmware_state(uint32_t programmable_core, uint32_t processor_class, int i) const {
-    return *(this->firmware_build_states_[build_processor_type_to_index(programmable_core, processor_class).first + i]);
-}
-
-const JitBuildState& Device::build_kernel_state(uint32_t programmable_core, uint32_t processor_class, int i) const {
-    return *(this->kernel_build_states_[build_processor_type_to_index(programmable_core, processor_class).first + i]);
-}
-
-const JitBuildStateSubset Device::build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const {
-    std::pair<int, int> bptti = build_processor_type_to_index(programmable_core, processor_class);
-    JitBuildStateSubset subset = {
-        &this->kernel_build_states_[bptti.first],
-        bptti.second
-    };
-    return subset;
-}
-
-const string Device::build_firmware_target_path(uint32_t programmable_core, uint32_t processor_class, int i) const {
-    const JitBuildState& bs = build_firmware_state(programmable_core, processor_class, i);
-    return bs.get_target_out_path("");
-}
-
-const string Device::build_kernel_target_path(uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const {
-    const JitBuildState& bs = build_kernel_state(programmable_core, processor_class, i);
-    return bs.get_target_out_path(kernel_name);
-}
-
-HWCommandQueue& Device::hw_command_queue(size_t cq_id) {
-    detail::DispatchStateCheck(true);
-    TT_FATAL( cq_id < hw_command_queues_.size(), "cq_id {} is out of range", cq_id );
+CommandQueue& Device::command_queue(size_t cq_id) {
+    detail::DispatchStateCheck(using_fast_dispatch_);
+    TT_FATAL(cq_id < command_queues_.size(), "cq_id {} is out of range", cq_id);
     TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
-    return *hw_command_queues_[cq_id];
-}
-
-CommandQueue &Device::command_queue(size_t cq_id) {
-    detail::DispatchStateCheck(using_fast_dispatch);
-    TT_FATAL( cq_id < sw_command_queues_.size(), "cq_id {} is out of range", cq_id );
-    TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
-    return *sw_command_queues_[cq_id];
-}
-
-bool Device::can_use_passthrough_scheduling() const {
-    return this->work_executor.use_passthrough();
+    return *command_queues_[cq_id];
 }
 
 void Device::synchronize() {
-    this->work_executor.synchronize();
+    if (not this->initialized_) {
+        log_warning("Attempting to synchronize Device {} which is not initialized. Ignoring...", this->id_);
+        return;
+    }
+    this->work_executor_->synchronize();
 }
 
-void Device::set_worker_mode(const WorkExecutorMode& mode) {
-    this->work_executor.set_worker_mode(mode);
-}
+void Device::set_worker_mode(const WorkExecutorMode& mode) { this->work_executor_->set_worker_mode(mode); }
 
 void Device::enable_async(bool enable) {
+    if (enable) {
+        tt::log_warning("Async mode is always disabled for a single device, ignoring enable_async call");
+    } else {
+        force_enable_async(false);
+    }
+}
+
+void Device::force_enable_async(bool enable) {
     auto mode = enable ? WorkExecutorMode::ASYNCHRONOUS : WorkExecutorMode::SYNCHRONOUS;
     this->set_worker_mode(mode);
     // If a worker thread is spawned for a device, register/track it in a runtime structure.
@@ -3480,267 +1313,361 @@ void Device::enable_async(bool enable) {
     // This is required for checking if a call is made from an application thread or a worker thread.
     // See InWorkerThread().
     if (enable) {
-        tt::DevicePool::instance().register_worker_thread_for_device(tt::DevicePool::instance().get_handle(this), this->work_executor.get_worker_thread_id());
+        tt::DevicePool::instance().register_worker_thread_for_device(
+            this, this->work_executor_->get_worker_thread_id());
     } else {
-        tt::DevicePool::instance().unregister_worker_thread_for_device(tt::DevicePool::instance().get_handle(this));
+        tt::DevicePool::instance().unregister_worker_thread_for_device(this);
     }
 }
 
 bool Device::using_slow_dispatch() const {
-    return not (this->using_fast_dispatch);
+    return !using_fast_dispatch();
+}
+
+bool Device::using_fast_dispatch() const {
+    return using_fast_dispatch_;
 }
 
 void Device::begin_trace(const uint8_t cq_id, const uint32_t tid) {
-    ZoneScoped;
-    TracyTTMetalBeginTrace(this->id(), tid);
-    TT_FATAL(!this->hw_command_queues_[cq_id]->tid.has_value(), "CQ {} is already being used for tracing tid {}", (uint32_t)cq_id, tid);
-    this->MarkAllocationsSafe();
-    // Create an empty trace buffer here. This will get initialized in end_trace
-    TT_FATAL(this->active_sub_device_manager_->get_trace(tid) == nullptr, "Trace already exists for tid {} on device {}'s active sub-device manager {}", tid, this->id_, this->active_sub_device_manager_id_);
-    auto &trace_buffer = this->active_sub_device_manager_->create_trace(tid);
-    this->hw_command_queues_[cq_id]->record_begin(tid, trace_buffer->desc);
+    this->push_work(
+        [this, cq_id, tid]() mutable {
+            ZoneScoped;
+
+            TracyTTMetalBeginTrace(this->id(), tid);
+            TT_FATAL(
+                !this->command_queues_[cq_id]->tid().has_value(),
+                "CQ {} is already being used for tracing tid {}",
+                (uint32_t)cq_id,
+                tid);
+            this->mark_allocations_safe();
+            // Create an empty trace buffer here. This will get initialized in end_trace
+            auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
+            TT_FATAL(
+                active_sub_device_manager->get_trace(tid) == nullptr,
+                "Trace already exists for tid {} on device {}'s active sub-device manager {}",
+                tid,
+                this->id_,
+                active_sub_device_manager->id());
+            auto& trace_buffer = active_sub_device_manager->create_trace(tid);
+            this->command_queues_[cq_id]->record_begin(tid, trace_buffer->desc);
+        },
+        false /* blocking */);
 }
 
 void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
-    ZoneScoped;
-    TracyTTMetalEndTrace(this->id(), tid);
-    TT_FATAL(this->hw_command_queues_[cq_id]->tid == tid, "CQ {} is not being used for tracing tid {}", (uint32_t)cq_id, tid);
-    auto trace_buffer = this->active_sub_device_manager_->get_trace(tid);
-    TT_FATAL(trace_buffer != nullptr, "Trace instance {} must exist on device {}'s active sub-device manager {}", tid, this->id_, this->active_sub_device_manager_id_);
-    this->hw_command_queues_[cq_id]->record_end();
-    Trace::initialize_buffer(this->command_queue(cq_id), trace_buffer);
-    this->MarkAllocationsUnsafe();
+    this->push_work(
+        [this, cq_id, tid]() mutable {
+            ZoneScoped;
+            TracyTTMetalEndTrace(this->id(), tid);
+            TT_FATAL(
+                this->command_queues_[cq_id]->tid() == tid,
+                "CQ {} is not being used for tracing tid {}",
+                (uint32_t)cq_id,
+                tid);
+            auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
+            auto trace_buffer = active_sub_device_manager->get_trace(tid);
+            TT_FATAL(
+                trace_buffer != nullptr,
+                "Trace instance {} must exist on device {}'s active sub-device manager {}",
+                tid,
+                this->id_,
+                active_sub_device_manager->id());
+            this->command_queues_[cq_id]->record_end();
+
+            // Capture Trace if light metal trace capturing is enabled.
+            auto& lm_capture_ctx = LightMetalCaptureContext::get();
+            if (lm_capture_ctx.is_tracing()) {
+                lm_capture_ctx.capture_trace_descriptor(*trace_buffer->desc, tid);
+            }
+
+            Trace::initialize_buffer(this->command_queue(cq_id), trace_buffer);
+            this->mark_allocations_unsafe();
+        },
+        false /* blocking */);
 }
 
-void Device::replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking) {
-    ZoneScoped;
-    TracyTTMetalReplayTrace(this->id(), tid);
-    constexpr bool check = false;
-    const auto &trace_buffer = this->active_sub_device_manager_->get_trace(tid);
-    TT_FATAL(trace_buffer != nullptr, "Trace instance {} must exist on device {}'s active sub-device manager {}", tid, this->id_, this->active_sub_device_manager_id_);
-    if constexpr (check) {
-        Trace::validate_instance(*trace_buffer);
-    }
-    EnqueueTrace(this->command_queue(cq_id), tid, blocking);
+// Load the TraceDescriptor for a given trace_id to the device. A combination of logic from begin/end_trace.
+void Device::load_trace(const uint8_t cq_id, const uint32_t trace_id, const TraceDescriptor& trace_desc) {
+    this->mark_allocations_safe();
+
+    auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
+    TT_FATAL(
+        active_sub_device_manager->get_trace(trace_id) == nullptr,
+        "Trace already exists for trace_id {} on device {}'s active sub-device manager {}",
+        trace_id,
+        this->id_,
+        active_sub_device_manager->id());
+
+    auto& trace_buffer = active_sub_device_manager->create_trace(trace_id);
+    *trace_buffer->desc = trace_desc;
+    Trace::initialize_buffer(this->command_queue(cq_id), trace_buffer);
+    this->mark_allocations_unsafe();
+}
+
+void Device::replay_trace(
+    const uint8_t cq_id, const uint32_t tid, const bool block_on_device, const bool block_on_worker_thread) {
+    // If blocking, ensure that worker thread blocks until trace is completed
+    this->push_work(
+        [this, cq_id, tid, block_on_device]() mutable {
+            ZoneScoped;
+            TracyTTMetalReplayTrace(this->id(), tid);
+            constexpr bool check = false;
+            auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
+            const auto& trace_buffer = active_sub_device_manager->get_trace(tid);
+            TT_FATAL(
+                trace_buffer != nullptr,
+                "Trace instance {} must exist on device {}'s active sub-device manager {}",
+                tid,
+                this->id_,
+                active_sub_device_manager->id());
+            if constexpr (check) {
+                trace_buffer->validate();
+            }
+            EnqueueTrace(this->command_queue(cq_id), tid, block_on_device);
+        },
+        block_on_worker_thread);
 }
 
 void Device::release_trace(const uint32_t tid) {
-    ZoneScoped;
-    TracyTTMetalReleaseTrace(this->id(), tid);
+    this->push_work(
+        [this, tid]() mutable {
+            ZoneScoped;
+            TracyTTMetalReleaseTrace(this->id(), tid);
 
-    this->active_sub_device_manager_->release_trace(tid);
+            sub_device_manager_tracker_->get_active_sub_device_manager()->release_trace(tid);
 
-    // Only enable allocations once all captured traces are released
-    if (this->trace_buffers_size == 0) {
-        this->MarkAllocationsSafe();
-    }
+            // Only enable allocations once all captured traces are released
+            if (this->trace_buffers_size_ == 0) {
+                this->mark_allocations_safe();
+            }
+        },
+        false /* blocking */);
 }
 
 std::shared_ptr<TraceBuffer> Device::get_trace(uint32_t tid) {
-    return this->active_sub_device_manager_->get_trace(tid);
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->get_trace(tid);
 }
 
-void Device::MarkAllocationsUnsafe() {
-    tt::tt_metal::allocator::mark_allocations_unsafe(*this->get_initialized_allocator());
+void Device::enable_program_cache() {
+    log_info(tt::LogMetal, "Enabling program cache on device {}", this->id_);
+    this->synchronize();
+    program_cache_.enable();
 }
-
-void Device::MarkAllocationsSafe() {
-    tt::tt_metal::allocator::mark_allocations_safe(*this->get_initialized_allocator());
-}
-
-void Device::generate_device_headers(const std::string &path) const
-{
-    const size_t num_dram_banks = this->num_banks(BufferType::DRAM);
-    const size_t num_dram_banks_pow2 = std::pow(2, std::ceil(std::log2(num_dram_banks)));
-    std::vector<CoreCoord> dram_noc_coord_per_bank(num_dram_banks);
-    std::vector<int32_t> dram_offsets_per_bank(num_dram_banks);
-    for (unsigned bank_id = 0; bank_id < num_dram_banks; bank_id++) {
-        dram_noc_coord_per_bank[bank_id] = this->dram_core_from_dram_channel(this->dram_channel_from_bank_id(bank_id));
-        dram_offsets_per_bank[bank_id] = this->bank_offset(BufferType::DRAM, bank_id);
+void Device::disable_and_clear_program_cache() {
+    log_info(tt::LogMetal, "Disabling and clearing program cache on device {}", this->id_);
+    this->synchronize();
+    if (this->program_cache_.is_enabled()) {
+        program_cache_.disable();
     }
-    const size_t num_l1_banks = this->num_banks(BufferType::L1);
-    const size_t num_l1_banks_pow2 = std::pow(2, std::ceil(std::log2(num_l1_banks)));
+    program_cache_.clear();
+}
+std::size_t Device::num_program_cache_entries() {
+    this->synchronize();
+    return program_cache_.num_entries();
+}
+
+void Device::mark_allocations_unsafe() { this->allocator()->mark_allocations_unsafe(); }
+
+void Device::mark_allocations_safe() { this->allocator()->mark_allocations_safe(); }
+
+void Device::generate_device_bank_to_noc_tables()
+{
+    const auto& allocator = this->allocator();
+    const size_t num_dram_banks = allocator->get_num_banks(BufferType::DRAM);
+    std::vector<CoreCoord> dram_noc_coord_per_bank(num_dram_banks);
+    dram_bank_offset_map_.clear();
+    dram_bank_offset_map_.resize(num_dram_banks);
+    for (unsigned bank_id = 0; bank_id < num_dram_banks; bank_id++) {
+        dram_noc_coord_per_bank[bank_id] =
+            this->dram_core_from_dram_channel(allocator->get_dram_channel_from_bank_id(bank_id));
+        dram_bank_offset_map_[bank_id] = allocator->get_bank_offset(BufferType::DRAM, bank_id);
+    }
+    const size_t num_l1_banks = allocator->get_num_banks(BufferType::L1);
     std::vector<CoreCoord> l1_noc_coord_per_bank(num_l1_banks);
-    std::vector<int32_t> l1_offset_per_bank(num_l1_banks);
+    l1_bank_offset_map_.clear();
+    l1_bank_offset_map_.resize(num_l1_banks);
     for (unsigned bank_id = 0; bank_id < num_l1_banks; bank_id++) {
-        l1_noc_coord_per_bank[bank_id] = this->worker_core_from_logical_core(this->logical_core_from_bank_id(bank_id));
-        l1_offset_per_bank[bank_id] = this->bank_offset(BufferType::L1, bank_id);
+        l1_noc_coord_per_bank[bank_id] =
+            this->worker_core_from_logical_core(allocator->get_logical_core_from_bank_id(bank_id));
+        l1_bank_offset_map_[bank_id] = allocator->get_bank_offset(BufferType::L1, bank_id);
     }
 
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(this->id());
 
-    // Generate header file in proper location
-    jit_build_genfiles_bank_to_noc_coord_descriptor (
-        path,
-        soc_d.grid_size,
-        dram_noc_coord_per_bank,
-        dram_offsets_per_bank,
-        l1_noc_coord_per_bank,
-        l1_offset_per_bank,
-        this->get_allocator_alignment()
-    );
-}
+    dram_bank_to_noc_xy_.clear();
+    dram_bank_to_noc_xy_.reserve(tt::tt_metal::hal.get_num_nocs() * dram_noc_coord_per_bank.size());
+    for (unsigned int noc = 0; noc < tt::tt_metal::hal.get_num_nocs(); noc++) {
+        for (unsigned int bank_id = 0; bank_id < dram_noc_coord_per_bank.size(); bank_id++) {
+            uint16_t noc_x = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.x, dram_noc_coord_per_bank[bank_id].x);
+            uint16_t noc_y = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord_per_bank[bank_id].y);
+            uint16_t xy = ((noc_y << tt::tt_metal::hal.get_noc_addr_node_id_bits()) | noc_x)
+                          << tt::tt_metal::hal.get_noc_coord_reg_offset();
+            dram_bank_to_noc_xy_.push_back(xy);
+        }
+    }
 
-size_t Device::get_device_kernel_defines_hash() {
-    return tt::utils::DefinesHash{}(this->device_kernel_defines_);
+    l1_bank_to_noc_xy_.clear();
+    l1_bank_to_noc_xy_.reserve(tt::tt_metal::hal.get_num_nocs() * l1_noc_coord_per_bank.size());
+    for (unsigned int noc = 0; noc < tt::tt_metal::hal.get_num_nocs(); noc++) {
+        for (unsigned int bank_id = 0; bank_id < l1_noc_coord_per_bank.size(); bank_id++) {
+            auto l1_noc_coords = this->virtual_noc0_coordinate(noc, l1_noc_coord_per_bank[bank_id]);
+            uint16_t noc_x = l1_noc_coords.x;
+            uint16_t noc_y = l1_noc_coords.y;
+            uint16_t xy = ((noc_y << tt::tt_metal::hal.get_noc_addr_node_id_bits()) | noc_x)
+                          << tt::tt_metal::hal.get_noc_coord_reg_offset();
+            l1_bank_to_noc_xy_.push_back(xy);
+        }
+    }
 }
 
 uint8_t Device::num_noc_mcast_txns(SubDeviceId sub_device_id) const {
-    return this->active_sub_device_manager_->num_noc_mcast_txns(sub_device_id);
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_mcast_txns(sub_device_id);
 }
 
 uint8_t Device::num_noc_unicast_txns(SubDeviceId sub_device_id) const {
-    return this->active_sub_device_manager_->num_noc_unicast_txns(sub_device_id);
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_unicast_txns(sub_device_id);
 }
 
 uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data, bool unicast_data) const {
     if (mcast_data) {
-        return this->active_sub_device_manager_->noc_mcast_data_start_index(sub_device_id);
+        return sub_device_manager_tracker_->get_active_sub_device_manager()->noc_mcast_data_start_index(sub_device_id);
     } else if (unicast_data) {
-        return this->active_sub_device_manager_->noc_unicast_data_start_index(sub_device_id);
+        return sub_device_manager_tracker_->get_active_sub_device_manager()->noc_unicast_data_start_index(
+            sub_device_id);
     } else {
         return 0;
     }
 }
 
-LaunchMessageRingBufferState& Device::get_worker_launch_message_buffer_state(SubDeviceId sub_device_id) {
-    return this->active_sub_device_manager_->get_worker_launch_message_buffer_state(sub_device_id);
-}
-
-NOC Device::dispatch_go_signal_noc() const {
-    return this->dispatch_s_enabled() ? NOC::NOC_1 : NOC::NOC_0;
-}
-
-SubDeviceManagerId Device::get_next_sub_device_manager_id() {
-    return this->next_sub_device_manager_id_++;
+CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
+    return this->command_queues_[cq_id]->virtual_enqueue_program_dispatch_core();
 }
 
 SubDeviceManagerId Device::get_active_sub_device_manager_id() const {
-    return this->active_sub_device_manager_id_;
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->id();
 }
 
 SubDeviceManagerId Device::get_default_sub_device_manager_id() const {
-    return this->default_sub_device_manager_id_;
+    return sub_device_manager_tracker_->get_default_sub_device_manager()->id();
 }
 
 SubDeviceManagerId Device::create_sub_device_manager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
-    auto [sub_device_manager, _] = this->sub_device_managers_.insert_or_assign(this->get_next_sub_device_manager_id(), std::make_unique<detail::SubDeviceManager>(sub_devices, local_l1_size, this));
-    return sub_device_manager->first;
+    return sub_device_manager_tracker_->create_sub_device_manager(sub_devices, local_l1_size);
+}
+
+std::tuple<SubDeviceManagerId, SubDeviceId> Device::create_sub_device_manager_with_fabric(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
+    return sub_device_manager_tracker_->create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
 }
 
 void Device::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
-    TT_FATAL(!this->using_slow_dispatch(), "Using sub device managers is unsupported with slow dispatch");
-    if (this->active_sub_device_manager_id_ == sub_device_manager_id) {
-        return;
-    }
-    if (this->active_sub_device_manager_id_ != this->default_sub_device_manager_id_) {
-        TT_FATAL(!this->active_sub_device_manager_->has_allocations(), "Cannot switch sub device managers while sub devices still have local allocations");
-    }
-    auto sub_device_manager = this->sub_device_managers_.find(sub_device_manager_id);
-    TT_FATAL(sub_device_manager != this->sub_device_managers_.end(), "Sub device manager does not exist");
-    this->reset_sub_devices_state(sub_device_manager->second);
-    const auto& global_allocator = this->get_initialized_allocator();
-    allocator::reset_allocator_size(*global_allocator, BufferType::L1);
-    // Shrink the global allocator size to make room for sub-device allocators
-    auto local_l1_size = sub_device_manager->second->local_l1_size();
-    allocator::shrink_allocator_size(*global_allocator, BufferType::L1, local_l1_size, true);
-    this->active_sub_device_manager_id_ = sub_device_manager_id;
-    this->active_sub_device_manager_ = sub_device_manager->second.get();
+    sub_device_manager_tracker_->load_sub_device_manager(sub_device_manager_id);
 }
 
-void Device::clear_loaded_sub_device_manager() {
-    this->load_sub_device_manager(this->default_sub_device_manager_id_);
-}
+void Device::clear_loaded_sub_device_manager() { sub_device_manager_tracker_->clear_loaded_sub_device_manager(); }
 
 void Device::remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
-    if (this->active_sub_device_manager_ != nullptr) {
-        TT_FATAL(sub_device_manager_id != this->active_sub_device_manager_id_, "Cannot remove active sub device manager {}", sub_device_manager_id);
-        TT_FATAL(sub_device_manager_id != this->default_sub_device_manager_id_, "Cannot remove default sub device manager {}", sub_device_manager_id);
-    }
-    auto sub_device_manager = this->sub_device_managers_.find(sub_device_manager_id);
-    TT_FATAL(sub_device_manager != this->sub_device_managers_.end(), "Sub device manager does not exist");
-    this->sub_device_managers_.erase(sub_device_manager);
+    sub_device_manager_tracker_->remove_sub_device_manager(sub_device_manager_id);
 }
 
 const std::vector<SubDeviceId> &Device::get_sub_device_ids() const {
-    return this->active_sub_device_manager_->get_sub_device_ids();
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->get_sub_device_ids();
 }
 
-size_t v1::GetNumAvailableDevices() { return tt::Cluster::instance().number_of_user_devices(); }
-
-size_t v1::GetNumPCIeDevices() { return tt::Cluster::instance().number_of_pci_devices(); }
-
-chip_id_t v1::GetPCIeDeviceID(chip_id_t device_id) {
-    return tt::Cluster::instance().get_associated_mmio_device(device_id);
+const std::vector<SubDeviceId> &Device::get_sub_device_stall_group() const {
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->get_sub_device_stall_group();
 }
 
-v1::DeviceHandle v1::CreateDevice(chip_id_t device_id, CreateDeviceOptions options) {
-    ZoneScoped;
-
-    tt::DevicePool::initialize(
-        {device_id},
-        options.num_hw_cqs,
-        options.l1_small_size,
-        options.trace_region_size,
-        options.dispatch_core_type,
-        options.l1_bank_remap);
-
-    return tt::DevicePool::instance().get_active_device(device_id);
+void Device::set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    sub_device_manager_tracker_->get_active_sub_device_manager()->set_sub_device_stall_group(sub_device_ids);
 }
 
-bool v1::CloseDevice(DeviceHandle device) { return v0::CloseDevice(device); }
-
-void v1::DeallocateBuffers(DeviceHandle device) { device->deallocate_buffers(); }
-
-void v1::DumpDeviceProfileResults(DeviceHandle device, const CoreRangeSet &worker_cores, bool last_dump) {
-    auto worker_cores_vec = corerange_to_cores(worker_cores);
-    detail::DumpDeviceProfileResults(device, worker_cores_vec, last_dump);
+void Device::reset_sub_device_stall_group() {
+    sub_device_manager_tracker_->get_active_sub_device_manager()->reset_sub_device_stall_group();
 }
 
-ARCH v1::GetArch(DeviceHandle device) { return device->arch(); }
+std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignment() {
+    // Top level function that users (ex: Op Writers) can use to assign Tensix Worker cores
+    // as DRAM readers or writers. Returns logical coordinates of optimally placed workers.
+    // This function queries Physical Coordinates (only exposed directly to the Device class)
+    // and passes them to logic in core_assignment.cpp to derive the most optimal core placement
+    // based on architecture specific logic and Physical Grid configuration.
+    if (not this->optimal_dram_bank_to_logical_worker_assignment_.size()) {
+        uint32_t full_grid_size_x = this->grid_size().x;
+        uint32_t full_grid_size_y = this->grid_size().y;
 
-chip_id_t v1::GetId(DeviceHandle device) { return device->id(); }
-
-int v1::GetNumDramChannels(DeviceHandle device) { return device->num_dram_channels(); }
-
-std::uint32_t v1::GetL1SizePerCore(DeviceHandle device) { return device->l1_size_per_core(); }
-
-CoreCoord v1::GetComputeWithStorageGridSize(DeviceHandle device) { return device->compute_with_storage_grid_size(); }
-
-CoreCoord v1::GetDramGridSize(DeviceHandle device) { return device->dram_grid_size(); }
-
-void v1::EnableProgramCache(DeviceHandle device) { device->enable_program_cache(); }
-
-void v1::DisableAndClearProgramCache(DeviceHandle device) { device->disable_and_clear_program_cache(); }
-
-void v1::PushWork(DeviceHandle device, std::function<void()> work, bool blocking) {
-    device->push_work(std::move(work), blocking);
+        auto compute_with_storage_grid_size = this->compute_with_storage_grid_size();
+        uint32_t num_cores_x = compute_with_storage_grid_size.x;
+        uint32_t num_cores_y = compute_with_storage_grid_size.y;
+        // Get physical coordinates of DRAM Controller NOC end-points
+        uint32_t num_dram_banks = this->num_dram_channels();
+        std::vector<CoreCoord> dram_phy_coords;
+        for (int i = 0; i < num_dram_banks; ++i) {
+            dram_phy_coords.push_back(dram_core_from_dram_channel(i));
+        }
+        // Get all logical cores in the worker grid
+        std::vector<CoreCoord> all_worker_cores_logical;
+        for (int i = 0; i < num_cores_x; ++i) {
+            for (int j = 0; j < num_cores_y; ++j) {
+                all_worker_cores_logical.push_back(CoreCoord(i, j));
+            }
+        }
+        // Get the physical rows and cols  (y, x) in the worker grid
+        std::vector<uint32_t> worker_phy_y = std::vector<uint32_t>(num_cores_y);
+        for (int i = 0; i < num_cores_y; ++i) {
+            auto core_phy = this->physical_worker_core_from_logical_core(CoreCoord(0, i));
+            worker_phy_y.at(i) = core_phy.y;
+        }
+        std::vector<uint32_t> worker_phy_x = std::vector<uint32_t>(num_cores_x);
+        for (int i = 0; i < num_cores_x; ++i) {
+            auto core_phy = this->physical_worker_core_from_logical_core(CoreCoord(i, 0));
+            worker_phy_x.push_back(core_phy.x);
+        }
+        // Get optimal placement of worker cores interfacing with DRAM Controllers in physical coordinate space
+        auto physical_worker_cores = get_optimal_dram_to_physical_worker_assignment(this->arch(), dram_phy_coords, full_grid_size_x, full_grid_size_y, worker_phy_x, worker_phy_y);
+        // Convert to physical worker coordinates to logical. This gets returned to the user.
+        for (int i = 0; i < physical_worker_cores.size(); ++i) {
+            for (int j = 0; j < all_worker_cores_logical.size(); ++j) {
+                auto core = this->physical_worker_core_from_logical_core(all_worker_cores_logical[j]);
+                if (physical_worker_cores[i] == core) {
+                    this->optimal_dram_bank_to_logical_worker_assignment_.push_back(all_worker_cores_logical[j]);
+                }
+            }
+        }
+    }
+    return this->optimal_dram_bank_to_logical_worker_assignment_;
 }
 
-void v1::Synchronize(DeviceHandle device) { device->synchronize(); }
+HalProgrammableCoreType Device::get_programmable_core_type(CoreCoord virtual_core) const {
+    if (!tt::Cluster::instance().is_ethernet_core(virtual_core, this->id_)) {
+        return HalProgrammableCoreType::TENSIX;
+    }
 
-std::vector<CoreCoord> v1::GetEthernetSockets(DeviceHandle device, chip_id_t connected_chip_id) {
-    return device->get_ethernet_sockets(connected_chip_id);
+    // Eth pcores have a different address, but only active ones.
+    CoreCoord logical_core = this->logical_core_from_ethernet_core(virtual_core);
+    if (this->is_active_ethernet_core(logical_core)) {
+        return HalProgrammableCoreType::ACTIVE_ETH;
+    }
+
+    return HalProgrammableCoreType::IDLE_ETH;
 }
 
-std::uint32_t v1::GetNumBanks(DeviceHandle device, BufferType buffer_type) { return device->num_banks(buffer_type); }
+// TODO: Find a better home for this function
+// Extracts all the pairs of noc multicast encodings given a set of core ranges
+std::vector<std::pair<transfer_info_cores, uint32_t>> Device::extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) {
+    std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info;
+    dst_noc_multicast_info.reserve(ranges.size());
+    for (const CoreRange& core_range : ranges) {
+        CoreCoord virtual_start = this->virtual_core_from_logical_core(core_range.start_coord, core_type);
+        CoreCoord virtual_end = this->virtual_core_from_logical_core(core_range.end_coord, core_type);
 
-std::int32_t v1::GetBankOffset(DeviceHandle device, BufferType buffer_type, std::uint32_t bank_id) {
-    return device->bank_offset(buffer_type, bank_id);
+        uint32_t num_receivers = core_range.size();
+        dst_noc_multicast_info.push_back(std::make_pair(CoreRange(virtual_start, virtual_end), num_receivers));
+    }
+    return dst_noc_multicast_info;
 }
 
-tt::stl::Span<const std::uint32_t> v1::BankIdsFromLogicalCore(
-    DeviceHandle device, BufferType buffer_type, CoreCoord logical_core) {
-    return device->bank_ids_from_logical_core(buffer_type, logical_core);
-}
-
-float v1::GetSfpuEps(DeviceHandle device) { return device->sfpu_eps(); }
-
-float v1::GetSfpuNan(DeviceHandle device) { return device->sfpu_nan(); }
-
-float v1::GetSfpuInf(DeviceHandle device) { return device->sfpu_inf(); }
-
-std::size_t v1::GetNumProgramCacheEntries(DeviceHandle device) { return device->num_program_cache_entries(); }
+tt::WorkExecutorMode Device::get_worker_mode() { return work_executor_->get_worker_mode(); }
+bool Device::is_worker_queue_empty() const { return work_executor_->worker_queue.empty(); }
 
 }  // namespace tt_metal
 

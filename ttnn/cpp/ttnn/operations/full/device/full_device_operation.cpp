@@ -50,20 +50,20 @@ void FullOperation::validate_on_program_cache_hit(
     validate_inputs(operation_attributes, tensor_args);
 };
 
-FullOperation::shape_return_value_t FullOperation::compute_output_shapes(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return SimpleShape(operation_attributes.shape);
+FullOperation::spec_return_value_t FullOperation::compute_output_specs(
+    const operation_attributes_t& operation_attributes, const tensor_args_t&) {
+    return TensorSpec(
+        Shape(operation_attributes.shape),
+        tt::tt_metal::TensorLayout(
+            operation_attributes.dtype,
+            tt::tt_metal::PageConfig(operation_attributes.layout),
+            operation_attributes.memory_config));
 };
 
 FullOperation::tensor_return_value_t FullOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto output_shape = compute_output_shapes(operation_attributes, tensor_args);
-    return create_device_tensor(
-        output_shape,
-        operation_attributes.dtype,
-        operation_attributes.layout,
-        tensor_args.any.device(),
-        operation_attributes.memory_config);
+    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    return create_device_tensor(output_spec, tensor_args.any.device());
 }
 
 std::tuple<FullOperation::operation_attributes_t, FullOperation::tensor_args_t> FullOperation::invoke(

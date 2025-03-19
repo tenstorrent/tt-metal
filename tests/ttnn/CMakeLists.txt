@@ -6,7 +6,7 @@ function(setup_ttnn_test_target target_name)
             test_common_libs
             ttnn
             Metalium::Metal
-            GTest::gtest_main
+            GTest::gmock_main
     )
     target_include_directories(
         ${target_name}
@@ -25,5 +25,4 @@ function(setup_ttnn_test_target target_name)
     )
 endfunction()
 
-add_subdirectory(distributed)
 add_subdirectory(unit_tests/gtests)

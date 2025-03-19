@@ -5,7 +5,7 @@
 #include <optional>
 
 #include "moreh_adamw_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_adamw {
@@ -47,7 +47,7 @@ MorehAdamWDeviceOperation::MultiCore::cached_program_t MorehAdamWDeviceOperation
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Device* device = param_in.device();
+    tt_metal::IDevice* device = param_in.device();
     auto grid = device->compute_with_storage_grid_size();
     const auto num_cores_y = grid.y;
 
@@ -69,27 +69,27 @@ MorehAdamWDeviceOperation::MultiCore::cached_program_t MorehAdamWDeviceOperation
         all_cores,
         data_format,
         {
-            {CB::c_in0, 1},                      // param_in
-            {CB::c_in1, 1},                      // grad
-            {CB::c_in2, 1},                      // exp_avg_in
-            {CB::c_in3, 1},                      // exp_avg_sq_in
-            {CB::c_in4, 1},                      // max_exp_avg_sq_in (optional)
-            {CB::c_in5, 5, intermed_cb_format},  // lr, beta1, beta2, eps, weight_decay
-            {CB::c_in6, 1, intermed_cb_format},  // 1.0f
+            {CBIndex::c_0, 1},                      // param_in
+            {CBIndex::c_1, 1},                      // grad
+            {CBIndex::c_2, 1},                      // exp_avg_in
+            {CBIndex::c_3, 1},                      // exp_avg_sq_in
+            {CBIndex::c_4, 1},                      // max_exp_avg_sq_in (optional)
+            {CBIndex::c_5, 5, intermed_cb_format},  // lr, beta1, beta2, eps, weight_decay
+            {CBIndex::c_6, 1, intermed_cb_format},  // 1.0f
 
-            {CB::c_intermed0, 1, intermed_cb_format},  // tmp_grad
-            {CB::c_intermed1, 1, intermed_cb_format},  // tmp_exp_avg
-            {CB::c_intermed2, 1, intermed_cb_format},  // tmp_exp_avg_sq
-            {CB::c_intermed3, 1, intermed_cb_format},  // tmp_max_exp_avg_sq
-            {CB::c_intermed4, 1, intermed_cb_format},  // beta1_exponent
-            {CB::c_intermed5, 1, intermed_cb_format},  // beta2_exponent
-            {CB::c_intermed6, 1, intermed_cb_format},  // tmp1
-            {CB::c_intermed7, 1, intermed_cb_format},  // tmp2
+            {CBIndex::c_24, 1, intermed_cb_format},  // tmp_grad
+            {CBIndex::c_25, 1, intermed_cb_format},  // tmp_exp_avg
+            {CBIndex::c_26, 1, intermed_cb_format},  // tmp_exp_avg_sq
+            {CBIndex::c_27, 1, intermed_cb_format},  // tmp_max_exp_avg_sq
+            {CBIndex::c_28, 1, intermed_cb_format},  // beta1_exponent
+            {CBIndex::c_29, 1, intermed_cb_format},  // beta2_exponent
+            {CBIndex::c_30, 1, intermed_cb_format},  // tmp1
+            {CBIndex::c_31, 1, intermed_cb_format},  // tmp2
 
-            {CB::c_out0, 1},  // param_out
-            {CB::c_out1, 1},  // exp_avg_out
-            {CB::c_out2, 1},  // exp_avg_sq_out
-            {CB::c_out3, 1},  // max_exp_avg_sq_out (optional)
+            {CBIndex::c_16, 1},  // param_out
+            {CBIndex::c_17, 1},  // exp_avg_out
+            {CBIndex::c_18, 1},  // exp_avg_sq_out
+            {CBIndex::c_19, 1},  // max_exp_avg_sq_out (optional)
         });
 
     ////////////////////////////////////////////////////////////////////////////

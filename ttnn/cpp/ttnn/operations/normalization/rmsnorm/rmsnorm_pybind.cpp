@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "rmsnorm.hpp"
 
 namespace ttnn::operations::normalization::detail {
@@ -15,7 +15,6 @@ namespace ttnn::operations::normalization::detail {
 namespace py = pybind11;
 
 void bind_normalization_rms_norm(py::module& module) {
-
     ttnn::bind_registered_operation(
         module,
         ttnn::rms_norm,

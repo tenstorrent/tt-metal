@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
     // compile-time args
@@ -14,7 +14,7 @@ void kernel_main() {
     const auto num_tiles = arg_fetcher.get_next_arg_val<uint32_t>();
     const auto start_id = arg_fetcher.get_next_arg_val<uint32_t>();
 
-    constexpr uint32_t cb_id_out = tt::CB::c_out0;
+    constexpr uint32_t cb_id_out = tt::CBIndex::c_16;
     constexpr uint32_t onetile = 1;
 
     uint32_t input_grad_tile_bytes = get_tile_size(cb_id_out);

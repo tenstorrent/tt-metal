@@ -194,6 +194,12 @@ def test_sin(device, h, w):
     run_unary_test(device, h, w, ttnn.sin)
 
 
+@pytest.mark.parametrize("h", [0])
+@pytest.mark.parametrize("w", [1])
+def test_01_volume_sin(device, h, w):
+    run_unary_test(device, h, w, ttnn.sin)
+
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_asin(device, h, w):
@@ -315,6 +321,22 @@ def run_unary_test_with_float(device, h, w, scalar, ttnn_function, pcc=0.9999):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
+def run_unary_test_with_float_remainder(device, h, w, scalar, ttnn_function, pcc=0.9999):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    torch_output_tensor = golden_function(torch_input_tensor, scalar, device=device)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn_function(input_tensor, scalar)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
 @pytest.mark.parametrize("scalar", [1, 2])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
@@ -337,7 +359,7 @@ def test_logit(device, h, w, scalar):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_pow(device, h, w, scalar):
-    run_unary_test_with_float(device, h, w, scalar, ttnn.pow, pcc=0.9)
+    run_unary_test_with_float(device, h, w, scalar, ttnn.pow, pcc=0.999)
 
 
 @pytest.mark.parametrize("lower_limit", [0, 1.0, 2])
@@ -383,7 +405,7 @@ def test_relu_max(device, h, w, upper_limit):
 @pytest.mark.parametrize("w", [128])
 @skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 def test_remainder(device, h, w, scalar):
-    run_unary_test_with_float(device, h, w, scalar, ttnn.remainder)
+    run_unary_test_with_float_remainder(device, h, w, scalar, ttnn.remainder)
 
 
 @pytest.mark.parametrize("scalar", [1.5, 2.0])
@@ -428,3 +450,41 @@ def run_unary_test_bitwise_not(device, h, w, fill_value, ttnn_function, pcc=0.99
 @pytest.mark.parametrize("fill_value", [-2147483647, 2147483648, 7534, 225, 97, 3])
 def test_bitwise_not(device, h, w, fill_value):
     run_unary_test_bitwise_not(device, h, w, fill_value, ttnn.bitwise_not)
+
+
+@skip_for_grayskull()
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_floor(input_shapes, device):
+    in_data1 = torch.empty(input_shapes, dtype=torch.float32).uniform_(-43566, 43565)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.floor(input_tensor1)
+    golden_function = ttnn.get_golden_function(ttnn.floor)
+    golden_tensor = golden_function(in_data1)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(golden_tensor, output_tensor, 0.999)
+
+
+@skip_for_grayskull()
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_ceil(input_shapes, device):
+    in_data1 = torch.empty(input_shapes, dtype=torch.float32).uniform_(-43566, 43565)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.ceil(input_tensor1)
+    golden_function = ttnn.get_golden_function(ttnn.ceil)
+    golden_tensor = golden_function(in_data1)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(golden_tensor, output_tensor, 0.999)

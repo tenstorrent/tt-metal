@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "common/utils.hpp"
+#include <tt-metalium/utils.hpp>
 
 namespace tt {
 namespace test_utils {
@@ -25,7 +25,7 @@ template <typename T>
 void print_vector_fixed_numel_per_row(const std::vector<T>& vec, const unsigned int numel_per_row) {
     int idx = 0;
     for (int i = 0; i < vec.size(); i++) {
-        if ((i%numel_per_row) == 0) {
+        if ((i % numel_per_row) == 0) {
             std::cout << std::endl;
         }
         std::cout << vec.at(i) << ", ";

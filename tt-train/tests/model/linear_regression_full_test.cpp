@@ -8,14 +8,20 @@
 #include <core/ttnn_all_includes.hpp>
 
 #include "autograd/auto_context.hpp"
+#include "core/tt_tensor_utils.hpp"
 #include "modules/linear_module.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/sgd.hpp"
 
 class LinearRegressionFullTest : public ::testing::Test {
 protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+    }
+
     void TearDown() override {
         ttml::autograd::ctx().reset_graph();
+        ttml::autograd::ctx().close_device();
     }
 };
 

@@ -41,11 +41,10 @@ INSTANTIATE_TEST_SUITE_P(
             ttnn::MemoryConfig{
                 .memory_layout = ttnn::TensorMemoryLayout::WIDTH_SHARDED,
                 .buffer_type = ttnn::BufferType::DRAM,
-                .shard_spec = ShardSpec(
+                .shard_spec = tt::tt_metal::ShardSpec(
                     CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{1, 2}, CoreCoord{7, 4}}}},
                     {32, 128},
-                    ShardOrientation::ROW_MAJOR,
-                    true
+                    tt::tt_metal::ShardOrientation::ROW_MAJOR
                 )
             }
         },
@@ -54,12 +53,11 @@ INSTANTIATE_TEST_SUITE_P(
             ttnn::MemoryConfig{
                 .memory_layout = ttnn::TensorMemoryLayout::BLOCK_SHARDED,
                 .buffer_type = ttnn::BufferType::DRAM,
-                .shard_spec = ShardSpec(
+                .shard_spec = tt::tt_metal::ShardSpec(
                     CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 4}}}},
                     {5, 6},
-                    ShardOrientation::ROW_MAJOR,
-                    true,
-                    ShardMode::LOGICAL
+                    tt::tt_metal::ShardOrientation::ROW_MAJOR,
+                    tt::tt_metal::ShardMode::LOGICAL
                 )
             }
         },
@@ -68,12 +66,11 @@ INSTANTIATE_TEST_SUITE_P(
             ttnn::MemoryConfig{
                 .memory_layout = ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
                 .buffer_type = ttnn::BufferType::L1,
-                .shard_spec = ShardSpec(
+                .shard_spec = tt::tt_metal::ShardSpec(
                     CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 7}}}},
                     {3, 4},
                     {32, 32},
-                    ShardOrientation::COL_MAJOR,
-                    false
+                    tt::tt_metal::ShardOrientation::COL_MAJOR
                 )
             }
         }
@@ -88,7 +85,8 @@ TEST(TEST_JSON_CONVERSION, TEST_MATMUL_CONFIG) {
 
     auto json_object = tt::stl::json::to_json(matmul_program_config);
 
-    auto deserialized_matmul_program_config = tt::stl::json::from_json<ttnn::operations::matmul::MatmulProgramConfig>(json_object);
+    auto deserialized_matmul_program_config =
+        tt::stl::json::from_json<ttnn::operations::matmul::MatmulProgramConfig>(json_object);
 
     ASSERT_EQ(
         matmul_multi_core_reuse_program_config.compute_with_storage_grid_size,
@@ -96,17 +94,22 @@ TEST(TEST_JSON_CONVERSION, TEST_MATMUL_CONFIG) {
             .compute_with_storage_grid_size);
     ASSERT_EQ(
         matmul_multi_core_reuse_program_config.in0_block_w,
-        std::get<ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig>(deserialized_matmul_program_config).in0_block_w);
+        std::get<ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig>(deserialized_matmul_program_config)
+            .in0_block_w);
     ASSERT_EQ(
         matmul_multi_core_reuse_program_config.out_subblock_h,
-        std::get<ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig>(deserialized_matmul_program_config).out_subblock_h);
+        std::get<ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig>(deserialized_matmul_program_config)
+            .out_subblock_h);
     ASSERT_EQ(
         matmul_multi_core_reuse_program_config.out_subblock_w,
-        std::get<ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig>(deserialized_matmul_program_config).out_subblock_w);
+        std::get<ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig>(deserialized_matmul_program_config)
+            .out_subblock_w);
     ASSERT_EQ(
         matmul_multi_core_reuse_program_config.per_core_M,
-        std::get<ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig>(deserialized_matmul_program_config).per_core_M);
+        std::get<ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig>(deserialized_matmul_program_config)
+            .per_core_M);
     ASSERT_EQ(
         matmul_multi_core_reuse_program_config.per_core_N,
-        std::get<ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig>(deserialized_matmul_program_config).per_core_N);
+        std::get<ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig>(deserialized_matmul_program_config)
+            .per_core_N);
 }

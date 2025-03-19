@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -11,16 +11,15 @@ void kernel_main() {
     auto ignore_index = static_cast<int32_t>(get_arg_val<uint32_t>(i++));
     auto num_units_per_core = get_arg_val<uint32_t>(i++);
     auto start_id = get_arg_val<uint32_t>(i++);
-    auto N = get_arg_val<uint32_t>(i++);
     auto C = get_arg_val<uint32_t>(i++);
     auto weight_num_tile = get_arg_val<uint32_t>(i++);
     auto element_size = get_arg_val<uint32_t>(i++);
     auto target_element_size = get_arg_val<uint32_t>(i++);
 
-    constexpr uint32_t cb_target = tt::CB::c_in0;
-    constexpr uint32_t cb_weight = tt::CB::c_in1;
+    constexpr uint32_t cb_target = tt::CBIndex::c_0;
+    constexpr uint32_t cb_weight = tt::CBIndex::c_1;
 
-    constexpr uint32_t cb_output = tt::CB::c_out0;
+    constexpr uint32_t cb_output = tt::CBIndex::c_16;
 
     // ublocks size defined in tiles
     const uint32_t target_tile_bytes = get_tile_size(cb_target);

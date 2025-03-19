@@ -25,7 +25,8 @@ template <bool untilize_en = false, bool skip_inputs = false>
 inline void llk_math_hw_configure_disaggregated(const std::uint32_t srca_operand, const std::uint32_t srcb_operand) {
     std::uint32_t srca_operand_id = get_operand_id(srca_operand);
     std::uint32_t srcb_operand_id = get_operand_id(srcb_operand);
-    _llk_math_hw_configure_<untilize_en, skip_inputs>(unpack_dst_format[srca_operand_id], unpack_dst_format[srcb_operand_id]);
+    _llk_math_hw_configure_<untilize_en, skip_inputs>(
+        unpack_dst_format[srca_operand_id], unpack_dst_format[srcb_operand_id]);
 }
 
 inline void llk_math_wait_for_dest_available() {
@@ -45,7 +46,7 @@ inline void llk_math_pack_sync_init() {
 }
 
 template <bool mail2math = true, bool mail2pack = true>
-inline void llk_math_get_tile(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t *p_tile) {
+inline void llk_math_get_tile(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t* p_tile) {
     _llk_math_get_tile_<mail2math, mail2pack>(tile_index, p_tile);
 }
 
@@ -54,7 +55,7 @@ inline void llk_math_release_tile(std::uint32_t operand) {
     _llk_math_release_tile_<mail2math, mail2pack>();
 }
 
-inline void llk_math_debug_dump(std::uint8_t *data, std::uint32_t byte_size) { _llk_math_debug_dump_(data, byte_size); }
+inline void llk_math_debug_dump(std::uint8_t* data, std::uint32_t byte_size) { _llk_math_debug_dump_(data, byte_size); }
 
 inline void llk_math_debug_dump_seek(std::uint8_t offset) { _llk_math_debug_dump_seek_(offset); }
 
@@ -75,7 +76,8 @@ inline void llk_math_reconfig_data_format(const std::uint32_t srca_new_operand, 
     std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
     std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
 
-    _llk_math_reconfig_data_format_<to_from_int8, is_fp32_dest_acc_en>(unpack_dst_format[new_srca_operand_id], unpack_dst_format[new_srcb_operand_id]);
+    _llk_math_reconfig_data_format_<to_from_int8, is_fp32_dest_acc_en>(
+        unpack_dst_format[new_srca_operand_id], unpack_dst_format[new_srcb_operand_id]);
 }
 
 template <bool to_from_int8 = false, bool is_fp32_dest_acc_en = false>
@@ -121,9 +123,7 @@ inline void llk_math_reconfig_data_format_srcb(
     }
 }
 
-inline std::uint32_t llk_math_get_compute_special_value_flags() {
-    return _llk_math_get_compute_special_value_flags_();
-}
+inline std::uint32_t llk_math_get_compute_special_value_flags() { return _llk_math_get_compute_special_value_flags_(); }
 
 inline std::uint32_t llk_math_get_compute_special_value_flags_fpu(std::uint32_t special_value_flags_reg) {
     constexpr std::uint32_t special_value_flags_fpu_mask = 0xf;
@@ -137,9 +137,7 @@ inline std::uint32_t llk_math_get_compute_special_value_flags_sfpu(std::uint32_t
     return (special_value_flags_reg & special_value_flags_sfpu_mask) >> special_value_flags_sfpu_shift;
 }
 
-inline void llk_math_clear_compute_special_value_flags() {
-    _llk_math_clear_compute_special_value_flags_();
-}
+inline void llk_math_clear_compute_special_value_flags() { _llk_math_clear_compute_special_value_flags_(); }
 
 inline void llk_math_store_compute_special_value_flags_to_l1(std::uint32_t l1_addr) {
     volatile tt_l1_ptr std::uint32_t* l1_addr_ptr = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(l1_addr);

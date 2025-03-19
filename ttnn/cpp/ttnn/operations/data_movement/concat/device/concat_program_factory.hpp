@@ -4,10 +4,9 @@
 
 #pragma once
 
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
-#include "ttnn/cpp/ttnn/operation.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/util.hpp>
+#include "cpp/ttnn/operation.hpp"
 
 #include "ttnn/operation.hpp"
 namespace ttnn::operations::data_movement::detail {
@@ -24,15 +23,15 @@ struct CorePageRange {
 };
 
 tt::tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
-    const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output, unsigned int groups = 1);
+    const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output, unsigned int groups = 1);
 
 tt::tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
-    const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output);
+    const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output);
 
 tt::tt_metal::operation::ProgramWithCallbacks sharded_concat_multi_core(
-    const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output, unsigned int groups = 1);
+    const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output, unsigned int groups = 1);
 
 tt::tt_metal::operation::ProgramWithCallbacks concat_multi_core(
-    const std::vector<Tensor> &input_tensors, const uint32_t dim, const Tensor &output);
+    const std::vector<Tensor>& input_tensors, const uint32_t dim, const Tensor& output);
 
 }  // namespace ttnn::operations::data_movement::detail

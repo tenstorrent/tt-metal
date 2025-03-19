@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/impl/dispatch/worker_config_buffer.hpp"
+#include <assert.hpp>
+#include <worker_config_buffer.hpp>
 
 namespace tt {
 
@@ -11,10 +11,7 @@ namespace tt_metal {
 
 constexpr uint32_t kernel_config_entry_count = 8;
 
-WorkerConfigBufferMgr::WorkerConfigBufferMgr() {
-
-    entries_.resize(kernel_config_entry_count);
-}
+WorkerConfigBufferMgr::WorkerConfigBufferMgr() { entries_.resize(kernel_config_entry_count); }
 
 void WorkerConfigBufferMgr::init_add_buffer(uint32_t base_addr, uint32_t size) {
     this->base_addrs_.push_back(base_addr);
@@ -38,7 +35,6 @@ void WorkerConfigBufferMgr::init_add_buffer(uint32_t base_addr, uint32_t size) {
 // To avoid allocs in a perf path, returns a reference to internal data
 const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> WorkerConfigBufferMgr::reserve(
     const std::vector<uint32_t>& sizes) {
-
     ConfigBufferSync sync_info;
     sync_info.need_sync = false;
 
@@ -58,6 +54,10 @@ const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> WorkerConfigB
             this->reservation_[idx].size = size;
             if (size == 0) {
                 this->reservation_[idx].addr = addr;
+                break;
+            }
+            if (free_index == alloc_index) {
+                this->reservation_[idx].addr = this->base_addrs_[idx];
                 break;
             }
             TT_ASSERT(size <= this->end_addrs_[idx] - this->base_addrs_[idx]);
@@ -87,9 +87,9 @@ const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> WorkerConfigB
                     // The sync will free the whole buffer, reset to the top
                     addr = this->base_addrs_[idx];
                 } else {
-                    uint32_t next_end = (addr >= this->entries_[next_free_index][idx].addr) ?
-                        this->end_addrs_[idx] :
-                        this->entries_[next_free_index][idx].addr;
+                    uint32_t next_end = (addr >= this->entries_[next_free_index][idx].addr)
+                                            ? this->end_addrs_[idx]
+                                            : this->entries_[next_free_index][idx].addr;
                     if (addr + size > next_end) {
                         // Need to free multiple entries
                         // Move the free index forward to the next entry and retry
@@ -105,8 +105,8 @@ const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> WorkerConfigB
                 } else {
                     sync_info.sync_count = this->entries_[free_index][idx].sync_count;
                 }
-            } else if (alloc_index + 1 == free_index ||
-                       (alloc_index + 1 == kernel_config_entry_count && free_index == 0)) {
+            } else if (
+                alloc_index + 1 == free_index || (alloc_index + 1 == kernel_config_entry_count && free_index == 0)) {
                 // We need a sync because the table of entries is too small
                 sync_info.need_sync = true;
                 if (had_sync) {
@@ -141,6 +141,9 @@ void WorkerConfigBufferMgr::free(uint32_t free_up_to_sync_count) {
 void WorkerConfigBufferMgr::alloc(uint32_t when_freeable_sync_count) {
     size_t num_buffer_types = this->reservation_.size();
     for (uint32_t idx = 0; idx < num_buffer_types; idx++) {
+        if (this->reservation_[idx].size == 0) {
+            continue;
+        }
         uint32_t alloc_index = this->alloc_index_[idx];
 
         this->entries_[alloc_index][idx].addr = this->reservation_[idx].addr;
@@ -153,9 +156,10 @@ void WorkerConfigBufferMgr::alloc(uint32_t when_freeable_sync_count) {
             alloc_index = 0;
         }
 
-        this->entries_[alloc_index][idx].addr = this->entries_[old_alloc_index][idx].addr + this->entries_[old_alloc_index][idx].size;
+        this->entries_[alloc_index][idx].addr =
+            this->entries_[old_alloc_index][idx].addr + this->entries_[old_alloc_index][idx].size;
         this->entries_[alloc_index][idx].size = 0;
-        this->entries_[alloc_index][idx].sync_count = 0xbabababa; // debug
+        this->entries_[alloc_index][idx].sync_count = 0xbabababa;  // debug
 
         this->alloc_index_[idx] = alloc_index;
     }
@@ -186,6 +190,26 @@ void WorkerConfigBufferMgr::mark_completely_full(uint32_t sync) {
         alloc_entry.addr = this->end_addrs_[idx];
         alloc_entry.size = 0;
         alloc_entry.sync_count = 0xbabababa;  // debug
+    }
+}
+
+void WorkerConfigBufferMgr::PrintStatus() {
+    size_t num_buffer_types = this->reservation_.size();
+    for (size_t i = 0; i < num_buffer_types; i++) {
+        fprintf(stderr, "Buffer type %zu\n", i);
+        log_info(tt::LogTest, "Buffer type {}", i);
+
+        size_t free_index = this->alloc_index_[i];
+        while (free_index != this->alloc_index_[i]) {
+            auto& entry = this->entries_[free_index][i];
+            log_info(
+                tt::LogTest, "Free index {} has values {} {} {}", free_index, entry.addr, entry.size, entry.sync_count);
+
+            free_index = (free_index + 1) % this->entries_.size();
+        }
+        auto& entry = this->entries_[free_index][i];
+        log_info(
+            tt::LogTest, "Alloc index {} has values {} {} {}", free_index, entry.addr, entry.size, entry.sync_count);
     }
 }
 

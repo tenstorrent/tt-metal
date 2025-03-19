@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "rotate_half.hpp"
 
 namespace ttnn::operations::experimental::transformer {
@@ -27,10 +27,7 @@ void py_bind_rotate_half(pybind11::module& module) {
             Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensor, if None then it gets set to input.memory_config()
         )doc",
-        ttnn::pybind_arguments_t{
-            py::arg("input"),
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt});
+        ttnn::pybind_arguments_t{py::arg("input"), py::kw_only(), py::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::experimental::transformer

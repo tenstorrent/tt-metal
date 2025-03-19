@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 #include "ttnn/operations/reduction/prod/prod.hpp"
 
@@ -28,6 +28,7 @@ void bind_reduction_prod_operation(py::module& module, const unary_operation_t& 
                 input_tensor (ttnn.Tensor): the input tensor.
                 all_dimensions (bool, optional): prod along all dimensions. Defaults to `False`.
                 dim (int, optional): Dimension to perform prod. Defaults to `0`.
+                keepdim (bool, optional): keep original dimension size. Defaults to `False`.
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
@@ -52,11 +53,14 @@ void bind_reduction_prod_operation(py::module& module, const unary_operation_t& 
                const Tensor& input_tensor,
                bool all_dimensions,
                int dim,
+               const bool keepdim,
                const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, all_dimensions, dim, memory_config); },
+                return self(input_tensor, all_dimensions, dim, keepdim, memory_config);
+            },
             py::arg("input_tensor"),
             py::arg("all_dimensions") = false,
             py::arg("dim") = 0,
+            py::arg("keepdim") = false,
             py::kw_only(),
             py::arg("memory_config") = std::nullopt},
         // prod along nc dimensions
@@ -66,13 +70,13 @@ void bind_reduction_prod_operation(py::module& module, const unary_operation_t& 
                const Tensor& output_tensor,
                ttnn::SmallVector<int64_t>& dims,
                const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, output_tensor, dims, memory_config); },
+                return self(input_tensor, output_tensor, dims, memory_config);
+            },
             py::arg("input_tensor"),
             py::arg("output_tensor"),
             py::kw_only(),
             py::arg("dims") = ttnn::SmallVector<int64_t>(),
-            py::arg("memory_config") = std::nullopt}
-            );
+            py::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::reduction::detail

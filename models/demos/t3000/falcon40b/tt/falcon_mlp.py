@@ -124,7 +124,7 @@ class TtFalconMLP:
         hidden_states = ttnn.get_device_tensors(
             ttnn.reduce_scatter(
                 ttnn.aggregate_as_tensor(hidden_states),
-                scatter_dim=3,
+                dim=3,
                 math_op=ttnn.ReduceType.Sum,
                 num_links=1,  # only unidirectional supported for now
                 memory_config=self.model_config["DEFAULT_MEMCFG"],
@@ -143,7 +143,7 @@ class TtFalconMLP:
     def fwd_prefill(self, x: List[ttnn.Tensor]) -> List[ttnn.Tensor]:
         hidden_states = []
         should_deallocate_ln_tensors = determine_tensor_deallocation(
-            self.model_config["layernorm_params"]["slice_size"], x.shape.with_tile_padding()[2]
+            self.model_config["layernorm_params"]["slice_size"], x.padded_shape[2]
         )
 
         mlp_num_slices = self.model_config["MLP_NUM_SLICES"]
@@ -200,7 +200,7 @@ class TtFalconMLP:
         hidden_states = ttnn.get_device_tensors(
             ttnn.reduce_scatter(
                 ttnn.aggregate_as_tensor(hidden_states),
-                scatter_dim=3,
+                dim=3,
                 math_op=ttnn.ReduceType.Sum,
                 num_links=1,  # only one link supported for now
                 memory_config=self.model_config["DEFAULT_MEMCFG"],

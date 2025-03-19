@@ -13,20 +13,20 @@ void MAIN {
     constexpr uint32_t max_tiles_per_core = get_compile_time_arg_val(0);
     constexpr uint32_t input_height = get_compile_time_arg_val(1);
 
-    constexpr uint32_t cb_grad = tt::CB::c_in0;
-    constexpr uint32_t cb_index = tt::CB::c_in1;
-    constexpr uint32_t cb_out_intermed = tt::CB::c_in2;
-    constexpr uint32_t cb_mask = tt::CB::c_intermed0;
-    constexpr uint32_t cb_chunk_count_scratch = tt::CB::c_intermed1;
-    constexpr uint32_t cb_out = tt::CB::c_out0;
+    constexpr uint32_t cb_grad = tt::CBIndex::c_0;
+    constexpr uint32_t cb_index = tt::CBIndex::c_1;
+    constexpr uint32_t cb_out_intermed = tt::CBIndex::c_2;
+    constexpr uint32_t cb_mask = tt::CBIndex::c_24;
+    constexpr uint32_t cb_chunk_count_scratch = tt::CBIndex::c_25;
+    constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
-    unary_op_init_common(cb_grad);
+    unary_op_init_common(cb_grad, cb_out);
 
     for (uint32_t i = 0; i < input_height; ++i) {
         cb_wait_front(cb_grad, max_tiles_per_core);
 
         // Get chunk_count from reader
-        volatile uint32_t *chunk_addr_ptr;
+        volatile uint32_t* chunk_addr_ptr;
         cb_get_tile(cb_chunk_count_scratch, 0, &chunk_addr_ptr);
         uint32_t chunk_count = chunk_addr_ptr[4];  // Need to shift because read ptr is off by 1 << 4 in BBE
         cb_release_tile(cb_chunk_count_scratch);
@@ -34,7 +34,7 @@ void MAIN {
         for (uint32_t chunk = 0; chunk < chunk_count; ++chunk) {  // chunk_count
             cb_wait_front(cb_mask, 1);
             // get cb_index pointer from unpack to math thread
-            volatile uint *idx_addr_ptr;
+            volatile uint* idx_addr_ptr;
             uint32_t tile_to_get = 0;
             cb_get_tile(cb_mask, tile_to_get, &idx_addr_ptr);
             uint32_t idx_addr = reinterpret_cast<uint32_t>(idx_addr_ptr);

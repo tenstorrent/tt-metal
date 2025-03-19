@@ -57,7 +57,7 @@ A chips is a collection of cores and I/O blocks, connected into a mesh via a NoC
 The **high BW and large capacity SRAM** in each Tensix core is a form of **near memory compute**. A Tensix core operating on its local SRAM achieves **"silicon peak"** of what current technology node allows for.
 Tensix cores are connected into a mesh via 2 NOCs, and each Tensix core can communicate with any other Tensix core in the mesh, and with off-chip DRAM, as well as Ethernet cores.
 GPU fracture SRAM across levels within the chip: large register files, small L1, and L2. SRAM is primarily used for re-use and pre-fetch on the way to off-chip DRAM, not as a primary form of Tensor storage and large parts of it not at the peak silicon speed.
-In contrast, in TT architecture, the entire SRAM is in one single level, and its significant capacity allows it be used as intermediates between operations, w/o relaying on HBM as the primary storage to hand-off data between operations.
+In contrast, in TT architecture, the entire SRAM is in one single level, and its significant capacity allows it be used as intermediates between operations, w/o relying on HBM as the primary storage to hand-off data between operations.
 
 #### Distributed Shared Memory and In-Place Compute
 The mesh of Tensix cores architecture is the first one to efficiently implement distributed shared memory within the chip and **enable programmers and compilers to optimize both layout and movement of the data**.
@@ -66,7 +66,7 @@ Further elaboration in [Scalable Architecture](#scalable-architecture) section.
 
 #### Explicit Data Movement
 The performance and efficiency of data movement in AI and HPC application is as important as raw compute capacity of the math engines.
-In Tenix, data movement is explicit and decoupled from compute. The data movement kernels use the data movement engine in each Tensix to bring data from neighbouring cores or off-chip DRAM to the local SRAM of the Tensix core, and trigger the compute engine to operate on the data. The data movement in TT architecture can be pre-planned, optimized and debugged separately from the compute.
+In Tensix, data movement is explicit and decoupled from compute. The data movement kernels use the data movement engine in each Tensix to bring data from neighbouring cores or off-chip DRAM to the local SRAM of the Tensix core, and trigger the compute engine to operate on the data. The data movement in TT architecture can be pre-planned, optimized and debugged separately from the compute.
 There is no caches, no global crossbars, no memory access coalescing or other complex mechanisms that are used in traditional architectures that hide the data movement from the programmer or compiler.
 For deeper insight see section [User Kernels: Explicit and Decoupled Data Movement and Compute](#user-kernels-explicit-and-decoupled-data-movement-and-compute).
 
@@ -125,29 +125,29 @@ kernel:
 ```
 namespace NAMESPACE {
 void MAIN {
-  mm_init();
+  mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
   acquire_dst();
 
-  cb_wait_front(tt::CB::c_in0, /* number of tiles */ 1);
-  cb_wait_front(tt::CB::c_in1, /* number of tiles */ 1);
+  cb_wait_front(tt::CBIndex::c_0, /* number of tiles */ 1);
+  cb_wait_front(tt::CBIndex::c_1, /* number of tiles */ 1);
 
-  matmul_tiles(tt::CB::c_in0, tt::CB::c_in1, 0, 0, 0, false);
+  matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0, false);
 
-  cb_pop_front(tt::CB::c_in1, /* number of tiles */ 1);
-  cb_pop_front(tt::CB::c_in0, /* number of tiles */ 1);
+  cb_pop_front(tt::CBIndex::c_1, /* number of tiles */ 1);
+  cb_pop_front(tt::CBIndex::c_0, /* number of tiles */ 1);
 
-  cb_reserve_back(tt::CB::c_out0, /* number of tiles */ 1);
-  pack_tile(0, tt::CB::c_out0);
-  cb_push_back(tt::CB::c_out0, /* number of tiles */ 1);
+  cb_reserve_back(tt::CBIndex::c_16, /* number of tiles */ 1);
+  pack_tile(0, tt::CBIndex::c_16);
+  cb_push_back(tt::CBIndex::c_16, /* number of tiles */ 1);
 
   release_dst();
 }
 }  // namespace NAMESPACE
 ```
 
-It takes two matrix tiles from `tt::CB::c_in0` and `tt::CB::c_in0` L1 and
+It takes two matrix tiles from `tt::CBIndex::c_0` and `tt::CBIndex::c_0` L1 and
 conducts a single-tile matrix multiplication. Finally, it packs the result to
-`tt::CB::c_out0`.
+`tt::CBIndex::c_16`.
 
 Note that tile registers are acquired by `acquire_dst()`, but actually we can
 use `tile_regs_..()` functions for the more fine-grained tile register lock
@@ -181,7 +181,7 @@ breaks to help understanding)
 
 Among many of the options, `-DUCK_CHLKC_PACK -DNAMESPACE=chlkc_pack` specifies
 it is a "Pack kernel". `-DCOMPILE_FOR_TRISC=2` means it will use `TRISC2` among
-the tree Baby RISCVs.
+the three Baby RISCVs.
 
 Based on the information, we can try the following steps:
 * Checking the ELF file on the directory e.g.,
@@ -297,25 +297,25 @@ with `tile_regs_..()` functions like:
 ```
 namespace NAMESPACE {
 void MAIN {
-  mm_init();
+  mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
 
-  cb_wait_front(tt::CB::c_in0, /* number of tiles */ 1);
-  cb_wait_front(tt::CB::c_in1, /* number of tiles */ 1);
+  cb_wait_front(tt::CBIndex::c_0, /* number of tiles */ 1);
+  cb_wait_front(tt::CBIndex::c_1, /* number of tiles */ 1);
 
   tile_regs_acquire();
 
-  matmul_tiles(tt::CB::c_in0, tt::CB::c_in1, 0, 0, 0, false);
+  matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0, false);
 
   tile_regs_commit();
 
-  cb_pop_front(tt::CB::c_in1, /* number of tiles */ 1);
-  cb_pop_front(tt::CB::c_in0, /* number of tiles */ 1);
+  cb_pop_front(tt::CBIndex::c_1, /* number of tiles */ 1);
+  cb_pop_front(tt::CBIndex::c_0, /* number of tiles */ 1);
 
   tile_regs_wait();
 
-  cb_reserve_back(tt::CB::c_out0, /* number of tiles */ 1);
-  pack_tile(0, tt::CB::c_out0);
-  cb_push_back(tt::CB::c_out0, /* number of tiles */ 1);
+  cb_reserve_back(tt::CBIndex::c_16, /* number of tiles */ 1);
+  pack_tile(0, tt::CBIndex::c_16);
+  cb_push_back(tt::CBIndex::c_16, /* number of tiles */ 1);
 
   tile_regs_release();
 }
@@ -367,12 +367,12 @@ void MAIN {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1); // should be <= 8 in this kernel
 
-    constexpr auto cb_in0 = tt::CB::c_in0;
-    constexpr auto cb_in1 = tt::CB::c_in1;
-    constexpr auto cb_out0 =  tt::CB::c_out0;
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto cb_in1 = tt::CBIndex::c_1;
+    constexpr auto cb_out0 =  tt::CBIndex::c_16;
 
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
-    add_tiles_init();
+    add_tiles_init(cb_in0, cb_in1);
 
     for(uint32_t block = 0; block < per_core_block_cnt; ++block) {
 
@@ -400,7 +400,7 @@ void MAIN {
         cb_pop_front(cb_in0, per_core_block_size);
         cb_pop_front(cb_in1, per_core_block_size);
 
-        // push a block of tiles to output CB
+        // push a block of tiles to output CBIndex
         cb_push_back(cb_out0, per_core_block_size);
     }
 

@@ -5,8 +5,8 @@
 #include <vector>
 
 #include "moreh_clip_grad_norm_step1_device_operation.hpp"
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
@@ -93,17 +93,17 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
         core_group_1,
         cb_data_format,
         {
-            {tt::CB::c_in0, in0_t},        // input(==x)
-            {tt::CB::c_in1, in1_t},        // one
-            {tt::CB::c_in2, in2_t},        // decimal
-            {tt::CB::c_in3, in3_t},        // mask_h_w
-            {tt::CB::c_out0, out0_t},      // output(==y)
-            {tt::CB::c_intermed0, im0_t},  // |x|
-            {tt::CB::c_intermed1, im1_t},  // |x|^p
-            {tt::CB::c_intermed2, im2_t},  // Add[|x|^p * exp(log(|x|) * decimal)]
-            {tt::CB::c_intermed3, im3_t},  // log(|x|)
-            {tt::CB::c_intermed4, im4_t},  // exp(log(|x|) * decimal)
-            {tt::CB::c_intermed5, im5_t},  // |x|^p * exp(log(|x|) * decimal)
+            {tt::CBIndex::c_0, in0_t},    // input(==x)
+            {tt::CBIndex::c_1, in1_t},    // one
+            {tt::CBIndex::c_2, in2_t},    // decimal
+            {tt::CBIndex::c_3, in3_t},    // mask_h_w
+            {tt::CBIndex::c_16, out0_t},  // output(==y)
+            {tt::CBIndex::c_24, im0_t},   // |x|
+            {tt::CBIndex::c_25, im1_t},   // |x|^p
+            {tt::CBIndex::c_26, im2_t},   // Add[|x|^p * exp(log(|x|) * decimal)]
+            {tt::CBIndex::c_27, im3_t},   // log(|x|)
+            {tt::CBIndex::c_28, im4_t},   // exp(log(|x|) * decimal)
+            {tt::CBIndex::c_29, im5_t},   // |x|^p * exp(log(|x|) * decimal)
         });
 
     ////////////////////////////////////////////////////////////////////////////

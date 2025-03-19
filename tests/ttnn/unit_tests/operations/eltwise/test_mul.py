@@ -97,3 +97,22 @@ def test_multiply_int32_with_scalar(device, input_a, scalar):
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output_tensor, output, 0.9999)
+
+
+#  #14840: use DRAM config
+@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("scalar", [0.125])
+@pytest.mark.parametrize("batch_size", [6, 7, 8])
+def test_multiply_with_scalar_sharded(device, scalar, batch_size, output_memory_config):
+    torch.manual_seed(0)
+    torch_input_tensor_a = torch.rand((batch_size, 16, 384, 384), dtype=torch.float32)
+    torch_output_tensor = scalar * torch_input_tensor_a
+
+    # GS has smaller L1 than WH
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG, device=device
+    )
+    output = ttnn.mul(input_tensor_a, scalar, memory_config=output_memory_config)
+    output = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_output_tensor, output, 0.9999)

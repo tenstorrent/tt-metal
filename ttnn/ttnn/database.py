@@ -166,6 +166,10 @@ def get_or_create_sqlite_db(report_path):
                 (tensor_id int UNIQUE, shape text, dtype text, layout text, memory_config text, device_id int, address int, buffer_type int)"""
     )
     cursor.execute(
+        """CREATE TABLE IF NOT EXISTS device_tensors
+                (tensor_id int, device_id int, address int)"""
+    )
+    cursor.execute(
         """CREATE TABLE IF NOT EXISTS local_tensor_comparison_records
                 (tensor_id int UNIQUE, golden_tensor_id int, matches bool, desired_pcc bool, actual_pcc float)"""
     )
@@ -300,16 +304,37 @@ def insert_tensor(report_path, tensor):
     if query_tensor_by_id(report_path, tensor.tensor_id) is not None:
         return
 
+    device_id = None
+    address = None
+    memory_config = None
+    buffer_type = None
+    device_tensors = []
+
     if ttnn.has_storage_type_of(tensor, ttnn.DEVICE_STORAGE_TYPE) and tensor.is_allocated():
         address = tensor.buffer_address()
         device_id = tensor.device().id()
         memory_config = ttnn.get_memory_config(tensor)
         buffer_type = memory_config.buffer_type.value
-    else:
-        address = None
-        device_id = None
-        memory_config = None
-        buffer_type = None
+        device_tensors.append(
+            {
+                "device_id": tensor.device().id(),
+                "address": tensor.buffer_address(),
+            }
+        )
+    elif ttnn.has_storage_type_of(tensor, ttnn.MULTI_DEVICE_STORAGE_TYPE) and tensor.is_allocated():
+        memory_config = ttnn.get_memory_config(tensor)
+        buffer_type = memory_config.buffer_type.value
+        for device_tensor in ttnn.get_device_tensors(tensor):
+            if device_id is None:
+                device_id = device_tensor.device().id()
+            if address is None:
+                address = device_tensor.buffer_address()
+            device_tensors.append(
+                {
+                    "device_id": device_tensor.device().id(),
+                    "address": device_tensor.buffer_address(),
+                }
+            )
 
     cursor.execute(
         f"""
@@ -323,6 +348,15 @@ def insert_tensor(report_path, tensor):
             {optional_value(address)},
             {optional_value(buffer_type)})"""
     )
+
+    for device_tensor in device_tensors:
+        cursor.execute(
+            f"""
+            INSERT INTO device_tensors VALUES (
+            {tensor.tensor_id},
+            {device_tensor["device_id"]},
+            {device_tensor["address"]})"""
+        )
     sqlite_connection.commit()
 
 

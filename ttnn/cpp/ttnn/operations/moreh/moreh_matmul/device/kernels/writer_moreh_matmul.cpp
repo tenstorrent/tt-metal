@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
     // compile-time args
@@ -20,7 +20,7 @@ void kernel_main() {
     const DataFormat output_data_format = get_dataformat(cb_id_out);
 
     const InterleavedAddrGenFast<output_is_dram> s = {
-        .bank_base_address = output_addr, .page_size = output_tile_bytes, .data_format = output_data_format };
+        .bank_base_address = output_addr, .page_size = output_tile_bytes, .data_format = output_data_format};
 
     uint32_t end_id = start_id + num_output_tiles;
     for (uint32_t i = start_id; i < end_id; i++) {

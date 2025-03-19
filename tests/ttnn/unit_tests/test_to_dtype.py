@@ -34,6 +34,5 @@ def test_to_dtype(height, width, from_dtype, to_dtype):
         assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
     assert tuple(output_tensor.shape) == (height, width)
 
-    output_tensor = ttnn.to_torch(output_tensor).to(torch_input_tensor.dtype)
-
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch_input_tensor.dtype)
     assert_with_pcc(torch_input_tensor, output_tensor)

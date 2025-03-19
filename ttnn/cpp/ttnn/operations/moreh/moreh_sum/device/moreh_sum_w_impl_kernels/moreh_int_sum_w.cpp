@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "compute_kernel_api/eltwise_unary/sfpu_int_sum.h"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 
@@ -12,10 +12,10 @@ void MAIN {
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t origin_W = get_compile_time_arg_val(2);
 
-    constexpr auto cb_in0 = tt::CB::c_in0;
-    constexpr auto cb_mask_w = tt::CB::c_in1;
-    constexpr auto cb_intermed0 = tt::CB::c_intermed0;
-    constexpr auto cb_out0 = tt::CB::c_out0;
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto cb_mask_w = tt::CBIndex::c_1;
+    constexpr auto cb_intermed0 = tt::CBIndex::c_24;
+    constexpr auto cb_out0 = tt::CBIndex::c_16;
     constexpr uint32_t TILE_W = 32;
     constexpr bool do_mask_w = (origin_W % TILE_W) != 0;
     constexpr int onetile = 1;

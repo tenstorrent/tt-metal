@@ -271,7 +271,7 @@ typedef union {
 /////////////
 // Interrupt controller definitions
 #define RISC_PIC_BASE 0xFFB1'3000
-#define RISC_PIC_BASE_PTR ((uint32_t volatile *)0xFFB1'3000)
+#define RISC_PIC_BASE_PTR ((uint32_t volatile*)0xFFB1'3000)
 #define RISC_PIC_BRISC_SW_INT_EN (RISC_PIC_BASE_PTR + 0)
 #define RISC_PIC_BRISC_HW_INT_EN (RISC_PIC_BASE_PTR + 1)
 #define RISC_PIC_BRISC_INT_NO (RISC_PIC_BASE_PTR + 2)

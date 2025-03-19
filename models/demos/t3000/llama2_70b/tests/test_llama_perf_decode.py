@@ -22,7 +22,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
 )
 from models.utility_functions import (
     profiler,
-    disable_compilation_reports,
     skip_for_grayskull,
     is_wormhole_b0,
 )
@@ -119,9 +118,7 @@ def run_test_LlamaModel_end_to_end(
         read_cache=True,
     )
 
-    for i in mesh_device.get_device_ids():
-        device = mesh_device.get_device(i)
-        ttnn.synchronize_device(device)
+    ttnn.synchronize_device(mesh_device)
 
     profiler.end("TT_llama_model_setup")
 
@@ -129,7 +126,7 @@ def run_test_LlamaModel_end_to_end(
 
     ##### Prepare Inputs #####
     prev_pos = total_len - 1
-    tt_inp_emb, prev_pos, rot_mat, cache_idxs, _ = tt_model.prepare_device_inputs(tokens, prev_pos)
+    tt_inp_emb, prev_pos, rot_mat, cache_idxs, _ = tt_model.prepare_device_inputs_decode(tokens, prev_pos)
 
     ##### Compile Model #####
     logger.info("Compiling model")
@@ -204,7 +201,7 @@ def run_test_LlamaModel_end_to_end(
         (128, 10000, 0.0655 + 0.01, 32, 1, 4096),
         (2048, 10000, 0.0771 + 0.01, 32, 1, 4096),
         (8192, 10000, 0.0825 + 0.01, 16, 1, 8192),
-        (128 * 1024, 10000, 0.0918 + 0.01, 1, 1, 128 * 1024),
+        (128 * 1024, 10000, 0.1518 + 0.01, 1, 1, 128 * 1024),
     ),
     ids=["gen32", "gen128", "gen2k", "gen8k", "gen128k"],
 )
@@ -231,8 +228,6 @@ def test_Llama_perf_host(
     check_mesh_device(t3k_mesh_device, model_config)
 
     t3k_mesh_device.enable_async(True)
-
-    disable_compilation_reports()
 
     run_test_LlamaModel_end_to_end(
         t3k_mesh_device,
@@ -296,7 +291,7 @@ def run_test_LlamaModel_end_to_end_hybrid_data_tensor_parallel(
     profiler.clear()
 
     submesh_to_metadata = defaultdict(dict)
-    submeshes = mesh_device.create_submeshes((2, 4), ttnn.MeshType.Ring)
+    submeshes = mesh_device.create_submeshes((2, 4))
     for submesh in submeshes:
         # Set up model -----------------------------------------------------------------------
         logger.info("Moving weights to devices; might take some time...")
@@ -312,15 +307,15 @@ def run_test_LlamaModel_end_to_end_hybrid_data_tensor_parallel(
             read_cache=True,
         )
 
-        for i in submesh.get_device_ids():
-            device = submesh.get_device(i)
-            ttnn.synchronize_device(device)
+        ttnn.synchronize_device(submesh)
 
         profiler.end("TT_llama_model_setup")
 
         ##### Prepare Inputs #####
         prev_pos = total_len - 1
-        tt_inp_emb, prev_pos, rot_mat, cache_idxs, _ = tt_model.prepare_device_inputs(tokens, prev_pos, mode="decode")
+        tt_inp_emb, prev_pos, rot_mat, cache_idxs, _ = tt_model.prepare_device_inputs_decode(
+            tokens, prev_pos, mode="decode"
+        )
 
         ##### Compile Model #####
         logger.info("Compiling model")
@@ -335,7 +330,7 @@ def run_test_LlamaModel_end_to_end_hybrid_data_tensor_parallel(
         compile_iter_time = profiler.get("compile_time")
         logger.info(f"decode with compile time, single iter latency: {compile_iter_time}")
 
-        submesh_to_metadata[submesh.get_mesh_id()] = {
+        submesh_to_metadata[submesh.id()] = {
             "submesh": submesh,
             "logits_rm": logits_rm,
             "tt_model": tt_model,
@@ -350,7 +345,7 @@ def run_test_LlamaModel_end_to_end_hybrid_data_tensor_parallel(
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
 
     for submesh in submeshes:
-        mesh_id = submesh.get_mesh_id()
+        mesh_id = submesh.id()
         tt_model = submesh_to_metadata[mesh_id]["tt_model"]
         tt_inp_emb = submesh_to_metadata[mesh_id]["tt_inp_emb"]
         rot_mat = submesh_to_metadata[mesh_id]["rot_mat"]
@@ -441,8 +436,6 @@ def test_Llama_perf_hybrid_data_tensor_parallel(
 
     check_mesh_device(mesh_device, model_config)
     mesh_device.enable_async(True)
-
-    disable_compilation_reports()
 
     run_test_LlamaModel_end_to_end_hybrid_data_tensor_parallel(
         mesh_device,

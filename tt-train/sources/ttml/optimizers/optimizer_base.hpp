@@ -4,13 +4,13 @@
 
 #pragma once
 
-#include "autograd/module_base.hpp"
+#include "serialization/serializable.hpp"
 
 namespace ttml::optimizers {
 
 class OptimizerBase {
 public:
-    explicit OptimizerBase(autograd::NamedParameters&& parameters);
+    explicit OptimizerBase(serialization::NamedParameters&& parameters);
     OptimizerBase(const OptimizerBase&) = delete;
     OptimizerBase& operator=(const OptimizerBase&) = delete;
     OptimizerBase(OptimizerBase&&) = delete;
@@ -21,16 +21,19 @@ public:
 
     virtual void step() = 0;
 
-    [[nodiscard]] virtual autograd::NamedParameters get_state_dict() const = 0;
-    virtual void set_state_dict(const autograd::NamedParameters& dict) = 0;
+    [[nodiscard]] virtual serialization::StateDict get_state_dict() const = 0;
+    virtual void set_state_dict(const serialization::StateDict& dict) = 0;
 
     [[nodiscard]] virtual size_t get_steps() const = 0;
     virtual void set_steps(size_t steps) = 0;
 
+    virtual void set_lr(float lr) = 0;
+    [[nodiscard]] virtual float get_lr() const = 0;
+
     virtual void print_stats() const;
 
 protected:
-    autograd::NamedParameters m_parameters;
+    serialization::NamedParameters m_parameters;
 };
 
 }  // namespace ttml::optimizers

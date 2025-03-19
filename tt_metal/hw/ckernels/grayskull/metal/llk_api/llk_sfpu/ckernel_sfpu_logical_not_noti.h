@@ -16,17 +16,12 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void calculate_logical_not_unary()
-{
-    #pragma GCC unroll 0
-    for (int d = 0; d < ITERATIONS; d++)
-    {
+inline void calculate_logical_not_unary() {
+#pragma GCC unroll 0
+    for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
-        v_if (v == 0) {
-            dst_reg[0] = 1.0f;
-        }v_else {
-            dst_reg[0] = 0.0f;
-        }
+        v_if(v == 0) { dst_reg[0] = 1.0f; }
+        v_else { dst_reg[0] = 0.0f; }
         v_endif;
         dst_reg++;
     }

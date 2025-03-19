@@ -5,14 +5,13 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void py_bind_bcast(py::module& module) {
-
     auto doc =
         R"doc(bcast(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, math_op[ADD, SUB, MUL],  dim: Optional[int] = None, memory_config: Optional[MemoryConfig] = std::nullopt, output_tensor: Optional[Tensor]) -> ttnn.Tensor
 
@@ -66,7 +65,7 @@ void py_bind_bcast(py::module& module) {
                ttnn::BcastOpDim bcast_dim,
                std::optional<Tensor> output_tensor,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
                     queue_id, input_tensor_a, input_tensor_b, bcast_op, bcast_dim, memory_config, output_tensor);
             },
@@ -77,8 +76,7 @@ void py_bind_bcast(py::module& module) {
             py::kw_only(),
             py::arg("output_tensor") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id").noconvert() = 0});
-
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::data_movement::detail

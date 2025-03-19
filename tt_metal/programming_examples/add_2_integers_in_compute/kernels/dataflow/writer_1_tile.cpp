@@ -5,13 +5,12 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    uint32_t dst_addr  = get_arg_val<uint32_t>(0);
-    uint32_t dst_dram_noc_x  = get_arg_val<uint32_t>(1);
-    uint32_t dst_dram_noc_y  = get_arg_val<uint32_t>(2);
+    uint32_t dst_addr = get_arg_val<uint32_t>(0);
+    uint32_t dst_bank_id = get_arg_val<uint32_t>(1);
 
-    uint64_t dst_noc_addr = get_noc_addr(dst_dram_noc_x, dst_dram_noc_y, dst_addr);
+    uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(dst_bank_id, dst_addr);
 
-    constexpr uint32_t cb_id_out0 = tt::CB::c_out0;
+    constexpr uint32_t cb_id_out0 = tt::CBIndex::c_16;
     uint32_t ublock_size_bytes = get_tile_size(cb_id_out0);
     uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 

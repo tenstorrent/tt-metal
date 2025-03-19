@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dprint.h"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -17,9 +17,9 @@ void kernel_main() {
     const auto inner_size = get_arg_val<uint32_t>(i++);
 
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t cb_id_in0 = tt::CB::c_in0;
-    constexpr uint32_t cb_id_in1 = tt::CB::c_in1;
-    constexpr uint32_t cb_id_in2 = tt::CB::c_in2;
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
+    constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
 
     union {
         float f;
