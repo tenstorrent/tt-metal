@@ -32,6 +32,8 @@ jobs:
         ]
 
     name: ${{ matrix.test-group.name }}
+    env:
+       ARCH_NAME: ${{ matrix.test-group.arch }}
     runs-on:
       - arch-wormhole_b0
       - config-t3000
