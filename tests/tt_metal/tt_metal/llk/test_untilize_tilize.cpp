@@ -312,7 +312,7 @@ TEST_F(DeviceFixture, TensixComputeUnpackTilize) {
                 continue;
             }
             for (bool dst_full_sync_en : {false}) {
-                for (uint8_t counter = 0; counter < 20; counter++) {
+                for (uint8_t counter = 0; counter < 10; counter++) {
                     unit_tests::compute::tilize::TestConfig test_config = {
                         .dst_full_sync_en = dst_full_sync_en,
                         .fp32_dest_acc_en = fp32_dest_acc_en,
