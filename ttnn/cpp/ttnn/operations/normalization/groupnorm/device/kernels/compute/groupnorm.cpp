@@ -99,8 +99,8 @@ void MAIN {
     constexpr uint32_t cb_ex = tt::CBIndex::c_9;
     constexpr uint32_t cb_ex2 = tt::CBIndex::c_13;
     constexpr uint32_t cb_ex_external = tt::CBIndex::c_10;
-    constexpr uint32_t cb_ex_global = num_cores_per_mcast_group == 1 ? cb_ex_partial : tt::CBIndex::c_15;
-    constexpr uint32_t cb_ex2_global = num_cores_per_mcast_group == 1 ? cb_ex2_partial : tt::CBIndex::c_14;
+    constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;
+    constexpr uint32_t cb_ex2_global = tt::CBIndex::c_14;
     constexpr uint32_t cb_ex2pe = tt::CBIndex::c_27;
 
     // interm cbs reuse
@@ -194,6 +194,7 @@ void MAIN {
             cb_wait_front(cb_input_mask, block_w);
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; out_block_index++) {
                 cb_wait_front(cb_in0, out_block_hw);
+
                 index_h_offset = 0;
                 reconfig_data_format_srcb(cb_in0, cb_input_mask);
                 // mask input
@@ -256,10 +257,12 @@ void MAIN {
                 cb_wait_front(cb_ex_partial, 1);
             }
 
-            if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
+            if constexpr (is_mcast_sender) {
                 reduce_init_delta<false>(cb_ex_external, cb_scaler_global, cb_ex_global);
                 cb_reserve_back(cb_ex_global, 1);
-                cb_reserve_back(cb_ex, 1);
+                if (num_cores_per_mcast_group > 1) {
+                    cb_reserve_back(cb_ex, 1);
+                }
                 tile_regs_acquire();
                 cb_wait_front(cb_scaler_global, 1);
                 cb_wait_front(cb_ex_external, 1);
@@ -271,7 +274,9 @@ void MAIN {
                 tile_regs_release();
                 reduce_revert_delta(cb_ex_global);
                 cb_push_back(cb_ex_global, 1);
-                cb_push_back(cb_ex, 1);
+                if (num_cores_per_mcast_group > 1) {
+                    cb_push_back(cb_ex, 1);
+                }
             }
 
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; out_block_index++) {
@@ -377,10 +382,12 @@ void MAIN {
                 reduce_revert_delta(cb_ex2_partial);
             }
 
-            if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
+            if constexpr (is_mcast_sender) {
                 reduce_init_delta<false>(cb_ex_external, cb_scaler_global, cb_ex2_global);
                 cb_reserve_back(cb_ex2_global, 1);
-                cb_reserve_back(cb_ex2, 1);
+                if (num_cores_per_mcast_group > 1) {
+                    cb_reserve_back(cb_ex2, 1);
+                }
                 tile_regs_acquire();
                 cb_wait_front(cb_scaler_global, 1);
                 cb_wait_front(cb_ex_external, 1);  // TODO DELETE THIS AND ADD POP
@@ -392,7 +399,9 @@ void MAIN {
                 tile_regs_release();
                 reduce_revert_delta(cb_ex2_global);
                 cb_push_back(cb_ex2_global, 1);
-                cb_push_back(cb_ex2, 1);
+                if (num_cores_per_mcast_group > 1) {
+                    cb_push_back(cb_ex2, 1);
+                }
             }
 
             // global reduce results
@@ -448,6 +457,7 @@ void MAIN {
                     cb_pop_front(cb_in0, block_w);
                 }
                 cb_push_back(cb_xmm, out_block_hw);
+
                 // zero out the garbage values by mult mask again
                 reconfig_data_format_srcb(cb_ex_global, cb_input_mask);
                 mul_tiles_init(cb_xmm, cb_input_mask);
