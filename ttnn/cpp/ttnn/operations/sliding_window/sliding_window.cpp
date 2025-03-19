@@ -548,19 +548,15 @@ std::pair<GatherConfig, GatherConfig> divide_transfers_between_cores(const Gathe
     return std::make_pair(reduce_flattened_transfers(first), reduce_flattened_transfers(second));
 }
 
-std::tuple<
-    std::vector<std::vector<uint16_t>>,
-    std::vector<std::vector<uint16_t>>,
-    std::vector<std::vector<uint16_t>>,
-    std::vector<std::vector<uint16_t>>,
-    std::vector<std::vector<uint16_t>>>
+std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>>
 generate_halo_kernel_config_tensors(
     const std::vector<PixelMetadata>& tensor_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
     bool is_block_sharded,
     bool transpose_mcast,
     bool remote_read,
-    IDevice* device) {
+    IDevice* device,
+    bool is_in_tiled) {
     auto core_id_to_noc_coords = [is_block_sharded, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
         auto num_cores_x = device->compute_with_storage_grid_size().x;
         auto core_coord = is_block_sharded ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id))
@@ -599,17 +595,7 @@ generate_halo_kernel_config_tensors(
     }
 
     // construct the config tensors
-    /**
-     * pad_config: length num_cores_nhw
-     *     each element (for core i): [dst_start0, length0, dst_start1, length1, ...]
-     * local_config: length num_cores_nhw
-     *     each element (for core i): (nocx, nocy, len) -> [src_start0, dst_start0, length0, src_start1, dst_start1,
-     * length1, ...]
-     * remote_config: length num_cores_nhw each element (for core i): { (nocx, nocy, len) -> [src_start0,
-     * dst_start0, length0, src_start1, dst_start1, length1, ...], (nocx, nocy, len) -> [src_start0, dst_start0,
-     * length0, src_start1, dst_start1, length1, ...], ...}
-     */
-
+    // pad_config: length num_cores_nhw - each element (for core i): [dst_start0, length0, dst_start1, length1, ...]
     std::vector<std::vector<uint32_pair_t>> pad_config;
     std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>> local_config;
     std::vector<std::vector<std::pair<uint32_triplet_t, std::vector<uint32_triplet_t>>>> remote_config;
@@ -672,8 +658,8 @@ generate_halo_kernel_config_tensors(
         }
     }
 
-    bool use_blocking = true;
     const int block_size = 32;  // TODO: pass this in
+    const bool use_blocking = is_in_tiled;
     std::vector<GatherConfig> ordered_gather_configs0;
     std::vector<GatherConfig> ordered_gather_configs1;
     for (const auto& config : gather_configs) {
@@ -689,7 +675,7 @@ generate_halo_kernel_config_tensors(
         }
     }
 
-    const auto serialized_gather_configs = serialize_gather_configs(ordered_gather_configs0);
+    const auto serialized_gather_configs0 = serialize_gather_configs(ordered_gather_configs0);
     const auto serialized_gather_configs1 = serialize_gather_configs(ordered_gather_configs1);
 
     // flatten and uniformize the lengths of each config list
@@ -716,74 +702,7 @@ generate_halo_kernel_config_tensors(
         return flattened_config;
     };
 
-    auto flatten_local_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
-        // find max length
-        size_t max_len = 0;
-        for (auto& [_, data] : config) {
-            max_len = std::max(max_len, 3 * data.size());  // each key is 3, data is 3 * data.size()
-        }
-        max_len += 3;  // key tuple
-        std::vector<std::vector<uint16_t>> flattened_config;
-        for (auto& [key, data] : config) {
-            auto [nocx, nocy, len] = key;
-            std::vector<uint16_t> flat_data(max_len, 0);
-            flat_data[0] = nocx;
-            flat_data[1] = nocy;
-            flat_data[2] = len;
-            uint32_t idx = 3;
-            for (size_t i = 0; i < data.size(); ++i) {
-                auto [src_start, dst_start, length] = data[i];
-                flat_data[idx++] = src_start;
-                flat_data[idx++] = dst_start;
-                flat_data[idx++] = length;
-            }
-            // null plug
-            flat_data.emplace_back(0);
-            flat_data.emplace_back(0);
-            flat_data.emplace_back(0);
-            flattened_config.emplace_back(flat_data);
-        }
-        return flattened_config;
-    };
-
-    auto flatten_remote_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
-        // find max length
-        size_t max_len = 0;
-        for (auto& core_config : config) {
-            size_t curr_len = 0;
-            for (auto& [key, subdata] : core_config) {
-                curr_len += 3 + 3 * subdata.size();  // each key is len 3
-            }
-            max_len = std::max(max_len, curr_len);  // each key is 3, data is 3 * data.size()
-        }
-        std::vector<std::vector<uint16_t>> flattened_config;
-        for (auto& core_config : config) {
-            std::vector<uint16_t> flat_data(max_len, 0);
-            uint32_t idx = 0;
-            for (auto& key_data : core_config) {
-                auto [nocx, nocy, len] = key_data.first;
-                flat_data[idx++] = nocx;
-                flat_data[idx++] = nocy;
-                flat_data[idx++] = len;
-                for (size_t i = 0; i < key_data.second.size(); ++i) {
-                    auto [src_start, dst_start, length] = key_data.second[i];
-                    flat_data[idx++] = src_start;
-                    flat_data[idx++] = dst_start;
-                    flat_data[idx++] = length;
-                }
-            }
-            // null plug
-            flat_data.emplace_back(0);
-            flat_data.emplace_back(0);
-            flat_data.emplace_back(0);
-            flattened_config.emplace_back(flat_data);
-        }
-        return flattened_config;
-    };
-
     auto flattened_pad_config = flatten_pad_config(pad_config);
-    auto flattened_local_config = flatten_local_config(local_config);
-    auto flattened_remote_config = flatten_remote_config(remote_config);
 
     auto align_config = [](auto& config, size_t align_granularity = 1, uint16_t align_value = 0) {
         size_t max_len = 0;
@@ -805,15 +724,8 @@ generate_halo_kernel_config_tensors(
     };
 
     align_config(flattened_pad_config, 2);
-    align_config(flattened_local_config, 2);
-    align_config(flattened_remote_config, 2);
 
-    return std::make_tuple(
-        flattened_pad_config,
-        serialized_gather_configs,
-        serialized_gather_configs1,
-        flattened_remote_config,  // TODO: fix the interface here, we just want to return pad and gather configs
-        flattened_remote_config);
+    return std::make_tuple(flattened_pad_config, serialized_gather_configs0, serialized_gather_configs1);
 }
 
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(

@@ -26,10 +26,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const uint32_t ncores_nhw,
     const uint32_t max_out_nsticks_per_core,
     const Tensor& padding_config,
-    const Tensor& local_config,
-    const Tensor& remote_config,
-    const Tensor& blocking_local_config,
-    const Tensor& blocking_remote_config,
+    const Tensor& gather_config0,
+    const Tensor& gather_config1,
     const bool remote_read,
     const bool transpose_mcast,
     Tensor& output_tensor,
@@ -190,35 +188,19 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             .set_globally_allocated_address(*padding_config_buffer);
     CBHandle padding_config_cb = CreateCircularBuffer(program, all_cores, padding_config_cb_config);
 
-    auto local_config_buffer = local_config.device_buffer();
+    auto local_config_buffer = gather_config0.device_buffer();
     auto local_config_cb_config =
         CircularBufferConfig(local_config_buffer->size() / num_cores, {{local_config_cb_id, kernel_config_df}})
             .set_page_size(local_config_cb_id, local_config_buffer->page_size())
             .set_globally_allocated_address(*local_config_buffer);
     CBHandle local_config_cb = CreateCircularBuffer(program, all_cores, local_config_cb_config);
 
-    auto remote_config_buffer = remote_config.device_buffer();
+    auto remote_config_buffer = gather_config1.device_buffer();
     auto remote_config_cb_config =
         CircularBufferConfig(remote_config_buffer->size() / num_cores, {{remote_config_cb_id, kernel_config_df}})
             .set_page_size(remote_config_cb_id, remote_config_buffer->page_size())
             .set_globally_allocated_address(*remote_config_buffer);
     CBHandle remote_config_cb = CreateCircularBuffer(program, all_cores, remote_config_cb_config);
-
-    auto blocking_local_config_buffer = blocking_local_config.device_buffer();
-    auto blocking_local_config_cb_config =
-        CircularBufferConfig(
-            blocking_local_config_buffer->size() / num_cores, {{blocking_local_config_cb_id, kernel_config_df}})
-            .set_page_size(blocking_local_config_cb_id, blocking_local_config_buffer->page_size())
-            .set_globally_allocated_address(*blocking_local_config_buffer);
-    CBHandle blocking_local_config_cb = CreateCircularBuffer(program, all_cores, blocking_local_config_cb_config);
-
-    auto blocking_remote_config_buffer = blocking_remote_config.device_buffer();
-    auto blocking_remote_config_cb_config =
-        CircularBufferConfig(
-            blocking_remote_config_buffer->size() / num_cores, {{blocking_remote_config_cb_id, kernel_config_df}})
-            .set_page_size(blocking_remote_config_cb_id, blocking_remote_config_buffer->page_size())
-            .set_globally_allocated_address(*blocking_remote_config_buffer);
-    CBHandle blocking_remote_config_cb = CreateCircularBuffer(program, all_cores, blocking_remote_config_cb_config);
 
     const bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
     const bool is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
@@ -231,7 +213,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         aligned_input_nstick_nbytes = tt::round_up(out_stick_nbytes, input_tensor.buffer()->alignment());
     }
 
-    const uint32_t block_stride = 2;
+    const uint32_t block_stride = 2;  // Skip every 2nd block because of split reader
 
     // reader kernel
     std::vector<uint32_t> reader_ct_args = {

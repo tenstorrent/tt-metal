@@ -96,35 +96,25 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     auto tensor_metadata = sliding_window::generate_tensor_metadata(
         pad_metadata, config_, reshard_num_cores_nhw_, is_in_tiled || is_out_tiled_);
     auto kernel_config = sliding_window::generate_halo_kernel_config_tensors(
-        tensor_metadata, shard_boundaries, is_block_sharded, transpose_mcast_, remote_read_, device);
+        tensor_metadata, shard_boundaries, is_block_sharded, transpose_mcast_, remote_read_, device, is_in_tiled);
 
     const auto& pad_config = std::get<0>(kernel_config);
-    const auto& local_config = std::get<1>(kernel_config);
-    const auto& remote_config = std::get<2>(kernel_config);
-    const auto& blocking_local_config = std::get<3>(kernel_config);
-    const auto& blocking_remote_config = std::get<4>(kernel_config);
+    const auto& gather_config0 = std::get<1>(kernel_config);
+    const auto& gather_config1 = std::get<2>(kernel_config);
 
     const auto pad_config_tensor =
         sliding_window::construct_on_host_config_tensor(pad_config, this->config_, this->parallel_config_);
-    const auto local_config_tensor =
-        sliding_window::construct_on_host_config_tensor(local_config, this->config_, this->parallel_config_);
-    const auto remote_config_tensor =
-        sliding_window::construct_on_host_config_tensor(remote_config, this->config_, this->parallel_config_);
-    const auto blocking_local_config_tensor =
-        sliding_window::construct_on_host_config_tensor(blocking_local_config, this->config_, this->parallel_config_);
-    const auto blocking_remote_config_tensor =
-        sliding_window::construct_on_host_config_tensor(blocking_remote_config, this->config_, this->parallel_config_);
+    const auto gather_config_tensor0 =
+        sliding_window::construct_on_host_config_tensor(gather_config0, this->config_, this->parallel_config_);
+    const auto gather_config_tensor1 =
+        sliding_window::construct_on_host_config_tensor(gather_config1, this->config_, this->parallel_config_);
 
     auto pad_config_device_tensor =
         sliding_window::move_config_tensor_to_device(pad_config_tensor, parallel_config_, is_block_sharded, device);
-    auto local_config_device_tensor =
-        sliding_window::move_config_tensor_to_device(local_config_tensor, parallel_config_, is_block_sharded, device);
-    auto remote_config_device_tensor =
-        sliding_window::move_config_tensor_to_device(remote_config_tensor, parallel_config_, is_block_sharded, device);
-    auto blocking_local_config_device_tensor = sliding_window::move_config_tensor_to_device(
-        blocking_local_config_tensor, parallel_config_, is_block_sharded, device);
-    auto blocking_remote_config_device_tensor = sliding_window::move_config_tensor_to_device(
-        blocking_remote_config_tensor, parallel_config_, is_block_sharded, device);
+    auto gather_config_device_tensor0 =
+        sliding_window::move_config_tensor_to_device(gather_config_tensor0, parallel_config_, is_block_sharded, device);
+    auto gather_config_device_tensor1 =
+        sliding_window::move_config_tensor_to_device(gather_config_tensor1, parallel_config_, is_block_sharded, device);
 
     Program program = CreateProgram();
 
@@ -135,10 +125,8 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         config_.num_cores_nhw,
         max_out_nsticks_per_core_,
         pad_config_device_tensor,
-        local_config_device_tensor,
-        remote_config_device_tensor,
-        blocking_local_config_device_tensor,
-        blocking_remote_config_device_tensor,
+        gather_config_device_tensor0,
+        gather_config_device_tensor1,
         remote_read_,
         transpose_mcast_,
         output_tensor,

@@ -75,10 +75,8 @@ operation::ProgramWithCallbacks UntilizeWithHaloV2::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto& padding_config = input_tensors.at(1);
-    const auto& local_config = input_tensors.at(2);
-    const auto& remote_config = input_tensors.at(3);
-    const auto& blocking_local_config = input_tensors.at(4);
-    const auto& blocking_remote_config = input_tensors.at(5);
+    const auto& gather_config0 = input_tensors.at(2);
+    const auto& gather_config1 = input_tensors.at(3);
     auto& output_tensor = output_tensors.at(0);
 
     Program program = CreateProgram();
@@ -90,10 +88,8 @@ operation::ProgramWithCallbacks UntilizeWithHaloV2::create_program(
         ncores_nhw_,
         max_out_nsticks_per_core_,
         padding_config,
-        local_config,
-        remote_config,
-        blocking_local_config,
-        blocking_remote_config,
+        gather_config0,
+        gather_config1,
         remote_read_,
         transpose_mcast_,
         output_tensor,
