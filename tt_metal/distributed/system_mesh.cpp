@@ -23,8 +23,8 @@ public:
     Impl();
 
     const MeshShape& get_shape() const;
-    std::vector<chip_id_t> get_mapped_physical_device_ids(
-        const MeshShape& shape, const std::optional<MeshCoordinate>& offset = std::nullopt) const;
+    std::vector<chip_id_t> get_mapped_physical_device_ids(const MeshDeviceConfig& config) const;
+    std::vector<chip_id_t> request_available_devices(const MeshDeviceConfig& config) const;
     chip_id_t get_physical_device_id(const MeshCoordinate& coord) const;
 };
 
@@ -61,33 +61,32 @@ chip_id_t SystemMesh::Impl::get_physical_device_id(const MeshCoordinate& coord) 
     return physical_coordinates_.at(coord).chip_id();
 }
 
-std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(
-    const MeshShape& shape, const std::optional<MeshCoordinate>& offset) const {
+std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const MeshDeviceConfig& config) const {
     std::vector<chip_id_t> physical_device_ids;
 
     const MeshShape& system_shape = this->get_shape();
     TT_FATAL(
-        shape.mesh_size() <= system_shape.mesh_size(),
+        config.mesh_shape.mesh_size() <= system_shape.mesh_size(),
         "Requested mesh is too big: {}, SystemMesh {}",
-        shape.mesh_size(),
+        config.mesh_shape.mesh_size(),
         system_shape.mesh_size());
 
     const size_t system_dimensions = system_shape.dims();
 
-    const MeshCoordinate system_offset = [&offset, system_dimensions]() {
-        if (offset.has_value()) {
+    const MeshCoordinate system_offset = [&config, system_dimensions]() {
+        if (config.offset.has_value()) {
             TT_FATAL(
-                offset->dims() == system_dimensions,
+                config.offset->dims() == system_dimensions,
                 "Provided offset dimensions mismatch: {} != {}",
-                offset,
+                config.offset,
                 system_dimensions);
-            return *offset;
+            return *config.offset;
         } else {
-            return MeshCoordinate::zero_coordinate(system_dimensions);
+            return MeshCoordinate(tt::stl::SmallVector<uint32_t>(system_dimensions, 0));
         }
     }();
 
-    if (is_line_topology(shape)) {
+    if (is_line_topology(config.mesh_shape)) {
         TT_FATAL(
             std::all_of(system_offset.coords().begin(), system_offset.coords().end(), [](int dim) { return dim == 0; }),
             "Offsets are unsupported for a line mesh");
@@ -96,7 +95,7 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(
         TT_FATAL(system_shape.dims() == 2, "Line topology is only supported for 2D meshes");
         Shape2D shape_2d(system_shape[0], system_shape[1]);
 
-        auto line_length = shape.mesh_size();
+        auto line_length = config.mesh_shape.mesh_size();
         for (const auto& logical_coordinate : MeshDeviceView::get_line_coordinates(line_length, shape_2d)) {
             auto physical_device_id = get_physical_device_id(logical_coordinate);
             physical_device_ids.push_back(physical_device_id);
@@ -108,7 +107,10 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(
     }
 
     TT_FATAL(
-        shape.dims() == system_dimensions, "Requested mesh shape dimensions mismatch: {} != {}", shape, system_shape);
+        config.mesh_shape.dims() == system_dimensions,
+        "Requested mesh shape dimensions mismatch: {} != {}",
+        config.mesh_shape,
+        system_shape);
 
     // Attempt to fit the requested mesh into the system mesh, potentially rotating it.
     auto requested_mesh_fits =
@@ -121,7 +123,7 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(
             return true;
         };
 
-    tt::stl::SmallVector<uint32_t> rotated_shape(shape.cbegin(), shape.cend());
+    tt::stl::SmallVector<uint32_t> rotated_shape(config.mesh_shape.cbegin(), config.mesh_shape.cend());
     size_t rotations = 0;
     while (!requested_mesh_fits(rotated_shape) && rotations < system_dimensions) {
         std::rotate(rotated_shape.begin(), rotated_shape.begin() + 1, rotated_shape.end());
@@ -131,7 +133,7 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(
     if (rotations == system_dimensions) {
         TT_THROW(
             "Requested mesh is too big and is not rotatable: {} and SystemMesh {}, offset {}",
-            shape,
+            config.mesh_shape,
             system_shape,
             system_offset);
     }
@@ -151,6 +153,16 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(
     return physical_device_ids;
 }
 
+std::vector<chip_id_t> SystemMesh::Impl::request_available_devices(const MeshDeviceConfig& config) const {
+    log_debug(LogMetal, "Mapping MeshDevice ({})", config.mesh_shape);
+    if (config.offset.has_value()) {
+        log_debug(LogMetal, "Offset: {}", config.offset.value());
+    }
+
+    return config.physical_device_ids.empty() ? this->get_mapped_physical_device_ids(config)
+                                              : config.physical_device_ids;
+}
+
 SystemMesh::SystemMesh() : pimpl_(std::make_unique<Impl>()) {}
 
 SystemMesh& SystemMesh::instance() {
@@ -164,9 +176,12 @@ chip_id_t SystemMesh::get_physical_device_id(const MeshCoordinate& coord) const 
 
 const MeshShape& SystemMesh::get_shape() const { return pimpl_->get_shape(); }
 
-std::vector<chip_id_t> SystemMesh::get_mapped_physical_device_ids(
-    const MeshShape& shape, const std::optional<MeshCoordinate>& offset) const {
-    return pimpl_->get_mapped_physical_device_ids(shape, offset);
+std::vector<chip_id_t> SystemMesh::request_available_devices(const MeshDeviceConfig& config) const {
+    return pimpl_->request_available_devices(config);
+}
+
+std::vector<chip_id_t> SystemMesh::get_mapped_physical_device_ids(const MeshDeviceConfig& config) const {
+    return pimpl_->get_mapped_physical_device_ids(config);
 }
 
 }  // namespace tt::tt_metal::distributed
