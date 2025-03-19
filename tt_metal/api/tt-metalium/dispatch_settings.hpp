@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <magic_enum/magic_enum.hpp>
 #include <unordered_map>
-#include <tt-metalium/hal.hpp>
 #include <umd/device/tt_core_coordinates.h>
 
 namespace tt {
