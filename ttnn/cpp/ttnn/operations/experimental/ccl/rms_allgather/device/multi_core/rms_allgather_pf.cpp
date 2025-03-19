@@ -1592,20 +1592,16 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
             const auto dst_buffer = output_tensors.at(0).buffer();
             bool skip_write_back =
                 output_tensors.at(0).shard_spec().value() == input_tensors.at(0).shard_spec().value();
-            printf("Updating first CB\n");
             UpdateDynamicCircularBufferAddress(program, cb_in0, *src_buffer_a);
-            printf("Updating second CB\n");
             if (!skip_write_back) {
                 UpdateDynamicCircularBufferAddress(program, cb_output_reshard, *dst_buffer);
             } else {
                 UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
             }
-            printf("Updating third CB\n");
             if (stats_tensor.has_value()) {
                 const auto stats_buffer = optional_input_tensors.at(2).value().buffer();
                 UpdateDynamicCircularBufferAddress(program, cb_stats, *stats_buffer);
             }
-            printf("Updated all CBs\n");
 
             auto& writer_sender_args_by_core = GetRuntimeArgs(program, writer_mcast_sender_kernels_id);
             auto& writer_receiver_args_by_core = num_none_all_to_all_workers > 0

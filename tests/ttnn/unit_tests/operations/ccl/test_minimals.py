@@ -14,13 +14,14 @@ from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_global_semaphore_with_same_address,
 )
 
-from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.rms_test import run_rms_fuse_impl
+from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.rms_test import run_rms_fuse_impl, run_rms_trace
 
 from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.reduce_scatter_test import run_reduce_scatter_impl
 
 from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.concat_fuse_test import run_concat_fuse_impl
 
 from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.all_reduce_test import run_all_reduce_impl
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 
 def run_allgather_only_with_trace(
@@ -367,13 +368,69 @@ def test_all_gather_only(
         (
             4,
             8192,
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
             None,
         ),
     ],
 )
 @pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("num_iters", [8])
+@pytest.mark.parametrize("num_iters, warmup_iters", [[1, 0]])
+@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"trace_region_size": 23887872}],
+    indirect=True,
+)
+# @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_tg_trace_rms_fuse(
+    t3k_mesh_device,
+    num_devices,
+    elements_per_batch,
+    num_links,
+    num_iters,
+    warmup_iters,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    input_shard_grid,
+    output_shard_grid,
+    trace_mode,
+):
+    profiler = BenchmarkProfiler()
+    run_rms_trace(
+        t3k_mesh_device,
+        num_devices,
+        elements_per_batch,
+        num_links,
+        use_program_cache,
+        function_level_defaults,
+        input_shard_grid,
+        output_shard_grid,
+        ttnn.Topology.Linear,
+        num_iters=num_iters,
+        enable_async=enable_async,
+        warmup_iters=warmup_iters,
+        profiler=profiler,
+    )
+
+
+# Enumerate the post-commit cases explicitly
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
+    [
+        # RMS NORM ALL GATHER FUSION
+        (
+            4,
+            8192,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+            None,
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("num_iters", [110])
 @pytest.mark.parametrize("enable_async", [True])
 def test_rms_fuse(
     t3k_mesh_device,
