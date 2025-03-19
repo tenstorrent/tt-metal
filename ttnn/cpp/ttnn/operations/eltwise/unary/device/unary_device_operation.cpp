@@ -30,11 +30,12 @@ void validate_supported_arch_dtype(
                 static_cast<int>(op_type));
             break;
         case UnaryOpType::FILL:
-           if(arch == tt::ARCH::GRAYSKULL){
+            if (arch == tt::ARCH::GRAYSKULL) {
                 TT_FATAL(
                     (input_datatype == DataType::BFLOAT16 || input_datatype == DataType::BFLOAT8_B),
-                    "Unsupported dtype {}. On Grayskull only BFLOAT16/BFLOAT8_B are supported", input_datatype);
-                }
+                    "Unsupported dtype {}. On Grayskull only BFLOAT16/BFLOAT8_B are supported",
+                    input_datatype);
+            }
             break;
         case UnaryOpType::BITWISE_XOR:
         case UnaryOpType::BITWISE_NOT:
@@ -88,9 +89,6 @@ UnaryDeviceOperation::program_factory_t UnaryDeviceOperation::select_program_fac
     if (tensor_args.input.is_sharded()) {
         return program::UnaryShardedProgramFactory{};
     } else {
-        if (args.use_rta_compute) {
-            return program::UnaryRTAProgramFactory{};
-        }
         return program::UnaryProgramFactory{};
     }
 }
@@ -157,7 +155,7 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
             computed_output_shape,
             preallocated_output_shape);
 
-        if(!input_tensor.is_sharded()){
+        if (!input_tensor.is_sharded()) {
             TT_FATAL(
                 (preallocated_output_tensor.value().get_layout() == Layout::TILE),
                 "Unary operation requires output tensor to be in Tile layout when working with non-sharded tensor.");
@@ -195,21 +193,12 @@ tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
 
     auto program_factory = select_program_factory(args, tensor_args);
     operation::Hash hash;
-    if (args.use_rta_compute) {
-        hash = operation::hash_operation<UnaryDeviceOperation>(
-            args,
-            program_factory.index(),
-            input_tensor.dtype(),
-            std::get<DeviceStorage>(input_tensor.storage()).memory_config());
-    } else {
-        hash = operation::hash_operation<UnaryDeviceOperation>(
-            args,
-            program_factory.index(),
-            input_tensor.dtype(),
-            std::get<DeviceStorage>(input_tensor.storage()).memory_config(),
-            input_shape.volume());
+    hash = operation::hash_operation<UnaryDeviceOperation>(
+        args,
+        program_factory.index(),
+        input_tensor.dtype(),
+        std::get<DeviceStorage>(input_tensor.storage()).memory_config());
 
-    }
     return hash;
 }
 
@@ -229,7 +218,6 @@ UnaryDeviceOperation::invoke(
     bool fp32_dest_acc_en,
     bool preserve_fp32_precision,
     bool bfp8_pack_precise,
-    bool use_rta_compute,
     const std::optional<Tensor>& preallocated_output) {
     return {
         operation_attributes_t{
@@ -239,7 +227,6 @@ UnaryDeviceOperation::invoke(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .preserve_fp32_precision = preserve_fp32_precision,
             .bfp8_pack_precise = bfp8_pack_precise,
-            .use_rta_compute = use_rta_compute
         },
         tensor_args_t{.input = input, .preallocated_output = preallocated_output}};
 }

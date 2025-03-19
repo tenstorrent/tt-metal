@@ -10,7 +10,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "unary_program_factory.hpp"
-#include "unary_rta_program_factory.hpp"
 #include "unary_sharded_program_factory.hpp"
 
 #include "ttnn/device_operation.hpp"
@@ -25,8 +24,7 @@ struct UnaryDeviceOperation {
     using tensor_args_t = unary::tensor_args_t;
     using spec_return_value_t = unary::spec_return_value_t;
     using tensor_return_value_t = unary::tensor_return_value_t;
-    using program_factory_t = std::
-        variant<program::UnaryProgramFactory, program::UnaryRTAProgramFactory, program::UnaryShardedProgramFactory>;
+    using program_factory_t = std::variant<program::UnaryProgramFactory, program::UnaryShardedProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -50,7 +48,6 @@ struct UnaryDeviceOperation {
         bool fp32_dest_acc_en,
         bool preserve_fp32_precision,
         bool bfp8_pack_precise,
-        bool use_rta_compute,
         const std::optional<Tensor>& preallocated_output);
 };
 
