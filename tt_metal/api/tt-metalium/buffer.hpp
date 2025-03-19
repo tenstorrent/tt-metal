@@ -20,6 +20,7 @@
 #include "bfloat16.hpp"
 #include "core_coord.hpp"
 #include "buffer_constants.hpp"
+#include "buffer_distribution_spec.hpp"
 #include "sub_device_types.hpp"
 #include "umd/device/tt_soc_descriptor.h"
 #include "umd/device/types/xy_pair.h"
@@ -200,6 +201,17 @@ public:
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
 
+    // Forked APIs for BufferDistributionSpec
+    static std::shared_ptr<Buffer> create(
+        IDevice* device,
+        DeviceAddr size,
+        DeviceAddr page_size,
+        BufferType buffer_type,
+        const BufferDistributionSpec& buffer_distribution_spec,
+        std::optional<bool> bottom_up = std::nullopt,
+        std::optional<SubDeviceId> sub_device_id = std::nullopt);
+    // TODO: Add create with address or just port over existing one?
+
     Buffer(const Buffer& other) = delete;
     Buffer& operator=(const Buffer& other) = delete;
     Buffer(Buffer&& other) = delete;
@@ -251,6 +263,7 @@ public:
     ShardSpecBuffer shard_spec() const;
     void set_shard_spec(const ShardSpecBuffer& shard_spec);
 
+    // TODO: Consolidate with interleaved and delete this (maybe get from BufferDistributionSpec)
     std::optional<uint32_t> num_cores() const;
 
     const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
@@ -269,6 +282,7 @@ public:
         BufferType buffer_type,
         TensorMemoryLayout buffer_layout,
         const std::optional<ShardSpecBuffer>& shard_parameter,
+        const std::optional<BufferDistributionSpec>& buffer_distribution_spec,
         std::optional<bool> bottom_up,
         std::optional<SubDeviceId> sub_device_id,
         bool owns_data,
@@ -314,6 +328,8 @@ private:
     DeviceAddr page_size_;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     std::optional<ShardSpecBuffer> shard_parameters_;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
+
+    std::optional<BufferDistributionSpec> buffer_distribution_spec_;
 
     std::weak_ptr<Buffer> weak_self;
     size_t unique_id_ = 0;
