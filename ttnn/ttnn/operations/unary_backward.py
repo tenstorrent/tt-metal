@@ -467,7 +467,6 @@ def _golden_function_gelu(grad_tensor, input_tensor, *args, **kwargs):
 
 
 ttnn.attach_golden_function(ttnn.gelu_bw, golden_function=_golden_function_gelu)
-ttnn.attach_golden_function(ttnn.experimental.gelu_bw, golden_function=_golden_function_gelu)
 
 
 def _golden_function_hardsigmoid(grad_tensor, input_tensor, *args, **kwargs):
