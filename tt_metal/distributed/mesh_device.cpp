@@ -488,16 +488,6 @@ CoreCoord MeshDevice::logical_grid_size() const {
     return validate_and_get_reference_value(
         scoped_devices_->root_devices(), [](const auto& device) { return device->logical_grid_size(); });
 }
-CoreType MeshDevice::core_type_from_virtual_core(const CoreCoord& virtual_coord) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [virtual_coord](const auto& device) {
-        return device->core_type_from_virtual_core(virtual_coord);
-    });
-}
-CoreCoord MeshDevice::virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [noc_index, coord](const auto& device) {
-        return device->virtual_noc_coordinate(noc_index, coord);
-    });
-}
 CoreCoord MeshDevice::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {
     return validate_and_get_reference_value(scoped_devices_->root_devices(), [noc_index, coord](const auto& device) {
         return device->virtual_noc0_coordinate(noc_index, coord);
