@@ -323,6 +323,8 @@ def run_test_sdpa_decode_single_iter(
     causal=True,
     start_core=ttnn.CoreCoord(0, 0),
     sub_core_grids=None,
+    override_q_chunk_size=None,
+    override_k_chunk_size=None,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if sub_core_grids is None:
@@ -349,7 +351,7 @@ def run_test_sdpa_decode_single_iter(
         min_pcc = 0.91 if dtype == ttnn.bfloat4_b else min_pcc
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
@@ -378,11 +380,13 @@ def run_test_sdpa_decode_single_iter(
     max_start_idx = max(start_indices)
     scale = d**-0.5
 
-    k_chunk_size = get_chunk_size(max_start_idx + 1, s)
+    q_chunk_size = padded_num_heads if override_q_chunk_size is None else override_q_chunk_size
+    k_chunk_size = get_chunk_size(max_start_idx + 1, s) if override_k_chunk_size is None else override_k_chunk_size
+
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid_size,
         sub_core_grids=compute_sub_core_grids,
-        q_chunk_size=padded_num_heads,
+        q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
     )
