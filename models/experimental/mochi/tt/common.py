@@ -283,9 +283,10 @@ def col_parallel_linear(name, bias, weight_cache_path, state_dict, state_dict_pr
 def load_linear(name, bias, weight_cache_path, state_dict, state_dict_prefix, mesh_device):
     w = torch.transpose(state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
     b = state_dict[f"{state_dict_prefix}.{name}.bias"] if bias else None
-    w = as_replicated_tensor(
+    w = as_sharded_tensor(
         w,
         mesh_device,
+        dim=-1,
         cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.weight"),
     )
     if b is not None:

@@ -43,9 +43,7 @@ class FeedForward(LightweightModule):
             pt_tensor,
             dtype=type,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device)
-            if self.seq_shard
-            else ttnn.ShardTensorToMesh(self.mesh_device, dim=dim),
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=dim),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name(name),
@@ -97,17 +95,28 @@ class FeedForward(LightweightModule):
         assert B == 1, "Batch size must be 1, got {}".format(B)
 
         # W1 computation (includes both x and gate paths)
+        if self.seq_shard:
+            w1 = ttnn.all_gather(self.w1, dim=-1)
+        else:
+            w1 = self.w1
+
         w1_out_1BSF = ttnn.linear(
             x_1BSD,
-            self.w1,
+            w1,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat16,
             memory_config=x_1BSD.memory_config(),
             program_config=self.w13_config(m=S),
         )
+
+        if self.seq_shard:
+            w3 = ttnn.all_gather(self.w3, dim=-1)
+        else:
+            w3 = self.w3
+
         w3_out_1BSF = ttnn.linear(
             x_1BSD,
-            self.w3,
+            w3,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat16,
             memory_config=x_1BSD.memory_config(),
@@ -124,9 +133,13 @@ class FeedForward(LightweightModule):
         )
 
         # W2 computation
+        if self.seq_shard:
+            w2 = ttnn.all_gather(self.w2, dim=-2)
+        else:
+            w2 = self.w2
         result_1BSD = ttnn.linear(
             w2_in_1BSF,
-            self.w2,
+            w2,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat16,
             memory_config=w2_in_1BSF.memory_config(),

@@ -3,7 +3,7 @@ from typing import Optional, Tuple
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
-from models.experimental.mochi.tt.common import create_linear_layer, as_sharded_tensor
+from models.experimental.mochi.tt.common import col_parallel_linear
 from models.experimental.mochi.tt.dit.attention import AsymmetricAttention
 from models.experimental.mochi.tt.dit.mlp import FeedForward
 from models.experimental.mochi.tt.dit.norms import modulated_rmsnorm, residual_tanh_gated_rmsnorm
@@ -45,30 +45,23 @@ class AsymmetricJointBlock(LightweightModule):
         self.hidden_size_y = hidden_size_y
 
         # Create modulation layers with weights and biases
-        self.mod_x, self.mod_x_bias = create_linear_layer(
+        self.mod_x, self.mod_x_bias = col_parallel_linear(
             "mod_x",
+            bias=True,
             weight_cache_path=weight_cache_path,
             state_dict=state_dict,
             state_dict_prefix=state_dict_prefix,
             mesh_device=mesh_device,
         )
 
-        if self.update_y:
-            self.mod_y, self.mod_y_bias = create_linear_layer(
-                "mod_y",
-                weight_cache_path=weight_cache_path,
-                state_dict=state_dict,
-                state_dict_prefix=state_dict_prefix,
-                mesh_device=mesh_device,
-            )
-        else:
-            self.mod_y, self.mod_y_bias = create_linear_layer(
-                "mod_y",
-                weight_cache_path=weight_cache_path,
-                state_dict=state_dict,
-                state_dict_prefix=state_dict_prefix,
-                mesh_device=mesh_device,
-            )
+        self.mod_y, self.mod_y_bias = col_parallel_linear(
+            "mod_y",
+            bias=True,
+            weight_cache_path=weight_cache_path,
+            state_dict=state_dict,
+            state_dict_prefix=state_dict_prefix,
+            mesh_device=mesh_device,
+        )
 
         # Self-attention
         self.attn = AsymmetricAttention(
@@ -207,6 +200,7 @@ class AsymmetricJointBlock(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        mod_x_B11Z = ttnn.all_gather(mod_x_B11Z, dim=3)
 
         scale_msa_x_B11X = mod_x_B11Z[:, :, :, : self.hidden_size_x]
         gate_msa_x_B11X = mod_x_B11Z[:, :, :, self.hidden_size_x : 2 * self.hidden_size_x]
@@ -225,7 +219,7 @@ class AsymmetricJointBlock(LightweightModule):
                 dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-
+            mod_y_B11C = ttnn.all_gather(mod_y_B11C, dim=3)
             if self.update_y:
                 scale_msa_y_B11Y = mod_y_B11C[:, :, :, : self.hidden_size_y]
                 gate_msa_y_B11Y = mod_y_B11C[:, :, :, self.hidden_size_y : 2 * self.hidden_size_y]

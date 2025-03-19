@@ -153,13 +153,15 @@ class AsymmetricAttention(LightweightModule):
         return w, b
 
     def _load_qkv(self, name, bias, weight_cache_path, state_dict, state_dict_prefix):
+        # Weight is fractured for FSDP, bias is not (it's small)
         torch_weight = lambda name, suffix: torch.transpose(state_dict[f"{state_dict_prefix}.{name}.{suffix}"], -2, -1)
         w = torch_weight(name, "weight")
         b = torch_weight(name, "bias") if bias else None
 
-        w = as_replicated_tensor(
+        w = as_sharded_tensor(
             w,
             mesh_device=self.mesh_device,
+            dim=-1,
             cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.weight"),
         )
         if b is not None:
@@ -267,9 +269,10 @@ class AsymmetricAttention(LightweightModule):
         x_1BNX = modulated_rmsnorm(x_1BNX, scale_x)
 
         # Process visual features
+        qkv_x = ttnn.all_gather(self.qkv_x, dim=-1)
         qkv_x_1BNE = ttnn.linear(
             x_1BNX,
-            self.qkv_x,
+            qkv_x,
             bias=self.qkv_x_bias,
             compute_kernel_config=self.mm_compute_kernel_config,
             dtype=ttnn.bfloat16,
@@ -421,9 +424,10 @@ class AsymmetricAttention(LightweightModule):
         M = out_1BNX.shape[2]
 
         # BUG: This linear clobbers `out_joint_1BLX` if padded and certain program configs are used
+        proj_x = ttnn.all_gather(self.proj_x, dim=-1, num_links=1)
         out_1BNX = ttnn.linear(
             out_1BNX,
-            self.proj_x,
+            proj_x,
             bias=self.proj_x_bias,
             compute_kernel_config=self.mm_compute_kernel_config,
             dtype=ttnn.bfloat16,
