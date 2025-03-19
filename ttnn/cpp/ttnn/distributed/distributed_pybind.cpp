@@ -71,13 +71,6 @@ void py_module_types(py::module& module) {
         module, "MeshCoordinateRangeSet", "Set of coordinate ranges within a mesh device.");
 }
 
-static Tensor get_cpu_if_device(const Tensor& tensor) {
-    if (tensor.storage_type() == StorageType::MULTI_DEVICE_HOST || tensor.storage_type() == StorageType::MULTI_DEVICE) {
-        return tt::tt_metal::tensor_impl::to_host_mesh_tensor_wrapper(tensor, true);
-    }
-    return tensor;
-}
-
 void py_module(py::module& module) {
     // TODO: #17477 - Remove overloads that accept 'row' and 'col'. Instead, use generic ND terms.
     static_cast<py::class_<MeshShape>>(module.attr("MeshShape"))
@@ -597,8 +590,7 @@ void py_module(py::module& module) {
         [](const Tensor& tensor,
            const TensorToMesh& mapper,
            std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt) -> Tensor {
-            Tensor cpu_tensor = get_cpu_if_device(tensor);
-            return distribute_tensor(cpu_tensor, mapper, mesh_device);
+            return distribute_tensor(from_device(tensor), mapper, mesh_device);
         },
         py::arg("tensor"),
         py::arg("mapper"),
@@ -606,17 +598,16 @@ void py_module(py::module& module) {
     module.def(
         "aggregate_tensor",
         [](const Tensor& tensor, const MeshToTensor& composer) -> Tensor {
-            Tensor cpu_tensor = get_cpu_if_device(tensor);
-            return aggregate_tensor(cpu_tensor, composer);
+            return aggregate_tensor(from_device(tensor), composer);
         },
         py::arg("tensor"),
         py::arg("composer"));
     module.def(
         "aggregate_tensor",
         [](const std::vector<Tensor>& tensors, const MeshToTensor& composer) -> Tensor {
-            Tensor aggregated_tensor = from_device(aggregate_as_tensor(tensors, AllGatherTensor{}));
-            Tensor cpu_tensor = get_cpu_if_device(aggregated_tensor);
-            return aggregate_tensor(cpu_tensor, composer);
+            Tensor aggregated_tensor = aggregate_as_tensor(tensors, AllGatherTensor{});
+
+            return aggregate_tensor(from_device(aggregated_tensor), composer);
         },
         py::arg("tensor"),
         py::arg("composer"));
