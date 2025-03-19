@@ -110,7 +110,6 @@ class Qwen2_5_VisionPatchEmbed(nn.Module):
 
     @instrument("Qwen2_5_VisionPatchEmbed")
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        print(f"Qwen2_5_VisionPatchEmbed: hidden_states shape: {hidden_states.shape}")
         target_dtype = self.proj.weight.dtype
         hidden_states = hidden_states.view(
             -1, self.in_channels, self.temporal_patch_size, self.patch_size, self.patch_size
@@ -259,7 +258,8 @@ class Qwen2_5_VLVisionAttention(nn.Module):
         position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
     ) -> torch.Tensor:
         seq_length = hidden_states.shape[0]
-        q, k, v = self.qkv(hidden_states).reshape(seq_length, 3, self.num_heads, -1).permute(1, 0, 2, 3).unbind(0)
+        qkv = self.qkv(hidden_states)
+        q, k, v = qkv.reshape(seq_length, 3, self.num_heads, -1).permute(1, 0, 2, 3).unbind(0)
         if position_embeddings is None:
             logger.warning_once(
                 "The attention layers in this model are transitioning from computing the RoPE embeddings internally "
@@ -272,13 +272,15 @@ class Qwen2_5_VLVisionAttention(nn.Module):
             sin = emb.sin().float()
         else:
             cos, sin = position_embeddings
-        q, k = apply_rotary_pos_emb_vision(q, k, cos, sin)
+
+        # NOCOMMIT: Skip RoPE
+        # q, k = apply_rotary_pos_emb_vision(q, k, cos, sin)
 
         attention_mask = torch.full(
             [1, seq_length, seq_length], torch.finfo(q.dtype).min, device=q.device, dtype=q.dtype
         )
-        for i in range(1, len(cu_seqlens)):
-            attention_mask[..., cu_seqlens[i - 1] : cu_seqlens[i], cu_seqlens[i - 1] : cu_seqlens[i]] = 0
+        # for i in range(1, len(cu_seqlens)):
+        #     attention_mask[..., cu_seqlens[i - 1] : cu_seqlens[i], cu_seqlens[i - 1] : cu_seqlens[i]] = 0
 
         q = q.transpose(0, 1)
         k = k.transpose(0, 1)
@@ -572,16 +574,11 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
                     blk.__call__, hidden_states, cu_seqlens_now, None, position_embeddings
                 )
             else:
-                print(f"pre blk: {hidden_states.flatten()[:3]=}")
                 hidden_states = blk(hidden_states, cu_seqlens=cu_seqlens_now, position_embeddings=position_embeddings)
-                print(f"post blk: {hidden_states.flatten()[:3]=}")
 
-        print(f"pre merger: {hidden_states.flatten()[:3]=}")
         hidden_states = self.merger(hidden_states)
-        print(f"post merger: {hidden_states.flatten()[:3]=}")
         reverse_indices = torch.argsort(window_index)
         hidden_states = hidden_states[reverse_indices, :]
-        print(f"output: {hidden_states.flatten()[:3]=}")
         return hidden_states
 
 

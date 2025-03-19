@@ -49,7 +49,8 @@ def standardize_hf_keys(state_dict):
 
 def convert_hf_to_meta(state_dict, head_dim):
     state_dict = split_hf_keys(state_dict)
-    state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
+    # NOCOMMIT: Skip swizzle when skipping rope for debug
+    # state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
     state_dict = map_hf_to_meta_keys(state_dict)
     return state_dict
 
@@ -71,6 +72,7 @@ def map_hf_to_meta_keys(loaded_weights):
         "self_attn.q_proj.bias": "attention.wq.bias",
         "self_attn.k_proj.bias": "attention.wk.bias",
         "self_attn.v_proj.bias": "attention.wv.bias",
+        "self_attn.o_proj.bias": "attention.wo.bias",
         # Feed forward module mappings
         "mlp.gate_proj.weight": "feed_forward.w1.weight",
         "mlp.up_proj.weight": "feed_forward.w3.weight",
@@ -90,6 +92,7 @@ def map_hf_to_meta_keys(loaded_weights):
         "q_proj.bias": "wq.bias",
         "k_proj.bias": "wk.bias",
         "v_proj.bias": "wv.bias",
+        "o_proj.bias": "wo.bias",
         # Direct MLP bias mappings
         "gate_proj.bias": "w1.bias",
         "up_proj.bias": "w3.bias",
@@ -105,6 +108,7 @@ def map_hf_to_meta_keys(loaded_weights):
         "model.layers.{layer}.self_attn.q_proj.bias": "layers.{layer}.attention.wq.bias",
         "model.layers.{layer}.self_attn.k_proj.bias": "layers.{layer}.attention.wk.bias",
         "model.layers.{layer}.self_attn.v_proj.bias": "layers.{layer}.attention.wv.bias",
+        "model.layers.{layer}.self_attn.o_proj.bias": "layers.{layer}.attention.wo.bias",
         "model.layers.{layer}.mlp.gate_proj.weight": "layers.{layer}.feed_forward.w1.weight",
         "model.layers.{layer}.mlp.up_proj.weight": "layers.{layer}.feed_forward.w3.weight",
         "model.layers.{layer}.mlp.down_proj.weight": "layers.{layer}.feed_forward.w2.weight",
@@ -264,6 +268,7 @@ def map_meta_to_hf_keys(loaded_weights):
         "attention.wq.bias": "self_attn.q_proj.bias",
         "attention.wk.bias": "self_attn.k_proj.bias",
         "attention.wv.bias": "self_attn.v_proj.bias",
+        "attention.wo.bias": "self_attn.o_proj.bias",
         # Feed forward module
         "feed_forward.w1.weight": "mlp.gate_proj.weight",
         "feed_forward.w3.weight": "mlp.up_proj.weight",
@@ -283,6 +288,7 @@ def map_meta_to_hf_keys(loaded_weights):
         "wq.bias": "q_proj.bias",
         "wk.bias": "k_proj.bias",
         "wv.bias": "v_proj.bias",
+        "wo.bias": "o_proj.bias",
         # Direct MLP bias mappings
         "w1.bias": "gate_proj.bias",
         "w3.bias": "up_proj.bias",

@@ -8,6 +8,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce, tt_all_gather
+from models.tt_transformers.tt.common import first_five, last_five
 
 
 class Attention(LightweightModule):
@@ -22,6 +23,7 @@ class Attention(LightweightModule):
         configuration,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        causal_mask=True,
     ):
         super().__init__()
 
@@ -36,6 +38,7 @@ class Attention(LightweightModule):
         self.max_batch_size = configuration.max_batch_size
         self.n_kv_heads = configuration.n_kv_heads
         self.paged_attention_config = paged_attention_config
+        self.causal_mask = causal_mask
         self.min_kv_prefill_shard_seqlen = configuration.min_kv_prefill_shard_seqlen
         self.ccl_dtype = configuration.ccl_dtype
         self.num_reduce_scatter_links = configuration.num_reduce_scatter_links
@@ -50,6 +53,7 @@ class Attention(LightweightModule):
 
         self.n_local_heads = self.n_heads // self.num_devices_per_group
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
+        self.padded_head_dim = math.ceil(self.head_dim / self.tile_size) * self.tile_size
 
         # TODO: Fix this once all-gather supports < tile_size
         if self.TG:
@@ -107,16 +111,37 @@ class Attention(LightweightModule):
         # Initialize bias tensors as None
         self.wqkv_bias_decode = None
         self.wqkv_bias_prefill = None
+        self.wo_bias_decode = None
+        self.wo_bias_prefill = None
 
         # Create combined QKV bias if present in state dict
         if f"{wq_str}.bias" in self.state_dict:
+            # Helper function to reshape and pad bias chunk if needed
+            def pad_bias_chunk(b):
+                if self.head_dim != self.padded_head_dim:
+                    # Reshape to separate head dimensions
+                    b = b.reshape(self.n_local_heads, self.head_dim)
+                    # Pad the head_dim dimension
+                    b = torch.nn.functional.pad(b, (0, self.padded_head_dim - self.head_dim))
+                    # Reshape back to 1D
+                    result = b.reshape(-1)
+                    return result
+                else:
+                    return b
+
             qkv_bias = torch.concat(
                 [
                     torch.concat(
                         [
-                            torch.chunk(self.state_dict[f"{wq_str}.bias"], configuration.num_devices)[i],
-                            torch.chunk(self.state_dict[f"{wk_str}.bias"], configuration.num_devices)[i],
-                            torch.chunk(self.state_dict[f"{wv_str}.bias"], configuration.num_devices)[i],
+                            pad_bias_chunk(
+                                torch.chunk(self.state_dict[f"{wq_str}.bias"], configuration.num_devices)[i]
+                            ),
+                            pad_bias_chunk(
+                                torch.chunk(self.state_dict[f"{wk_str}.bias"], configuration.num_devices)[i]
+                            ),
+                            pad_bias_chunk(
+                                torch.chunk(self.state_dict[f"{wv_str}.bias"], configuration.num_devices)[i]
+                            ),
                         ],
                         dim=-1,
                     )
@@ -179,6 +204,22 @@ class Attention(LightweightModule):
             wk_selected = torch.chunk(self.state_dict[f"{wk_str}.weight"], self.num_devices_per_group, dim=0)[i]
             wv_selected = torch.chunk(self.state_dict[f"{wv_str}.weight"], self.num_devices_per_group, dim=0)[i]
 
+            # If head_dim needs padding
+            if self.head_dim != self.padded_head_dim:
+                # Helper function to reshape and pad weights
+                def pad_weight(w):
+                    # Reshape to separate head dimensions
+                    w = w.reshape(self.n_local_heads, self.head_dim, -1)
+                    # Pad the head_dim dimension
+                    w = torch.nn.functional.pad(w, (0, 0, 0, self.padded_head_dim - self.head_dim))
+                    # Reshape back to 2D
+                    result = w.reshape(self.n_local_heads * self.padded_head_dim, -1)
+                    return result
+
+                wq_selected = pad_weight(wq_selected)
+                wk_selected = pad_weight(wk_selected)
+                wv_selected = pad_weight(wv_selected)
+
             # Transpose the selected chunks
             wq = torch.transpose(wq_selected, -2, -1)
             wk = torch.transpose(wk_selected, -2, -1)
@@ -207,15 +248,15 @@ class Attention(LightweightModule):
         # FIXME: workaround until nlp_concat_heads correctly supports sub-tile head dims
         # We are going to pad the input dim of the output weights with zeros in the places
         # that nlp_concat_heads inserts garbage values
-        if self.head_dim % self.tile_size != 0:
-            tile_padded_head_dim = math.ceil(self.head_dim / self.tile_size) * self.tile_size
+        if self.head_dim != self.padded_head_dim:
             # note that torch weights are already transposed to have input in last dim
             pt_wo_t = self.state_dict[f"{wo_str}.weight"]
             heads = pt_wo_t.reshape(-1, self.n_local_heads, self.head_dim)
             heads = torch.nn.functional.pad(
-                heads, (0, tile_padded_head_dim - self.head_dim)
+                heads, (0, self.padded_head_dim - self.head_dim)
             )  # tail-pad last dim with 0
-            pt_wo = heads.reshape(1, 1, -1, self.n_local_heads * tile_padded_head_dim).transpose(-1, -2)
+            pt_wo = heads.reshape(1, 1, -1, self.n_local_heads * self.padded_head_dim).transpose(-1, -2)
+
         else:
             pt_wo = self.state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
 
@@ -239,6 +280,45 @@ class Attention(LightweightModule):
                 # cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
             ),
         )
+
+        if f"{wo_str}.bias" in self.state_dict:
+            # Prefill can use broadcasting on the bias add so wants a 1d tensor
+            self.wo_bias_prefill = ttnn.as_tensor(
+                self.state_dict[f"{wo_str}.bias"],
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                dtype=self.dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.TILE_LAYOUT,
+                cache_file_name=cache_name("wo_bias_prefill_sharded"),
+            )
+            # as_tensor returns (32, dim) which is incorrect, this reshape updates the padded size to the correct size
+            self.wo_bias_prefill = ttnn.reshape(
+                self.wo_bias_prefill,
+                (1, 1, 1, self.wo_bias_prefill.shape[-1]),
+                (1, 1, self.wo_bias_prefill.shape[-2], self.wo_bias_prefill.shape[-1]),
+            )
+
+            # Broadcasting does not seem to be supported inside execute_trace so expand to the whole batch size
+            # Create a list of bias tensors for each multiple of tile_size up to max_batch_size
+            self.wo_bias_decode = []
+            for batch_size in range(
+                configuration.tile_size,
+                configuration.tile_padded_batch_rows + configuration.tile_size,
+                configuration.tile_size,
+            ):
+                wo_bias_decode = self.state_dict[f"{wo_str}.bias"].unsqueeze(0).expand(batch_size, -1)
+                bias_tensor = ttnn.as_tensor(
+                    wo_bias_decode,
+                    device=self.mesh_device,
+                    mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                    dtype=self.dtype,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.TILE_LAYOUT,
+                    cache_file_name=cache_name(f"wo_bias_decode_sharded_{batch_size}"),
+                )
+                self.wo_bias_decode.append(bias_tensor)
+
         if not use_paged_kv_cache:
             # vLLM provides its own kv cache
             self.init_kv_cache(configuration, weight_cache_path)
@@ -474,9 +554,15 @@ class Attention(LightweightModule):
                 memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG"],
             )
             ttnn.deallocate(attn_output_cat)
+
+            if self.wo_bias_decode:
+                # select the bias tensor based on the number of tiles in the rows
+                # WARNING: must not change the batch size between compiling and executing a trace
+                num_tiles = int(math.ceil(attn_output_cat.shape[-2] / self.tile_size))
+                dense_out_sharded = dense_out_sharded + self.wo_bias_decode[num_tiles - 1]
+
             dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
             return dense_out_sharded
-
         else:
             attn_output = tt_all_gather(
                 attn_output_cat,
@@ -512,6 +598,14 @@ class Attention(LightweightModule):
             )
 
             ttnn.deallocate(attn_output_cat)
+
+            if self.wo_bias_decode:
+                # select the bias tensor based on the number of tiles in the rows
+                # WARNING: must not change the batch size between compiling and executing a trace
+                num_tiles = int(math.ceil(attn_output_cat.shape[-2] / self.tile_size))
+                dense_out_sharded = dense_out_sharded + self.wo_bias_decode[num_tiles - 1]
+
+            dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
 
             # All reduce
             dense_out_reduced = tt_all_reduce(
@@ -593,7 +687,6 @@ class Attention(LightweightModule):
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
 
         ttnn.deallocate(x_11SH)
-        print(f"{xqkv_fused.shape=}")
 
         # split qkv into heads
         (
@@ -608,48 +701,54 @@ class Attention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        last_five_unpadded = lambda x, mesh_device: first_five(x, mesh_device, start=-(96 - 80) - 5, end=-(96 - 80))
+
         ttnn.deallocate(xqkv_fused)
 
-        ###
-        # Rotary embeddings
-        ###
+        # ###
+        # # Rotary embeddings
+        # ###
 
-        if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
-            q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
+        # if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
+        #     q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
 
-        # FIXME: workaround until rotary embeddings correctly supports sub-tile head dims
-        tile_padded_head_dim = math.ceil(self.head_dim / self.tile_size) * self.tile_size
-        pad_head_dim = lambda x: ttnn.pad(
-            x, (x.shape[0], x.shape[1], x.shape[2], tile_padded_head_dim), (0, 0, 0, 0), 0.0
-        )
-        rot_mats = [pad_head_dim(r) for r in rot_mats]
+        # # FIXME: workaround until rotary embeddings correctly supports sub-tile head dims
+        # self.padded_head_dim = math.ceil(self.head_dim / self.tile_size) * self.tile_size
+        # pad_head_dim = lambda x: ttnn.pad(
+        #     x, (x.shape[0], x.shape[1], x.shape[2], self.padded_head_dim), (0, 0, 0, 0), 0.0
+        # )
+        # rot_mats = [pad_head_dim(r) for r in rot_mats]
 
-        print(f"{q_heads_1QSD_pre_rot.shape=}")
-        print(f"{k_heads_1KSD_pre_rot.shape=}")
-        print(f"{v_heads_1VSD.shape=}")
-        print(f"{rot_mats[0].shape=}")
-        print(f"{rot_mats[1].shape=}")
-        print(f'{self.transformation_mats["prefill"].shape=}')
-        q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
-            q_heads_1QSD_pre_rot,
-            rot_mats[0],
-            rot_mats[1],
-            self.transformation_mats["prefill"],
-            is_decode_mode=False,
-        )
-        ttnn.deallocate(q_heads_1QSD_pre_rot)
+        # print(f"{q_heads_1QSD_pre_rot.shape=}")
+        # print(f"{k_heads_1KSD_pre_rot.shape=}")
+        # print(f"{v_heads_1VSD.shape=}")
+        # print(f"{rot_mats[0].shape=}")
+        # print(f"{rot_mats[1].shape=}")
+        # print(f'{self.transformation_mats["prefill"].shape=}')
+        # q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
+        #     q_heads_1QSD_pre_rot,
+        #     rot_mats[0],
+        #     rot_mats[1],
+        #     self.transformation_mats["prefill"],
+        #     is_decode_mode=False,
+        # )
+        # ttnn.deallocate(q_heads_1QSD_pre_rot)
 
-        if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
-            k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
+        # if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
+        #     k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
 
-        k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
-            k_heads_1KSD_pre_rot,
-            rot_mats[0],
-            rot_mats[1],
-            self.transformation_mats["prefill"],
-            is_decode_mode=False,
-        )
-        ttnn.deallocate(k_heads_1KSD_pre_rot)
+        # k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
+        #     k_heads_1KSD_pre_rot,
+        #     rot_mats[0],
+        #     rot_mats[1],
+        #     self.transformation_mats["prefill"],
+        #     is_decode_mode=False,
+        # )
+        # ttnn.deallocate(k_heads_1KSD_pre_rot)
+
+        # NOCOMMIT: Skip RoPE
+        q_heads_1QSD = q_heads_1QSD_pre_rot
+        k_heads_1KSD = k_heads_1KSD_pre_rot
 
         # Fill KV-Cache
         if kv_cache:
@@ -711,6 +810,9 @@ class Attention(LightweightModule):
         q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(q_heads_1QSD)
 
+        mask = torch.full([1, 1, seq_len, seq_len], -1e9, dtype=torch.float32)
+        tt_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=self.mesh_device)
+
         if chunk_start_idx is not None:
             attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
                 q_heads_1QSD_8b,
@@ -718,6 +820,7 @@ class Attention(LightweightModule):
                 values_BKSD,
                 page_table,
                 chunk_start_idx,
+                is_causal=self.causal_mask,
                 scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
@@ -727,7 +830,8 @@ class Attention(LightweightModule):
                 q_heads_1QSD_8b,
                 k_heads_1KSD_8b,
                 v_heads_1VSD_8b,
-                is_causal=True,
+                is_causal=self.causal_mask,
+                attn_mask=tt_mask,
                 scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
@@ -738,44 +842,15 @@ class Attention(LightweightModule):
         ttnn.deallocate(k_heads_1KSD_8b)
         ttnn.deallocate(v_heads_1VSD_8b)
 
-        # FIXME: workaround until nlp_create_qkv_heads correctly supports sub-tile head dims
-        fix_head_dim_padding = (
-            lambda x: ttnn.reshape(
-                x,
-                (x.shape[0], x.shape[1], x.shape[2], self.head_dim),
-                (x.shape[0], x.shape[1], x.shape[2], x.shape[3]),
-            )
-            if x.shape[-1] % self.head_dim != 0
-            else x
-        )
-        attn_output_84SD = fix_head_dim_padding(attn_output_84SD)
-        attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
+        attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.padded_head_dim])
 
         ###
         # Output matmul
         ###
-        print(f"{attn_output_1QSD.shape=}")
-        id_tensor = list(range(attn_output_1QSD.shape[-1]))
-        id_tensor = torch.Tensor(id_tensor).repeat(
-            attn_output_1QSD.shape[0], attn_output_1QSD.shape[1], attn_output_1QSD.shape[2], 1
-        )
-        id_tensor = ttnn.as_tensor(
-            id_tensor,
-            device=self.mesh_device,
-            memory_config=attn_output_1QSD.memory_config(),
-            dtype=attn_output_1QSD.dtype,
-            layout=attn_output_1QSD.layout,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-        id_tensor = fix_head_dim_padding(id_tensor)
-        print(f"{id_tensor.shape=}")
-        print(f"{attn_output_1QSD.shape=}", flush=True)
-        # attn_output_1QSD = attn_output_1QSD * 0.0 + id_tensor
         attn_output_11SH = ttnn.experimental.nlp_concat_heads(
             attn_output_1QSD,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        print(f"{attn_output_11SH.shape=}")
 
         ttnn.deallocate(attn_output_1QSD)
         # reshaping long sequence to matmul fit on device
@@ -800,6 +875,9 @@ class Attention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
         )
+        # FIXME: surely ttnn.linear bias should work?
+        if self.wo_bias_prefill is not None:
+            output_11SH = output_11SH + self.wo_bias_prefill
 
         if seq_len > 1024:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
