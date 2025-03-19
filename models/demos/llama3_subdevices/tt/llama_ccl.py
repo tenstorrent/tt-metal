@@ -192,7 +192,7 @@ class TT_CCL:
                 subdevice_id=self.worker_sub_device_id,
                 math_op=ttnn.ReduceType.Sum,
             )
-            # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
+            ttnn.synchronize_device(self.mesh_device)
 
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         self.buffer_idx[cluster_axis] = (self.buffer_idx[cluster_axis] + 1) % self.num_cbs
@@ -233,6 +233,8 @@ class TT_CCL:
             enable_persistent_fabric_mode=self.enable_persistent_fabric,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        if self.mode == "prefill":
+            ttnn.synchronize_device(self.mesh_device)
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
         return ttnn_tensor_out
 
