@@ -5,9 +5,8 @@
 #include <system_mesh.hpp>
 
 #include "small_vector.hpp"
+#include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/distributed/coordinate_translation.hpp"
-#include <tt-metalium/shape2d.hpp>
-#include <tt-metalium/mesh_device_view.hpp>
 
 #include <tt_stl/indestructible.hpp>
 #include "mesh_coord.hpp"
@@ -17,11 +16,17 @@ namespace tt::tt_metal::distributed {
 
 class SystemMesh::Impl {
 private:
-    MeshContainer<PhysicalMeshCoordinate> physical_coordinates_;
+    MeshShape logical_mesh_shape_;
+    CoordinateTranslationMap logical_to_physical_coordinates_;
+    std::unordered_map<MeshCoordinate, chip_id_t> logical_to_device_id_;
+    std::unordered_map<PhysicalCoordinate, chip_id_t> physical_coordinate_to_device_id_;
+    std::unordered_map<chip_id_t, PhysicalCoordinate> physical_device_id_to_coordinate_;
 
 public:
-    Impl();
+    Impl() = default;
 
+    bool is_system_mesh_initialized() const;
+    void initialize();
     const MeshShape& get_shape() const;
     std::vector<chip_id_t> get_mapped_physical_device_ids(const MeshDeviceConfig& config) const;
     std::vector<chip_id_t> request_available_devices(const MeshDeviceConfig& config) const;
@@ -29,49 +34,69 @@ public:
 };
 
 // Implementation of public methods
-SystemMesh::Impl::Impl() : physical_coordinates_(get_system_mesh_coordinate_translation_map()) {
-    for (const auto& [logical_coordinate, physical_mesh_coordinate] : physical_coordinates_) {
-        log_debug(
-            LogMetal,
-            "Logical Coordinate: ({}, {}), Physical Mesh Coordinate: (Mesh ID {}, Chip ID {})",
-            logical_coordinate[0],
-            logical_coordinate[1],
-            physical_mesh_coordinate.mesh_id(),
-            physical_mesh_coordinate.chip_id());
+bool SystemMesh::Impl::is_system_mesh_initialized() const { return !physical_coordinate_to_device_id_.empty(); }
+
+void SystemMesh::Impl::initialize() {
+    physical_device_id_to_coordinate_ = tt::Cluster::instance().get_user_chip_ethernet_coordinates();
+    if (physical_device_id_to_coordinate_.empty()) {
+        // Only WH has ethernet coordinates. Fabric will assign chip ids for BH
+        auto arch = tt::Cluster::instance().arch();
+        TT_FATAL(
+            arch == ARCH::GRAYSKULL or arch == ARCH::BLACKHOLE,
+            "Expected Wormhole chips to have ethernet coordinates assigned by cluster descriptor");
+        const int num_detected_devices = tt::Cluster::instance().number_of_devices();
+        for (auto chip_id = 0; chip_id < num_detected_devices; chip_id++) {
+            PhysicalCoordinate coord{0, chip_id, 0, 0, 0};
+            physical_device_id_to_coordinate_.emplace(chip_id, coord);
+            physical_coordinate_to_device_id_.emplace(coord, chip_id);
+        }
+    } else {
+        for (const auto& [chip_id, physical_coordinate] : this->physical_device_id_to_coordinate_) {
+            physical_coordinate_to_device_id_.emplace(physical_coordinate, chip_id);
+        }
+    }
+
+    std::tie(logical_to_physical_coordinates_, logical_mesh_shape_) = get_system_mesh_coordinate_translation_map();
+    for (const auto& [logical_coordinate, physical_coordinate] : logical_to_physical_coordinates_) {
+        auto physical_device_id_iter = physical_coordinate_to_device_id_.find(physical_coordinate);
+        TT_FATAL(
+            physical_device_id_iter != physical_coordinate_to_device_id_.end(),
+            "Physical (Ethernet) coordinate: {} not found. Have you used `tt-topology` to flash the ethernet "
+            "coordinates with the correct topology?",
+            physical_coordinate);
+        logical_to_device_id_.try_emplace(logical_coordinate, physical_device_id_iter->second);
     }
 }
 
-const MeshShape& SystemMesh::Impl::get_shape() const { return physical_coordinates_.shape(); }
+const MeshShape& SystemMesh::Impl::get_shape() const { return logical_mesh_shape_; }
 
 chip_id_t SystemMesh::Impl::get_physical_device_id(const MeshCoordinate& coord) const {
-    const MeshShape& system_shape = this->get_shape();
     TT_FATAL(
-        coord.dims() == system_shape.dims(),
+        coord.dims() == logical_mesh_shape_.dims(),
         "Coordinate dimensions mismatch: {} != {}",
         coord.dims(),
-        system_shape.dims());
+        logical_mesh_shape_.dims());
     for (size_t i = 0; i < coord.dims(); ++i) {
         TT_FATAL(
-            coord[i] < system_shape[i],
+            coord[i] < logical_mesh_shape_[i],
             "Coordinate at index {} out of bounds; mesh shape {}, coordinate {}",
             i,
-            system_shape,
+            logical_mesh_shape_,
             coord);
     }
-    return physical_coordinates_.at(coord).chip_id();
+    return logical_to_device_id_.at(coord);
 }
 
 std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const MeshDeviceConfig& config) const {
     std::vector<chip_id_t> physical_device_ids;
 
-    const MeshShape& system_shape = this->get_shape();
     TT_FATAL(
-        config.mesh_shape.mesh_size() <= system_shape.mesh_size(),
+        config.mesh_shape.mesh_size() <= logical_mesh_shape_.mesh_size(),
         "Requested mesh is too big: {}, SystemMesh {}",
         config.mesh_shape.mesh_size(),
-        system_shape.mesh_size());
+        logical_mesh_shape_.mesh_size());
 
-    const size_t system_dimensions = system_shape.dims();
+    const size_t system_dimensions = logical_mesh_shape_.dims();
 
     const MeshCoordinate system_offset = [&config, system_dimensions]() {
         if (config.offset.has_value()) {
@@ -92,8 +117,8 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const Me
             "Offsets are unsupported for a line mesh");
 
         // TODO: consider if we can do this in 3D.
-        TT_FATAL(system_shape.dims() == 2, "Line topology is only supported for 2D meshes");
-        Shape2D shape_2d(system_shape[0], system_shape[1]);
+        TT_FATAL(logical_mesh_shape_.dims() == 2, "Line topology is only supported for 2D meshes");
+        Shape2D shape_2d(logical_mesh_shape_[0], logical_mesh_shape_[1]);
 
         auto line_length = config.mesh_shape.mesh_size();
         for (const auto& logical_coordinate : MeshDeviceView::get_line_coordinates(line_length, shape_2d)) {
@@ -110,18 +135,17 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const Me
         config.mesh_shape.dims() == system_dimensions,
         "Requested mesh shape dimensions mismatch: {} != {}",
         config.mesh_shape,
-        system_shape);
+        logical_mesh_shape_);
 
     // Attempt to fit the requested mesh into the system mesh, potentially rotating it.
-    auto requested_mesh_fits =
-        [this, &system_offset, &system_shape](const tt::stl::SmallVector<uint32_t>& rotated_shape) {
-            for (int i = 0; i < system_shape.dims(); ++i) {
-                if (system_offset[i] + rotated_shape[i] > system_shape[i]) {
-                    return false;
-                }
+    auto requested_mesh_fits = [this, &system_offset](const tt::stl::SmallVector<uint32_t>& rotated_shape) {
+        for (int i = 0; i < logical_mesh_shape_.dims(); ++i) {
+            if (system_offset[i] + rotated_shape[i] > logical_mesh_shape_[i]) {
+                return false;
             }
-            return true;
-        };
+        }
+        return true;
+    };
 
     tt::stl::SmallVector<uint32_t> rotated_shape(config.mesh_shape.cbegin(), config.mesh_shape.cend());
     size_t rotations = 0;
@@ -134,7 +158,7 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const Me
         TT_THROW(
             "Requested mesh is too big and is not rotatable: {} and SystemMesh {}, offset {}",
             config.mesh_shape,
-            system_shape,
+            logical_mesh_shape_,
             system_offset);
     }
 
@@ -167,6 +191,9 @@ SystemMesh::SystemMesh() : pimpl_(std::make_unique<Impl>()) {}
 
 SystemMesh& SystemMesh::instance() {
     static tt::stl::Indestructible<SystemMesh> instance;
+    if (!instance.get().pimpl_->is_system_mesh_initialized()) {
+        instance.get().pimpl_->initialize();
+    }
     return instance.get();
 }
 
