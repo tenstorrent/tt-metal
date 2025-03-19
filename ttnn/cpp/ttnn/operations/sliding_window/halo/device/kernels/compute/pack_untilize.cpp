@@ -21,8 +21,6 @@ void MAIN {
     for (uint32_t b = 0; b < per_core_block_cnt; ++b) {
         const uint32_t out_cb_id = ((b / block_size) % 2 == 0) ? out_cb_id0 : out_cb_id1;
 
-        DPRINT << "pushing to  " << out_cb_id << ENDL();
-
         cb_wait_front(src_cb_id, per_core_block_tile_cnt);
         cb_reserve_back(out_cb_id, per_core_block_tile_cnt);
 

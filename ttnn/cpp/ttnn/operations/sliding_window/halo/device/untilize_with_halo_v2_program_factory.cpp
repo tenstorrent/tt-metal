@@ -87,7 +87,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     auto src_cb = CreateCircularBuffer(program, all_cores, src_cb_config);
     log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", src_cb_id, input_npages, in_page_size);
 
-    const uint32_t block_size_height = 256;  // TODO: Get this from a parameter
+    const uint32_t block_size_height = 32;  // TODO: Get this from a parameter
 
     // We need to clamp to avoid crashing in the case that the block size used was larger than the input
     const uint32_t clamped_block_size_height = std::min(block_size_height, input_npages * TILE_HEIGHT);

@@ -390,6 +390,7 @@ void serialize_gather_transfer(const GatherTransfer& transfer, std::vector<uint1
 // route = header [tranfer0 transfer1 ... ]
 void serialize_gather_route(const GatherRoute& route, std::vector<uint16_t>& output) {
     serialize_gather_header(route.header, output);
+    TT_FATAL(route.header.num_transfers == route.transfers.size(), "Number of transfers in route must match header");
     for (const auto& transfer : route.transfers) {
         serialize_gather_transfer(transfer, output);
     }
@@ -481,7 +482,7 @@ GatherConfig reduce_flattened_transfers(const std::vector<DestinationTransferPai
 
 GatherConfig reorder_transfers_globally(const GatherConfig& input) {
     std::vector<DestinationTransferPair> all = flatten_gather_config(input);
-    TT_FATAL(!all.empty(), "Expected to have at least one transfer during reorder");
+    // TT_FATAL(!all.empty(), "Expected to have at least one transfer during reorder");
 
     // Sort by ascending src_id and tie-break with noc coords
     std::sort(all.begin(), all.end(), [](const DestinationTransferPair& a, const DestinationTransferPair& b) {
@@ -528,22 +529,17 @@ GatherConfig split_into_blocks(const GatherConfig& input, uint32_t block_size) {
 
 std::pair<GatherConfig, GatherConfig> divide_blocks_between_cores(const GatherConfig& input, uint32_t block_size) {
     std::vector<DestinationTransferPair> all = flatten_gather_config(input);
-    TT_FATAL(!all.empty(), "Expected to have at least one transfer during reorder");
     std::vector<DestinationTransferPair> first;
     std::vector<DestinationTransferPair> second;
     for (const auto& transfer : all) {
         const auto block_id = transfer.src_id / block_size;
-        tt::log_info("block id = {}", block_id);
         (block_id % 2 == 0 ? first : second).push_back(transfer);
-        tt::log_info("done block id = {}", block_id);
     }
-    tt::log_info("got some {} {}", first.size(), second.size());
     return std::make_pair(reduce_flattened_transfers(first), reduce_flattened_transfers(second));
 }
 
 std::pair<GatherConfig, GatherConfig> divide_transfers_between_cores(const GatherConfig& input) {
     std::vector<DestinationTransferPair> all = flatten_gather_config(input);
-    TT_FATAL(!all.empty(), "Expected to have at least one transfer during reorder");
     std::vector<DestinationTransferPair> first;
     std::vector<DestinationTransferPair> second;
     for (int transfer_id = 0; transfer_id < all.size(); transfer_id++) {
@@ -677,15 +673,13 @@ generate_halo_kernel_config_tensors(
     }
 
     bool use_blocking = true;
-    const int block_size = 256;  // TODO: pass this in
+    const int block_size = 32;  // TODO: pass this in
     std::vector<GatherConfig> ordered_gather_configs0;
     std::vector<GatherConfig> ordered_gather_configs1;
     for (const auto& config : gather_configs) {
         if (use_blocking) {
             const auto ordered = reorder_transfers_globally(split_into_blocks(config, block_size));
-            tt::log_info("generated ordered config = {}", ordered);
             const auto [first, second] = divide_blocks_between_cores(ordered, block_size);
-            tt::log_info("divi ordered config = {} {}", first, second);
             ordered_gather_configs0.push_back(first);
             ordered_gather_configs1.push_back(second);
         } else {
@@ -697,7 +691,6 @@ generate_halo_kernel_config_tensors(
 
     const auto serialized_gather_configs = serialize_gather_configs(ordered_gather_configs0);
     const auto serialized_gather_configs1 = serialize_gather_configs(ordered_gather_configs1);
-    tt::log_info("first = {}, secon={}", serialized_gather_configs, serialized_gather_configs1);
 
     // flatten and uniformize the lengths of each config list
     auto flatten_pad_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
