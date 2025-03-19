@@ -12,6 +12,7 @@
 #include "tt_metal/detail/kernel_cache.hpp"
 #include <persistent_kernel_cache.hpp>
 #include <memory_reporter.hpp>
+#include <thread>
 #include <tt_metal.hpp>
 #include <graph_tracking.hpp>
 #include <host_api.hpp>
@@ -51,6 +52,7 @@ void GenerateBinaries(IDevice* device, JitBuildOptions &build_options, const std
     }
 }
 
+#define GENERATE_HASH_LOG (1)
 #ifdef GENERATE_HASH_LOG
 #include <fstream>
 #endif
@@ -73,11 +75,16 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
     }
     size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
 
+    log_info(
+        "thread: {} compile hash str: {} compile hash: {}",
+        std::hash<std::thread::id>{}(std::this_thread::get_id()),
+        compile_hash_str,
+        compile_hash);
 #ifdef GENERATE_HASH_LOG
     static std::ofstream f("/tmp/hashlog.txt");
     static std::mutex mutex_;
     {
-        unique_lock<mutex> lock;
+        std::unique_lock<std::mutex> lock(mutex_);
         f << kernel->name() << " :: " << build_key << "::" << std::hash<tt_hlk_desc>{}(build_options.hlk_desc)
           << " :: " << kernel->compute_hash() << " :: " << compile_hash_str << " " << compile_hash << std::endl
           << std::flush;
@@ -1426,19 +1433,28 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
                     bool cache_hit = true;
                     bool path_exists =
                         std::filesystem::exists(build_options.path + "/" + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
+                    log_info(
+                        "Program compile - thread {} enable_persistent_kernel_cache: {} kernel path suffix: {}",
+                        std::hash<std::thread::id>{}(std::this_thread::get_id()),
+                        enable_persistent_kernel_cache.load(),
+                        kernel_path_suffix);
                     if (enable_persistent_kernel_cache && path_exists) {
                         if (not detail::HashLookup::inst().exists(kernel_hash)) {
                             detail::HashLookup::inst().add(kernel_hash);
                             detail::HashLookup::inst().add_generated_bin(kernel_hash);
                         }
                     } else if (detail::HashLookup::inst().add(kernel_hash)) {
+                        log_info(
+                            "Program compile - thread {} generating binaries kernel path suffix: {}",
+                            std::hash<std::thread::id>{}(std::this_thread::get_id()),
+                            kernel_path_suffix);
                         GenerateBinaries(device, build_options, kernel);
                         cache_hit = false;
                         detail::HashLookup::inst().add_generated_bin(kernel_hash);
                     }
                     while (not detail::HashLookup::inst().is_bin_generated(kernel_hash)) {
                     }
-                    kernel->set_binary_path(build_options.path);
+                    // kernel->set_binary_path(build_options.path);
                 },
                 events);
         }

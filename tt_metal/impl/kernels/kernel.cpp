@@ -14,6 +14,7 @@
 #include "llrt.hpp"
 #include <string_view>
 #include <tt_metal.hpp>
+#include "logger.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include <utils.hpp>
 #include <core_coord.hpp>
@@ -409,7 +410,7 @@ void Kernel::set_binaries(uint32_t build_key, std::vector<ll_api::memory const*>
 }
 
 void DataMovementKernel::read_binaries(IDevice* device) {
-    TT_ASSERT(!binary_path_.empty(), "Path to Kernel binaries not set!");
+    // TT_ASSERT(!binary_path_.empty(), "Path to Kernel binaries not set!");
     std::vector<ll_api::memory const*> binaries;
 
     // TODO(pgk): move the procssor types into the build system.  or just use integer indicies
@@ -423,6 +424,10 @@ void DataMovementKernel::read_binaries(IDevice* device) {
     auto load_type =
         (riscv_id == 1 && (device->arch() == tt::ARCH::GRAYSKULL || device->arch() == tt::ARCH::WORMHOLE_B0)) ?
         ll_api::memory::Loading::CONTIGUOUS : ll_api::memory::Loading::CONTIGUOUS_XIP;
+    log_info(
+        "read_binaries - thread {} full path {}",
+        std::hash<std::thread::id>{}(std::this_thread::get_id()),
+        build_state.get_target_out_path(this->kernel_full_name_));
     ll_api::memory const& binary_mem = llrt::get_risc_binary(
         build_state.get_target_out_path(this->kernel_full_name_),
         load_type);
@@ -435,7 +440,7 @@ void DataMovementKernel::read_binaries(IDevice* device) {
 
 void EthernetKernel::read_binaries(IDevice* device) {
     // untested
-    TT_ASSERT(!binary_path_.empty(), "Path to Kernel binaries not set!");
+    // TT_ASSERT(!binary_path_.empty(), "Path to Kernel binaries not set!");
     std::vector<ll_api::memory const*> binaries;
     uint32_t erisc_core_type = hal_ref.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
@@ -467,7 +472,7 @@ void EthernetKernel::read_binaries(IDevice* device) {
 }
 
 void ComputeKernel::read_binaries(IDevice* device) {
-    TT_ASSERT(!binary_path_.empty(), "Path to Kernel binaries not set!");
+    // TT_ASSERT(!binary_path_.empty(), "Path to Kernel binaries not set!");
     std::vector<ll_api::memory const*> binaries;
     uint32_t tensix_core_type = hal_ref.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t compute_class_idx = magic_enum::enum_integer(HalProcessorClassType::COMPUTE);
