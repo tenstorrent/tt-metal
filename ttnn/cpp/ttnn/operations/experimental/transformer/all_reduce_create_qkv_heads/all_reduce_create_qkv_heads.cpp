@@ -11,7 +11,7 @@
 
 namespace ttnn::operations::experimental::ccl::transformer {
 
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteAllReduceCreateQkvHeads::invoke(
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteAllReduceCreateQkvHeads::invoke(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& buffer_tensor,
     const ttnn::Tensor& batch_offset,

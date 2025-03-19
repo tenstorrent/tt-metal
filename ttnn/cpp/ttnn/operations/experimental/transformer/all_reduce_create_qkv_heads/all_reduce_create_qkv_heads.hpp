@@ -19,7 +19,7 @@ namespace ccl {
 namespace transformer {
 
 struct ExecuteAllReduceCreateQkvHeads {
-    static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
+    static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
         const ttnn::Tensor& input_tensor,
         ttnn::Tensor& buffer_tensor,
         const ttnn::Tensor& batch_offset,

@@ -159,7 +159,7 @@ namespace operations {
 namespace experimental {
 namespace ccl {
 
-std::tuple<Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
+std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     const Tensor& input_tensor,
     Tensor& buffer_tensor,
     const Tensor& batch_offset_tensor,

@@ -43,7 +43,7 @@ void bind_all_reduce_create_qkv_heads(pybind11::module& module, const ccl_operat
                const std::optional<const uint32_t> slice_size,
                const std::optional<MemoryConfig>& final_memory_config,
                std::optional<std::array<Tensor, 3>> optional_output_tensors)
-                -> std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> {
+                -> std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> {
                 return self(
                     input_tensor,
                     buffer_tensor,

@@ -73,7 +73,7 @@ AllReduceCreateQkvHeads create_all_reduce_create_qkv_heads_struct(
 }  // namespace ccl
 
 void AllReduceCreateQkvHeads::validate(const std::vector<Tensor>& input_tensors) const {
-    TT_FATAL(input_tensors.size() == 2, "Error, Input tensor size should be 2 but has {}", input_tensors.size());
+    TT_FATAL(input_tensors.size() == 3, "Error, Input tensor size should be 3 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& buffer_tensor = input_tensors[1];
     const auto& layout = input_tensors[0].get_layout();
@@ -351,7 +351,7 @@ namespace operations {
 namespace experimental {
 namespace ccl {
 
-std::tuple<Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
+std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     const Tensor& input_tensor,
     Tensor& buffer_tensor,
     const Tensor& batch_offset_tensor,
@@ -434,7 +434,7 @@ std::tuple<Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
         },
         {input_tensor, buffer_tensor, batch_offset_tensor},
         output_tensors);
-    return std::make_tuple(output_tensors.at(0), output_tensors.at(0), output_tensors.at(0));
+    return std::make_tuple(output_tensors.at(0), output_tensors.at(1), output_tensors.at(2), output_tensors.at(3));
 }
 
 }  // namespace ccl
