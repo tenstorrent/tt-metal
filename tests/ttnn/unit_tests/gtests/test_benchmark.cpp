@@ -144,6 +144,7 @@ public:
 };
 
 TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
+    GTEST_SKIP() << "WH di/dt hang, need to skip CI and run locally only";
     const std::tuple<int, int>& grid_size = std::get<0>(GetParam());
     const int& tile_h = std::get<1>(GetParam());
     const int& tile_w = std::get<2>(GetParam());
