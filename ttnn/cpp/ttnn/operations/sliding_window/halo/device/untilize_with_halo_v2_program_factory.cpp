@@ -225,6 +225,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     if (out_stick_nbytes % input_tensor.buffer()->alignment() != 0) {
         aligned_input_nstick_nbytes = tt::round_up(out_stick_nbytes, input_tensor.buffer()->alignment());
     }
+
+    const uint32_t block_stride = 2;
+
     // reader kernel
     std::vector<uint32_t> reader_ct_args = {
         0,  // padding_config_cb_id
@@ -247,8 +250,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         skip_untilize,
         skip_untilize ? input_npages : clamped_block_size_height,
         ntiles_per_block,
-        0};  // Block start offset
-
+        0,            // Block start offset
+        block_stride  // Block stride
+    };
     reader_ct_args[0] = padding_config_cb_id;
     reader_ct_args[1] = local_config_cb_id;
     reader_ct_args[2] = 0;
@@ -267,7 +271,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     reader_ct_args[2] = 0;
     reader_ct_args[3] = 0;
     reader_ct_args[4] = 0;
-    reader_ct_args[6] = untilize_out_cb_id1;
+    reader_ct_args[6] = input_to_writer_cb_id1;
     reader_ct_args[20] = 1;  // block start offset
 
     KernelHandle reader_kernel_id1 = CreateKernel(

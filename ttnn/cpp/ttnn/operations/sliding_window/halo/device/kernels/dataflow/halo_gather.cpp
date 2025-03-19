@@ -162,6 +162,11 @@ void kernel_main() {
     constexpr uint32_t block_size_height = get_compile_time_arg_val(18);
     constexpr uint32_t block_size_width_tiles = get_compile_time_arg_val(19);
     constexpr uint32_t block_start_offset = get_compile_time_arg_val(20);
+    constexpr uint32_t block_stride = get_compile_time_arg_val(21);
+
+    DPRINT << "block_size_height=" << block_size_height << " block_size_width_tiles=" << block_size_width_tiles
+           << " block_start=" << block_start_offset << " block_stride=" << block_stride << " src_cb_id=" << src_cb_id
+           << " in_cb_id=" << in_cb_id << " in_nsticks=" << in_nsticks << ENDL();
 
     static_assert(!remote_read, "Remote read is not supported in this kernel");
 
@@ -174,8 +179,11 @@ void kernel_main() {
     const uint32_t in_base_l1_addr = get_read_ptr(in_cb_id);
     const uint32_t out_base_l1_addr = get_write_ptr(out_cb_id);
 
-    cb_reserve_back(src_cb_id, in_nsticks);
-    cb_push_back(src_cb_id, in_nsticks);
+    // Only one of the cores should push the input
+    if constexpr (block_start_offset == 0) {
+        cb_reserve_back(src_cb_id, in_nsticks);
+        cb_push_back(src_cb_id, in_nsticks);
+    }
 
     if constexpr (padding_config_cb_id) {
         cb_reserve_back(pad_cb_id, 1);
@@ -203,7 +211,9 @@ void kernel_main() {
         }
     }
 
-    const uint32_t block_stride = 2;
+    if constexpr (skip_untilize) {
+        cb_wait_front(src_cb_id, in_nsticks);
+    }
 
     const uint32_t config_data_l1_addr = get_read_ptr(local_config_cb_id);
     const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
