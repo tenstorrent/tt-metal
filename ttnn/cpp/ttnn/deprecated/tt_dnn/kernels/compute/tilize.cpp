@@ -14,6 +14,8 @@ namespace NAMESPACE {
 void MAIN {
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(1);
+    DPRINT_PACK(DPRINT << "per_core_block_cnt: " << per_core_block_cnt << ENDL());
+    DPRINT_PACK(DPRINT << "per_core_block_tile_cnt: " << per_core_block_tile_cnt << ENDL());
     tilize_init(tt::CBIndex::c_0, per_core_block_tile_cnt, tt::CBIndex::c_16);
 
     for (uint32_t b = 0; b < per_core_block_cnt; ++b) {
