@@ -2,8 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/tensor/storage.hpp"
+#include <algorithm>
+
 #include "tt-metalium/mesh_coord.hpp"
+
+#include "ttnn/tensor/storage.hpp"
 
 namespace tt::tt_metal {
 
@@ -53,6 +56,17 @@ IDevice* DeviceStorage::get_device() const {
     }
     TT_FATAL(this->buffer != nullptr, "Buffer is not allocated");
     return this->buffer->device();
+}
+
+void DeviceStorage::update_specs(const TensorSpec& new_spec) {
+    for (auto& [_, spec] : this->specs) {
+        spec = new_spec;
+    }
+}
+
+bool DeviceStorage::is_uniform_storage() const {
+    return specs.size() == mesh_buffer->device()->num_devices() &&
+           std::all_of(specs.begin(), specs.end(), [this](const auto& spec) { return spec.second == specs[0].second; });
 }
 
 }  // namespace tt::tt_metal

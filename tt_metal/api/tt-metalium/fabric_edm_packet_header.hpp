@@ -9,6 +9,13 @@
 #include <climits>
 #include <limits>
 
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
+#else
+#include "assert.hpp"
+#endif
+
 namespace tt::tt_fabric {
 
 enum TerminationSignal : uint32_t {
@@ -156,16 +163,42 @@ struct PacketHeaderBase {
 
     inline Derived& to_noc_unicast_write(
         const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_WRITE;
-        this->command_fields.unicast_write = noc_unicast_command_header;
+        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
+            noc_address_components.first.x,
+            noc_address_components.first.y,
+            noc_address_components.second,
+            edm_to_local_chip_noc);
+        NocUnicastCommandHeader modified_command_header = noc_unicast_command_header;
+        modified_command_header.noc_address = noc_addr;
+
+        this->command_fields.unicast_write = modified_command_header;
         this->payload_size_bytes = payload_size_bytes;
+#else
+        TT_THROW("Calling to_noc_unicast_write from host is unsupported");
+#endif
         return *static_cast<Derived*>(this);
     }
 
     inline Derived& to_noc_unicast_inline_write(const NocUnicastInlineWriteCommandHeader& noc_unicast_command_header) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_INLINE_WRITE;
-        this->command_fields.unicast_inline_write = noc_unicast_command_header;
+        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
+            noc_address_components.first.x,
+            noc_address_components.first.y,
+            noc_address_components.second,
+            edm_to_local_chip_noc);
+        NocUnicastInlineWriteCommandHeader modified_command_header = noc_unicast_command_header;
+        modified_command_header.noc_address = noc_addr;
+
+        this->command_fields.unicast_inline_write = modified_command_header;
         this->payload_size_bytes = 0;
+#else
+        TT_THROW("Calling to_noc_unicast_inline_write from host is unsupported");
+#endif
         return *static_cast<Derived*>(this);
     }
 
@@ -179,9 +212,22 @@ struct PacketHeaderBase {
 
     inline Derived& to_noc_unicast_atomic_inc(
         const NocUnicastAtomicIncCommandHeader& noc_unicast_atomic_inc_command_header) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_ATOMIC_INC;
-        this->command_fields.unicast_seminc = noc_unicast_atomic_inc_command_header;
+        auto noc_address_components = get_noc_address_components(noc_unicast_atomic_inc_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
+            noc_address_components.first.x,
+            noc_address_components.first.y,
+            noc_address_components.second,
+            edm_to_local_chip_noc);
+        NocUnicastAtomicIncCommandHeader modified_command_header = noc_unicast_atomic_inc_command_header;
+        modified_command_header.noc_address = noc_addr;
+
+        this->command_fields.unicast_seminc = modified_command_header;
         this->payload_size_bytes = 0;
+#else
+        TT_THROW("Calling to_noc_unicast_atomic_inc from host is unsupported");
+#endif
         return *static_cast<Derived*>(this);
     }
 
@@ -206,18 +252,40 @@ struct PacketHeaderBase {
 
     inline volatile Derived* to_noc_unicast_write(
         const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_WRITE;
-        this->command_fields.unicast_write.noc_address = noc_unicast_command_header.noc_address;
+        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
+            noc_address_components.first.x,
+            noc_address_components.first.y,
+            noc_address_components.second,
+            edm_to_local_chip_noc);
+
+        this->command_fields.unicast_write.noc_address = noc_addr;
         this->payload_size_bytes = payload_size_bytes;
+#else
+        TT_THROW("Calling to_noc_unicast_write from host is unsupported");
+#endif
         return static_cast<volatile Derived*>(this);
     }
 
     inline volatile Derived* to_noc_unicast_inline_write(
         const NocUnicastInlineWriteCommandHeader& noc_unicast_command_header) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_INLINE_WRITE;
-        this->command_fields.unicast_inline_write.noc_address = noc_unicast_command_header.noc_address;
+        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
+            noc_address_components.first.x,
+            noc_address_components.first.y,
+            noc_address_components.second,
+            edm_to_local_chip_noc);
+
+        this->command_fields.unicast_inline_write.noc_address = noc_addr;
         this->command_fields.unicast_inline_write.value = noc_unicast_command_header.value;
         this->payload_size_bytes = 0;
+#else
+        TT_THROW("Calling to_noc_unicast_inline_write from host is unsupported");
+#endif
         return static_cast<volatile Derived*>(this);
     }
 
@@ -235,11 +303,22 @@ struct PacketHeaderBase {
 
     inline volatile Derived* to_noc_unicast_atomic_inc(
         const NocUnicastAtomicIncCommandHeader& noc_unicast_atomic_inc_command_header) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_ATOMIC_INC;
-        this->command_fields.unicast_seminc.noc_address = noc_unicast_atomic_inc_command_header.noc_address;
+        auto noc_address_components = get_noc_address_components(noc_unicast_atomic_inc_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
+            noc_address_components.first.x,
+            noc_address_components.first.y,
+            noc_address_components.second,
+            edm_to_local_chip_noc);
+
+        this->command_fields.unicast_seminc.noc_address = noc_addr;
         this->command_fields.unicast_seminc.val = noc_unicast_atomic_inc_command_header.val;
         this->command_fields.unicast_seminc.wrap = noc_unicast_atomic_inc_command_header.wrap;
         this->payload_size_bytes = 0;
+#else
+        TT_THROW("Calling to_noc_unicast_atomic_inc from host is unsupported");
+#endif
         return static_cast<volatile Derived*>(this);
     }
 

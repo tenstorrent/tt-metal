@@ -74,10 +74,6 @@ public:
     virtual CoreCoord grid_size() const = 0;
     virtual CoreCoord logical_grid_size() const = 0;
     virtual CoreCoord dram_grid_size() const = 0;
-    virtual CoreType core_type_from_virtual_core(const CoreCoord& virtual_coord) const = 0;
-
-    // Given a Virtual coordinate in noc_index space, get the equivalent coordinate in Virtual NOC0 space
-    virtual CoreCoord virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const = 0;
 
     // Given a coordinate in Virtual NOC0 Space, get the equivalent coordinate in Virtual noc_index space
     virtual CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const = 0;

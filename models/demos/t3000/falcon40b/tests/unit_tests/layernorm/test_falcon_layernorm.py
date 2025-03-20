@@ -125,6 +125,7 @@ class TtFalconLayernorm:
                     block_w=32,
                     inplace=False,
                 ),
+                compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
             )
         else:  # Interleaved does not work for falcon40b dims [32, 8192] since once one core per tile-height is used to process the whole row
             # Uses only one core; runs out of L1
@@ -135,6 +136,7 @@ class TtFalconLayernorm:
                 epsilon=self.layernorm_eps,
                 weight=self.gamma,
                 bias=self.beta,
+                compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
             )
 
         return out

@@ -388,6 +388,7 @@ class TtFalconModelShared:
             bias=self.layernorm_beta,
             memory_config=self.model_config["LN_F_OUTPUT_MEMCFG"],
             program_config=self.model_config["LN_F_PROGCFG"],
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
         )
 
         return layer_output, presents

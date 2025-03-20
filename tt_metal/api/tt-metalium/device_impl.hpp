@@ -64,10 +64,7 @@ public:
     CoreCoord grid_size() const override;
     CoreCoord logical_grid_size() const override;
     CoreCoord dram_grid_size() const override;
-    CoreType core_type_from_virtual_core(const CoreCoord& virtual_coord) const override;
 
-    // Given a Virtual coordinate in noc_index space, get the equivalent coordinate in Virtual NOC0 space
-    CoreCoord virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const override;
     // Given a coordinate in Virtual NOC0 Space, get the equivalent coordinate in Virtual noc_index space
     CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const override;
 
@@ -228,7 +225,6 @@ private:
 
     CoreCoord physical_worker_core_from_logical_core(const CoreCoord &logical_core) const;
     CoreCoord dram_core_from_dram_channel(uint32_t dram_channel) const;
-    CoreType core_type_from_physical_core(const CoreCoord &physical_core) const;
     CoreCoord virtual_core_from_physical_core(const CoreCoord& physical_coord) const;
 
     chip_id_t id_;
