@@ -248,7 +248,7 @@ TEST_F(DispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
     constexpr uint32_t buffer_size = 2 * 1024 * 25;
 
     unit_tests_common::dram::test_dram::DRAMConfig dram_test_config = {
-        .core_range = {{0, 0}, {0, 0}}, // Set below
+        .core_range = {{0, 0}, {0, 0}},
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
         .dram_buffer_size = buffer_size,
         .l1_buffer_addr = tt::align(hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED), hal.get_alignment(HalMemType::L1)),
@@ -259,6 +259,28 @@ TEST_F(DispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
         for (auto active_eth_core : devices_.at(id)->get_active_ethernet_cores(true)) {
             dram_test_config.core_range = {active_eth_core, active_eth_core};
             ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core(this, devices_.at(id), dram_test_config));
+            break;
+        }
+        break;
+    }
+}
+
+TEST_F(DispatchFixture, IdleEthDRAMLoopbackSingleCore) {
+    constexpr uint32_t buffer_size = 2 * 1024 * 25;
+
+    unit_tests_common::dram::test_dram::DRAMConfig dram_test_config = {
+        .core_range = {{0, 0}, {0, 0}}, // Set below
+        .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
+        .dram_buffer_size = buffer_size,
+        .l1_buffer_addr = tt::align(hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED), hal.get_alignment(HalMemType::L1)),
+        .kernel_cfg = tt_metal::EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0},
+    };
+
+    for (unsigned int id = 0; id < devices_.size(); id++) {
+        for (auto idle_eth_core : devices_.at(id)->get_inactive_ethernet_cores()) {
+            tt::log_info("Single Idle Eth Loopback. Logical core {}", idle_eth_core.str());
+            dram_test_config.core_range = {idle_eth_core, idle_eth_core};
+            unit_tests_common::dram::test_dram::dram_single_core(this, devices_.at(id), dram_test_config);
         }
     }
 }
