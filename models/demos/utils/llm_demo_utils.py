@@ -111,7 +111,11 @@ def check_tokens_match(generated_text: dict, expected_greedy_output_path: str):
     return generated_text == expected_output, expected_output
 
 
-def verify_perf(measurements: dict, expected_perf_metrics: dict):
+def verify_perf(
+    measurements: dict,
+    expected_perf_metrics: dict,
+    high_tol_percentage=1.1,  # 10% tolerance to account for +-5% CI variance
+):
     """
     Verify the performance metrics against the expected values.
     The metrics that must be provided are specified in expected_measurements below.
@@ -134,9 +138,14 @@ def verify_perf(measurements: dict, expected_perf_metrics: dict):
         assert (
             key in measurements and key in expected_perf_metrics
         ), f"Metric {key} not found in measurements or expected_perf_metrics"
-        if measurements[key] < expected_perf_metrics[key]:
+        if measurements[key] < expected_perf_metrics[key]:  # Note: assumes higher is better for metric
             does_pass = False
             logger.warning(f"{key} ({measurements[key]}) is lower than expected {expected_perf_metrics[key]}")
+        elif measurements[key] > expected_perf_metrics[key] * high_tol_percentage:
+            does_pass = False
+            logger.warning(
+                f"{key} ({measurements[key]}) is higher than expected {expected_perf_metrics[key]}. Please update the expected perf."
+            )
 
     if does_pass:
         logger.info("Perf Check Passed!")
@@ -144,4 +153,4 @@ def verify_perf(measurements: dict, expected_perf_metrics: dict):
         logger.warning("Perf Check Failed!")
         assert (
             does_pass
-        ), f"Prefill or decode perf is lower than {expected_perf_metrics}. See earlier warnings for more details."
+        ), f"Prefill or decode perf is either lower or higher than {expected_perf_metrics}. See earlier warnings for more details."
