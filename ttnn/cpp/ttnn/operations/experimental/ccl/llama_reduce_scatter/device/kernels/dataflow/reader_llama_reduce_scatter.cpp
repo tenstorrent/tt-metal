@@ -7,32 +7,32 @@
 #include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
-// inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-//     DPRINT << "===" << tile_id << "===" << ENDL();
-//     for (uint16_t r = 0; r < 32; ++r) {
-//         DPRINT << (uint)r << " : "
-//                << TileSlice(
-//                       cb_id,
-//                       tile_id,
-//                       SliceRange{
-//                           .h0 = (uint8_t)r,
-//                           .h1 = (uint8_t)(r + 1),
-//                           .hs = (uint8_t)1,
-//                           .w0 = (uint8_t)0,
-//                           .w1 = (uint8_t)32,
-//                           .ws = (uint8_t)1},
-//                       true,
-//                       untilize)
-//                << ENDL();
-//     }
-//     DPRINT << "++++++" << ENDL();
-// }
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "===" << tile_id << "===" << ENDL();
+    for (uint16_t r = 0; r < 32; ++r) {
+        DPRINT << (uint)r << " : "
+               << TileSlice(
+                      cb_id,
+                      tile_id,
+                      SliceRange{
+                          .h0 = (uint8_t)r,
+                          .h1 = (uint8_t)(r + 1),
+                          .hs = (uint8_t)1,
+                          .w0 = (uint8_t)0,
+                          .w1 = (uint8_t)32,
+                          .ws = (uint8_t)1},
+                      true,
+                      untilize)
+               << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
 
-// inline void print_tiles(uint32_t cb_id, uint32_t tile_start = 0, uint32_t num_tiles = 1, bool untilize = false) {
-//     for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
-//         print_full_tile(cb_id, tile_start + tile_idx, untilize);
-//     }
-// }
+inline void print_tiles(uint32_t cb_id, uint32_t tile_start = 0, uint32_t num_tiles = 1, bool untilize = false) {
+    for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
+        print_full_tile(cb_id, tile_start + tile_idx, untilize);
+    }
+}
 
 template <uint8_t noc_ind = noc_index>
 FORCE_INLINE std::uint64_t static_noc_multicast_addr(
@@ -79,11 +79,9 @@ void kernel_main() {
 
     constexpr uint8_t device_order[num_devices - 1] =
         DEVICE_ORDER;  // this is code gen'd in the program factory using the defines
-    constexpr uint8_t receiver_core_for_device[num_devices][2] = RECEIVER_CORE_XY;
     constexpr uint8_t input_core_xy[input_tensor_cores][2] = INPUT_CORE_XY;
     constexpr uint8_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
-
-    constexpr uint8_t packet_worker_cores[num_packets_total_per_device][2] = PACKET_WORKER_CORES;
+    // constexpr uint8_t packet_worker_cores[num_packets_total_per_device][2] = PACKET_WORKER_CORES;
 
     constexpr uint32_t num_dests = (noc_end_x - noc_start_x + 1) * (noc_end_y - noc_start_y + 1);
     // Runtime arguments
@@ -91,9 +89,8 @@ void kernel_main() {
     uint32_t local_semaphore_address = get_semaphore(get_arg_val<uint32_t>(rt_arg_idx++));
     bool sender_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     bool worker_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
-    uint32_t linear_input_page_start_idx = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t linear_input_packet_start_idx = get_arg_val<uint32_t>(rt_arg_idx++);
     bool receiver_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
-    uint32_t receiver_for_device_id = get_arg_val<uint32_t>(rt_arg_idx++);
 
     // Constants for indexing
     constexpr uint32_t x_index = 0;
@@ -135,7 +132,7 @@ void kernel_main() {
         uint32_t linear_input_tile_offsets[num_pages_per_packet];
 
         for (uint32_t i = 0; i < num_pages_per_packet; i++) {
-            uint32_t rem = linear_input_page_start_idx + i;
+            uint32_t rem = linear_input_packet_start_idx + i;
             linear_input_core_idcs[i] = rem / tiles_per_core_width;
             linear_input_tile_offsets[i] = rem % tiles_per_core_width;
         }
@@ -158,12 +155,17 @@ void kernel_main() {
             uint64_t multicast_semaphore_addr =
                 static_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, local_semaphore_address);
             // DPRINT << "multicast_semaphore_addr: " << multicast_semaphore_addr << ENDL();
-            noc_multicast_semaphore_inc(multicast_semaphore_addr, 1, num_dests, 0);
+            noc_multicast_semaphore_inc(
+                multicast_semaphore_addr,
+                num_devices - 1,
+                num_dests,
+                0);  // could do different mcast for each device by having num_devices - 1 receiver cores
             noc_async_atomic_barrier();
             *(uint32_t*)receiver_semaphore_address = 0;
         } else {
             noc_semaphore_wait((uint32_t*)local_semaphore_address, (num_devices - 1));
         }
+        print_tiles(accumulator_cb_id, 0, num_pages_per_packet * num_devices, true);
         cb_push_back(accumulator_cb_id, num_pages_per_packet * num_devices);
         *(uint32_t*)local_semaphore_address = 0;
     } else {

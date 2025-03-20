@@ -12,32 +12,32 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 
-// inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-//     DPRINT << "===" << tile_id << "===" << ENDL();
-//     for (uint16_t r = 0; r < 32; ++r) {
-//         DPRINT << (uint)r << " : "
-//                << TileSlice(
-//                       cb_id,
-//                       tile_id,
-//                       SliceRange{
-//                           .h0 = (uint8_t)r,
-//                           .h1 = (uint8_t)(r + 1),
-//                           .hs = (uint8_t)1,
-//                           .w0 = (uint8_t)0,
-//                           .w1 = (uint8_t)32,
-//                           .ws = (uint8_t)1},
-//                       true,
-//                       untilize)
-//                << ENDL();
-//     }
-//     DPRINT << "++++++" << ENDL();
-// }
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "===" << tile_id << "===" << ENDL();
+    for (uint16_t r = 0; r < 32; ++r) {
+        DPRINT << (uint)r << " : "
+               << TileSlice(
+                      cb_id,
+                      tile_id,
+                      SliceRange{
+                          .h0 = (uint8_t)r,
+                          .h1 = (uint8_t)(r + 1),
+                          .hs = (uint8_t)1,
+                          .w0 = (uint8_t)0,
+                          .w1 = (uint8_t)32,
+                          .ws = (uint8_t)1},
+                      true,
+                      untilize)
+               << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
 
-// inline void print_tiles(uint32_t cb_id, uint32_t tile_start = 0, uint32_t num_tiles = 1, bool untilize = false) {
-//     for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
-//         print_full_tile(cb_id, tile_start + tile_idx, untilize);
-//     }
-// }
+inline void print_tiles(uint32_t cb_id, uint32_t tile_start = 0, uint32_t num_tiles = 1, bool untilize = false) {
+    for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
+        print_full_tile(cb_id, tile_start + tile_idx, untilize);
+    }
+}
 
 template <uint8_t noc_ind = noc_index>
 FORCE_INLINE std::uint64_t static_noc_multicast_addr(
@@ -54,7 +54,7 @@ FORCE_INLINE std::uint64_t static_noc_multicast_addr(
 }
 
 void kernel_main() {
-    // DPRINT << "Starting kernel_main for writer" << ENDL();
+    DPRINT << "Starting kernel_main for writer" << ENDL();
     size_t ct_arg_idx = 0, rt_arg_idx = 0;
 
     // Define all compile-time arguments at the beginning
@@ -63,20 +63,19 @@ void kernel_main() {
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(2);
     constexpr uint32_t fabric_receiver_cb_id = get_compile_time_arg_val(3);
     constexpr uint32_t accumulator_cb_id = get_compile_time_arg_val(4);
-    constexpr uint32_t output_accumulated_packets_cb_id = get_compile_time_arg_val(5);
-    constexpr uint32_t output_tensor_cb_id = get_compile_time_arg_val(6);
-    constexpr uint32_t chip_id = get_compile_time_arg_val(7);
-    constexpr uint32_t tiles_per_core_width = get_compile_time_arg_val(8);
-    constexpr uint32_t tiles_per_core_width_output = get_compile_time_arg_val(9);
-    constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(10);
-    constexpr uint32_t input_shard_cores_per_device = get_compile_time_arg_val(11);
-    constexpr uint32_t num_devices = get_compile_time_arg_val(12);
-    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(13);
-    constexpr uint32_t output_cores_per_device = get_compile_time_arg_val(14);
-    constexpr uint32_t noc_start_x = get_compile_time_arg_val(15);
-    constexpr uint32_t noc_start_y = get_compile_time_arg_val(16);
-    constexpr uint32_t noc_end_x = get_compile_time_arg_val(17);
-    constexpr uint32_t noc_end_y = get_compile_time_arg_val(18);
+    constexpr uint32_t output_tensor_cb_id = get_compile_time_arg_val(5);
+    constexpr uint32_t chip_id = get_compile_time_arg_val(6);
+    constexpr uint32_t tiles_per_core_width = get_compile_time_arg_val(7);
+    constexpr uint32_t tiles_per_core_width_output = get_compile_time_arg_val(8);
+    constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(9);
+    constexpr uint32_t input_shard_cores_per_device = get_compile_time_arg_val(10);
+    constexpr uint32_t num_devices = get_compile_time_arg_val(11);
+    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(12);
+    constexpr uint32_t output_cores_per_device = get_compile_time_arg_val(13);
+    constexpr uint32_t noc_start_x = get_compile_time_arg_val(14);
+    constexpr uint32_t noc_start_y = get_compile_time_arg_val(15);
+    constexpr uint32_t noc_end_x = get_compile_time_arg_val(16);
+    constexpr uint32_t noc_end_y = get_compile_time_arg_val(17);
 
     // Derived compile-time constants
     constexpr uint32_t input_tensor_cores = input_shard_cores_per_device * num_devices;
@@ -94,8 +93,7 @@ void kernel_main() {
 
     constexpr uint8_t device_order[num_devices - 1] =
         DEVICE_ORDER;  // this is code gen'd in the program factory using the defines
-    constexpr uint8_t receiver_core_for_device[num_devices][2] = RECEIVER_CORE_XY;
-    constexpr uint8_t input_core_xy[input_tensor_cores][2] = INPUT_CORE_XY;
+    // constexpr uint8_t input_core_xy[input_tensor_cores][2] = INPUT_CORE_XY;
     constexpr uint8_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
     constexpr uint8_t packet_worker_cores[num_packets_total_per_device][2] = PACKET_WORKER_CORES;
 
@@ -109,7 +107,7 @@ void kernel_main() {
     uint32_t linear_output_page_start_idx = get_arg_val<uint32_t>(rt_arg_idx++);
 
     if (sender_core) {
-        // DPRINT << "SENDER CORE WRITER" << ENDL();
+        DPRINT << "SENDER CORE WRITER" << ENDL();
 
         // Set up packet headers once
         auto packet_header_buffer_addr = get_read_ptr(packet_header_cb_id);
@@ -223,8 +221,10 @@ void kernel_main() {
 
         uint32_t output_tensor_base_addr = get_read_ptr(output_tensor_cb_id);
 
-        cb_wait_front(output_accumulated_packets_cb_id, num_pages_per_packet);
-        auto output_accumulated_packets_l1_addr = get_read_ptr(output_accumulated_packets_cb_id);
+        cb_wait_front(accumulator_cb_id, num_pages_per_packet);
+        print_tiles(accumulator_cb_id, 0, num_pages_per_packet, true);
+
+        auto accumulator_l1_addr = get_read_ptr(accumulator_cb_id);
         // Process all tiles
         for (uint32_t tile = 0; tile < num_pages_per_packet; tile++) {
             // DPRINT << "writer receiver processing tile " << tile << ENDL();
@@ -243,8 +243,7 @@ void kernel_main() {
             //     get_noc_addr(output_core_x, output_core_y, local_semaphore_address);
 
             // print_full_tile(fabric_receiver_cb_id, tile, true);
-            noc_async_write(
-                output_accumulated_packets_l1_addr + tile * page_size_bytes, noc_accumulator_addr, page_size_bytes);
+            noc_async_write(accumulator_l1_addr + tile * page_size_bytes, noc_accumulator_addr, page_size_bytes);
             // noc_async_write_barrier();
             // noc_semaphore_inc(local_receiver_semaphore_noc_addr, 1);  // mcast inc is needed, this will tank latency
         }
@@ -257,5 +256,5 @@ void kernel_main() {
         // Do nothing
         // win
     }
-    // DPRINT << "Kernel finished" << ENDL();
+    DPRINT << "Kernel finished" << ENDL();
 }
