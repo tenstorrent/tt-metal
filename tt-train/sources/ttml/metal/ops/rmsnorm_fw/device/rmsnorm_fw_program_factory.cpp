@@ -88,7 +88,7 @@ struct RMSNormForwardKernels {
 /**
  *   Create and configure a circular buffer, returning both the configuration and the handle.
  */
-inline tt::tt_metal::CBHandle create_circular_buffer(
+tt::tt_metal::CBHandle create_circular_buffer(
     tt::tt_metal::Program& program,
     const tt::tt_metal::CoreRangeSet& core_ranges,
     uint32_t cb_index,
@@ -106,7 +106,7 @@ inline tt::tt_metal::CBHandle create_circular_buffer(
 /**
  *   Create a reader kernel with the given compile-time arguments.
  */
-inline tt::tt_metal::KernelHandle create_reader_kernel(
+tt::tt_metal::KernelHandle create_reader_kernel(
     tt::tt_metal::Program& program,
     const tt::tt_metal::CoreRangeSet& core_ranges,
     const std::vector<uint32_t>& compile_time_args,
@@ -119,7 +119,7 @@ inline tt::tt_metal::KernelHandle create_reader_kernel(
 /**
  *   Create a writer kernel with the given compile-time arguments.
  */
-inline tt::tt_metal::KernelHandle create_writer_kernel(
+tt::tt_metal::KernelHandle create_writer_kernel(
     tt::tt_metal::Program& program,
     const tt::tt_metal::CoreRangeSet& core_ranges,
     const std::vector<uint32_t>& compile_time_args,
@@ -132,7 +132,7 @@ inline tt::tt_metal::KernelHandle create_writer_kernel(
 /**
  * Create a compute kernel with the given compile-time arguments.
  */
-inline tt::tt_metal::KernelHandle create_compute_kernel(
+tt::tt_metal::KernelHandle create_compute_kernel(
     tt::tt_metal::Program& program,
     const tt::tt_metal::CoreRangeSet& core_ranges,
     const std::vector<uint32_t>& compile_time_args,
@@ -154,7 +154,7 @@ inline tt::tt_metal::KernelHandle create_compute_kernel(
  * Set up the runtime arguments for the 4 relevant kernels (reader, writer, compute G1, compute G2)
  *        for each core in the grid.
  */
-inline void assign_per_core_runtime_args(
+void assign_per_core_runtime_args(
     tt::tt_metal::Program& program,
     const RMSNormForwardKernels& kernels,
     const tt::tt_metal::Buffer* input_buffer,
@@ -205,6 +205,7 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     // -------------------------------------------------------------------------
     const auto& input = tensor_args.input;
     const auto& gamma = tensor_args.gamma;
+
     auto* device = input.device();
 
     tt::tt_metal::Program program{};
@@ -246,25 +247,24 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     uint32_t twice_block_size = 2U * block_size;
     const uint32_t available_L1_in_bytes =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const uint64_t required_L1_in_bytes =
-        Wt * bfloat16_single_tile_size_bytes + kNumMaskTiles * bfloat16_single_tile_size_bytes +
-        Wt * bfloat16_single_tile_size_bytes + kNumScalerTiles * bfloat16_single_tile_size_bytes +
-        kNumEpsTiles * bfloat16_single_tile_size_bytes +
+
+    // Memory allocation for L1 cache
+    const uint64_t weight_memory = 2U * Wt * bfloat16_single_tile_size_bytes;
+    const uint64_t mask_scaler_eps_memory =
+        (kNumMaskTiles + kNumScalerTiles + kNumEpsTiles) * bfloat16_single_tile_size_bytes;
+    const uint64_t rms_memory =
         (kNumRmsBeforeReductionTiles + kNumRmsAfterReductionTiles + kNumInverseRmsAfterReductionTiles) *
-            float32_single_tile_size_bytes +
-        twice_block_size * bfloat16_single_tile_size_bytes + kNumRmsOutputTiles * bfloat16_single_tile_size_bytes +
-        twice_block_size * bfloat16_single_tile_size_bytes;
+        float32_single_tile_size_bytes;
+    const uint64_t block_memory = 2 * twice_block_size * bfloat16_single_tile_size_bytes;
+    const uint64_t rms_output_memory = kNumRmsOutputTiles * bfloat16_single_tile_size_bytes;
+    // Total L1 memory required
+    const uint64_t required_L1_in_bytes =
+        weight_memory + mask_scaler_eps_memory + rms_memory + block_memory + rms_output_memory;
     const bool everything_fits_in_l1 = required_L1_in_bytes <= available_L1_in_bytes;
 
-    const uint64_t required_L1_in_bytes_except_gamma =
-        Wt * bfloat16_single_tile_size_bytes + kNumMaskTiles * bfloat16_single_tile_size_bytes +
-        twice_block_size * bfloat16_single_tile_size_bytes + kNumScalerTiles * bfloat16_single_tile_size_bytes +
-        kNumEpsTiles * bfloat16_single_tile_size_bytes +
-        (kNumRmsBeforeReductionTiles + kNumRmsAfterReductionTiles + kNumInverseRmsAfterReductionTiles) *
-            float32_single_tile_size_bytes +
-        twice_block_size * bfloat16_single_tile_size_bytes + kNumRmsOutputTiles * bfloat16_single_tile_size_bytes +
-        twice_block_size * bfloat16_single_tile_size_bytes;
-    const bool everything_except_gamma_fits_in_l1 = required_L1_in_bytes <= available_L1_in_bytes;
+    const uint64_t required_L1_in_bytes_except_gamma = required_L1_in_bytes - Wt * bfloat16_single_tile_size_bytes +
+                                                       twice_block_size * bfloat16_single_tile_size_bytes;
+    const bool everything_except_gamma_fits_in_l1 = required_L1_in_bytes_except_gamma <= available_L1_in_bytes;
 
     const uint32_t num_input_tiles =
         (everything_fits_in_l1 | everything_except_gamma_fits_in_l1) ? Wt : twice_block_size;
