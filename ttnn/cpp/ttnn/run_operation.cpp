@@ -511,42 +511,6 @@ Tensors run_with_autoformat(
     return output_tensors;
 }
 
-void launch_with_autoformat(
-    std::function<Tensors(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>&& op_func,
-    const Tensors& input_tensors,
-    Tensors& output_tensors,
-    const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& optional_output_tensors) {
-    launch_op(std::move(op_func), input_tensors, output_tensors, optional_input_tensors, optional_output_tensors);
-}
-
-void validate_workers_and_storage(
-    const std::vector<Tensor>& inputs,
-    const std::vector<std::optional<const Tensor>>& optional_inputs,
-    const std::vector<IDevice*>& workers) {
-    bool single_device_storage = false;
-    // Verify that storage types are consistent - cannot mix single and multi-device storage. For multi-device tensors,
-    // ensure that workers are specified, since they cannot be inferred. This means that
-    // launch_op/launch_with_autoformat cannot be called with MultiDeviceHostStorage.
-    for (const auto& input : inputs) {
-        if (std::holds_alternative<DeviceStorage>(input.tensor_attributes->storage) or
-            std::holds_alternative<OwnedStorage>(input.tensor_attributes->storage)) {
-            single_device_storage |= true;
-        }
-    }
-
-    for (auto& input : optional_inputs) {
-        if (input.has_value()) {
-            if (std::holds_alternative<DeviceStorage>(input.value().tensor_attributes->storage) or
-                std::holds_alternative<OwnedStorage>(input.value().tensor_attributes->storage)) {
-                single_device_storage |= true;
-            }
-        }
-    }
-
-    TT_FATAL(not(single_device_storage), "Cannot mix single and multi-device tensors when calling launch op!");
-}
-
 std::vector<IDevice*> get_workers_for_op_output(
     const std::vector<Tensor>& inputs, const std::vector<std::optional<const Tensor>>& optional_inputs) {
     using ttnn::operations::experimental::auto_format::AutoFormat;

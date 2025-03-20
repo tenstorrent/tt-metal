@@ -13,7 +13,7 @@
 #include "work_executor_types.hpp"
 #include "data_types.hpp"
 #include "program_device_map.hpp"
-#include "hal.hpp"
+#include "hal_types.hpp"
 #include "command_queue_interface.hpp"
 #include "sub_device_types.hpp"
 #include <tt-metalium/allocator_types.hpp>
@@ -191,8 +191,7 @@ public:
 
     virtual HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const = 0;
 
-    template <typename T = DeviceAddr>
-    T get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;
+    uint64_t get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;
 
     virtual std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) = 0;
 
@@ -225,11 +224,6 @@ public:
 
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
 };
-
-template <typename T>
-inline T IDevice::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
-    return hal.get_dev_addr<T>(this->get_programmable_core_type(virtual_core), addr_type);
-}
 
 }  // namespace tt_metal
 

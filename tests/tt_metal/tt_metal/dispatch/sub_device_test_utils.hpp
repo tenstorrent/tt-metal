@@ -6,7 +6,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/hal.hpp>
+#include "hal.hpp"
 
 namespace tt::tt_metal {
 
