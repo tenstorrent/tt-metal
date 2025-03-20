@@ -49,37 +49,37 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
 // computes layernorm(a+*b)*gamma + beta
 // if b is nullptr it's treated as zero (no addition)
 bool CB_can_fit_in_L1(
-    uint32_t in0_t,
-    uint32_t in1_t,
-    uint32_t out0_t,
-    uint32_t im0_t,
-    uint32_t im3_t,
-    uint32_t in5_t,
-    uint32_t in6_t,
-    uint32_t im6_t,
-    uint32_t im5_t,
-    uint32_t im4_t,
-    uint32_t im1_t,
-    uint32_t in2_t,
-    uint32_t in3_t,
-    uint32_t im2_t,
+    uint32_t in0_size,
+    uint32_t in1_size,
+    uint32_t out0_size,
+    uint32_t im0_size,
+    uint32_t im3_size,
+    uint32_t in5_size,
+    uint32_t in6_size,
+    uint32_t im6_size,
+    uint32_t im5_size,
+    uint32_t im4_size,
+    uint32_t im1_size,
+    uint32_t in2_size,
+    uint32_t in3_size,
+    uint32_t im2_size,
     uint32_t l1_size) {
     uint32_t sum = 0;
-    sum += in0_t;
-    sum += in1_t;
-    sum += out0_t;
-    sum += im0_t;
-    sum += im3_t;
-    sum += in5_t;
-    sum += in6_t;
-    sum += im6_t;
-    sum += im5_t;
-    sum += im4_t;
-    sum += im1_t;
-    sum += in2_t;
-    sum += in3_t;
-    sum += im2_t;
-    return sum < l1_size;
+    sum += in0_size;
+    sum += in1_size;
+    sum += out0_size;
+    sum += im0_size;
+    sum += im3_size;
+    sum += in5_size;
+    sum += in6_size;
+    sum += im6_size;
+    sum += im5_size;
+    sum += im4_size;
+    sum += im1_size;
+    sum += in2_size;
+    sum += in3_size;
+    sum += im2_size;
+    return sum < l1_size * 0.95;
 }
 operation::ProgramWithCallbacks layernorm_multi_core(
     const Tensor& a,
@@ -201,21 +201,21 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     uint32_t in3_t = 2;  // epsilon coming from reader
     uint32_t im2_t = 2;  //
     bool cb_fits_in_L1 = CB_can_fit_in_L1(
-        in0_t,
-        in1_t,
-        out0_t,
-        im0_t,
-        im3_t,
-        in5_t,
-        in6_t,
-        im6_t,
-        im5_t,
-        im4_t,
-        im1_t,
-        in2_t,
-        in3_t,
-        im2_t,
-        a.device()->l1_size_per_core() / single_tile_size);
+        in0_t * in_single_tile_size,
+        in1_t * inb_single_tile_size,
+        out0_t * out_single_tile_size,
+        im0_t * single_tile_size,
+        im3_t * single_tile_size,
+        in5_t * gamma_single_tile_size,
+        in6_t * beta_single_tile_size,
+        im6_t * single_tile_size,
+        im5_t * single_tile_size,
+        im4_t * single_tile_size,
+        im1_t * single_tile_size,
+        in2_t * bfloat16_tile_size,
+        in3_t * bfloat16_tile_size,
+        im2_t * single_tile_size,
+        a.device()->l1_size_per_core());
     if (!rms_norm and !use_row_major_kernel) {
         if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and !cb_fits_in_L1) {
             // In the case that the required space is larger than what can be handeled by the single pass
@@ -325,6 +325,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         reader_defines["FUSE_PRE_ADD"] = "1";
         compute_defines["FUSE_PRE_ADD"] = "1";
     }
+
     if (gamma.has_value()) {
         reader_defines["FUSE_GAMMA"] = "1";
     }
