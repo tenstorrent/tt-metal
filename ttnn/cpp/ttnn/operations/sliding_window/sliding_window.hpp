@@ -34,8 +34,7 @@ struct ParallelConfig {
 
 using uint32_pair_t = std::pair<uint32_t, uint32_t>;
 
-using SlidingWindowPadding = std::
-    variant<uint32_pair_t, std::array<uint32_t, 2>, std::pair<uint32_pair_t, uint32_pair_t>, std::array<uint32_t, 4>>;
+using SlidingWindowPadding = std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>>;
 
 std::array<uint32_t, 4> get_pair_n4_padding(const SlidingWindowPadding& padding);
 struct SlidingWindowConfig {

@@ -112,7 +112,7 @@ Result conv_transpose2d(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    sliding_window::SlidingWindowPadding _padding,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> _padding,
     std::array<uint32_t, 2> output_padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
@@ -124,7 +124,7 @@ Result conv_transpose2d(
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
 
-    auto padding = sliding_window::get_pair_n4_padding(_padding);
+    std::array<uint32_t, 4> padding = sliding_window::get_pair_n4_padding(_padding);
     // Inverse of sliding_window.get_output_shape()
     SlidingWindowConfig sliding_window_config = SlidingWindowConfig{
         .batch_size = batch_size,
@@ -368,7 +368,7 @@ Result ConvTranpose2dOperation::invoke(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    sliding_window::SlidingWindowPadding _padding,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> _padding,
     std::array<uint32_t, 2> output_padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
@@ -411,7 +411,7 @@ Result ConvTranpose2dOperation::invoke(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    sliding_window::SlidingWindowPadding _padding,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> _padding,
     std::array<uint32_t, 2> output_padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,

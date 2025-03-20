@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <array>
+#include <cstdint>
 #include <optional>
 #include <utility>
 
@@ -45,7 +47,7 @@ Result conv2d(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    sliding_window::SlidingWindowPadding _padding,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> _padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
@@ -53,7 +55,7 @@ Result conv2d(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-    auto padding = sliding_window::get_pair_n4_padding(_padding);
+    std::array<uint32_t, 4> padding = sliding_window::get_pair_n4_padding(_padding);
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups, conv_config);
     const uint32_t output_height =
         ((input_height - kernel_size[0] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + (padding[0] + padding[1])) /
@@ -288,7 +290,7 @@ Result Conv2dOperation::invoke(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    sliding_window::SlidingWindowPadding _padding,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> _padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
@@ -327,7 +329,7 @@ Result Conv2dOperation::invoke(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    sliding_window::SlidingWindowPadding _padding,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> _padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,

@@ -145,7 +145,6 @@ def run_conv(
         mode="constant",
         value=0,
     )
-    print(torch_input_tensor_nchw.shape, torch_padded_input.shape)
     torch_out_golden_tensor = torch.nn.functional.conv2d(
         torch_padded_input,
         torch_weight_tensor,
@@ -448,7 +447,7 @@ def test_conv_features(
     packer_l1_acc,
 ):
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and shard_layout == WS:
-        pytest.skip("Bug in Width Sharded Row Major Tensor Creation when height%32!=0")
+        pytest.skip("Bug in Width Sharded Row Major Tensor Creation when height%32!=0. #19408")
 
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
