@@ -20,6 +20,48 @@ constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(1);
 tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(test_results_addr_arg);
 
 constexpr uint32_t target_address = get_compile_time_arg_val(2);
+constexpr bool mcast_mode = get_compile_time_arg_val(3);
+
+inline void setup_connection_and_headers(
+    tt::tt_fabric::WorkerToFabricEdmSender& connection,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
+    uint32_t hops,
+    uint64_t noc_dest_addr,
+    uint32_t packet_payload_size_bytes) {
+    // connect to edm
+    connection.open();
+
+    if constexpr (mcast_mode) {
+        packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(hops)});
+    } else {
+        packet_header->to_chip_unicast(static_cast<uint8_t>(hops));
+    }
+
+    packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_dest_addr}, packet_payload_size_bytes);
+}
+
+inline void send_packet(
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
+    uint64_t noc_dest_addr,
+    uint32_t source_l1_buffer_address,
+    uint32_t packet_payload_size_bytes,
+    uint32_t seed,
+    tt::tt_fabric::WorkerToFabricEdmSender& connection) {
+#ifndef BENCHMARK_MODE
+    packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_dest_addr}, packet_payload_size_bytes);
+    // fill packet data for sanity testing
+    tt_l1_ptr uint32_t* start_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(source_l1_buffer_address);
+    fill_packet_data(start_addr, packet_payload_size_bytes / 16, seed);
+    tt_l1_ptr uint32_t* last_word_addr =
+        reinterpret_cast<tt_l1_ptr uint32_t*>(source_l1_buffer_address + packet_payload_size_bytes - 4);
+#endif
+    connection.wait_for_empty_write_slot();
+    connection.send_payload_without_header_non_blocking_from_address(
+        source_l1_buffer_address, packet_payload_size_bytes);
+    connection.send_payload_blocking_from_address((uint32_t)packet_header, sizeof(tt::tt_fabric::PacketHeader));
+}
+
+inline void teardown_connection(tt::tt_fabric::WorkerToFabricEdmSender& connection) { connection.close(); }
 
 void kernel_main() {
     using namespace tt::tt_fabric;
@@ -29,51 +71,99 @@ void kernel_main() {
     uint32_t source_l1_buffer_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t packet_payload_size_bytes = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t num_packets = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t unicast_hops = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t rx_noc_encoding = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t time_seed = get_arg_val<uint32_t>(rt_args_idx++);
 
     uint64_t noc_dest_addr = get_noc_addr_helper(rx_noc_encoding, target_address);
 
-    auto fabric_connection =
-        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+    tt::tt_fabric::WorkerToFabricEdmSender fwd_fabric_connection;
+    tt::tt_fabric::WorkerToFabricEdmSender bwd_fabric_connection;
+
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* fwd_packet_header;
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* bwd_packet_header;
+
+    if constexpr (mcast_mode) {
+        uint32_t mcast_fwd_hops = get_arg_val<uint32_t>(rt_args_idx++);
+        uint32_t mcast_bwd_hops = get_arg_val<uint32_t>(rt_args_idx++);
+
+        fwd_fabric_connection =
+            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+        bwd_fabric_connection =
+            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+
+        fwd_packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_buffer_address);
+        bwd_packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
+            packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
+
+        setup_connection_and_headers(
+            fwd_fabric_connection, fwd_packet_header, mcast_fwd_hops, noc_dest_addr, packet_payload_size_bytes);
+
+        setup_connection_and_headers(
+            bwd_fabric_connection, bwd_packet_header, mcast_bwd_hops, noc_dest_addr, packet_payload_size_bytes);
+
+    } else {
+        uint32_t unicast_hops = get_arg_val<uint32_t>(rt_args_idx++);
+
+        fwd_fabric_connection =
+            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+
+        fwd_packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_buffer_address);
+
+        setup_connection_and_headers(
+            fwd_fabric_connection, fwd_packet_header, unicast_hops, noc_dest_addr, packet_payload_size_bytes);
+    }
 
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
-
-    // connect to edm
-    fabric_connection.open();
-
-    // construct packet header
-    volatile auto* unicast_packet_header =
-        reinterpret_cast<volatile tt_l1_ptr LowLatencyPacketHeader*>(packet_header_buffer_address);
-    unicast_packet_header->to_chip_unicast(static_cast<uint8_t>(unicast_hops));
-    unicast_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_dest_addr}, packet_payload_size_bytes);
 
     uint64_t start_timestamp = get_timestamp();
 
     // loop over for num packets
     for (uint32_t i = 0; i < num_packets; i++) {
 #ifndef BENCHMARK_MODE
-        unicast_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_dest_addr}, packet_payload_size_bytes);
-        // fill packet data for sanity testing
-        tt_l1_ptr uint32_t* start_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(source_l1_buffer_address);
         time_seed = prng_next(time_seed);
-        fill_packet_data(start_addr, packet_payload_size_bytes / 16, time_seed);
-        tt_l1_ptr uint32_t* last_word_addr =
-            reinterpret_cast<tt_l1_ptr uint32_t*>(source_l1_buffer_address + packet_payload_size_bytes - 4);
+#endif
+        if constexpr (mcast_mode) {
+            // fwd packet
+            send_packet(
+                fwd_packet_header,
+                noc_dest_addr,
+                source_l1_buffer_address,
+                packet_payload_size_bytes,
+                time_seed,
+                fwd_fabric_connection);
+
+            // bwd packet
+            send_packet(
+                bwd_packet_header,
+                noc_dest_addr,
+                source_l1_buffer_address,
+                packet_payload_size_bytes,
+                time_seed,
+                bwd_fabric_connection);
+        } else {
+            send_packet(
+                fwd_packet_header,
+                noc_dest_addr,
+                source_l1_buffer_address,
+                packet_payload_size_bytes,
+                time_seed,
+                fwd_fabric_connection);
+        }
+#ifndef BENCHMARK_MODE
         noc_dest_addr += packet_payload_size_bytes;
 #endif
-        fabric_connection.wait_for_empty_write_slot();
-        fabric_connection.send_payload_without_header_non_blocking_from_address(
-            source_l1_buffer_address, packet_payload_size_bytes);
-        fabric_connection.send_payload_blocking_from_address(
-            (uint32_t)unicast_packet_header, sizeof(tt::tt_fabric::PacketHeader));
     }
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
 
-    fabric_connection.close();
+    if constexpr (mcast_mode) {
+        teardown_connection(fwd_fabric_connection);
+        teardown_connection(bwd_fabric_connection);
+    } else {
+        teardown_connection(fwd_fabric_connection);
+    }
+
     noc_async_write_barrier();
 
     uint64_t bytes_sent = packet_payload_size_bytes * num_packets;
