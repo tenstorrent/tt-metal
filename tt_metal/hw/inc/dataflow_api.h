@@ -743,7 +743,7 @@ void noc_async_write_one_packet(
 
     WAYPOINT("NWPW");
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
-    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
+    while (!noc_cmd_buf_ready(noc, read_cmd_buf));
     WAYPOINT("NWPD");
 
     uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) |
@@ -751,20 +751,20 @@ void noc_async_write_one_packet(
                              0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
                              NOC_CMD_RESP_MARKED;
 
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CTRL, noc_cmd_field);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_noc_addr);
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CTRL, noc_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_noc_addr);
 #ifdef ARCH_BLACKHOLE
     // Handles writing to PCIe
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_noc_addr >> 32) & 0x1000000F);
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_noc_addr >> 32) & 0x1000000F);
 #endif
     NOC_CMD_BUF_WRITE_REG(
         noc,
-        write_cmd_buf,
+        read_cmd_buf,
         NOC_RET_ADDR_COORDINATE,
         (uint32_t)(dst_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, size);
-    NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_AT_LEN_BE, size);
+    NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
         inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
@@ -933,17 +933,17 @@ FORCE_INLINE void noc_async_read_tile(
 template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
 inline void noc_async_write(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
-    if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_write_one_packet(src_local_l1_addr, dst_noc_addr, size, noc);
-    } else {
-        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, dst_noc_addr, size, NOC_UNICAST_WRITE_VC);
+    // if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
+    //     noc_async_write_one_packet(src_local_l1_addr, dst_noc_addr, size, noc);
+    // } else {
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, dst_noc_addr, size, NOC_UNICAST_WRITE_VC);
 
-        WAYPOINT("NAWW");
-        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
-        ncrisc_noc_fast_write_any_len<noc_mode>(
-            noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true);
-        WAYPOINT("NAWD");
-    }
+    WAYPOINT("NAWW");
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
+    ncrisc_noc_fast_write_any_len<noc_mode>(
+        noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true);
+    WAYPOINT("NAWD");
+    // }
 }
 
 template <bool DRAM, uint32_t tile_hw>
