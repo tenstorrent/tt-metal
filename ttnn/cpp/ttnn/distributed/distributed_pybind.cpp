@@ -590,16 +590,14 @@ void py_module(py::module& module) {
         [](const Tensor& tensor,
            const TensorToMesh& mapper,
            std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt) -> Tensor {
-            return distribute_tensor(from_device(tensor), mapper, mesh_device);
+            return distribute_tensor(tensor, mapper, mesh_device);
         },
         py::arg("tensor"),
         py::arg("mapper"),
         py::arg("mesh_device") = py::none());
     module.def(
         "aggregate_tensor",
-        [](const Tensor& tensor, const MeshToTensor& composer) -> Tensor {
-            return aggregate_tensor(from_device(tensor), composer);
-        },
+        [](const Tensor& tensor, const MeshToTensor& composer) -> Tensor { return aggregate_tensor(tensor, composer); },
         py::arg("tensor"),
         py::arg("composer"));
     module.def(
@@ -607,7 +605,7 @@ void py_module(py::module& module) {
         [](const std::vector<Tensor>& tensors, const MeshToTensor& composer) -> Tensor {
             Tensor aggregated_tensor = aggregate_as_tensor(tensors, AllGatherTensor{});
 
-            return aggregate_tensor(from_device(aggregated_tensor), composer);
+            return aggregate_tensor(aggregated_tensor, composer);
         },
         py::arg("tensor"),
         py::arg("composer"));
