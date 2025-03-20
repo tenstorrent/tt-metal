@@ -244,9 +244,7 @@ Result conv2d(
         std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
         std::optional<MemoryConfig> mm_output_memory_config = std::nullopt;
         std::optional<std::string> activation = std::nullopt;
-        if (!conv_config.activation.empty()) {
-            activation = conv_config.activation;
-        }
+
         if (input_tensor_post_tm.is_sharded()) {
             uint32_t num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
             program_config = determine_matmul_op_config_from_conv_op_config(
@@ -257,6 +255,10 @@ Result conv2d(
                 parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
                 num_cores_c);
             mm_output_memory_config = conv_out_memory_config;
+        } else {
+            if (!conv_config.activation.empty()) {
+                activation = conv_config.activation;
+            }
         }
         Tensor matmul_output = ttnn::linear(
             input_tensor_post_tm,
