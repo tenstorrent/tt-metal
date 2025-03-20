@@ -442,4 +442,11 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
     defines[get_macro_definition(op_type)] = "1";
 }
 
+std::string get_compute_kernel_path(UnaryOpType op_type, const std::string& compute_root) {
+    switch (op_type) {
+        case UnaryOpType::MISH: return fmt::format("{}/{}", compute_root, "mish_kernel.cpp");
+        default: return fmt::format("{}/{}", compute_root, "eltwise_sfpu.cpp");
+    }
+}
+
 }  // namespace ttnn::operations::unary::utils

@@ -11,7 +11,6 @@
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #include "compute_kernel_api/eltwise_unary/exp.h"
 #include "compute_kernel_api.h"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -20,7 +19,7 @@ void MAIN {
 
     constexpr auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_output = tt::CBIndex::c_2;
-
+    constexpr uint32_t one = 0x3f800000u;  // Represents 1.0f
     init_sfpu(cb_input, cb_output);
 
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
@@ -36,7 +35,7 @@ void MAIN {
             exp_tile_init<1u>();
             exp_tile<1u>(0);
             binop_with_scalar_tile_init();
-            add_unary_tile(0, 0x3f800000u);
+            add_unary_tile(0, one);
             log_tile_init();
             log_tile(0);
             tanh_tile_init();
