@@ -87,11 +87,14 @@ jobs:
             -v /mnt/MLPerf:/mnt/MLPerf:ro
           install_wheel: true
           run_args: |
-            source ./tests/scripts/single_card/run_single_card_demo_tests.sh
+            source ${{ github.workspace }}/tests/scripts/single_card/run_single_card_demo_tests.sh
             ${{ matrix.test-group.cmd }}
       - name: Save environment data
         if: ${{ matrix.test-group.name == 'N300_performance' && !cancelled() }}
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: |
+          source ${{ github.workspace }}/python_env/bin/activate
           python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
       - name: Upload benchmark data
         if: ${{ matrix.test-group.name == 'N300_performance' && !cancelled() }}
