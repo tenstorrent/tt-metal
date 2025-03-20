@@ -8,5 +8,7 @@
 namespace ttml::ops {
 
 autograd::TensorPtr rmsnorm(const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, float epsilon);
+autograd::TensorPtr rmsnorm_composite(
+    const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, float epsilon);
 
 }  // namespace ttml::ops
