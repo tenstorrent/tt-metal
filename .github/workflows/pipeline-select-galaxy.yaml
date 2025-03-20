@@ -57,10 +57,13 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   tg-unit-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/tg-unit-tests-impl.yaml
     if: ${{ inputs.tg-unit }}
+    needs: build-artifact
+    uses: ./.github/workflows/tg-unit-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   tg-frequent-tests:
     if: ${{ inputs.tg-frequent }}
     needs: build-artifact
