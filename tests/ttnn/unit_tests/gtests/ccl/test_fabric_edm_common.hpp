@@ -2178,11 +2178,18 @@ void run_ring_all_gather_with_persistent_fabric(
     log_info(tt::LogTest, "Finished");
 }
 
+enum class FabricTestMode {
+    Linear,
+    HalfRing,
+    FullRing,
+    SaturateChipToChipRing,
+};
+
 struct WriteThroughputStabilityTestWithPersistentFabricParams {
     size_t line_size = 4;
     size_t num_devices_with_workers = 0;
     bool line_sync = true;
-    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear;
+    FabricTestMode fabric_mode = FabricTestMode::Linear;
 };
 
 void RunWriteThroughputStabilityTestWithPersistentFabric(
@@ -2204,22 +2211,30 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
         return;
     }
 
-    auto topology = params.topology;
-
     size_t line_size = params.line_size;
     size_t num_devices_with_workers = params.num_devices_with_workers;
     if (num_devices_with_workers == 0) {
         num_devices_with_workers = line_size;
     }
     using namespace ttnn::ccl;
-    TT_FATAL(num_devices_with_workers <= line_size, "num_devices_with_workers must be less than or equal to num_links");
+    TT_FATAL(num_devices_with_workers <= line_size, "num_devices_with_workers must be less than or equal to line_size");
+
+    ttnn::ccl::Topology topology;
+    FabricTestMode fabric_mode = params.fabric_mode;
+    switch (fabric_mode) {
+        case FabricTestMode::Linear: topology = ttnn::ccl::Topology::Linear; break;
+        case FabricTestMode::SaturateChipToChipRing:
+            TT_FATAL(line_size == 4, "SaturateChipToChipRing only supports line_size 4");
+        case FabricTestMode::HalfRing:
+        case FabricTestMode::FullRing: topology = ttnn::ccl::Topology::Ring; break;
+    }
 
     auto worker_core_logical = [](size_t link) { return CoreCoord(link, 0); };
 
     // static constexpr size_t source_l1_buffer_address = 1000000;
     static constexpr uint32_t packet_header_cb_index = tt::CB::c_in0;
     static constexpr uint32_t source_payload_cb_index = tt::CB::c_in1;
-    static constexpr size_t packet_header_cb_size_in_headers = 4;
+    static constexpr size_t packet_header_cb_size_in_headers = 5;
     static constexpr bool enable_persistent_fabric_mode = true;
     size_t dest_buffer_size = packet_payload_size_bytes * 4;
     static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;
@@ -2234,14 +2249,30 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
             view.get_device(MeshCoordinate(0, 0)),
             view.get_device(MeshCoordinate(1, 0)),
             view.get_device(MeshCoordinate(2, 0)),
-            view.get_device(MeshCoordinate(3, 0))};
+            view.get_device(MeshCoordinate(3, 0)),
+            view.get_device(MeshCoordinate(4, 0)),
+            view.get_device(MeshCoordinate(5, 0)),
+            view.get_device(MeshCoordinate(6, 0)),
+            view.get_device(MeshCoordinate(7, 0))};
     } else {
         // Choosing pcie devices so that more links are supported. More links == more (likelihood of) congestion.
-        devices_ = {
-            view.get_device(MeshCoordinate(0, 1)),
-            view.get_device(MeshCoordinate(0, 2)),
-            view.get_device(MeshCoordinate(1, 2)),
-            view.get_device(MeshCoordinate(1, 1))};
+        if (line_size <= 4) {
+            devices_ = {
+                view.get_device(MeshCoordinate(0, 1)),
+                view.get_device(MeshCoordinate(0, 2)),
+                view.get_device(MeshCoordinate(1, 2)),
+                view.get_device(MeshCoordinate(1, 1))};
+        } else {
+            devices_ = {
+                view.get_device(MeshCoordinate(0, 0)),
+                view.get_device(MeshCoordinate(0, 1)),
+                view.get_device(MeshCoordinate(0, 2)),
+                view.get_device(MeshCoordinate(0, 3)),
+                view.get_device(MeshCoordinate(1, 3)),
+                view.get_device(MeshCoordinate(1, 2)),
+                view.get_device(MeshCoordinate(1, 1)),
+                view.get_device(MeshCoordinate(1, 0))};
+        }
     }
     std::vector<IDevice*> devices;
     devices.reserve(line_size);
@@ -2339,6 +2370,9 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
         size_t mcast_fwd_hops;
         size_t mcast_bwd_hops;
         size_t unicast_hops;
+        size_t sync_mcast_fwd_hops;
+        size_t sync_mcast_bwd_hops;
+        size_t sync_count_per_link;
         if (topology == ttnn::ccl::Topology::Ring) {
             backward_device = i == 0 ? devices.back() : devices[i - 1];
             forward_device = i == line_size - 1 ? devices.front() : devices[i + 1];
@@ -2347,12 +2381,68 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
             has_forward_connection = true;
             has_backward_connection = true;
             unicast_forward = true;
-            mcast_fwd_hops = tt::div_up(line_size - 1, 2);
-            mcast_bwd_hops = line_size - 1 - mcast_fwd_hops;
+            // Have the sync for ring always use the same algorithm as HalfRing
+            sync_mcast_fwd_hops = tt::div_up(line_size - 1, 2);
+            sync_mcast_bwd_hops = line_size - 1 - sync_mcast_fwd_hops;
             if (i % 2 == 0) {
-                std::swap(mcast_fwd_hops, mcast_bwd_hops);
+                std::swap(sync_mcast_fwd_hops, sync_mcast_bwd_hops);
             }
-            unicast_hops = mcast_fwd_hops;
+            if (fabric_mode == FabricTestMode::HalfRing) {
+                mcast_fwd_hops = tt::div_up(line_size - 1, 2);
+                mcast_bwd_hops = line_size - 1 - mcast_fwd_hops;
+                if (i % 2 == 0) {
+                    std::swap(mcast_fwd_hops, mcast_bwd_hops);
+                }
+                sync_mcast_fwd_hops = mcast_fwd_hops;
+                sync_mcast_bwd_hops = mcast_bwd_hops;
+                // We will get 1 inc per remote chip + 1 local
+                sync_count_per_link = num_devices_with_workers;
+            } else if (fabric_mode == FabricTestMode::FullRing) {
+                mcast_fwd_hops = line_size - 1;
+                mcast_bwd_hops = line_size - 1;
+                sync_mcast_fwd_hops = mcast_fwd_hops;
+                sync_mcast_bwd_hops = mcast_bwd_hops;
+                // We will get 2 inc per remote chip + 1 local
+                sync_count_per_link = 2 * (num_devices_with_workers - 1) + 1;
+            } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
+                // We want to saturate the middle links between chip 1 and 2 in a 4 chip ring with the dateline between
+                // the first and last chip
+                // Mcast 2 hops from chip 1 F and chip 2 B, which is S0 -> R0
+                // Mcast 3 hops from chip 0 F and chip 3 B, which is S1 -> R0
+                // Mcast 4 hops from Chip 3 F and chip 0 B, which is S2 -> R1
+                if (line_index == line_size - 1) {
+                    mcast_fwd_hops = line_size - 1;
+                } else {
+                    mcast_fwd_hops = line_size - 2 - line_index;
+                }
+                if (line_index == 0) {
+                    mcast_bwd_hops = line_size - 1;
+                } else {
+                    mcast_bwd_hops = line_index - 1;
+                }
+                // The above calculations calculates the number of hops to land on the dest chip
+                // Extend by one so we mcast through them
+                if (mcast_fwd_hops != 0) {
+                    mcast_fwd_hops++;
+                }
+                if (mcast_bwd_hops != 0) {
+                    mcast_bwd_hops++;
+                }
+                // Flush all the way around the ring
+                sync_mcast_fwd_hops = line_size;
+                sync_mcast_bwd_hops = line_size;
+                // We will get 2 inc for all chips + 1 local
+                sync_count_per_link = 2 * num_devices_with_workers + 1;
+            } else {
+                TT_THROW("Invalid fabric mode");
+            }
+            if (mcast_fwd_hops >= mcast_bwd_hops) {
+                unicast_forward = true;
+                unicast_hops = mcast_fwd_hops;
+            } else {
+                unicast_forward = false;
+                unicast_hops = mcast_bwd_hops;
+            }
         } else {
             backward_device = i == 0 ? nullptr : devices[i - 1];
             forward_device = i == line_size - 1 ? nullptr : devices[i + 1];
@@ -2366,6 +2456,10 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
             mcast_fwd_hops = line_size - line_index - 1;
             mcast_bwd_hops = line_index;
             unicast_hops = unicast_forward ? mcast_fwd_hops : mcast_bwd_hops;
+            sync_mcast_fwd_hops = mcast_fwd_hops;
+            sync_mcast_bwd_hops = mcast_bwd_hops;
+            // We will get 1 inc per remote chip + 1 local
+            sync_count_per_link = num_devices_with_workers;
         }
 
         auto local_device_fabric_handle =
@@ -2453,7 +2547,9 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
                 }
                 TT_FATAL(global_semaphore_addrs.at(0) != -1, "Invalid test setup. Global semaphore address is -1");
                 rt_args.push_back(global_semaphore_addrs.at(0));
-                rt_args.push_back(num_links * num_devices_with_workers);
+                rt_args.push_back(num_links * sync_count_per_link);
+                rt_args.push_back(sync_mcast_fwd_hops);
+                rt_args.push_back(sync_mcast_bwd_hops);
             }
 
             tt_metal::SetRuntimeArgs(program, worker_kernel_id, worker_core, rt_args);
@@ -2533,7 +2629,7 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     // static constexpr size_t source_l1_buffer_address = 1000000;
     static constexpr uint32_t packet_header_cb_index = tt::CB::c_in0;
     static constexpr uint32_t source_payload_cb_index = tt::CB::c_in1;
-    static constexpr size_t packet_header_cb_size_in_headers = 4;
+    static constexpr size_t packet_header_cb_size_in_headers = 5;
     static constexpr bool enable_persistent_fabric_mode = true;
     size_t dest_buffer_size = packet_payload_size_bytes * 4;
     static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;
@@ -2632,6 +2728,7 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
         worker_devices.size());
     std::vector<KernelHandle> worker_kernel_ids;
     std::vector<size_t> per_device_global_sem_addr_rt_arg;
+    uint32_t num_dirs = (uint32_t)has_forward_connection + (uint32_t)has_backward_connection;
     for (size_t i = 0; i < num_devices_with_workers; i++) {
         const size_t line_index = i;
         auto& program = programs[i];
@@ -2651,9 +2748,9 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
 
         // Initialize the fabric handle for worker connection
         unicast_forward = false;
-        mcast_fwd_hops = line_size - 1;
-        mcast_bwd_hops = line_size - 1;
-        unicast_hops = mcast_fwd_hops;
+        mcast_fwd_hops = has_forward_connection ? line_size - 1 : 0;
+        mcast_bwd_hops = has_backward_connection ? line_size - 1 : 0;
+        unicast_hops = has_forward_connection ? mcast_fwd_hops : mcast_bwd_hops;
 
         auto local_device_fabric_handle =
             ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
@@ -2740,7 +2837,10 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
                 }
                 TT_FATAL(global_semaphore_addrs.at(0) != -1, "Invalid test setup. Global semaphore address is -1");
                 rt_args.push_back(global_semaphore_addrs.at(0));
-                rt_args.push_back(num_links * num_devices_with_workers);
+                // Receives one ack per direction per chip (not including self), plus 1 for self
+                rt_args.push_back(num_links * (num_dirs * (num_devices_with_workers - 1) + 1));
+                rt_args.push_back(mcast_fwd_hops);
+                rt_args.push_back(mcast_bwd_hops);
             }
 
             tt_metal::SetRuntimeArgs(program, worker_kernel_id, worker_core, rt_args);
