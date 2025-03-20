@@ -219,6 +219,12 @@ run_yolov8s_world_perf() {
 
 }
 
+run_vanilla_unet_demo() {
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/functional_vanilla_unet/demo/demo.py::test_unet_demo_single_image
+
+}
+
 main() {
   # For CI pipeline - source func commands but don't execute tests if not invoked directly
   if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
