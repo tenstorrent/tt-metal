@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,104 +7,143 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 namespace NAMESPACE {
 void MAIN {
     const uint32_t in0_cb = get_compile_time_arg_val(0);
     const uint32_t in1_cb = get_compile_time_arg_val(1);
     const uint32_t imm_cb = get_compile_time_arg_val(2);
-    const uint32_t out_cb = get_compile_time_arg_val(3);
-    const uint32_t num_in0_tiles = 1;
-    const uint32_t num_in1_tiles = 1;
-    const uint32_t num_out_tiles = 1;
-    const uint32_t in0_tile_index = 0;
-    const uint32_t in1_tile_index = 0;
-    const uint32_t out_tile_index = 0;
-    const bool transpose = false;
+    const uint32_t sync_cb = get_compile_time_arg_val(3);
+    const uint32_t out_cb = get_compile_time_arg_val(4);
+    const uint32_t rt_dim = get_compile_time_arg_val(5);
+    const uint32_t ct_dim = get_compile_time_arg_val(6);
+    const uint32_t kt_dim = get_compile_time_arg_val(7);
+    const uint32_t loop_factor = get_compile_time_arg_val(8);
+    const uint32_t reuse_a = get_compile_time_arg_val(9);
 
-    cb_reserve_back(3, 1);
+#ifdef TILIZE_MATMUL_FUSED
+    const uint32_t mm_cb = in0_cb;
+#else
+    const uint32_t mm_cb = imm_cb;
+#endif
+
+    cb_reserve_back(sync_cb, 1);
     volatile std::uint32_t* base_address = (std::uint32_t*)6768;
 
-    cb_reserve_back(imm_cb, num_out_tiles);
-    cb_wait_front(in0_cb, num_in0_tiles);
+#ifndef TILIZE_MATMUL_FUSED
+    tilize_init(in0_cb, kt_dim, imm_cb);
 
-    tilize_init(in0_cb, num_in0_tiles, imm_cb);
-
-    tensix_sync();
-    UNPACK((base_address[0] = 1));
-    MATH((base_address[1] = 2));
-    PACK((base_address[2] = 3));
-    while (base_address[0] != 1) {
-        asm("nop");
-    }
-    while (base_address[1] != 2) {
-        asm("nop");
-    }
-    while (base_address[2] != 3) {
-        asm("nop");
-    }
-    UNPACK((base_address[0] = 0));
-    MATH((base_address[1] = 0));
-    PACK((base_address[2] = 0));
-    while (base_address[0] != 0) {
-        asm("nop");
-    }
-    while (base_address[1] != 0) {
-        asm("nop");
-    }
-    while (base_address[2] != 0) {
-        asm("nop");
-    }
-
-    tilize_block(in0_cb, num_in0_tiles, imm_cb);
+    cb_reserve_back(imm_cb, rt_dim * kt_dim);
+    cb_wait_front(in0_cb, rt_dim * kt_dim);
 
     tensix_sync();
+    {
+        DeviceZoneScopedN("B0");
+        UNPACK((base_address[0] = 1));
+        MATH((base_address[1] = 2));
+        PACK((base_address[2] = 3));
+        while (base_address[0] != 1) {
+            asm("nop");
+        }
+        while (base_address[1] != 2) {
+            asm("nop");
+        }
+        while (base_address[2] != 3) {
+            asm("nop");
+        }
+        UNPACK((base_address[0] = 0));
+        MATH((base_address[1] = 0));
+        PACK((base_address[2] = 0));
+        while (base_address[0] != 0) {
+            asm("nop");
+        }
+        while (base_address[1] != 0) {
+            asm("nop");
+        }
+        while (base_address[2] != 0) {
+            asm("nop");
+        }
+    }
+
+    {
+        DeviceZoneScopedN("Tilize sync");
+        {
+            DeviceZoneScopedN("Tilize seq");
+            for (uint j = 0; j < rt_dim; j++) {
+                for (uint i = 0; i < loop_factor; i++) {
+                    tilize_block(in0_cb, kt_dim, imm_cb);
+                }
+                cb_pop_front(in0_cb, kt_dim);
+                cb_push_back(imm_cb, kt_dim);
+            }
+        }
+        tensix_sync();
+    }
 
     tilize_uninit(in0_cb, imm_cb);
+#endif
 
-    cb_pop_front(in0_cb, num_in0_tiles);
-    cb_push_back(imm_cb, num_in0_tiles);
+#ifdef TILIZE_MATMUL_FUSED
+    mm_block_tilize_A_init(mm_cb, in1_cb, out_cb, ct_dim, rt_dim, kt_dim, reuse_a);
+#else
+    mm_block_init(mm_cb, in1_cb, out_cb, 0, ct_dim, rt_dim, kt_dim, reuse_a);
+#endif
 
-    cb_reserve_back(out_cb, num_out_tiles);
-    cb_wait_front(in1_cb, num_in1_tiles);
-    cb_wait_front(imm_cb, num_in1_tiles);
+    cb_reserve_back(out_cb, rt_dim * ct_dim);
+    cb_wait_front(in1_cb, ct_dim * kt_dim);
+    cb_wait_front(mm_cb, rt_dim * kt_dim);
 
-    mm_init(imm_cb, in1_cb, out_cb);
-
-    UNPACK((base_address[0] = 1));
-    MATH((base_address[1] = 2));
-    PACK((base_address[2] = 3));
-    while (base_address[0] != 1) {
-        asm("nop");
+    {
+        DeviceZoneScopedN("B1");
+        UNPACK((base_address[0] = 1));
+        MATH((base_address[1] = 2));
+        PACK((base_address[2] = 3));
+        while (base_address[0] != 1) {
+            asm("nop");
+        }
+        while (base_address[1] != 2) {
+            asm("nop");
+        }
+        while (base_address[2] != 3) {
+            asm("nop");
+        }
+        UNPACK((base_address[0] = 0));
+        MATH((base_address[1] = 0));
+        PACK((base_address[2] = 0));
+        while (base_address[0] != 0) {
+            asm("nop");
+        }
+        while (base_address[1] != 0) {
+            asm("nop");
+        }
+        while (base_address[2] != 0) {
+            asm("nop");
+        }
     }
-    while (base_address[1] != 2) {
-        asm("nop");
-    }
-    while (base_address[2] != 3) {
-        asm("nop");
-    }
-    UNPACK((base_address[0] = 0));
-    MATH((base_address[1] = 0));
-    PACK((base_address[2] = 0));
-    while (base_address[0] != 0) {
-        asm("nop");
-    }
-    while (base_address[1] != 0) {
-        asm("nop");
-    }
-    while (base_address[2] != 0) {
-        asm("nop");
+
+    {
+        DeviceZoneScopedN("Matmul sync");
+        {
+            DeviceZoneScopedN("Matmul loop");
+            for (uint i = 0; i < loop_factor; i++) {
+                acquire_dst();
+                for (uint j = 0; j < kt_dim; j++) {
+#ifdef TILIZE_MATMUL_FUSED
+                    matmul_block_tilize_A(mm_cb, in1_cb, j, j * ct_dim, 0, ct_dim, rt_dim, kt_dim, reuse_a);
+#else
+                    matmul_block(mm_cb, in1_cb, j, j * ct_dim, 0, 0, ct_dim, rt_dim, kt_dim, reuse_a);
+#endif
+                }
+                matmul_pack_tile(0, out_cb, rt_dim * ct_dim);
+                release_dst();
+            }
+        }
+        tensix_sync();
     }
 
-    acquire_dst();
-    matmul_tiles(imm_cb, in1_cb, in0_tile_index, in1_tile_index, out_tile_index, transpose);
-    pack_tile(0, out_cb);
-    release_dst();
-
-    tensix_sync();
-
-    cb_pop_front(in1_cb, num_in1_tiles);
-    cb_pop_front(imm_cb, num_in1_tiles);
-    cb_push_back(out_cb, num_out_tiles);
+    cb_pop_front(mm_cb, rt_dim * kt_dim);
+    cb_pop_front(in1_cb, ct_dim * kt_dim);
+    cb_push_back(out_cb, rt_dim * ct_dim);
 }
 }  // namespace NAMESPACE

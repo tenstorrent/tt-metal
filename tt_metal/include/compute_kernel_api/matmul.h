@@ -10,6 +10,7 @@
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB_matmul_api.h"
+#include "llk_unpack_AB_matmul_tilize_A_api.h"
 #endif
 
 namespace ckernel {
@@ -153,11 +154,12 @@ ALWI void mm_block_init(
     const uint32_t transpose = 0,
     uint32_t ct_dim = 1,
     uint32_t rt_dim = 1,
-    uint32_t kt_dim = 1) {
+    uint32_t kt_dim = 1,
+    uint32_t reuse_a = 0) {
     UNPACK((llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
-    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim, reuse_a)));
 
-    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim, reuse_a)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure_disaggregated(in0_cb_id, in1_cb_id)));
 
@@ -197,9 +199,11 @@ ALWI void matmul_block(
     const uint32_t transpose,
     uint32_t ct_dim,
     uint32_t rt_dim,
-    uint32_t kt_dim) {
-    UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
-    MATH((llk_math_matmul<MATH_FIDELITY>(idst, transpose, ct_dim, rt_dim, kt_dim)));
+    uint32_t kt_dim,
+    uint32_t reuse_a = 0) {
+    UNPACK(
+        (llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim, reuse_a)));
+    MATH((llk_math_matmul<MATH_FIDELITY>(idst, transpose, ct_dim, rt_dim, kt_dim, reuse_a)));
 }
 
 // clang-format off
@@ -258,6 +262,41 @@ ALWI void mm_block_init_short_with_dt(
     UNPACK((llk_unpack_reconfig_data_format_srca(old_in1_cb_id, in1_cb_id)));
     MATH((llk_math_reconfig_data_format_srca(old_in1_cb_id, in1_cb_id)));
     mm_block_init_short(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
+}
+
+ALWI void mm_block_tilize_A_init(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    uint32_t out_cb_id,
+    uint32_t ct_dim = 1,
+    uint32_t rt_dim = 1,
+    uint32_t kt_dim = 1,
+    uint32_t reuse_a = 0) {
+    UNPACK((llk_unpack_AB_matmul_tilize_A_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
+    UNPACK((llk_unpack_AB_matmul_tilize_A_init(in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim, reuse_a)));
+
+    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, 0, ct_dim, rt_dim, kt_dim, reuse_a)));
+    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
+    MATH((llk_math_hw_configure_disaggregated(in0_cb_id, in1_cb_id)));
+
+    PACK((llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(out_cb_id)));
+    PACK((llk_pack_init<false, false>(out_cb_id)));
+    PACK((llk_pack_dest_init<false, DST_ACCUM_MODE>()));
+}
+
+ALWI void matmul_block_tilize_A(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    uint32_t in0_tile_index,
+    uint32_t in1_tile_index,
+    uint32_t idst,
+    uint32_t ct_dim = 1,
+    uint32_t rt_dim = 1,
+    uint32_t kt_dim = 1,
+    uint32_t reuse_a = 0) {
+    UNPACK((llk_unpack_AB_matmul_tilize_A(
+        in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim, reuse_a)));
+    MATH((llk_math_matmul<MATH_FIDELITY>(idst, 0, ct_dim, rt_dim, kt_dim, reuse_a)));
 }
 
 }  // namespace ckernel
