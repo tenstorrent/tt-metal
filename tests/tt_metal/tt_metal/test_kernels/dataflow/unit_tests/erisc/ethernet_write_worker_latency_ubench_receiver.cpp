@@ -104,4 +104,6 @@ void kernel_main() {
         asm volatile("nop");
     }
     ncrisc_noc_counters_init();
+
+    internal_::risc_context_switch();
 }
