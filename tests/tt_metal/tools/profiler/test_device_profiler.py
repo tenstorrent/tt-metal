@@ -215,7 +215,6 @@ def test_dispatch_cores():
         if stat in stats.keys():
             verifiedStat.append(stat)
             assert stats[stat]["stats"]["Count"] == REF_COUNT_DICT[ENV_VAR_ARCH_NAME][stat], "Wrong Dispatch zone count"
-
     statTypes = ["Dispatch", "Prefetch"]
     statTypesSet = set(statTypes)
     for statType in statTypes:

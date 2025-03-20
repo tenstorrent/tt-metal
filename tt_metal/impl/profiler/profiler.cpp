@@ -642,12 +642,20 @@ void DeviceProfiler::dumpResults(
 
     generateZoneSourceLocationsHashes();
 
-    auto output_dram_buffer_ptr = output_dram_buffer.get_buffer();
+    Buffer* output_dram_buffer_ptr = nullptr;
+    if (auto mesh_buffer = output_dram_buffer.get_mesh_buffer()) {
+        auto mesh_device = mesh_buffer->device();
+        auto device_coord = mesh_device->get_view().find_device(device->id());
+        output_dram_buffer_ptr = mesh_buffer->get_device_buffer(device_coord);
+    } else {
+        output_dram_buffer_ptr = output_dram_buffer.get_buffer();
+    }
     if (output_dram_buffer_ptr != nullptr) {
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
         if (USE_FAST_DISPATCH) {
-            if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
-                if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
+            if (state == ProfilerDumpState::LAST_CLOSE_DEVICE || state == ProfilerDumpState::FORCE_UMD_READ) {
+                if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores() ||
+                    state == ProfilerDumpState::FORCE_UMD_READ) {
                     tt_metal::detail::ReadFromBuffer(*output_dram_buffer_ptr, profile_buffer);
                 }
             } else {
