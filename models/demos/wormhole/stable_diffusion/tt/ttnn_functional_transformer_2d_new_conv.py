@@ -22,12 +22,6 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
 from loguru import logger
 
 
-def ttnn_to_torch(input):
-    input = ttnn.from_device(input)
-    input = ttnn.to_torch(input)
-    return input
-
-
 class transformer_2d_model:
     def __init__(self, device, parameters, batch_size, input_height, input_width, compute_kernel_config):
         self.device = device
