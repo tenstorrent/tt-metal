@@ -28,7 +28,7 @@ void kernel_main() {
     constexpr uint32_t block_w = get_compile_time_arg_val(12);
 
     constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(13) == 1;
-    constexpr bool size = get_compile_time_arg_val(14);
+    constexpr uint32_t size = get_compile_time_arg_val(14);
 
     const uint32_t gamma_addr = get_arg_val<uint32_t>(3);
     const uint32_t beta_addr = get_arg_val<uint32_t>(4);
