@@ -4,7 +4,6 @@
 
 import pytest
 import torch
-import torch.nn as nn
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters, fold_batch_norm2d_into_conv2d
 from models.utility_functions import skip_for_grayskull
@@ -13,6 +12,7 @@ from models.experimental.functional_vanilla_unet.ttnn.ttnn_unet import TtUnet
 from tests.ttnn.utils_for_testing import assert_with_pcc
 import os
 import torch.nn.functional as F
+from loguru import logger
 
 
 def create_custom_preprocessor(device):
@@ -160,5 +160,9 @@ def test_unet(device, reset_seeds, model_location_generator):
     )
 
     ttnn_output = ttnn_model(device, ttnn_input_tensor)
+    ttnn_output = ttnn.to_torch(ttnn_output)
+    ttnn_output = ttnn_output.permute(0, 3, 1, 2)
+    ttnn_output = ttnn_output.reshape(torch_output_tensor.shape)
 
-    assert_with_pcc(torch_output_tensor, ttnn_output, pcc=0.96)
+    pcc_passed, pcc_message = assert_with_pcc(torch_output_tensor, ttnn_output, pcc=0.96)
+    logger.info(pcc_message)

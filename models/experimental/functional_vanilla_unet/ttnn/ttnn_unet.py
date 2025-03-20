@@ -4,7 +4,7 @@
 
 import ttnn
 import torch
-from models.experimental.functional_vanilla_unet.ttnn.common import Conv, Conv_transpose, Conv_split
+from models.experimental.functional_vanilla_unet.ttnn.common import Conv, ConvTranspose, ConvSplit
 
 
 def torch_to_ttnn(input, device=None):
@@ -56,20 +56,20 @@ class TtUnet:
         )
         self.bottleneck_2 = Conv([1, 1, 1, 1], parameters["bottleneck"][1], height_sharding=False, reshard=True)
 
-        self.upconv4 = Conv_transpose([2, 2, 0, 0], parameters["upconv4"], auto_shard=True)
+        self.upconv4 = ConvTranspose([2, 2, 0, 0], parameters["upconv4"], auto_shard=True)
         self.dec4_1 = Conv([1, 1, 1, 1], parameters["decoder4"][0], auto_shard=True)
         self.dec4_2 = Conv([1, 1, 1, 1], parameters["decoder4"][1], auto_shard=True)
 
-        self.upconv3 = Conv_transpose([2, 2, 0, 0], parameters["upconv3"], auto_shard=True)
+        self.upconv3 = ConvTranspose([2, 2, 0, 0], parameters["upconv3"], auto_shard=True)
         self.dec3_1 = Conv([1, 1, 1, 1], parameters["decoder3"][0], act_block_h=32)
         self.dec3_2 = Conv([1, 1, 1, 1], parameters["decoder3"][1], height_sharding=False)
 
-        self.upconv2 = Conv_transpose([2, 2, 0, 0], parameters["upconv2"], auto_shard=True)
+        self.upconv2 = ConvTranspose([2, 2, 0, 0], parameters["upconv2"], auto_shard=True)
         self.dec2_1 = Conv([1, 1, 1, 1], parameters["decoder2"][0], act_block_h=32)
         self.dec2_2 = Conv([1, 1, 1, 1], parameters["decoder2"][1], act_block_h=64)
 
         self.upconv1 = model.upconv1
-        self.dec1_1 = Conv_split([1, 1, 1, 1], parameters["decoder1"][0], auto_shard=True)
+        self.dec1_1 = ConvSplit([1, 1, 1, 1], parameters["decoder1"][0], auto_shard=True)
         self.dec1_2 = Conv([1, 1, 1, 1], parameters["decoder1"][1], act_block_h=32)
 
         self.conv = Conv([1, 1, 0, 0], parameters["conv"], activation="")
@@ -123,7 +123,6 @@ class TtUnet:
         )
         pool_2_out_h, pool_2_out_w = int(enc2.shape[1] / 2), int(enc2.shape[2] / 2)
         pool_2 = ttnn.reshape(pool_2, (1, pool_2_out_h, pool_2_out_w, enc2.shape[3]))
-        # ttnn.deallocate(enc2)
         enc2 = ttnn.to_memory_config(enc2, ttnn.DRAM_MEMORY_CONFIG)
         if pool_2.is_sharded:
             pool_2 = ttnn.sharded_to_interleaved(pool_2, ttnn.L1_MEMORY_CONFIG)
@@ -250,12 +249,9 @@ class TtUnet:
         dec1 = torch_to_ttnn(dec1, device)  # 0.9979
         dec1 = self.dec1_2(device, dec1)  # 0.9968
 
-        output_tensor = self.conv(device, dec1)  # 0.9770
+        ttnn_output = self.conv(device, dec1)  # 0.9770
         ttnn.deallocate(dec1)
 
-        ttnn_output = ttnn.to_torch(output_tensor)
-        ttnn_output = ttnn_output.permute(0, 3, 1, 2)
-        ttnn_output = ttnn_output.to(torch.float)
-        ttnn_output = torch.sigmoid(ttnn_output)  # 0.96
+        ttnn_output = ttnn.sigmoid_accurate(ttnn_output)  # 0.96
 
         return ttnn_output

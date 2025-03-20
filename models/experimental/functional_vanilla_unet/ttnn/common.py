@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import ttnn
 
 
@@ -88,7 +87,7 @@ class Conv:
         return output_tensor
 
 
-class Conv_transpose:
+class ConvTranspose:
     def __init__(
         self,
         conv_params,
@@ -170,7 +169,7 @@ class Conv_transpose:
         return output_tensor
 
 
-class Conv_split:
+class ConvSplit:
     def __init__(
         self,
         conv_params,
