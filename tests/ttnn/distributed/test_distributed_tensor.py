@@ -78,12 +78,15 @@ def test_shard_to_tensor_mesh_equality(mesh_device, dtype):
 
     mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3)
 
-    sharded_tensor = ttnn.to_torch(ttnn.distribute_tensor(to_shard, mapper, mesh_device))
-    orig_sharded_tensor = ttnn.to_torch(orig_sharded_tensor)
+    tensor_shards = ttnn.get_device_tensors(ttnn.distribute_tensor(to_shard, mapper, mesh_device))
+    orig_tensor_shards = ttnn.get_device_tensors(orig_sharded_tensor)
 
-    out_pass, out_pcc = comp_pcc(orig_sharded_tensor, sharded_tensor, pcc=0.99)
-    logger.info(f"PCC value: {out_pcc}")
-    assert out_pass
+    out_pass1, out_pcc = comp_pcc(ttnn.to_torch(orig_tensor_shards[0]), ttnn.to_torch(tensor_shards[0]), pcc=0.99)
+    logger.info(f"Shard 1 PCC value: {out_pcc}")
+    out_pass2, out_pcc = comp_pcc(ttnn.to_torch(orig_tensor_shards[1]), ttnn.to_torch(tensor_shards[1]), pcc=0.99)
+    logger.info(f"Shard 2 PCC value: {out_pcc}")
+
+    assert out_pass1 and out_pass2
 
 
 @pytest.mark.parametrize(
@@ -128,14 +131,15 @@ def test_shard2d_to_tensor_mesh_equality(M, K, N, dtype, mesh_shape, mesh_device
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    mapper = ttnn.shard_tensor_to_2d_mesh_mapper(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
+    tensor_shards = ttnn.get_device_tensors(ttnn.distribute_tensor(to_shard, mapper, mesh_device))
+    orig_tensor_shards = ttnn.get_device_tensors(orig_sharded_tensor)
 
-    sharded_tensor = ttnn.to_torch(ttnn.distribute_tensor(to_shard, mapper, mesh_device))
-    orig_sharded_tensor = ttnn.to_torch(orig_sharded_tensor)
+    out_pass1, out_pcc = comp_pcc(ttnn.to_torch(orig_tensor_shards[0]), ttnn.to_torch(tensor_shards[0]), pcc=0.99)
+    logger.info(f"Shard 1 PCC value: {out_pcc}")
+    out_pass2, out_pcc = comp_pcc(ttnn.to_torch(orig_tensor_shards[1]), ttnn.to_torch(tensor_shards[1]), pcc=0.99)
+    logger.info(f"Shard 2 PCC value: {out_pcc}")
 
-    out_pass, out_pcc = comp_pcc(orig_sharded_tensor, sharded_tensor, pcc=0.99)
-    logger.info(f"PCC value: {out_pcc}")
-    assert out_pass
+    assert out_pass1 and out_pass2
 
 
 @pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.float32])
@@ -286,11 +290,15 @@ def test_shard_to_tensor_mesh(mesh_device, dtype):
 
     mapper = ttnn.shard_tensor_to_mesh_mapper(mesh_device, dim=3)
 
-    out_tensor = ttnn.distribute_tensor(to_shard, mapper, mesh_device)
+    tensor_shards = ttnn.get_device_tensors(ttnn.distribute_tensor(to_shard, mapper, mesh_device))
+    orig_tensor_shards = torch.chunk(torch_tensor, mesh_device.get_num_devices(), dim=3)
 
-    out_pass, out_pcc = comp_pcc(torch_tensor, ttnn.to_torch(out_tensor), pcc=0.99)
-    logger.info(f"PCC value: {out_pcc}")
-    assert out_pass
+    out_pass1, out_pcc = comp_pcc(orig_tensor_shards[0], ttnn.to_torch(tensor_shards[0]), pcc=0.99)
+    logger.info(f"Shard 1 PCC value: {out_pcc}")
+    out_pass2, out_pcc = comp_pcc(orig_tensor_shards[1], ttnn.to_torch(tensor_shards[1]), pcc=0.99)
+    logger.info(f"Shard 2 PCC value: {out_pcc}")
+
+    assert out_pass1 and out_pass2
 
 
 @pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.float32])
