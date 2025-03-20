@@ -13,6 +13,7 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
     dealloc_input,
     determine_blocking,
     reshard_to,
+    weight_to_bfp8,
 )
 
 
@@ -40,20 +41,13 @@ def compare(tensor, name, transpose=False, unpad=False):
     print(f"Maches on {name}: {passed} with message {message}, tensor shape: {tensor.shape}")
 
 
-def ttnn_to_torch(input):
-    input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)
-    input = ttnn.from_device(input)
-    input = ttnn.to_torch(input)
-    return input
-
-
 def pad_heads(tensor, num_heads=8, dim=-1):
     device = tensor.device()
     memory_config = ttnn.get_memory_config(tensor)
 
     padding_needed = not is_tile_dim_alligned(tensor.shape[dim] // num_heads)
     if padding_needed:
-        tensor = ttnn_to_torch(tensor)
+        tensor = ttnn.to_torch(tensor)
         unpadded_len = tensor.shape[-1] // num_heads
         padding_needed = round_up_to_tile_dim(unpadded_len) - unpadded_len
         unpadded_tensors = torch.split(tensor, tensor.shape[dim] // num_heads, dim=dim)
@@ -89,11 +83,11 @@ def concatenate_qkv(q, k, v):
     memory_config = ttnn.get_memory_config(k)
 
     if q is not None:
-        q = ttnn_to_torch(q)
+        q = ttnn.to_torch(q)
         assert is_tile_dim_alligned(q.shape[dim])
 
-    k = ttnn_to_torch(k)
-    v = ttnn_to_torch(v)
+    k = ttnn.to_torch(k)
+    v = ttnn.to_torch(v)
 
     assert is_tile_dim_alligned(k.shape[dim])
     assert is_tile_dim_alligned(v.shape[dim])
@@ -134,15 +128,6 @@ def concatenate_qkv(q, k, v):
     qkv = ttnn.from_torch(qkv, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
     qkv = ttnn.to_device(qkv, device, memory_config=memory_config)
     return qkv
-
-
-def weight_to_bfp8(weight):
-    device = weight.device()
-    memory_config = ttnn.get_memory_config(weight)
-    weight = ttnn_to_torch(weight)
-    weight = ttnn.from_torch(weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)
-    weight = ttnn.to_device(weight, device, memory_config=memory_config)
-    return weight
 
 
 class cross_attention:

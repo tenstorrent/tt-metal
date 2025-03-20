@@ -11,19 +11,13 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
 )
 
 
-def ttnn_to_torch(input):
-    input = ttnn.from_device(input)
-    input = ttnn.to_torch(input)
-    return input
-
-
 def split_linear_params(params):
     dim = -1
     device = params.proj.weight.device()
     memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-    weight = ttnn_to_torch(params.proj.weight)
-    bias = ttnn_to_torch(params.proj.bias)
+    weight = ttnn.to_torch(params.proj.weight)
+    bias = ttnn.to_torch(params.proj.bias)
 
     proj_weight, gate_weight = torch.split(weight, weight.shape[dim] // 2, dim=dim)
     proj_bias, gate_bias = torch.split(bias, bias.shape[dim] // 2, dim=dim)
