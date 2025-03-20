@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal_exp.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
@@ -14,6 +15,7 @@
 namespace ttnn::operations::unary::program {
 
 using namespace tt::constants;
+using namespace tt::tt_metal::experimental;
 
 UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
@@ -52,9 +54,9 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         num_tile_per_core = ntiles_along_width * ntiles_along_height;
     } else {
         TT_FATAL(
-            (shard_spec.shape[1] * datum_size(act_df)) % hal.get_alignment(HalMemType::L1) == 0,
+            (shard_spec.shape[1] * datum_size(act_df)) % hal::get_l1_alignment() == 0,
             "Shard width should be multiple of {} to satisfy L1 alignment",
-            hal.get_alignment(HalMemType::L1));
+            hal::get_l1_alignment());
         size_t shard_height = shard_spec.shape[0];
         size_t shard_width = round_up_to_mul16(
             shard_spec.shape[1]);  // rounding up is done to aligned with  --> tt-metal/tt_metal/detail/util.hpp:31

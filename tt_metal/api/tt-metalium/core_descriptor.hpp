@@ -5,7 +5,6 @@
 #pragma once
 
 #include "core_coord.hpp"
-#include "hal.hpp"
 #include "dispatch_core_common.hpp"
 
 #include <umd/device/types/arch.h>                      // tt::ARCH
