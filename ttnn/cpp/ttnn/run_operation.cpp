@@ -168,9 +168,10 @@ struct OldInfraDeviceOperation {
                     program_with_callbacks.override_runtime_arguments_callback}};
         }
 
-        static void override_runtime_arguments(
+        static void override_runtime_arguments_at(
             cached_program_t& cached_program,
             const operation_attributes_t& operation_attributes,
+            const ttnn::MeshCoordinate&,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
             auto& override_addresses_callback = cached_program.shared_variables.override_addresses_callback;

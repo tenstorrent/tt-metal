@@ -37,7 +37,7 @@ concept ProgramFactoryConcept = requires {
             requires { program_factory_t::create(operation_attributes, tensor_args, tensor_return_value); };
         constexpr bool has_create_at = requires {
             program_factory_t::create_at(
-                operation_attributes, ttnn::MeshCoordinate(0, 0), tensor_args, tensor_return_value);
+                operation_attributes, std::declval<ttnn::MeshCoordinate>(), tensor_args, tensor_return_value);
         };
         static_assert(has_create != has_create_at, "Program factory must implement exactly one of create or create_at");
 
@@ -47,9 +47,13 @@ concept ProgramFactoryConcept = requires {
                 cached_program, operation_attributes, tensor_args, tensor_return_value);
         } else if constexpr (has_create_at) {
             auto cached_program = program_factory_t::create_at(
-                operation_attributes, ttnn::MeshCoordinate(0, 0), tensor_args, tensor_return_value);
-            program_factory_t::override_runtime_arguments(
-                cached_program, operation_attributes, tensor_args, tensor_return_value);
+                operation_attributes, std::declval<ttnn::MeshCoordinate>(), tensor_args, tensor_return_value);
+            program_factory_t::override_runtime_arguments_at(
+                cached_program,
+                operation_attributes,
+                std::declval<ttnn::MeshCoordinate>(),
+                tensor_args,
+                tensor_return_value);
         }
     };
 };
@@ -198,10 +202,14 @@ tt::tt_metal::Program& create_or_get_program_from_cache(
                     return cached_program.program;
                 } else {
                     using cached_program_t = decltype(ProgramFactory::create_at(
-                        operation_attributes, ttnn::MeshCoordinate(0, 0), tensor_args, tensor_return_value));
+                        operation_attributes, std::declval<ttnn::MeshCoordinate>(), tensor_args, tensor_return_value));
                     auto& cached_program = cached_program_factory.cached_program.template get<cached_program_t>();
-                    ProgramFactory::override_runtime_arguments(
-                        cached_program, operation_attributes, tensor_args, tensor_return_value);
+                    ProgramFactory::override_runtime_arguments_at(
+                        cached_program,
+                        operation_attributes,
+                        ttnn::MeshCoordinate(0, 0),
+                        tensor_args,
+                        tensor_return_value);
                     return cached_program.program;
                 }
             },
@@ -241,7 +249,6 @@ inline auto& create_or_get_meshworkload_from_cache(
                         cached_program.program.set_runtime_id(device_operation_id);
                         return cached_program;
                     } else {
-                        TT_ASSERT(coord.has_value(), "Mesh coordinate is required for create_at");
                         auto cached_program =
                             ProgramFactory::create_at(operation_attributes, coord, tensor_args, tensor_return_value);
                         cached_program.program.set_runtime_id(device_operation_id);
@@ -317,8 +324,14 @@ inline auto& create_or_get_meshworkload_from_cache(
                     tt::tt_metal::program_cache::detail::ProgramAdapter<typename ProgramFactory::shared_variables_t>>();
 
                 // Override runtime arguments through the adapter
-                ProgramFactory::override_runtime_arguments(
-                    adapter, operation_attributes, tensor_args, tensor_return_value);
+                // TODO: override runtime args per coordinate
+                if constexpr (requires { &ProgramFactory::override_runtime_arguments_at; }) {
+                    ProgramFactory::override_runtime_arguments_at(
+                        adapter, operation_attributes, ttnn::MeshCoordinate(0, 0), tensor_args, tensor_return_value);
+                } else {
+                    ProgramFactory::override_runtime_arguments(
+                        adapter, operation_attributes, tensor_args, tensor_return_value);
+                }
 
                 // Set runtime ID for all programs
                 for (auto& [_, program] : adapter.get_cached_mesh_workload().workload.get_programs()) {
@@ -594,6 +607,7 @@ void launch_on_mesh_device(
         constexpr bool has_create =
             requires { program_factory.create(operation_attributes, tensor_args, tensor_return_value); };
 
+        bool tracker_hook_enabled = false;
         auto make_program = [&](const ttnn::MeshCoordinate& coord) {
             return std::visit(
                 [&]<typename ProgramFactory>(const ProgramFactory&) {
@@ -608,26 +622,27 @@ void launch_on_mesh_device(
                         program = std::make_shared<tt::tt_metal::Program>(std::move(cached_program.program));
                     }
                     program->set_runtime_id(device_operation_id);
+                    tt::tt_metal::GraphTracker::instance().track_program(program.get(), device);
+                    tracker_hook_enabled = tt::tt_metal::GraphTracker::instance().hook_program(program.get());
                     return program;
                 },
                 program_factory);
         };
 
-        auto program = make_program(ttnn::MeshCoordinate(0, 0));
-        tt::tt_metal::GraphTracker::instance().track_program(program.get(), device);
-        if (tt::tt_metal::GraphTracker::instance().hook_program(program.get())) {
-            return;
-        }
-
         tt::tt_metal::distributed::MeshWorkload mesh_workload;
-
         if (!mesh_device_operation_utils::uses_heterogenous_dispatch<device_operation_t, decltype(program_factory)>() &&
             mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
+            auto program = make_program(ttnn::MeshCoordinate::zero_coordinate(device->shape().dims()));
             mesh_workload.add_program(ttnn::MeshCoordinateRange(device->shape()), std::move(*program));
         } else {
             for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args)) {
-                mesh_workload.add_program(ttnn::MeshCoordinateRange(coord, coord), std::move(*make_program(coord)));
+                auto program = make_program(coord);
+                mesh_workload.add_program(ttnn::MeshCoordinateRange(coord, coord), std::move(*program));
             }
+        }
+
+        if (tracker_hook_enabled) {
+            return;
         }
 
         enqueue_mesh_workload(mesh_workload);

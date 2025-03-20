@@ -84,20 +84,32 @@ void apply_override_runtime_arguments(
     tt::tt_metal::Program& program,
     typename ProgramFactoryT::shared_variables_t& shared_vars,
     const AttributesT& attrs,
+    const ttnn::MeshCoordinate& coord,
     const TensorArgsT& tensor_args,
     ReturnValueT& return_value) {
-    if constexpr (requires {
-                      typename ProgramFactoryT::cached_program_t;
-                      factory.override_runtime_arguments(
-                          std::declval<typename ProgramFactoryT::cached_program_t&>(),
-                          attrs,
-                          tensor_args,
-                          return_value);
-                  }) {
+    if constexpr (
+        requires {
+            typename ProgramFactoryT::cached_program_t;
+            factory.override_runtime_arguments(
+                std::declval<typename ProgramFactoryT::cached_program_t&>(), attrs, tensor_args, return_value);
+        } ||
+        requires {
+            typename ProgramFactoryT::cached_program_t;
+            factory.override_runtime_arguments_at(
+                std::declval<typename ProgramFactoryT::cached_program_t&>(), attrs, coord, tensor_args, return_value);
+        }) {
         typename ProgramFactoryT::cached_program_t cached_program{program, shared_vars};
-        factory.override_runtime_arguments(cached_program, attrs, tensor_args, return_value);
+        if constexpr (requires { &ProgramFactoryT::override_runtime_arguments_at; }) {
+            factory.override_runtime_arguments_at(cached_program, attrs, coord, tensor_args, return_value);
+        } else {
+            factory.override_runtime_arguments(cached_program, attrs, tensor_args, return_value);
+        }
     } else {
-        factory.override_runtime_arguments(program, shared_vars, attrs, tensor_args, return_value);
+        if constexpr (requires { &ProgramFactoryT::override_runtime_arguments_at; }) {
+            factory.override_runtime_arguments_at(program, shared_vars, attrs, coord, tensor_args, return_value);
+        } else {
+            factory.override_runtime_arguments(program, shared_vars, attrs, tensor_args, return_value);
+        }
     }
 }
 
@@ -162,8 +174,10 @@ void override_mesh_runtime_arguments(
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_variables = cached_workload.coordinate_range_to_shared_variables[coordinate_range];
 
-        apply_override_runtime_arguments(
-            program_factory, program, shared_variables, attrs, tensor_args, tensor_return_value);
+        for (const auto& coord : coordinate_range) {
+            apply_override_runtime_arguments(
+                program_factory, program, shared_variables, attrs, coord, tensor_args, tensor_return_value);
+        }
     }
 }
 
