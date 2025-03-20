@@ -10,6 +10,7 @@
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB_matmul_api.h"
+#include "llk_unpack_AB_matmul_tilize_A_api.h"
 #endif
 
 namespace ckernel {
@@ -52,13 +53,13 @@ ALWI void mm_init(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t out_cb_id, co
  *
  * | Argument       | Description                                                             | Type     | Valid Range                                    | Required |
  * |----------------|-------------------------------------------------------------------------|----------|------------------------------------------------|----------|
- * | in0_cb_id      | The identifier of the first input circular buffer (CB)                  | uint32_t | 0 to 31                                        | True     | 
- * | in1_cb_id      | The identifier of the second input circular buffer (CB)                 | uint32_t | 0 to 31                                        | True     | 
+ * | in0_cb_id      | The identifier of the first input circular buffer (CB)                  | uint32_t | 0 to 31                                        | True     |
+ * | in1_cb_id      | The identifier of the second input circular buffer (CB)                 | uint32_t | 0 to 31                                        | True     |
  * | in0_tile_index | The index of the tile A from the first input CB                         | uint32_t | Must be less than the size of the CB           | True     |
- * | in1_tile_index | The index of the tile B from the second input CB                        | uint32_t | Must be less than the size of the CB           | True     | 
+ * | in1_tile_index | The index of the tile B from the second input CB                        | uint32_t | Must be less than the size of the CB           | True     |
  * | dst_tile_index | The index of the tile in DST REG to which the result C will be written. | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
- // clang-format on
+// clang-format on
 ALWI void matmul_tiles(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
@@ -141,11 +142,11 @@ ALWI void mm_init_short_with_dt(
  * | in0_cb_id      | The identifier of the first input circular buffer (CB)        | uint32_t | 0 to 31                                             | False    |
  * | in1_cb_id      | The identifier of the second input circular buffer (CB)       | uint32_t | 0 to 31                                             | False    |
  * | out_cb_id      | The identifier of the output circular buffer (CB)             | uint32_t | 0 to 31                                             | False    |
- * | ct_dim         | The number of columns of the output matrix in tiles           | uint32_t | 1 to 8 in half-sync mode, 1 to 16 in full-sync mode | False    | 
- * | rt_dim         | The number of rows of the output matrix in tiles              | uint32_t | 1 to 8 in half-sync mode, 1 to 16 in full-sync mode | False    | 
+ * | ct_dim         | The number of columns of the output matrix in tiles           | uint32_t | 1 to 8 in half-sync mode, 1 to 16 in full-sync mode | False    |
+ * | rt_dim         | The number of rows of the output matrix in tiles              | uint32_t | 1 to 8 in half-sync mode, 1 to 16 in full-sync mode | False    |
  * | kt_dim         | The inner dim of the input matrices in tiles                  | uint32_t | 1 to 2^32-1                                         | False    |
  */
- // clang-format on
+// clang-format on
 ALWI void mm_block_init(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
@@ -153,11 +154,12 @@ ALWI void mm_block_init(
     const uint32_t transpose = 0,
     uint32_t ct_dim = 1,
     uint32_t rt_dim = 1,
-    uint32_t kt_dim = 1) {
+    uint32_t kt_dim = 1,
+    uint32_t reuse_a = 0) {
     UNPACK((llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
-    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim, reuse_a)));
 
-    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim, reuse_a)));
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure_disaggregated(in0_cb_id, in1_cb_id)));
 
@@ -177,17 +179,17 @@ ALWI void mm_block_init(
  *
  * | Argument       | Description                                                             | Type     | Valid Range                                    | Required |
  * |----------------|-------------------------------------------------------------------------|----------|------------------------------------------------|----------|
- * | in0_cb_id      | The identifier of the first input circular buffer (CB)                  | uint32_t | 0 to 31                                        | True     | 
- * | in1_cb_id      | The identifier of the second input circular buffer (CB)                 | uint32_t | 0 to 31                                        | True     | 
+ * | in0_cb_id      | The identifier of the first input circular buffer (CB)                  | uint32_t | 0 to 31                                        | True     |
+ * | in1_cb_id      | The identifier of the second input circular buffer (CB)                 | uint32_t | 0 to 31                                        | True     |
  * | in0_tile_index | The index of the tile in block A from the first input CB                | uint32_t | Must be less than the size of the CB           | True     |
  * | in1_tile_index | The index of the tile in block B from the second input CB               | uint32_t | Must be less than the size of the CB           | True     |
- * | idst           | The index of the tile in DST REG to which the result C will be written. | uint32_t | Must be less than the acquired size of DST REG | True     | 
+ * | idst           | The index of the tile in DST REG to which the result C will be written. | uint32_t | Must be less than the acquired size of DST REG | True     |
  * | transpose      | The transpose flag for performing transpose operation on tiles in B.    | bool     | Must be true or false                          | True     |
- * | ct_dim         | The coloumn dimension for the output block.                             | uint32_t | Must be equal to block B column dimension      | True     | 
- * | rt_dim         | The row dimension for the output block.                                 | uint32_t | Must be equal to block A row dimension         | True     | 
+ * | ct_dim         | The coloumn dimension for the output block.                             | uint32_t | Must be equal to block B column dimension      | True     |
+ * | rt_dim         | The row dimension for the output block.                                 | uint32_t | Must be equal to block A row dimension         | True     |
  * | kt_dim         | The inner dimension.                                                    | uint32_t | Must be equal to block A column dimension      | True     |
  */
- // clang-format on
+// clang-format on
 ALWI void matmul_block(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
@@ -197,9 +199,11 @@ ALWI void matmul_block(
     const uint32_t transpose,
     uint32_t ct_dim,
     uint32_t rt_dim,
-    uint32_t kt_dim) {
-    UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
-    MATH((llk_math_matmul<MATH_FIDELITY>(idst, transpose, ct_dim, rt_dim, kt_dim)));
+    uint32_t kt_dim,
+    uint32_t reuse_a = 0) {
+    UNPACK(
+        (llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim, reuse_a)));
+    MATH((llk_math_matmul<MATH_FIDELITY>(idst, transpose, ct_dim, rt_dim, kt_dim, reuse_a)));
 }
 
 // clang-format off
@@ -213,12 +217,12 @@ ALWI void matmul_block(
  * |----------------|---------------------------------------------------------------|----------|-----------------------------------------------------|----------|
  * | in0_cb_id      | The identifier of the first input circular buffer (CB)        | uint32_t | 0 to 31                                             | False    |
  * | in1_cb_id      | The identifier of the second input circular buffer (CB)       | uint32_t | 0 to 31                                             | False    |
- * | transpose      | The transpose flag for performing transpose operation on B    | uint32_t | Any positive value will indicate tranpose is set    | False    | 
- * | ct_dim         | The coloumn dimension for the output block.                   | uint32_t | Must be equal to block B column dimension           | False    | 
- * | rt_dim         | The row dimension for the output block.                       | uint32_t | Must be equal to block A row dimension              | False    | 
+ * | transpose      | The transpose flag for performing transpose operation on B    | uint32_t | Any positive value will indicate tranpose is set    | False    |
+ * | ct_dim         | The coloumn dimension for the output block.                   | uint32_t | Must be equal to block B column dimension           | False    |
+ * | rt_dim         | The row dimension for the output block.                       | uint32_t | Must be equal to block A row dimension              | False    |
  * | kt_dim         | The inner dimension.                                          | uint32_t | Must be equal to block A column dimension           | False    |
  */
- // clang-format on
+// clang-format on
 ALWI void mm_block_init_short(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
@@ -243,10 +247,10 @@ ALWI void mm_block_init_short(
  * | in1_cb_id      | The identifier of the second input circular buffer (CB)    | uint32_t | 0 to 31                                   | False    |
  * | old_in1_cb_id  | The identifier of the old in1_cb_id circular buffer (CB)   | uint32_t | 0 to 31                                   | False    |
  * | ct_dim         | The coloumn dimension for the output block.                | uint32_t | Must be equal to block B column dimension | False    |
- * | rt_dim         | The row dimension for the output block.                    | uint32_t | Must be equal to block A row dimension    | False    | 
+ * | rt_dim         | The row dimension for the output block.                    | uint32_t | Must be equal to block A row dimension    | False    |
  * | kt_dim         | The inner dimension.                                       | uint32_t | Must be equal to block A column dimension | False    |
  */
- // clang-format on
+// clang-format on
 ALWI void mm_block_init_short_with_dt(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
@@ -258,6 +262,41 @@ ALWI void mm_block_init_short_with_dt(
     UNPACK((llk_unpack_reconfig_data_format_srca(old_in1_cb_id, in1_cb_id)));
     MATH((llk_math_reconfig_data_format_srca(old_in1_cb_id, in1_cb_id)));
     mm_block_init_short(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
+}
+
+ALWI void mm_block_tilize_A_init(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    uint32_t out_cb_id,
+    uint32_t ct_dim = 1,
+    uint32_t rt_dim = 1,
+    uint32_t kt_dim = 1,
+    uint32_t reuse_a = 0) {
+    UNPACK((llk_unpack_AB_matmul_tilize_A_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
+    UNPACK((llk_unpack_AB_matmul_tilize_A_init(in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim, reuse_a)));
+
+    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, 0, ct_dim, rt_dim, kt_dim, reuse_a)));
+    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
+    MATH((llk_math_hw_configure_disaggregated(in0_cb_id, in1_cb_id)));
+
+    PACK((llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(out_cb_id)));
+    PACK((llk_pack_init<false, false>(out_cb_id)));
+    PACK((llk_pack_dest_init<false, DST_ACCUM_MODE>()));
+}
+
+ALWI void matmul_block_tilize_A(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    uint32_t in0_tile_index,
+    uint32_t in1_tile_index,
+    uint32_t idst,
+    uint32_t ct_dim = 1,
+    uint32_t rt_dim = 1,
+    uint32_t kt_dim = 1,
+    uint32_t reuse_a = 0) {
+    UNPACK((llk_unpack_AB_matmul_tilize_A(
+        in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim, reuse_a)));
+    MATH((llk_math_matmul<MATH_FIDELITY>(idst, 0, ct_dim, rt_dim, kt_dim, reuse_a)));
 }
 
 }  // namespace ckernel

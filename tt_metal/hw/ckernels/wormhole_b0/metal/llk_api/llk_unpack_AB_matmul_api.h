@@ -67,7 +67,8 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t transpose = 0,
     const std::uint32_t ct_dim = 1,
     const std::uint32_t rt_dim = 1,
-    const std::uint32_t kt_dim = 1) {
+    const std::uint32_t kt_dim = 1,
+    const std::uint32_t reuse_a = 0) {
     // In0 -> srcB (supports partial face)
     // In1 -> srcA
     const uint32_t operandA_id = get_operand_id(operandB);
@@ -76,7 +77,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const uint32_t unpA_face_r_dim = get_operand_face_r_dim(operandA_id);
     const uint32_t unpB_face_r_dim = get_operand_face_r_dim(operandB_id);
 
-    const bool reuse_a = ct_dim >= rt_dim;
+    // const bool reuse_a = ct_dim >= rt_dim;
     const bool partial_face_a = get_operand_partial_face(operandA_id);
     const bool partial_face_b = get_operand_partial_face(operandB_id);
 
@@ -94,7 +95,8 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         unpA_num_faces,
         unpB_num_faces,
         partial_face_a,
-        partial_face_b);
+        partial_face_b,
+        reuse_a);
 }
 
 inline void llk_unpack_AB_matmul(
@@ -104,7 +106,8 @@ inline void llk_unpack_AB_matmul(
     const std::uint32_t tile_index_b,
     const std::uint32_t ct_dim = 1,
     const std::uint32_t rt_dim = 1,
-    const std::uint32_t kt_dim = 1) {
+    const std::uint32_t kt_dim = 1,
+    const std::uint32_t reuse_a = 0) {
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
 
@@ -139,6 +142,7 @@ inline void llk_unpack_AB_matmul(
         partial_face_b,
         ct_dim,
         rt_dim,
-        kt_dim);
+        kt_dim,
+        reuse_a);
     WAYPOINT("UPMD");
 }
