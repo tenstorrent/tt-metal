@@ -100,7 +100,7 @@ tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& tensor, int dim) {
 
     auto distributed_tensor = ttnn::distributed::create_multi_device_tensor(
         scattered_tensors, ttnn::StorageType::MULTI_DEVICE, storage.strategy);
-    
+
     return distributed_tensor;
 }
 
