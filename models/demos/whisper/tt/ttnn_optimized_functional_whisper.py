@@ -244,6 +244,7 @@ def encoder_layer(config, hidden_states, *, parameters):
         weight=parameters.self_attn_layer_norm.weight,
         bias=parameters.self_attn_layer_norm.bias,
         memory_config=WHISPER_MEMORY_CONFIG,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
     )
 
     hidden_states = whisper_attention(
@@ -258,6 +259,7 @@ def encoder_layer(config, hidden_states, *, parameters):
         weight=parameters.final_layer_norm.weight,
         bias=parameters.final_layer_norm.bias,
         memory_config=WHISPER_MEMORY_CONFIG,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
     )
     hidden_states = hidden_states @ parameters.fc1.weight + parameters.fc1.bias
     hidden_states = gelu(hidden_states)
@@ -280,6 +282,7 @@ def encoder(config, inputs_embeds, *, parameters):
         hidden_states,
         weight=parameters.layer_norm.weight,
         bias=parameters.layer_norm.bias,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
     )
     return hidden_states
 
@@ -316,6 +319,7 @@ def decoder_layer(
         hidden_states,
         weight=parameters.self_attn_layer_norm.weight,
         bias=parameters.self_attn_layer_norm.bias,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
     )
 
     hidden_states = whisper_attention(
@@ -336,6 +340,7 @@ def decoder_layer(
         hidden_states,
         weight=parameters.encoder_attn_layer_norm.weight,
         bias=parameters.encoder_attn_layer_norm.bias,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
     )
 
     hidden_states = whisper_attention(
@@ -357,6 +362,7 @@ def decoder_layer(
         hidden_states,
         weight=parameters.final_layer_norm.weight,
         bias=parameters.final_layer_norm.bias,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
     )
     hidden_states = hidden_states @ parameters.fc1.weight + parameters.fc1.bias
     hidden_states = gelu(hidden_states)
@@ -416,6 +422,7 @@ def decoder(
         hidden_states,
         weight=parameters.layer_norm.weight,
         bias=parameters.layer_norm.bias,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
     )
 
     return hidden_states

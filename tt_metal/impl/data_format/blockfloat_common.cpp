@@ -16,6 +16,8 @@
 #include "tile.hpp"
 #include <tt_stl/span.hpp>
 
+#include "hal.hpp"
+
 uint8_t get_max_exp(const std::vector<uint32_t>& vec, bool is_exp_a) {
     TT_ASSERT(vec.size() == 16);
     uint32_t max = 0;

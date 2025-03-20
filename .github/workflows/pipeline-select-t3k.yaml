@@ -107,6 +107,9 @@ jobs:
     uses: ./.github/workflows/t3000-profiler-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     if: ${{ inputs.t3000-profiler }}
   t3000-perplexity-tests:
     needs: build-artifact
