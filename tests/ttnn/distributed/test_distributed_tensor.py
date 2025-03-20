@@ -45,11 +45,14 @@ def test_replicate_to_tensor_mesh_equality(mesh_device, dtype):
 
     mapper = ttnn.replicate_tensor_to_mesh_mapper(mesh_device)
     replicated_tensors = ttnn.distribute_tensor(to_repl, mapper, mesh_device)
-    out_tensors = ttnn.to_torch(ttnn.get_device_tensors(replicated_tensors)[0])
+    out_tensors = ttnn.get_device_tensors(replicated_tensors)
 
-    out_pass, out_pcc = comp_pcc(orig_out_tensors, out_tensors, pcc=0.99)
-    logger.info(f"PCC value: {out_pcc}")
-    assert out_pass
+    out_passes = []
+    for i in range(len(out_tensors)):
+        out_passes[i], out_pcc = comp_pcc(torch_tensor, ttnn.to_torch(out_tensors[i]), pcc=0.99)
+        logger.info(f"Shard {i} PCC value: {out_pcc}")
+
+    assert all(out_passes)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.float32])
