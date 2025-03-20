@@ -123,7 +123,6 @@ class TtUnet:
         )
         pool_2_out_h, pool_2_out_w = int(enc2.shape[1] / 2), int(enc2.shape[2] / 2)
         pool_2 = ttnn.reshape(pool_2, (1, pool_2_out_h, pool_2_out_w, enc2.shape[3]))
-        # ttnn.deallocate(enc2)
         enc2 = ttnn.to_memory_config(enc2, ttnn.DRAM_MEMORY_CONFIG)
         if pool_2.is_sharded:
             pool_2 = ttnn.sharded_to_interleaved(pool_2, ttnn.L1_MEMORY_CONFIG)
@@ -250,12 +249,9 @@ class TtUnet:
         dec1 = torch_to_ttnn(dec1, device)  # 0.9979
         dec1 = self.dec1_2(device, dec1)  # 0.9968
 
-        output_tensor = self.conv(device, dec1)  # 0.9770
+        ttnn_output = self.conv(device, dec1)  # 0.9770
         ttnn.deallocate(dec1)
 
-        ttnn_output = ttnn.to_torch(output_tensor)
-        ttnn_output = ttnn_output.permute(0, 3, 1, 2)
-        ttnn_output = ttnn_output.to(torch.float)
-        ttnn_output = torch.sigmoid(ttnn_output)  # 0.96
+        ttnn_output = ttnn.sigmoid_accurate(ttnn_output)  # 0.96
 
         return ttnn_output
