@@ -18,13 +18,6 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
 from loguru import logger
 
 
-def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
-    input = ttnn.from_torch(input, ttnn.bfloat16)
-    input = ttnn.to_layout(input, layout)
-    input = ttnn.to_device(input, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    return input
-
-
 class cross_attention_upblock2d:
     def __init__(
         self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config

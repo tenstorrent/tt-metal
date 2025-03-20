@@ -11,10 +11,8 @@
 
 #include "launch_message_ring_buffer_state.hpp"
 #include "memcpy.hpp"
-#include "hal.hpp"
 #include "dispatch_settings.hpp"
 #include "buffer.hpp"
-#include "rtoptions.hpp"
 #include "umd/device/tt_core_coordinates.h"
 
 #include "command_queue_common.hpp"

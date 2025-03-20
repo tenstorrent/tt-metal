@@ -16,8 +16,6 @@ static constexpr size_t DESTINATION_HOP_COUNT = 1;
 // TODO: make 0 and the associated field to num mcast destinations
 static constexpr size_t LAST_MCAST_DESTINATION = 1;
 
-static constexpr uint8_t edm_to_local_chip_noc = 0;
-
 FORCE_INLINE void print_pkt_hdr_routing_fields(volatile tt::tt_fabric::PacketHeader* const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     switch (packet_start->chip_send_type) {
@@ -99,7 +97,11 @@ FORCE_INLINE void execute_chip_unicast_to_local_chip(
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
             const auto dest_address = header.command_fields.unicast_write.noc_address;
             noc_async_write_one_packet_with_trid(
-                payload_start_address, dest_address, payload_size_bytes, transaction_id, edm_to_local_chip_noc);
+                payload_start_address,
+                dest_address,
+                payload_size_bytes,
+                transaction_id,
+                tt::tt_fabric::edm_to_local_chip_noc);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE: {
@@ -119,14 +121,14 @@ FORCE_INLINE void execute_chip_unicast_to_local_chip(
         case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
             const uint64_t dest_address = header.command_fields.unicast_seminc.noc_address;
             const auto increment = header.command_fields.unicast_seminc.val;
-            noc_semaphore_inc(dest_address, increment, edm_to_local_chip_noc);
+            noc_semaphore_inc(dest_address, increment, tt::tt_fabric::edm_to_local_chip_noc);
 
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_INLINE_WRITE: {
             const auto dest_address = header.command_fields.unicast_inline_write.noc_address;
             const auto value = header.command_fields.unicast_inline_write.value;
-            noc_inline_dw_write(dest_address, value, 0xF, edm_to_local_chip_noc);
+            noc_inline_dw_write(dest_address, value, 0xF, tt::tt_fabric::edm_to_local_chip_noc);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC:
