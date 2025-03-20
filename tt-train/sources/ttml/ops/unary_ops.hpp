@@ -16,4 +16,10 @@ autograd::TensorPtr sum(const autograd::TensorPtr& tensor);
 autograd::TensorPtr broadcast_batch(const autograd::TensorPtr& tensor, uint32_t new_batch_dim);
 autograd::TensorPtr log_softmax(const autograd::TensorPtr& tensor, int dim);
 autograd::TensorPtr log_softmax_moreh(const autograd::TensorPtr& tensor, int dim);
+autograd::TensorPtr dytanh(
+    const autograd::TensorPtr& tensor,
+    const autograd::TensorPtr& scale,
+    const autograd::TensorPtr& gain,
+    const autograd::TensorPtr& bias);
+
 }  // namespace ttml::ops
