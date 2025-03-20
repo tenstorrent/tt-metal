@@ -268,7 +268,7 @@ def run_test_create_min_width_shard(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
-            sub_core_grids,
+            device_core_grid,
             [
                 32,
                 head_dim,
@@ -372,12 +372,6 @@ def test_create_min_width_shard(
     assert device.num_program_cache_entries() == expected_entries
 
 
-@pytest.fixture()
-def set_dispatch_col(device_params):
-    device_params["dispatch_core_axis"] = ttnn.DispatchCoreAxis.COL
-    return device_params
-
-
 @skip_for_blackhole("Requires eth connected devices to run, see #12349")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("batch", (32,))
@@ -421,14 +415,8 @@ def test_create_heads_with_slice(
     assert device.num_program_cache_entries() == expected_entries
 
 
-@pytest.fixture()
-def set_dispatch_col(device_params):
-    device_params["dispatch_core_axis"] = ttnn.DispatchCoreAxis.COL
-    return device_params
-
-
 @skip_for_blackhole("Requires eth connected devices to run, see #12349")
-@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 @pytest.mark.parametrize("batch", (1, 8, 16))
 @pytest.mark.parametrize(
     "n_local_heads, n_local_kv_heads, head_dim",
@@ -447,7 +435,6 @@ def set_dispatch_col(device_params):
     ),
 )
 def test_create_min_width_shard_subcoregrid(
-    set_dispatch_col,
     device,
     batch,
     n_local_heads,
