@@ -362,17 +362,63 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         program, output_tensor_cores, out_cb_config);  // TODO: This should be the output cores instead
 
     // Create reduction dataflow kernel
-    auto reduction_reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
-    reduction_reader_kernel_config.compile_args = {
+    std::vector<uint32_t> reader_compile_time_args = {
         reduction_cb_index,  // reduction_cb_index
         reduction_CB_tiles,  // total_num_reduction_tiles
-    };
+        // qkv heads reader compile time args
+        (std::uint32_t)element_size,
+        (std::uint32_t)sub_tile_line_bytes,
+        q_output_cb_index,
+        k_output_cb_index,
+        v_output_cb_index,
+        head_size,
+        num_q_heads,
+        num_kv_heads,
+        head_tiles,
+        1,  // read the first phase
+        in_num_cores,
+        process_qv,  // read and write q and v heads
+        process_k,   // read and write k heads
+        1,           // use_batch_offset
+        0,
+        batch_offset_index_stick_size,
+        batch_offset_cb_index_reader};
+
+    std::vector<uint32_t> writer_compile_time_args = {// qkv heads reader compile time args
+                                                      (std::uint32_t)element_size,
+                                                      (std::uint32_t)sub_tile_line_bytes,
+                                                      q_output_cb_index,
+                                                      k_output_cb_index,
+                                                      v_output_cb_index,
+                                                      head_size,
+                                                      num_q_heads,
+                                                      num_kv_heads,
+                                                      head_tiles,
+                                                      2,  // read the first phase
+                                                      in_num_cores,
+                                                      process_qv,  // read and write q and v heads
+                                                      process_k,   // read and write k heads
+                                                      1,           // use_batch_offset
+                                                      0,
+                                                      batch_offset_index_stick_size,
+                                                      batch_offset_cb_index_reader};
+
+    auto reduction_reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args);
+    auto reduction_writer_kernel_config = tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args);
+
     auto reduction_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/device/kernels/dataflow/"
         "reduction_receiver.cpp",
         output_tensor_cores,
         reduction_reader_kernel_config);
+
+    auto reduction_writer_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/device/kernels/dataflow/"
+        "reader_tm_tile_layout_nlp_create_qkv_heads_decode_on_subcoregrids.cpp",
+        output_tensor_cores,
+        reduction_writer_kernel_config);
 
     // Create reduction dataflow kernel
     auto reduction_kernel_config = tt::tt_metal::ComputeConfig{};
@@ -382,7 +428,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     };
     auto reduction_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/compute/"
+        "ttnn/cpp/ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/device/kernels/compute/"
         "reduction.cpp",
         output_tensor_cores,
         reduction_kernel_config);
