@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,17 +14,8 @@ from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_global_semaphore_with_same_address,
 )
 
-from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.rms_test import run_rms_trace
 
-from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.concat_fuse_test import (
-    run_concat_fuse_impl,
-    run_gather_concat_impl,
-)
-
-from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-
-
-def run_allgather_only_with_trace(
+def run_with_trace(
     mesh_device,
     all_gather_topology,
     input_tensor_mesh,
@@ -76,7 +67,7 @@ def run_allgather_only_with_trace(
     return tt_out_tensor
 
 
-def run_all_gather_impl(
+def run_reduce_scatter_impl(
     mesh_device,
     num_devices,
     output_shape,
@@ -194,7 +185,7 @@ def run_all_gather_impl(
 
     tt_out_tensor_list = []
     if trace_mode:
-        tt_out_tensor = run_allgather_only_with_trace(
+        tt_out_tensor = run_with_trace(
             mesh_device,
             all_gather_topology,
             input_tensor_mesh_list[0],
@@ -253,258 +244,3 @@ def run_all_gather_impl(
 
     if not passed:
         assert eq, f"{i} FAILED: {output}"
-
-
-# Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.parametrize(
-    "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
-    [
-        # All Reduce test
-        (
-            8,
-            [1, 1, 32, 10240],
-            3,
-            ttnn.TILE_LAYOUT,
-            (32, 64),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 3))}),
-            None,
-            None,
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ),
-        # Before Concat Heads
-        (
-            4,
-            [1, 32, 32, 128],
-            1,
-            ttnn.TILE_LAYOUT,
-            (32, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
-            (32, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))}),
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ),
-        # Reduce Scatter
-        (
-            8,
-            [1, 1, 32, 30720],
-            3,
-            ttnn.TILE_LAYOUT,
-            (32, 160),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 7))}),
-            None,
-            None,
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ),
-        # RMS NORM ALL GATHER FUSION
-        (
-            4,
-            [1, 1, 32, 128],
-            3,
-            ttnn.TILE_LAYOUT,
-            (32, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-            None,
-            None,
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ),
-    ],
-)
-@pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize(
-    "input_dtype",
-    [
-        ttnn.bfloat16,
-        ttnn.bfloat8_b,
-    ],
-)
-@pytest.mark.parametrize("num_iters", [8])
-@pytest.mark.parametrize("enable_async", [True])
-def test_all_gather_only(
-    t3k_mesh_device,
-    num_devices,
-    output_shape,
-    dim,
-    num_links,
-    input_dtype,
-    layout,
-    num_iters,
-    use_program_cache,
-    function_level_defaults,
-    enable_async,
-    input_shard_shape,
-    input_shard_grid,
-    output_shard_shape,
-    output_shard_grid,
-    tensor_mem_layout,
-):
-    run_all_gather_impl(
-        t3k_mesh_device,
-        num_devices,
-        output_shape,
-        dim,
-        num_links,
-        input_dtype,
-        layout,
-        use_program_cache,
-        function_level_defaults,
-        input_shard_shape,
-        input_shard_grid,
-        all_gather_topology=ttnn.Topology.Linear,
-        num_iters=num_iters,
-        enable_async=enable_async,
-        output_shard_shape=output_shard_shape,
-        output_shard_grid=output_shard_grid,
-        tensor_mem_layout=tensor_mem_layout,
-    )
-
-
-# Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.parametrize(
-    "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
-    [
-        # RMS NORM ALL GATHER FUSION
-        (
-            4,
-            8192,
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
-            None,
-        ),
-    ],
-)
-@pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("use_new_version", [True])
-@pytest.mark.parametrize("num_iters, warmup_iters", [[100, 10]])
-@pytest.mark.parametrize("enable_async", [True])
-@pytest.mark.parametrize("trace_mode", [True])
-@pytest.mark.parametrize(
-    "device_params",
-    [{"trace_region_size": 23887872}],
-    indirect=True,
-)
-@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
-def test_tg_trace_rms_fuse(
-    mesh_device,
-    num_devices,
-    elements_per_batch,
-    num_links,
-    num_iters,
-    warmup_iters,
-    use_program_cache,
-    function_level_defaults,
-    enable_async,
-    input_shard_grid,
-    output_shard_grid,
-    trace_mode,
-    use_new_version,
-):
-    profiler = BenchmarkProfiler()
-    run_rms_trace(
-        mesh_device,
-        num_devices,
-        elements_per_batch,
-        num_links,
-        use_program_cache,
-        function_level_defaults,
-        input_shard_grid,
-        output_shard_grid,
-        ttnn.Topology.Linear,
-        num_iters=num_iters,
-        enable_async=enable_async,
-        warmup_iters=warmup_iters,
-        profiler=profiler,
-        use_new_version=use_new_version,
-    )
-
-@skip_for_grayskull("Requires eth connected devices to run")
-@pytest.mark.parametrize(
-    "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
-    [
-        # Before Concat Heads
-        (
-            4,
-            [1, 32, 32, 128],
-            1,
-            ttnn.TILE_LAYOUT,
-            (32, 128),
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
-                }
-            ),
-            (32, 128),
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
-                }
-            ),
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ),
-    ],
-    ids=[
-        "concat_heads",
-    ],
-)
-@pytest.mark.parametrize("num_links", [3])
-@pytest.mark.parametrize(
-    "input_dtype",
-    [
-        ttnn.bfloat16,
-        # ttnn.bfloat8_b,
-    ],
-)
-@pytest.mark.parametrize("num_iters, warmup_iters", [[30, 5]])
-@pytest.mark.parametrize("enable_async", [True])
-@pytest.mark.parametrize("trace_mode", [True])
-@pytest.mark.parametrize(
-    "device_params",
-    [{"trace_region_size": 23887872}],
-    indirect=True,
-)
-@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
-def test_concat_fuse(
-    mesh_device,
-    num_devices,
-    output_shape,
-    dim,
-    num_links,
-    input_dtype,
-    layout,
-    num_iters,
-    warmup_iters,
-    use_program_cache,
-    function_level_defaults,
-    enable_async,
-    input_shard_shape,
-    input_shard_grid,
-    output_shard_shape,
-    output_shard_grid,
-    tensor_mem_layout,
-    trace_mode,
-):
-    profiler = BenchmarkProfiler()
-    run_concat_fuse_impl(
-        mesh_device,
-        num_devices,
-        output_shape,
-        dim,
-        num_links,
-        input_dtype,
-        layout,
-        use_program_cache,
-        function_level_defaults,
-        input_shard_shape,
-        input_shard_grid,
-        all_gather_topology=ttnn.Topology.Linear,
-        warmup_iters=warmup_iters,
-        num_iters=num_iters,
-        enable_async=enable_async,
-        output_shard_shape=output_shard_shape,
-        output_shard_grid=output_shard_grid,
-        tensor_mem_layout=tensor_mem_layout,
-        trace_mode=trace_mode,
-        profiler=profiler,
-    )
