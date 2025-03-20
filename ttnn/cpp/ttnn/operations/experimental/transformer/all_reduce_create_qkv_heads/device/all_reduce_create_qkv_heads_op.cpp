@@ -314,18 +314,21 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceCreateQkvHeads::create_pr
 
     tt::log_debug(tt::LogOp, "Running TG Llama specific all_reduce_create_qkv_heads_minimal_multi_core_with_workers");
     return all_reduce_create_qkv_heads_minimal_multi_core_with_workers(
-        input_tensors[0],
-        input_tensors[1],
+        input_tensors,
         this->forward_device,
         this->backward_device,
-        output_tensors[0],
+        output_tensors,
         this->num_links,
         this->ring_size,
         this->ring_index,
         this->topology,
         this->semaphore,
         this->sub_device_id,
-        this->enable_persistent_fabric_mode);
+        this->enable_persistent_fabric_mode,
+        this->num_heads,
+        this->num_kv_heads,
+        this->head_dim,
+        this->slice_size);
 }
 
 const tt::tt_metal::operation::Hash AllReduceCreateQkvHeads::compute_program_hash(
