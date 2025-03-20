@@ -347,7 +347,16 @@ ttnn.attach_golden_function(ttnn.remainder, golden_function=_golden_function_rem
 def _golden_function_fmod(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
-    return torch.fmod(input_tensor_a, input_tensor_b)
+    input_dtype = input_tensor_a.dtype
+    if not torch.is_tensor(input_tensor_b):
+        if input_dtype == torch.bfloat16:
+            input_tensor_a = input_tensor_a.float()
+
+    result = torch.fmod(input_tensor_a, input_tensor_b)
+
+    if input_dtype == torch.bfloat16:
+        result = result.bfloat16()
+    return result
 
 
 ttnn.attach_golden_function(ttnn.fmod, golden_function=_golden_function_fmod)
