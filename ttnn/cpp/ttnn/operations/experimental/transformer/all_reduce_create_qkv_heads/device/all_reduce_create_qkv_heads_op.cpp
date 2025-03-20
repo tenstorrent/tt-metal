@@ -224,7 +224,7 @@ std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
     auto output_tensor_layout =
         input_tensor.get_tensor_spec().tensor_layout().with_memory_config(this->all_reduce_mem_config);
     auto all_reduce_tensor_spec{TensorSpec(input_shape, output_tensor_layout)};
-    return {all_reduce_tensor_spec, all_reduce_tensor_spec, all_reduce_tensor_spec, all_reduce_tensor_spec};
+    // return {all_reduce_tensor_spec, all_reduce_tensor_spec, all_reduce_tensor_spec, all_reduce_tensor_spec};
     // copied from qkv create heads compute_output_specs
     using namespace tt::constants;
     // const auto& input_tensor = input_tensors.at(0);
@@ -434,7 +434,7 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
         },
         {input_tensor, buffer_tensor, batch_offset_tensor},
         output_tensors);
-    return std::make_tuple(output_tensors.at(0), output_tensors.at(0), output_tensors.at(0), output_tensors.at(0));
+    return std::make_tuple(output_tensors.at(0), output_tensors.at(1), output_tensors.at(2), output_tensors.at(3));
 }
 
 }  // namespace ccl
