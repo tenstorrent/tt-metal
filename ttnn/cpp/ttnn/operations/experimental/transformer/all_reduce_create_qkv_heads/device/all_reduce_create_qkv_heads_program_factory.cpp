@@ -67,11 +67,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     IDevice* device = input_tensor.device();
 
     // For qkv heads fuse
-    //  Create CBs for reader/writer for batch_offset
-    uint32_t batch_offset_cb_index_reader = tt::CBIndex::c_15;
-    uint32_t batch_offset_cb_index_writer = tt::CBIndex::c_14;
-    tt::tt_metal::CBHandle cb_batch_offset_reader = 0;
-    tt::tt_metal::CBHandle cb_batch_offset_writer = 0;
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
@@ -87,6 +82,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     const auto k_shard_spec = k_output_tensor.shard_spec().value();
     const auto k_cores = k_shard_spec.grid;
     const auto k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / TILE_HW;
+    const auto v_shard_spec = v_output_tensor.shard_spec().value();
+    const auto v_cores = q_shard_spec.grid;
+    const auto v_num_tiles = v_shard_spec.shape[0] * v_shard_spec.shape[1] / TILE_HW;
     const auto in_shard_spec = output_tensor.shard_spec().value();
     const auto in_cores = in_shard_spec.grid;
     const auto in_num_tiles = in_shard_spec.shape[0] * in_shard_spec.shape[1] / TILE_HW;
@@ -97,6 +95,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     qk_cores_set.insert(q_cores.ranges().begin(), q_cores.ranges().end());
     qk_cores_set.insert(k_cores.ranges().begin(), k_cores.ranges().end());
     auto qk_cores = CoreRangeSet(qk_cores_set);
+
+    //  Create CBs for reader/writer for batch_offset
+    uint32_t batch_offset_cb_index_reader = tt::CBIndex::c_15;
+    uint32_t batch_offset_cb_index_writer = tt::CBIndex::c_14;
+    tt::tt_metal::CBHandle cb_batch_offset_reader = 0;
+    tt::tt_metal::CBHandle cb_batch_offset_writer = 0;
 
     tt::DataFormat cb_batch_offset_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(batch_offset_tensor.get_dtype());
@@ -114,6 +118,27 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
             single_batch_offset_tile_size, {{batch_offset_cb_index_writer, cb_batch_offset_data_format}})
             .set_page_size(batch_offset_cb_index_writer, 1);
     cb_batch_offset_writer = tt::tt_metal::CreateCircularBuffer(program, qk_cores, cb_batch_offset_config_writer);
+
+    uint32_t q_output_cb_index = tt::CBIndex::c_16;
+    tt::tt_metal::CircularBufferConfig cb_q_output_config =
+        tt::tt_metal::CircularBufferConfig(q_num_tiles * single_tile_size, {{q_output_cb_index, cb_data_format}})
+            .set_page_size(q_output_cb_index, single_tile_size)
+            .set_globally_allocated_address(*q_output_tensor.buffer());
+    auto cb_q_output = tt::tt_metal::CreateCircularBuffer(program, q_cores, cb_q_output_config);
+
+    uint32_t k_output_cb_index = tt::CBIndex::c_17;
+    tt::tt_metal::CircularBufferConfig cb_k_output_config =
+        tt::tt_metal::CircularBufferConfig(k_num_tiles * single_tile_size, {{k_output_cb_index, cb_data_format}})
+            .set_page_size(k_output_cb_index, single_tile_size)
+            .set_globally_allocated_address(*k_output_tensor.buffer());
+    auto cb_k_output = tt::tt_metal::CreateCircularBuffer(program, k_cores, cb_k_output_config);
+
+    uint32_t v_output_cb_index = tt::CBIndex::c_18;
+    tt::tt_metal::CircularBufferConfig cb_v_output_config =
+        tt::tt_metal::CircularBufferConfig(v_num_tiles * single_tile_size, {{v_output_cb_index, cb_data_format}})
+            .set_page_size(v_output_cb_index, single_tile_size)
+            .set_globally_allocated_address(*v_output_tensor.buffer());
+    auto cb_v_output = tt::tt_metal::CreateCircularBuffer(program, v_cores, cb_v_output_config);
 
     // End of qkv heads fuse
 
