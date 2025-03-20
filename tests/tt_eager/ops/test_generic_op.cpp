@@ -26,6 +26,7 @@
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/functions.hpp"
+#include "ttnn/operations/creation.hpp"
 #include "ttnn/tensor/types.hpp"
 
 using tt::tt_metal::DataType;
@@ -1524,23 +1525,23 @@ void test_eltwise_sfpu() {
     constexpr int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
 
-    uint32_t num_tiles = 1;
+    uint32_t num_tiles = 4;
     uint32_t src_bank_id = 0;
     uint32_t dst_bank_id = 0;
 
-    auto shape = ttnn::Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
+    auto shape = ttnn::Shape{1, num_tiles, TILE_HEIGHT, TILE_WIDTH};
     Tensor input_tensor = ttnn::random::random(shape, DataType::BFLOAT16);
-    tt::log_info(tt::LogTest, "input_tensor storage type: {}", input_tensor.storage_type());
-    Tensor device_input_tensor = input_tensor.to_layout(Layout::TILE).to_device(device);
-    tt::log_info(tt::LogTest, "device_input_tensor storage type: {}", device_input_tensor.storage_type());
+    ttnn::MemoryConfig dram_memory_config = ttnn::MemoryConfig{
+        .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = tt::tt_metal::BufferType::DRAM};
+    
+    Tensor device_input_tensor = input_tensor.to_layout(Layout::TILE).to_device(device, dram_memory_config);
     Tensor device_output_tensor = tt::tt_metal::create_device_tensor(
         ttnn::TensorSpec(
-            input_tensor.get_logical_shape(),
+            device_input_tensor.get_logical_shape(),
             ttnn::TensorLayout(
-                input_tensor.get_dtype(), ttnn::PageConfig(input_tensor.get_layout()), input_tensor.memory_config())),
+                device_input_tensor.get_dtype(), ttnn::PageConfig(device_input_tensor.get_layout()), device_input_tensor.memory_config())),
         device_input_tensor.device()
     );
-    
 
     auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor.get_dtype());
     bool is_dram_input = device_input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
@@ -1565,20 +1566,21 @@ void test_eltwise_sfpu() {
 
     const std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)is_dram_input};
     const std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)tt::CBIndex::c_16, (std::uint32_t)is_dram_input};
-    const std::vector<uint32_t> read_rt_args = {device_input_tensor.buffer()->address(), src_bank_id, num_tiles};
-    const std::vector<uint32_t> write_rt_args = {device_output_tensor.buffer()->address(), dst_bank_id, num_tiles};
+    const std::vector<uint32_t> read_rt_args = {device_input_tensor.buffer()->address(), num_tiles, 0};
+    const std::vector<uint32_t> write_rt_args = {device_output_tensor.buffer()->address(), num_tiles, 0};
+
     ttnn::operations::generic::data_movement_attributes_t reader_attributes = {
         .core_spec = device_cores,
-        .kernel_path = "tt_metal/kernels/dataflow/reader_unary.cpp",
+        .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         .config = tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args),
         .runtime_args_per_core = {{core, read_rt_args}},
     };
 
     ttnn::operations::generic::data_movement_attributes_t writer_attributes = {
         .core_spec = device_cores,
-        .kernel_path = "tt_metal/kernels/dataflow/writer_unary.cpp",
+        .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         .config = tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args),
-        .runtime_args_per_core = {{core, read_rt_args}},
+        .runtime_args_per_core = {{core, write_rt_args}},
     };
 
     ttnn::operations::generic::compute_attributes_t compute_attributes = {
@@ -1601,13 +1603,9 @@ void test_eltwise_sfpu() {
     };
 
     Tensor device_output = ttnn::generic_op(std::vector<Tensor>{device_input_tensor}, program_attributes);
-    // Tensor golden = host_function<::detail::exp>(input_tensor);
-    Tensor golden = ttnn::exp(device_input_tensor).cpu();
+    Tensor golden = ttnn::exp(device_input_tensor);
 
-    log_info(tt::LogTest, "device_output: {}", device_output.cpu());
-    log_info(tt::LogTest, "golden: {}", golden);
-
-    auto allclose = ttnn::allclose<bfloat16>(golden, device_output.cpu(), 1e-1f, 1e-5f);
+    auto allclose = ttnn::allclose<bfloat16>(golden.cpu(), device_output_tensor.cpu(), 1e-1f, 1e-5f);
 
     TT_FATAL(allclose, "Error");
 
