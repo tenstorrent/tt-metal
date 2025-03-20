@@ -174,6 +174,11 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     TT_FATAL(cross_device_semaphore.has_value(), "Cross device semaphore is not present");
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer = output_tensor.buffer();
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+
+    uint32_t input_page_size = tile_size(
+        cb_data_format);  // doesn't work for tiny tiles, there is likely some API somewhere but I don't know where
+    uint32_t output_page_size = tile_size(cb_data_format);
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
@@ -192,24 +197,12 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     auto input_grid = shard_spec.grid;
     auto output_grid = output_shard_spec.grid;
 
-    auto full_shard_grid = input_grid.merge(output_grid);
-
-    // if (operation_attributes.ring_index == 3) {
-    //     std::cout << "input_grid: " << input_grid.str() << std::endl;
-    // }
-    // if (operation_attributes.ring_index == 3) {
-    //     std::cout << "output_grid: " << output_grid.str() << std::endl;
-    // }
-    auto receiver_grid = detail::next_core_range_set(
-        output_grid.bounding_box(),
-        device->compute_with_storage_grid_size(),
-        num_devices,
-        shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-    // if (operation_attributes.ring_index == 3) {
-    //     std::cout << "receiver_grid: " << receiver_grid.str() << std::endl;
-    // }
-
-    TT_FATAL(output_grid.intersects(receiver_grid) == false, "output_grid and receiver_grid must not intersect");
+    if (operation_attributes.ring_index == 3) {
+        std::cout << "input_grid: " << input_grid.str() << std::endl;
+    }
+    if (operation_attributes.ring_index == 3) {
+        std::cout << "output_grid: " << output_grid.str() << std::endl;
+    }
 
     tt::tt_metal::Program program{};
 
@@ -222,27 +215,44 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             enable_persistent_fabric,
             num_links);
 
-    // One sender per link - rn hardcoded to 6,6 for testing
+    const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
+    uint32_t num_pages_per_packet = packet_size_bytes / input_page_size;
+    TT_FATAL(
+        num_pages_per_packet <= tiles_per_core_width,
+        "num_pages_per_packet {} is less than tiles_per_core_width {}",
+        num_pages_per_packet,
+        tiles_per_core_width);
+
+    uint32_t ncores_input = shard_spec.num_cores();
+    TT_FATAL(ncores_input % num_devices == 0, "ncores_input must be divisible by num_devices");
+    uint32_t input_shard_cores_per_device = ncores_input / num_devices;
+    uint32_t output_cores_per_device = output_grid.num_cores();
     uint32_t num_workers_per_link = 1;
-    // const auto [sender_core_grid, sender_worker_cores] = choose_worker_cores(
-    //     num_links, num_workers_per_link, enable_persistent_fabric, device, operation_attributes.subdevice_id);
-    auto full_shard_grid_with_receiver_grid = full_shard_grid.merge(receiver_grid);
-    // auto sender_core = sender_worker_cores.at(0);
+    uint32_t num_packets_total_per_device =
+        (input_shard_cores_per_device * tiles_per_core_width + num_pages_per_packet - 1) / num_pages_per_packet;
+    auto
+        [num_packet_workers,
+         packet_worker_cores_grid,
+         packet_worker_cores_group_1,
+         packet_worker_cores_group_2,
+         num_packets_per_core_group_1,
+         num_packets_per_core_group_2] =
+            tt::tt_metal::split_work_to_cores(device->compute_with_storage_grid_size(), num_packets_total_per_device);
+
     auto sender_core_grid = detail::next_core_range_set(
-        full_shard_grid_with_receiver_grid,
+        packet_worker_cores_grid,
         device->compute_with_storage_grid_size(),
         num_workers_per_link * num_links,
         shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-    // if (operation_attributes.ring_index == 3) {
-    //     std::cout << "sender_core_grid: " << sender_core_grid.str() << std::endl;
-    // }
-    auto sender_core = sender_core_grid.bounding_box().start_coord;
-    auto sender_worker_cores = corerange_to_cores(sender_core_grid, std::nullopt);
 
-    auto all_cores_grid = full_shard_grid_with_receiver_grid.merge(sender_core);
-    // if (operation_attributes.ring_index == 3) {
-    //     std::cout << "all_cores_grid: " << all_cores_grid.str() << std::endl;
-    // }
+    if (operation_attributes.ring_index == 3) {
+        if (chip_id == 4) {
+            std::cout << "packet_worker_cores_grid: " << packet_worker_cores_grid.str() << std::endl;
+            std::cout << "sender_core_grid: " << sender_core_grid.str() << std::endl;
+        }
+    }
+
+    auto all_cores_grid = packet_worker_cores_grid.merge(sender_core_grid);
 
     // input sharded buffer
     uint32_t input_tensor_cb_id = tt::CBIndex::c_0;
@@ -257,23 +267,13 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     // accumulator before we perform the reduction
     uint32_t accumulator_cb_index = tt::CBIndex::c_5;
 
-    uint32_t ncores_input = shard_spec.num_cores();
-    TT_FATAL(ncores_input % num_devices == 0, "ncores_input must be divisible by num_devices");
-    uint32_t input_shard_cores_per_device = ncores_input / num_devices;
-    uint32_t ncores_output = output_grid.num_cores();
     // if (operation_attributes.ring_index == 3) {
     //     std::cout << "ncores_input: " << ncores_input
     //               << " input_shard_cores_per_device: " << input_shard_cores_per_device
-    //               << " ncores_output: " << ncores_output << std::endl;
+    //               << " output_cores_per_device: " << output_cores_per_device << std::endl;
     // }
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
-
-    uint32_t input_page_size = tile_size(
-        cb_data_format);  // doesn't work for tiny tiles, there is likely some API somewhere but I don't know where
-    uint32_t output_page_size = tile_size(cb_data_format);
-
-    tt::tt_metal::CircularBufferConfig cb_src_config =
+    tt::tt_metal::CircularBufferConfig cb_input_tensor_config =
         tt::tt_metal::CircularBufferConfig(
             tiles_per_core_width * input_page_size, {{input_tensor_cb_id, cb_data_format}})
             .set_page_size(input_tensor_cb_id, input_page_size)
@@ -285,7 +285,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     // }
 
     // CB to represent the output sharded buffer
-    tt::tt_metal::CircularBufferConfig cb_dst_config =
+    tt::tt_metal::CircularBufferConfig cb_output_tensor_config =
         tt::tt_metal::CircularBufferConfig(
             tiles_per_core_width_output * input_page_size, {{output_tensor_cb_id, cb_data_format}})
             .set_page_size(output_tensor_cb_id, input_page_size)
@@ -316,13 +316,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     // max packet size is 4 tiles wide, so we only send 4/5 of the tiles at once
     // ideally we send 5/5 of the tiles at once, but we need to make sure we don't overflow the fabric buffer
     // so we send 0-3 of the first shard, then 4 of the first shard + 0-2 of the second shard, etc.
-    const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
-    uint32_t num_pages_per_packet = packet_size_bytes / input_page_size;
-    TT_FATAL(
-        num_pages_per_packet <= tiles_per_core_width,
-        "num_pages_per_packet {} is less than tiles_per_core_width {}",
-        num_pages_per_packet,
-        tiles_per_core_width);
     // if (operation_attributes.ring_index == 3) {
     //     std::cout << "num_pages_per_packet: " << num_pages_per_packet << std::endl;
     // }
@@ -350,7 +343,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     // receiver core for the local device will do nothing.
     tt::tt_metal::CircularBufferConfig fabric_receiver_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            buffering_factor * input_shard_cores_per_device * tiles_per_core_width * input_page_size,
+            buffering_factor * num_pages_per_packet * num_devices * input_page_size,
             {{fabric_receiver_cb_index, cb_data_format}})
             .set_page_size(fabric_receiver_cb_index, input_page_size);
 
@@ -362,7 +355,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
 
     tt::tt_metal::CircularBufferConfig accumulator_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            buffering_factor * tiles_per_core_width_output * input_page_size * num_devices,
+            buffering_factor * num_pages_per_packet * tiles_per_core_width_output * input_page_size * num_devices,
             {{accumulator_cb_index, cb_data_format}})
             .set_page_size(accumulator_cb_index, input_page_size);
 
@@ -373,9 +366,9 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     // }
 
     auto cb_input_tensor_handle =
-        tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, cb_src_config);  // input buffer
+        tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, cb_input_tensor_config);  // input buffer
     auto cb_output_tensor_handle =
-        tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, cb_dst_config);  // output buffer
+        tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, cb_output_tensor_config);  // output buffer
     auto cb_client_interface_handle =
         tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, packet_header_cb_config);  // client interface
     auto cb_fabric_receiver_handle =
@@ -393,9 +386,9 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         return worker_cores;
     };
 
-    auto output_bounding_box = output_grid.bounding_box();
-    auto output_start_worker_core = to_worker_cores({output_bounding_box.start_coord});
-    auto output_end_worker_core = to_worker_cores({output_bounding_box.end_coord});
+    auto packet_bounding_box = packet_worker_cores_grid.bounding_box();
+    auto packet_start_worker_core = to_worker_cores({packet_bounding_box.start_coord});
+    auto packet_end_worker_core = to_worker_cores({packet_bounding_box.end_coord});
     std::vector<uint32_t> reader_compile_time_args = {
         input_tensor_cb_id,
         fabric_sender_cb_index,
@@ -410,53 +403,46 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         input_shard_cores_per_device,
         num_devices,
         input_page_size,
-        ncores_output,
+        output_cores_per_device,
+        packet_start_worker_core.at(0).x,
+        packet_start_worker_core.at(0).y,
+        packet_end_worker_core.at(0).x,
+        packet_end_worker_core.at(0).y,
     };
-    reader_compile_time_args.push_back(fabric_receiver_cb_index);
-    reader_compile_time_args.push_back(accumulator_cb_index);
-    reader_compile_time_args.push_back(tiles_per_core_width_output);
-    reader_compile_time_args.push_back(num_pages_per_packet);
-    reader_compile_time_args.push_back(output_start_worker_core.at(0).x);
-    reader_compile_time_args.push_back(output_start_worker_core.at(0).y);
-    reader_compile_time_args.push_back(output_end_worker_core.at(0).x);
-    reader_compile_time_args.push_back(output_end_worker_core.at(0).y);
 
     auto input_cores =
         corerange_to_cores(input_grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
     auto output_cores =
         corerange_to_cores(output_grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-    auto receiver_cores =
-        corerange_to_cores(receiver_grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
     auto sender_cores =
         corerange_to_cores(sender_core_grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
     auto all_cores =
         corerange_to_cores(all_cores_grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    auto packet_worker_cores = corerange_to_cores(
+        packet_worker_cores_grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
     reader_defines["INPUT_CORE_XY"] = detail::cores_to_string(to_worker_cores(input_cores));
     reader_defines["OUTPUT_CORE_XY"] = detail::cores_to_string(to_worker_cores(output_cores));
-    reader_defines["RECEIVER_CORE_XY"] = detail::cores_to_string(to_worker_cores(receiver_cores));
-
-    // if (operation_attributes.ring_index == 3) {
-    //     std::cout << "input_cores: " << reader_defines["INPUT_CORE_XY"] << std::endl;
-    // }
-    // if (operation_attributes.ring_index == 3) {
-    //     std::cout << "output_cores: " << reader_defines["OUTPUT_CORE_XY"] << std::endl;
-    // }
-    // if (operation_attributes.ring_index == 3) {
-    //     std::cout << "receiver_cores: " << reader_defines["RECEIVER_CORE_XY"] << std::endl;
-    // }
+    reader_defines["PACKET_WORKER_CORES"] = detail::cores_to_string(to_worker_cores(packet_worker_cores));
+    if (operation_attributes.ring_index == 3) {
+        std::cout << "input_cores: " << reader_defines["INPUT_CORE_XY"] << std::endl;
+    }
+    if (operation_attributes.ring_index == 3) {
+        std::cout << "output_cores: " << reader_defines["OUTPUT_CORE_XY"] << std::endl;
+    }
+    if (operation_attributes.ring_index == 3) {
+        std::cout << "packet_receiver_cores: " << reader_defines["PACKET_WORKER_CORES"] << std::endl;
+    }
     // create local semaphore
     auto local_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores_grid, INVALID);
     // std::cout << "Program factory local_semaphore: " << local_semaphore << std::endl;
 
-    std::vector<uint32_t> reader_runtime_args = {cross_device_semaphore->address(), local_semaphore, false, false, 0};
-    uint32_t is_reader_sender_core_idx = reader_runtime_args.size() - 3;
-    uint32_t is_worker_core_idx = reader_runtime_args.size() - 2;
-    uint32_t local_input_page_idx = reader_runtime_args.size() - 1;
-    reader_runtime_args.push_back(false);
+    std::vector<uint32_t> reader_runtime_args = {
+        cross_device_semaphore->address(), local_semaphore, false, false, 0, false};
+    uint32_t is_reader_sender_core_idx = reader_runtime_args.size() - 4;
+    uint32_t is_reader_worker_core_idx = reader_runtime_args.size() - 3;
+    uint32_t is_linear_input_packet_start_idx = reader_runtime_args.size() - 2;
     uint32_t is_reader_receiver_core_idx = reader_runtime_args.size() - 1;
-    reader_runtime_args.push_back(chip_id);
-    uint32_t is_reader_receiver_for_device_idx = reader_runtime_args.size() - 1;
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -469,55 +455,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             .noc = NOC::RISCV_0_default,
             .compile_args = reader_compile_time_args,
             .defines = reader_defines});
-
-    uint32_t local_input_page = chip_id * input_shard_cores_per_device * tiles_per_core_width;
-    uint32_t reader_receiver_for_device_id = 0;
-    for (auto core : all_cores) {
-        if (sender_core_grid.contains(core)) {
-            reader_runtime_args[is_reader_sender_core_idx] = true;
-            reader_runtime_args[is_worker_core_idx] = false;
-            reader_runtime_args[is_reader_receiver_core_idx] = false;
-            reader_runtime_args[is_reader_receiver_for_device_idx] = chip_id;
-        } else if (output_grid.contains(core)) {
-            reader_runtime_args[is_reader_sender_core_idx] = false;
-            reader_runtime_args[is_worker_core_idx] = true;
-            reader_runtime_args[local_input_page_idx] = local_input_page++;
-            reader_runtime_args[is_reader_receiver_core_idx] = false;
-            reader_runtime_args[is_reader_receiver_for_device_idx] = chip_id;
-        } else if (receiver_grid.contains(core)) {
-            TT_FATAL(
-                reader_receiver_for_device_id < num_devices,
-                "reader_receiver_for_device_id {} is greater than num_devices {}",
-                reader_receiver_for_device_id,
-                num_devices);
-            reader_runtime_args[is_reader_sender_core_idx] = false;
-            reader_runtime_args[is_worker_core_idx] = false;
-            reader_runtime_args[is_reader_receiver_core_idx] = true;
-            reader_runtime_args[is_reader_receiver_for_device_idx] = reader_receiver_for_device_id++;
-        } else {
-            reader_runtime_args[is_reader_sender_core_idx] = false;
-            reader_runtime_args[is_worker_core_idx] = false;
-            reader_runtime_args[is_reader_receiver_core_idx] = false;
-            reader_runtime_args[is_reader_receiver_for_device_idx] = chip_id;
-        }
-        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
-    }
-
-    // for (auto core : sender_cores) {
-    //     reader_runtime_args[is_reader_sender_core_idx] = true;
-    //     reader_runtime_args[is_worker_core_idx] = false;
-    //     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
-    // }
-
-    // uint32_t local_input_page = chip_id * input_shard_cores_per_device * tiles_per_core_width;
-    // for (auto core : output_cores) {
-    //     reader_runtime_args[is_reader_sender_core_idx] = false;
-    //     reader_runtime_args[is_worker_core_idx] = true;
-    //     reader_runtime_args[local_input_page_idx] = local_input_page++;
-    //     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
-    // }
-
-    std::vector<uint32_t> compute_kernel_args = {};
 
     std::vector<uint32_t> writer_compile_time_args = {
         input_tensor_cb_id,
@@ -533,17 +470,12 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         input_shard_cores_per_device,
         num_devices,
         input_page_size,
-        ncores_output,
+        output_cores_per_device,
+        packet_start_worker_core.at(0).x,
+        packet_start_worker_core.at(0).y,
+        packet_end_worker_core.at(0).x,
+        packet_end_worker_core.at(0).y,
     };
-
-    // if (operation_attributes.ring_index == 3) {
-    //     std::cout << "output start worker core: " << output_start_worker_core.at(0).str() << std::endl;
-    //     std::cout << "output end worker core: " << output_end_worker_core.at(0).str() << std::endl;
-    // }
-    writer_compile_time_args.push_back(output_start_worker_core.at(0).x);
-    writer_compile_time_args.push_back(output_start_worker_core.at(0).y);
-    writer_compile_time_args.push_back(output_end_worker_core.at(0).x);
-    writer_compile_time_args.push_back(output_end_worker_core.at(0).y);
 
     auto writer_defines = reader_defines;
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -558,12 +490,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             .compile_args = writer_compile_time_args,
             .defines = writer_defines});
 
-    std::vector<uint32_t> writer_runtime_args = {
-        cross_device_semaphore->address(), local_semaphore, false, false, chip_id};
-    uint32_t is_writer_sender_core_idx = writer_runtime_args.size() - 3;
-    uint32_t is_receiver_core_idx = writer_runtime_args.size() - 2;
-    uint32_t is_receiver_for_device_idx = writer_runtime_args.size() - 1;
-
     std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> forward_fabric_connection =
         line_topology.is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
             ? std::nullopt
@@ -575,63 +501,19 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(
                   local_fabric_handle->uniquely_connect_worker(device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
 
-    detail::append_fabric_connection_rt_args(forward_fabric_connection, sender_core, program, writer_runtime_args);
     // if (operation_attributes.ring_index == 3) {
     //     std::cout << "Writer runtime args after appending forward fabric connection: " << writer_runtime_args.size()
     //               << std::endl;
     // }
-    detail::append_fabric_connection_rt_args(backward_fabric_connection, sender_core, program, writer_runtime_args);
+
     // if (operation_attributes.ring_index == 3) {
     //     std::cout << "Writer runtime args after appending backward fabric connection: " << writer_runtime_args.size()
     //               << std::endl;
     // }
 
-    // std::cout << "Sender core: " << sender_core.x << ", " << sender_core.y << std::endl;
-
-    uint32_t receiver_for_device_id = 0;
-    for (auto core : all_cores) {
-        if (sender_core_grid.contains(core)) {
-            writer_runtime_args[is_writer_sender_core_idx] = true;
-            writer_runtime_args[is_receiver_core_idx] = false;
-        } else if (receiver_grid.contains(core)) {
-            TT_FATAL(
-                receiver_for_device_id < num_devices,
-                "receiver_for_device_id {} is greater than num_devices {}",
-                receiver_for_device_id,
-                num_devices);
-            writer_runtime_args[is_writer_sender_core_idx] = false;
-            writer_runtime_args[is_receiver_core_idx] = true;
-            writer_runtime_args[is_receiver_for_device_idx] = receiver_for_device_id++;
-        } else {
-            writer_runtime_args[is_writer_sender_core_idx] = false;
-            writer_runtime_args[is_receiver_core_idx] = false;
-        }
-        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
-    }
-
-    // for (auto core : sender_cores) {
-    //     writer_runtime_args[is_writer_sender_core_idx] = true;
-    //     writer_runtime_args[is_receiver_core_idx] = false;
-    //     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
-    // }
-
-    // for (auto core : receiver_cores) {
-    //     std::cout << "Setting receiver core: " << core.x << ", " << core.y << " for device: " <<
-    //     receiver_for_device_id
-    //               << std::endl;
-    //     writer_runtime_args[is_writer_sender_core_idx] = false;
-    //     writer_runtime_args[is_receiver_core_idx] = true;
-    //     TT_FATAL(
-    //         receiver_for_device_id < num_devices,
-    //         "receiver_for_device_id {} is greater than num_devices {}",
-    //         receiver_for_device_id,
-    //         num_devices);
-    //     writer_runtime_args[is_receiver_for_device_idx] = receiver_for_device_id++;
-    //     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
-    // }
-
+    // std::cout << "Sender core: " << sender_core_grid.x << ", " << sender_core_grid.y << std::endl;
     const std::vector<uint32_t> compute_compile_time_args = {
-        accumulator_cb_index, output_tensor_cb_id, num_devices, tiles_per_core_width_output};
+        accumulator_cb_index, output_tensor_cb_id, num_devices, tiles_per_core_width_output, num_pages_per_packet};
 
     bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32;
     const auto compute_kernel_file =
@@ -641,6 +523,54 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         compute_kernel_file,
         output_grid,
         tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_compile_time_args});
+
+    uint32_t local_input_page = chip_id * input_shard_cores_per_device * tiles_per_core_width;
+    uint32_t reader_receiver_for_device_id = 0;
+    bool first_packet_core = true;
+
+    for (auto core : all_cores) {
+        std::vector<uint32_t> writer_runtime_args = {
+            cross_device_semaphore->address(), local_semaphore, false, false, chip_id};
+        uint32_t is_writer_sender_core_idx = writer_runtime_args.size() - 3;
+        uint32_t is_writer_worker_core_idx = writer_runtime_args.size() - 2;
+        uint32_t is_linear_output_page_start_idx = writer_runtime_args.size() - 1;
+        if (sender_core_grid.contains(core)) {
+            std::cout << "Sender core: " << core.str() << std::endl;
+            reader_runtime_args[is_reader_sender_core_idx] = true;
+            reader_runtime_args[is_reader_worker_core_idx] = false;
+            reader_runtime_args[is_reader_receiver_core_idx] = false;
+
+            writer_runtime_args[is_writer_sender_core_idx] = true;
+            writer_runtime_args[is_writer_worker_core_idx] = false;
+            detail::append_fabric_connection_rt_args(forward_fabric_connection, core, program, writer_runtime_args);
+            detail::append_fabric_connection_rt_args(backward_fabric_connection, core, program, writer_runtime_args);
+        } else if (packet_worker_cores_grid.contains(core)) {
+            std::cout << "Packet worker core: " << core.str() << std::endl;
+            reader_runtime_args[is_reader_sender_core_idx] = false;
+            reader_runtime_args[is_reader_worker_core_idx] = true;
+            reader_runtime_args[is_linear_input_packet_start_idx] = local_input_page;
+
+            writer_runtime_args[is_writer_sender_core_idx] = false;
+            writer_runtime_args[is_writer_worker_core_idx] = true;
+            writer_runtime_args[is_linear_output_page_start_idx] = local_input_page;
+
+            local_input_page += num_pages_per_packet;
+            if (first_packet_core) {
+                first_packet_core = false;
+                reader_runtime_args[is_reader_receiver_core_idx] = true;
+            } else {
+                reader_runtime_args[is_reader_receiver_core_idx] = false;
+            }
+        } else {
+            reader_runtime_args[is_reader_sender_core_idx] = false;
+            reader_runtime_args[is_reader_worker_core_idx] = false;
+            reader_runtime_args[is_reader_receiver_core_idx] = false;
+            writer_runtime_args[is_writer_sender_core_idx] = false;
+            writer_runtime_args[is_writer_worker_core_idx] = false;
+        }
+        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
+    }
 
     // std::cout << "Made it to return " << chip_id << std::endl;
     return {
