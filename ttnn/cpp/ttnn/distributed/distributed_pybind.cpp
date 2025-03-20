@@ -455,7 +455,7 @@ void py_module(py::module& module) {
     auto py_replicate_tensor_config = static_cast<py::class_<ReplicateTensor>>(module.attr("ShardTensor"));
     py_replicate_tensor_config.def(py::init<>())
         .def(py::init<int>(), py::arg("replication_factor") = 1)
-        .def_readwrite("shard_dimension", &ReplicateTensor::replication_factor)
+        .def_readwrite("replication_factor", &ReplicateTensor::replication_factor)
         .def("__eq__", [](const ReplicateTensor& a, const ReplicateTensor& b) {
             return a.replication_factor == b.replication_factor;
         });
