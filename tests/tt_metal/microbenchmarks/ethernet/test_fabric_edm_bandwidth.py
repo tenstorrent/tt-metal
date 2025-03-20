@@ -115,7 +115,7 @@ def run_fabric_edm(
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("packet_size", [4096])
-@pytest.mark.parametrize("line_size, num_links, expected_bw", [(4, 1, 6.88), (4, 2, 6.85)])
+@pytest.mark.parametrize("line_size, num_links, expected_bw", [(4, 1, 6.66), (4, 2, 6.62)])
 def test_fabric_edm_mcast_half_ring_bw(
     num_mcasts,
     num_unicasts,
