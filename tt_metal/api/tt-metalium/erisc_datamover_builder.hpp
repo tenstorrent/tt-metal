@@ -35,11 +35,10 @@ struct FabricEriscDatamoverConfig {
 
     // Global
     static constexpr std::size_t eth_channel_sync_size = 16;
-    std::size_t handshake_addr = 0;
-    std::size_t edm_channel_ack_addr = 0;
-    std::size_t termination_signal_address = 0;  // pad extra bytes to match old EDM so handshake logic will still work
-    std::size_t edm_local_sync_address = 0;
-    std::size_t edm_status_address = 0;
+    std::size_t handshake_addr;
+    std::size_t edm_channel_ack_addr;
+    std::size_t termination_signal_address;  // pad extra bytes to match old EDM so handshake logic will still work
+    std::size_t edm_status_address;
 
     // Debug and Counters
     static constexpr std::size_t receiver_channel_counters_size_bytes =
@@ -228,7 +227,6 @@ public:
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> local_sender_channels_connection_info_addr;
 
     size_t termination_signal_ptr = 0;
-    size_t edm_local_sync_ptr = 0;
     size_t edm_status_ptr = 0;
 
     // Semaphore IDs
