@@ -377,7 +377,11 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     auto devices = input_tensor.get_workers();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
-    std::vector<Tensor> output_tensors(4, Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor})));
+    std::vector<Tensor> output_tensors{
+        Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor})),
+        Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor})),
+        Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor})),
+        Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
     std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
 
     tt::tt_metal::operation::launch_op(
