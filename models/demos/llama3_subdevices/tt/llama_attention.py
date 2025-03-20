@@ -377,6 +377,7 @@ class TtLlamaAttention(LightweightModule):
             cluster_axis=1,
             num_links=3,
             memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1]),
+            sdpa=True,
         )
         # ttnn.deallocate(attn_output_1G4D)
 
@@ -389,7 +390,7 @@ class TtLlamaAttention(LightweightModule):
             attn_output_gathered_sharded,
             num_heads=self.n_local_heads,
         )
-        ttnn.deallocate(attn_output_gathered_sharded)
+        # ttnn.deallocate(attn_output_gathered_sharded)
         # print("done concat heads")
 
         # Original matmul on each device [1, 1, 32, 1024] @ [1, 1, 1024, 2048]

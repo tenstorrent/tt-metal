@@ -138,24 +138,24 @@ SubDeviceManagerId SubDeviceManagerTracker::get_default_sub_device_manager_id() 
 std::optional<DeviceAddr> SubDeviceManagerTracker::lowest_occupied_compute_l1_address(
     tt::stl::Span<const SubDeviceId> sub_device_ids) const {
     constexpr uint32_t global_bank_id = 0;
-    if (sub_device_ids.empty()) {
-        // Global bank id needs to look up a bank from the compute grid (not the storage grid)
-        // Since banks are lockstep in an allocator it doesn't matter if the actual core matches or not
-        const auto& default_allocator = default_sub_device_manager_->allocator(SubDeviceId{0});
-        return default_allocator->get_lowest_occupied_l1_address(global_bank_id);
-    } else {
-        DeviceAddr lowest_addr = std::numeric_limits<DeviceAddr>::max();
-        for (const auto& sub_device_id : sub_device_ids) {
-            const auto& allocator = this->get_active_sub_device_manager()->sub_device_allocator(sub_device_id);
-            if (allocator) {
-                auto found_addr = allocator->get_lowest_occupied_l1_address(global_bank_id);
-                if (found_addr.has_value()) {
-                    lowest_addr = std::min(lowest_addr, *found_addr);
-                }
+    DeviceAddr lowest_addr = std::numeric_limits<DeviceAddr>::max();
+    // Global bank id needs to look up a bank from the compute grid (not the storage grid)
+    // Since banks are lockstep in an allocator it doesn't matter if the actual core matches or not
+    const auto& global_allocator = default_sub_device_manager_->allocator(SubDeviceId{0});
+    auto global_occupied_addr = global_allocator->get_lowest_occupied_l1_address(global_bank_id);
+    if (global_occupied_addr.has_value()) {
+        lowest_addr = std::min(lowest_addr, *global_occupied_addr);
+    }
+    for (const auto& sub_device_id : sub_device_ids) {
+        const auto& allocator = this->get_active_sub_device_manager()->sub_device_allocator(sub_device_id);
+        if (allocator) {
+            auto found_addr = allocator->get_lowest_occupied_l1_address(global_bank_id);
+            if (found_addr.has_value()) {
+                lowest_addr = std::min(lowest_addr, *found_addr);
             }
         }
-        return lowest_addr;
     }
+    return lowest_addr == std::numeric_limits<DeviceAddr>::max() ? std::nullopt : std::make_optional(lowest_addr);
 }
 
 }  // namespace tt::tt_metal
