@@ -17,9 +17,11 @@
 
 #include "unary_device_operation_types.hpp"
 
+
 namespace ttnn::operations::unary {
 
 struct UnaryDeviceOperation {
+
     using operation_attributes_t = unary::operation_attributes_t;
     using tensor_args_t = unary::tensor_args_t;
     using spec_return_value_t = unary::spec_return_value_t;
@@ -33,8 +35,7 @@ struct UnaryDeviceOperation {
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
-    static tensor_return_value_t create_output_tensors(
-        const operation_attributes_t& operation_attributes, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
@@ -55,4 +56,4 @@ struct UnaryDeviceOperation {
 
 namespace ttnn::prim {
 constexpr auto unary = ttnn::register_operation<"ttnn::prim::unary", ttnn::operations::unary::UnaryDeviceOperation>();
-}  // namespace ttnn::prim
+} // namespace ttnn::prim
