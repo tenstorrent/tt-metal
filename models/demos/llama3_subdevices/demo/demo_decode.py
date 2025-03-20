@@ -35,7 +35,7 @@ from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 # Maximum number of times `tokens_per_second_per_user` is allowed to be below `tsu_threshold`
 # before triggering an assertion failure. Allows occasional dips while ensuring
 # stable performance without breaking CI prematurely.
-TSU_FAILURE_LIMIT = 5
+TSU_PERF_DROP_LIMIT = 5
 
 # Constants for TSU thresholds based on the number of layers
 TSU_THRESHOLDS = {1: 128, "full_model": 28}  # Threshold for 1 layer  # Threshold for full model (all other layers)
@@ -489,8 +489,8 @@ def run_llama3_demo(
 
         # Ensure failures do not exceed the allowed limit
         assert (
-            tsu_failures <= TSU_FAILURE_LIMIT
-        ), f"Throughput is less than {tsu_threshold} tokens per second per user for {TSU_FAILURE_LIMIT} consecutive iterations"
+            tsu_failures <= TSU_PERF_DROP_LIMIT
+        ), f"Throughput is less than {tsu_threshold} tokens per second per user for {TSU_PERF_DROP_LIMIT} consecutive iterations"
 
         profiler.end(f"log_printing_iter_{iteration}", iteration=iteration)
 
@@ -504,7 +504,7 @@ def run_llama3_demo(
             users_decoding = False
 
     # Print out total number of tsu_failures
-    logger.info(f"Total TSU Failures: {tsu_failures} (threshold: {TSU_FAILURE_LIMIT})")
+    logger.info(f"Total TSU Failures: {tsu_failures} (threshold: {TSU_PERF_DROP_LIMIT})")
 
     # Release trace
     ttnn.release_trace(mesh_device, trace_id)
