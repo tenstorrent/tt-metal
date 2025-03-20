@@ -40,6 +40,10 @@ jobs:
         run: |
           sudo cpupower frequency-set -g performance
       - uses: ./.github/actions/ensure-active-weka-mount
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+          echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
       - name: Download build artifact
         uses: actions/download-artifact@v4
         with:
@@ -117,6 +121,10 @@ jobs:
         run: |
           sudo cpupower frequency-set -g performance
       - uses: ./.github/actions/ensure-active-weka-mount
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+          echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
       - name: Download profiler build artifact
         uses: actions/download-artifact@v4
         with:
