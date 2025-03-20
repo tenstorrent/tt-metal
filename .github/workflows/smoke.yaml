@@ -59,7 +59,9 @@ jobs:
           git init
       - name: Test Report
         uses: phoenix-actions/test-reporting@f957cd93fc2d848d556fa0d03c57bc79127b6b5e # v15
-        if: ${{ !cancelled() }}
+        # Because of https://github.com/tenstorrent/tt-metal/issues/19413, only run for our repo
+        # for now. No forks!
+        if: ${{ !cancelled() && github.repository_owner == 'tenstorrent' }}
         with:
           name: Metalium ${{ matrix.platform }} smoke tests
           path: /work/test-reports/*.xml
