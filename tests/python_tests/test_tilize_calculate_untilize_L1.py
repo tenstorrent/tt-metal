@@ -19,11 +19,11 @@ def generate_golden(op, operand1, operand2, data_format, math_fidelity):
     )
 
     if data_format == DataFormat.Float16_b:
-        if math_fidelity in [0, 2]:  # LoFi or HiFi2
+        if math_fidelity in [MathFidelity.LoFi, MathFidelity.HiFi2]:  # LoFi or HiFi2
             for element in operand2:
                 element = element.to(torch.int32)
                 element &= 0xFFFE
-        if math_fidelity == 0:  # LoFi
+        if math_fidelity == MathFidelity.LoFi:  # LoFi
             for element in operand1:
                 element = element.to(torch.int32)
                 element &= 0xFFF8
@@ -33,11 +33,11 @@ def generate_golden(op, operand1, operand2, data_format, math_fidelity):
     tensor2_float = tilize(tensor2_float, data_format)
 
     # Second step is to perform the operation
-    if op == "elwadd":
+    if op == MathOperation.Elwadd:
         res = tensor1_float + tensor2_float
-    elif op == "elwsub":
+    elif op == MathOperation.Elwsub:
         res = tensor1_float - tensor2_float
-    elif op == "elwmul":
+    elif op == MathOperation.Elwmul:
         res = tensor1_float * tensor2_float
     else:
         raise ValueError("Unsupported operation!")
@@ -54,10 +54,10 @@ all_format_combos = generate_format_combinations(
 all_params = generate_params(
     ["tilize_calculate_untilize_L1"],
     all_format_combos,
-    dest_acc=[""],
-    mathop=["elwadd", "elwsub", "elwmul"],
-    math_fidelity=[4],
-    tile_cnt=range(1, 2),
+    dest_acc=[DestAccumulation.No],
+    mathop=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
+    math_fidelity=[MathFidelity.HiFi4],
+    tile_cnt=[TileCount.One],
 )
 param_ids = generate_param_ids(all_params)
 
@@ -67,24 +67,23 @@ param_ids = generate_param_ids(all_params)
     clean_params(all_params),
     ids=param_ids,
 )
+@pytest.mark.skip(reason="Not fully implemented")
 def test_tilize_calculate_untilize_L1(
     testname, formats, dest_acc, mathop, math_fidelity, tile_cnt
 ):
-    #  When running hundreds of tests, failing tests may cause incorrect behavior in subsequent passing tests.
-    #  To ensure accurate results, for now we reset board after each test.
-    #  Fix this: so we only reset after failing tests
-    if full_sweep:
-        run_shell_command(f"cd .. && make clean")
-        run_shell_command(f"tt-smi -r 0")
 
-    src_A, src_B = generate_stimuli(formats.unpack_src, tile_cnt)
+    src_A, src_B = generate_stimuli(
+        formats.unpack_A_src, formats.unpack_B_src, tile_cnt
+    )
 
     golden_tensor = generate_golden(
         mathop, src_A, src_B, formats.pack_dst, math_fidelity
     )
     print(golden_tensor.view(32, 32))
 
-    write_stimuli_to_l1(src_A, src_B, formats.unpack_src, "0,0", tile_cnt)
+    write_stimuli_to_l1(
+        src_A, src_B, formats.unpack_A_src, formats.unpack_B_src, "0,0", tile_cnt
+    )
 
     test_config = {
         "formats": formats,

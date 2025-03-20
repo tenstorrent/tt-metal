@@ -30,8 +30,8 @@ void run_kernel()
 {
     volatile uint32_t* const buffer_A = reinterpret_cast<volatile uint32_t*>(0x1a000);
 
-    _llk_unpack_untilize_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(UNPACK_IN, UNPACK_OUT, FACE_R_DIM, 0, 4);
-    _llk_unpack_untilize_init_(UNPACK_IN, 1024, FACE_R_DIM, 4);
+    _llk_unpack_untilize_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(UNPACK_A_IN, UNPACK_A_OUT, FACE_R_DIM, 0, 4);
+    _llk_unpack_untilize_init_(UNPACK_A_IN, 1024, FACE_R_DIM, 4);
     _llk_unpack_untilize_pass_<true>(L1_ADDRESS(buffer_A), 1);
     _llk_unpack_untilize_pass_<false>(L1_ADDRESS(buffer_A), 1);
 }

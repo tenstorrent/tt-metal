@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from .format_arg_mapping import format_dict
+from .format_arg_mapping import format_dict, TileCount
 from .format_config import DataFormat
 
 
@@ -36,16 +36,21 @@ def generate_random_face(
 
 
 def generate_random_face_ab(
-    stimuli_format, const_face=False, const_value_A=1, const_value_B=2
+    stimuli_format_A,
+    stimuli_format_B,
+    const_face=False,
+    const_value_A=1,
+    const_value_B=2,
 ):
     return generate_random_face(
-        stimuli_format, const_value_A, const_face
-    ), generate_random_face(stimuli_format, const_value_B, const_face)
+        stimuli_format_A, const_value_A, const_face
+    ), generate_random_face(stimuli_format_B, const_value_B, const_face)
 
 
 def generate_stimuli(
-    stimuli_format=DataFormat.Float16_b,
-    tile_cnt=1,
+    stimuli_format_A=DataFormat.Float16_b,
+    stimuli_format_B=DataFormat.Float16_b,
+    tile_cnt=TileCount.One,
     sfpu=False,
     const_face=False,
     const_value_A=1,
@@ -55,22 +60,27 @@ def generate_stimuli(
     srcA = []
     srcB = []
 
-    for _ in range(4 * tile_cnt):
+    for _ in range(4 * tile_cnt.value):
         face_a, face_b = generate_random_face_ab(
-            stimuli_format, const_face, const_value_A, const_value_B
+            stimuli_format_A, stimuli_format_B, const_face, const_value_A, const_value_B
         )
         srcA.extend(face_a.tolist())
         srcB.extend(face_b.tolist())
 
     if not sfpu:
-        dtype = (
-            format_dict[stimuli_format]
-            if stimuli_format != DataFormat.Bfp8_b
+        dtype_A = (
+            format_dict[stimuli_format_A]
+            if stimuli_format_A != DataFormat.Bfp8_b
             else torch.bfloat16
         )
-        return torch.tensor(srcA, dtype=dtype), torch.tensor(srcB, dtype=dtype)
+        dtype_B = (
+            format_dict[stimuli_format_B]
+            if stimuli_format_B != DataFormat.Bfp8_b
+            else torch.bfloat16
+        )
+        return torch.tensor(srcA, dtype=dtype_A), torch.tensor(srcB, dtype=dtype_B)
     else:
-        srcA = generate_random_face(stimuli_format, const_value_A, const_face)
+        srcA = generate_random_face(stimuli_format_A, const_value_A, const_face)
         srcB = torch.zeros(256)
         srcA = torch.cat((srcA, torch.zeros(1024 - 256)))
         return srcA, srcB

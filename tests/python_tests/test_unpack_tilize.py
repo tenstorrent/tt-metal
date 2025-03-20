@@ -22,19 +22,12 @@ param_ids = generate_param_ids(all_params)
 @pytest.mark.parametrize("testname, formats", clean_params(all_params), ids=param_ids)
 def test_unpack_tilize(testname, formats):
 
-    #  When running hundreds of tests, failing tests may cause incorrect behavior in subsequent passing tests.
-    #  To ensure accurate results, for now we reset board after each test.
-    #  Fix this: so we only reset after failing tests
-    if full_sweep:
-        run_shell_command(f"cd .. && make clean")
-        run_shell_command(f"tt-smi -r 0")
-
-    src_A, src_B = generate_stimuli(formats.unpack_src)
+    src_A, src_B = generate_stimuli(formats.unpack_A_src, formats.unpack_B_src)
     src_B = torch.full((1024,), 0)
 
     golden_tensor = generate_golden(src_A, formats.pack_dst)
 
-    write_stimuli_to_l1(src_A, src_B, formats.unpack_src)
+    write_stimuli_to_l1(src_A, src_B, formats.unpack_A_src, formats.unpack_B_src)
 
     test_config = {
         "formats": formats,

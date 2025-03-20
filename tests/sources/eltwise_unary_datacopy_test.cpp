@@ -20,7 +20,7 @@ const bool is_fp32_dest_acc_en = true;
 const bool is_fp32_dest_acc_en = false;
 #endif
 
-#if defined(UNPACK_SRC_INT32) || defined(UNPACK_SRC_FLOAT32)
+#if defined(UNPACK_A_SRC_INT32) || defined(UNPACK_A_SRC_FLOAT32)
 const bool unpack_to_dest = true;
 #else
 const bool unpack_to_dest = false;
@@ -36,9 +36,9 @@ void run_kernel()
 {
     volatile uint32_t* const buffer_A = reinterpret_cast<volatile uint32_t*>(0x1a000);
 
-    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(0, 0, FACE_R_DIM, 4, UNPACK_IN, UNPACK_OUT);
-    _llk_unpack_A_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(UNPACK_IN, UNPACK_OUT, FACE_R_DIM, 0, 4);
-    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(buffer_A), 0, UNPACK_IN, UNPACK_OUT);
+    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(0, 0, FACE_R_DIM, 4, UNPACK_A_IN, UNPACK_A_OUT);
+    _llk_unpack_A_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(UNPACK_A_IN, UNPACK_A_OUT, FACE_R_DIM, 0, 4);
+    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(buffer_A), 0, UNPACK_A_IN, UNPACK_A_OUT);
 }
 
 #endif
@@ -69,7 +69,7 @@ void run_kernel()
     _llk_math_hw_configure_<false, false>(MATH_FORMAT, MATH_FORMAT);
     _llk_math_wait_for_dest_available_<DstSync::SyncFull>();
     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncFull, BroadcastType::NONE, is_fp32_dest_acc_en, unpack_to_dest>(
-        0, UNPACK_OUT, UNPACK_OUT);
+        0, UNPACK_A_OUT, UNPACK_A_OUT);
     _llk_math_dest_section_done_<DstSync::SyncFull, is_fp32_dest_acc_en>();
 }
 

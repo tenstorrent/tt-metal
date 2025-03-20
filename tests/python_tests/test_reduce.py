@@ -27,7 +27,7 @@ def generate_golden(operand1, reduce_dim, pool_type, data_format):
         else:
             pytest.skip("Nonexisting pool type")
 
-    if reduce_dim == "reduce_col":
+    if reduce_dim == ReduceDimension.Column:
         left_half = torch.cat((f0, f2), 0)
         right_half = torch.cat((f1, f3), 0)
 
@@ -37,7 +37,7 @@ def generate_golden(operand1, reduce_dim, pool_type, data_format):
         result[0][0:16] = left_half_max.view(1, 16)
         result[0][16:32] = right_half_max.view(1, 16)
 
-    elif reduce_dim == "reduce_row":
+    elif reduce_dim == ReduceDimension.Row:
         top_half = torch.cat((f0, f1), 1)
         bottom_half = torch.cat((f2, f3), 1)
 
@@ -46,7 +46,7 @@ def generate_golden(operand1, reduce_dim, pool_type, data_format):
 
         result[:16, 0] = top_half_max.view(16)
         result[16:32, 0] = bottom_half_max.view(16)
-    elif reduce_dim == "reduce_scalar":
+    elif reduce_dim == ReduceDimension.Scalar:
 
         result[0][0] = apply_pooling(operand1.view(1024), pool_type, dim=0)
 
@@ -65,9 +65,9 @@ all_format_combos = generate_format_combinations(
 all_params = generate_params(
     ["reduce_test"],
     all_format_combos,
-    dest_acc=[""],
-    reduce_dim=["reduce_col"],
-    pool_type=["max", "sum", "avg"],
+    dest_acc=[DestAccumulation.No],
+    reduce_dim=[ReduceDimension.Column],
+    pool_type=[ReducePool.Max, ReducePool.Sum, ReducePool.Average],
 )
 param_ids = generate_param_ids(all_params)
 
@@ -80,26 +80,22 @@ param_ids = generate_param_ids(all_params)
 @pytest.mark.skip(reason="Not fully implemented")
 def test_reduce(testname, formats, dest_acc, reduce_dim, pool_type):
 
-    #  When running hundreds of tests, failing tests may cause incorrect behavior in subsequent passing tests.
-    #  To ensure accurate results, for now we reset board after each test.
-    #  Fix this: so we only reset after failing tests
-    if full_sweep:
-        run_shell_command(f"cd .. && make clean")
-        run_shell_command(f"tt-smi -r 0")
+    src_A, src_B = generate_stimuli(formats.unpack_A_src, formats.unpack_B_src)
 
-    src_A, src_B = generate_stimuli(formats.unpack_src)
-
-    if pool_type in ["max", "sum"]:  # result in srcA should be divided by 1
+    if pool_type in [
+        ReducePool.Max,
+        ReducePool.Sum,
+    ]:  # result in srcA should be divided by 1
         src_B = torch.full((1024,), 1)
     else:
         # reduce average divides by length of elements in array we reduce
-        if reduce_dim in ["reduce_col", "reduce_row"]:
+        if reduce_dim in [ReduceDimension.Column, ReduceDimension.Row]:
             src_B = torch.full((1024,), 1 / 32)
         else:
             src_B = torch.full((1024,), torch.sqrt(torch.tensor(1 / 1024)))
 
     golden_tensor = generate_golden(src_A, reduce_dim, pool_type, formats.pack_dst)
-    write_stimuli_to_l1(src_A, src_B, formats.unpack_src)
+    write_stimuli_to_l1(src_A, src_B, formats.unpack_A_src, formats.unpack_B_src)
 
     test_config = {
         "formats": formats,

@@ -32,7 +32,7 @@ void run_kernel()
 
     for (uint index = 0; index < 16; index++)
     {
-        _llk_unpack_AB_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(UNPACK_IN, UNPACK_IN, UNPACK_OUT, UNPACK_OUT);
+        _llk_unpack_AB_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(UNPACK_A_IN, UNPACK_B_IN, UNPACK_B_OUT, UNPACK_B_OUT);
         _llk_unpack_AB_init_<>();
         _llk_unpack_AB_<>(L1_ADDRESS(buffer_A), L1_ADDRESS(buffer_B));
     }

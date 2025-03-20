@@ -38,7 +38,7 @@ void run_kernel()
     volatile uint32_t* const buffer_B = reinterpret_cast<volatile uint32_t*>(0x1b000);
 
     _llk_unpack_AB_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(
-        UNPACK_IN, UNPACK_IN, UNPACK_OUT, UNPACK_OUT, FACE_R_DIM, within_face_16x16_transpose);
+        UNPACK_A_IN, UNPACK_B_IN, UNPACK_A_OUT, UNPACK_B_OUT, FACE_R_DIM, within_face_16x16_transpose);
     _llk_unpack_AB_init_<>(FACE_C_DIM, 4, false, within_face_16x16_transpose, 0);
     _llk_unpack_AB_<>(L1_ADDRESS(buffer_A), L1_ADDRESS(buffer_B), within_face_16x16_transpose);
 }
