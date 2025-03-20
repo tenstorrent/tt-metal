@@ -11,6 +11,7 @@ using namespace tt::tt_fabric;
 
 void kernel_main() {
     constexpr uint32_t client_interface_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t data_mode = get_compile_time_arg_val(1);
     uint32_t rt_args_idx = 0;
     uint32_t src_addr = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t dst_noc_offset = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
@@ -29,7 +30,11 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
     fabric_endpoint_init(client_interface, 0 /* unused */);
 
-    fabric_async_write_multicast(
+    fabric_async_write_multicast<
+        decltype(client_interface),
+        (ClientDataMode)data_mode,
+        AsyncWriteMode::ALL,
+        RoutingType::ROUTER_XY>(
         client_interface,
         e_router_noc_xy,
         src_addr,  // source address in sender’s memory

@@ -35,7 +35,7 @@ bool terminated_slave_routers = false;
 
 // careful, may be null
 tt_l1_ptr uint32_t* const kernel_status = reinterpret_cast<tt_l1_ptr uint32_t*>(kernel_status_buf_addr_arg);
-volatile tt_l1_ptr chan_req_buf* fvc_consumer_req_buf =
+volatile tt_l1_ptr chan_req_buf* fvc_outbound_req_buf =
     reinterpret_cast<tt_l1_ptr chan_req_buf*>(FABRIC_ROUTER_REQ_QUEUE_START);
 volatile tt_l1_ptr fabric_router_l1_config_t* routing_table =
     reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
@@ -102,7 +102,7 @@ void kernel_main() {
     router_state.sync_in = 0;
     router_state.sync_out = 0;
 
-    zero_l1_buf((tt_l1_ptr uint32_t*)fvc_consumer_req_buf, sizeof(chan_req_buf));
+    zero_l1_buf((tt_l1_ptr uint32_t*)fvc_outbound_req_buf, sizeof(chan_req_buf));
     zero_l1_buf((tt_l1_ptr uint32_t*)FVCC_IN_BUF_START, FVCC_IN_BUF_SIZE);
     zero_l1_buf((tt_l1_ptr uint32_t*)FVCC_OUT_BUF_START, FVCC_OUT_BUF_SIZE);
     write_kernel_status(kernel_status, TT_FABRIC_WORD_CNT_INDEX, (uint32_t)&router_state);
@@ -178,13 +178,23 @@ void kernel_main() {
     while (1) {
         // Handle Ethernet Outbound Data
 #ifdef FVC_MODE_PULL
-        if (!fvc_req_buf_is_empty(fvc_consumer_req_buf) && fvc_req_valid(fvc_consumer_req_buf)) {
-            uint32_t req_index = fvc_consumer_req_buf->rdptr.ptr & CHAN_REQ_BUF_SIZE_MASK;
-            chan_request_entry_t* req = (chan_request_entry_t*)fvc_consumer_req_buf->chan_req + req_index;
+        if (!fvc_req_buf_is_empty(fvc_outbound_req_buf) && fvc_req_valid(fvc_outbound_req_buf)) {
+            uint32_t req_index = fvc_outbound_req_buf->rdptr.ptr & CHAN_REQ_BUF_SIZE_MASK;
+            chan_request_entry_t* req = (chan_request_entry_t*)fvc_outbound_req_buf->chan_req + req_index;
             pull_request_t* pull_req = &req->pull_request;
-            if (req->bytes[47] == FORWARD) {
-                // Data is packetized.
-                fvc_outbound_state.pull_data_to_fvc_buffer(pull_req);
+            uint32_t flags = pull_req->flags;
+            if (flags & (FORWARD | PACK_N_FORWARD)) {
+                if (flags == FORWARD) {
+                    // Data is packetized.
+                    fvc_outbound_state.pull_data_to_fvc_buffer<true>(pull_req, NULL);
+                } else {
+                    // Data is not packetized.
+                    // Packet header is in req_index + 1 entry of outbound request buffer.
+                    uint32_t header_index = (req_index + 1) & CHAN_REQ_BUF_SIZE_MASK;
+                    chan_request_entry_t* header_ptr =
+                        (chan_request_entry_t*)fvc_outbound_req_buf->chan_req + header_index;
+                    fvc_outbound_state.pull_data_to_fvc_buffer<false>(pull_req, &header_ptr->pull_request);
+                }
                 if (fvc_outbound_state.packet_words_remaining == 0 ||
                     fvc_outbound_state.pull_words_in_flight >= FVC_SYNC_THRESHOLD) {
                     fvc_outbound_state.total_words_to_forward += fvc_outbound_state.pull_words_in_flight;
@@ -200,7 +210,7 @@ void kernel_main() {
             if (fvc_outbound_state.packet_in_progress == 1 and fvc_outbound_state.packet_words_remaining == 0) {
                 // clear the flags field to invalidate pull request slot.
                 // flags will be set to non-zero by next requestor.
-                req_buf_advance_rdptr((chan_req_buf*)fvc_consumer_req_buf);
+                req_buf_advance_rdptr((chan_req_buf*)fvc_outbound_req_buf);
                 fvc_outbound_state.packet_in_progress = 0;
             }
             loop_count = 0;

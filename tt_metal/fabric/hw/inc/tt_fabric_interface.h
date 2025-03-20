@@ -352,8 +352,9 @@ typedef struct _fabric_pull_client_interface {
     uint64_t pull_req_buf_addr;
     uint32_t num_routing_planes;
     uint32_t routing_tables_l1_offset;
-    uint32_t return_status[3];
+    uint32_t return_status[4];
     local_pull_request_t local_pull_request;
+    packet_header_t header_buffer[CLIENT_HEADER_BUFFER_ENTRIES];
 } fabric_pull_client_interface_t;
 
 static_assert(sizeof(fabric_client_interface_t) % 16 == 0);
@@ -373,6 +374,7 @@ typedef struct _fabric_push_client_interface {
     uint32_t router_space;
     uint32_t update_router_space;
     uint32_t reserved[3];
+    packet_header_t header_buffer[CLIENT_HEADER_BUFFER_ENTRIES];
 } fabric_push_client_interface_t;
 
 static_assert(sizeof(fabric_push_client_interface_t) % 16 == 0);
