@@ -22,7 +22,7 @@ namespace ttnn {
  * 1. From an existing device operation, derive a new operation that uses this adapter
  * 2. The operation will now work correctly on mesh devices without additional code
  */
-template <typename DeviceOperation, typename CustomizerType = void>
+template <typename DeviceOperation>
 struct MeshDeviceOperationAdapter {
     // Add type aliases to identify the template parameters
     using device_operation_t = DeviceOperation;
@@ -80,7 +80,7 @@ struct MeshDeviceOperationAdapter {
         tensor_return_value_t& tensor_return_value) {
         return std::visit(
             [&]<typename ConcreteFactory>(const ConcreteFactory& concrete_factory) {
-                return mesh_device_operation_utils::create_mesh_workload<ConcreteFactory>(
+                return mesh_device_operation_utils::create_mesh_workload<DeviceOperation, ConcreteFactory>(
                     mesh_device, attrs, tensor_args, tensor_return_value);
             },
             select_program_factory(attrs, tensor_args));
@@ -132,7 +132,7 @@ concept MeshDeviceOperationAdapterType = requires {
 template <typename T>
 struct is_mesh_device_operation_adapter : std::false_type {};
 
-template <typename DeviceOp, typename Customizer>
-struct is_mesh_device_operation_adapter<MeshDeviceOperationAdapter<DeviceOp, Customizer>> : std::true_type {};
+template <typename DeviceOp>
+struct is_mesh_device_operation_adapter<MeshDeviceOperationAdapter<DeviceOp>> : std::true_type {};
 
 }  // namespace ttnn
