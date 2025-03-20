@@ -74,7 +74,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     const uint32_t head_tiles = head_dim / TILE_WIDTH;
     const uint32_t head_size = head_tiles * single_tile_size;
 
-    const uint32_t element_size = input_tensor.element_size();
+    const uint32_t element_size = output_tensor.element_size();
     const uint32_t sub_tile_line_bytes = 16 * element_size;
     const auto q_shard_spec = q_output_tensor.shard_spec().value();
     const auto q_cores = q_shard_spec.grid;
@@ -139,6 +139,31 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
             .set_page_size(v_output_cb_index, single_tile_size)
             .set_globally_allocated_address(*v_output_tensor.buffer());
     auto cb_v_output = tt::tt_metal::CreateCircularBuffer(program, v_cores, cb_v_output_config);
+
+    uint32_t q_base_addr = output_tensor.buffer()->address();
+
+    // cores for q
+    const uint32_t q_num_cores = q_cores.num_cores();  // number of cores of the output
+    const auto& q_cores_vector = corerange_to_cores(q_cores, q_num_cores, true);
+
+    // cores for k
+    const uint32_t k_num_cores = k_cores.num_cores();  // number of cores of the output
+    const auto& k_cores_vector = corerange_to_cores(k_cores, k_num_cores, true);
+
+    // cores for input
+    const uint32_t in_num_cores = in_cores.num_cores();  // number of cores of the input
+    auto in_cores_vec = corerange_to_cores(in_cores, in_num_cores, true);
+
+    std::vector<uint32_t> noc_x_coords, noc_y_coords;
+    noc_x_coords.reserve(in_num_cores);
+    noc_y_coords.reserve(in_num_cores);
+
+    for (uint32_t i = 0; i < in_num_cores; ++i) {
+        auto worker_core = device->worker_core_from_logical_core(in_cores_vec[i]);
+        noc_x_coords.push_back(worker_core.x);
+        noc_y_coords.push_back(worker_core.y);
+    }
+    uint32_t process_qv = 1, process_k = 0;
 
     // End of qkv heads fuse
 
