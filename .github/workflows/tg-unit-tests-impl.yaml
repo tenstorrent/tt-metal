@@ -2,6 +2,16 @@ name: "[internal] TG unit tests impl"
 
 on:
   workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
 
 jobs:
   TG-UMD-tests:
@@ -16,24 +26,42 @@ jobs:
             cmd: "./build/test/umd/galaxy/unit_tests_glx"
           },
         ]
-    env:
-      ARCH_NAME: ${{ matrix.test-group.arch }}
-      LOGURU_LEVEL: INFO
     runs-on: ${{ matrix.test-group.runs-on }}
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        ARCH_NAME: ${{ matrix.test-group.arch }}
+        LOGURU_LEVEL: INFO
+        TT_METAL_HOME: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+
       - name: Build UMD device and tests
         run: |
           cmake -B build -G Ninja -DTT_UMD_BUILD_TESTS=ON -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake
           cmake --build build --target umd_tests
+
       - name: Run UMD unit regression tests
         timeout-minutes: 10
         run: |
-          cd $TT_METAL_HOME
           ${{ matrix.test-group.cmd }}
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
+
   TG-tests:
     strategy:
       fail-fast: false
@@ -47,52 +75,84 @@ jobs:
           { name: "TG distributed runtime tests", arch: wormhole_b0, model: distributed-runtime, timeout: 45, owner_id: U03NG0A5ND7},  # Aditya Saigal
         ]
     name: ${{ matrix.test-group.name }}
-    env:
-      ARCH_NAME: ${{ matrix.test-group.arch }}
-      LOGURU_LEVEL: INFO
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-      GTEST_OUTPUT: xml:generated/test_reports/
     runs-on:
       - arch-wormhole_b0
       - config-tg
       - in-service
       - bare-metal
       - pipeline-functional
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ matrix.test-group.arch }}
+        LOGURU_LEVEL: INFO
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
-          name: TTMetal_build_any
+          name: ${{ inputs.build-artifact-name }}
+          path: docker-job
+
       - name: Extract files
         run: tar -xvf ttm_any.tar
-      - uses: ./.github/actions/install-python-deps
+
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+          path: docker-job
+
+      - name: Install Wheel
+        run: |
+          WHEEL_FILENAME=$(ls -1 *.whl)
+          pip3 install $WHEEL_FILENAME
+
       - name: Run unit regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
           mkdir -p generated/test_reports
           ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type unit_tg_device --dispatch-mode "" --model ${{ matrix.test-group.model }}
+
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: ${{ matrix.test-group.owner_id }}
+
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           path: |
-            generated/test_reports/
+            /work/generated/test_reports/
           prefix: "test_reports_"
+
       - name: Generate gtest annotations on failure
         uses: ./.github/actions/generate-gtest-failure-message
         if: ${{ failure() }}
         with:
           path: |
             generated/test_reports/
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
