@@ -7,7 +7,6 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
-#include <iostream>
 
 namespace ttnn::operations::moreh::moreh_cumsum {
 
