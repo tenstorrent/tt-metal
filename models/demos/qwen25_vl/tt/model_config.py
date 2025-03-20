@@ -48,5 +48,6 @@ class VisionModelArgs(ModelArgs):
         return False
 
     def get_state_dict_prefix(self, module_name, layer_num):
-        base_prefix = super().get_state_dict_prefix(module_name, layer_num)
+        base_module_name = "Attention" if module_name == "VisionAttention" else module_name
+        base_prefix = super().get_state_dict_prefix(base_module_name, layer_num)
         return "visual." + base_prefix.replace("layers.", "blocks.")

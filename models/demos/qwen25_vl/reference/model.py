@@ -279,8 +279,9 @@ class Qwen2_5_VLVisionAttention(nn.Module):
         attention_mask = torch.full(
             [1, seq_length, seq_length], torch.finfo(q.dtype).min, device=q.device, dtype=q.dtype
         )
-        # for i in range(1, len(cu_seqlens)):
-        #     attention_mask[..., cu_seqlens[i - 1] : cu_seqlens[i], cu_seqlens[i - 1] : cu_seqlens[i]] = 0
+        print(cu_seqlens)
+        for i in range(1, len(cu_seqlens)):
+            attention_mask[..., cu_seqlens[i - 1] : cu_seqlens[i], cu_seqlens[i - 1] : cu_seqlens[i]] = 0
 
         q = q.transpose(0, 1)
         k = k.transpose(0, 1)

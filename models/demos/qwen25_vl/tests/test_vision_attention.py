@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.tt_transformers.tt.attention import Attention
+from models.demos.qwen25_vl.tt.vision_attention import VisionAttention
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.tt_transformers.tt.common import (
@@ -53,7 +53,7 @@ from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
     "page_params",
     [{"page_block_size": 32, "page_max_num_blocks": 1024}],
 )
-def test_attention_inference(
+def test_vision_attention_inference(
     paged_attention,
     page_params,
     mesh_device,
@@ -149,7 +149,7 @@ def test_attention_inference(
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-    tt_model = Attention(
+    tt_model = VisionAttention(
         mesh_device,
         state_dict,
         weight_cache_path=None,  # NOCOMMIT during debug. model_args.weight_cache_path(dtype),
@@ -172,10 +172,9 @@ def test_attention_inference(
 
     tt_out = tt_model(
         attention_input,
-        current_pos=None,
+        cu_seqlens=cu_seqlens,
         rot_mats=rot_mats,
         user_id=0,
-        mode="prefill",
         page_table=page_table_tt,
     )
     tt_out = ttnn.to_torch(

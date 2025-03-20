@@ -646,6 +646,7 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        mask=None,
     ):
         seq_len = x_11SH.shape[-2]
         # assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
@@ -810,9 +811,6 @@ class Attention(LightweightModule):
         q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(q_heads_1QSD)
 
-        mask = torch.full([1, 1, seq_len, seq_len], -1e9, dtype=torch.float32)
-        tt_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=self.mesh_device)
-
         if chunk_start_idx is not None:
             attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
                 q_heads_1QSD_8b,
@@ -821,6 +819,7 @@ class Attention(LightweightModule):
                 page_table,
                 chunk_start_idx,
                 is_causal=self.causal_mask,
+                attn_mask=mask,
                 scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
@@ -831,7 +830,7 @@ class Attention(LightweightModule):
                 k_heads_1KSD_8b,
                 v_heads_1VSD_8b,
                 is_causal=self.causal_mask,
-                attn_mask=tt_mask,
+                attn_mask=mask,
                 scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
