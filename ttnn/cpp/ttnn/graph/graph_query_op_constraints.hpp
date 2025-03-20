@@ -14,19 +14,35 @@
 namespace ttnn::graph {
 
 namespace detail {
-template <typename Result>
-Tensor extract_output_tensor(Result&& result) {
-    if constexpr (std::is_same_v<std::decay_t<Result>, Tensor>) {
-        return std::forward<Result>(result);
-    } else if constexpr (
-        std::tuple_size_v<std::decay_t<Result>> > 0 &&
-        std::is_same_v<std::tuple_element_t<0, std::decay_t<Result>>, Tensor>) {
-        // handle conv2d return type
-        return std::get<0>(std::forward<Result>(result));
-    } else {
-        static_assert(false, "Unsupported return type: Must be Tensor or a tuple with Tensor as the first element.");
-    }
+
+// most ops just return a tensor
+Tensor extract_output_tensor(const Tensor& result) { return result; }
+
+// conv2d output
+template <typename... Args>
+Tensor extract_output_tensor(const std::tuple<Tensor, Args...>& result) {
+    return std::get<0>(result);
 }
+
+// template <typename Result>
+// Tensor extract_output_tensor(Result&& result) {
+//     constexpr bool is_tensor =
+//         std::is_same_v<std::decay_t<Result>, Tensor>;
+
+//     constexpr bool is_tuple_with_tensor =
+//         (std::tuple_size_v<std::decay_t<Result>> > 0 &&
+//          std::is_same_v<std::tuple_element_t<0, std::decay_t<Result>>, Tensor>);
+
+//     static_assert(is_tensor || is_tuple_with_tensor,
+//                   "Unsupported return type: Must be Tensor or a tuple with Tensor as the first element.");
+
+//     if constexpr (is_tensor) {
+//         return std::forward<Result>(result);
+//     } else if constexpr (is_tuple_with_tensor) {
+//         return std::get<0>(std::forward<Result>(result));
+//     }
+// }
+
 }  // namespace detail
 
 struct ResourceUsage {
