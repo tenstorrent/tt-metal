@@ -82,14 +82,16 @@ void kernel_main() {
     constexpr uint8_t receiver_core_for_device[num_devices][2] = RECEIVER_CORE_XY;
     constexpr uint8_t input_core_xy[input_tensor_cores][2] = INPUT_CORE_XY;
     constexpr uint8_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
-    constexpr uint32_t num_dests = (noc_end_x - noc_start_x + 1) * (noc_end_y - noc_start_y + 1);
 
+    constexpr uint8_t packet_worker_cores[num_packets_total_per_device][2] = PACKET_WORKER_CORES;
+
+    constexpr uint32_t num_dests = (noc_end_x - noc_start_x + 1) * (noc_end_y - noc_start_y + 1);
     // Runtime arguments
     uint32_t receiver_semaphore_address = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t local_semaphore_address = get_semaphore(get_arg_val<uint32_t>(rt_arg_idx++));
     bool sender_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     bool worker_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
-    uint32_t linear_input_page_idx = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t linear_input_page_start_idx = get_arg_val<uint32_t>(rt_arg_idx++);
     bool receiver_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t receiver_for_device_id = get_arg_val<uint32_t>(rt_arg_idx++);
 
@@ -128,97 +130,42 @@ void kernel_main() {
             }
         }
     } else if (worker_core) {
-        // DPRINT << "linear_input_page_idx " << linear_input_page_idx << ENDL();
         // Calculate core index and tile offset once
-        uint32_t linear_input_core_idx = linear_input_page_idx / tiles_per_core_width;
-        // DPRINT << "linear_input_core_idx " << linear_input_core_idx << ENDL();
-        uint32_t linear_input_tile_offset = linear_input_page_idx % tiles_per_core_width;
-        // DPRINT << "linear_input_tile_offset " << linear_input_tile_offset << ENDL();
+        uint32_t linear_input_core_idcs[num_pages_per_packet];
+        uint32_t linear_input_tile_offsets[num_pages_per_packet];
 
-        uint32_t core_x = input_core_xy[linear_input_core_idx][x_index];
-        uint32_t core_y = input_core_xy[linear_input_core_idx][y_index];
-
-        uint32_t tile_offset = linear_input_tile_offset * page_size_bytes;
-        uint64_t tile_addr = get_noc_addr(core_x, core_y, get_read_ptr(input_tensor_cb_id) + tile_offset);
-
-        // Precompute the destination address
-        uint32_t dest_addr = get_write_ptr(accumulator_cb_id) + chip_id * page_size_bytes;
-
-        noc_async_read(tile_addr, dest_addr, page_size_bytes);
-        noc_async_read_barrier();
-        // DPRINT << "waiting for local semaphore" << ENDL();
-        // while (*(uint32_t*)local_semaphore_address < (num_devices - 1)) {
-        //     DPRINT << "local semaphore " << *(uint32_t*)local_semaphore_address << ENDL();
-        // }
-        noc_semaphore_wait((uint32_t*)local_semaphore_address, (num_devices - 1));
-        // DPRINT << "semaphore received" << ENDL();
-        // Push all accumulated data at once
-        // DPRINT << "local semaphore received" << ENDL();
-        cb_push_back(accumulator_cb_id, tiles_per_core_width_output * num_devices);
-        *(uint32_t*)local_semaphore_address = 0;
-    } else if (receiver_core && receiver_for_device_id != chip_id) {
-        // DPRINT << "RECEIVER CORE WRITER" << ENDL();
-        // DPRINT << "Receiver for device id: " << receiver_for_device_id << " chip_id: " << chip_id << ENDL();
-
-        // Get base addresses once
-        uint32_t base_receiver_l1_addr = get_read_ptr(fabric_receiver_cb_id);
-        uint32_t accumulator_l1_addr = get_read_ptr(accumulator_cb_id);
-
-        // Precompute output tile offset
-        uint32_t output_tile_offset = receiver_for_device_id * tiles_per_core_width_output * page_size_bytes;
-
-        // Wait on semaphore
-        // DPRINT << "reader receiver waiting on semaphore" << ENDL();
-        noc_semaphore_wait((uint32_t*)receiver_semaphore_address, 1);
-        // DPRINT << "reader receiver semaphore received" << ENDL();
-        // while (*(uint32_t*)receiver_semaphore_address < 1) {
-        // }
-
-        // Process all tiles
-        constexpr uint32_t total_tiles = input_shard_cores_per_device * tiles_per_core_width;
-        for (uint32_t tile = total_tiles / 2; tile < total_tiles; tile++) {
-            // DPRINT << "reader receiver processing tile " << tile << ENDL();
-            // one tile to each core
-            uint32_t output_core = tile;
-            uint32_t output_core_x = output_core_xy[output_core][x_index];
-            uint32_t output_core_y = output_core_xy[output_core][y_index];
-
-            // Compute addresses
-            uint64_t noc_accumulator_addr =
-                get_noc_addr(output_core_x, output_core_y, accumulator_l1_addr + output_tile_offset);
-            // uint64_t local_receiver_semaphore_noc_addr =
-            //     get_noc_addr(output_core_x, output_core_y, local_semaphore_address);
-
-            // print_full_tile(fabric_receiver_cb_id, tile, true);
-            noc_async_write(base_receiver_l1_addr + tile * page_size_bytes, noc_accumulator_addr, page_size_bytes);
-            // noc_async_write_barrier();
-            // noc_semaphore_inc(local_receiver_semaphore_noc_addr, 1);  // mcast inc is needed, this will tank latency
+        for (uint32_t i = 0; i < num_pages_per_packet; i++) {
+            uint32_t rem = linear_input_page_start_idx + i;
+            linear_input_core_idcs[i] = rem / tiles_per_core_width;
+            linear_input_tile_offsets[i] = rem % tiles_per_core_width;
         }
-        noc_async_write_barrier();
-        // DPRINT << "reader receiver async write barrier done" << ENDL();
-        // Now we have the block in the CB address, we can mcast to dests!
-        // uint64_t multicast_semaphore_addr =
-        //     static_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, local_semaphore_address);
-        // // DPRINT << "multicast_semaphore_addr: " << multicast_semaphore_addr << ENDL();
-        // noc_multicast_semaphore_inc(multicast_semaphore_addr, 1, num_dests);
-        // noc_async_atomic_barrier();
-        noc_semaphore_inc(get_noc_addr(receiver_semaphore_address), 1);
-        // DPRINT << "reader receiver async atomic barrier done" << ENDL();
-        // DPRINT << "semaphore_inc_done" << ENDL();
-
-        // for (uint32_t tile = 0; tile < total_tiles; tile++) {
-        //     // one tile to each core
-        //     uint32_t output_core = tile;
-        //     uint32_t output_core_x = output_core_xy[output_core][x_index];
-        //     uint32_t output_core_y = output_core_xy[output_core][y_index];
-        //     uint64_t local_receiver_semaphore_noc_addr =
-        //         get_noc_addr(output_core_x, output_core_y, local_semaphore_address);
-        //     noc_semaphore_inc(local_receiver_semaphore_noc_addr, 1);  // mcast inc is needed, this will tank latency
-        // }
-        // noc_async_atomic_barrier();
-
-        // Reset semaphore
-        // *(uint32_t*)receiver_semaphore_address = 0;
+        // coalesce across the
+        for (uint32_t i = 0; i < num_pages_per_packet; i++) {
+            // DPRINT << "linear_input_core_idcs[" << i << "] " << linear_input_core_idcs[i] << ENDL();
+            // DPRINT << "linear_input_tile_offsets[" << i << "] " << linear_input_tile_offsets[i] << ENDL();
+            uint32_t core_x = input_core_xy[linear_input_core_idcs[i]][x_index];
+            uint32_t core_y = input_core_xy[linear_input_core_idcs[i]][y_index];
+            uint32_t tile_offset = chip_id * num_pages_per_packet * page_size_bytes;
+            uint64_t tile_addr = get_noc_addr(core_x, core_y, get_read_ptr(input_tensor_cb_id) + tile_offset);
+            // DPRINT << "tile_addr[" << i << "] " << tile_addr << ENDL();
+            uint32_t dest_addr = get_write_ptr(accumulator_cb_id) + chip_id * num_pages_per_packet * page_size_bytes;
+            noc_async_read(tile_addr, dest_addr, page_size_bytes);
+        }
+        noc_async_read_barrier();
+        if (receiver_core) {
+            noc_semaphore_wait((uint32_t*)receiver_semaphore_address, num_devices - 1);
+            // Now we have the block in the CB address, we can mcast to dests!
+            uint64_t multicast_semaphore_addr =
+                static_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, local_semaphore_address);
+            // DPRINT << "multicast_semaphore_addr: " << multicast_semaphore_addr << ENDL();
+            noc_multicast_semaphore_inc(multicast_semaphore_addr, 1, num_dests, 0);
+            noc_async_atomic_barrier();
+            *(uint32_t*)receiver_semaphore_address = 0;
+        } else {
+            noc_semaphore_wait((uint32_t*)local_semaphore_address, (num_devices - 1));
+        }
+        cb_push_back(accumulator_cb_id, num_pages_per_packet * num_devices);
+        *(uint32_t*)local_semaphore_address = 0;
     } else {
         // Do nothing
         // win
