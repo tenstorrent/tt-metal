@@ -102,11 +102,7 @@ private:
     uint8_t channel_id;
 };
 
-template <
-    uint8_t NUM_BUFFERS,
-    bool USE_STATEFUL_NOC_API = false,
-    uint8_t PTR_UPDATE_NOC_CMD_BUF = write_at_cmd_buf,
-    uint8_t PTR_UPDATE_NOC_INDEX = noc_index>
+template <uint8_t NUM_BUFFERS>
 struct EdmChannelWorkerInterface {
     EdmChannelWorkerInterface() :
         worker_location_info_ptr(nullptr),
