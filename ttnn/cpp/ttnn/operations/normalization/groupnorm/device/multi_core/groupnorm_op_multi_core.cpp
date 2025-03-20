@@ -1132,24 +1132,68 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t Ht = H / TILE_HEIGHT;
     uint32_t W = shape[3];
     uint32_t Wt = W / TILE_WIDTH;
-    uint32_t per_core_M = H / num_cores_r;
+    uint32_t per_core_M_group_1 = H / num_cores_r;
+    uint32_t per_core_M_group_2 = 0;
     uint32_t per_core_N = W / num_cores_c;
     TT_ASSERT(H % num_cores_r == 0 && "width * height must be divisible by num_cores.y");
     TT_ASSERT(W % num_cores_c == 0 && "channels must be divisible by num_cores.x");
-    uint32_t per_core_Mt = per_core_M / TILE_HEIGHT;
+    uint32_t per_core_Mt_group_1 = per_core_M_group_1 / TILE_HEIGHT;
+    uint32_t per_core_Mt_group_2 = 0;
     uint32_t per_core_Nt = (per_core_N + TILE_WIDTH - 1) / TILE_WIDTH;
     uint32_t num_datum_row_per_group = W / num_groups;
     uint32_t num_datum_row_per_group_mod_tile_w =
         num_datum_row_per_group % TILE_WIDTH == 0 ? TILE_WIDTH : num_datum_row_per_group % TILE_WIDTH;
     uint32_t group_size = W / num_groups;
     // split each batch into multiple cores
-    uint32_t num_shards_r = H / per_core_M;
+    uint32_t num_shards_r = H / per_core_M_group_1;
     uint32_t num_cores_per_batch = num_batches > num_shards_r ? 1 : num_shards_r / num_batches;
     uint32_t num_shards_c = W / per_core_N;
     uint32_t num_cores_per_group = num_groups > num_shards_c ? 1 : num_shards_c / num_groups;
     // each core contains multiple batches
-    uint32_t num_batches_per_core = num_batches > num_shards_r ? num_batches / num_shards_r : 1;
+    uint32_t num_batches_per_core_group_1 = num_batches > num_shards_r ? num_batches / num_shards_r : 1;
+    uint32_t num_batches_per_core_group_2 = num_batches_per_core_group_1;  // need this to be non-zero even if unused
     uint32_t num_groups_per_core = num_groups > num_shards_c ? num_groups / num_shards_c : 1;
+
+    // subblock
+    uint32_t num_rows_per_batch_per_core_group_1 = per_core_M_group_1 / num_batches_per_core_group_1;
+    uint32_t num_rows_per_batch_per_core_group_2 = 0;
+    auto [block_wt, num_groups_per_reset] = find_max_tile_span(per_core_N, group_size);
+    uint32_t block_ht_group_1 = per_core_Mt_group_1 / num_batches_per_core_group_1;
+    uint32_t block_ht_group_2 = 0;
+    uint32_t subblock_wt = get_max_subblock(block_wt, 8);
+    uint32_t num_subblocks_w = block_wt / subblock_wt;
+    bool block_wt_last = (per_core_Nt + num_groups_per_core - 1) / num_groups_per_core;
+
+    // support for uneven batches across rows
+    bool equal_batches_per_core = true;
+    uint32_t last_row_with_extra_batch = 0;
+    if (num_batches >= num_cores_r) {
+        last_row_with_extra_batch = (num_batches % num_shards_r);
+        equal_batches_per_core = (last_row_with_extra_batch == 0);
+        if (!equal_batches_per_core) {
+            last_row_with_extra_batch--;  // zero based index
+        }
+    }
+
+    // Have first group (each row has 1 extra batch compared to second group), and second group
+    if (!equal_batches_per_core) {
+        // tensor shape
+        uint32_t per_core_Ht_group_2 = Ht / num_cores_r;
+        uint32_t per_core_Ht_group_1 = per_core_Ht_group_2++;
+        per_core_M_group_1 = per_core_Ht_group_1 * TILE_HEIGHT;
+        per_core_M_group_2 = per_core_Ht_group_2 * TILE_HEIGHT;
+        per_core_Mt_group_1 = per_core_M_group_1 / TILE_HEIGHT;
+        per_core_Mt_group_2 = per_core_M_group_2 / TILE_HEIGHT;
+
+        num_batches_per_core_group_2 = num_batches / num_cores_r;
+        num_batches_per_core_group_1 = num_batches_per_core_group_2++;
+
+        // subblock
+        num_rows_per_batch_per_core_group_1 = per_core_M_group_1 / num_batches_per_core_group_1;
+        num_rows_per_batch_per_core_group_2 = per_core_M_group_2 / num_batches_per_core_group_2;
+        block_ht_group_1 = per_core_Mt_group_1 / num_batches_per_core_group_1;
+        block_ht_group_2 = per_core_Mt_group_2 / num_batches_per_core_group_2;
+    }
 
     // shard shape per core
     uint32_t per_core_N_bytes_padded = tt::round_up(per_core_N * datum_size_bytes, output.buffer()->alignment());
@@ -1158,21 +1202,24 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     bool untilize_out = output.get_layout() == Layout::ROW_MAJOR;
 
     TT_ASSERT(per_core_N % num_datum_row_per_group == 0);
-    TT_ASSERT(per_core_M % TILE_HEIGHT == 0);
+    TT_ASSERT(per_core_M_group_1 % TILE_HEIGHT == 0);
+    if (per_core_M_group_2 > 0) {
+        TT_ASSERT(per_core_M_group_2 % TILE_HEIGHT == 0);
+    }
     if (per_core_N != W) {
         TT_ASSERT(per_core_N * num_cores_c == W);
-        TT_ASSERT(per_core_M * num_cores_r == H);
+        // TT_ASSERT(per_core_M_group_1 * num_cores_r == H); TODO VASH
     }
 
-    TT_ASSERT(per_core_M % TILE_HEIGHT == 0 && "per_core_M must be divisble by TILE_HEIGHT");
+    TT_ASSERT(per_core_M_group_1 % TILE_HEIGHT == 0 && "per_core_M must be divisble by TILE_HEIGHT");
+    if (per_core_M_group_2 > 0) {
+        TT_ASSERT(per_core_M_group_2 % TILE_HEIGHT == 0 && "per_core_M must be divisble by TILE_HEIGHT");
+    }
 
     TT_ASSERT(W % num_groups == 0 && "Tensor W must be divisble by num_groups");
-    TT_ASSERT(H % per_core_M == 0 && "H dim must be divisible by per_core_M");
     TT_ASSERT(W % per_core_N == 0 && "W dim must be divisible by per_core_N");
-    if (num_batches >= num_shards_r) {
-        TT_ASSERT(
-            num_batches % num_shards_r == 0 && "num_batches must be divisible by number of cores in a full column");
-    } else {
+    if (num_batches < num_shards_r) {
+        TT_ASSERT(H % per_core_M_group_1 == 0 && "H dim must be divisible by per_core_M");
         TT_ASSERT(
             num_shards_r % num_batches == 0 && "number of cores in a full column must be divisible by num_batches");
     }
@@ -1182,17 +1229,11 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         TT_ASSERT(num_shards_c % num_groups == 0 && "number of cores in a full row must be divisible by num_groups");
     }
 
-    // subblock
-    uint32_t num_rows_per_batch_per_core = per_core_M / num_batches_per_core;
-    auto [block_wt, num_groups_per_reset] = find_max_tile_span(per_core_N, group_size);
-    uint32_t block_ht = per_core_Mt / num_batches_per_core;
-    uint32_t subblock_wt = get_max_subblock(block_wt, 8);
-    uint32_t num_subblocks_w = block_wt / subblock_wt;
-    bool block_wt_last = (per_core_Nt + num_groups_per_core - 1) / num_groups_per_core;
-
     log_debug(tt::LogOp, "num_cores: {}", num_cores);
-    log_debug(tt::LogOp, "num_rows_per_batch_per_core: {}", per_core_M / num_batches_per_core);
-    log_debug(tt::LogOp, "per_core_M: {}", per_core_M);
+    log_debug(tt::LogOp, "num_rows_per_batch_per_core_group 1: {}", num_rows_per_batch_per_core_group_1);
+    log_debug(tt::LogOp, "num_rows_per_batch_per_core_group 2: {}", num_rows_per_batch_per_core_group_2);
+    log_debug(tt::LogOp, "per_core_M_group_1: {}", per_core_M_group_1);
+    log_debug(tt::LogOp, "per_core_M_group_2: {}", per_core_M_group_2);
     log_debug(tt::LogOp, "per_core_N: {}", per_core_N);
     log_debug(tt::LogOp, "W: {}", W);
     log_debug(tt::LogOp, "H: {}", H);
@@ -1203,16 +1244,25 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     log_debug(tt::LogOp, "num_cores_c: {}", num_cores_c);
     log_debug(tt::LogOp, "num_cores_per_batch: {}", num_cores_per_batch);
     log_debug(tt::LogOp, "num_cores_per_group: {}", num_cores_per_group);
-    log_debug(tt::LogOp, "num_batches_per_core: {}", num_batches_per_core);
+    log_debug(tt::LogOp, "num_batches_per_core_group_1: {}", num_batches_per_core_group_1);
+    log_debug(tt::LogOp, "num_batches_per_core_group_2: {}", num_batches_per_core_group_2);
+    log_debug(tt::LogOp, "equal_batches_per_core: {}", equal_batches_per_core);
     log_debug(tt::LogOp, "num_groups_per_core: {}", num_groups_per_core);
     log_debug(tt::LogOp, "block_wt: {}", block_wt);
     log_debug(tt::LogOp, "block_wt_last: {}", block_wt_last);
-    log_debug(tt::LogOp, "block_ht: {}", block_ht);
+    log_debug(tt::LogOp, "block_ht_group_1: {}", block_ht_group_1);
+    log_debug(tt::LogOp, "block_ht_group_2: {}", block_ht_group_2);
     log_debug(tt::LogOp, "subblock_wt: {}", subblock_wt);
     log_debug(tt::LogOp, "num_subblocks_w: {}", num_subblocks_w);
     log_debug(tt::LogOp, "reader_repack_output: {}", reader_repack_output);
 
-    TT_ASSERT(per_core_M % num_batches_per_core == 0 && "shard height must be div by per_core_batch");
+    TT_ASSERT(
+        per_core_M_group_1 % num_batches_per_core_group_1 == 0 && "per_core_M height must be div by per_core_batch");
+    if (per_core_M_group_2 > 0) {
+        TT_ASSERT(
+            per_core_M_group_2 % num_batches_per_core_group_2 == 0 &&
+            "per_core_M height must be div by per_core_batch");
+    }
     TT_ASSERT(W % num_groups == 0 && "tensor width must be divisible by num_groups!");
     // if (shard_orientation == ShardOrientation::ROW_MAJOR and num_groups_per_core == 1) {
     //     TT_FATAL(false, "VASH TODO");
@@ -1271,15 +1321,17 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     // block size for in0 (tensor a)
-    uint32_t in0_block_tiles = block_ht * block_wt;
-    uint32_t in0_CB_size = in0_block_tiles * in_single_tile_size;
-    uint32_t in_CB_size = in0_block_tiles * in_single_tile_size;
+    uint32_t in0_block_tiles_group_1 = block_ht_group_1 * block_wt;
+    uint32_t in0_block_tiles_group_2 = 0;
+    uint32_t in0_CB_size_group_1 = in0_block_tiles_group_1 * in_single_tile_size;
+    uint32_t in0_CB_size_group_2 = 0;
+    uint32_t in_CB_size_group_1 = in0_block_tiles_group_1 * in_single_tile_size;
+    uint32_t in_CB_size_group_2 = 0;
     // in2 - scaler
     uint32_t in2_CB_size = single_tile_size;
     // in3 - eps
     uint32_t in3_CB_size = single_tile_size;
     // gamma
-    // uint32_t gamma_beta_num_cols_tile_per_core = block_wt * num_groups_per_core;
     uint32_t gamma_beta_num_cols_tile_per_core = per_core_Nt;
     uint32_t in5_CB_size = gamma_beta_num_cols_tile_per_core * gamma_beta_single_tile_size;
     // beta
@@ -1290,46 +1342,109 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     // repack cb
     uint32_t repack_CB_size = per_core_Nt * in_single_tile_size * 2;  // double buffer
     // itermediate buffers
-    uint32_t interm_block_tiles = block_ht * block_wt;
-    uint32_t im_out_CB_size = out_single_tile_size * interm_block_tiles;
-    uint32_t x_CB_size = interm_block_tiles * single_tile_size;
-    uint32_t xmm_CB_size = interm_block_tiles * single_tile_size;
+    uint32_t interm_block_tiles_group_1 = block_ht_group_1 * block_wt;
+    uint32_t interm_block_tiles_group_2 = 0;
+    uint32_t im_out_CB_size_group_1 = out_single_tile_size * interm_block_tiles_group_1;
+    uint32_t im_out_CB_size_group_2 = 0;
+    uint32_t x_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
+    uint32_t x_CB_size_group_2 = 0;
+    uint32_t xmm_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
+    uint32_t xmm_CB_size_group_2 = 0;
     uint32_t ex_partial_CB_size = single_tile_size;   // partial Ex
-    uint32_t ex2_partial_CB_size = single_tile_size;  // partial Ex
+    uint32_t ex2_partial_CB_size = single_tile_size;  // partial Ex2
     uint32_t ex_global_CB_size = ex_partial_CB_size;  // the final result Ex
-    uint32_t ex2_global_CB_size = ex_partial_CB_size;  // the final result Ex
-    uint32_t xmm2_CB_size = interm_block_tiles * single_tile_size;
-    uint32_t xmm3_CB_size = interm_block_tiles * single_tile_size;
+    uint32_t ex2_global_CB_size = ex2_partial_CB_size;  // the final result Ex2
+    uint32_t xmm2_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
+    uint32_t xmm2_CB_size_group_2 = 0;
+    uint32_t xmm3_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
+    uint32_t xmm3_CB_size_group_2 = 0;
     uint32_t ex2pe_CB_size = ex_partial_CB_size;
     // output buffer size
-    uint32_t out_CB_size = in0_block_tiles * out_single_tile_size;
-    TT_FATAL(
-        cbs_fit_in_DRAM(
-            in0_CB_size,
-            in_CB_size,
-            in2_CB_size,
-            in3_CB_size,
-            in5_CB_size,
-            in6_CB_size,
-            in_mask_CB_size,
-            repack_CB_size,
-            im_out_CB_size,
-            x_CB_size,
-            xmm_CB_size,
-            ex_partial_CB_size,
-            ex_global_CB_size,
-            ex2_global_CB_size,
-            xmm2_CB_size,
-            xmm3_CB_size,
-            ex2pe_CB_size,
-            out_CB_size,
-            a.device()->l1_size_per_core()),
-        "Circular buffers require too much space to fit into L1");
+    uint32_t out_CB_size_group_1 = in0_block_tiles_group_1 * out_single_tile_size;
+    uint32_t out_CB_size_group_2 = 0;
+
+    if (!equal_batches_per_core) {
+        // input buffers
+        in0_block_tiles_group_1 = block_ht_group_1 * block_wt;
+        in0_block_tiles_group_2 = block_ht_group_2 * block_wt;
+        in0_CB_size_group_1 = in0_block_tiles_group_1 * in_single_tile_size;
+        in0_CB_size_group_2 = in0_block_tiles_group_2 * in_single_tile_size;
+        in_CB_size_group_1 = in0_block_tiles_group_1 * in_single_tile_size;
+        in_CB_size_group_2 = in0_block_tiles_group_2 * in_single_tile_size;
+        // intermediate buffers
+        interm_block_tiles_group_1 = block_ht_group_1 * block_wt;
+        interm_block_tiles_group_2 = block_ht_group_2 * block_wt;
+        im_out_CB_size_group_1 = out_single_tile_size * interm_block_tiles_group_1;
+        im_out_CB_size_group_2 = out_single_tile_size * interm_block_tiles_group_2;
+        x_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
+        x_CB_size_group_2 = interm_block_tiles_group_2 * single_tile_size;
+        xmm_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
+        xmm_CB_size_group_2 = interm_block_tiles_group_2 * single_tile_size;
+        xmm2_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
+        xmm2_CB_size_group_2 = interm_block_tiles_group_2 * single_tile_size;
+        xmm3_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
+        xmm3_CB_size_group_2 = interm_block_tiles_group_2 * single_tile_size;
+        // output buffer size
+        out_CB_size_group_1 = in0_block_tiles_group_1 * out_single_tile_size;
+        out_CB_size_group_2 = in0_block_tiles_group_2 * out_single_tile_size;
+    }
+
+    // Do CB size check with group_2 since it's larger
+    if (equal_batches_per_core) {
+        TT_FATAL(
+            cbs_fit_in_DRAM(
+                in0_CB_size_group_1,
+                in_CB_size_group_1,
+                in2_CB_size,
+                in3_CB_size,
+                in5_CB_size,
+                in6_CB_size,
+                in_mask_CB_size,
+                repack_CB_size,
+                im_out_CB_size_group_1,
+                x_CB_size_group_1,
+                xmm_CB_size_group_1,
+                ex_partial_CB_size,
+                ex_global_CB_size,
+                ex2_global_CB_size,
+                xmm2_CB_size_group_1,
+                xmm3_CB_size_group_1,
+                ex2pe_CB_size,
+                out_CB_size_group_1,
+                a.device()->l1_size_per_core()),
+            "Circular buffers require too much space to fit into L1");
+    } else {
+        TT_FATAL(
+            cbs_fit_in_DRAM(
+                in0_CB_size_group_2,
+                in_CB_size_group_2,
+                in2_CB_size,
+                in3_CB_size,
+                in5_CB_size,
+                in6_CB_size,
+                in_mask_CB_size,
+                repack_CB_size,
+                im_out_CB_size_group_2,
+                x_CB_size_group_2,
+                xmm_CB_size_group_2,
+                ex_partial_CB_size,
+                ex_global_CB_size,
+                ex2_global_CB_size,
+                xmm2_CB_size_group_2,
+                xmm3_CB_size_group_2,
+                ex2pe_CB_size,
+                out_CB_size_group_2,
+                a.device()->l1_size_per_core()),
+            "Circular buffers require too much space to fit into L1");
+    }
 
     log_debug(tt::LogOp, "per_core_Nt: {}", per_core_Nt);
-    log_debug(tt::LogOp, "per_core_Mt: {}", per_core_Mt);
-    log_debug(tt::LogOp, "in0_CB_size: {}", in0_CB_size);
-    log_debug(tt::LogOp, "in_CB_size: {}", in_CB_size);
+    log_debug(tt::LogOp, "per_core_Mt_group_1: {}", per_core_Mt_group_1);
+    log_debug(tt::LogOp, "per_core_Mt_group_2: {}", per_core_Mt_group_2);
+    log_debug(tt::LogOp, "in0_CB_size_group_1: {}", in0_CB_size_group_1);
+    log_debug(tt::LogOp, "in0_CB_size_group_2: {}", in0_CB_size_group_2);
+    log_debug(tt::LogOp, "in_CB_size_group_1: {}", in_CB_size_group_1);
+    log_debug(tt::LogOp, "in_CB_size_group_2: {}", in_CB_size_group_2);
     log_debug(tt::LogOp, "gamma_beta_num_cols_tile_per_core: {}", gamma_beta_num_cols_tile_per_core);
     log_debug(tt::LogOp, "in5_CB_size: {}", in5_CB_size);
     log_debug(tt::LogOp, "repack_CB_size: {}", repack_CB_size);
@@ -1348,6 +1463,19 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     for (int i = 0; i < core_coords.size(); ++i) {
         log_debug(tt::LogOp, "worker coord: {} {}", core_coords[i].x, core_coords[i].y);
     }
+    std::set<CoreRange> all_cores_group_1_core_ranges;
+    std::set<CoreRange> all_cores_group_2_core_ranges;
+    for (int i = 0; i < num_cores; ++i) {
+        CoreCoord core = core_coords[i];
+        if (equal_batches_per_core || (core.x <= last_row_with_extra_batch)) {
+            all_cores_group_1_core_ranges.insert(CoreRange(core_coords[i]));
+        } else {
+            all_cores_group_2_core_ranges.insert(CoreRange(core_coords[i]));
+        }
+    }
+    CoreRangeSet all_cores_group_1 = CoreRangeSet(all_cores_group_1_core_ranges);
+    CoreRangeSet all_cores_group_2 = CoreRangeSet(all_cores_group_2_core_ranges);
+
     std::vector<std::vector<CoreCoord>> core_coords2D;
     for (int j = 0; j < num_cores_c; ++j) {
         for (int i = 0; i < num_cores_r / num_cores_per_group; ++i) {
@@ -1360,38 +1488,70 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     }
 
     // one mcast core per batch per group
-    std::set<CoreRange> mcast_sender_core_ranges;
-    std::set<CoreRange> mcast_receiver_core_ranges;
+    std::set<CoreRange> mcast_sender_core_ranges_group_1;
+    std::set<CoreRange> mcast_sender_core_ranges_group_2;
+    std::set<CoreRange> mcast_sender_core_ranges_all;
+    std::set<CoreRange> mcast_receiver_core_ranges_group_1;
+    std::set<CoreRange> mcast_receiver_core_ranges_group_2;
+    std::set<CoreRange> mcast_receiver_core_ranges_all;
     uint32_t core_index = 0;
     uint32_t core_index_offset = 0;
-    for (int i = 0; i < num_batches / num_batches_per_core; ++i) {
+    uint32_t sender_groups_count = equal_batches_per_core ? (num_batches / num_batches_per_core_group_1) : num_cores_r;
+    for (int i = 0; i < sender_groups_count; ++i) {
         uint32_t core_index = core_index_offset;
         for (int j = 0; j < num_groups / num_groups_per_core; ++j) {
-            mcast_sender_core_ranges.insert(CoreRange(core_coords[core_index]));
+            mcast_sender_core_ranges_all.insert(CoreRange(core_coords[core_index]));
+            CoreCoord core = core_coords[core_index];
+            if (equal_batches_per_core || (core.x <= last_row_with_extra_batch)) {
+                mcast_sender_core_ranges_group_1.insert(CoreRange(core_coords[core_index]));
+            } else {
+                mcast_sender_core_ranges_group_2.insert(CoreRange(core_coords[core_index]));
+            }
             core_index += num_cores_per_group;
             core_index_offset += num_cores_per_batch * num_cores_per_group;
         }
     }
-    for (auto& coord : mcast_sender_core_ranges) {
+    for (auto& coord : mcast_sender_core_ranges_all) {
         log_debug(tt::LogOp, "mcast sender coord: {} {}", coord.start_coord.x, coord.start_coord.y);
+    }
+    for (auto& coord : mcast_sender_core_ranges_group_1) {
+        log_debug(tt::LogOp, "mcast sender coord group 1: {} {}", coord.start_coord.x, coord.start_coord.y);
+    }
+    for (auto& coord : mcast_sender_core_ranges_group_2) {
+        log_debug(tt::LogOp, "mcast sender coord group 2: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
     for (int i = 0; i < num_cores; ++i) {
         // not found in mcast sender
-        if (mcast_sender_core_ranges.find(CoreRange(core_coords[i])) == mcast_sender_core_ranges.end()) {
-            mcast_receiver_core_ranges.insert(CoreRange(core_coords[i]));
+        if (mcast_sender_core_ranges_all.find(CoreRange(core_coords[i])) == mcast_sender_core_ranges_all.end()) {
+            mcast_receiver_core_ranges_all.insert(CoreRange(core_coords[i]));
+            CoreCoord core = core_coords[i];
+            if (equal_batches_per_core || (core.x <= last_row_with_extra_batch)) {
+                mcast_receiver_core_ranges_group_1.insert(CoreRange(core_coords[i]));
+            } else {
+                mcast_receiver_core_ranges_group_2.insert(CoreRange(core_coords[i]));
+            }
         }
     }
-    for (auto& coord : mcast_receiver_core_ranges) {
+    for (auto& coord : mcast_receiver_core_ranges_all) {
         log_debug(tt::LogOp, "mcast receiver coord: {} {}", coord.start_coord.x, coord.start_coord.y);
     }
-    CoreRangeSet mcast_sender_cores = CoreRangeSet(mcast_sender_core_ranges);
-    CoreRangeSet mcast_receiver_cores = CoreRangeSet(mcast_receiver_core_ranges);
+    for (auto& coord : mcast_receiver_core_ranges_group_1) {
+        log_debug(tt::LogOp, "mcast receiver coord group 1: {} {}", coord.start_coord.x, coord.start_coord.y);
+    }
+    for (auto& coord : mcast_receiver_core_ranges_group_2) {
+        log_debug(tt::LogOp, "mcast receiver coord group 2: {} {}", coord.start_coord.x, coord.start_coord.y);
+    }
+    CoreRangeSet mcast_sender_cores_group_1 = CoreRangeSet(mcast_sender_core_ranges_group_1);
+    CoreRangeSet mcast_receiver_cores_group_1 = CoreRangeSet(mcast_receiver_core_ranges_group_1);
+    CoreRangeSet mcast_sender_cores_group_2 = CoreRangeSet(mcast_sender_core_ranges_group_2);
+    CoreRangeSet mcast_receiver_cores_group_2 = CoreRangeSet(mcast_receiver_core_ranges_group_2);
     // mcast groups
     std::vector<std::vector<CoreCoord>> mcast_groups;
     int group_index = -1;
     for (int i = 0; i < core_coords2D.size(); ++i) {
         for (int j = 0; j < core_coords2D[i].size(); ++j) {
-            if (mcast_sender_core_ranges.find(CoreRange(core_coords2D[i][j])) != mcast_sender_core_ranges.end()) {
+            if (mcast_sender_core_ranges_all.find(CoreRange(core_coords2D[i][j])) !=
+                mcast_sender_core_ranges_all.end()) {
                 group_index += 1;
             }
             if (group_index >= mcast_groups.size()) {
@@ -1434,47 +1594,93 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         reader_mcast_receiver_defines["UNTILIZE_OUT"] = "1";
     }
     // reader compile time args
-    std::vector<uint32_t> reader_mcast_sender_compile_time_args = {
+    std::vector<uint32_t> reader_mcast_sender_compile_time_args_group_1 = {
         (std::uint32_t)1,
         (std::uint32_t)1,
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
         (std::uint32_t)num_cores_per_mcast_group,
-        (std::uint32_t)num_groups_per_core * num_batches_per_core,
-        (std::uint32_t)num_batches_per_core,
+        (std::uint32_t)num_groups_per_core * num_batches_per_core_group_1,
+        (std::uint32_t)num_batches_per_core_group_1,
         (std::uint32_t)per_core_Nt,
         (std::uint32_t)per_core_N_bytes_padded,
         (std::uint32_t)per_core_Nt * TILE_WIDTH * datum_size_bytes,
         (std::uint32_t)datum_size_bytes,
-        (std::uint32_t)per_core_Mt,
+        (std::uint32_t)per_core_Mt_group_1,
         (std::uint32_t)TILE_HEIGHT,
-        (std::uint32_t)block_ht,
+        (std::uint32_t)block_ht_group_1,
         (std::uint32_t)block_wt,
-        (std::uint32_t)block_ht * block_wt,
+        (std::uint32_t)block_ht_group_1 * block_wt,
         (std::uint32_t)num_datum_row_per_group_mod_tile_w,
-        (std::uint32_t)per_core_Mt * Wt / num_batches_per_core,
+        (std::uint32_t)per_core_Mt_group_1 * Wt / num_batches_per_core_group_1,
         (std::uint32_t)block_wt_last,
         (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks};
-    std::vector<uint32_t> reader_mcast_receiver_compile_time_args = {
+    std::vector<uint32_t> reader_mcast_receiver_compile_time_args_group_1 = {
         (std::uint32_t)1,
         (std::uint32_t)1,
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
-        (std::uint32_t)num_groups_per_core * num_batches_per_core,
-        (std::uint32_t)num_batches_per_core,
+        (std::uint32_t)num_groups_per_core * num_batches_per_core_group_1,
+        (std::uint32_t)num_batches_per_core_group_1,
         (std::uint32_t)per_core_Nt,
         (std::uint32_t)per_core_N_bytes_padded,
         (std::uint32_t)per_core_Nt * TILE_WIDTH * datum_size_bytes,
-        (std::uint32_t)per_core_Mt,
+        (std::uint32_t)per_core_Mt_group_1,
         (std::uint32_t)TILE_HEIGHT,
-        (std::uint32_t)block_ht,
+        (std::uint32_t)block_ht_group_1,
         (std::uint32_t)block_wt,
-        (std::uint32_t)block_ht * block_wt,
+        (std::uint32_t)block_ht_group_1 * block_wt,
         (std::uint32_t)num_datum_row_per_group_mod_tile_w,
-        (std::uint32_t)per_core_Mt * Wt / num_batches_per_core,
+        (std::uint32_t)per_core_Mt_group_1 * Wt / num_batches_per_core_group_1,
+        (std::uint32_t)block_wt_last,
+        (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
+        (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
+        (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
+        (std::uint32_t)num_out_blocks};
+    std::vector<uint32_t> reader_mcast_sender_compile_time_args_group_2 = {
+        (std::uint32_t)1,
+        (std::uint32_t)1,
+        (std::uint32_t)reduce_receiver_semaphore_id,
+        (std::uint32_t)reduce_sender_semaphore_id,
+        (std::uint32_t)num_cores_per_mcast_group,
+        (std::uint32_t)num_groups_per_core * num_batches_per_core_group_2,
+        (std::uint32_t)num_batches_per_core_group_2,
+        (std::uint32_t)per_core_Nt,
+        (std::uint32_t)per_core_N_bytes_padded,
+        (std::uint32_t)per_core_Nt * TILE_WIDTH * datum_size_bytes,
+        (std::uint32_t)datum_size_bytes,
+        (std::uint32_t)per_core_Mt_group_2,
+        (std::uint32_t)TILE_HEIGHT,
+        (std::uint32_t)block_ht_group_2,
+        (std::uint32_t)block_wt,
+        (std::uint32_t)block_ht_group_2 * block_wt,
+        (std::uint32_t)num_datum_row_per_group_mod_tile_w,
+        (std::uint32_t)per_core_Mt_group_2 * Wt / num_batches_per_core_group_2,
+        (std::uint32_t)block_wt_last,
+        (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
+        (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
+        (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
+        (std::uint32_t)num_out_blocks};
+    std::vector<uint32_t> reader_mcast_receiver_compile_time_args_group_2 = {
+        (std::uint32_t)1,
+        (std::uint32_t)1,
+        (std::uint32_t)reduce_receiver_semaphore_id,
+        (std::uint32_t)reduce_sender_semaphore_id,
+        (std::uint32_t)num_groups_per_core * num_batches_per_core_group_2,
+        (std::uint32_t)num_batches_per_core_group_2,
+        (std::uint32_t)per_core_Nt,
+        (std::uint32_t)per_core_N_bytes_padded,
+        (std::uint32_t)per_core_Nt * TILE_WIDTH * datum_size_bytes,
+        (std::uint32_t)per_core_Mt_group_2,
+        (std::uint32_t)TILE_HEIGHT,
+        (std::uint32_t)block_ht_group_2,
+        (std::uint32_t)block_wt,
+        (std::uint32_t)block_ht_group_2 * block_wt,
+        (std::uint32_t)num_datum_row_per_group_mod_tile_w,
+        (std::uint32_t)per_core_Mt_group_2 * Wt / num_batches_per_core_group_2,
         (std::uint32_t)block_wt_last,
         (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
@@ -1482,35 +1688,57 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_out_blocks};
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+
     // reader kernel
-    auto reader_mcast_sender_kernels_id = CreateKernel(
+    auto reader_mcast_sender_kernels_id_group_1 = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
         "reader_mcast_sender_unary_gn.cpp",
-        mcast_sender_cores,
+        mcast_sender_cores_group_1,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = reader_noc,
-            .compile_args = reader_mcast_sender_compile_time_args,
+            .compile_args = reader_mcast_sender_compile_time_args_group_1,
             .defines = reader_mcast_sender_defines});
-    KernelHandle reader_mcast_receiver_kernels_id = -1;
+    auto reader_mcast_sender_kernels_id_group_2 = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+        "reader_mcast_sender_unary_gn.cpp",
+        mcast_sender_cores_group_2,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = reader_noc,
+            .compile_args = reader_mcast_sender_compile_time_args_group_2,
+            .defines = reader_mcast_sender_defines});
+    KernelHandle reader_mcast_receiver_kernels_id_group_1 = -1;
+    KernelHandle reader_mcast_receiver_kernels_id_group_2 = -1;
     if (use_mcast) {
-        reader_mcast_receiver_kernels_id = CreateKernel(
+        reader_mcast_receiver_kernels_id_group_1 = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
             "reader_mcast_receiver_unary_gn.cpp",
-            mcast_receiver_cores,
+            mcast_receiver_cores_group_1,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = reader_noc,
-                .compile_args = reader_mcast_receiver_compile_time_args,
+                .compile_args = reader_mcast_receiver_compile_time_args_group_1,
+                .defines = reader_mcast_receiver_defines});
+        reader_mcast_receiver_kernels_id_group_2 = CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+            "reader_mcast_receiver_unary_gn.cpp",
+            mcast_receiver_cores_group_2,
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = reader_noc,
+                .compile_args = reader_mcast_receiver_compile_time_args_group_2,
                 .defines = reader_mcast_receiver_defines});
     }
 
     // writer defines
     std::map<string, string> writer_defines;
     // writer compile time args
-    std::vector<uint32_t> writer_mcast_sender_compile_time_args = {
+    std::vector<uint32_t> writer_mcast_sender_compile_time_args_group_1 = {
         1,
         (std::uint32_t)gamma.has_value(),
         (std::uint32_t)beta.has_value(),
@@ -1519,62 +1747,102 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)is_dram(beta),
         (std::uint32_t)is_dram(input_mask),
         (std::uint32_t)gamma_beta_num_cols_tile_per_core,
-        (std::uint32_t)per_core_Mt,
+        (std::uint32_t)per_core_Mt_group_1,
         (std::uint32_t)per_core_Nt,
         (std::uint32_t)per_core_N * datum_size_bytes,
         (std::uint32_t)per_core_Nt * TILE_WIDTH * datum_size_bytes,
         (std::uint32_t)num_groups_per_core,
-        (std::uint32_t)num_batches_per_core,
+        (std::uint32_t)num_batches_per_core_group_1,
         (std::uint32_t)num_datum_row_per_group_mod_tile_w,
-        (std::uint32_t)per_core_Mt * Wt / num_batches_per_core,
+        (std::uint32_t)per_core_Mt_group_1 * Wt / num_batches_per_core_group_1,
         (std::uint32_t)block_wt_last,
         (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks,
-        (std::uint32_t)block_ht,
+        (std::uint32_t)block_ht_group_1,
         (std::uint32_t)block_wt,
-        (std::uint32_t)block_ht * block_wt};
+        (std::uint32_t)block_ht_group_1 * block_wt};
+    std::vector<uint32_t> writer_mcast_sender_compile_time_args_group_2 = {
+        1,
+        (std::uint32_t)gamma.has_value(),
+        (std::uint32_t)beta.has_value(),
+        1,
+        (std::uint32_t)is_dram(gamma),
+        (std::uint32_t)is_dram(beta),
+        (std::uint32_t)is_dram(input_mask),
+        (std::uint32_t)gamma_beta_num_cols_tile_per_core,
+        (std::uint32_t)per_core_Mt_group_2,
+        (std::uint32_t)per_core_Nt,
+        (std::uint32_t)per_core_N * datum_size_bytes,
+        (std::uint32_t)per_core_Nt * TILE_WIDTH * datum_size_bytes,
+        (std::uint32_t)num_groups_per_core,
+        (std::uint32_t)num_batches_per_core_group_2,
+        (std::uint32_t)num_datum_row_per_group_mod_tile_w,
+        (std::uint32_t)per_core_Mt_group_2 * Wt / num_batches_per_core_group_2,
+        (std::uint32_t)block_wt_last,
+        (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
+        (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
+        (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
+        (std::uint32_t)num_out_blocks,
+        (std::uint32_t)block_ht_group_2,
+        (std::uint32_t)block_wt,
+        (std::uint32_t)block_ht_group_2 * block_wt};
 
     if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
         auto gamma_stick_size = gamma.value().get_padded_shape()[3] * gamma.value().element_size();
         bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
-        writer_mcast_sender_compile_time_args.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
+        writer_mcast_sender_compile_time_args_group_1.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
+        writer_mcast_sender_compile_time_args_group_2.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
         if (gamma_stick_size_is_power_of_two) {
             uint32_t gamma_log2_stick_size =
                 gamma_stick_size_is_power_of_two ? (std::uint32_t)std::log2(gamma_stick_size) : 0;
-            writer_mcast_sender_compile_time_args.push_back((std::uint32_t)gamma_log2_stick_size);
+            writer_mcast_sender_compile_time_args_group_1.push_back((std::uint32_t)gamma_log2_stick_size);
+            writer_mcast_sender_compile_time_args_group_2.push_back((std::uint32_t)gamma_log2_stick_size);
         } else {
-            writer_mcast_sender_compile_time_args.push_back(gamma_stick_size);
+            writer_mcast_sender_compile_time_args_group_1.push_back(gamma_stick_size);
+            writer_mcast_sender_compile_time_args_group_2.push_back(gamma_stick_size);
         }
     } else if (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR) {
         auto beta_stick_size = beta.value().get_padded_shape()[3] * beta.value().element_size();
         bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
-        writer_mcast_sender_compile_time_args.push_back((std::uint32_t)beta_stick_size_is_power_of_two);
+        writer_mcast_sender_compile_time_args_group_1.push_back((std::uint32_t)beta_stick_size_is_power_of_two);
+        writer_mcast_sender_compile_time_args_group_2.push_back((std::uint32_t)beta_stick_size_is_power_of_two);
         if (beta_stick_size_is_power_of_two) {
             uint32_t beta_log2_stick_size =
                 beta_stick_size_is_power_of_two ? (std::uint32_t)std::log2(beta_stick_size) : 0;
-            writer_mcast_sender_compile_time_args.push_back((std::uint32_t)beta_log2_stick_size);
+            writer_mcast_sender_compile_time_args_group_1.push_back((std::uint32_t)beta_log2_stick_size);
+            writer_mcast_sender_compile_time_args_group_2.push_back((std::uint32_t)beta_log2_stick_size);
         } else {
-            writer_mcast_sender_compile_time_args.push_back(beta_stick_size);
+            writer_mcast_sender_compile_time_args_group_1.push_back(beta_stick_size);
+            writer_mcast_sender_compile_time_args_group_2.push_back(beta_stick_size);
         }
     } else {
-        writer_mcast_sender_compile_time_args.push_back(0);
-        writer_mcast_sender_compile_time_args.push_back(0);
+        writer_mcast_sender_compile_time_args_group_1.push_back(0);
+        writer_mcast_sender_compile_time_args_group_2.push_back(0);
     }
 
     // writer kernel
     bool use_row_major_kernel = true;
     std::string writer_kernel =
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/writer_unary_gn_rm_gb.cpp";
-    auto writer_kernels_id = CreateKernel(
+    auto writer_kernels_id_group_1 = CreateKernel(
         program,
         writer_kernel,
-        all_cores,
+        all_cores_group_1,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = writer_noc,
-            .compile_args = writer_mcast_sender_compile_time_args,
+            .compile_args = writer_mcast_sender_compile_time_args_group_1,
+            .defines = writer_defines});
+    auto writer_kernels_id_group_2 = CreateKernel(
+        program,
+        writer_kernel,
+        all_cores_group_2,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = writer_noc,
+            .compile_args = writer_mcast_sender_compile_time_args_group_2,
             .defines = writer_defines});
     // defines
     std::map<string, string> eltwise_binary_defines;
@@ -1588,29 +1856,60 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         eltwise_binary_defines["UNTILIZE_OUT"] = "1";
     }
     // compute kernel compile time args
-    std::vector<uint32_t> mcast_sender_compute_compile_time_args = {
+    std::vector<uint32_t> mcast_sender_compute_compile_time_args_group_1 = {
         (std::uint32_t)1,
         (std::uint32_t)gamma.has_value(),
         (std::uint32_t)beta.has_value(),
         (std::uint32_t)num_cores_per_mcast_group,
-        (std::uint32_t)num_batches_per_core,
+        (std::uint32_t)num_batches_per_core_group_1,
         (std::uint32_t)num_groups_per_core,
 
-        (std::uint32_t)block_ht,
+        (std::uint32_t)block_ht_group_1,
         (std::uint32_t)block_wt,
-        (std::uint32_t)block_ht * block_wt,
+        (std::uint32_t)block_ht_group_1 * block_wt,
 
         (std::uint32_t)subblock_wt,
         (std::uint32_t)num_subblocks_w,
 
-        (std::uint32_t)per_core_Mt,
+        (std::uint32_t)per_core_Mt_group_1,
         (std::uint32_t)per_core_Nt,
-        (std::uint32_t)per_core_Mt * per_core_Nt,
+        (std::uint32_t)per_core_Mt_group_1 * per_core_Nt,
 
         (std::uint32_t)per_core_Nt * TILE_HW * datum_size_bytes,  // per_core_N_tile_bytes
         (std::uint32_t)num_groups_per_reset,
         (std::uint32_t)single_tile_size,
-        (std::uint32_t)per_core_Mt * Wt / num_batches_per_core,
+        (std::uint32_t)per_core_Mt_group_1 * Wt / num_batches_per_core_group_1,
+        (std::uint32_t)num_groups_per_core * block_wt,
+        (std::uint32_t)num_datum_row_per_group_mod_tile_w,
+        (std::uint32_t)block_wt_last,
+        (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
+        (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
+        (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
+        (std::uint32_t)num_out_blocks,
+    };
+    std::vector<uint32_t> mcast_sender_compute_compile_time_args_group_2 = {
+        (std::uint32_t)1,
+        (std::uint32_t)gamma.has_value(),
+        (std::uint32_t)beta.has_value(),
+        (std::uint32_t)num_cores_per_mcast_group,
+        (std::uint32_t)num_batches_per_core_group_2,
+        (std::uint32_t)num_groups_per_core,
+
+        (std::uint32_t)block_ht_group_2,
+        (std::uint32_t)block_wt,
+        (std::uint32_t)block_ht_group_2 * block_wt,
+
+        (std::uint32_t)subblock_wt,
+        (std::uint32_t)num_subblocks_w,
+
+        (std::uint32_t)per_core_Mt_group_2,
+        (std::uint32_t)per_core_Nt,
+        (std::uint32_t)per_core_Mt_group_2 * per_core_Nt,
+
+        (std::uint32_t)per_core_Nt * TILE_HW * datum_size_bytes,  // per_core_N_tile_bytes
+        (std::uint32_t)num_groups_per_reset,
+        (std::uint32_t)single_tile_size,
+        (std::uint32_t)per_core_Mt_group_2 * Wt / num_batches_per_core_group_2,
         (std::uint32_t)num_groups_per_core * block_wt,
         (std::uint32_t)num_datum_row_per_group_mod_tile_w,
         (std::uint32_t)block_wt_last,
@@ -1620,29 +1919,60 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_out_blocks,
     };
 
-    std::vector<uint32_t> mcast_receiver_compute_compile_time_args = {
+    std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_1 = {
         (std::uint32_t)0,
         (std::uint32_t)gamma.has_value(),
         (std::uint32_t)beta.has_value(),
         (std::uint32_t)num_cores_per_mcast_group,
-        (std::uint32_t)num_batches_per_core,
+        (std::uint32_t)num_batches_per_core_group_1,
         (std::uint32_t)num_groups_per_core,
 
-        (std::uint32_t)block_ht,
+        (std::uint32_t)block_ht_group_1,
         (std::uint32_t)block_wt,
-        (std::uint32_t)block_ht * block_wt,
+        (std::uint32_t)block_ht_group_1 * block_wt,
 
         (std::uint32_t)subblock_wt,
         (std::uint32_t)num_subblocks_w,
 
-        (std::uint32_t)per_core_Mt,
+        (std::uint32_t)per_core_Mt_group_1,
         (std::uint32_t)per_core_Nt,
-        (std::uint32_t)per_core_Mt * per_core_Nt,
+        (std::uint32_t)per_core_Mt_group_1 * per_core_Nt,
 
         (std::uint32_t)per_core_Nt * TILE_HW * datum_size_bytes,  // per_core_N_tile_bytes
         (std::uint32_t)num_groups_per_reset,
         (std::uint32_t)single_tile_size,
-        (std::uint32_t)per_core_Mt * Wt / num_batches_per_core,
+        (std::uint32_t)per_core_Mt_group_1 * Wt / num_batches_per_core_group_1,
+        (std::uint32_t)num_groups_per_core * block_wt,
+        (std::uint32_t)num_datum_row_per_group_mod_tile_w,
+        (std::uint32_t)block_wt_last,
+        (std::uint32_t)(num_datum_row_per_group_mod_tile_w & (num_datum_row_per_group_mod_tile_w - 1)) == 0,
+        (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
+        (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
+        (std::uint32_t)num_out_blocks,
+    };
+    std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_2 = {
+        (std::uint32_t)0,
+        (std::uint32_t)gamma.has_value(),
+        (std::uint32_t)beta.has_value(),
+        (std::uint32_t)num_cores_per_mcast_group,
+        (std::uint32_t)num_batches_per_core_group_2,
+        (std::uint32_t)num_groups_per_core,
+
+        (std::uint32_t)block_ht_group_2,
+        (std::uint32_t)block_wt,
+        (std::uint32_t)block_ht_group_2 * block_wt,
+
+        (std::uint32_t)subblock_wt,
+        (std::uint32_t)num_subblocks_w,
+
+        (std::uint32_t)per_core_Mt_group_2,
+        (std::uint32_t)per_core_Nt,
+        (std::uint32_t)per_core_Mt_group_2 * per_core_Nt,
+
+        (std::uint32_t)per_core_Nt * TILE_HW * datum_size_bytes,  // per_core_N_tile_bytes
+        (std::uint32_t)num_groups_per_reset,
+        (std::uint32_t)single_tile_size,
+        (std::uint32_t)per_core_Mt_group_2 * Wt / num_batches_per_core_group_2,
         (std::uint32_t)num_groups_per_core * block_wt,
         (std::uint32_t)num_datum_row_per_group_mod_tile_w,
         (std::uint32_t)block_wt_last,
@@ -1654,67 +1984,89 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     // compute kernel
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = true;
-    auto mcast_sender_compute_kernels_id = CreateKernel(
+    auto mcast_sender_compute_kernels_id_group_1 = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp",
-        mcast_sender_cores,
+        mcast_sender_cores_group_1,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
-            .compile_args = mcast_sender_compute_compile_time_args,
+            .compile_args = mcast_sender_compute_compile_time_args_group_1,
             .defines = eltwise_binary_defines});
-    auto mcast_receiver_compute_kernels_id = CreateKernel(
+    auto mcast_sender_compute_kernels_id_group_2 = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp",
-        mcast_receiver_cores,
+        mcast_sender_cores_group_2,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
-            .compile_args = mcast_receiver_compute_compile_time_args,
+            .compile_args = mcast_sender_compute_compile_time_args_group_2,
+            .defines = eltwise_binary_defines});
+    auto mcast_receiver_compute_kernels_id_group_1 = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp",
+        mcast_receiver_cores_group_1,
+        tt::tt_metal::ComputeConfig{
+            .math_fidelity = fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .math_approx_mode = math_approx_mode,
+            .compile_args = mcast_receiver_compute_compile_time_args_group_1,
+            .defines = eltwise_binary_defines});
+    auto mcast_receiver_compute_kernels_id_group_2 = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp",
+        mcast_receiver_cores_group_2,
+        tt::tt_metal::ComputeConfig{
+            .math_fidelity = fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .math_approx_mode = math_approx_mode,
+            .compile_args = mcast_receiver_compute_compile_time_args_group_2,
             .defines = eltwise_binary_defines});
 
     // Create circular buffers
     uint32_t in0_cb_index = tt::CBIndex::c_0;
     uint32_t output_cb_index = tt::CBIndex::c_16;
-    CBHandle cb_in0;
-    CBHandle cb_output;
-    if (inplace) {
-        std::map<uint8_t, tt::DataFormat> in0_out0_cb_data_format_spec{
-            {in0_cb_index, in_data_format}, {output_cb_index, in_data_format}};
-        CircularBufferConfig in0_out0_cb_config =
-            tt::tt_metal::CircularBufferConfig(in0_CB_size, in0_out0_cb_data_format_spec)
-                .set_page_size(in0_cb_index, in_single_tile_size)
-                .set_page_size(output_cb_index, in_single_tile_size)
-                .set_globally_allocated_address(*a.buffer());
+    tt::tt_metal::CircularBufferConfig in0_cb_config_group_1 =
+        tt::tt_metal::CircularBufferConfig(in0_CB_size_group_1, {{in0_cb_index, in_data_format}})
+            .set_page_size(in0_cb_index, in_single_tile_size);
+    tt::tt_metal::CircularBufferConfig output_cb_config_group_1 =
+        tt::tt_metal::CircularBufferConfig(out_CB_size_group_1, {{output_cb_index, out_data_format}})
+            .set_page_size(output_cb_index, out_single_tile_size);
 
-        cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in0_out0_cb_config);
-        cb_output = cb_in0;
-    } else {
-        tt::tt_metal::CircularBufferConfig in0_cb_config =
-            tt::tt_metal::CircularBufferConfig(in0_CB_size, {{in0_cb_index, in_data_format}})
-                .set_page_size(in0_cb_index, in_single_tile_size);
-        tt::tt_metal::CircularBufferConfig output_cb_config =
-            tt::tt_metal::CircularBufferConfig(out_CB_size, {{output_cb_index, out_data_format}})
-                .set_page_size(output_cb_index, out_single_tile_size);
+    auto cb_in0_group_1 = tt::tt_metal::CreateCircularBuffer(program, all_cores_group_1, in0_cb_config_group_1);
+    auto cb_output_group_1 = tt::tt_metal::CreateCircularBuffer(program, all_cores_group_1, output_cb_config_group_1);
+    tt::tt_metal::CircularBufferConfig in0_cb_config_group_2 =
+        tt::tt_metal::CircularBufferConfig(in0_CB_size_group_2, {{in0_cb_index, in_data_format}})
+            .set_page_size(in0_cb_index, in_single_tile_size);
+    tt::tt_metal::CircularBufferConfig output_cb_config_group_2 =
+        tt::tt_metal::CircularBufferConfig(out_CB_size_group_2, {{output_cb_index, out_data_format}})
+            .set_page_size(output_cb_index, out_single_tile_size);
 
-        cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in0_cb_config);
-        cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
-    }
+    auto cb_in0_group_2 = tt::tt_metal::CreateCircularBuffer(program, all_cores_group_2, in0_cb_config_group_2);
+    auto cb_output_group_2 = tt::tt_metal::CreateCircularBuffer(program, all_cores_group_2, output_cb_config_group_2);
     // in - stores tilized input
     uint32_t in_cb_index = tt::CBIndex::c_29;
-    tt::tt_metal::CircularBufferConfig in_cb_config =
-        tt::tt_metal::CircularBufferConfig(in_CB_size, {{in_cb_index, in_data_format}})
+    tt::tt_metal::CircularBufferConfig in_cb_config_group_1 =
+        tt::tt_metal::CircularBufferConfig(in_CB_size_group_1, {{in_cb_index, in_data_format}})
             .set_page_size(in_cb_index, in_single_tile_size);
-    auto cb_in = tt::tt_metal::CreateCircularBuffer(program, all_cores, in_cb_config);
+    auto cb_in_group_1 = tt::tt_metal::CreateCircularBuffer(program, all_cores_group_1, in_cb_config_group_1);
+    tt::tt_metal::CircularBufferConfig in_cb_config_group_2 =
+        tt::tt_metal::CircularBufferConfig(in_CB_size_group_2, {{in_cb_index, in_data_format}})
+            .set_page_size(in_cb_index, in_single_tile_size);
+    auto cb_in_group_2 = tt::tt_metal::CreateCircularBuffer(program, all_cores_group_2, in_cb_config_group_2);
     // out - stores tilized output
     if (untilize_out) {
         uint32_t out_cb_index = tt::CBIndex::c_30;
-        tt::tt_metal::CircularBufferConfig out_cb_config =
-            tt::tt_metal::CircularBufferConfig(in_CB_size, {{out_cb_index, in_data_format}})
+        tt::tt_metal::CircularBufferConfig out_cb_config_group_1 =
+            tt::tt_metal::CircularBufferConfig(in_CB_size_group_1, {{out_cb_index, in_data_format}})
                 .set_page_size(out_cb_index, in_single_tile_size);
-        auto cb_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, out_cb_config);
+        auto cb_out_group_1 = tt::tt_metal::CreateCircularBuffer(program, all_cores_group_1, out_cb_config_group_1);
+        tt::tt_metal::CircularBufferConfig out_cb_config_group_2 =
+            tt::tt_metal::CircularBufferConfig(in_CB_size_group_2, {{out_cb_index, in_data_format}})
+                .set_page_size(out_cb_index, in_single_tile_size);
+        auto cb_out_group_2 = tt::tt_metal::CreateCircularBuffer(program, all_cores_group_2, out_cb_config_group_2);
     }
     // in2 scaler - for partial Ex
     uint32_t in2_cb_index = tt::CBIndex::c_2;
@@ -1771,28 +2123,44 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     }
     // x
     uint32_t x_cb_index = tt::CBIndex::c_24;
-    tt::tt_metal::CircularBufferConfig x_cb_config =
-        tt::tt_metal::CircularBufferConfig(x_CB_size, {{x_cb_index, cb_data_format}})
+    tt::tt_metal::CircularBufferConfig x_cb_config_group_1 =
+        tt::tt_metal::CircularBufferConfig(x_CB_size_group_1, {{x_cb_index, cb_data_format}})
             .set_page_size(x_cb_index, single_tile_size);
-    auto cb_x = tt::tt_metal::CreateCircularBuffer(program, all_cores, x_cb_config);
+    auto cb_x_group_1 = tt::tt_metal::CreateCircularBuffer(program, all_cores_group_1, x_cb_config_group_1);
+    tt::tt_metal::CircularBufferConfig x_cb_config_group_2 =
+        tt::tt_metal::CircularBufferConfig(x_CB_size_group_2, {{x_cb_index, cb_data_format}})
+            .set_page_size(x_cb_index, single_tile_size);
+    auto cb_x_group_2 = tt::tt_metal::CreateCircularBuffer(program, all_cores_group_2, x_cb_config_group_2);
     // xmm
     uint32_t xmm_cb_index = tt::CBIndex::c_25;
-    tt::tt_metal::CircularBufferConfig xmm_cb_config =
-        tt::tt_metal::CircularBufferConfig(xmm_CB_size, {{xmm_cb_index, cb_data_format}})
+    tt::tt_metal::CircularBufferConfig xmm_cb_config_group_1 =
+        tt::tt_metal::CircularBufferConfig(xmm_CB_size_group_1, {{xmm_cb_index, cb_data_format}})
             .set_page_size(xmm_cb_index, single_tile_size);
-    auto cb_xmm = tt::tt_metal::CreateCircularBuffer(program, all_cores, xmm_cb_config);
+    auto cb_xmm_group_1 = tt::tt_metal::CreateCircularBuffer(program, all_cores_group_1, xmm_cb_config_group_1);
+    tt::tt_metal::CircularBufferConfig xmm_cb_config_group_2 =
+        tt::tt_metal::CircularBufferConfig(xmm_CB_size_group_2, {{xmm_cb_index, cb_data_format}})
+            .set_page_size(xmm_cb_index, single_tile_size);
+    auto cb_xmm_group_2 = tt::tt_metal::CreateCircularBuffer(program, all_cores_group_2, xmm_cb_config_group_2);
     // xmm2
     uint32_t xmm2_cb_index = tt::CBIndex::c_23;
-    tt::tt_metal::CircularBufferConfig xmm2_cb_config =
-        tt::tt_metal::CircularBufferConfig(xmm2_CB_size, {{xmm2_cb_index, cb_data_format}})
+    tt::tt_metal::CircularBufferConfig xmm2_cb_config_group_1 =
+        tt::tt_metal::CircularBufferConfig(xmm2_CB_size_group_1, {{xmm2_cb_index, cb_data_format}})
             .set_page_size(xmm2_cb_index, single_tile_size);
-    auto cb_xmm2 = tt::tt_metal::CreateCircularBuffer(program, all_cores, xmm2_cb_config);
+    auto cb_xmm2_group_1 = tt::tt_metal::CreateCircularBuffer(program, all_cores_group_1, xmm2_cb_config_group_1);
+    tt::tt_metal::CircularBufferConfig xmm2_cb_config_group_2 =
+        tt::tt_metal::CircularBufferConfig(xmm2_CB_size_group_2, {{xmm2_cb_index, cb_data_format}})
+            .set_page_size(xmm2_cb_index, single_tile_size);
+    auto cb_xmm2_group_2 = tt::tt_metal::CreateCircularBuffer(program, all_cores_group_2, xmm2_cb_config_group_2);
     // xmm3
     uint32_t xmm3_cb_index = tt::CBIndex::c_22;
-    tt::tt_metal::CircularBufferConfig xmm3_cb_config =
-        tt::tt_metal::CircularBufferConfig(xmm3_CB_size, {{xmm3_cb_index, cb_data_format}})
+    tt::tt_metal::CircularBufferConfig xmm3_cb_config_group_1 =
+        tt::tt_metal::CircularBufferConfig(xmm3_CB_size_group_1, {{xmm3_cb_index, cb_data_format}})
             .set_page_size(xmm3_cb_index, single_tile_size);
-    auto cb_xmm3 = tt::tt_metal::CreateCircularBuffer(program, all_cores, xmm3_cb_config);
+    auto cb_xmm3_group_1 = tt::tt_metal::CreateCircularBuffer(program, all_cores_group_1, xmm3_cb_config_group_1);
+    tt::tt_metal::CircularBufferConfig xmm3_cb_config_group_2 =
+        tt::tt_metal::CircularBufferConfig(xmm3_CB_size_group_2, {{xmm3_cb_index, cb_data_format}})
+            .set_page_size(xmm3_cb_index, single_tile_size);
+    auto cb_xmm3_group_2 = tt::tt_metal::CreateCircularBuffer(program, all_cores_group_2, xmm3_cb_config_group_2);
     // ex_partial
     uint32_t ex_cb_partial_index = tt::CBIndex::c_8;
     tt::tt_metal::CircularBufferConfig ex_cb_partial_config =
@@ -1840,9 +2208,21 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
 
     // Runtime Args
     std::vector<KernelHandle> writer_kernel_ids;
-    float winv = 1.0f / std::sqrt(num_rows_per_batch_per_core * num_datum_row_per_group);  // bcast-w scaler
-    bfloat16 bfloat_winv_value = bfloat16(winv);
-    uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
+    float winv_group_1 =
+        1.0f / std::sqrt(num_rows_per_batch_per_core_group_1 * num_datum_row_per_group);  // bcast-w scaler
+    bfloat16 bfloat_winv_value_group_1 = bfloat16(winv_group_1);
+    uint32_t packed_winv_value_group_1 =
+        pack_two_bfloat16_into_uint32({bfloat_winv_value_group_1, bfloat_winv_value_group_1});
+    float winv_group_2 = winv_group_1;
+    bfloat16 bfloat_winv_value_group_2 = bfloat_winv_value_group_1;
+    uint32_t packed_winv_value_group_2 = packed_winv_value_group_1;
+    if (num_batches_per_core_group_2 > 0) {
+        winv_group_2 =
+            1.0f / std::sqrt(num_rows_per_batch_per_core_group_2 * num_datum_row_per_group);  // bcast-w scaler
+        bfloat_winv_value_group_2 = bfloat16(winv_group_2);
+        packed_winv_value_group_2 =
+            pack_two_bfloat16_into_uint32({bfloat_winv_value_group_2, bfloat_winv_value_group_2});
+    }
     float cinv = 1.0f / std::sqrt(num_cores_per_batch * num_cores_per_group);  // bcast-cores scaler
     bfloat16 bfloat_cinv_value = bfloat16(cinv);
     uint32_t packed_cinv_value = pack_two_bfloat16_into_uint32({bfloat_cinv_value, bfloat_cinv_value});
@@ -1852,7 +2232,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     } e;
     e.f = eps;
 
-    log_debug(tt::LogOp, "num_rows_per_batch_per_core: {}", num_rows_per_batch_per_core);
+    log_debug(tt::LogOp, "num_rows_per_batch_per_core_group_1: {}", num_rows_per_batch_per_core_group_1);
+    log_debug(tt::LogOp, "num_rows_per_batch_per_core_group_2: {}", num_rows_per_batch_per_core_group_2);
     log_debug(tt::LogOp, "num_datum_row_per_group: {}", num_datum_row_per_group);
     log_debug(tt::LogOp, "num_cores_per_batch: {}", num_cores_per_batch);
     log_debug(tt::LogOp, "num_cores_per_group: {}", num_cores_per_group);
@@ -1864,8 +2245,16 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         for (int j = 0; j < group.size(); ++j) {
             CoreCoord core = group[j];
             CoreCoord core_physical = device->worker_core_from_logical_core(core);
-            uint32_t in0_start_id = per_core_Mt * Wt * core.x + per_core_Nt * core.y;
-            uint32_t out_tile_start_id = per_core_Mt * Wt * core.x + per_core_Nt * core.y;
+            uint32_t in0_start_id, out_tile_start_id;
+            if (equal_batches_per_core || (core.x <= last_row_with_extra_batch)) {
+                in0_start_id = per_core_Mt_group_1 * Wt * core.x + per_core_Nt * core.y;
+                out_tile_start_id = per_core_Mt_group_1 * Wt * core.x + per_core_Nt * core.y;
+            } else {
+                in0_start_id = per_core_Mt_group_1 * Wt * (last_row_with_extra_batch + 1) +
+                               per_core_Mt_group_2 * Wt * (core.x - last_row_with_extra_batch - 1) +
+                               per_core_Nt * core.y;
+                out_tile_start_id = in0_start_id;
+            }
 
             if (j == 0) {  // mcast sender
                 // get the bounding box for the mcast
@@ -1966,8 +2355,13 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
                     mcast_noc_xy.push_back(coord.y);
                 }
                 mcast_sender_args.insert(mcast_sender_args.end(), mcast_noc_xy.begin(), mcast_noc_xy.end());
-                tt::tt_metal::SetRuntimeArgs(program, reader_mcast_sender_kernels_id, core, mcast_sender_args);
-
+                if (equal_batches_per_core || (core.x <= last_row_with_extra_batch)) {
+                    tt::tt_metal::SetRuntimeArgs(
+                        program, reader_mcast_sender_kernels_id_group_1, core, mcast_sender_args);
+                } else {
+                    tt::tt_metal::SetRuntimeArgs(
+                        program, reader_mcast_sender_kernels_id_group_2, core, mcast_sender_args);
+                }
             } else {  // mcast receiver
                 log_debug(tt::LogOp, "mcast receiver receive from coord: {} {}", group.front().x, group.front().y);
 
@@ -1979,7 +2373,13 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
                     (std::uint32_t)Wt,                 // num channel tiles
                     (std::uint32_t)(device->worker_core_from_logical_core(group.front()).x),
                     (std::uint32_t)(device->worker_core_from_logical_core(group.front()).y)};
-                tt::tt_metal::SetRuntimeArgs(program, reader_mcast_receiver_kernels_id, core, mcast_receiver_args);
+                if (equal_batches_per_core || (core.x <= last_row_with_extra_batch)) {
+                    tt::tt_metal::SetRuntimeArgs(
+                        program, reader_mcast_receiver_kernels_id_group_1, core, mcast_receiver_args);
+                } else {
+                    tt::tt_metal::SetRuntimeArgs(
+                        program, reader_mcast_receiver_kernels_id_group_2, core, mcast_receiver_args);
+                }
             }
         }
     }
@@ -1990,11 +2390,22 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t input_mask_tile_start_id = 0;
     for (int i = 0; i < core_coords.size(); ++i) {
         auto core = core_coords[i];
-        uint32_t out_tile_start_id = per_core_Mt * Wt * core.x + per_core_Nt * core.y;
+        uint32_t out_tile_start_id;
+        if (equal_batches_per_core || (core.x <= last_row_with_extra_batch)) {
+            out_tile_start_id = per_core_Mt_group_1 * Wt * core.x + per_core_Nt * core.y;
+        } else {
+            out_tile_start_id = per_core_Mt_group_1 * Wt * (last_row_with_extra_batch + 1) +
+                                per_core_Mt_group_2 * Wt * (core.x - last_row_with_extra_batch - 1) +
+                                per_core_Nt * core.y;
+        }
 
         std::vector<uint32_t> writer_mcast_sender_args;
         writer_mcast_sender_args.push_back(packed_cinv_value);
-        writer_mcast_sender_args.push_back(packed_winv_value);
+        if (equal_batches_per_core || (core.x <= last_row_with_extra_batch)) {
+            writer_mcast_sender_args.push_back(packed_winv_value_group_1);
+        } else {
+            writer_mcast_sender_args.push_back(packed_winv_value_group_2);
+        }
         writer_mcast_sender_args.push_back(e.u);
         writer_mcast_sender_args.push_back(out_dram_addr);
         writer_mcast_sender_args.push_back(gamma_dram_addr);
@@ -2005,8 +2416,13 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         writer_mcast_sender_args.push_back(beta_tile_start_id);
         writer_mcast_sender_args.push_back(input_mask_tile_start_id);
         writer_mcast_sender_args.push_back(Wt);
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernels_id, core, writer_mcast_sender_args);
-        writer_kernel_ids.push_back(writer_kernels_id);
+        if (equal_batches_per_core || (core.x <= last_row_with_extra_batch)) {
+            tt::tt_metal::SetRuntimeArgs(program, writer_kernels_id_group_1, core, writer_mcast_sender_args);
+            writer_kernel_ids.push_back(writer_kernels_id_group_1);
+        } else {
+            tt::tt_metal::SetRuntimeArgs(program, writer_kernels_id_group_2, core, writer_mcast_sender_args);
+            writer_kernel_ids.push_back(writer_kernels_id_group_2);
+        }
 
         if (gamma.has_value()) {
             gamma_tile_start_id =
@@ -2022,20 +2438,20 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         }
     }
 
-    auto override_runtime_args_callback = [writer_kernel_ids, cb_in0, cb_output, num_cores, grid_size](
+    auto override_runtime_args_callback = [writer_kernel_ids, num_cores, grid_size](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_buffer_a = input_tensors.at(0).buffer();
+        // auto src_buffer_a = input_tensors.at(0).buffer();
         auto gamma_tensor = optional_input_tensors.at(0);
         auto beta_tensor = optional_input_tensors.at(1);
         auto mask_tensor = optional_input_tensors.at(2);
-        auto dst_buffer = output_tensors.at(0).buffer();
+        // auto dst_buffer = output_tensors.at(0).buffer();
 
-        UpdateDynamicCircularBufferAddress(program, cb_in0, *src_buffer_a);
-        UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+        // UpdateDynamicCircularBufferAddress(program, cb_in0, *src_buffer_a);
+        // UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
 
         for (uint32_t i = 0; i < num_cores; ++i) {
             CoreCoord core = {i % grid_size.x, i / grid_size.x};
