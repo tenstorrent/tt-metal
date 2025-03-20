@@ -32,6 +32,7 @@ void kernel_main() {
     size_t arg_idx = 1;
     // Load the input tensor spec
     address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
+    uint32_t out_ready_sem_bank_addr_concat = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_tiles_per_core = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t first_core_tile_start_offset = get_arg_val<uint32_t>(arg_idx++);
@@ -78,7 +79,8 @@ void kernel_main() {
     constexpr uint32_t temp_cb_id = get_compile_time_arg_val(13);
 
     uint32_t arg_sem_idx = 2 + 2 * in_num_cores;
-    uint32_t out_ready_sem_bank_addr_concat = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx);
+    DPRINT << "out_ready_sem_bank_addr_concat is at arg index: " << (uint32_t)(concat_arg_start + arg_sem_idx);
+    // uint32_t out_ready_sem_bank_addr_concat = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx);
     uint32_t out_ready_sem_wait_value_concat = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 1);
     uint32_t out_ready_sem_noc0_x_concat = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 2);
     uint32_t out_ready_sem_noc0_y_concat = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 3);

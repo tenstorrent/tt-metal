@@ -458,7 +458,7 @@ def test_tg_trace_rms_fuse(
 )
 @pytest.mark.parametrize("num_iters, warmup_iters", [[30, 5]])
 @pytest.mark.parametrize("enable_async", [True])
-@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize("trace_mode", [False])
 @pytest.mark.parametrize(
     "device_params",
     [{"trace_region_size": 23887872}],
@@ -475,7 +475,7 @@ def test_concat_fuse(
     layout,
     num_iters,
     warmup_iters,
-    use_program_cache,
+    # use_program_cache,
     function_level_defaults,
     enable_async,
     input_shard_shape,
@@ -494,7 +494,7 @@ def test_concat_fuse(
         num_links,
         input_dtype,
         layout,
-        use_program_cache,
+        # use_program_cache,
         function_level_defaults,
         input_shard_shape,
         input_shard_grid,

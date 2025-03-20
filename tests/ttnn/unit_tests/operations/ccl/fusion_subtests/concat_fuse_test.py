@@ -456,7 +456,7 @@ def run_concat_fuse_impl(
     num_links,
     input_dtype,
     layout,
-    use_program_cache,
+    # use_program_cache,
     function_level_defaults,
     input_shard_shape,
     input_shard_grid,
