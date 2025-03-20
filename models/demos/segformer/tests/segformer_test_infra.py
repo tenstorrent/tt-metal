@@ -161,9 +161,11 @@ class SegformerTestInfra:
         torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1)
         # torch_input_tensor = torch_input_tensor.reshape(1, 1, h * w * n, c)
         tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        # padding moved to tests individually
         # tt_inputs_host = ttnn.pad(tt_inputs_host, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
         # tt_inputs_host_padded = ttnn.pad(tt_inputs_host, [n, h, w, 32], [0, 0, 0, 0], 0)
-        return tt_inputs_host, [n, h, w, 32], input_mem_config
+        return tt_inputs_host, input_mem_config, [n, h, w, 32]
 
     def setup_dram_sharded_input(self, device, torch_input_tensor=None, mesh_mapper=None, mesh_composer=None):
         tt_inputs_host, input_mem_config = self.setup_l1_sharded_input(device)
