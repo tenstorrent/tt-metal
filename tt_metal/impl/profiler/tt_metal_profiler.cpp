@@ -324,7 +324,7 @@ void peekDeviceData(IDevice* device, std::vector<CoreCoord>& worker_cores) {
     ZoneName(zoneName.c_str(), zoneName.size());
     if (tt_metal_device_profiler_map.find(device_id) != tt_metal_device_profiler_map.end()) {
         tt_metal_device_profiler_map.at(device_id).device_sync_new_events.clear();
-        tt_metal_device_profiler_map.at(device_id).dumpResults(device, worker_cores);
+        tt_metal_device_profiler_map.at(device_id).dumpResults(device, worker_cores, ProfilerDumpState::FORCE_UMD_READ);
         for (auto& event : tt_metal_device_profiler_map.at(device_id).device_events) {
             if (event.zone_name.find("SYNC-ZONE") != std::string::npos) {
                 ZoneScopedN("Adding_device_sync_event");
@@ -357,13 +357,6 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
     }
 
     if (device_sender != nullptr and device_receiver != nullptr) {
-        // Not supported for MeshDevice
-        if (auto mesh_sender = device_sender->get_mesh_device()) {
-            return;
-        }
-        if (auto mesh_receiver = device_receiver->get_mesh_device()) {
-            return;
-        }
         constexpr std::uint16_t sample_count = 240;
         constexpr std::uint16_t sample_size = 16;
         constexpr std::uint16_t channel_count = 1;
@@ -409,19 +402,12 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
             eth_receiver_core,
             tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = ct_args});
 
-        try {
-            tt::tt_metal::detail::CompileProgram(device_sender, program_sender);
-            tt::tt_metal::detail::CompileProgram(device_receiver, program_receiver);
-        } catch (std::exception& e) {
-            log_error("Failed compile: {}", e.what());
-            throw e;
-        }
-
-        tt_metal::EnqueueProgram(device_sender->command_queue(), program_sender, false);
-        tt_metal::EnqueueProgram(device_receiver->command_queue(), program_receiver, false);
-
-        tt_metal::Finish(device_sender->command_queue());
-        tt_metal::Finish(device_receiver->command_queue());
+        tt_metal::detail::LaunchProgram(
+            device_sender, program_sender, false /* wait_until_cores_done */, true /* force_slow_dispatch */);
+        tt_metal::detail::LaunchProgram(
+            device_receiver, program_receiver, false /* wait_until_cores_done */, true /* force_slow_dispatch */);
+        tt_metal::detail::WaitProgramDone(device_sender, program_sender, false);
+        tt_metal::detail::WaitProgramDone(device_receiver, program_receiver, false);
 
         CoreCoord sender_core = {eth_sender_core.x, eth_sender_core.y};
         std::vector<CoreCoord> sender_cores = {

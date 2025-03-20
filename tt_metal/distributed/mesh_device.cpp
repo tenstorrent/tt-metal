@@ -207,7 +207,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     for (size_t i = 0; i < device_ids.size(); i++) {
         submeshes[i]->initialize(num_command_queues, l1_small_size, trace_region_size, l1_bank_remap);
         for (auto device : submeshes[i]->get_devices()) {
-            dynamic_cast<Device*>(device)->mesh_device = mesh_device;
+            dynamic_cast<Device*>(device)->mesh_device = submeshes[i];
         }
         result[device_ids[i]] = submeshes[i];
     }
