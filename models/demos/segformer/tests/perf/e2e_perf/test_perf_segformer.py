@@ -28,7 +28,8 @@ def test_perf_segformer(device, batch_size, act_dtype, weight_dtype, expected_co
         model_location_generator=None,
     )
 
-    tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
+    tt_inputs_host, input_mem_config, padded_size = test_infra.setup_l1_sharded_input(device)
+    tt_inputs_host = ttnn.pad(tt_inputs_host, padded_size, [0, 0, 0, 0], 0)
 
     # JIT Run
     start_jit = time.time()
