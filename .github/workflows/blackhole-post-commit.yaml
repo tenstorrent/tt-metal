@@ -26,7 +26,7 @@ on:
           - ASan
           - TSan
   schedule:
-    - cron: "0 */2 * * *"
+    - cron: "0 */4 * * *"
   # Pause this since not enough runners to support every commit to main
   # push:
   #  branches: ["main"]
