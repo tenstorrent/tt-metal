@@ -28,6 +28,41 @@ jobs:
     with:
       version: 22.04
 
+  find-changes:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
+      docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
+    steps:
+      - id: find-changes
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
+
+  build:
+    if: ${{ needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.any-code-changed == 'true' ||
+            needs.find-changes.outputs.docs-changed == 'true'
+        }}
+    needs: find-changes
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      build-type: Release
+      build-wheel: true
+      version: 22.04
+
+  build-docs:
+    if: ${{ needs.find-changes.outputs.any-code-changed == 'true' ||
+            needs.find-changes.outputs.docs-changed == 'true'
+        }}
+    needs: [find-changes, build]
+    uses: ./.github/workflows/docs-latest-public.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
   workflow-status:
@@ -41,13 +76,13 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [code-analysis]
+    needs: [code-analysis, find-changes, build, build-docs]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
-          required-jobs: "code-analysis"
-          optional-jobs: ""
+          required-jobs: "code-analysis, find-changes"
+          optional-jobs: "build, build-docs"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'

@@ -18,6 +18,8 @@ outputs:
     value: ${{ steps.find-changed-files.outputs.submodule-changed }}
   any-code-changed:
     value: ${{ steps.find-changed-files.outputs.any-code-changed }}
+  docs-changed:
+    value: ${{ steps.find-changed-files.outputs.docs-changed }}
 
 runs:
   using: "composite"

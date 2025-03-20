@@ -5,7 +5,9 @@
 #include <tt-metalium/dispatch_mem_map.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/fabric_host_interface.h>
+#include "indestructible.hpp"
 #include "rtoptions.hpp"
+#include "hal.hpp"
 
 namespace tt::tt_metal {
 
@@ -104,8 +106,8 @@ uint8_t DispatchMemMap::get_dispatch_message_update_offset(uint32_t index) const
 }
 
 DispatchMemMap& DispatchMemMap::get_instance() {
-    static DispatchMemMap instance;
-    return instance;
+    static tt::stl::Indestructible<DispatchMemMap> instance;
+    return instance.get();
 }
 
 // Reset the instance using the settings for the core_type and num_hw_cqs.
