@@ -5,8 +5,9 @@
 import torch
 import pytest
 import ttnn
+import random
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
-from models.utility_functions import skip_for_blackhole
+from models.utility_functions import skip_for_blackhole, is_grayskull, skip_for_grayskull
 
 
 @pytest.mark.parametrize(
@@ -978,3 +979,27 @@ def test_unary_sqrt_ttnn(input_shapes, device):
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([64, 64])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@skip_for_grayskull("Unsupported in Grayskull")
+def test_unary_bitwise_not(input_shapes, device):
+    torch.manual_seed(213919)
+    in_data1 = torch.randint(-1000, 1000, input_shapes, dtype=torch.int32)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.bitwise_not(input_tensor1)
+    golden_function = ttnn.get_golden_function(ttnn.bitwise_not)
+    golden_tensor = golden_function(in_data1)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
+    assert pcc >= 0.99
