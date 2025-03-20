@@ -14,7 +14,8 @@ void RMSNormLayer::initialize_tensors(uint32_t features) {
         autograd::create_tensor(core::ones(core::create_shape({1, 1, 1, features}), &autograd::ctx().get_device()));
 }
 
-RMSNormLayer::RMSNormLayer(uint32_t features, float epsilon) : m_epsilon(epsilon) {
+RMSNormLayer::RMSNormLayer(uint32_t features, float epsilon, bool use_composite) :
+    m_epsilon(epsilon), m_use_composite(use_composite) {
     initialize_tensors(features);
 
     create_name("rmsnorm");
@@ -22,7 +23,11 @@ RMSNormLayer::RMSNormLayer(uint32_t features, float epsilon) : m_epsilon(epsilon
 }
 
 autograd::TensorPtr RMSNormLayer::operator()(const autograd::TensorPtr& tensor) {
-    return ops::rmsnorm(tensor, m_gamma, m_epsilon);
+    if (m_use_composite) {
+        return ops::rmsnorm(tensor, m_gamma, m_epsilon);
+    } else {
+        return ops::rmsnorm_composite(tensor, m_gamma, m_epsilon);
+    }
 }
 
 }  // namespace ttml::modules
