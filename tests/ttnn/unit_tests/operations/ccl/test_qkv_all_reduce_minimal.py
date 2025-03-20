@@ -523,7 +523,7 @@ def run_all_reduce_qkv_heads_fuse_impl(
         # tt_qkv Shape([1, 1, 32, 1280])
         # tt_qkv_reduced Shape([1, 1, 32, 1280])
         # MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=7,y=4)]},shape={32, 32},orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
-        tt_qkv_reduced, *_ = ttnn.experimental.all_reduce_create_qkv_heads(
+        tt_qkv_reduced, q_dummy, k_dummy, v_dummy = ttnn.experimental.all_reduce_create_qkv_heads(
             tt_qkv,
             tt_intermediate_tensors[0],
             cluster_axis=cluster_axis,
