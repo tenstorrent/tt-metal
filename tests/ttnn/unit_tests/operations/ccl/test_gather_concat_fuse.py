@@ -312,7 +312,7 @@ def run_line_all_gather_concat_on_TG_with_mesh_tensor_along_rows(
     # here
     output_tensor_concat = full_input_tensor_unfractured[:, :, :8, :]
     print("output_tensor_concat1:", output_tensor_concat.shape)
-    output_tensor_concat = output_tensor_concat.reshape(8, 1, 32, 1024)
+    output_tensor_concat = output_tensor_concat.reshape(num_all_gather_instances, 1, 32, 1024)
     print("output_tensor_concat2:", output_tensor_concat.shape)
 
     output_golden[:, :, :, :] = output_tensor_concat.repeat(repeat_factor)
