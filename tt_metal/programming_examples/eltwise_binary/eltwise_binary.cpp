@@ -35,10 +35,10 @@ struct BinaryOpType {
     static const auto all() { return magic_enum::enum_values<Enum>(); }
 };
 
-std::map<string, string> get_defines(BinaryOpType::Enum op_type) {
-    std::map<string, string> defines;
+std::map<std::string, std::string> get_defines(BinaryOpType::Enum op_type) {
+    std::map<std::string, std::string> defines;
     // TODO(AP): remove duplication
-    string op_name, op_binary_type;
+    std::string op_name, op_binary_type;
     switch (op_type) {
         case BinaryOpType::ADD:
             op_name = "add_tiles";
