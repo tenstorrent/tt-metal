@@ -1540,6 +1540,13 @@ TEST_F(CommandQueueSingleCardProgramFixture, TestLogicalCoordinatesDataMovement)
     }
 }
 
+// Ensure the compute core can access their own logical coordinate. Same binary enqueued to multiple cores.
+TEST_F(CommandQueueSingleCardProgramFixture, TestLogicalCoordinatesCompute) {
+    for (IDevice* device : devices_) {
+        local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE);
+    }
+}
+
 // Ensure the eth core can access their own logical coordinate. Same binary enqueued to multiple cores.
 TEST_F(CommandQueueSingleCardProgramFixture, TestLogicalCoordinatesEth) {
     for (IDevice* device : devices_) {
@@ -1558,6 +1565,14 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesDataMo
         local_test_functions::test_my_coordinates(device, tt::RISCV::BRISC, 1);
         local_test_functions::test_my_coordinates(device, tt::RISCV::NCRISC);
         local_test_functions::test_my_coordinates(device, tt::RISCV::NCRISC, 1);
+    }
+}
+
+// Ensure the compute core can access their own logical coordinate. Same binary enqueued to multiple cores.
+TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesCompute) {
+    for (IDevice* device : devices_) {
+        local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE);
+        local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE, 1);
     }
 }
 
