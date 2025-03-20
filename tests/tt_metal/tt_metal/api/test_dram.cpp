@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dispatch_fixture.hpp"
+#include "device_fixture.hpp"
 #include "gtest/gtest.h"
 #include "kernel_types.hpp"
 #include <tt-metalium/host_api.hpp>
@@ -247,7 +248,7 @@ TEST_F(DispatchFixture, TensixDRAMLoopbackSingleCoreDB) {
     }
 }
 
-TEST_F(DispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
+TEST_F(BlackholeSingleCardFixture, ActiveEthDRAMLoopbackSingleCore) {
     constexpr uint32_t buffer_size = 2 * 1024 * 25;
 
     if (!this->IsSlowDispatch()) {
