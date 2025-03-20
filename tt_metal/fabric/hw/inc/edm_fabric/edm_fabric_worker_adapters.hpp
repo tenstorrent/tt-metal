@@ -105,7 +105,7 @@ struct WorkerToFabricEdmSenderImpl {
         volatile uint32_t* const worker_teardown_addr,
         uint32_t local_buffer_index_addr,
         uint8_t data_noc_cmd_buf,
-        uint8_t credit_noc_cmd_buf) :
+        uint8_t sync_noc_cmd_buf) :
         edm_buffer_addr(edm_buffer_base_addr),
         edm_buffer_slot_wrptr_addr(
             connected_to_persistent_fabric ? edm_l1_sem_id
@@ -128,8 +128,8 @@ struct WorkerToFabricEdmSenderImpl {
         edm_noc_x(edm_worker_x),
         edm_noc_y(edm_worker_y),
         data_noc_cmd_buf(data_noc_cmd_buf),
-        credit_noc_cmd_buf(credit_noc_cmd_buf) {
-        setup_edm_noc_cmd_buf(data_noc_cmd_buf, credit_noc_cmd_buf);
+        sync_noc_cmd_buf(sync_noc_cmd_buf) {
+        setup_edm_noc_cmd_buf(data_noc_cmd_buf, sync_noc_cmd_buf);
         ASSERT(buffer_size_bytes > 0);
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
             ASSERT(num_buffers_per_channel == EDM_NUM_BUFFER_SLOTS);
@@ -140,12 +140,12 @@ struct WorkerToFabricEdmSenderImpl {
         }
     }
 
-    FORCE_INLINE void setup_edm_noc_cmd_buf(uint8_t data_cmd_buf, uint8_t credit_cmd_buf) const {
+    FORCE_INLINE void setup_edm_noc_cmd_buf(uint8_t data_cmd_buf, uint8_t sync_cmd_buf) const {
         uint64_t edm_noc_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0, edm_to_local_chip_noc);
         noc_async_write_one_packet_with_trid_set_state(edm_noc_addr, data_cmd_buf, edm_to_local_chip_noc);
         const uint64_t noc_sem_addr =
             get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr, edm_to_local_chip_noc);
-        noc_inline_dw_write_set_state(noc_sem_addr, 0xF, credit_cmd_buf, edm_to_local_chip_noc);
+        noc_inline_dw_write_set_state(noc_sem_addr, 0xF, sync_cmd_buf, edm_to_local_chip_noc);
     }
 
     FORCE_INLINE bool edm_has_space_for_packet() const {
@@ -316,13 +316,13 @@ struct WorkerToFabricEdmSenderImpl {
 
     // the cmd buffer is used for edm-edm path
     uint8_t data_noc_cmd_buf;
-    uint8_t credit_noc_cmd_buf;
+    uint8_t sync_noc_cmd_buf;
 
 private:
     template <bool stateful_api = false>
     FORCE_INLINE void update_edm_buffer_slot_wrptr(uint8_t noc = noc_index) {
         if constexpr (stateful_api) {
-            noc_inline_dw_write_with_state(*this->buffer_slot_wrptr_ptr, this->credit_noc_cmd_buf, noc);
+            noc_inline_dw_write_with_state(*this->buffer_slot_wrptr_ptr, this->sync_noc_cmd_buf, noc);
         } else {
             const uint64_t noc_sem_addr =
                 get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr, noc);
