@@ -14,6 +14,8 @@
 
 namespace ttnn::operations::unary::program {
 
+static const std::string compute_root_sharded = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/";
+
 using namespace tt::constants;
 using namespace tt::tt_metal::experimental;
 
@@ -121,10 +123,8 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     bool math_approx_mode = std::all_of(
         args.op_chain.begin(), args.op_chain.end(), [](const auto& u) { return utils::get_op_approx_mode(u.op_type); });
     std::map<string, string> unary_defines = utils::get_block_defines(args.op_chain);
-    auto path = get_kernel_path("eltwise_sfpu.cpp");
-    if (ops_chain[0].op_type == UnaryOpType::MISH) {
-        path = get_kernel_path("mish_kernel.cpp");
-    }
+    auto path = utils::get_compute_kernel_path(ops_chain[0].op_type, compute_root_sharded);
+
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
         path,
