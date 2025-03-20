@@ -156,9 +156,9 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     TT_FATAL(num_measurement_iterations > 0, "Won't have data without at least one measurement iteration");
     tt::tt_metal::IDevice* device = device_;
     TT_ASSERT(
-        use_program_cache,
-        "If program cache is disabled, the test will have an unrealistically high dispatch overhead and will not be "
-        "representative of expected performance")
+        num_warmup_iterations > 0 && use_program_cache,
+        "Test requires a warmup iteration to be performed with program cache enabled, else unrealistically high "
+        "dispatch overhead and will be observed and is not representative of expected performance");
     if (use_program_cache) {
         device->enable_program_cache();
     }
@@ -304,6 +304,9 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
                 device->synchronize();
                 output_tensor.deallocate();
             }
+
+            // Note that time is measured with chrono around the ops, so there is some overhead from measuring on the
+            // host side instead of on device.
             std::chrono::duration<double> total_time = std::chrono::duration<double>::zero();
 
             // Performance measurement iterations
