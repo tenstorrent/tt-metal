@@ -647,11 +647,13 @@ void launch_on_mesh_device(
 
         enqueue_mesh_workload(mesh_workload);
 
+        TT_FATAL(mesh_workload.get_programs().size() >= 1, "Mesh workload must contain at least one program");
+        const auto& first_program = mesh_workload.get_programs().begin()->second;
         TracyOpTTNNDevice(
             device_operation_t{},
             device_operation_id,
             device->id(),
-            *program,
+            first_program,
             operation_attributes,
             tensor_args,
             tensor_return_value);
