@@ -273,8 +273,9 @@ class Qwen2_5_VLVisionAttention(nn.Module):
         else:
             cos, sin = position_embeddings
 
-        # NOCOMMIT: Skip RoPE
-        # q, k = apply_rotary_pos_emb_vision(q, k, cos, sin)
+        print(cos.shape, sin.shape)
+        print(cos)
+        q, k = apply_rotary_pos_emb_vision(q, k, cos, sin)
 
         attention_mask = torch.full(
             [1, seq_length, seq_length], torch.finfo(q.dtype).min, device=q.device, dtype=q.dtype

@@ -706,19 +706,19 @@ class Attention(LightweightModule):
 
         ttnn.deallocate(xqkv_fused)
 
-        # ###
-        # # Rotary embeddings
-        # ###
+        ###
+        # Rotary embeddings
+        ###
 
-        # if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
-        #     q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
+        if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
+            q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
 
-        # # FIXME: workaround until rotary embeddings correctly supports sub-tile head dims
-        # self.padded_head_dim = math.ceil(self.head_dim / self.tile_size) * self.tile_size
-        # pad_head_dim = lambda x: ttnn.pad(
-        #     x, (x.shape[0], x.shape[1], x.shape[2], self.padded_head_dim), (0, 0, 0, 0), 0.0
-        # )
-        # rot_mats = [pad_head_dim(r) for r in rot_mats]
+        # FIXME: workaround until rotary embeddings correctly supports sub-tile head dims
+        self.padded_head_dim = math.ceil(self.head_dim / self.tile_size) * self.tile_size
+        pad_head_dim = lambda x: ttnn.pad(
+            x, (x.shape[0], x.shape[1], x.shape[2], self.padded_head_dim), (0, 0, 0, 0), 0.0
+        )
+        rot_mats = [pad_head_dim(r) for r in rot_mats]
 
         # print(f"{q_heads_1QSD_pre_rot.shape=}")
         # print(f"{k_heads_1KSD_pre_rot.shape=}")
@@ -726,30 +726,26 @@ class Attention(LightweightModule):
         # print(f"{rot_mats[0].shape=}")
         # print(f"{rot_mats[1].shape=}")
         # print(f'{self.transformation_mats["prefill"].shape=}')
-        # q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
-        #     q_heads_1QSD_pre_rot,
-        #     rot_mats[0],
-        #     rot_mats[1],
-        #     self.transformation_mats["prefill"],
-        #     is_decode_mode=False,
-        # )
-        # ttnn.deallocate(q_heads_1QSD_pre_rot)
+        q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
+            q_heads_1QSD_pre_rot,
+            rot_mats[0],
+            rot_mats[1],
+            self.transformation_mats["prefill"],
+            is_decode_mode=False,
+        )
+        ttnn.deallocate(q_heads_1QSD_pre_rot)
 
-        # if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
-        #     k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
+        if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
+            k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
 
-        # k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
-        #     k_heads_1KSD_pre_rot,
-        #     rot_mats[0],
-        #     rot_mats[1],
-        #     self.transformation_mats["prefill"],
-        #     is_decode_mode=False,
-        # )
-        # ttnn.deallocate(k_heads_1KSD_pre_rot)
-
-        # NOCOMMIT: Skip RoPE
-        q_heads_1QSD = q_heads_1QSD_pre_rot
-        k_heads_1KSD = k_heads_1KSD_pre_rot
+        k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
+            k_heads_1KSD_pre_rot,
+            rot_mats[0],
+            rot_mats[1],
+            self.transformation_mats["prefill"],
+            is_decode_mode=False,
+        )
+        ttnn.deallocate(k_heads_1KSD_pre_rot)
 
         # Fill KV-Cache
         if kv_cache:

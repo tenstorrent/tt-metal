@@ -97,19 +97,31 @@ def test_vision_attention_inference(
     )
 
     # pre-compute the rotational embedding matrix and send to device
-    rot_mats = get_prefill_rot_mat(
-        model_args.head_dim,
-        mesh_device,
-        seq_len,
-        # FIXME: what should these be?
-        model_args.rope_theta,
-        model_args.rope_scaling_factor,
-        model_args.orig_context_len,
+    cos, sin = position_embeddings
+    cos = torch.nn.functional.pad(cos, (0, 0, 0, seq_len - ref_seq_len)).unsqueeze(0).unsqueeze(0)
+    sin = torch.nn.functional.pad(sin, (0, 0, 0, seq_len - ref_seq_len)).unsqueeze(0).unsqueeze(0)
+    cos = ttnn.from_torch(
+        cos,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
+    sin = ttnn.from_torch(
+        sin,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    rot_mats = [cos, sin]
+
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
     print(f"{transformation_mat_torch.shape=}")
     print(f"{rot_mats[0].shape=}")
     print(f"{rot_mats[1].shape=}")
+    print(f"{rot_mats[0]=}")
 
     transformation_mats_prefill = ttnn.as_tensor(
         transformation_mat_torch,
