@@ -84,6 +84,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           ls -lart /mnt/MLPerf/
+          ls -lart /dev/tenstorrent/
           source /work/tests/scripts/t3000/run_t3000_perplexity_tests.sh
           ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
