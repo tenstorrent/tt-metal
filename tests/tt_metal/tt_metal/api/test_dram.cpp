@@ -123,7 +123,10 @@ bool dram_single_core(
     auto output_dram_buffer = tt_metal::CreateBuffer(dram_config);
     uint32_t output_dram_buffer_addr = output_dram_buffer->address();
 
-    log_debug(tt::LogVerif, "Creating kernel");
+    tt::log_info("Creating kernel at {}", cfg.core_range.str());
+    tt::log_info("Input DRAM Address  = {:#x}", input_dram_buffer_addr);
+    tt::log_info("Output DRAM Address = {:#x}", output_dram_buffer_addr);
+    tt::log_info("L1 Buffer Address   = {:#x}", cfg.l1_buffer_addr);
     // Create the kernel
     tt::tt_metal::KernelHandle kernel = CreateKernelFromVariant(program, cfg);
 
@@ -251,7 +254,7 @@ TEST_F(DispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
         .core_range = {{0, 0}, {0, 0}},
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
         .dram_buffer_size = buffer_size,
-        .l1_buffer_addr = tt::align(hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED), hal.get_alignment(HalMemType::L1)),
+        .l1_buffer_addr = tt::align(hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED), hal.get_alignment(HalMemType::DRAM)),
         .kernel_cfg = tt_metal::EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0},
     };
 
@@ -272,7 +275,7 @@ TEST_F(DispatchFixture, IdleEthDRAMLoopbackSingleCore) {
         .core_range = {{0, 0}, {0, 0}}, // Set below
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
         .dram_buffer_size = buffer_size,
-        .l1_buffer_addr = tt::align(hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED), hal.get_alignment(HalMemType::L1)),
+        .l1_buffer_addr = tt::align(hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED), hal.get_alignment(HalMemType::DRAM)),
         .kernel_cfg = tt_metal::EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0},
     };
 
