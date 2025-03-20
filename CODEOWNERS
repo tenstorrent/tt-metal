@@ -182,6 +182,7 @@ models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar
 models/demos/wormhole/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/wormhole/mistral7b @yieldthought @uaydonat @mtairum
 models/demos/wormhole/stable_diffusion @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions
+models/demos/blackhole/stable_diffusion @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions
 models/demos/t3000/falcon40b @uaydonat @djordje-tt @johanna-rock-tt
 models/demos/t3000/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/t3000/llama2_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar

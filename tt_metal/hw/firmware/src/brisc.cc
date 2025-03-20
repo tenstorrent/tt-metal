@@ -374,6 +374,15 @@ inline void wait_ncrisc_trisc() {
 
 inline void trigger_sync_register_init() { mailboxes->slave_sync.trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
 
+inline void barrier_remote_cb_interface_setup(uint8_t noc_index, uint32_t end_cb_index) {
+#if defined(ARCH_BLACKHOLE)
+    // cq_dispatch does not update noc transaction counts so skip this barrier on the dispatch core
+    if (end_cb_index != NUM_CIRCULAR_BUFFERS) {
+        noc_async_atomic_barrier(noc_index);
+    }
+#endif
+}
+
 int main() {
     configure_l1_data_cache();
     DIRTY_STACK_MEMORY();
@@ -412,15 +421,6 @@ int main() {
     noc_local_state_init(noc_index);
     uint8_t prev_noc_mode = DM_DEDICATED_NOC;
     trigger_sync_register_init();
-
-
-#if defined(ARCH_BLACKHOLE)
-    // When dispatch_s is on an ethernet core on blockhole, we've been seeing
-    // issues where posted atomic incremenets seem to fail to complete.
-    const bool post_atomic_increments = false;
-#else
-    const bool post_atomic_increments = true;
-#endif
 
     while (1) {
         reset_ncrisc_with_iram();
@@ -495,6 +495,10 @@ int main() {
                 if (prev_noc_mode != noc_mode) {
                     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
                 }
+#ifdef ARCH_BLACKHOLE
+                // Need to add this to allow adding barrier after setup_remote_cb_interfaces
+                noc_local_state_init(noc_index);
+#endif
                 cmd_buf = BRISC_AT_CMD_BUF;
             } else {
                 if (prev_noc_mode != noc_mode) {
@@ -520,7 +524,8 @@ int main() {
                     (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
                 end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
                 experimental::setup_remote_cb_interfaces<true>(
-                    cb_l1_base, end_cb_index, noc_index, noc_mode, post_atomic_increments, cmd_buf);
+                    cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
+                barrier_remote_cb_interface_setup(noc_index, end_cb_index);
                 start_ncrisc_kernel_run(enables);
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
                 void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
@@ -542,7 +547,8 @@ int main() {
                         (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
                     uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
                     experimental::setup_remote_cb_interfaces<true>(
-                        cb_l1_base, end_cb_index, noc_index, noc_mode, post_atomic_increments, cmd_buf);
+                        cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
+                    barrier_remote_cb_interface_setup(noc_index, end_cb_index);
                 }
                 start_ncrisc_kernel_run(enables);
                 wait_for_go_message();

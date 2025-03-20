@@ -1190,8 +1190,8 @@ void pytensor_module(py::module& m_tensor) {
         .def(
             "unpad",
             [](const Tensor& self,
-               const std::array<uint32_t, 4>& output_tensor_start,
-               const std::array<uint32_t, 4>& output_tensor_end) {
+               const ttnn::SmallVector<uint32_t>& output_tensor_start,
+               const ttnn::SmallVector<uint32_t>& output_tensor_end) {
                 return self.unpad(ttnn::Shape(output_tensor_start), ttnn::Shape(output_tensor_end));
             },
             R"doc(
@@ -1204,11 +1204,11 @@ void pytensor_module(py::module& m_tensor) {
             +---------------------+----------------------------------------------+--------------+-----------------------------------------------------+----------+
             | Argument            | Description                                  | Data type    | Valid range                                         | Required |
             +=====================+==============================================+==============+=====================================================+==========+
-            | arg0                | Start indices of input tensor                | List[int[4]] | Values along each dim must be                       | Yes      |
+            | arg0                | Start indices of input tensor                | List[int]    | Values along each dim must be                       | Yes      |
             |                     |                                              |              |                                                     |          |
             |                     |                                              |              | < input_tensor_shape[i] and <= output_tensor_end[i] |          |
             +---------------------+----------------------------------------------+--------------+-----------------------------------------------------+----------+
-            | arg1                | End indices of input tensor in output tensor | List[int[4]] | Values along each dim must be                       | Yes      |
+            | arg1                | End indices of input tensor in output tensor | List[int]    | Values along each dim must be                       | Yes      |
             |                     |                                              |              |                                                     |          |
             |                     |                                              |              | < input_tensor_shape[i]                             |          |
             +---------------------+----------------------------------------------+--------------+-----------------------------------------------------+----------+

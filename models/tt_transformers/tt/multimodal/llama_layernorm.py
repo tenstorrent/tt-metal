@@ -91,6 +91,7 @@ class TtLayerNorm(LightweightModule):
                 bias=self.bias,
                 program_config=self.sharded_program_config,
                 memory_config=self.sharded_output_config,
+                compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
             )
             if out_sharded:
                 return x
