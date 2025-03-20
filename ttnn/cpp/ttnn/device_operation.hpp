@@ -182,8 +182,7 @@ inline auto& create_or_get_meshworkload_from_cache(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args,
     typename device_operation_t::tensor_return_value_t& tensor_return_value,
-    ttnn::MeshDevice* mesh_device,
-    uint64_t device_operation_id) {
+    ttnn::MeshDevice* mesh_device) {
     if (!program_cache_hit) {
         ZoneScopedN("Program Cache Miss");
         auto program_factory = device_operation_t::select_program_factory(operation_attributes, tensor_args);
@@ -196,10 +195,10 @@ inline auto& create_or_get_meshworkload_from_cache(
              &operation_attributes,
              &tensor_args,
              &tensor_return_value,
-             &device_operation_id,
              &mesh_device]<typename ProgramFactory>(const ProgramFactory&) -> auto& {
                 auto make_program = [&]() {
                     auto cached_program = ProgramFactory::create(operation_attributes, tensor_args, tensor_return_value);
+                    auto device_operation_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
                     cached_program.program.set_runtime_id(device_operation_id);
                     return cached_program;
                 };
@@ -264,7 +263,6 @@ inline auto& create_or_get_meshworkload_from_cache(
              &operation_attributes,
              &tensor_args,
              &tensor_return_value,
-             &device_operation_id,
              &mesh_device,
              &cached_program_factory](auto&& program_factory) -> auto& {
                 using program_factory_t = std::decay_t<decltype(program_factory)>;
@@ -281,13 +279,14 @@ inline auto& create_or_get_meshworkload_from_cache(
                     adapter, operation_attributes, tensor_args, tensor_return_value);
 
                 // Set runtime ID for all programs
-                for (auto& [_, program] : adapter.get_cached_mesh_workload().workload.get_programs()) {
-                    program.set_runtime_id(device_operation_id);
+                auto& workload = adapter.get_cached_mesh_workload().workload;
+                for (auto& [_, program] : workload.get_programs()) {
+                    program.set_runtime_id(ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id());
                     tt::tt_metal::GraphTracker::instance().track_program(&program, mesh_device);
                 }
 
                 // Return the mesh workload from the cached factory
-                return adapter.get_cached_mesh_workload().workload;
+                return workload;
             },
             program_factory);
         return mesh_workload;
@@ -320,7 +319,6 @@ auto get_operation_name(const typename device_operation_t::operation_attributes_
 
 template <typename device_operation_t>
 inline void log_operation(
-    std::size_t device_operation_id,
     std::size_t device_id,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args,
@@ -355,7 +353,6 @@ inline void log_operation(
 
 template <typename device_operation_t>
 inline void log_operation(
-    std::size_t device_operation_id,
     std::size_t device_id,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args,
@@ -369,12 +366,13 @@ inline void log_operation(
 template <DeviceOperationConcept device_operation_t>
 void launch_on_worker_thread(
     ttnn::QueueId cq_id,
-    uint64_t device_operation_id,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args,
     typename device_operation_t::tensor_return_value_t& tensor_return_value,
     tt::tt_metal::IDevice* device) {
     ZoneScopedN("TT_DNN_DEVICE_OP");
+
+    auto device_operation_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
 
     if constexpr (HasSkipLaunch<device_operation_t>) {
         if (device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)) {
@@ -394,7 +392,6 @@ void launch_on_worker_thread(
     }
 
     log_operation<device_operation_t>(
-            device_operation_id,
             device->id(),
             operation_attributes,
             tensor_args,
@@ -476,7 +473,6 @@ void launch_on_worker_thread(
 template <DeviceOperationConcept device_operation_t>
 void launch_on_mesh_device(
     ttnn::QueueId cq_id,
-    uint64_t device_operation_id,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args,
     typename device_operation_t::tensor_return_value_t& tensor_return_value,
@@ -500,8 +496,7 @@ void launch_on_mesh_device(
         program_cache_hit = program_cache.contains(program_hash);
     }
 
-    log_operation<device_operation_t>(
-        device_operation_id, device->id(), operation_attributes, tensor_args, program_hash, program_cache_hit);
+    log_operation<device_operation_t>(device->id(), operation_attributes, tensor_args, program_hash, program_cache_hit);
 
     tt::stl::reflection::visit_object_of_type<Tensor>(CheckDeviceBufferIsAllocated{}, tensor_args);
 
@@ -526,10 +521,9 @@ void launch_on_mesh_device(
             operation_attributes,
             tensor_args,
             tensor_return_value,
-            device,
-            device_operation_id);
+            device);
         enqueue_mesh_workload(mesh_workload);
-        TracyOpMeshWorkload(device, mesh_workload, device_operation_t{}, device_operation_id, operation_attributes, tensor_args, tensor_return_value);
+        TracyOpMeshWorkload(device, mesh_workload, device_operation_t{}, operation_attributes, tensor_args, tensor_return_value);
     } else {
         auto make_program = [&]() {
             return std::visit(
@@ -537,7 +531,7 @@ void launch_on_mesh_device(
                     auto cached_program =
                         ProgramFactory::create(operation_attributes, tensor_args, tensor_return_value);
                     auto program = std::make_shared<tt::tt_metal::Program>(std::move(cached_program.program));
-                    program->set_runtime_id(device_operation_id);
+                    program->set_runtime_id(ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id());
                     return program;
                 },
                 device_operation_t::select_program_factory(operation_attributes, tensor_args));
@@ -561,7 +555,7 @@ void launch_on_mesh_device(
         }
 
         enqueue_mesh_workload(mesh_workload);
-        TracyOpMeshWorkload(device, mesh_workload, device_operation_t{}, device_operation_id, operation_attributes, tensor_args, tensor_return_value);
+        TracyOpMeshWorkload(device, mesh_workload, device_operation_t{}, operation_attributes, tensor_args, tensor_return_value);
     }
 }
 
@@ -579,7 +573,6 @@ concept DeviceOperationWithMeshDeviceAdapter =
 
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void handle_mesh_adapter_cache_hit(
-    uint64_t device_operation_id,
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
@@ -613,7 +606,7 @@ void handle_mesh_adapter_cache_hit(
 
         // Set runtime ID for all programs
         for (auto& [_, program] : adapter.get_cached_mesh_workload().workload.get_programs()) {
-            program.set_runtime_id(device_operation_id);
+            program.set_runtime_id(ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id());
             tt::tt_metal::GraphTracker::instance().track_program(&program, mesh_device);
             if (tt::tt_metal::GraphTracker::instance().hook_program(&program)) {
                 return;
@@ -623,14 +616,13 @@ void handle_mesh_adapter_cache_hit(
         tt::tt_metal::distributed::EnqueueMeshWorkload(
             mesh_device->mesh_command_queue(), adapter.get_cached_mesh_workload().workload, false);
 
-        TracyOpMeshWorkload(mesh_device, adapter.get_cached_mesh_workload().workload, mesh_device_operation_t{}, device_operation_id, operation_attributes, tensor_args, tensor_return_value);
+        TracyOpMeshWorkload(mesh_device, adapter.get_cached_mesh_workload().workload, mesh_device_operation_t{}, operation_attributes, tensor_args, tensor_return_value);
     }, program_factory);
 }
 
 // Helper for creating and caching a mesh workload
 template <DeviceOperationConcept mesh_device_operation_t>
 void create_and_cache_mesh_workload(
-    uint64_t device_operation_id,
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
@@ -647,7 +639,7 @@ void create_and_cache_mesh_workload(
 
     // Set runtime ID for all programs
     for (auto& [_, program] : cached_workload.workload.get_programs()) {
-        program.set_runtime_id(device_operation_id);
+        program.set_runtime_id(ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id());
         tt::tt_metal::GraphTracker::instance().track_program(&program, mesh_device);
         if (tt::tt_metal::GraphTracker::instance().hook_program(&program)) {
             return;
@@ -680,13 +672,13 @@ void create_and_cache_mesh_workload(
             tt::tt_metal::distributed::EnqueueMeshWorkload(
                 mesh_device->mesh_command_queue(), cached_adapter.get_cached_mesh_workload().workload, false);
 
-            TracyOpMeshWorkload(mesh_device, cached_adapter.get_cached_mesh_workload().workload, mesh_device_operation_t{}, device_operation_id, operation_attributes, tensor_args, tensor_return_value);
+            TracyOpMeshWorkload(mesh_device, cached_adapter.get_cached_mesh_workload().workload, mesh_device_operation_t{}, operation_attributes, tensor_args, tensor_return_value);
         }, program_factory);
     } else {
         // Enqueue the workload directly (no caching)
         tt::tt_metal::distributed::EnqueueMeshWorkload(
             mesh_device->mesh_command_queue(), cached_workload.workload, false);
-        TracyOpMeshWorkload(mesh_device, cached_workload.workload, mesh_device_operation_t{}, device_operation_id, operation_attributes, tensor_args, tensor_return_value);
+        TracyOpMeshWorkload(mesh_device, cached_workload.workload, mesh_device_operation_t{}, operation_attributes, tensor_args, tensor_return_value);
     }
 }
 
@@ -694,7 +686,6 @@ void create_and_cache_mesh_workload(
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void launch_operation_with_adapter(
     QueueId cq_id,
-    uint64_t device_operation_id,
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
@@ -719,18 +710,17 @@ void launch_operation_with_adapter(
         program_cache_hit = program_cache.contains(program_hash);
     }
 
-    log_operation<mesh_device_operation_t>(
-        device_operation_id, mesh_device->id(), operation_attributes, tensor_args, program_hash, program_cache_hit);
+    log_operation<mesh_device_operation_t>(mesh_device->id(), operation_attributes, tensor_args, program_hash, program_cache_hit);
 
     tt::stl::reflection::visit_object_of_type<Tensor>(CheckDeviceBufferIsAllocated{}, tensor_args);
 
     if (program_cache_hit) {
         handle_mesh_adapter_cache_hit<mesh_device_operation_t>(
-            device_operation_id, operation_attributes, tensor_args, tensor_return_value,
+            operation_attributes, tensor_args, tensor_return_value,
             mesh_device, program_cache, program_hash);
     } else {
         create_and_cache_mesh_workload<mesh_device_operation_t>(
-            device_operation_id, operation_attributes, tensor_args, tensor_return_value,
+            operation_attributes, tensor_args, tensor_return_value,
             mesh_device, program_cache, program_hash);
     }
 }
@@ -750,7 +740,6 @@ typename device_operation_t::tensor_return_value_t launch_on_single_device(
     */
 
     ZoneScopedN("Launch Device Operation");
-    auto device_operation_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
 
     // Create output tensor first
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
@@ -758,15 +747,15 @@ typename device_operation_t::tensor_return_value_t launch_on_single_device(
     if (auto mesh_device = first_tensor.mesh_device(); mesh_device != nullptr) {
         if constexpr (MeshDeviceOperationAdapterType<device_operation_t>) {
             launch_operation_with_adapter<device_operation_t>(
-                cq_id, device_operation_id, operation_attributes, tensor_args, tensor_return_value, mesh_device);
+                cq_id, operation_attributes, tensor_args, tensor_return_value, mesh_device);
         } else {
             launch_on_mesh_device<device_operation_t>(
-                cq_id, device_operation_id, operation_attributes, tensor_args, tensor_return_value, mesh_device);
+                cq_id, operation_attributes, tensor_args, tensor_return_value, mesh_device);
         }
     } else {
         auto device = first_tensor.device();
         launch_on_worker_thread<device_operation_t>(
-            cq_id, device_operation_id, operation_attributes, tensor_args, tensor_return_value, device);
+            cq_id, operation_attributes, tensor_args, tensor_return_value, device);
     }
     return tensor_return_value;
 }
