@@ -1178,15 +1178,15 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     // Have first group (each row has 1 extra batch compared to second group), and second group
     if (!equal_batches_per_core) {
         // tensor shape
-        uint32_t per_core_Ht_group_2 = Ht / num_cores_r;
-        uint32_t per_core_Ht_group_1 = per_core_Ht_group_2++;
-        per_core_M_group_1 = per_core_Ht_group_1 * TILE_HEIGHT;
-        per_core_M_group_2 = per_core_Ht_group_2 * TILE_HEIGHT;
-        per_core_Mt_group_1 = per_core_M_group_1 / TILE_HEIGHT;
-        per_core_Mt_group_2 = per_core_M_group_2 / TILE_HEIGHT;
-
         num_batches_per_core_group_2 = num_batches / num_cores_r;
-        num_batches_per_core_group_1 = num_batches_per_core_group_2++;
+        num_batches_per_core_group_1 = num_batches_per_core_group_2 + 1;
+
+        TT_ASSERT(Ht % num_batches == 0);
+        uint32_t per_batch_tiles = Ht / num_batches;
+        per_core_Mt_group_1 = num_batches_per_core_group_1 * per_batch_tiles;
+        per_core_Mt_group_2 = num_batches_per_core_group_2 * per_batch_tiles;
+        per_core_M_group_1 = per_core_Mt_group_1 * TILE_HEIGHT;
+        per_core_M_group_2 = per_core_Mt_group_2 * TILE_HEIGHT;
 
         // subblock
         num_rows_per_batch_per_core_group_1 = per_core_M_group_1 / num_batches_per_core_group_1;
