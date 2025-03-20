@@ -88,6 +88,7 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
     )
 
     torch_input = torch.randn(1, 1, seq_len, model_args.dim)
+    prev_pcc = None
 
     logger.info("Run Llama_MLP_PF")
     for i in range(20):
@@ -131,6 +132,10 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
 
         pcc_required = 0.99
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
+
+        if prev_pcc is not None:
+            assert prev_pcc == pcc_message, f"PCC changed from {prev_pcc} to {pcc_message} during inference."
+        prev_pcc = pcc_message
 
         logger.info(comp_allclose(reference_output, tt_output_torch))
         logger.info(f"PCC: {pcc_message}")
