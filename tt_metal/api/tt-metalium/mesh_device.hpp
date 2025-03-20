@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "device.hpp"
+#include "dispatch_core_common.hpp"
 
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
@@ -118,8 +119,6 @@ public:
     CoreCoord grid_size() const override;
     CoreCoord logical_grid_size() const override;
     CoreCoord dram_grid_size() const override;
-    CoreType core_type_from_virtual_core(const CoreCoord& virtual_coord) const override;
-    CoreCoord virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const override;
     CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const override;
 
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>&logical_cores) const override;
@@ -291,7 +290,9 @@ public:
     // and the MeshDevice has a single SubDeviceManager responsible for all Devices.
     void mesh_set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids);
     void mesh_reset_sub_device_stall_group();
-
+    // Currently expose users to the dispatch thread pool through the MeshDevice
+    void enqueue_to_thread_pool(std::function<void()>&& f);
+    void wait_for_thread_pool();
     static std::shared_ptr<MeshDevice> create(
         const MeshDeviceConfig& config,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,

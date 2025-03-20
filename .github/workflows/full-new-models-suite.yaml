@@ -11,6 +11,8 @@ on:
           - Release
           - Debug
           - RelWithDebInfo
+          - ASan
+          - TSan
   schedule:
     - cron: "0 2,11 * * *"
 
@@ -50,6 +52,10 @@ jobs:
     needs: build-artifact
     uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
     secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   demos-single-card:
     needs: build-artifact
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml

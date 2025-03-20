@@ -98,6 +98,8 @@ private:
         uint32_t expected_num_workers_completed,
         bool mcast_go_signals,
         bool unicast_go_signals);
+    // Clear the num_workers_completed counter on the dispatcher cores corresponding to this CQ.
+    void clear_expected_num_workers_completed();
     // Access a reference system memory manager, which acts as a global host side state manager for
     // specific MeshCommandQueue attributes.
     // TODO: All Mesh level host state managed by this class should be moved out, since its not
@@ -151,11 +153,14 @@ private:
     // Number of outstanding reads to be completed by the completion queue reader
     std::atomic<uint32_t> num_outstanding_reads_ = 0;
     // Exit signal for the completion queue reader
-    bool exit_condition_ = false;
+    std::atomic<bool> exit_condition_ = false;
     // Completion Queue Reader thread
     std::thread completion_queue_reader_thread_;
     // Global Mutex (used by both CQs) to safely use the reader_thread_pool_
     inline static std::mutex reader_thread_pool_mutex_;
+    // Used to Maintain state: Mark/Check if this data structure is being used for dispatch.
+    // This is temporary - will not be needed when we MeshCommandQueue is the only dispatch interface.
+    bool in_use_ = false;
 
 public:
     MeshCommandQueue(

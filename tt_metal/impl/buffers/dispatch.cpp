@@ -312,16 +312,9 @@ ShardedBufferWriteDispatchParams initialize_sharded_buf_dispatch_params(
 }
 
 uint32_t calculate_partial_page_size(const Buffer& buffer) {
-    uint32_t partial_page_size = 0;
-    const CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
-    if (dispatch_core_type == CoreType::WORKER) {
-        partial_page_size = DispatchSettings::BASE_PARTIAL_PAGE_SIZE_TENSIX_DISPATCH;
-    } else {
-        TT_ASSERT(dispatch_core_type == CoreType::ETH);
-        partial_page_size = DispatchSettings::BASE_PARTIAL_PAGE_SIZE_ETH_DISPATCH;
-    }
     const HalMemType buffer_mem_type = buffer.memory_type();
-    partial_page_size = tt::align(partial_page_size, hal.get_common_alignment_with_pcie(buffer_mem_type));
+    const uint32_t partial_page_size = tt::align(
+        DispatchSettings::BASE_PARTIAL_PAGE_SIZE_DISPATCH, hal.get_common_alignment_with_pcie(buffer_mem_type));
     return partial_page_size;
 }
 
@@ -1031,7 +1024,7 @@ void copy_completion_queue_data_into_user_space(
     uint16_t channel,
     uint32_t cq_id,
     SystemMemoryManager& sysmem_manager,
-    volatile bool& exit_condition) {
+    std::atomic<bool>& exit_condition) {
     const auto& [buffer_layout, page_size, padded_page_size, buffer_page_mapping, dst, dst_offset, num_pages_read, cur_dev_page_id, starting_host_page_id] =
         read_buffer_descriptor;
     const uint32_t padded_num_bytes = (num_pages_read * padded_page_size) + sizeof(CQDispatchCmd);

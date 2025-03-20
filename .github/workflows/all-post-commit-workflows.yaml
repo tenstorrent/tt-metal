@@ -17,6 +17,8 @@ on:
           - Release
           - Debug
           - RelWithDebInfo
+          - ASan
+          - TSan
       with-retries:
         default: false
         type: boolean
@@ -210,6 +212,7 @@ jobs:
     needs: build-artifact
     secrets: inherit
     strategy:
+      fail-fast: false
       matrix:
         config:
           - version: "22.04"

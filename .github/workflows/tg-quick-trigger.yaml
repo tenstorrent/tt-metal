@@ -15,6 +15,7 @@ jobs:
 
   tg-quick-test:
     needs: build-artifact
+    secrets: inherit
     uses: ./.github/workflows/tg-quick.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}

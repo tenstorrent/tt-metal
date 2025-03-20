@@ -323,6 +323,16 @@ void ElfFile::Impl::LoadImage() {
                 section.sh_size,
                 section.sh_offset);
         }
+        // If the name begins with .empty. it should be empty.  We can
+        // generate a better error here than the linker can -- and one
+        // has the binary to examine.
+        if (section.sh_flags & SHF_ALLOC && section.sh_size != 0) {
+            auto* name = GetName(section);
+            constexpr auto* prefix = ".empty.";
+            if (std::strncmp(name, prefix, std::strlen(prefix)) == 0) {
+                TT_THROW("{}: {} section has contents (namespace-scope constructor present?)", path_, name);
+            }
+        }
     }
     if (haveStack) {
         // Remove the stack segment, now we used it for checking the sections.

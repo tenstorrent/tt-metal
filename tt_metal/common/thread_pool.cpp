@@ -8,6 +8,8 @@
 #include <numa.h>
 #include <semaphore>
 
+#include <sched.h>         // Needed for setting process priorities
+#include <sys/resource.h>  // Needed for setting process priorities
 #include <tt-metalium/device.hpp>
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -27,17 +29,38 @@ std::unordered_map<int, std::vector<uint32_t>> get_cpu_cores_per_numa_node() {
     return cpu_cores_per_numa_node;
 }
 
-uint32_t get_cpu_core_for_physical_device(uint32_t physical_device_id, uint32_t logical_cpu_offset) {
+bool balanced_physical_device_numa() {
+    if (numa_available() != -1) {
+        int num_nodes = numa_max_node() + 1;
+        std::unordered_set<int> numa_nodes_for_cluster = {};
+        for (uint32_t device_id = 0; device_id < tt::Cluster::instance().number_of_devices(); device_id++) {
+            auto numa_node_for_device = tt::Cluster::instance().get_numa_node_for_device(device_id);
+            numa_nodes_for_cluster.insert(numa_node_for_device);
+        }
+        return numa_nodes_for_cluster.size() == num_nodes;
+    }
+    return false;
+}
+
+uint32_t get_cpu_core_for_physical_device(uint32_t physical_device_id) {
     static std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node = get_cpu_cores_per_numa_node();
+    static std::unordered_map<int, int> logical_cpu_id_per_numa_node = {};
+    static bool devices_balanced_across_numa_nodes = balanced_physical_device_numa();
     // Initialize to an invalid value. Determine the NUMA Node based on the physical device id.
     // If a NUMA Node is not found, use a round robin policy.
     int numa_node = -1;
-    if (physical_device_id < tt::Cluster::instance().number_of_user_devices()) {
-        numa_node = tt::Cluster::instance().get_numa_node_for_device(physical_device_id);
+    if (physical_device_id < tt::Cluster::instance().number_of_devices()) {
+        // If the cluster uses all NUMA nodes, assign worker threads to CPU cores based
+        // on the NUMA layout. If not, balance the worker threads across all NUMA Nodes/
+        // CPU cores to minimize resource contention.
+        numa_node = devices_balanced_across_numa_nodes
+                        ? tt::Cluster::instance().get_numa_node_for_device(physical_device_id)
+                        : physical_device_id % 2;
     }
     if (cpu_cores_per_numa_node.find(numa_node) != cpu_cores_per_numa_node.end()) {
         auto& cpu_cores_on_node = cpu_cores_per_numa_node[numa_node];
-        return cpu_cores_on_node[(physical_device_id + logical_cpu_offset) % cpu_cores_on_node.size()];
+        return cpu_cores_on_node[(logical_cpu_id_per_numa_node[numa_node]++) % cpu_cores_on_node.size()];
+
     } else {
         uint32_t num_threads = std::thread::hardware_concurrency();
         TT_FATAL(num_threads, "Could not detect the number of CPU cores on host.");
@@ -55,6 +78,20 @@ void set_worker_affinity(std::thread& worker, uint32_t cpu_core) {
             tt::LogMetal,
             "Unable to bind worker thread to CPU Core. May see performance degradation. Error Code: {}",
             rc);
+    }
+}
+
+void set_process_priority(int requested_priority) {
+    // Get priority for calling process
+    int process_priority = getpriority(PRIO_PROCESS, 0);
+    log_debug(tt::LogMetal, "Initial Process Priority: {}", process_priority);
+    if (process_priority == requested_priority) {
+        return;
+    }
+    // Set priority for calling process to user specified value
+    int rc = setpriority(PRIO_PROCESS, 0, requested_priority);
+    if (rc) {
+        log_warning(tt::LogMetal, "Unable to set process priority to {}, error code: {}", requested_priority, rc);
     }
 }
 
@@ -129,18 +166,31 @@ private:
 // This executor should only be used to asynchronously process tasks for a specific TT-Device
 // (specified through the physical_device_id constructor argument).
 // The executor is NUMA aware, i.e. it will bind its worker thread to a NUMA node that is "closest"
-// to its physical device. The logical_cpu_offset constructor argument can be used to specify the
-// logical base offset within a NUMA node when binding the worker thread.
-// The CPU selection algorithm is:
-// CPUs[numa_node][(physical_device_id + logical_cpu_offset) % num_cores_on_numa_node]
+// to its physical device.
+// If all physical devices are on the same NUMA node, CPU cores will be assigned to minimize contention
+// across threads.
 class NumaAwareExecutor {
 public:
-    NumaAwareExecutor(uint32_t physical_device_id, uint32_t logical_cpu_offset) : tasks_() {
+    NumaAwareExecutor(uint32_t physical_device_id) : tasks_() {
+        // Set the priority for this process to 0 (niceness value in linux)
+        thread_binding::set_process_priority(0);
         worker = std::thread([this]() {
             std::function<void()> task;  // Task container for this thread
             while (true) {
                 {
-                    task_semaphore_.acquire();
+                    // Retry loop with linear backoff:
+                    // - Increment attempts up to BACKOFF_START_ATTEMPT. If a task is seen, exit.
+                    // - If above BACKOFF_START_ATTEMPT, apply a delay that increases with each attempt
+                    // (scaling with BACKOFF_FACTOR_MICROSECONDS and bound by BACKOFF_END_ATTEMPT).
+                    // - The goal is to minimize CPU overhead and thread startup latency
+                    uint32_t attempts = 0;
+                    while (task_counter_.load(std::memory_order_acquire) == 0) {
+                        attempts = std::min(attempts + 1, BACKOFF_END_ATTEMPT);
+                        if (attempts > BACKOFF_START_ATTEMPT) {
+                            std::this_thread::sleep_for(std::chrono::microseconds(
+                                (attempts - BACKOFF_START_ATTEMPT) * BACKOFF_FACTOR_MICROSECONDS));
+                        }
+                    }
                     if (shutdown_) {
                         return;
                     }
@@ -156,14 +206,13 @@ public:
                 }
                 // Atomically decrement counter used to synchronize with main thread
                 // and notify the main thread if all tasks have completed
-                if (counter_.fetch_sub(1, std::memory_order_release) == 1) {
-                    counter_.notify_all();
+                if (task_counter_.fetch_sub(1, std::memory_order_release) == 1) {
+                    task_counter_.notify_all();
                 }
             }
         });
 
-        auto cpu_core_for_worker =
-            thread_binding::get_cpu_core_for_physical_device(physical_device_id, logical_cpu_offset);
+        auto cpu_core_for_worker = thread_binding::get_cpu_core_for_physical_device(physical_device_id);
         thread_binding::set_worker_affinity(worker, cpu_core_for_worker);
     }
 
@@ -172,25 +221,23 @@ public:
         // Wait to ensure that the worker thread has completed.
         this->wait();
         shutdown_ = true;
-        task_semaphore_.release();
+        task_counter_.fetch_add(1);
         worker.join();
     }
 
     void enqueue(std::function<void()>&& f) {
         tasks_.push(std::move(f));  // Move the task directly into queue
-        task_semaphore_.release();  // Notify a worker that a task is available
         // Light-Weight counter increment to track the number of tasks in flight
-        // Need this because a counting_semaphore does not allow querying state
-        counter_++;
+        task_counter_.fetch_add(1, std::memory_order_relaxed);
     }
 
     std::exception_ptr wait() const {
-        // Wait until all tasks have completed (counter_ == 0)
+        // Wait until all tasks have completed (task_counter_ == 0)
         // To avoid spinning, sleep until notified by the worker threads
-        // or counter_ changes (this only happens with a spurious wakeup)
+        // or task_counter_ changes (this only happens with a spurious wakeup)
         int current;
-        while ((current = counter_.load(std::memory_order_acquire)) > 0) {
-            counter_.wait(current, std::memory_order_relaxed);
+        while ((current = task_counter_.load(std::memory_order_acquire)) > 0) {
+            task_counter_.wait(current, std::memory_order_relaxed);
         }
         // Return the stored exception to the caller.
         // If an exception was caught by the worker thread
@@ -203,10 +250,14 @@ public:
 private:
     TaskQueue tasks_;
     std::thread worker;
-    std::atomic<int> counter_ = 0;
-    std::counting_semaphore<> task_semaphore_{0};
+    std::atomic<int> task_counter_ = 0;
     bool shutdown_ = false;
     mutable std::exception_ptr stored_exception_;
+    // Variables managing the linear backoff strategy used by worker threads
+    // when waiting on a task to be inserted in the queue
+    static constexpr uint32_t BACKOFF_START_ATTEMPT = 100;
+    static constexpr uint32_t BACKOFF_END_ATTEMPT = 300;
+    static constexpr uint32_t BACKOFF_FACTOR_MICROSECONDS = 5;
 };
 
 }  // namespace threading_primitives
@@ -225,7 +276,7 @@ public:
         futures_.reserve(thread_count * 4);
         // Bind threads to CPU cores.
         for (int i = 0; i < thread_count; i++) {
-            auto cpu_id = thread_binding::get_cpu_core_for_physical_device(i, 0);
+            auto cpu_id = thread_binding::get_cpu_core_for_physical_device(i);
             auto task = [cpu_id]() {
                 pthread_t thread = pthread_self();
                 cpu_set_t cpuset;
@@ -278,7 +329,7 @@ public:
         }
         // Bind threads to CPU cores.
         for (int i = 0; i < thread_count; i++) {
-            auto cpu_id = thread_binding::get_cpu_core_for_physical_device(i, 0);
+            auto cpu_id = thread_binding::get_cpu_core_for_physical_device(i);
             auto task = [cpu_id]() {
                 pthread_t thread = pthread_self();
                 cpu_set_t cpuset;
@@ -322,21 +373,21 @@ class DeviceBoundThreadPool : public ThreadPool {
 public:
     // Constuctor accepting the physical device IDs this pool is bound to. Each thread will be tied to a device, and is
     // guaranteed to be bound to a CPU core on a NUMA Node "closest" to that device.
-    DeviceBoundThreadPool(const std::vector<tt::tt_metal::IDevice*>& physical_devices, uint32_t logical_cpu_offset) {
+    DeviceBoundThreadPool(const std::vector<tt::tt_metal::IDevice*>& physical_devices) {
         num_workers_ = physical_devices.size();
         workers_.reserve(num_workers_);
         for (uint32_t i = 0; i < num_workers_; i++) {
-            workers_.emplace_back(std::make_unique<NumaAwareExecutor>(physical_devices[i]->id(), logical_cpu_offset));
+            workers_.emplace_back(std::make_unique<NumaAwareExecutor>(physical_devices[i]->id()));
             phys_device_to_thread_id_[physical_devices[i]->id()] = i;
         }
     }
     // Constructor accepting the number of threads to spawn. The threads in this pool will be bound to a specific CPU
     // core but they are not guaranteed to be "close" to any physical device.
-    DeviceBoundThreadPool(uint32_t thread_count, uint32_t logical_cpu_offset) {
+    DeviceBoundThreadPool(uint32_t thread_count) {
         workers_.reserve(thread_count);
         num_workers_ = thread_count;
         for (uint32_t i = 0; i < thread_count; i++) {
-            workers_.emplace_back(std::make_unique<NumaAwareExecutor>(i, logical_cpu_offset));
+            workers_.emplace_back(std::make_unique<NumaAwareExecutor>(i));
             phys_device_to_thread_id_[i] = i;
         }
     }
@@ -353,11 +404,17 @@ public:
 
     void wait() override {
         thread_idx_ = 0;  // Reset thread_idx for next call without Device ID specified.
+        std::exception_ptr exception;
+        // Wait on all workers. Capture exceptions if any, and rethrow the first exception
+        // in the calling thread.
         for (auto& worker : workers_) {
-            auto exception = worker->wait();
-            if (exception) {
-                std::rethrow_exception(exception);
+            auto temp_exception = worker->wait();
+            if (!exception && temp_exception) {
+                exception = temp_exception;
             }
+        }
+        if (exception) {
+            std::rethrow_exception(exception);
         }
     }
 
@@ -382,13 +439,13 @@ std::shared_ptr<ThreadPool> create_distributed_boost_thread_pool(int num_threads
     return std::make_shared<thread_pool_impls::DistributedBoostThreadPool>(num_threads);
 }
 
-std::shared_ptr<ThreadPool> create_device_bound_thread_pool(int num_threads, uint32_t logical_cpu_offset) {
-    return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(num_threads, logical_cpu_offset);
+std::shared_ptr<ThreadPool> create_device_bound_thread_pool(int num_threads) {
+    return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(num_threads);
 }
 
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
-    const std::vector<tt::tt_metal::IDevice*>& physical_devices, uint32_t logical_cpu_offset) {
-    return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(physical_devices, logical_cpu_offset);
+    const std::vector<tt::tt_metal::IDevice*>& physical_devices) {
+    return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(physical_devices);
 }
 
 }  // namespace tt::tt_metal

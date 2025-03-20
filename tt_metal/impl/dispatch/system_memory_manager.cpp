@@ -13,6 +13,8 @@
 #include <llrt/tt_cluster.hpp>
 #include "dispatch_core_manager.hpp"
 
+#include <atomic>
+
 namespace tt::tt_metal {
 
 SystemMemoryManager::SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs) :
@@ -342,7 +344,8 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
     }
 }
 
-uint32_t SystemMemoryManager::completion_queue_wait_front(const uint8_t cq_id, volatile bool& exit_condition) const {
+uint32_t SystemMemoryManager::completion_queue_wait_front(
+    const uint8_t cq_id, std::atomic<bool>& exit_condition) const {
     uint32_t write_ptr_and_toggle;
     uint32_t write_ptr;
     uint32_t write_toggle;
@@ -353,7 +356,7 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(const uint8_t cq_id, v
         write_ptr = write_ptr_and_toggle & 0x7fffffff;
         write_toggle = write_ptr_and_toggle >> 31;
     } while (cq_interface.completion_fifo_rd_ptr == write_ptr and
-             cq_interface.completion_fifo_rd_toggle == write_toggle and not exit_condition);
+             cq_interface.completion_fifo_rd_toggle == write_toggle and not exit_condition.load());
     return write_ptr_and_toggle;
 }
 

@@ -93,17 +93,15 @@ def run_conv(
     enable_split_reader=False,
     activation="",
     preprocess_weights_on_device=True,
+    run_twice=False,
 ):
-    if isinstance(device, ttnn.MeshDevice):
-        num_devices = len(device.get_device_ids())
-        if num_devices != 1:
-            assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when using device mesh"
-            assert weight_mesh_mapper is not None, "Expected mesh mapper for weight tensors when using device mesh"
-            assert output_mesh_composer is not None, "Expected mesh composer for output tensor when using device mesh"
-        total_batch_size = num_devices * batch_size  # Batch size across all devices
-        logger.info(f"Using {num_devices} devices for this test")
-    else:
-        total_batch_size = batch_size
+    num_devices = device.get_num_devices()
+    if num_devices != 1:
+        assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when using device mesh"
+        assert weight_mesh_mapper is not None, "Expected mesh mapper for weight tensors when using device mesh"
+        assert output_mesh_composer is not None, "Expected mesh composer for output tensor when using device mesh"
+    total_batch_size = num_devices * batch_size  # Batch size across all devices
+    logger.info(f"Using {num_devices} devices for this test")
 
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
@@ -216,6 +214,30 @@ def run_conv(
         return_output_dim=True,
         return_weights_and_bias=True,
     )
+    if run_twice:
+        [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
+            input_tensor=tt_input_tensor,
+            weight_tensor=tt_weight_tensor,
+            in_channels=input_channels,
+            out_channels=output_channels,
+            device=device,
+            bias_tensor=tt_bias_tensor,
+            kernel_size=(filter_height, filter_width),
+            stride=(stride_h, stride_w),
+            padding=(pad_h, pad_w),
+            dilation=(dilation, dilation),
+            batch_size=batch_size,
+            input_height=input_height,
+            input_width=input_width,
+            conv_config=conv_config,
+            compute_config=compute_config,
+            conv_op_cache=reader_patterns_cache,
+            debug=debug,
+            groups=groups,
+            memory_config=memory_config,
+            return_output_dim=True,
+            return_weights_and_bias=True,
+        )
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
 
@@ -458,6 +480,7 @@ def test_conv_features(
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
         preprocess_weights_on_device=True,
+        run_twice=True,
     )
 
 

@@ -9,7 +9,7 @@
 #include <functional>
 #include <concepts>
 #include <tt-metalium/program_cache.hpp>
-#include "ttnn/device_operation_helper.hpp"
+#include "ttnn/mesh_device_operation_utils.hpp"
 
 namespace ttnn {
 
@@ -137,7 +137,7 @@ struct MeshDeviceOperationAdapter {
                 using ConcreteFactory = std::decay_t<decltype(concrete_factory)>;
                 using concrete_shared_vars_t = typename ConcreteFactory::shared_variables_t;
 
-                return device_operation::MeshDeviceOperationHelper::create_mesh_workload<ConcreteFactory>(
+                return mesh_device_operation_utils::create_mesh_workload<ConcreteFactory>(
                     mesh_device, attrs, tensor_args, tensor_return_value, customizer_func);
             },
             factory);
@@ -156,7 +156,7 @@ struct MeshDeviceOperationAdapter {
         std::visit(
             [&](auto&& concrete_factory) {
                 using ConcreteFactory = std::decay_t<decltype(concrete_factory)>;
-                device_operation::MeshDeviceOperationHelper::override_mesh_runtime_arguments<ConcreteFactory>(
+                mesh_device_operation_utils::override_mesh_runtime_arguments<ConcreteFactory>(
                     cached_workload, mesh_device, attrs, tensor_args, tensor_return_value, customizer_func);
             },
             factory);
