@@ -1101,8 +1101,6 @@ re_run_command:
             process_wait();
             break;
 
-        case CQ_DISPATCH_CMD_GO: DPRINT << "cmd_go" << ENDL(); break;
-
         case CQ_DISPATCH_CMD_SINK: DPRINT << "cmd_sink" << ENDL(); break;
 
         case CQ_DISPATCH_CMD_DEBUG:
