@@ -473,9 +473,6 @@ std::string to_string(
                     return to_string<T>(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
                 }
                 const auto& specs = storage.specs;
-                if (specs.size() == 1) {
-                    return to_string<T>(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
-                }
                 auto specs_it = specs.begin();
                 std::stringstream ss;
                 apply(cpu_tensor, [&](const Tensor& device_shard) {
