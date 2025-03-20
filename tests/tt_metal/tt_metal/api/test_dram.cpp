@@ -250,6 +250,11 @@ TEST_F(DispatchFixture, TensixDRAMLoopbackSingleCoreDB) {
 TEST_F(DispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
     constexpr uint32_t buffer_size = 2 * 1024 * 25;
 
+    if (!this->IsSlowDispatch()) {
+        tt::log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
+        GTEST_SKIP();
+    }
+
     unit_tests_common::dram::test_dram::DRAMConfig dram_test_config = {
         .core_range = {{0, 0}, {0, 0}},
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
@@ -270,6 +275,11 @@ TEST_F(DispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
 
 TEST_F(DispatchFixture, IdleEthDRAMLoopbackSingleCore) {
     constexpr uint32_t buffer_size = 2 * 1024 * 25;
+
+    if (!this->IsSlowDispatch()) {
+        tt::log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
+        GTEST_SKIP();
+    }
 
     unit_tests_common::dram::test_dram::DRAMConfig dram_test_config = {
         .core_range = {{0, 0}, {0, 0}}, // Set below
