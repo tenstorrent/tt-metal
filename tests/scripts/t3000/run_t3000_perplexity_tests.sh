@@ -41,7 +41,7 @@ run_t3000_falcon40b_perplexity_tests() {
 run_t3000_llama70b_perplexity_tests() {
 
   echo "LOG_METAL: Checking number of devices"
-  python3 -c "import ttnn; print(ttnn.get_num_devices())" || true
+  python3 -c "import ttnn; print('Number of devices:', ttnn.get_num_devices())"
 
   fail=0
   # Record the start time
@@ -84,7 +84,7 @@ run_t3000_mixtral8x7b_perplexity_tests() {
 run_t3000_llama3_perplexity_tests_single_card() {
 
   echo "LOG_METAL: Checking number of devices"
-  python3 -c "import ttnn; print(ttnn.get_num_devices())" || true
+  python3 -c "import ttnn; print('Number of devices:', ttnn.get_num_devices())"
 
   # Split long set of tests into two groups
   # This one runs all the N150 and N300 tests spoofed on a T3k
@@ -116,7 +116,7 @@ run_t3000_llama3_perplexity_tests_single_card() {
 run_t3000_llama3_perplexity_tests_t3000() {
 
   echo "LOG_METAL: Checking number of devices"
-  python3 -c "import ttnn; print(ttnn.get_num_devices())" || true
+  python3 -c "import ttnn; print('Number of devices:', ttnn.get_num_devices())"
 
   # Split long set of tests into two groups
   # This one runs all the T3K tests
