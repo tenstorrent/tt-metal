@@ -13,6 +13,7 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
+      version: 22.04
   models-unit-tests:
     needs: build-artifact
     secrets: inherit

@@ -11,6 +11,8 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
+    with:
+      version: 22.04
   cpp-unit-tests:
     needs: build-artifact
     secrets: inherit

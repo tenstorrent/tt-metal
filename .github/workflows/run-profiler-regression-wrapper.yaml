@@ -10,6 +10,7 @@ jobs:
     with:
       tracy: true
       build-wheel: true
+      version: 22.04
     secrets: inherit
   run-profiler-regression:
     needs: build-artifact-profiler
