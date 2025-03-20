@@ -14,9 +14,9 @@ def generate_golden(operation, operand1, data_format):
         .to(format_dict[data_format] if data_format != "Bfp8_b" else torch.bfloat16)
     )
     ops = {
-        "sqrt": lambda x: math.sqrt(x),
-        "square": lambda x: x * x,
-        "log": lambda x: math.log(x) if x != 0 else float("nan"),
+        MathOperation.Sqrt: lambda x: math.sqrt(x),
+        MathOperation.Square: lambda x: x * x,
+        MathOperation.Log: lambda x: math.log(x) if x != 0 else float("nan"),
     }
     if operation not in ops:
         raise ValueError("Unsupported operation!")
@@ -25,14 +25,16 @@ def generate_golden(operation, operand1, data_format):
 
 full_sweep = False
 all_format_combos = generate_format_combinations(
-    [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32], all_same=True
+    [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32],
+    all_same=True,
+    same_src_reg_format=True,  # setting src_A and src_B register to have same format
 )  # Generate format combinations with all formats being the same (flag set to True), refer to `param_config.py` for more details.
 all_params = generate_params(
     ["eltwise_unary_sfpu_test"],
     all_format_combos,
-    dest_acc=["", "DEST_ACC"],
-    approx_mode=["false", "true"],
-    mathop=["sqrt", "log", "square"],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    approx_mode=[ApproximationMode.No, ApproximationMode.Yes],
+    mathop=[MathOperation.Sqrt, MathOperation.Log, MathOperation.Square],
 )
 param_ids = generate_param_ids(all_params)
 
@@ -44,28 +46,23 @@ param_ids = generate_param_ids(all_params)
 )
 def test_eltwise_unary_sfpu(testname, formats, dest_acc, approx_mode, mathop):  #
     if (
-        formats.unpack_src in [DataFormat.Float32, DataFormat.Int32]
-        and dest_acc != "DEST_ACC"
+        formats.unpack_A_src in [DataFormat.Float32, DataFormat.Int32]
+        and dest_acc != DestAccumulation.Yes
     ):
         pytest.skip(
             reason="Skipping test for 32 bit wide data without 32 bit accumulation in Dest"
         )
-    if formats.unpack_src == DataFormat.Float16 and (
-        (dest_acc == "" and get_chip_architecture() == "blackhole")
-        or (dest_acc == "DEST_ACC" and get_chip_architecture() == "wormhole")
+    if formats.unpack_A_src == DataFormat.Float16 and (
+        (dest_acc == DestAccumulation.No and get_chip_architecture() == "blackhole")
+        or (dest_acc == DestAccumulation.Yes and get_chip_architecture() == "wormhole")
     ):
         pytest.skip(reason="This combination is not fully implemented in testing")
 
-    #  When running hundreds of tests, failing tests may cause incorrect behavior in subsequent passing tests.
-    #  To ensure accurate results, for now we reset board after each test.
-    #  Fix this: so we only reset after failing tests
-    if full_sweep:
-        run_shell_command(f"cd .. && make clean")
-        run_shell_command(f"tt-smi -r 0")
-
-    src_A, src_B = generate_stimuli(formats.unpack_src, sfpu=True)
+    src_A, src_B = generate_stimuli(
+        formats.unpack_A_src, formats.unpack_B_src, sfpu=True
+    )
     golden = generate_golden(mathop, src_A, formats.pack_dst)
-    write_stimuli_to_l1(src_A, src_B, formats.unpack_src)
+    write_stimuli_to_l1(src_A, src_B, formats.unpack_A_src, formats.unpack_B_src)
 
     test_config = {
         "formats": formats,

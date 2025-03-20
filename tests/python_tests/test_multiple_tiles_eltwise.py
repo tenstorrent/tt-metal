@@ -7,6 +7,9 @@ from helpers import *
 
 
 def generate_golden(op, operand1, operand2, data_format, math_fidelity):
+    op_num = list(MathOperation).index(op) + 1
+    if op.value == "Elwadd":
+        assert op_num == 1
     tensor1_float = (
         operand1.clone()
         .detach()
@@ -19,20 +22,20 @@ def generate_golden(op, operand1, operand2, data_format, math_fidelity):
     )
 
     if data_format == DataFormat.Float16_b:
-        if math_fidelity in [0, 2]:  # LoFi or HiFi2
+        if math_fidelity in [MathFidelity.LoFi, MathFidelity.HiFi2]:  # LoFi or HiFi2
             for element in operand2:
                 element = element.to(torch.int32)
                 element &= 0xFFFE
-        if math_fidelity == 0:  # LoFi
+        if math_fidelity == MathFidelity.LoFi:  # LoFi
             for element in operand1:
                 element = element.to(torch.int32)
                 element &= 0xFFF8
 
-    if op == 1:
+    if op_num == 1:
         res = tensor1_float + tensor2_float
-    elif op == 2:
+    elif op_num == 2:
         res = tensor1_float - tensor2_float
-    elif op == 3:
+    elif op_num == 3:
         res = tensor1_float * tensor2_float
     else:
         raise ValueError("Unsupported operation!")
@@ -40,7 +43,6 @@ def generate_golden(op, operand1, operand2, data_format, math_fidelity):
     return res.tolist()
 
 
-mathop_map = {1: "elwadd", 2: "elwsub", 3: "elwmul"}
 full_sweep = False
 all_format_combos = generate_format_combinations(
     [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Bfp8_b], all_same=True
@@ -48,10 +50,15 @@ all_format_combos = generate_format_combinations(
 all_params = generate_params(
     ["multiple_tiles_eltwise_test"],
     all_format_combos,
-    dest_acc=["", "DEST_ACC"],
-    mathop=range(1, 4),
-    math_fidelity=[0, 2, 3, 4],
-    tile_cnt=range(1, 4),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
+    math_fidelity=[
+        MathFidelity.LoFi,
+        MathFidelity.HiFi2,
+        MathFidelity.HiFi3,
+        MathFidelity.HiFi4,
+    ],
+    tile_cnt=[TileCount.One, TileCount.Two, TileCount.Three],
 )
 param_ids = generate_param_ids(all_params)
 
@@ -63,31 +70,26 @@ param_ids = generate_param_ids(all_params)
 )
 def test_multiple_tiles(testname, formats, dest_acc, mathop, math_fidelity, tile_cnt):
     if (
-        mathop in range(1, 4)
-        and formats.unpack_src == DataFormat.Float16
-        and dest_acc == "DEST_ACC"
+        mathop in [MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul]
+        and formats.unpack_A_src == DataFormat.Float16
+        and dest_acc == DestAccumulation.Yes
     ):
         pytest.skip(reason="This combination is not fully implemented in testing")
 
-    #  When running hundreds of tests, failing tests may cause incorrect behavior in subsequent passing tests.
-    #  To ensure accurate results, for now we reset board after each test.
-    #  Fix this: so we only reset after failing tests
-    if full_sweep:
-        run_shell_command(f"cd .. && make clean")
-        run_shell_command(f"tt-smi -r 0")
-
-    pack_start_address = 0x1A000 + 2 * 4096 * tile_cnt
-    pack_addresses = [pack_start_address + 0x1000 * i for i in range(tile_cnt)]
+    pack_start_address = 0x1A000 + 2 * 4096 * tile_cnt.value
+    pack_addresses = [pack_start_address + 0x1000 * i for i in range(tile_cnt.value)]
     pack_addresses_formatted = format_kernel_list(pack_addresses, as_hex=True)
 
     src_A, src_B = generate_stimuli(
-        formats.unpack_src, tile_cnt=tile_cnt
+        formats.unpack_A_src, formats.unpack_B_src, tile_cnt=tile_cnt
     )  # , const_face=True, const_value_A=3, const_value_B=2)
     golden = generate_golden(mathop, src_A, src_B, formats.pack_dst, math_fidelity)
-    write_stimuli_to_l1(src_A, src_B, formats.unpack_src, "0,0", tile_cnt)
+    write_stimuli_to_l1(
+        src_A, src_B, formats.unpack_A_src, formats.unpack_B_src, "0,0", tile_cnt
+    )
 
-    if mathop != 3:
-        math_fidelity = 0
+    if mathop != MathOperation.Elwmul:
+        math_fidelity = MathFidelity.LoFi
 
     test_config = {
         "formats": formats,

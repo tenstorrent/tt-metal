@@ -44,7 +44,9 @@ all_format_combos = generate_format_combinations(
     [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Bfp8_b], all_same=True
 )  # Generate format combinations with all formats being the same (flag set to True), refer to `param_config.py` for more details.
 all_params = generate_params(
-    ["fill_dest_test"], all_format_combos, dest_acc=["", "DEST_ACC"]
+    ["fill_dest_test"],
+    all_format_combos,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 param_ids = generate_param_ids(all_params)
 
@@ -54,22 +56,15 @@ param_ids = generate_param_ids(all_params)
 )
 def test_fill_dest(testname, formats, dest_acc):
 
-    if formats.unpack_src == DataFormat.Float16 and dest_acc == "DEST_ACC":
+    if formats.unpack_A_src == DataFormat.Float16 and dest_acc == DestAccumulation.Yes:
         pytest.skip(reason="This combination is not fully implemented in testing")
-
-    #  When running hundreds of tests, failing tests may cause incorrect behavior in subsequent passing tests.
-    #  To ensure accurate results, for now we reset board after each test.
-    #  Fix this: so we only reset after failing tests
-    if full_sweep:
-        run_shell_command(f"cd .. && make clean")
-        run_shell_command(f"tt-smi -r 0")
 
     pack_start_address = 0x1C000
     pack_addresses = [pack_start_address + 0x1000 * i for i in range(16)]
 
-    src_A, src_B = generate_stimuli(formats.unpack_src)
+    src_A, src_B = generate_stimuli(formats.unpack_A_src, formats.unpack_B_src)
     golden = generate_golden([2] * 16, src_A, src_B, formats.pack_dst)
-    write_stimuli_to_l1(src_A, src_B, formats.unpack_src)
+    write_stimuli_to_l1(src_A, src_B, formats.unpack_A_src, formats.unpack_B_src)
 
     test_config = {
         "formats": formats,

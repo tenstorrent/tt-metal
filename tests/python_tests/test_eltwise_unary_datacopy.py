@@ -12,6 +12,29 @@ def generate_golden(operand1, format):
 
 
 full_sweep = False
+#  This is an example of how users can define and create their own format combinations for testing specific cases they're interested in
+# Note these combinations might fail because we don't have date inference model to adjust unsupported format combinations
+generate_format_selection = create_formats_for_testing(
+    [
+        (
+            DataFormat.Float16,  # index 0 is for unpack_A_src
+            DataFormat.Float16_b,  # index 1 is for unpack_A_dst
+            DataFormat.Bfp8_b,  # index 2 is for pack_src (if src registers have same formats)
+            DataFormat.Int32,  # index 3 is for pack_dst
+            DataFormat.Float32,  # index 4 is for math format
+        ),
+        (
+            DataFormat.Float32,  # index 0 is for unpack_A_src
+            DataFormat.Float32,  # index 1 is for unpack_A_dst
+            DataFormat.Bfp8_b,  # index 2 is for unpack_B_src (inputs to src registers have different formats)
+            DataFormat.Int32,  # index 3 is for unpack_B_dst (inputs to src registers have different formats)
+            DataFormat.Float32,  # index 4 is for pack_src (if src registers have same formats)
+            DataFormat.Int32,  # index 5 is for pack_dst
+            DataFormat.Float32,  # index 6 is for math format
+        ),
+    ]
+)
+
 all_format_combos = generate_format_combinations(
     formats=[
         DataFormat.Float32,
@@ -21,8 +44,9 @@ all_format_combos = generate_format_combinations(
         DataFormat.Int32,
     ],
     all_same=True,
+    same_src_reg_format=True,  # setting src_A and src_B register to have same format
 )  # Generate format combinations with all formats being the same (flag set to True), refer to `param_config.py` for more details.
-dest_acc = ["", "DEST_ACC"]
+dest_acc = [DestAccumulation.No, DestAccumulation.Yes]
 testname = ["eltwise_unary_datacopy_test"]
 all_params = generate_params(testname, all_format_combos, dest_acc)
 param_ids = generate_param_ids(all_params)
@@ -33,27 +57,20 @@ param_ids = generate_param_ids(all_params)
 )
 def test_unary_datacopy(testname, formats, dest_acc):
 
-    if formats.unpack_src == DataFormat.Float16 and dest_acc == "DEST_ACC":
+    if formats.unpack_A_src == DataFormat.Float16 and dest_acc == DestAccumulation.Yes:
         pytest.skip(reason="This combination is not fully implemented in testing")
     if (
-        formats.unpack_src in [DataFormat.Float32, DataFormat.Int32]
-        and dest_acc != "DEST_ACC"
+        formats.unpack_A_src in [DataFormat.Float32, DataFormat.Int32]
+        and dest_acc != DestAccumulation.Yes
     ):
         pytest.skip(
             reason="Skipping test for 32 bit wide data without 32 bit accumulation in Dest"
         )
 
-    #  When running hundreds of tests, failing tests may cause incorrect behavior in subsequent passing tests.
-    #  To ensure accurate results, for now we reset board after each test.
-    #  Fix this: so we only reset after failing tests
-    if full_sweep:
-        run_shell_command(f"cd .. && make clean")
-        run_shell_command(f"tt-smi -r 0")
-
-    src_A, src_B = generate_stimuli(formats.unpack_src)
+    src_A, src_B = generate_stimuli(formats.unpack_A_src, formats.unpack_B_src)
     srcB = torch.full((1024,), 0)
     golden = generate_golden(src_A, formats.pack_dst)
-    write_stimuli_to_l1(src_A, src_B, formats.unpack_src)
+    write_stimuli_to_l1(src_A, src_B, formats.unpack_A_src, formats.unpack_B_src)
 
     test_config = {
         "formats": formats,

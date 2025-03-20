@@ -27,45 +27,83 @@ constexpr std::underlying_type_t<DataFormat> get_data_format(DataFormat format)
 }
 } // namespace
 
-#define UNPACK_SRC_CASE(data_format) constexpr auto UNPACK_IN = get_data_format(DataFormat::data_format);
+#define UNPACK_A_SRC_CASE(data_format) constexpr auto UNPACK_A_IN = get_data_format(DataFormat::data_format);
 
-#if defined(UNPACK_SRC_FLOAT16_B)
-UNPACK_SRC_CASE(Float16_b)
+#if defined(UNPACK_A_SRC_FLOAT16_B)
+UNPACK_A_SRC_CASE(Float16_b)
 #endif
-#if defined(UNPACK_SRC_FLOAT16)
-UNPACK_SRC_CASE(Float16)
+#if defined(UNPACK_A_SRC_FLOAT16)
+UNPACK_A_SRC_CASE(Float16)
 #endif
-#if defined(UNPACK_SRC_FLOAT32)
-UNPACK_SRC_CASE(Float32)
+#if defined(UNPACK_A_SRC_FLOAT32)
+UNPACK_A_SRC_CASE(Float32)
 #endif
-#if defined(UNPACK_SRC_INT32)
-UNPACK_SRC_CASE(Int32)
+#if defined(UNPACK_A_SRC_INT32)
+UNPACK_A_SRC_CASE(Int32)
 #endif
-#if defined(UNPACK_SRC_BFP8_B)
-UNPACK_SRC_CASE(Bfp8_b)
-#endif
-
-#undef UNPACK_SRC_CASE
-
-#define UNPACK_DST_CASE(data_format) constexpr auto UNPACK_OUT = get_data_format(DataFormat::data_format);
-
-#if defined(UNPACK_DST_FLOAT16_B)
-UNPACK_DST_CASE(Float16_b)
-#endif
-#if defined(UNPACK_DST_FLOAT16)
-UNPACK_DST_CASE(Float16)
-#endif
-#if defined(UNPACK_DST_FLOAT32)
-UNPACK_DST_CASE(Float32)
-#endif
-#if defined(UNPACK_DST_INT32)
-UNPACK_DST_CASE(Int32)
-#endif
-#if defined(UNPACK_DST_BFP8_B)
-UNPACK_DST_CASE(Bfp8_b)
+#if defined(UNPACK_A_SRC_BFP8_B)
+UNPACK_A_SRC_CASE(Bfp8_b)
 #endif
 
-#undef UNPACK_DST_CASE
+#undef UNPACK_A_SRC_CASE
+
+#define UNPACK_B_SRC_CASE(data_format) constexpr auto UNPACK_B_IN = get_data_format(DataFormat::data_format);
+
+#if defined(UNPACK_B_SRC_FLOAT16_B)
+UNPACK_B_SRC_CASE(Float16_b)
+#endif
+#if defined(UNPACK_B_SRC_FLOAT16)
+UNPACK_B_SRC_CASE(Float16)
+#endif
+#if defined(UNPACK_B_SRC_FLOAT32)
+UNPACK_B_SRC_CASE(Float32)
+#endif
+#if defined(UNPACK_B_SRC_INT32)
+UNPACK_B_SRC_CASE(Int32)
+#endif
+#if defined(UNPACK_B_SRC_BFP8_B)
+UNPACK_B_SRC_CASE(Bfp8_b)
+#endif
+
+#undef UNPACK_B_SRC_CASE
+
+#define UNPACK_A_DST_CASE(data_format) constexpr auto UNPACK_A_OUT = get_data_format(DataFormat::data_format);
+#if defined(UNPACK_A_DST_FLOAT16_B)
+UNPACK_A_DST_CASE(Float16_b)
+#endif
+#if defined(UNPACK_A_DST_FLOAT16)
+UNPACK_A_DST_CASE(Float16)
+#endif
+#if defined(UNPACK_A_DST_FLOAT32)
+UNPACK_A_DST_CASE(Float32)
+#endif
+#if defined(UNPACK_A_DST_INT32)
+UNPACK_A_DST_CASE(Int32)
+#endif
+#if defined(UNPACK_A_DST_BFP8_B)
+UNPACK_A_DST_CASE(Bfp8_b)
+#endif
+
+#undef UNPACK_A_DST_CASE
+
+#define UNPACK_B_DST_CASE(data_format) constexpr auto UNPACK_B_OUT = get_data_format(DataFormat::data_format);
+#if defined(UNPACK_B_DST_FLOAT16_B)
+UNPACK_B_DST_CASE(Float16_b)
+#endif
+#if defined(UNPACK_B_DST_FLOAT16)
+UNPACK_B_DST_CASE(Float16)
+#endif
+#if defined(UNPACK_B_DST_FLOAT32)
+UNPACK_B_DST_CASE(Float32)
+#endif
+#if defined(UNPACK_B_DST_INT32)
+UNPACK_B_DST_CASE(Int32)
+#endif
+#if defined(UNPACK_B_DST_BFP8_B)
+UNPACK_B_DST_CASE(Bfp8_b)
+#endif
+
+#undef UNPACK_B_DST_CASE
 
 #define PACK_SRC_CASE(data_format) constexpr auto PACK_IN = get_data_format(DataFormat::data_format);
 
