@@ -84,19 +84,23 @@ tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& tensor, int dim) {
 
     std::vector<tt::tt_metal::Tensor> scattered_tensors;
     scattered_tensors.reserve(num_tensor_buffers);
-    for (size_t device_index = 0; device_index < num_tensor_buffers; ++device_index) {
-        auto device = storage.get_buffer_for_device_id(device_index)->device();
+    uint32_t device_index = 0;
+    for (const auto& [shard_index, buffer] : storage.buffers) {
+        auto device = buffer->device();
         auto tensor_on_device =
-            tt::tt_metal::Tensor(storage.get_buffer_for_device(device), storage.get_tensor_spec_for_device(device));
+            tt::tt_metal::Tensor(buffer, storage.get_tensor_spec_for_device(device));
 
         start[dim] = split_size_per_device * device_index;
-        end[dim] = split_size_per_device * (device_index + 1);
+        end[dim] = split_size_per_device * (device_index + 1U);
 
         auto sliced_tensor = ttnn::slice(tensor_on_device, start, end, stride);
         scattered_tensors.push_back(sliced_tensor);
+        device_index++;
     }
+
     auto distributed_tensor = ttnn::distributed::create_multi_device_tensor(
         scattered_tensors, ttnn::StorageType::MULTI_DEVICE, storage.strategy);
+    
     return distributed_tensor;
 }
 
