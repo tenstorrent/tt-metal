@@ -7,6 +7,7 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_exp.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_log.h>
@@ -17,6 +18,7 @@
 static const uint32_t max_read_size = 2048;  // max read size in bytes for reader and writer kernels
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -818,8 +820,8 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     auto stick_size_padded = W_padded * a.element_size();
     auto stick_size_padded_front = front_pad[-1] * a.element_size();
     auto stick_size_padded_end = stick_size_padded - stick_size - stick_size_padded_front;
-    uint32_t stick_size_padded_aligned = tt::align(stick_size_padded, hal.get_alignment(HalMemType::L1));
-    uint32_t stick_size_padded_DRAM_aligned = tt::align(stick_size_padded, hal.get_alignment(HalMemType::DRAM));
+    uint32_t stick_size_padded_aligned = tt::align(stick_size_padded, hal::get_l1_alignment());
+    uint32_t stick_size_padded_DRAM_aligned = tt::align(stick_size_padded, hal::get_dram_alignment());
     uint32_t row_major_min_bytes = 16;
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
@@ -852,7 +854,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
             .set_page_size(src1_cb_index, stick_size_padded_DRAM_aligned);
     auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
 
-    bool unaligned = stick_size_padded_aligned % hal.get_alignment(HalMemType::DRAM) != 0;
+    bool unaligned = stick_size_padded_aligned % hal::get_dram_alignment() != 0;
     if (stick_size_padded_front != 0 || unaligned) {
         uint32_t src2_cb_index = tt::CBIndex::c_2;
         tt::tt_metal::CircularBufferConfig cb_src2_config =
@@ -1432,7 +1434,7 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
         TT_THROW("ttnn.pad: unsupported data type for pad_rm_sharded_stickwise");
     }
 
-    auto l1_alignment_bytes = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1);
+    auto l1_alignment_bytes = hal::get_l1_alignment();
     uint32_t padded_stick_step = tt::round_up(
         padded_stick_bytes, l1_alignment_bytes);  // round padded_stick bytes to a multiple of l1_alignment_bytes
     uint32_t unpadded_stick_step = tt::round_up(
