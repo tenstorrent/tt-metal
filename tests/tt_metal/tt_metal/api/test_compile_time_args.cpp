@@ -7,6 +7,7 @@
 #include "device.hpp"
 #include "device_fixture.hpp"
 #include "hal.hpp"
+#include <numeric>
 #include <string>
 #include <tt-metalium/kernel.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -15,7 +16,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-TEST_F(DeviceFixture, TensixTestSixtyThousandCompileTimeArgs) {
+TEST_F(DeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
     for (IDevice* device : this->devices_) {
         CoreCoord core = {0, 0};
         Program program;
@@ -24,11 +25,9 @@ TEST_F(DeviceFixture, TensixTestSixtyThousandCompileTimeArgs) {
 
         const std::map<string, string>& defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}};
 
-        const uint32_t num_compile_time_args = 60000;
-        std::vector<uint32_t> compile_time_args;
-        for (uint32_t i = 0; i < num_compile_time_args; i++) {
-            compile_time_args.push_back(1);
-        }
+        const uint32_t num_compile_time_args = 20000;
+        std::vector<uint32_t> compile_time_args(num_compile_time_args);
+        std::iota(compile_time_args.begin(), compile_time_args.end(), 0);
 
         CreateKernel(
             program,
@@ -41,7 +40,8 @@ TEST_F(DeviceFixture, TensixTestSixtyThousandCompileTimeArgs) {
                 .defines = defines});
         this->RunProgram(device, program);
 
-        const std::vector<uint32_t> compile_time_args_expected{num_compile_time_args};
+        const std::vector<uint32_t> compile_time_args_expected{
+            std::accumulate(compile_time_args.begin(), compile_time_args.end(), 0)};
 
         std::vector<uint32_t> compile_time_args_actual;
         detail::ReadFromDeviceL1(device, core, write_addr, sizeof(uint32_t), compile_time_args_actual);

@@ -698,12 +698,14 @@ void JitBuildState::compile_one(
             if (values.empty()) {
                 return;
             }
-            defines += "-DKERNEL_COMPILE_TIME_ARGS=";
+            std::stringstream ss;
+            ss << "-DKERNEL_COMPILE_TIME_ARGS=";
             for (uint32_t i = 0; i < values.size(); i++) {
-                defines += to_string(values[i]) + ",";
+                ss << values[i] << ",";
             }
-            defines.pop_back();
-            defines += " ";
+            std::string args = ss.str();
+            args.pop_back();  // Remove the trailing comma
+            defines += args + " ";
         });
 
         cmd += fmt::format("-{} ", settings->get_compiler_opt_level());
