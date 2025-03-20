@@ -29,16 +29,13 @@ def run_moreh_cumsum_tests(
             0,
         )
 
-        tt_x = ttnn.from_torch(x, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)  # int32 uint32 bfloat16
+        tt_x = ttnn.from_torch(x, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
 
-        # tt_x = ttnn.typecast(tt_x, ttnn.bfloat16)
         tt_result = ttnn.moreh_cumsum(
             tt_x,
             0,
         )
         tt_result = ttnn.to_torch(tt_result)
-        # print(f"tt_result {tt_result.shape} {tt_result}")
-        # print(f"ref_value {ref_value.shape} {ref_value}")
 
         passed, message = check_with_pcc(ref_value, tt_result)
         assert passed, f"{message, tt_x}"
@@ -48,7 +45,6 @@ def run_moreh_cumsum_tests(
         print(traceback.format_exc())
         raise e
 
-    # assert len(tt_result.shape) == len(ref_value.shape)
     assert tt_result.shape == ref_value.shape
     assert_with_pcc(ref_value, tt_result, 0.999)
 
@@ -75,7 +71,6 @@ def run_moreh_cumsum_tests_2(
     device,
 ):
     x = (torch.rand(in_shape) * 10).to(torch_type)
-    # x = (torch.ones(in_shape)).to(torch_type)
 
     try:
         ref_value = aten.cumsum.default(
@@ -83,16 +78,13 @@ def run_moreh_cumsum_tests_2(
             dim,
         )
 
-        tt_x = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)  # int32 uint32 bfloat16
+        tt_x = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-        # tt_x = ttnn.typecast(tt_x, ttnn.bfloat16)
         tt_result = ttnn.moreh_cumsum(
             tt_x,
             dim,
         )
         tt_result = ttnn.to_torch(tt_result)
-        # print(f"tt_result {tt_result.shape} {tt_result}")
-        # print(f"ref_value {ref_value.shape} {ref_value}")
 
         passed, message = check_with_pcc(ref_value, tt_result)
         assert passed, f"{message, tt_x}"
@@ -102,7 +94,6 @@ def run_moreh_cumsum_tests_2(
         print(traceback.format_exc())
         raise e
 
-    # assert len(tt_result.shape) == len(ref_value.shape)
     assert tt_result.shape == ref_value.shape
     assert_with_pcc(ref_value, tt_result, 0.999)
 
@@ -127,5 +118,4 @@ test_sweep_args_2 = [
     (test_sweep_args_2),
 )
 def test_moreh_cumsum_2(shape, torch_type, dtype, dim, device):
-    disable_persistent_kernel_cache()
     run_moreh_cumsum_tests_2(shape, torch_type, dtype, dim, device)

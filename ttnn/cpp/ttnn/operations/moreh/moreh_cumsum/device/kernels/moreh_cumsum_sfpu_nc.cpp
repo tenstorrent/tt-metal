@@ -13,11 +13,6 @@
 #include "compute_kernel_api/add_int32_sfpu.h"
 #include "compute_kernel_api/common.h"
 
-// DRAM -> SRAM -> REG: [SrcA SrcB DST]
-//  Matrix Engine [FPU]
-
-// Vector Engine [SFPU] //signle precission floating point unit
-
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
 
@@ -66,7 +61,6 @@ void MAIN {
             copy_tile(cb_in0, first_tile, dst1);
             cb_pop_front(cb_in0, 1);
 
-            // Add tiles in dst0 and dst1. Store result to dst0
             // Add tiles in dst0 and dst1. Store result to dst0
             add_int32_tile_init();
             add_int32_tile(dst0, dst1);
