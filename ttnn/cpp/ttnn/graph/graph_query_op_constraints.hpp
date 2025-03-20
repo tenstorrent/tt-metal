@@ -13,22 +13,6 @@
 
 namespace ttnn::graph {
 
-namespace detail {
-template <typename Result>
-Tensor extract_output_tensor(Result&& result) {
-    if constexpr (std::is_same_v<std::decay_t<Result>, Tensor>) {
-        return std::forward<Result>(result);
-    } else if constexpr (
-        std::tuple_size_v<std::decay_t<Result>> > 0 &&
-        std::is_same_v<std::tuple_element_t<0, std::decay_t<Result>>, Tensor>) {
-        // handle conv2d return type
-        return std::get<0>(std::forward<Result>(result));
-    } else {
-        static_assert(false, "Unsupported return type: Must be Tensor or a tuple with Tensor as the first element.");
-    }
-}
-}  // namespace detail
-
 struct ResourceUsage {
     size_t cb_peak_size_per_core = 0;
     size_t l1_buffers_peak_per_core = 0;
@@ -38,7 +22,6 @@ struct ResourceUsage {
 struct ConstraintQueryResponse {
     ExecutionStatus status = ExecutionStatus::Error;
     ResourceUsage resource_usage;
-    std::optional<TensorSpec> output_tensor_spec;
     std::optional<std::string> error_message;
 };
 
@@ -62,7 +45,6 @@ auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
     uint32_t num_of_active_graph_captures = 0;
     try {
         nlohmann::json op_trace;
-        std::optional<TensorSpec> output_spec = std::nullopt;
         // outer graph capture is to avoid dispatching/allocating dummy input tensors
         {
             auto capture_outer = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
@@ -80,8 +62,7 @@ auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
             // inner graph capture is to capture the actual op graph trace
             {
                 auto capture_inner = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
-                Tensor output = detail::extract_output_tensor(std::apply(op, transformed_args));
-                output_spec = output.get_tensor_spec();
+                std::apply(op, transformed_args);
                 op_trace = capture_inner.end_graph_capture();
             }  // end of inner graph capture
 
@@ -96,13 +77,11 @@ auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
             extract_l1_output_buffer_allocation_size_per_core(op_trace, interleaved_storage_cores);
 
         return ConstraintQueryResponse{
-            ExecutionStatus::Success,
-            {cb_peak_size_per_core, l1_buffers_peak_per_core, l1_output_buffer_per_core},
-            output_spec};
+            ExecutionStatus::Success, {cb_peak_size_per_core, l1_buffers_peak_per_core, l1_output_buffer_per_core}};
 
     } catch (const std::exception& e) {
         tt::log_debug(tt::LogOp, "op_constraints - error: {}", e.what());
-        return ConstraintQueryResponse{ExecutionStatus::Error, {0, 0, 0}, std::nullopt, e.what()};
+        return ConstraintQueryResponse{ExecutionStatus::Error, {0, 0, 0}, e.what()};
     }
 }
 
