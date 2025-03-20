@@ -63,19 +63,20 @@ void kernel_main() {
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(2);
     constexpr uint32_t fabric_receiver_cb_id = get_compile_time_arg_val(3);
     constexpr uint32_t accumulator_cb_id = get_compile_time_arg_val(4);
-    constexpr uint32_t output_tensor_cb_id = get_compile_time_arg_val(5);
-    constexpr uint32_t chip_id = get_compile_time_arg_val(6);
-    constexpr uint32_t tiles_per_core_width = get_compile_time_arg_val(7);
-    constexpr uint32_t tiles_per_core_width_output = get_compile_time_arg_val(8);
-    constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(9);
-    constexpr uint32_t input_shard_cores_per_device = get_compile_time_arg_val(10);
-    constexpr uint32_t num_devices = get_compile_time_arg_val(11);
-    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(12);
-    constexpr uint32_t output_cores_per_device = get_compile_time_arg_val(13);
-    constexpr uint32_t noc_start_x = get_compile_time_arg_val(14);
-    constexpr uint32_t noc_start_y = get_compile_time_arg_val(15);
-    constexpr uint32_t noc_end_x = get_compile_time_arg_val(16);
-    constexpr uint32_t noc_end_y = get_compile_time_arg_val(17);
+    constexpr uint32_t output_accumulated_packets_cb_id = get_compile_time_arg_val(5);
+    constexpr uint32_t output_tensor_cb_id = get_compile_time_arg_val(6);
+    constexpr uint32_t chip_id = get_compile_time_arg_val(7);
+    constexpr uint32_t tiles_per_core_width = get_compile_time_arg_val(8);
+    constexpr uint32_t tiles_per_core_width_output = get_compile_time_arg_val(9);
+    constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(10);
+    constexpr uint32_t input_shard_cores_per_device = get_compile_time_arg_val(11);
+    constexpr uint32_t num_devices = get_compile_time_arg_val(12);
+    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(13);
+    constexpr uint32_t output_cores_per_device = get_compile_time_arg_val(14);
+    constexpr uint32_t noc_start_x = get_compile_time_arg_val(15);
+    constexpr uint32_t noc_start_y = get_compile_time_arg_val(16);
+    constexpr uint32_t noc_end_x = get_compile_time_arg_val(17);
+    constexpr uint32_t noc_end_y = get_compile_time_arg_val(18);
 
     // Derived compile-time constants
     constexpr uint32_t input_tensor_cores = input_shard_cores_per_device * num_devices;
@@ -96,6 +97,7 @@ void kernel_main() {
     constexpr uint8_t receiver_core_for_device[num_devices][2] = RECEIVER_CORE_XY;
     constexpr uint8_t input_core_xy[input_tensor_cores][2] = INPUT_CORE_XY;
     constexpr uint8_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
+    constexpr uint8_t packet_worker_cores[num_packets_total_per_device][2] = PACKET_WORKER_CORES;
 
     constexpr uint32_t num_dests = (noc_end_x - noc_start_x + 1) * (noc_end_y - noc_start_y + 1);
 
@@ -103,8 +105,8 @@ void kernel_main() {
     uint32_t receiver_semaphore_address = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t local_semaphore_address = get_semaphore(get_arg_val<uint32_t>(rt_arg_idx++));
     bool sender_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
-    bool receiver_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
-    uint32_t receiver_for_device_id = get_arg_val<uint32_t>(rt_arg_idx++);
+    bool worker_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t linear_output_page_start_idx = get_arg_val<uint32_t>(rt_arg_idx++);
 
     if (sender_core) {
         // DPRINT << "SENDER CORE WRITER" << ENDL();
@@ -134,19 +136,22 @@ void kernel_main() {
             auto& fabric_conn = target_device_id > chip_id ? fabric_connection.get_forward_connection()
                                                            : fabric_connection.get_backward_connection();
 
-            uint32_t receiver_core_x = receiver_core_for_device[chip_id][x_index];
-            uint32_t receiver_core_y = receiver_core_for_device[chip_id][y_index];
             uint32_t base_receiver_l1_addr = get_read_ptr(fabric_receiver_cb_id);
 
             // for LLaMa - 6 cores * 5 tiles per core = 30 tiles to each other device
             // 30/4 = 8 packets, with the last packet having 2 pages
-            uint32_t packet_offset = 0;
+            uint32_t packet_offset = chip_id * num_pages_per_packet * page_size_bytes;
 
             for (uint32_t packet = 0; packet < num_packets_total_per_device; packet++) {
                 // Determine packet size based on whether it's the last packet
                 uint32_t curr_packet_num_pages =
                     packet == num_packets_total_per_device - 1 ? last_packet_num_pages : num_pages_per_packet;
                 uint32_t curr_packet_size_bytes = curr_packet_num_pages * page_size_bytes;
+
+                uint32_t receiver_core_x = packet_worker_cores[packet][x_index];
+                uint32_t receiver_core_y = packet_worker_cores[packet][y_index];
+                DPRINT << "Sending to core " << receiver_core_x << " " << receiver_core_y << " on packet " << packet
+                       << " with offset " << packet_offset << ENDL();
 
                 // DPRINT << "packet " << packet << " waiting on " << curr_packet_num_pages << ENDL();
                 cb_wait_front(fabric_sender_cb_id, curr_packet_num_pages);
@@ -175,13 +180,11 @@ void kernel_main() {
 
                 // DPRINT << "popping front" << ENDL();
                 cb_pop_front(fabric_sender_cb_id, curr_packet_num_pages);
-
-                // DPRINT << "packet_offset += curr_packet_num_pages * page_size_bytes" << ENDL();
-                packet_offset += curr_packet_size_bytes;
             }
 
             // DPRINT << "sending mcast packet" << ENDL();
-            uint64_t sem_noc_addr = get_noc_addr(receiver_core_x, receiver_core_y, receiver_semaphore_address);
+            uint64_t sem_noc_addr = get_noc_addr(
+                packet_worker_cores[0][x_index], packet_worker_cores[0][x_index], receiver_semaphore_address);
             sem_inc_packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                 sem_noc_addr,
                 static_cast<uint16_t>(1),  // increment 1
@@ -204,70 +207,50 @@ void kernel_main() {
             // DPRINT << "fabric connection closed" << ENDL();
         }
         // DPRINT << "Closing fabric connection" << ENDL();
-    } else if (receiver_core && receiver_for_device_id != chip_id) {
+    } else if (worker_core) {
         // DPRINT << "RECEIVER CORE WRITER" << ENDL();
         // DPRINT << "Receiver for device id: " << receiver_for_device_id << " chip_id: " << chip_id << ENDL();
+        uint32_t linear_output_core_idcs[num_pages_per_packet];
+        uint32_t linear_output_tile_offsets[num_pages_per_packet];
 
-        // Get base addresses once
-        uint32_t base_receiver_l1_addr = get_read_ptr(fabric_receiver_cb_id);
-        uint32_t accumulator_l1_addr = get_read_ptr(accumulator_cb_id);
+        for (uint32_t i = 0; i < num_pages_per_packet; i++) {
+            uint32_t rem = linear_output_page_start_idx + i;
+            linear_output_core_idcs[i] = rem / tiles_per_core_width_output;
+            linear_output_tile_offsets[i] = rem % tiles_per_core_width_output;
+            DPRINT << "linear_output_core_idcs[" << i << "] " << linear_output_core_idcs[i] << ENDL();
+            DPRINT << "linear_output_tile_offsets[" << i << "] " << linear_output_tile_offsets[i] << ENDL();
+        }
 
-        // Precompute output tile offset
-        uint32_t output_tile_offset = receiver_for_device_id * tiles_per_core_width_output * page_size_bytes;
+        uint32_t output_tensor_base_addr = get_read_ptr(output_tensor_cb_id);
 
-        // Wait on semaphore
-        // DPRINT << "writer receiver waiting on semaphore" << ENDL();
-        noc_semaphore_wait((uint32_t*)receiver_semaphore_address, 1);
-        // DPRINT << "writer receiver semaphore received" << ENDL();
-        // while (*(uint32_t*)receiver_semaphore_address < 1) {
-        // }
-
+        cb_wait_front(output_accumulated_packets_cb_id, num_pages_per_packet);
+        auto output_accumulated_packets_l1_addr = get_read_ptr(output_accumulated_packets_cb_id);
         // Process all tiles
-        constexpr uint32_t total_tiles = input_shard_cores_per_device * tiles_per_core_width;
-        for (uint32_t tile = 0; tile < total_tiles / 2; tile++) {
+        for (uint32_t tile = 0; tile < num_pages_per_packet; tile++) {
             // DPRINT << "writer receiver processing tile " << tile << ENDL();
             // one tile to each core
-            uint32_t output_core = tile;
+
+            uint32_t output_core = linear_output_core_idcs[tile];
             uint32_t output_core_x = output_core_xy[output_core][x_index];
             uint32_t output_core_y = output_core_xy[output_core][y_index];
 
             // Compute addresses
-            uint64_t noc_accumulator_addr =
-                get_noc_addr(output_core_x, output_core_y, accumulator_l1_addr + output_tile_offset);
+            uint64_t noc_accumulator_addr = get_noc_addr(
+                output_core_x,
+                output_core_y,
+                output_tensor_base_addr + linear_output_tile_offsets[tile] * page_size_bytes);
             // uint64_t local_receiver_semaphore_noc_addr =
             //     get_noc_addr(output_core_x, output_core_y, local_semaphore_address);
 
             // print_full_tile(fabric_receiver_cb_id, tile, true);
-            noc_async_write(base_receiver_l1_addr + tile * page_size_bytes, noc_accumulator_addr, page_size_bytes);
+            noc_async_write(
+                output_accumulated_packets_l1_addr + tile * page_size_bytes, noc_accumulator_addr, page_size_bytes);
             // noc_async_write_barrier();
             // noc_semaphore_inc(local_receiver_semaphore_noc_addr, 1);  // mcast inc is needed, this will tank latency
         }
         noc_async_write_barrier();
         // DPRINT << "writer receiver async write barrier done" << ENDL();
         // Now we have the block in the CB address, we can mcast to dests!
-        uint64_t multicast_semaphore_addr =
-            static_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, local_semaphore_address);
-        // DPRINT << "multicast_semaphore_addr: " << multicast_semaphore_addr << ENDL();
-        // DPRINT << "writer receiver waiting on semaphore inc from reader" << ENDL();
-        // DPRINT << "receiver semaphore value: " << *(uint32_t*)receiver_semaphore_address << ENDL();
-        noc_semaphore_wait((uint32_t*)receiver_semaphore_address, 2);
-        // DPRINT << "writer receiver semaphore inc from reader received" << ENDL();
-        noc_multicast_semaphore_inc(multicast_semaphore_addr, 1, num_dests);
-        noc_async_atomic_barrier();
-        // DPRINT << "writer receiver async atomic barrier done" << ENDL();
-        // DPRINT << "semaphore_inc_done" << ENDL();
-
-        // for (uint32_t tile = 0; tile < total_tiles; tile++) {
-        //     // one tile to each core
-        //     uint32_t output_core = tile;
-        //     uint32_t output_core_x = output_core_xy[output_core][x_index];
-        //     uint32_t output_core_y = output_core_xy[output_core][y_index];
-        //     uint64_t local_receiver_semaphore_noc_addr =
-        //         get_noc_addr(output_core_x, output_core_y, local_semaphore_address);
-        //     noc_semaphore_inc(local_receiver_semaphore_noc_addr, 1);  // mcast inc is needed, this will tank latency
-        // }
-        // noc_async_atomic_barrier();
-
         // Reset semaphore
         *(uint32_t*)receiver_semaphore_address = 0;
     } else {

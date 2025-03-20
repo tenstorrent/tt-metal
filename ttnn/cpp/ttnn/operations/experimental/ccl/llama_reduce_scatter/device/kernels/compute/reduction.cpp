@@ -29,16 +29,17 @@ namespace NAMESPACE {
 void MAIN {
     // Define all compile-time arguments at the beginning
     constexpr uint32_t accumulator_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t output_tensor_cb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t output_accumulated_packets_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t num_devices = get_compile_time_arg_val(2);
     constexpr uint32_t tiles_per_core_width_output = get_compile_time_arg_val(3);
+    constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(4);
 
     // Initialize binary operations - use the same constants consistently
-    binary_op_init_common(accumulator_cb_id, accumulator_cb_id, output_tensor_cb_id);
+    binary_op_init_common(accumulator_cb_id, accumulator_cb_id, output_accumulated_packets_cb_id);
     add_tiles_init(accumulator_cb_id, accumulator_cb_id, true);
 
     // UNPACK(DPRINT << "waiting on cb" << accumulator_cb_id << " num tiles:" << num_devices << ENDL());
-    cb_wait_front(accumulator_cb_id, num_devices);
+    cb_wait_front(accumulator_cb_id, num_devices * num_pages_per_packet);
 
     // This loop doesn't do anything now that print statements are commented out
     // for (uint32_t i = 0; i < num_devices; i++) {
@@ -46,24 +47,33 @@ void MAIN {
     // }
 
     // Reserve output space once before processing
-    cb_reserve_back(output_tensor_cb_id, tiles_per_core_width_output);
+    cb_reserve_back(output_accumulated_packets_cb_id, num_pages_per_packet);
 
     // Process tiles in pairs for efficient addition
     tile_regs_acquire();
-    for (uint32_t i = 0; i < num_devices; i += 2) {
-        add_tiles(accumulator_cb_id, accumulator_cb_id, i, i + 1, 0);
-        // dprint_tensix_dest_reg(0);
+    for (uint32_t page_group = 0; page_group < num_pages_per_packet; page_group++) {
+        for (uint32_t j = 0; j < num_devices; j += 2) {
+            add_tiles(
+                accumulator_cb_id,
+                accumulator_cb_id,
+                j * num_pages_per_packet + page_group,
+                (j + 1) * num_pages_per_packet + page_group,
+                page_group);
+            // dprint_tensix_dest_reg(0);
+        }
     }
     tile_regs_commit();
 
     // Pack output tiles
     tile_regs_wait();
-    pack_tile(0, output_tensor_cb_id);
+    for (uint32_t page_group = 0; page_group < num_pages_per_packet; page_group++) {
+        pack_tile(page_group, output_accumulated_packets_cb_id);
+    }
     tile_regs_release();
 
     // UNPACK(DPRINT << "popping front from cb " << accumulator_cb_id << " tiles: " << num_devices << ENDL());
-    cb_pop_front(accumulator_cb_id, num_devices);
-    cb_push_back(output_tensor_cb_id, tiles_per_core_width_output);
+    cb_pop_front(accumulator_cb_id, num_devices * num_pages_per_packet);
+    cb_push_back(output_accumulated_packets_cb_id, num_pages_per_packet);
     // DPRINT << "Kernel finished" << ENDL();
 }
 }  // namespace NAMESPACE
