@@ -607,19 +607,19 @@ INSTANTIATE_TEST_SUITE_P(
 class Conv2dOpIfTest : public ttnn::TTNNFixtureWithDevice {};
 TEST_F(Conv2dOpIfTest, Conv2d) {
     const auto input_spec = ttnn::TensorSpec(
-        ttnn::Shape({1, 1, 50176, 3}),
+        ttnn::Shape{1, 1, 50176, 3},
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
             ttnn::DRAM_MEMORY_CONFIG));
     const auto weight_spec = ttnn::TensorSpec(
-        ttnn::Shape({1, 1, 1568, 64}),
+        ttnn::Shape{1, 1, 1568, 64},
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
             ttnn::DRAM_MEMORY_CONFIG));
     const auto output_spec = ttnn::TensorSpec(
-        ttnn::Shape({1, 1, 12544, 64}),
+        ttnn::Shape{1, 1, 12544, 64},
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
