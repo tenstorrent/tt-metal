@@ -6,7 +6,7 @@
 
 #include "dispatch_fixture.hpp"
 
-#include <tt-metalium/hal.hpp>
+#include "hal.hpp"
 #include <tt-metalium/allocator.hpp>
 
 namespace tt::tt_metal {

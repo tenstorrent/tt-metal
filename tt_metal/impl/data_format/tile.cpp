@@ -4,6 +4,8 @@
 
 #include <tt-metalium/tile.hpp>
 
+#include "hal.hpp"
+
 namespace tt::tt_metal {
 
 Tile::Tile(std::array<uint32_t, 2> tile_shape, bool transpose_tile) : tile_shape(tile_shape) {

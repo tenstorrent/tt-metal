@@ -5,8 +5,10 @@
 #include "sharded_to_interleaved_op.hpp"
 
 #include "sharded_to_interleaved_program_factory.hpp"
+#include <tt-metalium/hal_exp.hpp>
 
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement {
 
@@ -21,7 +23,7 @@ void ShardedToInterleavedDeviceOperation::validate(const std::vector<Tensor>& in
         this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
         "Output memory config must be Interleaved");
     if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-        uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+        uint32_t l1_alignment = hal::get_l1_alignment();
         TT_FATAL(
             (*input_tensor.memory_config().shard_spec).shape[1] * input_tensor.element_size() % (l1_alignment) == 0,
             "Shard page size must be aligned to {}B for L1 Tensor",

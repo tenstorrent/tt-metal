@@ -9,7 +9,6 @@
 
 #include "core_coord.hpp"
 #include "buffer_constants.hpp"
-#include "hal.hpp"
 #include "distributed.hpp"
 
 namespace tt::tt_metal {

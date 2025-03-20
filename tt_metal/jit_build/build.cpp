@@ -18,6 +18,7 @@
 #include <kernel.hpp>
 #include "tt_metal/llrt/tt_elffile.hpp"
 #include "env_lib.hpp"
+#include "hal.hpp"
 
 namespace fs = std::filesystem;
 

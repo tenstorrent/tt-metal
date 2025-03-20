@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include <vector>
-#include "hal.hpp"
+#include "hal_types.hpp"
 
 namespace tt {
 

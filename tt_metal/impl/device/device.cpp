@@ -47,6 +47,10 @@ namespace tt {
 
 namespace tt_metal {
 
+uint64_t IDevice::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
+    return hal.get_dev_addr(this->get_programmable_core_type(virtual_core), addr_type);
+}
+
 Device::Device(Device&& other) = default;
 Device& Device::operator=(Device&& other) = default;
 

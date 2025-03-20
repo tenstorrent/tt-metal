@@ -13,7 +13,7 @@
 #include "work_executor_types.hpp"
 #include "data_types.hpp"
 #include "program_device_map.hpp"
-#include "hal.hpp"
+#include "hal_types.hpp"
 #include "command_queue_interface.hpp"
 #include "command_queue.hpp"
 #include "sub_device_manager_tracker.hpp"

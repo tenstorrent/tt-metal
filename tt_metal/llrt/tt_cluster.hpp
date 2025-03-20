@@ -17,7 +17,7 @@
 
 #include <tt-metalium/dev_msgs.h>
 
-#include <tt-metalium/hal.hpp>
+#include "hal.hpp"
 
 static constexpr std::uint32_t SW_VERSION = 0x00020000;
 
