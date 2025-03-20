@@ -20,8 +20,6 @@ jobs:
           { name: "t3k LLM llama2-70B model perf tests", model: "llama2-70b", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_llama2_70b_tests, timeout: 75, owner_id: U03FJB5TM5Y}, # Colman Glagovich
           { name: "t3k LLM falcon40b model perf tests", model: "falcon40b", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 75, owner_id: U053W15B6JF}, # Djordje Ivanovic
           { name: "t3k CNN resnet50 model perf tests", model: "resnet50", model-type: "CNN", arch: wormhole_b0, cmd: run_t3000_resnet50_tests, timeout: 75, owner_id: U055MU9S9CJ}, # Abhinav
-          { name: "t3k CCL perf tests", arch: wormhole_b0, cmd: run_t3000_ccl_all_gather_perf_tests && run_t3000_ccl_reduce_scatter_perf_tests, timeout: 75, tracy: true, owner_id: ULMEPM2MA}, # Sean Nijjar
-          #{ name: "t3k CNN model perf tests ", model-type: "CNN", arch: wormhole_b0, cmd: run_t3000_cnn_tests, timeout: 120, owner_id: }, #No tests are being run?
         ]
     name: ${{ matrix.test-group.name }}
     env:
@@ -34,7 +32,10 @@ jobs:
       - pipeline-perf
       - ${{ inputs.extra-tag }}
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Enable performance mode
         run: |
           sudo cpupower frequency-set -g performance
@@ -43,26 +44,14 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
           echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
-      - name: Download profiler build artifact
-        id: download-profiler-artifact
-        if: ${{ matrix.test-group.tracy }}
-        uses: actions/download-artifact@v4
-        with:
-          name: TTMetal_build_any_profiler
-        continue-on-error: true
       - name: Download build artifact
-        id: download-artifact
-        if: ${{ !matrix.test-group.tracy }}
         uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_any
       - name: Extract files
-        if: ${{ matrix.test-group.tracy && steps.download-profiler-artifact.outcome == 'success' || !matrix.test-group.tracy }}
         run: tar -xvf ttm_any.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run model perf regression tests
-        if: ${{ matrix.test-group.tracy && steps.download-profiler-artifact.outcome == 'success' || !matrix.test-group.tracy }}
-        shell: bash {0}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
@@ -73,46 +62,107 @@ jobs:
           env python models/perf/merge_perf_results.py
       - name: Check perf report exists
         id: check-perf-report
-        if: ${{ !cancelled() && (matrix.test-group.tracy && steps.download-profiler-artifact.outcome == 'success' || !matrix.test-group.tracy) }}
         run: |
           TODAY=$(date +%Y_%m_%d)
           PERF_REPORT_FILENAME_MODELS="Models_Perf_${TODAY}.csv"
-          PERF_REPORT_FILENAME_CCL_ALL_GATHER="CCL_all_gather_Perf_${TODAY}.csv"
-          PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER="CCL_reduce_scatter_Perf_${TODAY}.csv"
-          if [ "${{ matrix.test-group.tracy }}" == "true" ]; then
-            found_reports=false
-            if [ -f "$PERF_REPORT_FILENAME_CCL_ALL_GATHER" ]; then
-              echo "Found CCL AllGather Perf report: $PERF_REPORT_FILENAME_CCL_ALL_GATHER"
-              echo "perf_report_filename_all_gather=$PERF_REPORT_FILENAME_CCL_ALL_GATHER" >> "$GITHUB_OUTPUT"
-              found_reports=true
-            fi
-            if [ -f "$PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER" ]; then
-              echo "Found CCL ReduceScatter Perf report: $PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER"
-              echo "perf_report_filename_reduce_scatter=$PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER" >> "$GITHUB_OUTPUT"
-              found_reports=true
-            fi
-            if [ "$found_reports" = false ]; then
-              echo "No CCL perf report found for today."
-              exit 1
-            fi
+          if [ -f "$PERF_REPORT_FILENAME_MODELS" ]; then
+            echo "Found Models Perf report: $PERF_REPORT_FILENAME_MODELS"
+            echo "perf_report_filename=$PERF_REPORT_FILENAME_MODELS" >> "$GITHUB_OUTPUT"
           else
-            if [ -f "$PERF_REPORT_FILENAME_MODELS" ]; then
-              echo "Found Models Perf report: $PERF_REPORT_FILENAME_MODELS"
-              echo "perf_report_filename=$PERF_REPORT_FILENAME_MODELS" >> "$GITHUB_OUTPUT"
-            else
-              echo "No Models perf report found for today."
-              exit 1
-            fi
+            echo "No Models perf report found for today."
+            exit 1
           fi
       - name: Upload Models perf report
-        if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' && !matrix.test-group.tracy}}
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
           name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.model }}-bare-metal
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.owner_id }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            generated/test_reports/
+          prefix: "test_reports_"
+      - name: Disable performance mode
+        if: always()
+        run: |
+          sudo cpupower frequency-set -g ondemand
+
+  t3000-model-perf-tests-profiler:
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { name: "t3k CCL perf tests", arch: wormhole_b0, cmd: run_t3000_ccl_all_gather_perf_tests && run_t3000_ccl_reduce_scatter_perf_tests, timeout: 75, owner_id: ULMEPM2MA}, # Sean Nijjar
+        ]
+    name: ${{ matrix.test-group.name }}
+    env:
+      ARCH_NAME: ${{ matrix.test-group.arch }}
+      LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    runs-on:
+      - arch-wormhole_b0
+      - config-t3000
+      - pipeline-perf
+      - ${{ inputs.extra-tag }}
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Enable performance mode
+        run: |
+          sudo cpupower frequency-set -g performance
+      - uses: ./.github/actions/ensure-active-weka-mount
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+          echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
+      - name: Download profiler build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_any_profiler
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
+      - uses: ./.github/actions/install-python-deps
+      - name: Run model perf regression tests
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_model_perf_tests.sh
+          ${{ matrix.test-group.cmd }}
+          env python models/perf/merge_perf_results.py
+      - name: Check perf report exists
+        id: check-perf-report
+        run: |
+          TODAY=$(date +%Y_%m_%d)
+          PERF_REPORT_FILENAME_CCL_ALL_GATHER="CCL_all_gather_Perf_${TODAY}.csv"
+          PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER="CCL_reduce_scatter_Perf_${TODAY}.csv"
+          found_reports=false
+          if [ -f "$PERF_REPORT_FILENAME_CCL_ALL_GATHER" ]; then
+            echo "Found CCL AllGather Perf report: $PERF_REPORT_FILENAME_CCL_ALL_GATHER"
+            echo "perf_report_filename_all_gather=$PERF_REPORT_FILENAME_CCL_ALL_GATHER" >> "$GITHUB_OUTPUT"
+            found_reports=true
+          fi
+          if [ -f "$PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER" ]; then
+            echo "Found CCL ReduceScatter Perf report: $PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER"
+            echo "perf_report_filename_reduce_scatter=$PERF_REPORT_FILENAME_CCL_REDUCE_SCATTER" >> "$GITHUB_OUTPUT"
+            found_reports=true
+          fi
+          if [ "$found_reports" = false ]; then
+            echo "No CCL perf report found for today."
+            exit 1
+          fi
       - name: Upload CCL perf report
-        if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' && matrix.test-group.tracy}}
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
