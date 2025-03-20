@@ -373,8 +373,9 @@ def test_all_gather_only(
         ),
     ],
 )
-@pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("num_iters, warmup_iters", [[1, 0]])
+@pytest.mark.parametrize("num_links", [3])
+@pytest.mark.parametrize("use_new_version", [True])
+@pytest.mark.parametrize("num_iters, warmup_iters", [[20, 10]])
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
@@ -382,9 +383,9 @@ def test_all_gather_only(
     [{"trace_region_size": 23887872}],
     indirect=True,
 )
-# @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 def test_tg_trace_rms_fuse(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     elements_per_batch,
     num_links,
@@ -396,10 +397,11 @@ def test_tg_trace_rms_fuse(
     input_shard_grid,
     output_shard_grid,
     trace_mode,
+    use_new_version,
 ):
     profiler = BenchmarkProfiler()
     run_rms_trace(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         elements_per_batch,
         num_links,
@@ -412,6 +414,7 @@ def test_tg_trace_rms_fuse(
         enable_async=enable_async,
         warmup_iters=warmup_iters,
         profiler=profiler,
+        use_new_version=use_new_version,
     )
 
 

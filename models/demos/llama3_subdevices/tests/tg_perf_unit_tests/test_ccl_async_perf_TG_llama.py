@@ -143,7 +143,7 @@ def test_rms_perf(
     step_name = f"rms_test"
 
     subdir = "llama_ccl_perf"
-    command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_tg_trace_rms_fuse -k {ar_type}"
+    command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_tg_trace_rms_fuse"
     cols = ["DEVICE KERNEL"]
     op_name = "RMS"
     warmup_iters = warmup_iters * 4  # 5 iterations per device

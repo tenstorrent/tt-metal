@@ -144,39 +144,39 @@ def run_rms_trace(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     logger.info("Compiling model")
-    tt_stats = ttnn.fused_rms_1_1_32_8192(
-        input_tensor,
-        ccl_semaphore_handles,
-        layer_norm_config,
-        is_pre=True,
-    )
-    tt_stats_gathered = ttnn.experimental.all_gather_async(
-        tt_stats,
-        3,
-        ccl_semaphore_handles,
-        num_links=1,
-        topology=ttnn.Topology.Linear,
-        enable_persistent_fabric_mode=True,
-        memory_config=ag_memory_config,
-    )
-
-    tt_out = ttnn.fused_rms_1_1_32_8192(
-        input_tensor,
-        ccl_semaphore_handles,
-        layer_norm_config,
-        dtype=ttnn.bfloat8_b,
-        memory_config=output_memory_config,
-        epsilon=epsilon,
-        weight=gamma_tensor,
-        stats=tt_stats_gathered,
-        is_pre=False,
-    )
-
-    logger.info("Capturing trace")
     if use_new_version:
+        tt_stats = ttnn.fused_rms_1_1_32_8192(
+            input_tensor,
+            ccl_semaphore_handles,
+            layer_norm_config,
+            is_pre=True,
+        )
+        tt_stats_gathered = ttnn.experimental.all_gather_async(
+            tt_stats,
+            3,
+            ccl_semaphore_handles,
+            num_links=num_links,
+            topology=ttnn.Topology.Linear,
+            enable_persistent_fabric_mode=True,
+            memory_config=ag_memory_config,
+        )
+
+        tt_out = ttnn.fused_rms_1_1_32_8192(
+            input_tensor,
+            ccl_semaphore_handles,
+            layer_norm_config,
+            dtype=ttnn.bfloat8_b,
+            memory_config=output_memory_config,
+            epsilon=epsilon,
+            weight=gamma_tensor,
+            stats=tt_stats_gathered,
+            is_pre=False,
+        )
+
+        logger.info("Capturing trace")
         if warmup_iters > 0:
             trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-            for i in range(warmup_iters):
+            for _ in range(warmup_iters):
                 tt_stats = ttnn.fused_rms_1_1_32_8192(
                     input_tensor,
                     ccl_semaphore_handles,
@@ -187,7 +187,7 @@ def run_rms_trace(
                     tt_stats,
                     3,
                     ccl_semaphore_handles,
-                    num_links=1,
+                    num_links=num_links,
                     topology=ttnn.Topology.Linear,
                     enable_persistent_fabric_mode=True,
                     memory_config=ag_memory_config,
@@ -204,9 +204,10 @@ def run_rms_trace(
                     is_pre=False,
                 )
             ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
-
+            logger.info("Done warmup")
+            ttnn.synchronize_device(mesh_device)
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        for i in range(num_iter):
+        for _ in range(num_iters):
             tt_stats = ttnn.fused_rms_1_1_32_8192(
                 input_tensor,
                 ccl_semaphore_handles,
@@ -217,7 +218,7 @@ def run_rms_trace(
                 tt_stats,
                 3,
                 ccl_semaphore_handles,
-                num_links=1,
+                num_links=num_links,
                 topology=ttnn.Topology.Linear,
                 enable_persistent_fabric_mode=True,
                 memory_config=ag_memory_config,
@@ -234,13 +235,92 @@ def run_rms_trace(
                 is_pre=False,
             )
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    else:
+        tt_stats = ttnn.rms_norm_pre_all_gather(
+            input_tensor,
+            program_config=layer_norm_config,
+        )
+        tt_stats_gathered = ttnn.experimental.all_gather_async(
+            tt_stats,
+            3,
+            ccl_semaphore_handles,
+            num_links=num_links,
+            topology=ttnn.Topology.Linear,
+            enable_persistent_fabric_mode=True,
+            memory_config=ag_memory_config,
+        )
 
+        tt_out = ttnn.rms_norm_post_all_gather(
+            input_tensor,
+            tt_stats_gathered,
+            program_config=layer_norm_config,
+            dtype=ttnn.bfloat8_b,
+            memory_config=output_memory_config,
+            epsilon=epsilon,
+            weight=gamma_tensor,
+        )
+
+        logger.info("Capturing trace")
+        if warmup_iters > 0:
+            trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            for _ in range(warmup_iters):
+                tt_stats = ttnn.rms_norm_pre_all_gather(
+                    input_tensor,
+                    program_config=layer_norm_config,
+                )
+                tt_stats_gathered = ttnn.experimental.all_gather_async(
+                    tt_stats,
+                    3,
+                    ccl_semaphore_handles,
+                    num_links=num_links,
+                    topology=ttnn.Topology.Linear,
+                    enable_persistent_fabric_mode=True,
+                    memory_config=ag_memory_config,
+                )
+                tt_out = ttnn.rms_norm_post_all_gather(
+                    input_tensor,
+                    tt_stats_gathered,
+                    program_config=layer_norm_config,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=output_memory_config,
+                    epsilon=epsilon,
+                    weight=gamma_tensor,
+                )
+            ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
+            logger.info("Done warmup")
+            ttnn.synchronize_device(mesh_device)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        for _ in range(num_iters):
+            tt_stats = ttnn.rms_norm_pre_all_gather(
+                input_tensor,
+                program_config=layer_norm_config,
+            )
+            tt_stats_gathered = ttnn.experimental.all_gather_async(
+                tt_stats,
+                3,
+                ccl_semaphore_handles,
+                num_links=num_links,
+                topology=ttnn.Topology.Linear,
+                enable_persistent_fabric_mode=True,
+                memory_config=ag_memory_config,
+            )
+            tt_out = ttnn.rms_norm_post_all_gather(
+                input_tensor,
+                tt_stats_gathered,
+                program_config=layer_norm_config,
+                dtype=ttnn.bfloat8_b,
+                memory_config=output_memory_config,
+                epsilon=epsilon,
+                weight=gamma_tensor,
+            )
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     logger.info("Starting Trace perf test...")
 
     profiler.start("rms-trace-warmup")
     if warmup_iters > 0:
         ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
         ttnn.release_trace(mesh_device, trace_id_warmup)
+        ttnn.synchronize_device(mesh_device)
     profiler.end("rms-trace-warmup")
 
     signpost("start")
@@ -248,6 +328,7 @@ def run_rms_trace(
 
     ttnn.execute_trace(mesh_device, trace_id, blocking=False)
     ttnn.release_trace(mesh_device, trace_id)
+    ttnn.synchronize_device(mesh_device)
     profiler.end("rms-trace")
     signpost("stop")
     time_taken = profiler.get_duration("rms-trace") - profiler.get_duration("rms-trace-warmup")
