@@ -1480,7 +1480,9 @@ void kernel_main() {
             local_sender_channel_1_connection_buffer_index_id,
             reinterpret_cast<volatile uint32_t* const>(edm_vc0_forwarding_semaphore_address),
             reinterpret_cast<volatile uint32_t* const>(edm_vc0_teardown_semaphore_address),
-            downstream_vc0_noc_interface_buffer_index_local_addr);
+            downstream_vc0_noc_interface_buffer_index_local_addr,
+            write_reg_cmd_buf,
+            read_cmd_buf);
     }
     if constexpr (enable_ring_support) {
         if (has_downstream_edm_vc1_buffer_connection) {
@@ -1499,7 +1501,9 @@ void kernel_main() {
                 local_sender_channel_2_connection_buffer_index_id,
                 reinterpret_cast<volatile uint32_t* const>(edm_vc1_forwarding_semaphore_address),
                 reinterpret_cast<volatile uint32_t* const>(edm_vc1_teardown_semaphore_address),
-                downstream_vc1_noc_interface_buffer_index_local_addr);
+                downstream_vc1_noc_interface_buffer_index_local_addr,
+                write_reg_cmd_buf,
+                read_cmd_buf);
         }
     }
     for (uint8_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
