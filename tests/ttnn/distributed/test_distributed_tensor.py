@@ -110,9 +110,6 @@ def test_shard2d_to_tensor_mesh_equality(M, K, N, dtype, mesh_shape, mesh_device
     # If K < N it's FF1-like test case, else FF2-like test case
     shard_dim = (0, 3) if K < N else (3, 0)
 
-    K = K // mesh_shape[1] if K < N else K // mesh_shape[0]
-    N = N // mesh_shape[0] if K < N else N // mesh_shape[1]
-
     mapper = ttnn.ShardTensorTo2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
 
     orig_sharded_tensor = ttnn.from_torch(
@@ -134,12 +131,12 @@ def test_shard2d_to_tensor_mesh_equality(M, K, N, dtype, mesh_shape, mesh_device
     tensor_shards = ttnn.get_device_tensors(ttnn.distribute_tensor(to_shard, mapper, mesh_device))
     orig_tensor_shards = ttnn.get_device_tensors(orig_sharded_tensor)
 
-    out_pass1, out_pcc = comp_pcc(ttnn.to_torch(orig_tensor_shards[0]), ttnn.to_torch(tensor_shards[0]), pcc=0.99)
-    logger.info(f"Shard 1 PCC value: {out_pcc}")
-    out_pass2, out_pcc = comp_pcc(ttnn.to_torch(orig_tensor_shards[1]), ttnn.to_torch(tensor_shards[1]), pcc=0.99)
-    logger.info(f"Shard 2 PCC value: {out_pcc}")
+    out_passes = []
+    for i in range(len(orig_tensor_shards)):
+        out_passes[i], out_pcc = comp_pcc(orig_tensor_shards[i], ttnn.to_torch(tensor_shards[i]), pcc=0.99)
+        logger.info(f"Shard {i} PCC value: {out_pcc}")
 
-    assert out_pass1 and out_pass2
+    assert all(out_passes)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.float32])
@@ -204,9 +201,6 @@ def test_concat2d_to_tensor_mesh_equality(M, K, N, dtype, mesh_shape, mesh_devic
     # If K < N it's FF1-like test case, else FF2-like test case
     shard_dim = (0, 3) if K < N else (3, 0)
     concat_dim = (3, 1) if K < N else (1, 3)
-
-    K = K // mesh_shape[1] if K < N else K // mesh_shape[0]
-    N = N // mesh_shape[0] if K < N else N // mesh_shape[1]
 
     mapper = ttnn.ShardTensorTo2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
 
@@ -375,9 +369,6 @@ def test_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
     # If K < N it's FF1-like test case, else FF2-like test case
     shard_dim = (0, 3) if K < N else (3, 0)
 
-    K = K // mesh_shape[1] if K < N else K // mesh_shape[0]
-    N = N // mesh_shape[0] if K < N else N // mesh_shape[1]
-
     to_shard = ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
@@ -389,11 +380,24 @@ def test_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
 
     shards = ttnn.get_device_tensors(ttnn.distribute_tensor(to_shard, mapper, mesh_device))
 
-    sharded_tensor = ttnn.aggregate_as_tensor(shards)
+    rows, cols = mesh_shape
+    row_dim, col_dim = shard_dim
 
-    out_pass, out_pcc = comp_pcc(torch_tensor, ttnn.to_torch(sharded_tensor), pcc=0.99)
-    logger.info(f"PCC value: {out_pcc}")
-    assert out_pass
+    # Shard along rows
+    row_tensors = torch.chunk(torch_tensor, rows, dim=row_dim)
+
+    # Shard along columns
+    if col_dim == 0:
+        orig_tensor_shards = [t.clone() for t in row_tensors for _ in range(cols)]
+    else:
+        orig_tensor_shards = [tt for t in row_tensors for tt in torch.chunk(t, cols, dim=col_dim)]
+
+    out_passes = []
+    for i in range(len(orig_tensor_shards)):
+        out_passes[i], out_pcc = comp_pcc(orig_tensor_shards[i], ttnn.to_torch(shards[i]), pcc=0.99)
+        logger.info(f"Shard {i} PCC value: {out_pcc}")
+
+    assert all(out_passes)
 
 
 @pytest.mark.parametrize(
@@ -416,9 +420,6 @@ def test_concat2d_to_tensor(M, K, N, dtype, mesh_shape, mesh_device):
     # If K < N it's FF1-like test case, else FF2-like test case
     shard_dim = (0, 3) if K < N else (3, 0)
     concat_dim = (3, 1) if K < N else (1, 3)
-
-    K = K // mesh_shape[1] if K < N else K // mesh_shape[0]
-    N = N // mesh_shape[0] if K < N else N // mesh_shape[1]
 
     to_shard = ttnn.from_torch(
         torch_tensor,
