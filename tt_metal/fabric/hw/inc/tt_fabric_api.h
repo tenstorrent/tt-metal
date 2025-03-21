@@ -236,7 +236,7 @@ inline void fabric_client_router_reserve(
     router_addr += direction * sizeof(uint64_t);
     // stream register to receive router buffer space available updates.
     uint64_t xy_local_addr = get_noc_addr(0);
-    noc_inline_dw_write(
+    noc_inline_dw_write<true>(
         router_addr,
         (STREAM_REG_ADDR(
             STREAM_ID_NOC_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX)));

@@ -3,13 +3,27 @@ name: "[internal] T3000 model perf tests impl"
 on:
   workflow_call:
     inputs:
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      build-artifact-profiler-name:
+        required: true
+        type: string
+      wheel-artifact-profiler-name:
+        required: true
+        type: string
+      docker-image:
+        required: true
+        type: string
       extra-tag:
         required: false
         type: string
         default: "in-service"
 
 jobs:
-
   t3000-model-perf-tests:
     strategy:
       fail-fast: false
@@ -36,30 +50,40 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Enable performance mode
-        run: |
-          sudo cpupower frequency-set -g performance
       - uses: ./.github/actions/ensure-active-weka-mount
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-          echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
-      - name: Download build artifact
+      - name: ⬇️ Download Build
         uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
-          name: TTMetal_build_any
+          name: ${{ inputs.build-artifact-name }}
       - name: Extract files
         run: tar -xvf ttm_any.tar
-      - uses: ./.github/actions/install-python-deps
-      - name: Run model perf regression tests
-        timeout-minutes: ${{ matrix.test-group.timeout }}
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+      - name: Enable Performance mode
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_model_perf_tests.sh
-          ${{ matrix.test-group.cmd }}
-          env python models/perf/merge_perf_results.py
+          sudo cpupower frequency-set -g performance
+      - name: Run model perf regression tests
+        uses: ./.github/actions/docker-run
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-group.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+          install_wheel: true
+          run_args: |
+            source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_model_perf_tests.sh
+            ${{ matrix.test-group.cmd }}
+            env python3 models/perf/merge_perf_results.py
       - name: Check perf report exists
         id: check-perf-report
         run: |
@@ -117,30 +141,40 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Enable performance mode
-        run: |
-          sudo cpupower frequency-set -g performance
       - uses: ./.github/actions/ensure-active-weka-mount
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-          echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
-      - name: Download profiler build artifact
+      - name: ⬇️ Download Build
         uses: actions/download-artifact@v4
+        timeout-minutes: 10
         with:
-          name: TTMetal_build_any_profiler
+          name: ${{ inputs.build-artifact-profiler-name }}
       - name: Extract files
         run: tar -xvf ttm_any.tar
-      - uses: ./.github/actions/install-python-deps
-      - name: Run model perf regression tests
-        timeout-minutes: ${{ matrix.test-group.timeout }}
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.wheel-artifact-profiler-name }}
+      - name: Enable Performance mode
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_model_perf_tests.sh
-          ${{ matrix.test-group.cmd }}
-          env python models/perf/merge_perf_results.py
+          sudo cpupower frequency-set -g performance
+      - name: Run model perf regression tests
+        uses: ./.github/actions/docker-run
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-group.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
+          install_wheel: true
+          run_args: |
+            source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_model_perf_tests.sh
+            ${{ matrix.test-group.cmd }}
+            env python3 models/perf/merge_perf_results.py
       - name: Check perf report exists
         id: check-perf-report
         run: |

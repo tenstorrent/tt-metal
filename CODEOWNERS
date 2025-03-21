@@ -150,6 +150,7 @@ tests/ttnn/unit_tests/operations/fused/ @bbradelTT @nsorabaTT @vsureshTT @edwinl
 tests/ttnn/unit_tests/operations/reduce/ @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT
 tests/ttnn/nightly/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions
 tests/ttnn/nightly/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions
+tests/ttnn/integration_tests/resnet/ @tenstorrent/metalium-developers-convolutions
 tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
 tests/sweep_framework/sweeps
 tests/sweep_framework/sweeps/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT

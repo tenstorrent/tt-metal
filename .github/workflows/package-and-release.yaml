@@ -45,10 +45,20 @@ jobs:
     needs: build-artifact
     uses: ./.github/workflows/t3000-demo-tests-impl.yaml
     secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   t3000-model-perf:
     needs: build-artifact
     uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
     secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      build-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
   tg-demos:
     needs: build-artifact
     uses: ./.github/workflows/tg-demo-tests-impl.yaml
