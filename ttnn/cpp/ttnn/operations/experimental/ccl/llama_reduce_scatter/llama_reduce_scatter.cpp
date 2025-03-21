@@ -47,8 +47,6 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
             for (uint32_t i = 0; i < ring_devices; ++i) {
                 if (devices.at(i) == input_tensor.device()) {
                     ring_index = i;
-                    std::cout << "ring_index: " << ring_index << " device id: " << input_tensor.device()->id()
-                              << std::endl;
                     semaphore = semaphores.at(i);
                     if (i != 0) {
                         backward_device = devices.at(i - 1);

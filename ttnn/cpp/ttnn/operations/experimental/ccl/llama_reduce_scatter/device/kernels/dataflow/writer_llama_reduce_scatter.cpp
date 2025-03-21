@@ -12,32 +12,32 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 
-inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    DPRINT << "===" << tile_id << "===" << ENDL();
-    for (uint16_t r = 0; r < 32; ++r) {
-        DPRINT << (uint)r << " : "
-               << TileSlice(
-                      cb_id,
-                      tile_id,
-                      SliceRange{
-                          .h0 = (uint8_t)r,
-                          .h1 = (uint8_t)(r + 1),
-                          .hs = (uint8_t)1,
-                          .w0 = (uint8_t)0,
-                          .w1 = (uint8_t)32,
-                          .ws = (uint8_t)1},
-                      true,
-                      untilize)
-               << ENDL();
-    }
-    DPRINT << "++++++" << ENDL();
-}
+// inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+//     DPRINT << "===" << tile_id << "===" << ENDL();
+//     for (uint16_t r = 0; r < 32; ++r) {
+//         DPRINT << (uint)r << " : "
+//                << TileSlice(
+//                       cb_id,
+//                       tile_id,
+//                       SliceRange{
+//                           .h0 = (uint8_t)r,
+//                           .h1 = (uint8_t)(r + 1),
+//                           .hs = (uint8_t)1,
+//                           .w0 = (uint8_t)0,
+//                           .w1 = (uint8_t)32,
+//                           .ws = (uint8_t)1},
+//                       true,
+//                       untilize)
+//                << ENDL();
+//     }
+//     DPRINT << "++++++" << ENDL();
+// }
 
-inline void print_tiles(uint32_t cb_id, uint32_t tile_start = 0, uint32_t num_tiles = 1, bool untilize = false) {
-    for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
-        print_full_tile(cb_id, tile_start + tile_idx, untilize);
-    }
-}
+// inline void print_tiles(uint32_t cb_id, uint32_t tile_start = 0, uint32_t num_tiles = 1, bool untilize = false) {
+//     for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
+//         print_full_tile(cb_id, tile_start + tile_idx, untilize);
+//     }
+// }
 
 template <uint8_t noc_ind = noc_index>
 FORCE_INLINE std::uint64_t static_noc_multicast_addr(
@@ -46,7 +46,6 @@ FORCE_INLINE std::uint64_t static_noc_multicast_addr(
     std::uint32_t noc_x_end,
     std::uint32_t noc_y_end,
     std::uint32_t addr) {
-    DPRINT << "Noc index " << (uint32_t)noc_ind << ENDL();
     if constexpr (noc_ind == 0) {
         return get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, addr);
     } else {
@@ -55,7 +54,6 @@ FORCE_INLINE std::uint64_t static_noc_multicast_addr(
 }
 
 void kernel_main() {
-    DPRINT << "Starting kernel_main for writer" << ENDL();
     size_t ct_arg_idx = 0, rt_arg_idx = 0;
 
     // Define all compile-time arguments at the beginning
@@ -110,21 +108,15 @@ void kernel_main() {
     uint32_t linear_output_page_start_idx = get_arg_val<uint32_t>(rt_arg_idx++);
 
     if (sender_core) {
-        DPRINT << "SENDER CORE WRITER" << ENDL();
-
         // Set up packet headers once
         auto packet_header_buffer_addr = get_read_ptr(packet_header_cb_id);
         auto* unicast_packet_header = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
         auto* sem_inc_packet_header =
             reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_addr + packet_header_size);
-
-        // DPRINT << "Opening fabric connection" << ENDL();
         auto fabric_connection = FabricConnectionManager::build_from_args(rt_arg_idx);
         if (fabric_connection.is_logically_connected()) {
             fabric_connection.open();
         }
-        // DPRINT << "Fabric connection opened " << ENDL();
-        // DPRINT << "num_packets_total_per_device " << num_packets_total_per_device << ENDL();
 
         for (auto target_device_id : device_order) {
             if (target_device_id == chip_id) {
@@ -151,10 +143,7 @@ void kernel_main() {
 
                 uint32_t receiver_core_x = packet_worker_cores[packet][x_index];
                 uint32_t receiver_core_y = packet_worker_cores[packet][y_index];
-                DPRINT << "Sending to core " << receiver_core_x << " " << receiver_core_y << " on packet " << packet
-                       << " with offset " << packet_offset << ENDL();
 
-                // DPRINT << "packet " << packet << " waiting on " << curr_packet_num_pages << ENDL();
                 cb_wait_front(fabric_sender_cb_id, curr_packet_num_pages);
                 auto sender_l1_addr = get_read_ptr(fabric_sender_cb_id);
                 // print_tiles(fabric_sender_cb_id, 0, curr_packet_num_pages, true);
@@ -165,25 +154,19 @@ void kernel_main() {
                 unicast_packet_header->to_noc_unicast_write(
                     tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, curr_packet_size_bytes);
 
-                // DPRINT << "waiting for empty write slot" << ENDL();
                 fabric_conn.wait_for_empty_write_slot();
 
-                // DPRINT << "sending payload without header non-blocking" << ENDL();
                 fabric_conn.send_payload_without_header_non_blocking_from_address(
                     sender_l1_addr, curr_packet_size_bytes);
 
-                // DPRINT << "sending payload flush blocking" << ENDL();
                 fabric_conn.send_payload_flush_blocking_from_address(
                     (uint32_t)unicast_packet_header, packet_header_size);
 
-                // DPRINT << "flushed because cross chip" << ENDL();
                 noc_async_writes_flushed();  // flushed because cross chip?
 
-                // DPRINT << "popping front" << ENDL();
                 cb_pop_front(fabric_sender_cb_id, curr_packet_num_pages);
             }
 
-            DPRINT << "sending mcast packet to " << packet_receiver_core_x << " " << packet_receiver_core_y << ENDL();
             uint64_t sem_noc_addr =
                 get_noc_addr(packet_receiver_core_x, packet_receiver_core_y, receiver_semaphore_address);
             sem_inc_packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
@@ -192,25 +175,16 @@ void kernel_main() {
                 32});
 
             // Write the mcast packet (forward)
-            // DPRINT << "sending mcast packet to chip " << target_device_id << ENDL();
             sem_inc_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
             fabric_conn.wait_for_empty_write_slot();
 
-            // DPRINT << "sending mcast packet flush blocking" << ENDL();
             fabric_conn.send_payload_flush_blocking_from_address((uint32_t)sem_inc_packet_header, packet_header_size);
-
-            // DPRINT << "flushed because cross chip" << ENDL();
         }
 
         if (fabric_connection.is_logically_connected()) {
-            // DPRINT << "closing fabric connection" << ENDL();
             fabric_connection.close();
-            // DPRINT << "fabric connection closed" << ENDL();
         }
-        // DPRINT << "Closing fabric connection" << ENDL();
     } else if (worker_core) {
-        DPRINT << "WORKER CORE WRITER" << ENDL();
-        // DPRINT << "Receiver for device id: " << receiver_for_device_id << " chip_id: " << chip_id << ENDL();
         uint32_t linear_output_core_idcs[num_pages_per_packet];
         uint32_t linear_output_tile_offsets[num_pages_per_packet];
 
@@ -218,26 +192,19 @@ void kernel_main() {
             uint32_t rem = linear_output_page_start_idx + i;
             linear_output_core_idcs[i] = rem / tiles_per_core_width_output;
             linear_output_tile_offsets[i] = rem % tiles_per_core_width_output;
-            DPRINT << "linear_output_core_idcs[" << i << "] " << linear_output_core_idcs[i] << ENDL();
-            DPRINT << "linear_output_tile_offsets[" << i << "] " << linear_output_tile_offsets[i] << ENDL();
         }
 
         uint32_t output_tensor_base_addr = get_read_ptr(output_tensor_cb_id);
 
-        DPRINT << "Waiting for accumulator" << ENDL();
         cb_wait_front(accumulator_cb_id, num_pages_per_packet);
-        DPRINT << "Accumulator wait done" << ENDL();
-        print_tiles(accumulator_cb_id, 0, num_pages_per_packet, true);
 
         auto accumulator_l1_addr = get_read_ptr(accumulator_cb_id);
         // Process all tiles
         for (uint32_t tile = 0; tile < num_pages_per_packet; tile++) {
-            // DPRINT << "writer receiver processing tile " << tile << ENDL();
             // one tile to each core
 
             uint32_t output_core = linear_output_core_idcs[tile];
             if (linear_output_core_idcs[tile] >= output_cores_per_device) {
-                DPRINT << "output_core " << output_core << " is out of bounds" << ENDL();
                 break;
             }
             uint32_t output_core_x = output_core_xy[output_core][x_index];
@@ -257,7 +224,6 @@ void kernel_main() {
             // noc_semaphore_inc(local_receiver_semaphore_noc_addr, 1);  // mcast inc is needed, this will tank latency
         }
         noc_async_write_barrier();
-        // DPRINT << "writer receiver async write barrier done" << ENDL();
         // Now we have the block in the CB address, we can mcast to dests!
         // Reset semaphore
         *(uint32_t*)receiver_semaphore_address = 0;
@@ -265,5 +231,4 @@ void kernel_main() {
         // Do nothing
         // win
     }
-    DPRINT << "Kernel finished" << ENDL();
 }
