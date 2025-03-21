@@ -49,7 +49,6 @@ class TtLlamaMLP(LightweightModule):
         self.model_config = model_config
         self.prefetcher_setup = prefetcher_setup
         self.tt_ccl = tt_ccl
-        self.worker_sub_device_id = prefetcher_setup.worker_sub_device_id
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
         torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
         if args.dummy_weights:

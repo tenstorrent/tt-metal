@@ -54,7 +54,6 @@ class TtLlamaAttention(LightweightModule):
 
         self.prefetcher_setup = prefetcher_setup
         self.tt_ccl = tt_ccl
-        self.worker_sub_device_id = prefetcher_setup.worker_sub_device_id
 
         # TODO: Fix this once all-gather supports < tile_size
         if self.TG:
@@ -241,9 +240,9 @@ class TtLlamaAttention(LightweightModule):
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                # cache_file_name=f"{weight_cache_path}/kvcache_{k_or_v.shape}"
-                # if weight_cache_path and not configuration.dummy_weights
-                # else None,
+                cache_file_name=f"{weight_cache_path}/kvcache_{k_or_v.shape}"
+                if weight_cache_path and not configuration.dummy_weights
+                else None,
             )
             for k_or_v in [cache_k, cache_v]
         ]
