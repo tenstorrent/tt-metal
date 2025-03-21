@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -132,6 +134,14 @@ static Tensor reduce_impl(
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
 
     Tensor output_tensor;
+
+    // If the input tensor is a rank 0 tensor, return the input tensor, adjusted for keepdim
+    if (rank == 0) {
+        // Create an output tensor with same shape and attributes as input tensor
+        output_tensor = ttnn::clone(input_tensor_arg, /*dtype=*/std::nullopt, memory_config, compute_kernel_config);
+        return adjust_shape(output_tensor, input_shape, keepdim, dim, non_height_width_dims);
+    }
+
     float pad_value = get_pad_value(reduce_type);
     bool single_reduce_op = (dim.size() == 0) || (dim.size() == 1 && (dim[0] == rank - 1 || dim[0] == rank - 2)) ||
                             (dim.size() == 2 && dim[1] == rank - 1 && dim[0] == rank - 2);
@@ -262,6 +272,15 @@ static Tensor std_var_impl(
     auto input_shape = input_tensor_arg.get_logical_shape();
     auto rank = input_shape.size();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
+
+    // If the input tensor is a rank 0 tensor, return NaN
+    if (rank == 0) {
+        // Create an output tensor with same shape and attributes as input tensor
+        auto output_tensor =
+            ttnn::clone(input_tensor_arg, /*dtype=*/std::nullopt, memory_config, compute_kernel_config);
+        output_tensor = ttnn::mul_sfpu(NAN, output_tensor, memory_config);
+        return adjust_shape(output_tensor, input_shape, keepdim, dim, non_height_width_dims);
+    }
 
     if (dim.size()) {
         int reduced_volume = 1;

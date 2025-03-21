@@ -28,9 +28,8 @@ dims_to_test = lambda rank: list(range(-rank, rank)) if rank > 0 else [None]
 reduction_ops = [
     "sum",
     "mean",
-    # "prod",
-    "min",
     "max",
+    "min",
     "std",
     "var",
 ]
@@ -78,7 +77,7 @@ def test_reduction(device, tensor_shape, keepdim, dim, op):
     # There is a scale factor difference between torch and ttnn for std and var
     if op in ["std", "var"]:
         val, msg = check_with_pcc(result_torch, result_ttnn, 0.99)
-        assert val, msg
+        assert val, f"torch: {result_torch}, ttnn: {result_ttnn}"
     else:
         assert torch.allclose(
             result_torch, result_ttnn, atol=0.2, rtol=0.05
