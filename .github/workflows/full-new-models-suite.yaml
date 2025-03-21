@@ -47,6 +47,10 @@ jobs:
   e2e-model-perf-single-card:
     needs: build-artifact
     uses: ./.github/workflows/perf-models-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     secrets: inherit
   nightly-single-card:
     needs: build-artifact

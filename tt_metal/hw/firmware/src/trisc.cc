@@ -34,6 +34,11 @@ namespace kernel_profiler {
 uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
 
+uint8_t my_logical_x_ __attribute__((used));
+uint8_t my_logical_y_ __attribute__((used));
+uint8_t my_relative_x_ __attribute__((used));
+uint8_t my_relative_y_ __attribute__((used));
+
 namespace ckernel {
 
 enum class ttRiscCores : std::uint32_t { Unpack = 0, Math = 1, Pack = 2, Brisc = 3, Nrisc = 4 };
@@ -100,6 +105,9 @@ int main(int argc, char *argv[]) {
 
     reset_cfg_state_id();
 
+    my_logical_x_ = mailboxes->core_info.absolute_logical_x;
+    my_logical_y_ = mailboxes->core_info.absolute_logical_y;
+
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
         WAYPOINT("W");
@@ -136,6 +144,8 @@ int main(int argc, char *argv[]) {
         crta_l1_base =
             (uint32_t tt_l1_ptr*)(kernel_config_base +
                                   launch_msg->kernel_config.rta_offset[DISPATCH_CLASS_TENSIX_COMPUTE].crta_offset);
+        my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
+        my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
 
         WAYPOINT("R");
         int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::MATH0) + thread_id;
