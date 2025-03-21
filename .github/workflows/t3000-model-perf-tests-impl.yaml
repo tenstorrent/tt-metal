@@ -160,6 +160,7 @@ jobs:
         run: |
           sudo cpupower frequency-set -g performance
       - name: Run model perf regression tests
+        uses: ./.github/actions/docker-run
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           LOGURU_LEVEL: INFO
