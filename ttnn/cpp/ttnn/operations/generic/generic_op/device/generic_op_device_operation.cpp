@@ -22,21 +22,26 @@ void GenericOpDeviceOperation::validate_on_program_cache_hit(
 GenericOpDeviceOperation::spec_return_value_t GenericOpDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     // User has to do this. Just referencing last element (preallocated output tensor).
-    return tensor_args.input_tensor.get_tensor_spec();
+    return tensor_args.output_tensor->get_tensor_spec();
 }
 
 GenericOpDeviceOperation::tensor_return_value_t GenericOpDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Don't create anything, user is passing output tensor.
-    return create_device_tensor(
-        compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
+    // TODO: CHECK IF THEY PASSED AN OUTPUT TENSOR
+    return *tensor_args.output_tensor;
+
+    // return create_device_tensor(
+    //     compute_output_specs(operation_attributes, tensor_args), tensor_args.output_tensor.device());
 }
 
 std::tuple<GenericOpDeviceOperation::operation_attributes_t, GenericOpDeviceOperation::tensor_args_t> 
 GenericOpDeviceOperation::invoke(
-    const Tensor& input, 
-    const operation_attributes_t& operation_attributes) {
-    return {operation_attributes, tensor_args_t{.input_tensor = input}};
+    const std::vector<Tensor>& input_tensors, 
+    // const Tensor& input_tensors,
+    const operation_attributes_t& operation_attributes, 
+    const std::optional<const Tensor>& output_tensor) {
+    return {operation_attributes, tensor_args_t{.input_tensors = input_tensors, .output_tensor = output_tensor}};
 }
 
 }  // namespace ttnn::operations::generic
