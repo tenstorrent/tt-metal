@@ -832,8 +832,8 @@ void run_receiver_channel_step(
     WriteTridTracker& receiver_channel_trid_tracker) {
     auto& ack_ptr = receiver_channel_pointers.ack_ptr;
     auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
-    bool pkts_received = pkts_received_since_last_check > 0;
     if constexpr (enable_first_level_ack) {
+        bool pkts_received = pkts_received_since_last_check > 0;
         bool can_send_over_eth = !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
         ASSERT(receiver_channel_pointers.completion_ptr.distance_behind(ack_ptr) < RECEIVER_NUM_BUFFERS);
         if (pkts_received && can_send_over_eth) {
