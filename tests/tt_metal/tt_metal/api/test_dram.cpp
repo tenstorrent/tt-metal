@@ -269,9 +269,7 @@ TEST_F(BlackholeSingleCardFixture, ActiveEthDRAMLoopbackSingleCore) {
             tt::log_info("Active Eth Loopback. Logical core {}", active_eth_core.str());
             dram_test_config.core_range = {active_eth_core, active_eth_core};
             ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core(this, devices_.at(id), dram_test_config));
-            break;
         }
-        break;
     }
 }
 
