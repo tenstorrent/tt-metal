@@ -46,6 +46,7 @@ FORCE_INLINE std::uint64_t static_noc_multicast_addr(
     std::uint32_t noc_x_end,
     std::uint32_t noc_y_end,
     std::uint32_t addr) {
+    DPRINT << "Noc index " << (uint32_t)noc_ind << ENDL();
     if constexpr (noc_ind == 0) {
         return get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, addr);
     } else {
@@ -76,6 +77,8 @@ void kernel_main() {
     constexpr uint32_t noc_start_y = get_compile_time_arg_val(15);
     constexpr uint32_t noc_end_x = get_compile_time_arg_val(16);
     constexpr uint32_t noc_end_y = get_compile_time_arg_val(17);
+    constexpr uint32_t packet_receiver_core_x = get_compile_time_arg_val(18);
+    constexpr uint32_t packet_receiver_core_y = get_compile_time_arg_val(19);
 
     // Derived compile-time constants
     constexpr uint32_t input_tensor_cores = input_shard_cores_per_device * num_devices;
@@ -180,9 +183,9 @@ void kernel_main() {
                 cb_pop_front(fabric_sender_cb_id, curr_packet_num_pages);
             }
 
-            // DPRINT << "sending mcast packet" << ENDL();
-            uint64_t sem_noc_addr = get_noc_addr(
-                packet_worker_cores[0][x_index], packet_worker_cores[0][x_index], receiver_semaphore_address);
+            DPRINT << "sending mcast packet to " << packet_receiver_core_x << " " << packet_receiver_core_y << ENDL();
+            uint64_t sem_noc_addr =
+                get_noc_addr(packet_receiver_core_x, packet_receiver_core_y, receiver_semaphore_address);
             sem_inc_packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                 sem_noc_addr,
                 static_cast<uint16_t>(1),  // increment 1
@@ -206,7 +209,7 @@ void kernel_main() {
         }
         // DPRINT << "Closing fabric connection" << ENDL();
     } else if (worker_core) {
-        // DPRINT << "RECEIVER CORE WRITER" << ENDL();
+        DPRINT << "WORKER CORE WRITER" << ENDL();
         // DPRINT << "Receiver for device id: " << receiver_for_device_id << " chip_id: " << chip_id << ENDL();
         uint32_t linear_output_core_idcs[num_pages_per_packet];
         uint32_t linear_output_tile_offsets[num_pages_per_packet];
@@ -221,7 +224,9 @@ void kernel_main() {
 
         uint32_t output_tensor_base_addr = get_read_ptr(output_tensor_cb_id);
 
+        DPRINT << "Waiting for accumulator" << ENDL();
         cb_wait_front(accumulator_cb_id, num_pages_per_packet);
+        DPRINT << "Accumulator wait done" << ENDL();
         print_tiles(accumulator_cb_id, 0, num_pages_per_packet, true);
 
         auto accumulator_l1_addr = get_read_ptr(accumulator_cb_id);
@@ -231,6 +236,10 @@ void kernel_main() {
             // one tile to each core
 
             uint32_t output_core = linear_output_core_idcs[tile];
+            if (linear_output_core_idcs[tile] >= output_cores_per_device) {
+                DPRINT << "output_core " << output_core << " is out of bounds" << ENDL();
+                break;
+            }
             uint32_t output_core_x = output_core_xy[output_core][x_index];
             uint32_t output_core_y = output_core_xy[output_core][y_index];
 

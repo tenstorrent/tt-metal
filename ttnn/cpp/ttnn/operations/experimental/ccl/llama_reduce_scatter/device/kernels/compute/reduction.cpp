@@ -6,25 +6,25 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "debug/dprint_tensix.h"
 
-// void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-//     for (uint16_t r = 0; r < 32; ++r) {
-//         DPRINT << (uint)r << " : "
-//                << TileSlice(
-//                       cb_id,
-//                       tile_id,
-//                       SliceRange{
-//                           .h0 = (uint8_t)r,
-//                           .h1 = (uint8_t)(r + 1),
-//                           .hs = (uint8_t)1,
-//                           .w0 = (uint8_t)0,
-//                           .w1 = (uint8_t)32,
-//                           .ws = (uint8_t)1},
-//                       true,
-//                       untilize)
-//                << ENDL();
-//     }
-//     DPRINT << ENDL();
-// }
+void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    for (uint16_t r = 0; r < 32; ++r) {
+        DPRINT << (uint)r << " : "
+               << TileSlice(
+                      cb_id,
+                      tile_id,
+                      SliceRange{
+                          .h0 = (uint8_t)r,
+                          .h1 = (uint8_t)(r + 1),
+                          .hs = (uint8_t)1,
+                          .w0 = (uint8_t)0,
+                          .w1 = (uint8_t)32,
+                          .ws = (uint8_t)1},
+                      true,
+                      untilize)
+               << ENDL();
+    }
+    DPRINT << ENDL();
+}
 namespace NAMESPACE {
 void MAIN {
     // Define all compile-time arguments at the beginning
@@ -38,13 +38,16 @@ void MAIN {
     binary_op_init_common(fabric_receiver_cb_id, fabric_receiver_cb_id, accumulator_cb_id);
     add_tiles_init(fabric_receiver_cb_id, fabric_receiver_cb_id, true);
 
-    // UNPACK(DPRINT << "waiting on cb" << fabric_receiver_cb_id << " num tiles:" << num_devices << ENDL());
+    UNPACK(
+        DPRINT << "waiting on cb " << fabric_receiver_cb_id << " num tiles:" << num_devices * num_pages_per_packet
+               << ENDL());
     cb_wait_front(fabric_receiver_cb_id, num_devices * num_pages_per_packet);
+    UNPACK(DPRINT << "cb_wait_front done" << ENDL());
 
     // This loop doesn't do anything now that print statements are commented out
-    // for (uint32_t i = 0; i < num_devices; i++) {
-    //     UNPACK(print_full_tile(fabric_receiver_cb_id, i, true));
-    // }
+    for (uint32_t i = 0; i < num_devices; i++) {
+        UNPACK(print_full_tile(fabric_receiver_cb_id, i, true));
+    }
 
     // Reserve output space once before processing
     cb_reserve_back(accumulator_cb_id, num_pages_per_packet);
@@ -59,8 +62,8 @@ void MAIN {
                 device_id * num_pages_per_packet + page_group,
                 (device_id + 1) * num_pages_per_packet + page_group,
                 page_group);
-            // dprint_tensix_dest_reg(0);
         }
+        dprint_tensix_dest_reg(page_group);
     }
     tile_regs_commit();
 
@@ -71,9 +74,12 @@ void MAIN {
     }
     tile_regs_release();
 
-    // UNPACK(DPRINT << "popping front from cb " << fabric_receiver_cb_id << " tiles: " << num_devices << ENDL());
+    UNPACK(
+        DPRINT << "popping front from cb " << fabric_receiver_cb_id << " tiles: " << num_devices * num_pages_per_packet
+               << ENDL());
     cb_pop_front(fabric_receiver_cb_id, num_devices * num_pages_per_packet);
+    PACK(DPRINT << "pushing back to cb " << accumulator_cb_id << " tiles: " << num_pages_per_packet << ENDL());
     cb_push_back(accumulator_cb_id, num_pages_per_packet);
-    // DPRINT << "Kernel finished" << ENDL();
+    DPRINT << "Kernel finished" << ENDL();
 }
 }  // namespace NAMESPACE
