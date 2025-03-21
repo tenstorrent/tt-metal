@@ -510,9 +510,19 @@ def test_reduce_scatter(
             1,
             ttnn.TILE_LAYOUT,
             (32, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
+                }
+            ),
             (32, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
+                }
+            ),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ),
     ],
@@ -547,7 +557,7 @@ def test_concat_fuse(
     layout,
     num_iters,
     warmup_iters,
-    # use_program_cache,
+    use_program_cache,
     function_level_defaults,
     enable_async,
     input_shard_shape,
@@ -566,7 +576,7 @@ def test_concat_fuse(
         num_links,
         input_dtype,
         layout,
-        # use_program_cache,
+        use_program_cache,
         function_level_defaults,
         input_shard_shape,
         input_shard_grid,

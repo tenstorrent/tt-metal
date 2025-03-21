@@ -131,7 +131,7 @@ def run_line_all_gather_concat_on_TG_with_mesh_tensor_along_rows(
     input_dtype,
     layout,
     buffer_type: ttnn.BufferType,
-    # use_program_cache,
+    use_program_cache,
     function_level_defaults,
     enable_async,
     input_shard_spec: ttnn.ShardSpec = None,
@@ -362,9 +362,19 @@ def run_line_all_gather_concat_on_TG_with_mesh_tensor_along_rows(
             (1, 32, 32, 128),
             1,
             (32, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
+                }
+            ),
             (32, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
+                }
+            ),
             ttnn.TILE_LAYOUT,
         ),
     ),
@@ -390,7 +400,7 @@ def test_all_gather_concat_fuse_llama(
     num_links,
     input_dtype,
     layout,
-    # use_program_cache,
+    use_program_cache,
     function_level_defaults,
     enable_async,
     replication_factor,
@@ -426,7 +436,7 @@ def test_all_gather_concat_fuse_llama(
         input_dtype,
         layout,
         ttnn.BufferType.L1,
-        # use_program_cache,
+        use_program_cache,
         function_level_defaults,
         enable_async=enable_async,
         num_iters=num_iters,

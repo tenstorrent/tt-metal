@@ -23,8 +23,11 @@ ttnn::Tensor ExecuteAllGatherConcat::invoke(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool enable_persistent_fabric_mode) {
     const std::array<uint32_t, 2> shard_shape = {32, 128};
+
+    auto core_range_1 = CoreRange(CoreCoord{1, 0}, CoreCoord{3, 9});
+    auto core_range_2 = CoreRange(CoreCoord{5, 0}, CoreCoord{6, 0});
     auto shard_spec =
-        ShardSpec(CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{7, 3})), shard_shape, ShardOrientation::ROW_MAJOR);
+        ShardSpec(CoreRangeSet(std::vector{core_range_1, core_range_2}), shard_shape, ShardOrientation::ROW_MAJOR);
     auto inter_output_mem_config =
         ttnn::MemoryConfig(TensorMemoryLayout::HEIGHT_SHARDED, ttnn::BufferType::L1, shard_spec);
 

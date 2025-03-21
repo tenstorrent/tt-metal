@@ -16,56 +16,6 @@ from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tracy import signpost
 
-"""
-def run_with_trace(
-    mesh_device,
-    all_gather_topology,
-    input_tensor_mesh,
-    dim,
-    num_links,
-    output_mem_config,
-    enable_persistent_fabric,
-    multi_device_global_semaphore,
-    num_iter=20,
-    subdevice_id=None,
-):
-    # Compile Run
-    logger.info("Compiling model")
-    tt_out_tensor = ttnn.experimental.all_gather_async(
-        input_tensor_mesh,
-        dim,
-        multi_device_global_semaphore=multi_device_global_semaphore,
-        num_links=num_links,
-        memory_config=output_mem_config,
-        topology=all_gather_topology,
-        subdevice_id=subdevice_id,
-        enable_persistent_fabric_mode=enable_persistent_fabric,
-    )
-    ttnn.synchronize_device(mesh_device)
-    # Capture trace
-    logger.info("Capturing trace")
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    for i in range(num_iter):
-        tt_out_tensor = ttnn.experimental.all_gather_async(
-            input_tensor_mesh,
-            dim,
-            multi_device_global_semaphore=multi_device_global_semaphore,
-            num_links=num_links,
-            memory_config=output_mem_config,
-            topology=all_gather_topology,
-            subdevice_id=subdevice_id,
-            enable_persistent_fabric_mode=enable_persistent_fabric,
-        )
-    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-    ttnn.synchronize_device(mesh_device)
-    # Run the op
-    logger.info("Starting Trace perf test...")
-    ttnn.execute_trace(mesh_device, trace_id, blocking=False)
-    ttnn.release_trace(mesh_device, trace_id)
-    ttnn.synchronize_device(mesh_device)
-    return tt_out_tensor
-"""
-
 
 def run_with_trace(
     mesh_device,
@@ -99,7 +49,6 @@ def run_with_trace(
     # Capture trace
     logger.info("Capturing trace")
 
-    print("warmup iteration: ", warmup_iters)
     if warmup_iters > 0:
         trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         for i in range(warmup_iters):
@@ -432,15 +381,7 @@ def run_gather_concat_impl(
             if not eq:
                 logger.error(f"output mismatch for tensor {i}")
                 passed = False
-            # print(tt_output_tensor)
-            # print(output_tensor_concat)
-    """
-    for i in range(num_devices):
-        assert (
-            mesh_device.get_devices()[i].num_program_cache_entries() == 1
-            or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters
-        ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
-    """
+
     mesh_device.reset_sub_device_stall_group()
     teardown_fabric_interface(mesh_device)
 
@@ -456,7 +397,7 @@ def run_concat_fuse_impl(
     num_links,
     input_dtype,
     layout,
-    # use_program_cache,
+    use_program_cache,
     function_level_defaults,
     input_shard_shape,
     input_shard_grid,
@@ -567,7 +508,7 @@ def run_concat_fuse_impl(
         input_tensor_mesh_list.append(input_tensor_mesh)
 
     tt_out_tensor_list = []
-    print("input tensor shape: \n", input_tensor_mesh_list[0].shape)
+
     if trace_mode:
         tt_out_tensor = run_with_trace(
             mesh_device,
@@ -586,7 +527,6 @@ def run_concat_fuse_impl(
         tt_out_tensor_list.append(tt_out_tensor)
     else:
         for i in range(num_iters):
-            print("iteration: ", i)
             tt_out_tensor = ttnn.experimental.all_gather_concat(
                 input_tensor_mesh_list[i],
                 dim,
@@ -621,15 +561,7 @@ def run_concat_fuse_impl(
             if not eq:
                 logger.error(f"output mismatch for tensor {i}")
                 passed = False
-            print(tt_output_tensor)
-            print(output_tensor_concat)
-    """
-    for i in range(num_devices):
-        assert (
-            mesh_device.get_devices()[i].num_program_cache_entries() == 1
-            or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters
-        ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
-    """
+
     mesh_device.reset_sub_device_stall_group()
     teardown_fabric_interface(mesh_device)
     print("teardown done\n")
