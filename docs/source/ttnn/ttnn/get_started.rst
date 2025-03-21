@@ -28,7 +28,7 @@ for details.
 You can also check our demos for
 `ResNet <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/ttnn_resnet>`_,
 `BERT <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/metal_BERT_large_11>`_,
-`Mistral 7B <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/mistral7b>`_,
+`Mistral 7B <https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers/README.md>`_,
 and
 `Llama2-70B (coming soon on our T3000 platforms) <https://github.com/tenstorrent/tt-metal/tree/main/models/demos/t3000/llama2_70b>`_.
 
