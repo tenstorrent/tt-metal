@@ -56,9 +56,9 @@ jobs:
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
-      distro: ${{ inputs.distro }}
-      version: ${{ inputs.version }}
-      architecture: ${{ inputs.architecture }}
+      distro: ${{ inputs.distro || 'ubuntu' }}
+      version: ${{ inputs.version || '22.04' }}
+      architecture: ${{ inputs.architecture || 'amd64' }}
 
   clang-tidy:
     name: 🤖 Clang Tidy
