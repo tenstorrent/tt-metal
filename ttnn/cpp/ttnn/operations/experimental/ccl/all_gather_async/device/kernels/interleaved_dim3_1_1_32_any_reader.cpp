@@ -76,17 +76,16 @@ inline void pack_contig_tiles_dim3_bf16(
             if ((abs_tile_id >= packet_size_in_pages * num_banks) &&
                 ((uint32_t)my_chip_id ==
                  ((abs_tile_id - packet_size_in_pages * num_banks) % total_cols) / tile_cols_per_chip)) {
-                cb_reserve_back(cb0_id, 2);
+                cb_reserve_back(cb0_id, packet_size_in_pages);
                 // TODO: loop
                 DPRINT << "\t\t\t[R][" << (uint32_t)my_chip_id << "] non contig total: " << total << ", id: " << tile_id
                        << ", abs_id: " << dim3_rel2abs_tile_id(tile_id, tile_cols_per_chip, ring_size, my_chip_id)
                        << "\n";
                 noc_async_read_tile(tile_id, addrgen, l1_write_addr);
-                l1_write_addr += tensor0_page_size;
                 tile_id++;
                 total++;
                 noc_async_read_barrier();
-                cb_push_back(cb0_id, 2);
+                cb_push_back(cb0_id, packet_size_in_pages);
             } else {
                 DPRINT << "\t\t[R][" << (uint32_t)my_chip_id << "] SKIP!! total: " << total << ", tile_id: " << tile_id
                        << ", abs_tile_id: " << abs_tile_id << "\n";
@@ -95,7 +94,7 @@ inline void pack_contig_tiles_dim3_bf16(
         } else {
             DPRINT << "\t\t[R][" << (uint32_t)my_chip_id << "] total: " << total << ", tile_id: " << tile_id
                    << ", abs_tile_id: " << abs_tile_id << "\n";
-            cb_reserve_back(cb0_id, 2);
+            cb_reserve_back(cb0_id, packet_size_in_pages);
             if (((abs_tile_id + num_banks) <= end_abs_tile_id) &&
                 (uint32_t)my_chip_id == ((abs_tile_id + num_banks) % total_cols) / tile_cols_per_chip) {
                 // +12ed tile exists in same bank of output tensor
@@ -109,19 +108,18 @@ inline void pack_contig_tiles_dim3_bf16(
                     id = dim3_abs2rel_tile_id(abs_tile_id + num_banks, tile_cols_per_chip, ring_size, my_chip_id);
                 }
                 tile_id++;
-                total += 2;
+                total += packet_size_in_pages;
             } else {
                 // TODO: loop
                 DPRINT << "\t\t\t[R][" << (uint32_t)my_chip_id << "] non contig total: " << total << ", id: " << tile_id
                        << ", abs_id: " << dim3_rel2abs_tile_id(tile_id, tile_cols_per_chip, ring_size, my_chip_id)
                        << "\n";
                 noc_async_read_tile(tile_id, addrgen, l1_write_addr);
-                l1_write_addr += tensor0_page_size;
                 tile_id++;
                 total++;
             }
             noc_async_read_barrier();
-            cb_push_back(cb0_id, 2);
+            cb_push_back(cb0_id, packet_size_in_pages);
         }
     }
     DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] DONE pack_contig_tiles_dim3 total: " << total
@@ -217,8 +215,7 @@ inline void pack_tiles_dim2_bf8(
     uint32_t& total,
     uint32_t rest_filled_bank,
     InterleavedAddrGenFast<DRAM>& tensor0_addrgen) {
-    auto rest_2contig_cols = 0;
-    auto rest_tiles = 0;
+    uint32_t rest_2contig_cols, rest_tiles;
     if (num_banks * 3 < rest_filled_bank) {
         rest_2contig_cols = (num_banks - rest_full_contig_cols);
         rest_tiles = rest_2contig_cols;
@@ -229,15 +226,18 @@ inline void pack_tiles_dim2_bf8(
         rest_2contig_cols = (rest_filled_bank) % num_banks;
         rest_tiles = num_banks - rest_2contig_cols;
     } else {
+        rest_2contig_cols = 0;
         rest_tiles = rest_filled_bank;
     }
-    DPRINT << "[R][" << (uint32_t)my_chip_id << "] pack_tiles_dim2_bf8 filled_bank_tiles:" << filled_bank_tiles
-           << ", rest_2contig_cols:" << rest_2contig_cols << ", rest_tiles:" << rest_tiles << "\n";
+    uint32_t num_tiles = rest_2contig_cols + (filled_bank_tiles + rest_full_contig_cols);
     uint32_t outer_id = 0;
-    while (total < rest_2contig_cols + (filled_bank_tiles + rest_full_contig_cols)) {
+
+    DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] pack_tiles_dim2_bf8 rest_tiles:" << rest_tiles
+           << ", rest_2contig_cols: " << rest_2contig_cols << ", total: " << total << ", num_tiles: " << num_tiles
+           << "\n";
+    while (total < num_tiles) {
         uint32_t num_2contig = min(rest_2contig_cols - outer_id, 2);
-        DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] total: " << total
-               << ", end: " << rest_2contig_cols + (filled_bank_tiles + rest_full_contig_cols)
+        DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] total: " << total << ", num_tiles: " << num_tiles
                << ", num_2contig: " << num_2contig << "\n";
 
         cb_reserve_back(cb0_id, packet_size_in_pages);

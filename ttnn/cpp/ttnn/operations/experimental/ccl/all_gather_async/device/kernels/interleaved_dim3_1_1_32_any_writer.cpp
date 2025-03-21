@@ -106,7 +106,7 @@ inline void fabric_send_contig_tiles_dim3_bf16(
             ((uint32_t)my_chip_id == ((abs_tile_id - num_banks) % total_cols) / tile_cols_per_chip)) {
             if ((abs_tile_id >= 2 * num_banks) &&
                 ((uint32_t)my_chip_id == ((abs_tile_id - 2 * num_banks) % total_cols) / tile_cols_per_chip)) {
-                cb_wait_front(cb0_id, 2);
+                cb_wait_front(cb0_id, packet_size_in_pages);
                 DPRINT << "\t\t\t[W][" << (uint32_t)my_chip_id
                        << "] write non contig tiles abs_tile_id: " << abs_tile_id << "\n";
                 // TODO: loop
@@ -120,7 +120,7 @@ inline void fabric_send_contig_tiles_dim3_bf16(
                 tile_id++;
                 total++;
                 noc_async_writes_flushed();
-                cb_pop_front(cb0_id, 2);
+                cb_pop_front(cb0_id, packet_size_in_pages);
             } else {
                 DPRINT << "\t\t[W][" << (uint32_t)my_chip_id << "] SKIP!! total: " << total << ", tile_id: " << tile_id
                        << ", abs_tile_id: " << abs_tile_id << "\n";
@@ -129,7 +129,7 @@ inline void fabric_send_contig_tiles_dim3_bf16(
         } else {
             DPRINT << "\t\t[W][" << (uint32_t)my_chip_id << "] total: " << total << ", tile_id: " << tile_id
                    << ", abs_tile_id: " << abs_tile_id << "\n";
-            cb_wait_front(cb0_id, 2);
+            cb_wait_front(cb0_id, packet_size_in_pages);
             if ((abs_tile_id + num_banks) <= end_abs_tile_id &&
                 (uint32_t)my_chip_id == ((abs_tile_id + num_banks) % total_cols) / tile_cols_per_chip) {
                 DPRINT << "\t\t\t[W][" << (uint32_t)my_chip_id << "] write contig tiles: abs_tile_id: " << abs_tile_id
@@ -142,7 +142,7 @@ inline void fabric_send_contig_tiles_dim3_bf16(
                     l1_read_addr,
                     packet_size_in_pages * tensor0_page_size);
                 tile_id++;
-                total += 2;
+                total += packet_size_in_pages;
             } else {
                 DPRINT << "\t\t\t[W][" << (uint32_t)my_chip_id
                        << "] write non contig tiles abs_tile_id: " << abs_tile_id << "\n";
@@ -158,7 +158,7 @@ inline void fabric_send_contig_tiles_dim3_bf16(
                 total++;
             }
             noc_async_writes_flushed();
-            cb_pop_front(cb0_id, 2);
+            cb_pop_front(cb0_id, packet_size_in_pages);
         }
     }
     DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] DONE fabric_send_contig_tiles_dim3_bf16 num_tiles: " << num_tiles
@@ -270,8 +270,7 @@ inline void fabric_send_dim2_bf8(
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
     FabricConnectionManager& fabric_connection) {
-    auto rest_2contig_cols = 0;
-    auto rest_tiles = 0;
+    uint32_t rest_2contig_cols, rest_tiles;
     if (num_banks * 3 < rest_filled_bank) {
         rest_2contig_cols = (num_banks - rest_full_contig_cols);
         rest_tiles = rest_2contig_cols;
@@ -282,15 +281,16 @@ inline void fabric_send_dim2_bf8(
         rest_2contig_cols = (rest_filled_bank) % num_banks;
         rest_tiles = num_banks - rest_2contig_cols;
     } else {
+        rest_2contig_cols = 0;
         rest_tiles = rest_filled_bank;
     }
-
-    DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] rest_tiles:" << rest_tiles
-           << ", rest_2contig_cols: " << rest_2contig_cols << ", total: " << total
-           << ", end: " << rest_2contig_cols + (filled_bank_tiles + rest_full_contig_cols) << "\n";
-
+    uint32_t num_tiles = rest_2contig_cols + (filled_bank_tiles + rest_full_contig_cols);
     uint32_t outer_id = 0;
-    while (total < rest_2contig_cols + (filled_bank_tiles + rest_full_contig_cols)) {
+
+    DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] fabric_send_dim2_bf8 rest_tiles:" << rest_tiles
+           << ", rest_2contig_cols: " << rest_2contig_cols << ", total: " << total << ", num_tiles: " << num_tiles
+           << "\n";
+    while (total < num_tiles) {
         uint32_t num_2contig = min(rest_2contig_cols - outer_id, 2);
         DPRINT << "\t\t[W][" << (uint32_t)my_chip_id << "] total: " << total << ", num_2contig: " << num_2contig
                << "\n";
