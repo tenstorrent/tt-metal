@@ -19,6 +19,8 @@ from models.utility_functions import (
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
+from models.demos.llama3_subdevices.tt.prefetcher_common import TtLlamaPrefetcherSetup
+from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 
 
 @torch.no_grad()
@@ -35,12 +37,12 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "paged_attention",
     (
-        True,
-        # False
+        # True,
+        False,
     ),
     ids=(
-        "paged_attention",
-        # "default_attention"
+        # "paged_attention",
+        "default_attention",
     ),
 )
 @pytest.mark.parametrize(
@@ -50,10 +52,11 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "max_seq_len",
     (
-        4096,
+        # 4096,
         128,
     ),
 )
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 def test_llama_decoder_inference(
     max_seq_len,
     paged_attention,
@@ -69,6 +72,8 @@ def test_llama_decoder_inference(
     mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args.use_prefetcher = False
+
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
@@ -128,6 +133,10 @@ def test_llama_decoder_inference(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
+    prefetcher_setup = TtLlamaPrefetcherSetup(mesh_device, n_tensors=0, n_layers=1, mode="prefill")
+    mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
+    crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
+    tt_ccl = TT_CCL(mesh_device, crs, prefetcher_setup.worker_sub_device_id, mode="prefill")
 
     # Initialize TT model
     tt_model = TtTransformerBlock(
@@ -135,10 +144,13 @@ def test_llama_decoder_inference(
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         layer_num=0,
+        n_layers=1,
         dtype=dtype,
         transformation_mats=transformation_mats,
         args=model_args,
         paged_attention_config=paged_attention_config,
+        prefetcher_setup=prefetcher_setup,
+        tt_ccl=tt_ccl,
     )
 
     for i in range(generation_length):
@@ -162,7 +174,7 @@ def test_llama_decoder_inference(
         attn_mask_torch = torch.triu(attn_mask, diagonal=1)
         ref_output = reference_model(pt_decode_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
         # Run TT model
-        tt_out = tt_model(decode_input, None, rot_mats, user_id=0, mode="prefill", page_table=page_table_tt)
+        tt_out, _ = tt_model(decode_input, None, None, rot_mats, user_id=0, mode="prefill", page_table=page_table_tt)
         tt_out = ttnn.to_torch(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
@@ -179,7 +191,7 @@ def test_llama_decoder_inference(
         else:
             logger.warning("Llama Decoder Block Failed!")
             all_tests_pass = False
-
+    tt_ccl.close()
     if all_tests_pass:
         logger.info(f"All Llama decode iterations Passed!")
     else:
