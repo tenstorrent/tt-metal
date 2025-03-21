@@ -97,14 +97,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     const auto output_tensor_shard_num_pages = output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
     const auto num_output_cores = output_tensor_cores.num_cores();
 
-    // Get worker cores, assuming 1 worker per link
-    std::optional<CoreRangeSet> reserved_cores = output_tensor_cores;
-    uint32_t num_workers_per_link = 1;
     auto sub_device_cores = device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value_or(device->get_sub_device_ids().at(0)));
-    auto available_cores = reserved_cores.has_value() ? sub_device_cores.subtract(*reserved_cores) : sub_device_cores;
-    const auto [sender_worker_core_range, sender_worker_cores] =
-        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, available_cores);
 
     std::vector<CoreRange> output_cores;
     for (const auto& cr : sub_device_cores.ranges()) {
@@ -113,10 +107,18 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
             output_cores.push_back(intersection.bounding_box());
         }
     }
-
-    constexpr bool has_work = 1;
     // output_cores_all is the bounding box of the output_tensor_cores but respecting boundaries of subdevice grids
     CoreRangeSet output_cores_all(output_cores);
+
+    std::optional<CoreRangeSet> reserved_cores = output_cores_all;
+    auto available_cores = reserved_cores.has_value() ? sub_device_cores.subtract(*reserved_cores) : sub_device_cores;
+    // Get worker cores, assuming 1 worker per link
+    uint32_t num_workers_per_link = 1;
+    const auto [sender_worker_core_range, sender_worker_cores] =
+        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, available_cores);
+
+    constexpr bool has_work = 1;
+
     // output_cores_unused is the cores that should do no work
     auto output_cores_unused = output_cores_all.subtract(output_tensor_cores);
     // all_cores is both sender and worker cores
@@ -134,7 +136,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
-    uint32_t cb_num_pages = input_tensor_num_pages;  // TODO: Reduce this to double-buffer packet-size?
+    uint32_t cb_num_pages = tt::div_up(output_tensor_cores.num_cores(), num_links) * output_tensor_shard_num_pages;
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     tt::tt_metal::CircularBufferConfig cb_src0_config =
