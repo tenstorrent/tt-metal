@@ -96,11 +96,12 @@ FORCE_INLINE void execute_chip_unicast_to_local_chip(
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
             const auto dest_address = header.command_fields.unicast_write.noc_address;
-            noc_async_write_one_packet_with_trid(
+            noc_async_write_one_packet_with_trid<false, false>(
                 payload_start_address,
                 dest_address,
                 payload_size_bytes,
                 transaction_id,
+                tt::tt_fabric::local_chip_data_cmd_buf,
                 tt::tt_fabric::edm_to_local_chip_noc);
         } break;
 
