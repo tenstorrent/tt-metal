@@ -440,6 +440,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     };
     tt::tt_metal::SetRuntimeArgs(program, reduction_kernel_id, output_tensor_cores, reduction_kernel_rt_args);
 
+    // Now prepare rt args for the reader and writer kernels
+
+    std::vector<uint32_t> reader_writer_runtime_args_template;
+    reader_writer_runtime_args_template.reserve(4 + 2 * in_num_cores);
+    reader_writer_runtime_args_template = {q_base_addr, batch_offset_tensor.buffer()->address(), 0};
+    reader_writer_runtime_args_template.insert(
+        reader_writer_runtime_args_template.end(), noc_x_coords.begin(), noc_x_coords.end());
+    reader_writer_runtime_args_template.insert(
+        reader_writer_runtime_args_template.end(), noc_x_coords.begin(), noc_x_coords.end());
+
     // KERNEL CREATION
     tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_1;
     tt::tt_metal::NOC writer_noc = tt::tt_metal::NOC::NOC_0;
@@ -615,11 +625,24 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
 
         // Set reduction worker runtime args
-        std::vector<uint32_t> reduction_reader_rt_args = {
-            reduction_semaphore_ids[link],  // reduction_semaphore_id
-        };
+        std::vector<uint32_t> reduction_reader_rt_args(reader_writer_runtime_args_template);
+        std::vector<uint32_t> reduction_writer_rt_args(reader_writer_runtime_args_template);
+        reduction_reader_rt_args.push_back(reduction_semaphore_ids[link]);
         tt::tt_metal::SetRuntimeArgs(
             program, reduction_reader_kernel_id, output_corerangeset_per_link[link], reduction_reader_rt_args);
+        tt::tt_metal::SetRuntimeArgs(
+            program, reduction_writer_kernel_id, output_corerangeset_per_link[link], reduction_writer_rt_args);
+    }
+
+    auto& reader_args_by_core = GetRuntimeArgs(program, reduction_reader_kernel_id);
+    auto& writer_args_by_core = GetRuntimeArgs(program, reduction_writer_kernel_id);
+
+    for (uint32_t i = 0; i < q_cores_vector.size(); i++) {
+        const auto& core = q_cores_vector[i];
+        auto& reader_args = reader_args_by_core[core.x][core.y];
+        reader_args[2] = i;
+        auto& writer_args = writer_args_by_core[core.x][core.y];
+        writer_args[2] = i;
     }
 
     auto override_runtime_arguments_callback =
