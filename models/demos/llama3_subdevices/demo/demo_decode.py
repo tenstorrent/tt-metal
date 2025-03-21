@@ -171,14 +171,14 @@ def run_llama3_demo(
     profiler.end("weight_loading")
 
     page_table_tt = None
-
     if paged_attention:
         # Implied shuffling of blocks
         permutation = torch.randperm(paged_attention_config.max_num_blocks)
         # Page table which maps virtual blocks to physical
         reverse_permutation = torch.argsort(permutation)
         page_table = reverse_permutation.reshape(
-            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
+            model_args.batch_size_per_device_group,
+            paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
         )
         page_table_tt = ttnn.from_torch(
             page_table,
@@ -187,6 +187,7 @@ def run_llama3_demo(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
         )
+        logger.info("Page table tensor done")
 
     # Load TTNN Llama3.1 model
     logger.info("Loading weights to device...")
@@ -234,23 +235,6 @@ def run_llama3_demo(
     user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
 
     logger.info("Starting decode...")
-
-    # Shard the page table for TG decode
-    if paged_attention and model_args.is_galaxy and batch_size > 1:
-        page_table_tt = ttnn.from_torch(
-            page_table,
-            device=mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
-                dims=(None, -2) if batch_size > 1 else (None, None),
-                mesh_shape=model_args.cluster_shape,
-            ),
-        )
-
-        logger.info("Page table tensor done")
-
     # Initial positions
     decoding_pos = [0] * batch_size
     current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
