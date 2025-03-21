@@ -27,15 +27,10 @@ std::vector<Tensor> split_dim_n_chunks_rm(
     const auto& input_shape = input_tensor.get_logical_shape();
     auto input_rank = input_shape.size();
 
-    const bool on_host = input_tensor.is_host_tensor();
-    std::optional<IDevice*> device = on_host ? std::nullopt : std::make_optional(input_tensor.device());
+    std::optional<IDevice*> device = std::make_optional(input_tensor.device());
 
     Tensor preprocessed = ttnn::unsqueeze_to_4D(input_tensor);  // ensure we're 4D before slicing
     dim += 4 - input_rank;                                      // convert to 4D index
-
-    if (!on_host && input_tensor.get_dtype() == DataType::BFLOAT16) {
-        preprocessed = preprocessed.cpu();  // bf16 tensors must be handled on host due to limitations in slice
-    }
 
     const auto& preproc_shape = preprocessed.get_logical_shape();
 
@@ -64,6 +59,11 @@ std::vector<Tensor> split_dim_n_chunks_rm(
             preprocessed, start_shape, end_shape, ttnn::SmallVector<uint32_t>(end_shape.size(), 1), mem_config);
         if (input_rank < 4) {
             output_chunk = ttnn::squeeze_from_4D(output_chunk, input_rank);
+        }
+
+        const bool on_host = input_tensor.is_host_tensor();
+        if (!on_host && input_tensor.get_dtype() == DataType::BFLOAT16) {
+            output_chunk = output_chunk.cpu();  // bf16 tensors must be handled on host due to limitations in slice
         }
 
         tt::tt_metal::Layout layout = input_tensor.get_layout();
