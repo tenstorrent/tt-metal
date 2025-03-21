@@ -523,6 +523,16 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
     }
 
+    const uint32_t unpack_nops = std::stoi(std::getenv("UNPACK_NOPS"));
+    const uint32_t math_nops = std::stoi(std::getenv("MATH_NOPS"));
+    const uint32_t pack_nops = std::stoi(std::getenv("PACK_NOPS"));
+    std::cout << "Factory nops " << "Unpack " << unpack_nops << " Math " << math_nops << " Pack " << pack_nops
+              << std::endl;
+    mm_kernel_defines["MM_ADD_NOPS"] = "1";
+    mm_kernel_defines["UNPACK_NOPS"] = std::to_string(unpack_nops);
+    mm_kernel_defines["MATH_NOPS"] = std::to_string(math_nops);
+    mm_kernel_defines["PACK_NOPS"] = std::to_string(pack_nops);
+
     bmm_op_utils::add_stagger_defines_if_needed(device->arch(), cores.size(), mm_kernel_defines);
 
     if (in0_receiver_interleaved.num_cores() == 0) {

@@ -8,6 +8,7 @@
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "mod_div_lib.h"
+#include "debug/dprint.h"
 
 #ifdef FUSE_BIAS
 #include "compute_kernel_api/bcast.h"
@@ -21,6 +22,15 @@
 // Have to keep a copy because cannot import ttnn into tests/tt_metal.
 
 namespace NAMESPACE {
+
+inline void add_nops(const int num_nops) {
+    DPRINT << "NOPS " << num_nops << ENDL();
+#pragma GCC urnoll num_nops
+    for (int i = 0; i < num_nops; i++) {
+        // TTI_NOP;
+        asm volatile("nop");
+    }
+}
 
 FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t in0_cb_id,
@@ -39,10 +49,12 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t start_tile_index = 0;
     copy_block_matmul_partials(mm_partials_cb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
+    // MATH(WAYPOINT("MREW"));
     cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
     // Reconfigure srcA back
     mm_block_init_short_with_dt(
         in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    // MATH(WAYPOINT("MRED"));
 }
 
 template <uint32_t out_subblock_w, uint32_t out_block_w>
@@ -136,6 +148,13 @@ void MAIN {
 #endif
 
     constexpr bool spill = num_blocks_inner_dim > 1;
+    DPRINT << num_blocks_h_dim << " " << num_blocks_w_dim << " " << num_blocks_inner_dim << " " << in0_num_subblocks
+           << " " << in1_num_subblocks << " " << out_subblock_h << " " << out_subblock_w << " " << in0_block_w
+           << ENDL();
+
+    DPRINT << "Unpack nops " << UNPACK_NOPS << " Math nops " << MATH_NOPS << " Pack nops " << PACK_NOPS << ENDL();
+
+    DPRINT << "Untilize out " << (uint32_t)untilize_out << ENDL();
 
     mm_block_init(
         in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
@@ -169,12 +188,14 @@ void MAIN {
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
                     cb_wait_front(in1_cb_id, in1_block_num_tiles);
 
+                    // add_nops(1000);
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                         int in1_index_subblock_offset = 0;
                         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                             tile_regs_acquire();
                             if (enable_reload) {
+                                // MATH(WAYPOINT("REW"));
                                 reload_from_cb_to_dst(
                                     in0_cb_id,
                                     in1_cb_id,
@@ -184,6 +205,7 @@ void MAIN {
                                     out_subblock_w,
                                     out_subblock_h,
                                     in0_block_w);
+                                // MATH(WAYPOINT("RED"));
                             }
 
 #ifndef SKIP_COMPUTE
@@ -194,10 +216,17 @@ void MAIN {
                             uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
                             // inner dim that we accumualte is the inner dim of in0/in1, which is in0_block_w
                             for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
+#ifdef MM_ADD_NOPS
+                                UNPACK(add_nops(UNPACK_NOPS));
+                                MATH(add_nops(MATH_NOPS));
+                                PACK(add_nops(PACK_NOPS));
+#endif
+
                                 // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                                 // accumulation is done by iterating matmul_block across inner dim
                                 // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride
                                 // in0
+                                //	MATH(WAYPOINT("MAW"));
                                 matmul_block(
                                     in0_cb_id,
                                     in1_cb_id,
@@ -208,6 +237,7 @@ void MAIN {
                                     out_subblock_w,
                                     out_subblock_h,
                                     in0_block_w);
+                                //	MATH(WAYPOINT("MAD"));
                                 in0_index++;               // stride right by 1
                                 in1_index += in1_block_w;  // to stride down by 1 need to stride by in_per_core_w
                                                            // (should be called in1_block_w)

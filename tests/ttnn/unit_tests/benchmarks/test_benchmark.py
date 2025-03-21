@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time
+from timeit import default_timer as timer
 
 from loguru import logger
 import csv
@@ -14,8 +15,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from pathlib import Path
 import os
 
-# # Configure loguru to write logs to a file
-# logger.add("test_benchmark.log", rotation="500 MB", retention="15 days", level="INFO")
 
 SUBBLOCK_HW_CHOICES = [
     (4, 2),
@@ -85,39 +84,13 @@ def get_device_freq():
 
 
 matmul_shapes_bfloat16 = [
-    (512, 512, 512, True, True, 1, 1, 1),
-    (512, 1024, 1024, True, True, 1, 1, 1),
-    (512, 1024, 2048, True, True, 1, 1, 1),
-    (1024, 1024, 1024, True, True, 1, 1, 1),
-    (1024, 1024, 2048, True, True, 1, 1, 1),
-    (1024, 2048, 2048, True, True, 1, 1, 1),
-    (2048, 2048, 2048, True, True, 1, 1, 1),
-    (2048, 2048, 3072, True, True, 1, 1, 1),
-    (2048, 3072, 3072, True, True, 2, 1, 1),
-    (3072, 3072, 3072, True, True, 4, 1, 1),
-    (3072, 3072, 4096, False, False, 2, 1, 1),
-    (3072, 4096, 4096, False, False, 2, 1, 1),
-    (4096, 4096, 4096, False, False, 1, 2, 2),
-    (8192, 8192, 8192, False, False, 2, 4, 4),
-    (16384, 16384, 16384, False, False, 4, 8, 8),
+    # (16384, 16384, 16384, False, False, 4, 8, 8),
+    (16384, 65536, 16384, False, False, 16, 8, 8),
 ]
 
 matmul_shapes_bfloat8_b = [
-    (512, 512, 512, True, True, 1, 1, 1),
-    (512, 1024, 1024, True, True, 1, 1, 1),
-    (512, 1024, 2048, True, True, 1, 1, 1),
-    (1024, 1024, 1024, True, True, 1, 1, 1),
-    (1024, 1024, 2048, True, True, 1, 1, 1),
-    (1024, 2048, 2048, True, True, 1, 1, 1),
-    (2048, 2048, 2048, True, True, 1, 1, 1),
-    (2048, 2048, 3072, True, True, 1, 1, 1),
-    (2048, 3072, 3072, True, True, 1, 1, 1),
-    (3072, 3072, 3072, True, True, 2, 1, 1),
-    (3072, 3072, 4096, True, True, 2, 1, 1),
-    (3072, 4096, 4096, True, True, 1, 2, 2),
-    (4096, 4096, 4096, False, False, 1, 2, 2),
-    (8192, 8192, 8192, False, False, 2, 4, 4),
-    (16384, 16384, 16384, False, False, 4, 8, 8),
+    # (512, 1024, 1024, True, True, 1, 1, 1),
+    (512, 4096, 1024, True, True, 4, 1, 1),
 ]
 
 matmul_shapes_bfloat4_b = [
@@ -140,10 +113,9 @@ matmul_shapes_bfloat4_b = [
 
 matmul_configs = [
     (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, False),
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, False),
     (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False),
-    (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False),
+    # (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False),
+    # (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False),
     # (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, True),
     # (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, True),
     # (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True),
@@ -154,11 +126,11 @@ matmul_configs = [
 
 # @pytest.mark.skip(reason="WH didt hang, need to skip CI and run locally only")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 3855488}], indirect=True)
-@pytest.mark.parametrize("grid_size", [(2, 4)])
+@pytest.mark.parametrize("grid_size", [(1, 1)])
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
-@pytest.mark.parametrize("num_warmup_iterations", [5])
-@pytest.mark.parametrize("num_measurement_iterations", [100])
+@pytest.mark.parametrize("num_warmup_iterations", [0])
+@pytest.mark.parametrize("num_measurement_iterations", [1])
 def test_matmul_2d_host_perf(
     device,
     grid_size,
@@ -166,9 +138,10 @@ def test_matmul_2d_host_perf(
     tile_w,
     num_warmup_iterations,
     num_measurement_iterations,
-    use_program_cache,
+    #    use_program_cache,
 ):
     ENVS = dict(os.environ)
+    ERR_FILE_PATH = Path(ENVS["ERR_FILE_PATH"])
     TT_METAL_HOME = Path(ENVS["TT_METAL_HOME"])
     ARTIFACTS_DIR = TT_METAL_HOME / "generated"
     FILE_NAME = ARTIFACTS_DIR / "matmul_2d_host_perf_report.csv"
@@ -178,39 +151,35 @@ def test_matmul_2d_host_perf(
     HiFi3_cycle = LoFi_cycle * 3
     HiFi4_cycle = LoFi_cycle * 4
 
-    with open(FILE_NAME, mode="w", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(
-            [
-                "m",
-                "k",
-                "n",
-                "use_trace",
-                "grid_size",
-                "in0_sharded",
-                "out_sharded",
-                "in0_storage_type",
-                "in1_storage_type",
-                "out_storage_type",
-                "dtype",
-                "math_fidelity",
-                "inference_time_avg (ns)",
-                "TFLOPs (avg)",
-                "Utilization (vs user grid)",
-                "Utilization (vs 8x8 full grid)",
-            ]
-        )
-
+    max_nops_unpack = 15
+    max_nops_math = 15
+    max_nops_pack = 100
+    for y in range(9, max_nops_math):
         for dtype, math_fidelity, use_trace in matmul_configs:
             if dtype == ttnn.bfloat16:
                 matmul_shapes = matmul_shapes_bfloat16
+                os.environ["TT_NOP_UNPACK"] = str(0)
+                os.environ["TT_NOP_MATH"] = str(0)
+                os.environ["TT_NOP_PACK"] = str(0)
             elif dtype == ttnn.bfloat8_b:
                 matmul_shapes = matmul_shapes_bfloat8_b
+                os.environ["TT_NOP_UNPACK"] = str(0)
+                os.environ["TT_NOP_MATH"] = str(y)
+                os.environ["TT_NOP_PACK"] = str(0)
             elif dtype == ttnn.bfloat4_b:
                 matmul_shapes = matmul_shapes_bfloat4_b
             logger.info(f"dtype = {dtype}, math_fidelity = {math_fidelity}, use_trace = {use_trace}")
-            for m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w in matmul_shapes:
-                profiler.clear()
+            for (
+                m,
+                k,
+                n,
+                in0_sharded,
+                out_sharded,
+                in0_block_w_div,
+                num_out_blocks_h,
+                num_out_blocks_w,
+            ) in matmul_shapes:
+                # profiler.clear()
 
                 # scale input size to match BH grid size
                 m = (m // 8) * grid_size[1]
@@ -305,17 +274,8 @@ def test_matmul_2d_host_perf(
                 else:
                     output_tile = ttnn.Tile([tile_h, tile_w])
 
-                output_t = ttnn.matmul(
-                    in0_t,
-                    in1_t,
-                    program_config=program_config,
-                    memory_config=out_mem_config,
-                    dtype=dtype,
-                    compute_kernel_config=compute_kernel_config,
-                    output_tile=output_tile,
-                )
-
-                for iter in range(0, num_warmup_iterations):
+                start = timer()
+                for iter in range(0, num_measurement_iterations):
                     output_t = ttnn.matmul(
                         in0_t,
                         in1_t,
@@ -325,271 +285,13 @@ def test_matmul_2d_host_perf(
                         compute_kernel_config=compute_kernel_config,
                         output_tile=output_tile,
                     )
-
-                if use_trace:
-                    tid = ttnn.begin_trace_capture(device, cq_id=0)
-                    for iter in range(0, num_measurement_iterations):
-                        output_t = ttnn.matmul(
-                            in0_t,
-                            in1_t,
-                            program_config=program_config,
-                            memory_config=out_mem_config,
-                            dtype=dtype,
-                            compute_kernel_config=compute_kernel_config,
-                            output_tile=output_tile,
-                        )
-                    ttnn.end_trace_capture(device, tid, cq_id=0)
-                    profiler.start(f"run")
-                    ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-                    ttnn.synchronize_device(device)
-                    profiler.end(f"run")
-                    ttnn.release_trace(device, tid)
-                else:
-                    profiler.start(f"run")
-                    for iter in range(0, num_measurement_iterations):
-                        output_t = ttnn.matmul(
-                            in0_t,
-                            in1_t,
-                            program_config=program_config,
-                            memory_config=out_mem_config,
-                            dtype=dtype,
-                            compute_kernel_config=compute_kernel_config,
-                            output_tile=output_tile,
-                        )
-                    ttnn.synchronize_device(device)
-                    profiler.end(f"run")
-
-                ttnn.DumpDeviceProfiler(device)
-
-                inference_time_avg = profiler.get("run") / num_measurement_iterations
-                tflops = 2 * m * k * n / 1e12 / inference_time_avg
-                if math_fidelity == ttnn.MathFidelity.LoFi:
-                    cycle_per_tile = LoFi_cycle
-                elif math_fidelity == ttnn.MathFidelity.HiFi2:
-                    cycle_per_tile = HiFi2_cycle
-                elif math_fidelity == ttnn.MathFidelity.HiFi3:
-                    cycle_per_tile = HiFi3_cycle
-                elif math_fidelity == ttnn.MathFidelity.HiFi4:
-                    cycle_per_tile = HiFi4_cycle
-                num_cores_user_grid = grid_size[0] * grid_size[1]
-                compute_grid_size = device.compute_with_storage_grid_size()
-                num_cores_full_grid = compute_grid_size.x * compute_grid_size.y
-                ideal_cycle_full_grid = m * k * n / tile_h / tile_w / 32 * cycle_per_tile / num_cores_full_grid
-                ideal_cycle_user_grid = m * k * n / tile_h / tile_w / 32 * cycle_per_tile / num_cores_user_grid
-                # inference_cycle = inference_time_avg * get_device_freq() * 1e6
-                inference_cycle = inference_time_avg * 800 * 1e6
-                utilization_full_grid = ideal_cycle_full_grid / inference_cycle
-                utilization_user_grid = ideal_cycle_user_grid / inference_cycle
-                utilization_full_grid_percentage = f"{utilization_full_grid * 100:.2f}%"
-                utilization_user_grid_percentage = f"{utilization_user_grid * 100:.2f}%"
-                logger.info(
-                    f"M*K*N = {m}*{k}*{n} == inference time (avg): {inference_time_avg}, tflops (avg): {tflops}, utilization (vs user grid): {utilization_user_grid_percentage}, utilization (vs 8x8 grid): {utilization_full_grid_percentage}"
-                )
-
-                output_tensor = ttnn.to_torch(output_t)
+                end = timer()
+                time_taken = end - start
+                runtime_spike = "True" if (time_taken > 1) else "False"
+                with open(ERR_FILE_PATH, "a") as f:
+                    f.write(f"dtype={dtype} math_nop={y}, time={time_taken} runtime_spike={runtime_spike}\n")
+                    f.close()
+                ttnn.synchronize_device(device)
                 ttnn.deallocate(output_t)
                 ttnn.deallocate(in0_t)
                 ttnn.deallocate(in1_t)
-                writer.writerow(
-                    [
-                        m,
-                        k,
-                        n,
-                        f"{True}" if use_trace else f"{False}",
-                        grid_size,
-                        in0_sharded,
-                        out_sharded,
-                        in0_storage_type,
-                        in1_storage_type,
-                        out_storage_type,
-                        dtype,
-                        math_fidelity,
-                        f"{inference_time_avg * 1e9:.2f}",
-                        f"{tflops:.2f}",
-                        utilization_user_grid_percentage,
-                        utilization_full_grid_percentage,
-                    ]
-                )
-
-
-matmul_shapes_oob = [
-    (512, 512, 512),
-    (512, 1024, 1024),
-    (512, 1024, 2048),
-    (1024, 1024, 1024),
-    (1024, 1024, 2048),
-    (1024, 2048, 2048),
-    (2048, 2048, 2048),
-    (2048, 2048, 3072),
-    (2048, 3072, 3072),
-    (3072, 3072, 3072),
-    (3072, 3072, 4096),
-    (3072, 4096, 4096),
-    (4096, 4096, 4096),
-]
-
-matmul_configs_oob = [
-    (ttnn.bfloat16, False),
-    (ttnn.bfloat16, True),
-    (ttnn.bfloat8_b, False),
-    (ttnn.bfloat8_b, True),
-    (ttnn.bfloat4_b, False),
-    (ttnn.bfloat4_b, True),
-]
-
-
-@pytest.mark.skip(reason="WH didt hang, need to skip CI and run locally only")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 3855488}], indirect=True)
-@pytest.mark.parametrize("grid_size", [(4, 2)])
-@pytest.mark.parametrize("tile_h", [32])
-@pytest.mark.parametrize("tile_w", [32])
-@pytest.mark.parametrize("num_warmup_iterations", [5])
-@pytest.mark.parametrize("num_measurement_iterations", [100])
-def test_matmul_2d_host_perf_out_of_box(
-    device,
-    grid_size,
-    tile_h,
-    tile_w,
-    num_warmup_iterations,
-    num_measurement_iterations,
-    use_program_cache,
-):
-    ENVS = dict(os.environ)
-    TT_METAL_HOME = Path(ENVS["TT_METAL_HOME"])
-    ARTIFACTS_DIR = TT_METAL_HOME / "generated"
-    FILE_NAME = ARTIFACTS_DIR / "matmul_2d_host_perf_out_of_box_report.csv"
-
-    LoFi_cycle = 16
-    HiFi2_cycle = LoFi_cycle * 2
-    HiFi3_cycle = LoFi_cycle * 3
-    HiFi4_cycle = LoFi_cycle * 4
-
-    with open(FILE_NAME, mode="w", newline="") as file:
-        writer = csv.writer(file)
-        writer.writerow(
-            [
-                "m",
-                "k",
-                "n",
-                "use_trace",
-                "grid_size",
-                "in0_storage_type",
-                "in1_storage_type",
-                "out_storage_type",
-                "dtype",
-                "math_fidelity",
-                "inference_time_avg (ns)",
-                "TFLOPs (avg)",
-                "Utilization (vs user grid)",
-                "Utilization (vs 8x8 full grid)",
-            ]
-        )
-
-        for dtype, use_trace in matmul_configs_oob:
-            matmul_shapes = matmul_shapes_oob
-            if dtype == ttnn.bfloat16:
-                math_fidelity = ttnn.MathFidelity.HiFi2
-            elif dtype == ttnn.bfloat8_b:
-                math_fidelity = ttnn.MathFidelity.LoFi
-            elif dtype == ttnn.bfloat4_b:
-                math_fidelity = ttnn.MathFidelity.LoFi
-            for m, k, n in matmul_shapes:
-                profiler.clear()
-
-                in0_shape = [1, 1, m, k]
-                in1_shape = [1, 1, k, n]
-
-                in0 = torch.ones(in0_shape).bfloat16()
-                in1 = torch.randn(in1_shape).bfloat16()
-
-                in0_storage_type = "DRAM"
-                in1_storage_type = "DRAM"
-                out_storage_type = "DRAM"
-
-                in0_t = ttnn.from_torch(
-                    in0,
-                    tile=ttnn.Tile((tile_h, 32)),
-                    dtype=dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                in1_t = ttnn.from_torch(
-                    in1,
-                    tile=ttnn.Tile((32, tile_w)),
-                    dtype=dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-
-                output_t = in0_t @ in1_t
-
-                for iter in range(0, num_warmup_iterations):
-                    output_t = in0_t @ in1_t
-
-                if use_trace:
-                    tid = ttnn.begin_trace_capture(device, cq_id=0)
-                    for iter in range(0, num_measurement_iterations):
-                        output_t = in0_t @ in1_t
-                    ttnn.end_trace_capture(device, tid, cq_id=0)
-                    profiler.start(f"run")
-                    ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-                    ttnn.synchronize_device(device)
-                    profiler.end(f"run")
-                    ttnn.release_trace(device, tid)
-                else:
-                    profiler.start(f"run")
-                    for iter in range(0, num_measurement_iterations):
-                        output_t = in0_t @ in1_t
-                    ttnn.synchronize_device(device)
-                    profiler.end(f"run")
-
-                ttnn.DumpDeviceProfiler(device)
-
-                inference_time_avg = profiler.get("run") / num_measurement_iterations
-                tflops = 2 * m * k * n / 1e12 / inference_time_avg
-                if math_fidelity == ttnn.MathFidelity.LoFi:
-                    cycle_per_tile = LoFi_cycle
-                elif math_fidelity == ttnn.MathFidelity.HiFi2:
-                    cycle_per_tile = HiFi2_cycle
-                elif math_fidelity == ttnn.MathFidelity.HiFi3:
-                    cycle_per_tile = HiFi3_cycle
-                elif math_fidelity == ttnn.MathFidelity.HiFi4:
-                    cycle_per_tile = HiFi4_cycle
-                num_cores_user_grid = grid_size[0] * grid_size[1]
-                compute_grid_size = device.compute_with_storage_grid_size()
-                num_cores_full_grid = compute_grid_size.x * compute_grid_size.y
-                ideal_cycle_full_grid = m * k * n / tile_h / tile_w / 32 * cycle_per_tile / num_cores_full_grid
-                ideal_cycle_user_grid = m * k * n / tile_h / tile_w / 32 * cycle_per_tile / num_cores_user_grid
-                inference_cycle = inference_time_avg * get_device_freq() * 1e6
-                utilization_full_grid = ideal_cycle_full_grid / inference_cycle
-                utilization_user_grid = ideal_cycle_user_grid / inference_cycle
-                utilization_full_grid_percentage = f"{utilization_full_grid * 100:.2f}%"
-                utilization_user_grid_percentage = f"{utilization_user_grid * 100:.2f}%"
-                logger.info(
-                    f"M*K*N = {m}*{k}*{n} == inference time (avg): {inference_time_avg}, tflops (avg): {tflops}, utilization (vs user grid): {utilization_user_grid_percentage}, utilization (vs 8x8 grid): {utilization_full_grid_percentage}"
-                )
-
-                output_tensor = ttnn.to_torch(output_t)
-                ttnn.deallocate(output_t)
-                ttnn.deallocate(in0_t)
-                ttnn.deallocate(in1_t)
-                writer.writerow(
-                    [
-                        m,
-                        k,
-                        n,
-                        f"{True}" if use_trace else f"{False}",
-                        grid_size,
-                        in0_storage_type,
-                        in1_storage_type,
-                        out_storage_type,
-                        dtype,
-                        math_fidelity,
-                        f"{inference_time_avg * 1e9:.2f}",
-                        f"{tflops:.2f}",
-                        utilization_user_grid_percentage,
-                        utilization_full_grid_percentage,
-                    ]
-                )
