@@ -110,119 +110,117 @@ void kernel_main() {
                 uint32_t out_block_start_id_offset = 0;
                 for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; out_block_index++) {
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
-                const uint32_t src0_tile_bytes = get_tile_size(cb_in0);
-                const DataFormat src0_data_format = get_dataformat(cb_in0);
-                const InterleavedAddrGenFast<src0_is_dram> src_a = {
-                    .bank_base_address = src_addr, .page_size = src0_tile_bytes, .data_format = src0_data_format};
-                uint32_t l1_write_addr;
-                l1_write_addr = get_write_ptr(cb_in0);
-                cb_reserve_back(cb_in0, out_block_hw);
-                for (uint32_t mt = 0; mt < out_block_h; mt++) {
-                    for (uint32_t nt = 0; nt < block_w; nt++) {
-                        noc_async_read_tile(
-                            start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt + index_b_offset +
-                                index_g_offset,
-                            src_a,
-                            l1_write_addr);
-                        l1_write_addr += src0_tile_bytes;
-                        noc_async_read_barrier();
+                    const uint32_t src0_tile_bytes = get_tile_size(cb_in0);
+                    const DataFormat src0_data_format = get_dataformat(cb_in0);
+                    const InterleavedAddrGenFast<src0_is_dram> src_a = {
+                        .bank_base_address = src_addr, .page_size = src0_tile_bytes, .data_format = src0_data_format};
+                    uint32_t l1_write_addr;
+                    l1_write_addr = get_write_ptr(cb_in0);
+                    cb_reserve_back(cb_in0, out_block_hw);
+                    for (uint32_t mt = 0; mt < out_block_h; mt++) {
+                        for (uint32_t nt = 0; nt < block_w; nt++) {
+                            noc_async_read_tile(
+                                start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt + index_b_offset +
+                                    index_g_offset,
+                                src_a,
+                                l1_write_addr);
+                            l1_write_addr += src0_tile_bytes;
+                            noc_async_read_barrier();
+                        }
                     }
-                }
-                out_block_start_id_offset += out_block_h * num_channels_tiles;
-                cb_push_back(cb_in0, out_block_hw);
+                    cb_push_back(cb_in0, out_block_hw);
 
 #endif
+                    if (n == 0 || n == 1) {
+                        // wait for local data ready
+                        noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
+                        if (n == 0) {
+                            cb_wait_front(cb_ex_partial, 1);
+                        } else {
+                            cb_wait_front(cb_ex2_partial, 1);
+                        }
+                        noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
+
+                        noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
+                        if (n == 0) {
+                            cb_pop_front(cb_ex_partial, 1);
+                        } else {
+                            cb_pop_front(cb_ex2_partial, 1);
+                        }
+                    } else if (n == 2) {
+                        const InterleavedAddrGenFast<out_is_dram> dst_a = {
+                            .bank_base_address = out_addr,
+                            .page_size = single_tile_size_bytes,
+                            .data_format = out_data_format};
+
+                        // add or copy with previous output results
+                        uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
+
+                        const uint32_t dst_tile_bytes = get_tile_size(cb_reread_out);
+                        uint32_t l1_write_addr;
+                        l1_write_addr = get_write_ptr(cb_reread_out);
+                        cb_reserve_back(cb_reread_out, out_block_hw);
+
+                        for (uint32_t mt = 0; mt < out_block_h; mt++) {
+                            for (uint32_t nt = 0; nt < block_w_curr; nt++) {
+                                noc_async_read_tile(
+                                    out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
+                                        index_b_offset + index_g_offset,
+                                    dst_a,
+                                    l1_write_addr);
+                                l1_write_addr += dst_tile_bytes;
+                                noc_async_read_barrier();
+                            }
+                        }
+                        cb_push_back(cb_reread_out, out_block_hw);
+                    }
+                    out_block_start_id_offset += out_block_h * num_channels_tiles;
+                }
+
                 if (n == 0 || n == 1) {
-                    // wait for local data ready
                     noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
+                    uint32_t cb_mcast_receive;
                     if (n == 0) {
-                        cb_wait_front(cb_ex_partial, 1);
-                    } else {
-                        cb_wait_front(cb_ex2_partial, 1);
+                        cb_mcast_receive = cb_ex_global;
+                    } else if (n == 1) {
+                        cb_mcast_receive = cb_ex2_global;
                     }
-                    noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
-
+                    cb_reserve_back(cb_mcast_receive, 1);
                     noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
-                    if (n == 0) {
-                        cb_pop_front(cb_ex_partial, 1);
-                    } else {
-                        cb_pop_front(cb_ex2_partial, 1);
-                    }
-                }
-                }
-
-            if (n == 0 || n == 1) {
-                noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
-                uint32_t cb_mcast_receive;
-                if (n == 0) {
-                    cb_mcast_receive = cb_ex_global;
-                } else if (n == 1) {
-                    cb_mcast_receive = cb_ex2_global;
-                }
-                cb_reserve_back(cb_mcast_receive, 1);
-                noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
-                cb_push_back(cb_mcast_receive, 1);
-            }
-            }
-
-        const InterleavedAddrGenFast<out_is_dram> dst_a = {
-            .bank_base_address = out_addr, .page_size = single_tile_size_bytes, .data_format = out_data_format};
-
-        // add or copy with previous output results
-        uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
-
-        uint32_t out_block_start_id_offset = 0;
-        for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; out_block_index++) {
-            const uint32_t dst_tile_bytes = get_tile_size(cb_reread_out);
-            uint32_t l1_write_addr;
-            l1_write_addr = get_write_ptr(cb_reread_out);
-            cb_reserve_back(cb_reread_out, out_block_hw);
-
-            for (uint32_t mt = 0; mt < out_block_h; mt++) {
-                for (uint32_t nt = 0; nt < block_w_curr; nt++) {
-                    noc_async_read_tile(
-                        out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt + index_b_offset +
-                            index_g_offset,
-                        dst_a,
-                        l1_write_addr);
-                    l1_write_addr += dst_tile_bytes;
-                    noc_async_read_barrier();
+                    cb_push_back(cb_mcast_receive, 1);
                 }
             }
-            out_block_start_id_offset += out_block_h * num_channels_tiles;
-            cb_push_back(cb_reread_out, out_block_hw);
-        }
 
-        if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
-            if (row_offset == TILE_WIDTH) {
-                index_g_offset += block_w;
-                row_offset = num_cols_per_group;
+            if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
+                if (row_offset == TILE_WIDTH) {
+                    index_g_offset += block_w;
+                    row_offset = num_cols_per_group;
 
+                } else {
+                    index_g_offset += block_w_minus_one;
+                    row_offset += num_cols_per_group;
+                }
+            } else if constexpr (GROUP_SIZE_SMALLER_THAN_TILE_W) {
+                if (row_offset == TILE_WIDTH) {
+                    index_g_offset += block_w_minus_one;
+                    row_offset = num_cols_per_group;
+
+                } else if (row_offset > TILE_WIDTH) {
+                    index_g_offset += block_w_minus_one;
+                    row_offset = row_offset + group_row_offset;
+
+                } else {
+                    row_offset += num_cols_per_group;
+                }
             } else {
-                index_g_offset += block_w_minus_one;
-                row_offset += num_cols_per_group;
+                if (row_offset > TILE_WIDTH) {
+                    index_g_offset += block_w_minus_one;
+                    row_offset = row_offset - tile_w_minux_group_size;
+                } else {
+                    row_offset += num_cols_per_group;
+                    index_g_offset += block_w_minus_two;
+                }
             }
-        } else if constexpr (GROUP_SIZE_SMALLER_THAN_TILE_W) {
-            if (row_offset == TILE_WIDTH) {
-                index_g_offset += block_w_minus_one;
-                row_offset = num_cols_per_group;
-
-            } else if (row_offset > TILE_WIDTH) {
-                index_g_offset += block_w_minus_one;
-                row_offset = row_offset + group_row_offset;
-
-            } else {
-                row_offset += num_cols_per_group;
-            }
-        } else {
-            if (row_offset > TILE_WIDTH) {
-                index_g_offset += block_w_minus_one;
-                row_offset = row_offset - tile_w_minux_group_size;
-            } else {
-                row_offset += num_cols_per_group;
-                index_g_offset += block_w_minus_two;
-            }
-        }
         }
         index_b_offset += num_tiles_per_batch;
     }
