@@ -1,10 +1,9 @@
-name: "(Single-card) Model perf tests"
+name: "TG Stress"
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: "0 2,7,10,14,17,20,23 * * *"
-  workflow_call:
+    - cron: "0 3 * * 6" # Run @ 3am every Saturday
+  workflow_dispatch:
 
 jobs:
   build-artifact:
@@ -13,11 +12,12 @@ jobs:
     with:
       build-wheel: true
       version: 22.04
-  models-perf:
+
+  tg-quick-test:
     needs: build-artifact
-    uses: ./.github/workflows/perf-models-impl.yaml
     secrets: inherit
+    uses: ./.github/workflows/tg-stress.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

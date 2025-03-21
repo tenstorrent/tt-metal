@@ -81,9 +81,9 @@ public:
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and num_devices_ >= 8 and tt::tt_metal::GetNumPCIeDevices() == 4) {
             if (num_devices_ == TG_num_devices || num_devices_ == galaxy_6u_num_devices) {
-                mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{8, 4}});
+                mesh_device_ = MeshDevice::create(MeshDeviceConfig(MeshShape{8, 4}));
             } else {
-                mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{2, 4}});
+                mesh_device_ = MeshDevice::create(MeshDeviceConfig(MeshShape{2, 4}));
             }
 
             std::vector<chip_id_t> ids(num_devices_, 0);
@@ -2586,15 +2586,9 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
     for (IDevice* d : devices) {
         tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
     }
-    for (size_t i = 0; i < programs.size(); i++) {
-        auto d = worker_devices[i];
-        auto& program = programs[i];
-        tt_metal::DumpDeviceProfileResults(d, program);
-    }
-    for (size_t i = 0; i < fabric_programs->size(); i++) {
-        auto d = devices[i];
-        auto& program = fabric_programs.value()[i];
-        tt_metal::DumpDeviceProfileResults(d, program);
+
+    for (IDevice* d : devices) {
+        detail::DumpDeviceProfileResults(d);
     }
     log_info(tt::LogTest, "Finished");
 }

@@ -1795,7 +1795,7 @@ def set_tg_attention_config(model_config, dim):
     )
     start_core = ttnn.CoreCoord(1, 0)
     shard_spec_n_cores_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-        start_core, 40, sub_core_grids, row_wise=True
+        start_core, 10, sub_core_grids, row_wise=True
     )
 
     model_config["CREATE_HEAD_INPUT_MEMCFG"] = (
@@ -1808,11 +1808,23 @@ def set_tg_attention_config(model_config, dim):
                 shard_spec_n_cores_grid,
                 [
                     32,
-                    32,
+                    128,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
+    )
+    model_config["CREATE_HEAD_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            sub_core_grids,
+            [
+                32,
+                128,
+            ],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
     )
 
     num_cores = 40 if dim == 8192 else (24 if dim == 4096 else (20 if dim == 3072 else 12))

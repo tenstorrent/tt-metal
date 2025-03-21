@@ -33,6 +33,8 @@ class MeshDeviceView;
 class MeshSubDeviceManagerId;
 class MeshTraceBuffer;
 
+using DeviceIds = std::vector<int>;
+
 class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevice> {
 private:
     // Resource management class / RAII wrapper for *physical devices* of the mesh
@@ -66,7 +68,7 @@ private:
     };
 
     std::shared_ptr<ScopedDevices> scoped_devices_;
-    MeshDeviceID mesh_id_;
+    int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
     // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
     std::shared_ptr<MeshDevice> parent_mesh_;
@@ -105,7 +107,7 @@ public:
 
     // IDevice interface implementation
     tt::ARCH arch() const override;
-    MeshDeviceID id() const override;
+    int id() const override;
     chip_id_t build_id() const override;
     uint8_t num_hw_cqs() const override;
     bool is_initialized() const override;
