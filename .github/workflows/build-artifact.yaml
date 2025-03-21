@@ -273,7 +273,12 @@ jobs:
 
       - name: 'Tar files'
         if: ${{ inputs.publish-artifact }}
-        run: tar -cvhf /work/ttm_any.tar ttnn/ttnn/*.so build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools build/tt-train data runtime
+        run: |
+          ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools runtime"
+          if [[ "${{ inputs.skip-tt-train }}" != "true" ]]; then
+            ARTIFACT_PATHS="$ARTIFACT_PATHS build/tt-train data"
+          fi
+          tar -cvhf /work/ttm_any.tar $ARTIFACT_PATHS
 
       - name: Set build artifact name
         id: set_build_artifact_name
