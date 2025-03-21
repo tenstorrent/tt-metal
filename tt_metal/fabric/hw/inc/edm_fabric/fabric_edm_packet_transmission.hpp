@@ -164,7 +164,7 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 // !!!WARNING!!! * do NOT call before determining if the packet should be consumed locally or forwarded
 // !!!WARNING!!! * ENSURE DOWNSTREAM EDM HAS SPACE FOR PACKET BEFORE CALLING
 // !!!WARNING!!!
-template <uint8_t NUM_SENDER_BUFFERS>
+template <uint8_t NUM_SENDER_BUFFERS, bool enable_ring_support>
 FORCE_INLINE void forward_payload_to_downstream_edm(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint16_t payload_size_bytes,
@@ -177,6 +177,6 @@ FORCE_INLINE void forward_payload_to_downstream_edm(
     // This is a good place to print the packet header for debug if you are trying to inspect packets
     // because it is before we start manipulating the header for forwarding
     update_packet_header_for_next_hop(packet_header, cached_routing_fields);
-    downstream_edm_interface.send_payload_non_blocking_from_address_with_trid(
+    downstream_edm_interface.template send_payload_non_blocking_from_address_with_trid<enable_ring_support>(
         reinterpret_cast<size_t>(packet_header), payload_size_bytes + sizeof(PACKET_HEADER_TYPE), transaction_id);
 }

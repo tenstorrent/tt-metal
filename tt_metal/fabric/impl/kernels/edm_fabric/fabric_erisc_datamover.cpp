@@ -659,7 +659,7 @@ FORCE_INLINE void receiver_forward_packet(
         uint16_t payload_size_bytes = packet_start->payload_size_bytes;
         bool not_last_destination_device = cached_routing_fields.value != tt::tt_fabric::RoutingFields::LAST_MCAST_VAL;
         if (not_last_destination_device) {
-            forward_payload_to_downstream_edm(
+            forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
         }
         if (start_distance_is_terminal_value) {
@@ -673,12 +673,12 @@ FORCE_INLINE void receiver_forward_packet(
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id);
                 break;
             case tt::tt_fabric::LowLatencyRoutingFields::FORWARD_ONLY:
-                forward_payload_to_downstream_edm(
+                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support>(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
                 break;
             case tt::tt_fabric::LowLatencyRoutingFields::WRITE_AND_FORWARD:
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id);
-                forward_payload_to_downstream_edm(
+                forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support>(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
                 break;
             default: ASSERT(false);
@@ -710,10 +710,10 @@ FORCE_INLINE void check_worker_connections(
             channel_connection_established = true;
             local_sender_channel_worker_interface.cache_producer_noc_addr();
             if constexpr (enable_first_level_ack) {
-                local_sender_channel_worker_interface.update_worker_copy_of_read_ptr(
+                local_sender_channel_worker_interface.template update_worker_copy_of_read_ptr<enable_ring_support>(
                     local_sender_channel_worker_interface.local_ackptr.get_ptr());
             } else {
-                local_sender_channel_worker_interface.update_worker_copy_of_read_ptr(
+                local_sender_channel_worker_interface.template update_worker_copy_of_read_ptr<enable_ring_support>(
                     local_sender_channel_worker_interface.local_rdptr.get_ptr());
             }
         }
@@ -785,7 +785,8 @@ void run_sender_channel_step(
             to_sender_packets_completed_streams[sender_channel_index], -completions_since_last_check);
         if constexpr (!enable_first_level_ack) {
             if (channel_connection_established) {
-                local_sender_channel_worker_interface.update_worker_copy_of_read_ptr(sender_rdptr.get_ptr());
+                local_sender_channel_worker_interface.template update_worker_copy_of_read_ptr<enable_ring_support>(
+                    sender_rdptr.get_ptr());
             }
         }
     }
@@ -799,7 +800,8 @@ void run_sender_channel_step(
         if (acks_since_last_check > 0) {
             sender_ackptr.increment_n(acks_since_last_check);
             if (channel_connection_established) {
-                local_sender_channel_worker_interface.update_worker_copy_of_read_ptr(sender_ackptr.get_ptr());
+                local_sender_channel_worker_interface.template update_worker_copy_of_read_ptr<enable_ring_support>(
+                    sender_ackptr.get_ptr());
             }
             increment_local_update_ptr_val(
                 to_sender_packets_acked_streams[sender_channel_index], -acks_since_last_check);
