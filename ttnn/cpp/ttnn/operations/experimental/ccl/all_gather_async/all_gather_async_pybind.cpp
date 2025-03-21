@@ -88,7 +88,7 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
             py::arg("topology"),
             py::arg("multi_device_global_semaphore"),
             py::kw_only(),
-            py::arg("persistent_output_tensor"),
+            py::arg("persistent_output_tensor") = std::nullopt,
             py::arg("num_links") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("subdevice_id") = std::nullopt,

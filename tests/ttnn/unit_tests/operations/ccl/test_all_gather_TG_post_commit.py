@@ -210,6 +210,9 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         assert not teardown_persistent_fabric
         assert not enable_persistent_fabric
 
+    if use_persistent_output and not use_all_gather_async:
+        pytest.skip("Persistent output tensor requires all-gather-async")
+
     mesh_device.enable_async(enable_async)
 
     input_shape_per_chip = list(per_chip_output_shape)
@@ -264,8 +267,6 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
 
     ttnn_persistent_output_tensor = None
     if use_persistent_output:
-        assert use_all_gather_async, "use_persistent_output requires use_all_gather_async to be True"
-
         ttnn_persistent_output_tensor = ttnn.from_torch(
             torch.zeros(per_chip_output_shape),
             tile=ttnn.Tile(tile),
