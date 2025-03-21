@@ -160,8 +160,9 @@ void kernel_main() {
     // DRAM sharded write API
     for (uint32_t i = 0; i < iteration; i++) {
         uint32_t trid = i % 16 + 1;
-        noc_async_write_one_packet_with_trid(l1_read_addr, addr_self_noc, page_size, trid, noc_index);
-        noc_async_write_one_packet_with_trid(l1_read_addr, addr_other_noc, page_size, trid, 1 - noc_index);
+        noc_async_write_one_packet_with_trid(l1_read_addr, addr_self_noc, page_size, trid, write_cmd_buf, noc_index);
+        noc_async_write_one_packet_with_trid(
+            l1_read_addr, addr_other_noc, page_size, trid, write_cmd_buf, 1 - noc_index);
     }
     for (uint32_t i = 1; i < 15; i++) {
         noc_async_write_barrier_with_trid(i, noc_index);
