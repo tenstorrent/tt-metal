@@ -163,8 +163,8 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     int HiFi3_cycle = LoFi_cycle * 3;
     int HiFi4_cycle = LoFi_cycle * 4;
 
-    int MAX_UNOP = 20;
-    int MAX_MNOP = 20;
+    int MAX_UNOP = 50;
+    int MAX_MNOP = 50;
     for (int unop = 0; unop < MAX_UNOP; unop++) {
         for (int mnop = 0; mnop < MAX_MNOP; mnop++) {
             for (const auto& config : matmul_configs) {
@@ -178,6 +178,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
                     export_nops(0, 0, 0);
                     matmul_shapes = matmul_shapes_bfloat16;
                 } else if (dtype == DataType::BFLOAT8_B) {
+                    // export_nops(0, 0, 0);
                     export_nops(unop, mnop, 0);
                     matmul_shapes = matmul_shapes_bfloat8_b;
                 } else if (dtype == DataType::BFLOAT4_B) {
