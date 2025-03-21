@@ -87,6 +87,19 @@ concept DeviceOperationConcept = requires {
     };
 } && HasComputeOutputSpecs<device_operation_t>;
 
+/**
+ * @brief Concept that defines a device operation that has a mesh device adapter.
+ *
+ * This concept requires that the type satisfies both the DeviceOperationConcept
+ * and the MeshDeviceOperationAdapterType concept. It represents operations that
+ * can be executed across multiple devices in a mesh configuration using the
+ * adapter pattern.
+ */
+template <typename device_operation_t>
+concept DeviceOperationWithMeshDeviceAdapter =
+    DeviceOperationConcept<device_operation_t> && MeshDeviceOperationAdapterType<device_operation_t>;
+
+
 template <typename device_operation_t>
 concept DeviceOperationWithCustomProgramCacheConcept =
     DeviceOperationConcept<device_operation_t> &&
@@ -358,7 +371,10 @@ struct CheckDeviceBufferIsAllocated {
 
 template <typename device_operation_t>
 auto get_operation_name(const typename device_operation_t::operation_attributes_t& operation_attributes) {
-    if constexpr (requires { device_operation_t::get_type_name(operation_attributes); }) {
+    if constexpr (DeviceOperationWithMeshDeviceAdapter<device_operation_t>) {
+        // For MeshAdapter operations, we recurse to get the name of the underlying device operation
+        return get_operation_name<typename device_operation_t::device_operation_t>(operation_attributes);
+    } else if constexpr (requires { device_operation_t::get_type_name(operation_attributes); }) {
         // TODO: remove this if statement once OldInfraDeviceOperation is removed
         return device_operation_t::get_type_name(operation_attributes);
     } else {
@@ -631,17 +647,6 @@ void launch_on_mesh_device(
     }
 }
 
-/**
- * @brief Concept that defines a device operation that has a mesh device adapter.
- *
- * This concept requires that the type satisfies both the DeviceOperationConcept
- * and the MeshDeviceOperationAdapterType concept. It represents operations that
- * can be executed across multiple devices in a mesh configuration using the
- * adapter pattern.
- */
-template <typename device_operation_t>
-concept DeviceOperationWithMeshDeviceAdapter =
-    DeviceOperationConcept<device_operation_t> && MeshDeviceOperationAdapterType<device_operation_t>;
 
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void handle_mesh_adapter_cache_hit(
