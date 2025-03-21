@@ -15,6 +15,7 @@
 
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
+#include "debug/dprint.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -28,6 +29,8 @@ void MAIN {
 
     constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs;
     constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs;
+
+    DPRINT << "Kernel code" << ENDL();
 
     unary_op_init_common(cb_post_lhs, cb_out);
 #ifdef PACK_RELU

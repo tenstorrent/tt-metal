@@ -125,8 +125,46 @@ Tensor ExecuteMinimum::invoke(
 // maximum(a,b) = a + (b - a > 0 )*(b-a)
 Tensor ExecuteMaximum::invoke(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor t_diff = ttnn::subtract(input_b, input_a, std::nullopt, output_mem_config);
+    std::cout << std::endl;
+    std::cout << "input_b = " << std::endl;
+    input_b.print();
+    std::cout << std::endl;
+
+    Tensor t_diff = ttnn::experimental::gte(input_b, input_a);
+    std::cout << "t_diff = " << std::endl;
+    t_diff.print();
+    std::cout << std::endl;
+
     Tensor result = ttnn::where(t_diff, input_b, input_a);
+    std::cout << "before result = " << std::endl;
+    result.print();
+    std::cout << std::endl;
+
+    Tensor eq_inf = ttnn::experimental::eq(input_b, std::numeric_limits<float>::infinity());
+    std::cout << "eq_inf = " << std::endl;
+    eq_inf.print();
+    std::cout << std::endl;
+
+    Tensor eq_m_inf = ttnn::experimental::eq(input_b, -std::numeric_limits<float>::infinity());
+    std::cout << "eq_m_inf = " << std::endl;
+    eq_m_inf.print();
+    std::cout << std::endl;
+
+    Tensor logical_or_res = ttnn::experimental::logical_or(eq_inf, eq_m_inf);
+    std::cout << "logical_or_res = " << std::endl;
+    logical_or_res.print();
+    std::cout << std::endl;
+
+    Tensor logical_and_res = ttnn::experimental::logical_and(t_diff, logical_or_res, std::nullopt, output_mem_config);
+    std::cout << "logical_and_res = " << std::endl;
+    logical_and_res.print();
+    std::cout << std::endl;
+
+    result = ttnn::where(logical_and_res, input_b, result);
+    std::cout << "result = " << std::endl;
+    result.print();
+    std::cout << std::endl;
+
     return result;
 }
 

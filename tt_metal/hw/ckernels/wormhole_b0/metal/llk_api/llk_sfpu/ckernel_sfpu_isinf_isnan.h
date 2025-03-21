@@ -38,8 +38,9 @@ inline void calculate_isinf() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
-        v_if(v == std::numeric_limits<float>::infinity() || v == -std::numeric_limits<float>::infinity()) { v = 1.0f; }
-        v_else { v = 0.0f; }
+        vFloat inf_val = 1.7014e+38;
+        v_if(v == inf_val || v == -std::numeric_limits<float>::infinity()) { v = 1.0f; }
+        v_else { v = dst_reg[0]; }
         v_endif;
 
         dst_reg[0] = v;
