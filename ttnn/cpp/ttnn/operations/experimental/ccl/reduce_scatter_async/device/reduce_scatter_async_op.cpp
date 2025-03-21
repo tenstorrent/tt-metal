@@ -33,8 +33,9 @@ ReduceScatterAsync create_reduce_scatter_struct(
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle) {
     uint32_t num_devices = devices.size();
 
+    // TODO: fix `devices[0]` arg this.
     auto [device_index, sender_device_id, receiver_device_id] =
-        get_device_index_and_sender_receiver_ids(input_tensor, devices, topology);
+        get_device_index_and_sender_receiver_ids(devices[0], devices, topology);
 
     TT_FATAL(
         receiver_device_id != std::nullopt || sender_device_id != std::nullopt,

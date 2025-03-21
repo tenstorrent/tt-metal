@@ -93,10 +93,16 @@ std::vector<Tensor> AllGatherMatmul::create_output_tensors(const std::vector<Ten
     return {all_gather_output_tensor, matmul_output_tensor, datacopy_output_tensor};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmul::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmul::create_program_at(
+    const ttnn::MeshCoordinate& mesh_coord,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
+    auto [device_index, sender_device_id, receiver_device_id] = ::ttnn::ccl::get_device_index_and_sender_receiver_ids(
+        input_tensors[0].mesh_device()->get_device(mesh_coord),
+        input_tensors[0].mesh_device()->get_devices(),
+        this->all_gather_struct.topology);
+
     // Return the AllGatherMatmul program with callbacks
     return all_gather_matmul_multi_core_with_workers(
         input_tensors[0],   // input_tensor
@@ -109,11 +115,11 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmul::create_program(
         this->all_gather_struct.dim,
         this->all_gather_struct.num_links,
         this->all_gather_struct.ring_size,
-        this->all_gather_struct.ring_index,
+        device_index,
         this->all_gather_struct.user_defined_num_workers,
         this->all_gather_struct.user_defined_num_buffers_per_channel,
-        this->all_gather_struct.receiver_device_id,
-        this->all_gather_struct.sender_device_id,
+        receiver_device_id,
+        sender_device_id,
         this->all_gather_struct.topology,
         this->all_gather_core_grid_offset,
 
@@ -151,11 +157,11 @@ std::vector<ttnn::Tensor> all_gather_matmul(
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "AllGatherMatmul is only supported for Fast Dispatch");
 
-    auto devices = input_tensor.get_workers();
+    auto devices = input_tensor.mesh_device()->get_devices();
     std::vector<Tensor> output_tensors = {
-        ttnn::Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor, weight_tensor})),
-        ttnn::Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor, weight_tensor})),
-        ttnn::Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor, weight_tensor}))};
+        ttnn::Tensor(input_tensor.mesh_device()),
+        ttnn::Tensor(input_tensor.mesh_device()),
+        ttnn::Tensor(input_tensor.mesh_device())};
     std::vector<std::optional<const ttnn::Tensor>> optional_input_tensors = {std::nullopt};
 
     tt::tt_metal::operation::launch_op(
@@ -181,15 +187,15 @@ std::vector<ttnn::Tensor> all_gather_matmul(
             const auto& weight_tensor = input_tensors[1];
 
             /* AllGather setup */
-            ttnn::AllGather all_gather_struct = ttnn::ccl::all_gather_detail::create_all_gather_struct(
-                input_tensor,
-                dim,
-                num_links,
-                memory_config_ag,
-                user_defined_num_workers,
-                user_defined_num_buffers_per_channel,
-                devices,
-                ttnn::ccl::Topology::Ring);
+            ttnn::AllGather all_gather_struct{
+                .dim = dim,
+                .num_links = num_links,
+                .ring_size = devices.size(),
+                .user_defined_num_workers = user_defined_num_workers,
+                .user_defined_num_buffers_per_channel = user_defined_num_buffers_per_channel,
+                .output_mem_config = memory_config_ag.value_or(input_tensor.memory_config()),
+                ttnn::ccl::Topology::Ring,
+                .cluster_axis = std::nullopt};
 
             // Create the all gather output tensor used as input (activation) to the matmul
             ttnn::Tensor all_gather_out_tensor = all_gather_struct.create_output_tensors({input_tensor})[0];

@@ -161,15 +161,13 @@ TEST(GalaxyTests, TestAllGatherDeadlock) {
                 // Configure CCL running on this device.
                 uint32_t receiver_device_id = device_ids[(dev_idx) + 1 % num_devices_in_row];
                 uint32_t sender_device_id = device_ids[(dev_idx + num_devices_in_row - 1) % num_devices_in_row];
+                // TODO: fix this.
                 auto all_gather_op = ttnn::AllGather{
                     3,
                     2,
                     num_devices_in_row,
-                    dev_idx,
                     std::nullopt,
                     std::nullopt,
-                    receiver_device_id,
-                    sender_device_id,
                     input_tensor.memory_config(),
                     ttnn::ccl::Topology::Linear};
                 // Send CCL to this device. All CCLs will complete simultaneously.
@@ -270,6 +268,7 @@ TEST(GalaxyTests, TestReduceScatterDeadlock) {
             // Push inputs.
             ttnn::write_buffer(ttnn::DefaultQueueId, input_tensor, {host_data});
             // Configure CCL running on this device.
+            // TODO: fix this.
             uint32_t receiver_device_id = device_ids[(dev_idx + 1) % ring_devices.size()];
             uint32_t sender_device_id = device_ids[(dev_idx + ring_devices.size() - 1) % ring_devices.size()];
             auto all_gather_op = ttnn::ReduceScatter{
@@ -277,9 +276,6 @@ TEST(GalaxyTests, TestReduceScatterDeadlock) {
                 scatter_dim,
                 1,
                 static_cast<uint32_t>(ring_devices.size()),
-                dev_idx,
-                receiver_device_id,
-                sender_device_id,
                 input_tensor.memory_config(),
                 ttnn::ccl::Topology::Ring};
             // Send CCL to this device. All CCLs will complete simultaneously.

@@ -143,15 +143,15 @@ static Tensor all_gather_local_reduce(
     auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
 
     const auto& gathered_tensor = tt::tt_metal::operation::run(
-        ttnn::ccl::all_gather_detail::create_all_gather_struct(
-            reshaped_tensor,
-            0,
-            num_links,
-            output_mem_config,
-            user_defined_num_workers,
-            user_defined_num_buffers_per_channel,
-            devices,
-            topology),
+        ttnn::AllGather{
+            .dim = 0,
+            .num_links = num_links,
+            .ring_size = num_devices,
+            .user_defined_num_workers = user_defined_num_workers,
+            .user_defined_num_buffers_per_channel = user_defined_num_buffers_per_channel,
+            .output_mem_config = output_mem_config,
+            .topology = topology,
+            .cluster_axis = std::nullopt},
         {reshaped_tensor});
 
     auto sum_tensor = ttnn::sum(gathered_tensor.at(0), 0);
@@ -179,28 +179,28 @@ static Tensor reduce_scatter_all_gather(
     }
 
     const auto& reduced_tensor = tt::tt_metal::operation::run(
-        ttnn::ccl::reduce_scatter_detail::create_reduce_scatter_struct(
-            input_tensor,
-            binary_op_type,
-            all_reduce_dim,
-            num_links,
-            output_mem_config,
-            user_defined_num_workers,
-            user_defined_num_buffers_per_channel,
-            devices,
-            topology),
+        ttnn::ReduceScatter{
+            .binary_op_type = binary_op_type,
+            .scatter_dim = all_reduce_dim,
+            .num_links = num_links,
+            .ring_size = num_devices,
+            .output_mem_config = output_mem_config,
+            .topology = topology,
+            .cluster_axis = std::nullopt,
+            .user_defined_num_workers = user_defined_num_workers,
+            .user_defined_num_buffers_per_channel = user_defined_num_buffers_per_channel},
         {input_tensor});
 
     const auto& gathered_tensor = tt::tt_metal::operation::run(
-        ttnn::ccl::all_gather_detail::create_all_gather_struct(
-            reduced_tensor.at(0),
-            all_reduce_dim,
-            num_links,
-            output_mem_config,
-            user_defined_num_workers,
-            user_defined_num_buffers_per_channel,
-            devices,
-            topology),
+        ttnn::AllGather{
+            .dim = all_reduce_dim,
+            .num_links = num_links,
+            .ring_size = num_devices,
+            .user_defined_num_workers = user_defined_num_workers,
+            .user_defined_num_buffers_per_channel = user_defined_num_buffers_per_channel,
+            .output_mem_config = output_mem_config,
+            .topology = topology,
+            .cluster_axis = std::nullopt},
         {reduced_tensor.at(0)});
 
     return gathered_tensor.at(0);
@@ -262,11 +262,11 @@ Tensor all_reduce(
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "All Reduce op is only supported for Fast Dispatch");
 
-    auto devices = input_tensor.get_workers();
+    auto devices = input_tensor.mesh_device()->get_devices();
     uint32_t num_devices = devices.size();
     TT_FATAL(num_devices > 1, "all_reduce op will only work for num_devices > 1, but has {}", num_devices);
 
-    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
+    std::vector<Tensor> output_tensors = {Tensor(input_tensor.mesh_device())};
     tt::tt_metal::operation::launch_op(
         [binary_op_type,
          num_links,
