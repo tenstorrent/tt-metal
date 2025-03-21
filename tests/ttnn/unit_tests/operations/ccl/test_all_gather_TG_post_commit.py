@@ -79,7 +79,7 @@ def run_with_trace(
             dim,
             cluster_axis=cluster_axis,
             mesh_device=mesh_device,
-            topology=ttnn.Topology.Linear,
+            topology=all_gather_topology,
             multi_device_global_semaphore=ccl_semaphore_handles[0]
             if type(ccl_semaphore_handles) == list
             else ccl_semaphore_handles,
@@ -112,7 +112,7 @@ def run_with_trace(
                     dim,
                     cluster_axis=cluster_axis,
                     mesh_device=mesh_device,
-                    topology=ttnn.Topology.Linear,
+                    topology=all_gather_topology,
                     multi_device_global_semaphore=ccl_semaphore_handles[i % NUM_BUFFERS]
                     if type(ccl_semaphore_handles) == list
                     else ccl_semaphore_handles,
@@ -257,6 +257,14 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
     ttnn_tensor = ttnn.to_memory_config(ttnn_tensor, input_mem_config)
+    # TODO: Take as an arg
+    linear = True
+    if linear:
+        all_gather_topology = ttnn.Topology.Linear
+        wrap_mesh = False
+    else:
+        all_gather_topology = ttnn.Topology.Ring
+        wrap_mesh = True
 
     sub_device_stall_group = []
     if use_all_gather_async:
@@ -274,7 +282,13 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         if create_persistent_fabric:
             logger.info("Create persistent fabric interface")
             mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-                mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
+                mesh_device,
+                [worker_sub_device],
+                0,
+                0,
+                enable_persistent_fabric,
+                wrap_fabric_around_mesh=wrap_mesh,
+                topology=all_gather_topology,
             )
             logger.info("Done Create persistent fabric interface")
             mesh_device.set_sub_device_stall_group(sub_device_stall_group)
@@ -296,7 +310,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
                 ccl_semaphore_handles=ccl_semaphore_handles,
                 worker_sub_device_id=worker_sub_device_id,
                 enable_persistent_fabric=enable_persistent_fabric,
-                all_gather_topology=ttnn.Topology.Linear,
+                all_gather_topology=all_gather_topology,
                 num_iter=num_iters,
                 warmup_iters=warmup_iters,
                 use_all_gather_async=use_all_gather_async,
@@ -313,7 +327,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
                         dim,
                         cluster_axis=cluster_axis,
                         mesh_device=mesh_device,
-                        topology=ttnn.Topology.Linear,
+                        topology=all_gather_topology,
                         multi_device_global_semaphore=ccl_semaphore_handles[i % NUM_BUFFERS],
                         num_links=num_links,
                         memory_config=output_mem_config,
@@ -328,7 +342,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
                         mesh_device=mesh_device,
                         num_links=num_links,
                         memory_config=output_mem_config,
-                        topology=ttnn.Topology.Linear,
+                        topology=all_gather_topology,
                     )
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
             signpost("stop")
@@ -339,7 +353,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         if enable_persistent_fabric and teardown_persistent_fabric:
             logger.info("Tearing down persistent fabric interface")
             mesh_device.reset_sub_device_stall_group()
-            teardown_fabric_interface(mesh_device)
+            teardown_fabric_interface(mesh_device, wrap_fabric_around_mesh=wrap_mesh, topology=all_gather_topology)
             logger.info("Done tearing down persistent fabric interface")
 
     # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor_out)
