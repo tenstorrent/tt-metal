@@ -39,19 +39,19 @@
 //     }
 // }
 
-template <uint8_t noc_ind = noc_index>
-FORCE_INLINE std::uint64_t static_noc_multicast_addr(
-    std::uint32_t noc_x_start,
-    std::uint32_t noc_y_start,
-    std::uint32_t noc_x_end,
-    std::uint32_t noc_y_end,
-    std::uint32_t addr) {
-    if constexpr (noc_ind == 0) {
-        return get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, addr);
-    } else {
-        return get_noc_multicast_addr(noc_x_end, noc_y_end, noc_x_start, noc_y_start, addr);
-    }
-}
+// template <uint8_t noc_ind = noc_index>
+// FORCE_INLINE std::uint64_t static_noc_multicast_addr(
+//     std::uint32_t noc_x_start,
+//     std::uint32_t noc_y_start,
+//     std::uint32_t noc_x_end,
+//     std::uint32_t noc_y_end,
+//     std::uint32_t addr) {
+//     if constexpr (noc_ind == 0) {
+//         return get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, addr);
+//     } else {
+//         return get_noc_multicast_addr(noc_x_end, noc_y_end, noc_x_start, noc_y_start, addr);
+//     }
+// }
 
 void kernel_main() {
     size_t ct_arg_idx = 0, rt_arg_idx = 0;
@@ -89,8 +89,8 @@ void kernel_main() {
     constexpr size_t packet_header_size = sizeof(PACKET_HEADER_TYPE);
 
     // Constants for indexing
-    constexpr uint32_t x_index = 0;
-    constexpr uint32_t y_index = 1;
+    constexpr uint8_t x_index = 0;
+    constexpr uint8_t y_index = 1;
 
     constexpr uint8_t device_order[num_devices - 1] =
         DEVICE_ORDER;  // this is code gen'd in the program factory using the defines
@@ -133,7 +133,7 @@ void kernel_main() {
 
             // for LLaMa - 6 cores * 5 tiles per core = 30 tiles to each other device
             // 30/4 = 8 packets, with the last packet having 2 pages
-            uint32_t packet_offset = chip_id * num_pages_per_packet * page_size_bytes;
+            uint32_t packet_offset = base_receiver_l1_addr + chip_id * num_pages_per_packet * page_size_bytes;
 
             for (uint32_t packet = 0; packet < num_packets_total_per_device; packet++) {
                 // Determine packet size based on whether it's the last packet
@@ -148,8 +148,7 @@ void kernel_main() {
                 auto sender_l1_addr = get_read_ptr(fabric_sender_cb_id);
                 // print_tiles(fabric_sender_cb_id, 0, curr_packet_num_pages, true);
 
-                uint64_t noc0_dest_noc_addr =
-                    get_noc_addr(receiver_core_x, receiver_core_y, base_receiver_l1_addr + packet_offset);
+                uint64_t noc0_dest_noc_addr = get_noc_addr(receiver_core_x, receiver_core_y, packet_offset);
 
                 unicast_packet_header->to_noc_unicast_write(
                     tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, curr_packet_size_bytes);
@@ -185,50 +184,59 @@ void kernel_main() {
             fabric_connection.close();
         }
     } else if (worker_core) {
-        uint32_t linear_output_core_idcs[num_pages_per_packet];
-        uint32_t linear_output_tile_offsets[num_pages_per_packet];
+        uint32_t linear_output_core_idcs = 0;
+        uint32_t linear_output_tile_offsets = 0;
+        uint64_t noc_addresses[num_pages_per_packet];
+        uint32_t accumulator_l1_addresses[num_pages_per_packet];
+        uint32_t output_tensor_base_addr = get_read_ptr(output_tensor_cb_id);
+        auto accumulator_l1_addr = get_read_ptr(accumulator_cb_id);
 
+        uint32_t num_packets = num_pages_per_packet;
         for (uint32_t i = 0; i < num_pages_per_packet; i++) {
             uint32_t rem = linear_output_page_start_idx + i;
-            linear_output_core_idcs[i] = rem / tiles_per_core_width_output;
-            linear_output_tile_offsets[i] = rem % tiles_per_core_width_output;
+            linear_output_core_idcs = rem / tiles_per_core_width_output;
+            if (linear_output_core_idcs >= output_cores_per_device) {
+                num_packets = i;
+                break;
+            }
+            linear_output_tile_offsets = rem % tiles_per_core_width_output;
+            noc_addresses[i] = get_noc_addr(
+                output_core_xy[linear_output_core_idcs][x_index],
+                output_core_xy[linear_output_core_idcs][y_index],
+                output_tensor_base_addr + (linear_output_tile_offsets * page_size_bytes));
+            accumulator_l1_addresses[i] = accumulator_l1_addr + i * page_size_bytes;
         }
-
-        uint32_t output_tensor_base_addr = get_read_ptr(output_tensor_cb_id);
 
         cb_wait_front(accumulator_cb_id, num_pages_per_packet);
 
-        auto accumulator_l1_addr = get_read_ptr(accumulator_cb_id);
         // Process all tiles
-        for (uint32_t tile = 0; tile < num_pages_per_packet; tile++) {
+        for (uint32_t tile = 0; tile < num_packets; tile++) {
             // one tile to each core
 
-            uint32_t output_core = linear_output_core_idcs[tile];
-            if (linear_output_core_idcs[tile] >= output_cores_per_device) {
-                break;
-            }
-            uint32_t output_core_x = output_core_xy[output_core][x_index];
-            uint32_t output_core_y = output_core_xy[output_core][y_index];
+            // uint32_t output_core = linear_output_core_idcs[tile];
+            // if (linear_output_core_idcs[tile] >= output_cores_per_device) {
+            //     break;
+            // }
+            // uint32_t output_core_x = output_core_xy[output_core][x_index];
+            // uint32_t output_core_y = output_core_xy[output_core][y_index];
 
             // Compute addresses
-            uint64_t noc_accumulator_addr = get_noc_addr(
-                output_core_x,
-                output_core_y,
-                output_tensor_base_addr + linear_output_tile_offsets[tile] * page_size_bytes);
+            // uint64_t noc_accumulator_addr = get_noc_addr(
+            //     output_core_x,
+            //     output_core_y,
+            //     output_tensor_base_addr + linear_output_tile_offsets[tile] * page_size_bytes);
             // uint64_t local_receiver_semaphore_noc_addr =
             //     get_noc_addr(output_core_x, output_core_y, local_semaphore_address);
 
             // print_full_tile(fabric_receiver_cb_id, tile, true);
-            noc_async_write(accumulator_l1_addr + tile * page_size_bytes, noc_accumulator_addr, page_size_bytes);
+            noc_async_write(accumulator_l1_addresses[tile], noc_addresses[tile], page_size_bytes);
             // noc_async_write_barrier();
             // noc_semaphore_inc(local_receiver_semaphore_noc_addr, 1);  // mcast inc is needed, this will tank latency
         }
         noc_async_write_barrier();
         // Now we have the block in the CB address, we can mcast to dests!
         // Reset semaphore
-        *(uint32_t*)receiver_semaphore_address = 0;
-    } else {
-        // Do nothing
-        // win
+        // *(uint32_t*)receiver_semaphore_address = 0;
+        cb_pop_front(accumulator_cb_id, num_pages_per_packet);
     }
 }

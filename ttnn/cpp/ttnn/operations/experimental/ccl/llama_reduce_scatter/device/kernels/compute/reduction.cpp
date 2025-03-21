@@ -38,7 +38,9 @@ void MAIN {
     binary_op_init_common(fabric_receiver_cb_id, fabric_receiver_cb_id, accumulator_cb_id);
     add_tiles_init(fabric_receiver_cb_id, fabric_receiver_cb_id, true);
 
-    cb_wait_front(fabric_receiver_cb_id, num_devices * num_pages_per_packet);
+    constexpr uint32_t total_pages = num_devices * num_pages_per_packet;
+
+    cb_wait_front(fabric_receiver_cb_id, total_pages);
 
     // Reserve output space once before processing
     cb_reserve_back(accumulator_cb_id, num_pages_per_packet);
@@ -64,7 +66,7 @@ void MAIN {
     }
     tile_regs_release();
 
-    cb_pop_front(fabric_receiver_cb_id, num_devices * num_pages_per_packet);
+    cb_pop_front(fabric_receiver_cb_id, total_pages);
     cb_push_back(accumulator_cb_id, num_pages_per_packet);
 }
 }  // namespace NAMESPACE
