@@ -69,10 +69,29 @@ jobs:
         run: |
           WHEEL_FILENAME=$(ls -1 *.whl)
           pip3 install $WHEEL_FILENAME
+      - name: Enable Performance mode
+        run: |
+          sudo cpupower frequency-set -g performance
       - name: Run demo regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model ${{ matrix.test-group.model }}
+      - uses: ./.github/actions/install-python-deps
+      - name: Save environment data
+        if: ${{ (matrix.test-group.name == 'TG Falcon7b demo tests') && !cancelled() }}
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+      - name: Upload benchmark data
+        if: ${{ (matrix.test-group.name == 'TG Falcon7b demo tests') && !cancelled() }}
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
@@ -85,4 +104,8 @@ jobs:
           path: |
             generated/test_reports/
           prefix: "test_reports_"
+      - name: Disable Performance mode
+        if: always()
+        run: |
+          sudo cpupower frequency-set -g ondemand
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
