@@ -210,8 +210,11 @@ std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor>& 
     return tt::tt_metal::operation::default_create_output_tensors(*this, input_tensors, {});
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks AllGather::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+tt::tt_metal::operation::ProgramWithCallbacks AllGather::create_program_at(
+    const ttnn::MeshCoordinate& mesh_coord,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    // TODO: determine receiver/sender here based on `mesh_coord`.
     return all_gather_multi_core_with_workers(
         input_tensors[0],
         output_tensors[0],
