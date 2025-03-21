@@ -407,6 +407,7 @@ std::vector<uint16_t> serialize_gather_config(const GatherConfig& config) {
     return output;
 }
 
+// Flatten a list of configs and ensure they are uniform lengths by padding
 std::vector<std::vector<uint16_t>> serialize_gather_configs(const std::vector<GatherConfig>& configs) {
     std::vector<std::vector<uint16_t>> serialized_configs;
     for (const auto& config : configs) {
@@ -480,25 +481,27 @@ GatherConfig reduce_flattened_transfers(const std::vector<DestinationTransferPai
     return output;
 }
 
+// Reorder config such that transfers are strongly ordered by their source offset. In order to satisfy this guarantee,
+// there may be duplicate routes added to the config.
 GatherConfig reorder_transfers_globally(const GatherConfig& input) {
     std::vector<DestinationTransferPair> all = flatten_gather_config(input);
-    // TT_FATAL(!all.empty(), "Expected to have at least one transfer during reorder");
-
-    // Sort by ascending src_id and tie-break with noc coords
-    std::sort(all.begin(), all.end(), [](const DestinationTransferPair& a, const DestinationTransferPair& b) {
-        if (a.src_id != b.src_id) {
-            return a.src_id < b.src_id;
-        }
-        if (a.noc_x != b.noc_x) {
-            return a.noc_x < b.noc_x;
-        }
-        return a.noc_y < b.noc_y;
-    });
-
+    if (!all.empty()) {
+        // Sort by ascending src_id and tie-break with noc coords
+        std::sort(all.begin(), all.end(), [](const DestinationTransferPair& a, const DestinationTransferPair& b) {
+            if (a.src_id != b.src_id) {
+                return a.src_id < b.src_id;
+            }
+            if (a.noc_x != b.noc_x) {
+                return a.noc_x < b.noc_x;
+            }
+            return a.noc_y < b.noc_y;
+        });
+    }
     return reduce_flattened_transfers(all);
 }
 
-GatherConfig split_into_blocks(const GatherConfig& input, uint32_t block_size) {
+// Split up transfers that span across blocks of some given block size
+GatherConfig quantize_transfers_along_block_boundaries(const GatherConfig& input, uint32_t block_size) {
     GatherConfig output;
     for (const auto& route : input.routes) {
         GatherRoute new_route;
@@ -527,29 +530,36 @@ GatherConfig split_into_blocks(const GatherConfig& input, uint32_t block_size) {
     return output;
 }
 
-std::pair<GatherConfig, GatherConfig> divide_blocks_between_cores(const GatherConfig& input, uint32_t block_size) {
+const uint32_t NUM_RISCV_DATA_MOVEMENT_CORES = 2;
+
+// Round-robin blocks between two cores
+std::tuple<GatherConfig, GatherConfig, uint32_t> divide_blocks_between_cores(
+    const GatherConfig& input, uint32_t block_size) {
     std::vector<DestinationTransferPair> all = flatten_gather_config(input);
     std::vector<DestinationTransferPair> first;
     std::vector<DestinationTransferPair> second;
+    int32_t number_of_blocks = 0;
     for (const auto& transfer : all) {
         const auto block_id = transfer.src_id / block_size;
-        (block_id % 2 == 0 ? first : second).push_back(transfer);
+        (block_id % NUM_RISCV_DATA_MOVEMENT_CORES == 0 ? first : second).push_back(transfer);
+        number_of_blocks = std::max(number_of_blocks, static_cast<int32_t>(block_id + 1));
     }
-    return std::make_pair(reduce_flattened_transfers(first), reduce_flattened_transfers(second));
+    tt::log_info("num blocks! = {}", number_of_blocks);
+    return std::make_tuple(reduce_flattened_transfers(first), reduce_flattened_transfers(second), number_of_blocks);
 }
 
+// Round-robin transfers between two cores
 std::pair<GatherConfig, GatherConfig> divide_transfers_between_cores(const GatherConfig& input) {
     std::vector<DestinationTransferPair> all = flatten_gather_config(input);
     std::vector<DestinationTransferPair> first;
     std::vector<DestinationTransferPair> second;
     for (int transfer_id = 0; transfer_id < all.size(); transfer_id++) {
-        (transfer_id % 2 == 0 ? first : second).push_back(all[transfer_id]);
+        (transfer_id % NUM_RISCV_DATA_MOVEMENT_CORES == 0 ? first : second).push_back(all[transfer_id]);
     }
     return std::make_pair(reduce_flattened_transfers(first), reduce_flattened_transfers(second));
 }
 
-std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>>
-generate_halo_kernel_config_tensors(
+HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     const std::vector<PixelMetadata>& tensor_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
     bool is_block_sharded,
@@ -662,12 +672,17 @@ generate_halo_kernel_config_tensors(
     const bool use_blocking = is_in_tiled;
     std::vector<GatherConfig> ordered_gather_configs0;
     std::vector<GatherConfig> ordered_gather_configs1;
+    std::vector<uint32_t> number_of_blocks_per_core;
+    int core = 0;
     for (const auto& config : gather_configs) {
         if (use_blocking) {
-            const auto ordered = reorder_transfers_globally(split_into_blocks(config, block_size));
-            const auto [first, second] = divide_blocks_between_cores(ordered, block_size);
+            const auto quantized = quantize_transfers_along_block_boundaries(config, block_size);
+            const auto ordered = reorder_transfers_globally(quantized);
+            const auto [first, second, number_of_blocks] = divide_blocks_between_cores(ordered, block_size);
+            tt::log_info("num blcoks {}", number_of_blocks);
             ordered_gather_configs0.push_back(first);
             ordered_gather_configs1.push_back(second);
+            number_of_blocks_per_core.push_back(number_of_blocks);
         } else {
             const auto [first, second] = divide_transfers_between_cores(config);
             ordered_gather_configs0.push_back(first);
@@ -678,7 +693,10 @@ generate_halo_kernel_config_tensors(
     const auto serialized_gather_configs0 = serialize_gather_configs(ordered_gather_configs0);
     const auto serialized_gather_configs1 = serialize_gather_configs(ordered_gather_configs1);
 
-    // flatten and uniformize the lengths of each config list
+    tt::log_info("gather conf = {}", serialized_gather_configs0);
+    tt::log_info("gather conf 2 = {}", serialized_gather_configs1);
+
+    // Flatten and uniformize the lengths of each config list
     auto flatten_pad_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
         // find max length
         size_t max_len = 0;
@@ -725,7 +743,8 @@ generate_halo_kernel_config_tensors(
 
     align_config(flattened_pad_config, 2);
 
-    return std::make_tuple(flattened_pad_config, serialized_gather_configs0, serialized_gather_configs1);
+    return HaloGatherKernelConfig{
+        flattened_pad_config, serialized_gather_configs0, serialized_gather_configs1, number_of_blocks_per_core};
 }
 
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(

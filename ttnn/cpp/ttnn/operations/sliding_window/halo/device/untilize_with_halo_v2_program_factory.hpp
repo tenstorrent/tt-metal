@@ -17,6 +17,7 @@ tt::tt_metal::operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const Tensor& padding_config,
     const Tensor& gather_config0,
     const Tensor& gather_config1,
+    const std::vector<uint32_t>& number_of_blocks_per_core,
     const bool remote_read,
     const bool transpose_mcast,
     Tensor& output_tensor,

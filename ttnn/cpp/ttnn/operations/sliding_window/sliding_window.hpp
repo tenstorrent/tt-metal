@@ -115,8 +115,14 @@ std::vector<PixelMetadata> generate_tensor_metadata(
 
 uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& shard_boundaries);
 
-std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>>
-generate_halo_kernel_config_tensors(
+struct HaloGatherKernelConfig {
+    std::vector<std::vector<uint16_t>> pad_config;
+    std::vector<std::vector<uint16_t>> gather_config0;
+    std::vector<std::vector<uint16_t>> gather_config1;
+    std::vector<uint32_t> number_of_blocks_per_core;
+};
+
+HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     const std::vector<PixelMetadata>& tensor_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
     bool is_block_sharded,

@@ -98,9 +98,10 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     auto kernel_config = sliding_window::generate_halo_kernel_config_tensors(
         tensor_metadata, shard_boundaries, is_block_sharded, transpose_mcast_, remote_read_, device, is_in_tiled);
 
-    const auto& pad_config = std::get<0>(kernel_config);
-    const auto& gather_config0 = std::get<1>(kernel_config);
-    const auto& gather_config1 = std::get<2>(kernel_config);
+    const auto& pad_config = kernel_config.pad_config;
+    const auto& gather_config0 = kernel_config.gather_config0;
+    const auto& gather_config1 = kernel_config.gather_config1;
+    const auto& number_of_blocks_per_core = kernel_config.number_of_blocks_per_core;
 
     const auto pad_config_tensor =
         sliding_window::construct_on_host_config_tensor(pad_config, this->config_, this->parallel_config_);
@@ -127,6 +128,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         pad_config_device_tensor,
         gather_config_device_tensor0,
         gather_config_device_tensor1,
+        number_of_blocks_per_core,
         remote_read_,
         transpose_mcast_,
         output_tensor,
