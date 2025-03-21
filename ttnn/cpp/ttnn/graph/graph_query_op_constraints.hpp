@@ -103,7 +103,8 @@ auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
 
     } catch (const std::exception& e) {
         tt::log_debug(tt::LogOp, "op_constraints - error: {}", e.what());
-        return ConstraintQueryResponse{ExecutionStatus::Error, {0, 0, 0}, std::nullopt, e.what()};
+        return ConstraintQueryResponse{
+            ExecutionStatus::Error, {0, 0, 0}, /* output_tensor_spec= */ std::nullopt, e.what()};
     }
 }
 
