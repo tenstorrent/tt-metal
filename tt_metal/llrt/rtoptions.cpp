@@ -160,6 +160,7 @@ RunTimeOptions::RunTimeOptions() {
     if (getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
         this->erisc_iram_enabled = true;
     }
+    this->fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
 }
 
 const std::string& RunTimeOptions::get_root_dir() {
