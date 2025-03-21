@@ -113,7 +113,7 @@ void SliceDeviceOperation::validate_with_output_tensors(
         TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
         TT_FATAL(
             (output_tensor_shape[-2] % TILE_HEIGHT == 0) && (this->slice_start[-2] % TILE_HEIGHT == 0),
-            "Can only slice tilized tensor with with height begin index aligned to tiles");
+            "Can only slice tilized tensor with height begin index aligned to tiles");
         TT_FATAL(
             (output_tensor_shape[-1] % TILE_WIDTH == 0) && (this->slice_start[-1] % TILE_WIDTH == 0),
             "Can only slice tilized tensor with width begin index aligned to tiles");

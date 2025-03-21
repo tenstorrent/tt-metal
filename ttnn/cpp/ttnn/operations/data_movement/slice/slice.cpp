@@ -2,18 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/common/constants.hpp"
-#include "slice.hpp"
 #include "device/slice_op.hpp"
 #include "ttnn/run_operation.hpp"
-// #include "ttnn/operations/copy.hpp"
+#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
-#include "ttnn/common/queue_id.hpp"
-#include "cpp/ttnn/operations/creation.hpp"
-#include "ttnn/common/constants.hpp"
-#include "cpp/ttnn/operations/data_movement/common/common.hpp"
+#include "slice.hpp"
 
 namespace ttnn::operations::data_movement {
 
