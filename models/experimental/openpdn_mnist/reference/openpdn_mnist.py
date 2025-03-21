@@ -1,16 +1,15 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 
-class Mnist_like_model(nn.Module):
+class OpenPDNMnist(nn.Module):
     def __init__(self, num_classes):
-        super(Mnist_like_model, self).__init__()
+        super(OpenPDNMnist, self).__init__()
         self.conv1 = nn.Conv2d(in_channels=5, out_channels=32, kernel_size=5, padding=2)
         self.pool2 = nn.MaxPool2d(2, 2)
         self.pool4 = nn.MaxPool2d(2, 2)
