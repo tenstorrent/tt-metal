@@ -1612,7 +1612,10 @@ def create_head_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tenso
     parameters.conv_args.c11["enable_act_double_buffer"] = False
     parameters.conv_args.c11["deallocate_activation"] = True
     parameters.conv_args.c11["reshard_if_not_optimal"] = True
-    parameters.conv_args.c11["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    if resolution[0] == 320:
+        parameters.conv_args.c11["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+    else:
+        parameters.conv_args.c11["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     parameters.conv_args.c11["transpose_shards"] = False
 
     parameters.conv_args.c12["act_block_h"] = None
