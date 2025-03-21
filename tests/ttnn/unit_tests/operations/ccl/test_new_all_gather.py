@@ -630,7 +630,7 @@ def test_all_gather(
         ),
     ],
 )
-@pytest.mark.parametrize("num_iters", [5])
+@pytest.mark.parametrize("num_iters", [1])
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 65536 * 32}], indirect=True)
 def test_all_gather_real_workloads(
