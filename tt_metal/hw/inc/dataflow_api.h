@@ -1484,12 +1484,52 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  * | be        | Byte-enable                                            | uint8_t  | 0x1-0xF                                                       | False    |
  */
 // clang-format on
-FORCE_INLINE
-void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_INLINE, addr, 32, NOC_UNICAST_WRITE_VC);
-
+template <bool write_to_stream_reg = false>
+FORCE_INLINE void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t noc = noc_index) {
     WAYPOINT("NWIW");
     DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
+#ifdef ARCH_BLACKHOLE
+    // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
+    // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
+    // mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on
+    // Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
+    ASSERT((addr & 0x3) == 0);
+    if constexpr (write_to_stream_reg) {
+        noc_fast_write_dw_inline<noc_mode>(
+            noc,
+            write_at_cmd_buf,
+            val,
+            addr,
+            be,  // byte-enable
+            NOC_UNICAST_WRITE_VC,
+            false,  // mcast
+            false   // posted
+        );
+        WAYPOINT("NWID");
+        return;
+    }
+
+    ASSERT(be == 0xF);
+    uint32_t src_addr = noc_get_interim_inline_value_addr(noc, addr);
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, addr, src_addr, 4);
+    noc_async_writes_flushed(noc);
+    volatile tt_l1_ptr uint32_t* interim_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr);
+    *interim_addr_ptr = val;
+    ncrisc_noc_fast_write_any_len<noc_mode>(
+        noc,
+        write_cmd_buf,
+        src_addr,
+        addr,
+        4,
+        NOC_UNICAST_WRITE_VC,
+        false,  // mcast
+        false,  // linked
+        1,      // num_dests
+        true,   // multicast_path_reserve
+        false   // posted
+    );
+    noc_async_writes_flushed(noc);
+#else
     noc_fast_write_dw_inline<noc_mode>(
         noc,
         write_at_cmd_buf,
@@ -1500,6 +1540,7 @@ void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t 
         false,  // mcast
         false   // posted
     );
+#endif
     WAYPOINT("NWID");
 }
 

@@ -18,6 +18,7 @@
 #include <kernel.hpp>
 #include "tt_metal/llrt/tt_elffile.hpp"
 #include "env_lib.hpp"
+#include "hal.hpp"
 
 namespace fs = std::filesystem;
 
@@ -50,8 +51,7 @@ static void build_failure(const string& target_name, const string& op, const str
     std::ifstream file{log_file};
     if (file.is_open()) {
         std::string log_contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-        log_error(tt::LogBuildKernels, "{}", log_contents);
-        TT_THROW("{} build failed", target_name);
+        TT_THROW("{} build failed. Log: {}", target_name, log_contents);
     } else {
         TT_THROW("Failed to open {} failure log file {}", op, log_file);
     }

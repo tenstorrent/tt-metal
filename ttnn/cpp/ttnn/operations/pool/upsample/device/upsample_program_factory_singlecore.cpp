@@ -4,13 +4,13 @@
 
 #include <math.h>
 
-#include "tt-metalium/hal.hpp"
 #include "upsample_op.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal_exp.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/math.hpp>
 
@@ -18,6 +18,7 @@
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::upsample {
 using namespace tt;
@@ -42,7 +43,7 @@ operation::ProgramWithCallbacks upsample_single_core(
     uint32_t next_cb_index = CBIndex::c_0;
     uint32_t src0_cb_index = next_cb_index++;
     uint32_t num_input_units = 2;
-    uint32_t aligned_input_unit_size = tt::round_up(input_unit_size, hal.get_alignment(HalMemType::DRAM));
+    uint32_t aligned_input_unit_size = tt::round_up(input_unit_size, hal::get_dram_alignment());
 
     tt::tt_metal::create_cb(
         src0_cb_index, program, core, aligned_input_unit_size, num_input_units, input_cb_data_format);
