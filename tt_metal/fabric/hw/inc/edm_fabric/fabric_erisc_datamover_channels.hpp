@@ -152,10 +152,10 @@ struct EdmChannelWorkerInterface {
     template <bool enable_ring_support>
     FORCE_INLINE void update_worker_copy_of_read_ptr(BufferPtr new_ptr_val) {
         if constexpr (enable_ring_support) {
-            noc_inline_dw_write_with_state<true>(
+            noc_inline_dw_write_with_state<true, false, false>(
                 new_ptr_val, this->cached_worker_semaphore_address, this->sender_sync_noc_cmd_buf);
         } else {
-            noc_inline_dw_write_with_state<false>(new_ptr_val, 0, this->sender_sync_noc_cmd_buf);
+            noc_inline_dw_write_with_state<false, false, false>(new_ptr_val, 0, this->sender_sync_noc_cmd_buf);
         }
     }
 
