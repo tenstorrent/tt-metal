@@ -4,35 +4,35 @@
 
 #pragma once
 
-#include <cstddef>
 #include <vector>
 
 #include "mesh_coord.hpp"
 
 namespace tt::tt_metal::distributed {
 
-using DeviceIds = std::vector<int>;
-using MeshDeviceID = int;
 using chip_id_t = int;
 
-/**
- * @brief Defines the organization of physical devices in a user-defined MeshDevice.
- *
- * The mesh type imposes properties on the physical connectivity of devices:
- *
- * - RowMajor: Devices are arranged in a 2D grid and accessed in row-major order.
- *             This is the default configuration for most multi-device setups.
- *
- * - Ring: Devices are arranged in a circular topology where each device is connected
- *         to its neighbors, forming a ring structure.
- *
- * - Line: Devices are arranged linearly in a single dimension.
- */
+// Specifies the configuration of a MeshDevice.
+class MeshDeviceConfig {
+public:
+    // Constructs a MeshDeviceConfig.
+    // `offset` is the optional parameter that specifies the offset of the mesh device within the connected system mesh.
+    // `physical_device_ids` is the optional parameter that allows to override physical device IDs used to create the
+    // mesh device.
+    MeshDeviceConfig(
+        const MeshShape& mesh_shape,
+        const std::optional<MeshCoordinate>& offset = std::nullopt,
+        const std::vector<chip_id_t>& physical_device_ids = {}) :
+        mesh_shape_(mesh_shape), offset_(offset), physical_device_ids_(physical_device_ids) {}
 
-struct MeshDeviceConfig {
-    MeshShape mesh_shape{0, 0};
-    std::optional<MeshCoordinate> offset;
-    std::vector<chip_id_t> physical_device_ids{};
+    const MeshShape& mesh_shape() const { return mesh_shape_; }
+    const std::optional<MeshCoordinate>& offset() const { return offset_; }
+    const std::vector<chip_id_t>& physical_device_ids() const { return physical_device_ids_; }
+
+private:
+    MeshShape mesh_shape_;
+    std::optional<MeshCoordinate> offset_;
+    std::vector<chip_id_t> physical_device_ids_;
 };
 
 }  // namespace tt::tt_metal::distributed

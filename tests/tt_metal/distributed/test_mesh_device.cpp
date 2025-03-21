@@ -21,7 +21,7 @@ using ::tt::tt_metal::distributed::MeshContainer;
 TEST(MeshDeviceInitTest, Init1x1Mesh) {
     auto& sys = SystemMesh::instance();
 
-    auto config = tt::tt_metal::distributed::MeshDeviceConfig{.mesh_shape = MeshShape(1, 1)};
+    MeshDeviceConfig config(MeshShape(1, 1));
 
     EXPECT_NO_THROW({
         auto mesh = tt::tt_metal::distributed::MeshDevice::create(

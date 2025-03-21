@@ -19,6 +19,7 @@ TEST_F(ControlPlaneFixture, TestTGMeshGraphInit) {
 }
 
 TEST_F(ControlPlaneFixture, TestTGControlPlaneInit) {
+    tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::FABRIC_2D);
     const std::filesystem::path tg_mesh_graph_desc_path =
         std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
@@ -39,6 +40,7 @@ TEST_F(ControlPlaneFixture, TestTGMeshAPIs) {
 }
 
 TEST_F(ControlPlaneFixture, TestTGFabricRoutes) {
+    tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::FABRIC_2D);
     const std::filesystem::path tg_mesh_graph_desc_path =
         std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
@@ -58,6 +60,7 @@ TEST_F(ControlPlaneFixture, TestT3kMeshGraphInit) {
 }
 
 TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
+    tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::FABRIC_2D);
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml";
@@ -66,6 +69,7 @@ TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
 }
 
 TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
+    tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::FABRIC_2D);
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml";
@@ -82,12 +86,22 @@ TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
 }
 
 TEST_F(ControlPlaneFixture, TestQuantaGalaxyControlPlaneInit) {
+    tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::FABRIC_2D);
     const std::filesystem::path quanta_galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/quanta_galaxy_mesh_graph_descriptor.yaml";
     auto control_plane = std::make_unique<ControlPlane>(quanta_galaxy_mesh_graph_desc_path.string());
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 }
+
+TEST_F(ControlPlaneFixture, TestQuantaGalaxyMeshAPIs) {
+    const auto control_plane = tt::Cluster::instance().get_control_plane();
+    auto user_meshes = control_plane->get_user_physical_mesh_ids();
+    EXPECT_EQ(user_meshes.size(), 1);
+    EXPECT_EQ(user_meshes[0], 0);
+    EXPECT_EQ(control_plane->get_physical_mesh_shape(0), tt::tt_metal::distributed::MeshShape(8, 4));
+}
+
 
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric
