@@ -67,23 +67,12 @@ void kernel_main() {
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
     constexpr uint32_t MAX_ELE_PER_REDUCTION = 512;  // TILE_WIDTH * 8 * numbytes
 
-    // <<<<<<<
-    // HEAD:ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/reader_pool_2d_multi_core_sharded_with_halo_large_kernel_v2.cpp
-    //     constexpr uint32_t in_cb_id = (reader_id == 1) ? tt::CBIndex::c_1 : tt::CBIndex::c_0;
-    //     constexpr uint32_t in_shard_cb_id = tt::CBIndex::c_2;  // local input shard
-    //     constexpr uint32_t in_reader_indices_cb_id = tt::CBIndex::c_3;
-    //     constexpr uint32_t in_scalar_cb_id = tt::CBIndex::c_4;
-    // constexpr uint32_t in_one_cb_id = tt::CBIndex::c_5;
-    //     constexpr uint32_t interm_reduction_cb_id = tt::CBIndex::c_25;
-    // =======
     constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(19) : get_compile_time_arg_val(18);
     constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(20);
     constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(21);
     constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(22);
     constexpr uint32_t interm_reduction_cb_id = get_compile_time_arg_val(23);
     constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(24);
-    // >>>>>>>
-    // origin/main:ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/reader_max_pool_2d_multi_core_sharded_with_halo_large_kernel_v2.cpp
 
     // minus infinity for bfp16
     uint16_t minus_inf = 63487;
