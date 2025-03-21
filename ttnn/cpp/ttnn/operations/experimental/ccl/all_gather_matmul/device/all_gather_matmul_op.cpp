@@ -188,14 +188,14 @@ std::vector<ttnn::Tensor> all_gather_matmul(
 
             /* AllGather setup */
             ttnn::AllGather all_gather_struct{
-                .dim = dim,
-                .num_links = num_links,
-                .ring_size = devices.size(),
-                .user_defined_num_workers = user_defined_num_workers,
-                .user_defined_num_buffers_per_channel = user_defined_num_buffers_per_channel,
-                .output_mem_config = memory_config_ag.value_or(input_tensor.memory_config()),
+                dim,
+                num_links,
+                devices.size(),
+                user_defined_num_workers,
+                user_defined_num_buffers_per_channel,
+                memory_config_ag.value_or(input_tensor.memory_config()),
                 ttnn::ccl::Topology::Ring,
-                .cluster_axis = std::nullopt};
+                /*cluster_axis=*/std::nullopt};
 
             // Create the all gather output tensor used as input (activation) to the matmul
             ttnn::Tensor all_gather_out_tensor = all_gather_struct.create_output_tensors({input_tensor})[0];

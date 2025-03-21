@@ -193,9 +193,9 @@ static Tensor reduce_scatter_all_gather(
             .ring_size = num_devices,
             .output_mem_config = output_mem_config,
             .topology = topology,
-            .cluster_axis = std::nullopt,
             .user_defined_num_workers = user_defined_num_workers,
-            .user_defined_num_buffers_per_channel = user_defined_num_buffers_per_channel},
+            .user_defined_num_buffers_per_channel = user_defined_num_buffers_per_channel,
+            .cluster_axis = std::nullopt},
         {input_tensor});
 
     const auto& gathered_tensor = tt::tt_metal::operation::run(

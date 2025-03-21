@@ -188,7 +188,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGather::create_program_at(
             mesh_view.is_mesh_2d(),
             "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
         const auto view_index = (cluster_axis == 0) ? mesh_coord[1] : mesh_coord[0];
-        const auto device_index = (cluster_axis == 0) ? mesh_coord[0] : mesh_coord[1];
+        device_index = (cluster_axis == 0) ? mesh_coord[0] : mesh_coord[1];
 
         auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {
             auto new_row = mesh_coord[0];
@@ -203,8 +203,8 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGather::create_program_at(
 
         bool is_last_chip_in_clockwise_direction = device_index == (num_links - 1);
         bool is_last_chip_in_counter_clockwise_direction = device_index == 0;
-        auto receiver_device_id = is_last_chip_in_clockwise_direction ? std::nullopt : get_chip_id(device_index + 1);
-        auto sender_device_id =
+        receiver_device_id = is_last_chip_in_clockwise_direction ? std::nullopt : get_chip_id(device_index + 1);
+        sender_device_id =
             is_last_chip_in_counter_clockwise_direction ? std::nullopt : get_chip_id(device_index + num_links - 1);
     } else {
         std::tie(device_index, sender_device_id, receiver_device_id) = ccl::get_device_index_and_sender_receiver_ids(

@@ -77,7 +77,7 @@ operation::ProgramWithCallbacks ReduceScatterAsync::create_program_at(
         devices =
             (cluster_axis == 0) ? mesh_view.get_devices_on_column(coord[1]) : mesh_view.get_devices_on_row(coord[0]);
     } else {
-        auto devices = input_tensors[0].mesh_device()->get_devices();
+        devices = input_tensors[0].mesh_device()->get_devices();
     }
     uint32_t num_devices = devices.size();
 
