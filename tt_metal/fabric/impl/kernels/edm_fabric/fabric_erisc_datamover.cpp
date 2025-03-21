@@ -611,8 +611,6 @@ FORCE_INLINE void receiver_send_received_ack(
 // MUST CHECK !is_eth_txq_busy() before calling
 template <size_t NUM_SENDER_CHANNELS, uint8_t SENDER_NUM_BUFFERS, uint8_t RECEIVER_NUM_BUFFERS>
 FORCE_INLINE void receiver_send_completion_ack(
-    std::array<tt::tt_fabric::ChannelBufferPointer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>&
-        remote_eth_sender_completion_ptrs,
     std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>& remote_sender_channels,
     tt::tt_fabric::ChannelBufferPointer<RECEIVER_NUM_BUFFERS>& receiver_channel_ptr,
     tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& local_receiver_buffer_channel) {
@@ -623,8 +621,6 @@ FORCE_INLINE void receiver_send_completion_ack(
     const auto src_id = pkt_header->src_ch_id;
     remote_update_ptr_val(to_sender_packets_completed_streams[src_id], 1);
     receiver_channel_ptr.increment();
-    auto& remote_sender_completion_ptr = remote_eth_sender_completion_ptrs[src_id];
-    remote_sender_completion_ptr.increment();
 }
 
 template <uint8_t SENDER_NUM_BUFFERS>
@@ -831,7 +827,6 @@ void run_receiver_channel_step(
     std::array<tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>& remote_sender_channels,
     tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>& downstream_edm_interface,
     volatile tt::tt_fabric::EdmFabricReceiverChannelCounters* receiver_channel_counters_ptr,
-    std::array<tt::tt_fabric::ChannelBufferPointer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS>& remote_eth_sender_wrptrs,
     ReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& receiver_channel_pointers,
     PacketHeaderRecorder& packet_header_recorder,
     WriteTridTracker& receiver_channel_trid_tracker) {
@@ -844,8 +839,7 @@ void run_receiver_channel_step(
         if (pkts_received && can_send_over_eth) {
             // currently only support processing one packet at a time, so we only decrement by 1
             increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
-            receiver_send_received_ack(
-                remote_eth_sender_wrptrs, remote_sender_channels, ack_ptr, local_receiver_channel);
+            receiver_send_received_ack(remote_sender_channels, ack_ptr, local_receiver_channel);
             ack_ptr.increment();
         }
     } else {
@@ -890,8 +884,7 @@ void run_receiver_channel_step(
             bool can_send_without_blocking = !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
             if (can_send_without_blocking) {
                 // completion ptr incremented in callee
-                receiver_send_completion_ack(
-                    remote_eth_sender_wrptrs, remote_sender_channels, completion_ptr, local_receiver_channel);
+                receiver_send_completion_ack(remote_sender_channels, completion_ptr, local_receiver_channel);
             }
         }
     } else {
@@ -907,8 +900,7 @@ void run_receiver_channel_step(
             auto& completion_ptr = receiver_channel_pointers.completion_ptr;
             wr_flush_ptr.increment();
             receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
-            receiver_send_completion_ack(
-                remote_eth_sender_wrptrs, remote_sender_channels, completion_ptr, local_receiver_channel);
+            receiver_send_completion_ack(remote_sender_channels, completion_ptr, local_receiver_channel);
         }
     }
 };
@@ -1012,7 +1004,6 @@ void run_fabric_edm_main_loop(
     //       (probably better) pack most of these into single words (e.g. we could hold a read, write, and ackptr in a
     //       single word) this way - especially if power of 2 wraps, we can handle both channels literally at once with
     //       math ops on single individual words (or half words)
-    std::array<tt::tt_fabric::ChannelBufferPointer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS> remote_eth_sender_wrptrs;
     std::array<OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS>
         outbound_to_receiver_channel_pointers;
     std::array<ReceiverChannelPointers<RECEIVER_NUM_BUFFERS>, NUM_RECEIVER_CHANNELS> receiver_channel_pointers;
@@ -1073,7 +1064,6 @@ void run_fabric_edm_main_loop(
                     remote_sender_channels,
                     downstream_edm_noc_interfaces[0],
                     receiver_channel_counters_ptrs[0],
-                    remote_eth_sender_wrptrs,
                     receiver_channel_pointers[0],
                     receiver_channel_packet_recorders[0],
                     receiver_channel_0_trid_tracker);
@@ -1090,7 +1080,6 @@ void run_fabric_edm_main_loop(
                     remote_sender_channels,
                     downstream_edm_noc_interfaces[1],
                     receiver_channel_counters_ptrs[1],
-                    remote_eth_sender_wrptrs,
                     receiver_channel_pointers[1],
                     receiver_channel_packet_recorders[1],
                     receiver_channel_1_trid_tracker);
