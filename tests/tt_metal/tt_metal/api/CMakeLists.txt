@@ -18,6 +18,7 @@ set(UNIT_TESTS_API_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_banked.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_bit_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_buffer_region.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_compile_time_args.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_direct.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_dram_to_l1_multicast.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_dram.cpp

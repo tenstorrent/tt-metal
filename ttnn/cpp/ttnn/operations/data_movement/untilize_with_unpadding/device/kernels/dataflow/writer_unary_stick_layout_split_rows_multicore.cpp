@@ -22,15 +22,11 @@ void kernel_main() {
 
     const uint32_t num_tiles_per_row = padded_X_size >> (FLOAT32_DTYPE ? 7 : 6);
 
-#define stick_size_is_power_of_two get_compile_time_arg_val(1) == 1
-
-#if (stick_size_is_power_of_two)
+    constexpr bool stick_size_is_power_of_two = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(2);
-    const InterleavedPow2AddrGen<dst_is_dram> s = {
-        .bank_base_address = dst_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
-#else
-    const InterleavedAddrGen<dst_is_dram> s = {.bank_base_address = dst_addr, .page_size = unpadded_X_size};
-#endif
+
+    const auto s = get_interleaved_addr_gen<dst_is_dram, stick_size_is_power_of_two>(
+        dst_addr, unpadded_X_size, log_base_2_of_page_size);
 
     auto pop_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {

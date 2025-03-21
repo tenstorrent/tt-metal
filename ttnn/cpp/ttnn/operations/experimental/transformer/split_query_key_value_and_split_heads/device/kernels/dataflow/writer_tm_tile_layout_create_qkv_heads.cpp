@@ -17,8 +17,8 @@ void kernel_main() {
     // COMPILE TIME ARGS
     // interleaved accessor args
     constexpr uint32_t out_is_dram = get_compile_time_arg_val(0);
-// WRITER COMPILE TIME ARGS
-#define block_size_is_one get_compile_time_arg_val(1) == 1
+    // WRITER COMPILE TIME ARGS
+    constexpr bool block_size_is_one = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t block_size = get_compile_time_arg_val(2);
     constexpr uint32_t out_num_blocks_per_tensor = get_compile_time_arg_val(3);
     constexpr uint32_t out_num_c_per_block = get_compile_time_arg_val(4);
@@ -58,17 +58,19 @@ void kernel_main() {
     // Create q head
     out_tensor_current_tile_id_along_c = out_tensor_tile_id;
     for (uint32_t block_idx = 0; block_idx < out_num_blocks_per_tensor; block_idx++) {
-#if (!block_size_is_one)
-        cb_wait_front(cb_id_out1, out_num_tiles_read_out1);
-        out_num_tiles_read_out1 += block_size;
-#endif
+        if constexpr (!block_size_is_one) {
+            cb_wait_front(cb_id_out1, out_num_tiles_read_out1);
+            out_num_tiles_read_out1 += block_size;
+        }
+
         for (uint32_t c_dim_idx = 0; c_dim_idx < out_num_c_per_block; c_dim_idx++) {
             out_tensor_current_tile_id = out_tensor_current_tile_id_along_c;
             for (uint32_t w_dim = 0; w_dim < out_w_tiles; w_dim++) {
-#if (block_size_is_one)
-                cb_wait_front(cb_id_out1, out_num_tiles_read_out1);
-                out_num_tiles_read_out1++;
-#endif
+                if constexpr (block_size_is_one) {
+                    cb_wait_front(cb_id_out1, out_num_tiles_read_out1);
+                    out_num_tiles_read_out1++;
+                }
+
                 noc_async_write_tile(out_tensor_current_tile_id, sq, l1_read_addr_out1);
                 l1_read_addr_out1 += single_tile_size_bytes;
                 out_tensor_current_tile_id++;
@@ -80,16 +82,18 @@ void kernel_main() {
     // Create k head
     out_tensor_current_tile_id = out_tensor_tile_id_with_transpose;
     for (uint32_t block_idx = 0; block_idx < out_num_blocks_per_tensor; block_idx++) {
-#if (!block_size_is_one)
-        cb_wait_front(cb_id_out0, out_num_tiles_read_out0);
-        out_num_tiles_read_out0 += block_size;
-#endif
+        if constexpr (!block_size_is_one) {
+            cb_wait_front(cb_id_out0, out_num_tiles_read_out0);
+            out_num_tiles_read_out0 += block_size;
+        }
+
         for (uint32_t c_dim_idx = 0; c_dim_idx < out_num_c_per_block; c_dim_idx++) {
             for (uint32_t w_dim = 0; w_dim < out_w_tiles; w_dim++) {
-#if (block_size_is_one)
-                cb_wait_front(cb_id_out0, out_num_tiles_read_out0);
-                out_num_tiles_read_out0++;
-#endif
+                if constexpr (block_size_is_one) {
+                    cb_wait_front(cb_id_out0, out_num_tiles_read_out0);
+                    out_num_tiles_read_out0++;
+                }
+
                 noc_async_write_tile(out_tensor_current_tile_id, sk, l1_read_addr_out0);
                 l1_read_addr_out0 += single_tile_size_bytes;
                 out_tensor_current_tile_id += out_h_tiles;
@@ -100,17 +104,19 @@ void kernel_main() {
     // Create v head
     out_tensor_current_tile_id_along_c = out_tensor_tile_id;
     for (uint32_t block_idx = 0; block_idx < out_num_blocks_per_tensor; block_idx++) {
-#if (!block_size_is_one)
-        cb_wait_front(cb_id_out1, out_num_tiles_read_out1);
-        out_num_tiles_read_out1 += block_size;
-#endif
+        if constexpr (!block_size_is_one) {
+            cb_wait_front(cb_id_out1, out_num_tiles_read_out1);
+            out_num_tiles_read_out1 += block_size;
+        }
+
         for (uint32_t c_dim_idx = 0; c_dim_idx < out_num_c_per_block; c_dim_idx++) {
             out_tensor_current_tile_id = out_tensor_current_tile_id_along_c;
             for (uint32_t w_dim = 0; w_dim < out_w_tiles; w_dim++) {
-#if (block_size_is_one)
-                cb_wait_front(cb_id_out1, out_num_tiles_read_out1);
-                out_num_tiles_read_out1++;
-#endif
+                if constexpr (block_size_is_one) {
+                    cb_wait_front(cb_id_out1, out_num_tiles_read_out1);
+                    out_num_tiles_read_out1++;
+                }
+
                 noc_async_write_tile(out_tensor_current_tile_id, sv, l1_read_addr_out1);
                 l1_read_addr_out1 += single_tile_size_bytes;
                 out_tensor_current_tile_id++;
