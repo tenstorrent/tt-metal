@@ -15,6 +15,7 @@
 #include "debug/assert.h"
 #include "debug/dprint.h"
 #include <cstdint>
+#include <array>
 
 namespace tt::tt_fabric {
 
@@ -127,6 +128,10 @@ struct WorkerToFabricEdmSenderImpl {
         ASSERT(buffer_size_bytes > 0);
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
             ASSERT(num_buffers_per_channel == EDM_NUM_BUFFER_SLOTS);
+            for (size_t i = 0; i < EDM_NUM_BUFFER_SLOTS; ++i) {
+                edm_buffer_slot_addrs[i] =
+                    edm_buffer_base_addr + (i * (buffer_size_bytes + sizeof(eth_channel_sync_t)));
+            }
         }
     }
 
@@ -243,8 +248,11 @@ struct WorkerToFabricEdmSenderImpl {
         noc_inline_dw_write(edm_connection_handshake_noc_addr, open_connection_value);
         noc_async_read_barrier();
 
-        this->edm_buffer_addr = this->edm_buffer_base_addr + (this->get_buffer_slot_index() *
-                                                              (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
+        if constexpr (!USER_DEFINED_NUM_BUFFER_SLOTS) {
+            this->edm_buffer_addr =
+                this->edm_buffer_base_addr +
+                (this->get_buffer_slot_index() * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
+        }
         ASSERT(*this->buffer_slot_wrptr_ptr < 20);
     }
 
@@ -267,6 +275,8 @@ struct WorkerToFabricEdmSenderImpl {
     }
 
     uint32_t edm_buffer_addr;
+
+    std::array<uint32_t, EDM_NUM_BUFFER_SLOTS> edm_buffer_slot_addrs;
 
     // the L1 address of buffer_slot wrptr on the EDM we are writing to
     // Writing to this address will tell the EDM that the wrptr is changed and
@@ -321,13 +331,19 @@ private:
         } else {
             uint8_t wrptr = *this->buffer_slot_wrptr_ptr;
             *this->buffer_slot_wrptr_ptr = !(wrptr == ((this->num_buffers_per_channel * 2) - 1)) ? wrptr + 1 : 0;
+            this->edm_buffer_addr =
+                this->edm_buffer_base_addr +
+                (this->get_buffer_slot_index() * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
         }
-        this->edm_buffer_addr = this->edm_buffer_base_addr + (this->get_buffer_slot_index() *
-                                                              (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
     }
 
     FORCE_INLINE uint64_t compute_dest_buffer_slot_noc_addr() const {
-        return get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_addr);
+        if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
+            return get_noc_addr(
+                this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_addrs[this->get_buffer_slot_index()]);
+        } else {
+            return get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_addr);
+        }
     }
 
     FORCE_INLINE void post_send_payload_increment_pointers(uint8_t noc = noc_index) {
@@ -366,8 +382,18 @@ private:
         ASSERT(size_bytes <= this->buffer_size_bytes);
         ASSERT(tt::tt_fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
-        send_chunk_from_address_with_trid<blocking_mode>(
-            source_address, 1, size_bytes, this->edm_buffer_addr, trid, this->edm_noc_cmd_buf);
+        if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
+            send_chunk_from_address_with_trid<blocking_mode>(
+                source_address,
+                1,
+                size_bytes,
+                this->edm_buffer_slot_addrs[this->get_buffer_slot_index()],
+                trid,
+                this->edm_noc_cmd_buf);
+        } else {
+            send_chunk_from_address_with_trid<blocking_mode>(
+                source_address, 1, size_bytes, this->edm_buffer_addr, trid, this->edm_noc_cmd_buf);
+        }
         post_send_payload_increment_pointers(edm_to_local_chip_noc);
     }
 
