@@ -35,7 +35,9 @@ def gen_tensor(dim, shard_height, shard_width, num_devices, num_cores, scheme="r
     return torch.cat(torch_input_tensors, dim=dim)
 
 
-def run_reduce_scatter_test(mesh_device, dim, shard_height, shard_width, num_devices, num_cores, num_iters, trace_mode):
+def run_reduce_scatter_test(
+    mesh_device, dim, shard_height, shard_width, num_devices, num_cores, num_iters, trace_mode, scheme="random"
+):
     mesh_device.enable_async(True)
     mesh_device.enable_program_cache()
 
@@ -51,7 +53,7 @@ def run_reduce_scatter_test(mesh_device, dim, shard_height, shard_width, num_dev
     output_tensor_goldens_list = []
     tt_input_tensors_list = []
     for _ in range(num_iters):
-        input = gen_tensor(dim, shard_height, shard_width, num_devices, num_cores, scheme="random")
+        input = gen_tensor(dim, shard_height, shard_width, num_devices, num_cores, scheme=scheme)
 
         intermediate_outputs = torch.chunk(input, chunks=num_devices, dim=3)
         output = torch.zeros(intermediate_outputs[0].shape)
@@ -186,5 +188,13 @@ def test_fabric_reduce_scatter_t3k_no_trace(t3k_mesh_device):
     trace_mode = False
 
     run_reduce_scatter_test(
-        t3k_mesh_device, dim, shard_height, shard_width, num_devices, num_cores, num_iters, trace_mode
+        t3k_mesh_device,
+        dim,
+        shard_height,
+        shard_width,
+        num_devices,
+        num_cores,
+        num_iters,
+        trace_mode,
+        scheme="sequential",
     )

@@ -172,8 +172,8 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     // All of them should have the same address, noticed that the address value is uint64_t though, which we can't pass
     // into NOC
     TT_FATAL(cross_device_semaphore.has_value(), "Cross device semaphore is not present");
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    auto input_tensor_buffer = input_tensor.buffer();
+    auto output_tensor_buffer = output_tensor.buffer();
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
     uint32_t input_page_size = tile_size(
@@ -278,7 +278,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         tt::tt_metal::CircularBufferConfig(
             tiles_per_core_width * input_page_size, {{input_tensor_cb_id, cb_data_format}})
             .set_page_size(input_tensor_cb_id, input_page_size)
-            .set_globally_allocated_address(*src_buffer);
+            .set_globally_allocated_address(*input_tensor_buffer);
 
     // if (operation_attributes.ring_index == 3) {
     //     std::cout << "CB src config total size: " << tiles_per_core_width * input_page_size
@@ -290,7 +290,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         tt::tt_metal::CircularBufferConfig(
             tiles_per_core_width_output * input_page_size, {{output_tensor_cb_id, cb_data_format}})
             .set_page_size(output_tensor_cb_id, input_page_size)
-            .set_globally_allocated_address(*dst_buffer);
+            .set_globally_allocated_address(*output_tensor_buffer);
 
     // if (operation_attributes.ring_index == 3) {
     //     std::cout << "CB dst config total size: " << tiles_per_core_width_output * input_page_size
@@ -600,16 +600,16 @@ void LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::override_runtime_
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
 
-    auto src_buffer = input_tensor.buffer();
-    auto dst_buffer = output_tensor.buffer();
+    auto input_tensor_buffer = input_tensor.buffer();
+    auto output_tensor_buffer = output_tensor.buffer();
     auto& all_cores_grid = cached_program.shared_variables.core_range;
     auto& sender_cores = cached_program.shared_variables.sender_core_range;
 
     auto cores = corerange_to_cores(all_cores_grid, std::nullopt);
     auto sender_cores_list = corerange_to_cores(sender_cores, std::nullopt);
 
-    UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_handles[0], *src_buffer);
-    UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_handles[1], *dst_buffer);
+    UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_handles[0], *input_tensor_buffer);
+    UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.cb_handles[1], *output_tensor_buffer);
 
     for (const auto& core : cores) {
         auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
