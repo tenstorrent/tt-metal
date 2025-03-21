@@ -26,7 +26,9 @@ void ScaledDotProductAttention::validate(
         TT_FATAL(input_tensor.buffer() != nullptr, "Operands to SDPA need to be allocated in buffers on device");
         TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to SDPA must be tilized");
         TT_FATAL(
-            input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B, "Error");
+            input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B ||
+                input_tensor.get_dtype() == DataType::BFLOAT4_B,
+            "Error");
         TT_FATAL(
             input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Operands to SDPA need to be in DRAM");
