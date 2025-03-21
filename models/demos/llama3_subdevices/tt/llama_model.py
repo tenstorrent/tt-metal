@@ -123,12 +123,22 @@ class TtTransformer(LightweightModule):
             self.tt_tensors = self.prefetcher_setup.get_input_tensors()
 
     def setup_prefill(self):
-        self.prefetcher_setup = TtLlamaPrefetcherSetup(
-            self.mesh_device, n_tensors=0, n_layers=self.n_layers, mode="prefill"
-        )
-        self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
+        # self.prefetcher_setup = TtLlamaPrefetcherSetup(
+        #     self.mesh_device, n_tensors=0, n_layers=self.n_layers, mode="prefill"
+        # )
+        # self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
-        self.tt_ccl = TT_CCL(self.mesh_device, crs, self.prefetcher_setup.worker_sub_device_id, mode="prefill")
+        # self.tt_ccl = TT_CCL(self.mesh_device, crs, self.prefetcher_setup.worker_sub_device_id, mode="prefill")
+        self.prefetcher_setup = None
+        self.tt_ccl = TT_CCL(
+            self.mesh_device,
+            crs,
+            None,
+            mode="prefill",
+            enable_persistent_fabric=False,
+            create_persistent_fabric=False,
+            teardown_persistent_fabric=False,
+        )
 
     def setup_decode(self):
         self.prefetcher_setup = TtLlamaPrefetcherSetup(
@@ -392,9 +402,10 @@ class TtTransformer(LightweightModule):
             if self.is_prefill_setup:
                 self.tt_ccl.close()
                 del self.tt_ccl
-                self.mesh_device.clear_loaded_sub_device_manager()
-                self.mesh_device.remove_sub_device_manager(self.prefetcher_setup.mesh_sub_device_manager_id)
-                del self.prefetcher_setup
+                if self.prefetcher_setup is not None:
+                    self.mesh_device.clear_loaded_sub_device_manager()
+                    self.mesh_device.remove_sub_device_manager(self.prefetcher_setup.mesh_sub_device_manager_id)
+                    del self.prefetcher_setup
                 ttnn.synchronize_device(self.mesh_device)
                 self.is_prefill_setup = False
                 self.mesh_device.disable_and_clear_program_cache()
@@ -474,7 +485,7 @@ class TtTransformer(LightweightModule):
 
         x = x_norm
 
-        return self.lm_head(x, self.prefetcher_setup.worker_sub_device_id, mode=mode)
+        return self.lm_head(x, None if mode == "prefill" else self.prefetcher_setup.worker_sub_device_id, mode=mode)
 
     def __del__(self):
         self.tt_ccl.close()
