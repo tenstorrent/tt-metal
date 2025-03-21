@@ -300,6 +300,64 @@ operation::ProgramWithCallbacks ScaledDotProductAttention::create_program(
         this->program_config);
 }
 
+operation::OpPerformanceModel ScaledDotProductAttention::create_op_performance_model(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    auto& input_tensor_q = input_tensors.at(0);
+    auto& input_tensor_k = input_tensors.at(1);
+    auto& input_tensor_v = input_tensors.at(2);
+    auto& output_tensor = output_tensors.at(0);
+
+    if (output_tensor.storage_type() != StorageType::DEVICE) {
+        tt::log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
+    }
+
+    // Get main dimensions for Q*K and softmax(QK^T/sqrt) * V matmuls
+    auto q_shape = input_tensor_q.get_logical_shape();
+    auto k_shape = input_tensor_k.get_logical_shape();
+    auto v_shape = input_tensor_v.get_logical_shape();
+    TT_ASSERT(q_shape.size() == 4, "ScaledDotProductAttention perf model: input tensor Q rank != 4");
+    TT_ASSERT(k_shape.size() == 4, "ScaledDotProductAttention perf model: input tensor K rank != 4");
+    TT_ASSERT(v_shape.size() == 4, "ScaledDotProductAttention perf model: input tensor V rank != 4");
+
+    uint32_t batch_size_q = get_batch_size(q_shape);
+    uint32_t batch_size_k = get_batch_size(k_shape);
+    const auto S = q_shape[2];
+    const auto DH = q_shape[3];
+    const auto DV = v_shape[2];
+
+    TT_ASSERT(batch_size_q != batch_size_k, "ScaledDotProductAttention perf model: Q and K have unequal batch size!");
+    TT_ASSERT(q_shape[-2] != k_shape[-2], "ScaledDotProductAttention perf model: Q and K have unequal seq len!");
+    TT_ASSERT(q_shape[-3] != k_shape[-3], "ScaledDotProductAttention perf model: Q and K have unequal hidden dim!");
+
+    // Compute number of FLOPS for the two main matmuls
+    constexpr int64_t FLOPS_PER_FMA = 2;  // each FMA is 2 FLOPS
+    int64_t num_mul_adds = 0;
+    // Q * K matmul for raw attention scores
+    num_mul_adds += FLOPS_PER_FMA * DH * S * S * batch_size_q;
+    // attention scores * V matmul
+    num_mul_adds += FLOPS_PER_FMA * S * S * DV * batch_size_q;
+
+    // calculate arch specific parameters
+    MathFidelity math_fidelity = ttnn::get_math_fidelity(compute_kernel_config);
+    auto arch = output_tensor.storage_type() == StorageType::DEVICE
+                    ? output_tensor.device()->arch()
+                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    const int num_cores = (arch == tt::ARCH::WORMHOLE_B0) ? 8 * 8 : 9 * 12;
+    const int tensix_mul_adds_per_cycle_lofi = (arch == tt::ARCH::WORMHOLE_B0) ? 4096 : 2048;
+
+    // ideal total cycles is ESTIMATED_FLOPS / IDEAL_THROUGHPUT
+    int ideal_dev_clock_cycles = std::ceil(
+        ((float)num_mul_adds / (float)(num_cores * tensix_mul_adds_per_cycle_lofi)) *
+        (float)operation::OpPerformanceModel::fidelity_multiplier(math_fidelity));
+
+    // TODO: somehow account for overhead of fused masking and softmax?
+
+    operation::OpPerformanceModel result(input_tensors, output_tensors, ideal_dev_clock_cycles);
+    return result;
+}
+
 operation::Hash ScaledDotProductAttention::compute_program_hash(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
