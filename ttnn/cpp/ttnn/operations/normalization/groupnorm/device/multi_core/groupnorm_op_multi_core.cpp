@@ -36,7 +36,6 @@ inline bool cbs_fit_in_DRAM(
     uint32_t in6_CB_size,
     uint32_t in_mask_CB_size,
     uint32_t repack_CB_size,
-    uint32_t im_out_CB_size,
     uint32_t x_CB_size,
     uint32_t xmm_CB_size,
     uint32_t ex_partial_CB_size,
@@ -56,7 +55,6 @@ inline bool cbs_fit_in_DRAM(
     sum += in6_CB_size;
     sum += in_mask_CB_size;
     sum += repack_CB_size;
-    sum += im_out_CB_size;
     sum += x_CB_size;
     sum += xmm_CB_size;
     sum += ex_partial_CB_size;
@@ -381,7 +379,6 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     uint32_t repack_CB_size = per_core_Nt * in_single_tile_size * 2;  // double buffer
     // itermediate buffers
     uint32_t interm_block_tiles = block_ht * block_wt;
-    uint32_t im_out_CB_size = out_single_tile_size * interm_block_tiles;
     uint32_t x_CB_size = interm_block_tiles * single_tile_size;
     uint32_t xmm_CB_size = interm_block_tiles * single_tile_size;
     uint32_t ex_partial_CB_size = single_tile_size;   // partial Ex
@@ -1320,8 +1317,12 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
+    TT_ASSERT(block_ht_group_1 % num_out_blocks == 0 && "block_ht_group_1 % num_out_blocks must be 0");
+    if (block_ht_group_2 > 0) {
+        TT_ASSERT(block_ht_group_2 % num_out_blocks == 0 && "block_ht_group_2 % num_out_blocks must be 0");
+    }
     // block size for in0 (tensor a)
-    uint32_t in0_block_tiles_group_1 = block_ht_group_1 * block_wt;
+    uint32_t in0_block_tiles_group_1 = block_ht_group_1 / num_out_blocks * block_wt;
     uint32_t in0_block_tiles_group_2 = 0;
     uint32_t in0_CB_size_group_1 = in0_block_tiles_group_1 * in_single_tile_size;
     uint32_t in0_CB_size_group_2 = 0;
@@ -1342,10 +1343,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     // repack cb
     uint32_t repack_CB_size = per_core_Nt * in_single_tile_size * 2;  // double buffer
     // itermediate buffers
-    uint32_t interm_block_tiles_group_1 = block_ht_group_1 * block_wt;
+    uint32_t interm_block_tiles_group_1 = block_ht_group_1 / num_out_blocks * block_wt;
     uint32_t interm_block_tiles_group_2 = 0;
-    uint32_t im_out_CB_size_group_1 = out_single_tile_size * interm_block_tiles_group_1;
-    uint32_t im_out_CB_size_group_2 = 0;
     uint32_t x_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
     uint32_t x_CB_size_group_2 = 0;
     uint32_t xmm_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
@@ -1365,17 +1364,15 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
 
     if (!equal_batches_per_core) {
         // input buffers
-        in0_block_tiles_group_1 = block_ht_group_1 * block_wt;
-        in0_block_tiles_group_2 = block_ht_group_2 * block_wt;
+        in0_block_tiles_group_1 = block_ht_group_1 / num_out_blocks * block_wt;
+        in0_block_tiles_group_2 = block_ht_group_2 / num_out_blocks * block_wt;
         in0_CB_size_group_1 = in0_block_tiles_group_1 * in_single_tile_size;
         in0_CB_size_group_2 = in0_block_tiles_group_2 * in_single_tile_size;
         in_CB_size_group_1 = in0_block_tiles_group_1 * in_single_tile_size;
         in_CB_size_group_2 = in0_block_tiles_group_2 * in_single_tile_size;
         // intermediate buffers
-        interm_block_tiles_group_1 = block_ht_group_1 * block_wt;
-        interm_block_tiles_group_2 = block_ht_group_2 * block_wt;
-        im_out_CB_size_group_1 = out_single_tile_size * interm_block_tiles_group_1;
-        im_out_CB_size_group_2 = out_single_tile_size * interm_block_tiles_group_2;
+        interm_block_tiles_group_1 = block_ht_group_1 / num_out_blocks * block_wt;
+        interm_block_tiles_group_2 = block_ht_group_2 / num_out_blocks * block_wt;
         x_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
         x_CB_size_group_2 = interm_block_tiles_group_2 * single_tile_size;
         xmm_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
@@ -1401,7 +1398,6 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
                 in6_CB_size,
                 in_mask_CB_size,
                 repack_CB_size,
-                im_out_CB_size_group_1,
                 x_CB_size_group_1,
                 xmm_CB_size_group_1,
                 ex_partial_CB_size,
@@ -1424,7 +1420,6 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
                 in6_CB_size,
                 in_mask_CB_size,
                 repack_CB_size,
-                im_out_CB_size_group_2,
                 x_CB_size_group_2,
                 xmm_CB_size_group_2,
                 ex_partial_CB_size,
