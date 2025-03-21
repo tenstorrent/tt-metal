@@ -100,6 +100,11 @@ def map_hf_to_meta_keys(loaded_weights):
         "model.layers.{layer}.mlp.gate_proj.weight": "layers.{layer}.feed_forward.w1.weight",
         "model.layers.{layer}.mlp.up_proj.weight": "layers.{layer}.feed_forward.w3.weight",
         "model.layers.{layer}.mlp.down_proj.weight": "layers.{layer}.feed_forward.w2.weight",
+        # "model.layers.{layer}.mlp.down_proj.weight": "layers.{layer}.feed_forward.w2.weight",
+        "model.layers.{layer}.block_sparse_moe.experts.{expert}.w1.weight": "layers.{layer}.feed_forward.experts.{expert}.w1.weight",
+        "model.layers.{layer}.block_sparse_moe.experts.{expert}.w2.weight": "layers.{layer}.feed_forward.experts.{expert}.w2.weight",
+        "model.layers.{layer}.block_sparse_moe.experts.{expert}.w3.weight": "layers.{layer}.feed_forward.experts.{expert}.w3.weight",
+        "model.layers.{layer}.block_sparse_moe.gate.weight": "layers.{layer}.feed_forward.gate.weight",
     }
 
     meta_state_dict = {}
@@ -110,11 +115,20 @@ def map_hf_to_meta_keys(loaded_weights):
         elif "model.layers." in key:
             # Extract layer number and form a template key
             parts = key.split(".")
-            layer_num = parts[2]  # e.g. "0" in "model.layers.0.input_layernorm.weight"
+            layer = parts[2]  # e.g. "0" in "model.layers.0.input_layernorm.weight"
             template_key = "model.layers.{layer}." + ".".join(parts[3:])
-            if template_key in hf_to_meta:
-                meta_state_dict[hf_to_meta[template_key].format(layer=layer_num)] = tensor
-
+            if f"model.layers.{layer}.block_sparse_moe.experts." in key:
+                expert = parts[5]  # e.g. "0" in "model.layers.0.input_layernorm.weight"
+                expert_template_key = "model.layers.{layer}.block_sparse_moe.experts.{expert}." + ".".join(parts[6:])
+                if expert_template_key in hf_to_meta:
+                    meta_state_dict[hf_to_meta[expert_template_key].format(layer=layer, expert=expert)] = tensor
+                pass
+            elif template_key in hf_to_meta:
+                meta_state_dict[hf_to_meta[template_key].format(layer=layer)] = tensor
+            else:
+                logger.warning(f"Template Key {template_key} not found in mapping, skipping.")
+        else:
+            logger.warning(f"Key {key} not found in mapping, skipping.")
     return meta_state_dict
 
 
