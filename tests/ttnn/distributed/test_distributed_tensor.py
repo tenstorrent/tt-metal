@@ -35,7 +35,7 @@ def test_replicate_to_tensor_mesh_equality(mesh_device, dtype):
         device=mesh_device,
     )
 
-    orig_out_tensors = ttnn.to_torch(ttnn.get_device_tensors(replicated_tensors)[0])
+    orig_out_tensors = ttnn.get_device_tensors(replicated_tensors)
 
     to_repl = ttnn.from_torch(
         torch_tensor,
@@ -49,7 +49,8 @@ def test_replicate_to_tensor_mesh_equality(mesh_device, dtype):
 
     out_passes = []
     for i in range(len(out_tensors)):
-        out_passes[i], out_pcc = comp_pcc(torch_tensor, ttnn.to_torch(out_tensors[i]), pcc=0.99)
+        out_pass, out_pcc = comp_pcc(ttnn.to_torch(orig_out_tensors[i]), ttnn.to_torch(out_tensors[i]), pcc=0.99)
+        out_passes.append(out_pass)
         logger.info(f"Shard {i} PCC value: {out_pcc}")
 
     assert all(out_passes)
@@ -113,7 +114,7 @@ def test_shard2d_to_tensor_mesh_equality(M, K, N, dtype, mesh_shape, mesh_device
     # If K < N it's FF1-like test case, else FF2-like test case
     shard_dim = (0, 3) if K < N else (3, 0)
 
-    mapper = ttnn.ShardTensorTo2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
 
     orig_sharded_tensor = ttnn.from_torch(
         torch_tensor,
@@ -136,7 +137,8 @@ def test_shard2d_to_tensor_mesh_equality(M, K, N, dtype, mesh_shape, mesh_device
 
     out_passes = []
     for i in range(len(orig_tensor_shards)):
-        out_passes[i], out_pcc = comp_pcc(orig_tensor_shards[i], ttnn.to_torch(tensor_shards[i]), pcc=0.99)
+        out_pass, out_pcc = comp_pcc(orig_tensor_shards[i], ttnn.to_torch(tensor_shards[i]), pcc=0.99)
+        out_passes.append(out_pass)
         logger.info(f"Shard {i} PCC value: {out_pcc}")
 
     assert all(out_passes)
@@ -205,7 +207,7 @@ def test_concat2d_to_tensor_mesh_equality(M, K, N, dtype, mesh_shape, mesh_devic
     shard_dim = (0, 3) if K < N else (3, 0)
     concat_dim = (3, 1) if K < N else (1, 3)
 
-    mapper = ttnn.ShardTensorTo2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
 
     sharded_tensor = ttnn.from_torch(
         torch_tensor,
@@ -373,10 +375,7 @@ def test_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
     shard_dim = (0, 3) if K < N else (3, 0)
 
     to_shard = ttnn.from_torch(
-        torch_tensor,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG, device=mesh_device
     )
 
     mapper = ttnn.shard_tensor_to_2d_mesh_mapper(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
@@ -397,7 +396,8 @@ def test_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
 
     out_passes = []
     for i in range(len(orig_tensor_shards)):
-        out_passes[i], out_pcc = comp_pcc(orig_tensor_shards[i], ttnn.to_torch(shards[i]), pcc=0.99)
+        out_pass, out_pcc = comp_pcc(orig_tensor_shards[i], ttnn.to_torch(shards[i]), pcc=0.99)
+        out_passes.append(out_pass)
         logger.info(f"Shard {i} PCC value: {out_pcc}")
 
     assert all(out_passes)
@@ -425,10 +425,7 @@ def test_concat2d_to_tensor(M, K, N, dtype, mesh_shape, mesh_device):
     concat_dim = (3, 1) if K < N else (1, 3)
 
     to_shard = ttnn.from_torch(
-        torch_tensor,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG, device=mesh_device
     )
 
     mapper = ttnn.shard_tensor_to_2d_mesh_mapper(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
