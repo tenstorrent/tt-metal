@@ -374,48 +374,50 @@ public:
     // Constuctor accepting the physical device IDs this pool is bound to. Each thread will be tied to a device, and is
     // guaranteed to be bound to a CPU core on a NUMA Node "closest" to that device.
     DeviceBoundThreadPool(const std::vector<tt::tt_metal::IDevice*>& physical_devices) {
-        num_workers_ = physical_devices.size();
-        workers_.reserve(num_workers_);
-        for (uint32_t i = 0; i < num_workers_; i++) {
-            workers_.emplace_back(std::make_unique<NumaAwareExecutor>(physical_devices[i]->id()));
-            phys_device_to_thread_id_[physical_devices[i]->id()] = i;
-        }
+        // num_workers_ = physical_devices.size();
+        // workers_.reserve(num_workers_);
+        // for (uint32_t i = 0; i < num_workers_; i++) {
+        //     workers_.emplace_back(std::make_unique<NumaAwareExecutor>(physical_devices[i]->id()));
+        //     phys_device_to_thread_id_[physical_devices[i]->id()] = i;
+        // }
     }
     // Constructor accepting the number of threads to spawn. The threads in this pool will be bound to a specific CPU
     // core but they are not guaranteed to be "close" to any physical device.
     DeviceBoundThreadPool(uint32_t thread_count) {
-        workers_.reserve(thread_count);
-        num_workers_ = thread_count;
-        for (uint32_t i = 0; i < thread_count; i++) {
-            workers_.emplace_back(std::make_unique<NumaAwareExecutor>(i));
-            phys_device_to_thread_id_[i] = i;
-        }
+        // workers_.reserve(thread_count);
+        // num_workers_ = thread_count;
+        // for (uint32_t i = 0; i < thread_count; i++) {
+        //     workers_.emplace_back(std::make_unique<NumaAwareExecutor>(i));
+        //     phys_device_to_thread_id_[i] = i;
+        // }
     }
 
     void enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt) override {
+        f();
         // If the user does not provide the Device ID tied to this task, determine the thread to use
         // based on the internally stored thread_idx. Tasks will get round-robined across threads,
         // when relying on the thread_idx.
         // If the device id is specified, use the thread tied to the device.
-        uint32_t thread_id =
-            device_idx.has_value() ? phys_device_to_thread_id_[device_idx.value()] : ((thread_idx_++) % num_workers_);
-        workers_[thread_id]->enqueue(std::move(f));
+        // uint32_t thread_id =
+        //     device_idx.has_value() ? phys_device_to_thread_id_[device_idx.value()] : ((thread_idx_++) %
+        //     num_workers_);
+        // workers_[thread_id]->enqueue(std::move(f));
     }
 
     void wait() override {
-        thread_idx_ = 0;  // Reset thread_idx for next call without Device ID specified.
-        std::exception_ptr exception;
-        // Wait on all workers. Capture exceptions if any, and rethrow the first exception
-        // in the calling thread.
-        for (auto& worker : workers_) {
-            auto temp_exception = worker->wait();
-            if (!exception && temp_exception) {
-                exception = temp_exception;
-            }
-        }
-        if (exception) {
-            std::rethrow_exception(exception);
-        }
+        // thread_idx_ = 0;  // Reset thread_idx for next call without Device ID specified.
+        // std::exception_ptr exception;
+        // // Wait on all workers. Capture exceptions if any, and rethrow the first exception
+        // // in the calling thread.
+        // for (auto& worker : workers_) {
+        //     auto temp_exception = worker->wait();
+        //     if (!exception && temp_exception) {
+        //         exception = temp_exception;
+        //     }
+        // }
+        // if (exception) {
+        //     std::rethrow_exception(exception);
+        // }
     }
 
 private:

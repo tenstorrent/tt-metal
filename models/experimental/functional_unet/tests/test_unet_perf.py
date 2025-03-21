@@ -96,6 +96,13 @@ def test_unet_trace_perf(
         (1, 2, 128, 25.0, 1650.0, False),
     ),
 )
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        (1, 2),
+    ],
+    indirect=True,
+)
 def test_unet_trace_perf_multi_device(
     batch: int,
     groups: int,
