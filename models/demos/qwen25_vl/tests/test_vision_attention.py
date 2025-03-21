@@ -10,7 +10,6 @@ from models.demos.qwen25_vl.tt.vision_attention import VisionAttention
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.tt_transformers.tt.common import (
-    get_prefill_rot_mat,
     get_rot_transformation_mat,
     PagedAttentionConfig,
 )
@@ -21,8 +20,7 @@ from models.utility_functions import (
 )
 from models.utility_functions import skip_for_grayskull
 
-# from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLVisionAttention
-from models.demos.qwen25_vl.reference.model import Qwen2_5_VLVisionAttention
+from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLVisionAttention
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
 
 
@@ -118,10 +116,6 @@ def test_vision_attention_inference(
     rot_mats = [cos, sin]
 
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
-    print(f"{transformation_mat_torch.shape=}")
-    print(f"{rot_mats[0].shape=}")
-    print(f"{rot_mats[1].shape=}")
-    print(f"{rot_mats[0]=}")
 
     transformation_mats_prefill = ttnn.as_tensor(
         transformation_mat_torch,
@@ -175,8 +169,6 @@ def test_vision_attention_inference(
 
     tt_attention_input = pt_attention_input.clone()
     tt_attention_input = torch.nn.functional.pad(tt_attention_input, (0, 0, 0, seq_len - ref_seq_len))
-    print(f"{pt_attention_input.shape=}")
-    print(f"{tt_attention_input.shape=}")
     attention_input = model_args.prepare_residual_tensor_prefill(
         tt_attention_input,
         force_replicated=False if model_args.is_galaxy else True,
@@ -193,14 +185,10 @@ def test_vision_attention_inference(
         tt_out,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
     )
-    print(f"{tt_out.shape=}")
     tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, seq_len, -1)  # [ batch, seq, hidden_dim]
-    print(f"{tt_output_torch.shape=}")
 
     # Remove sequence padding
     tt_output_torch = tt_output_torch[0, :ref_seq_len, :]
-
-    print(f"{position_embeddings[0].shape=}")
 
     reference_output = reference_model(
         pt_attention_input.squeeze(0).squeeze(0),

@@ -8,7 +8,6 @@ from loguru import logger
 import os
 import ttnn
 from models.demos.qwen25_vl.tt.mlp import MLP
-from models.tt_transformers.tt.model_config import ModelArgs
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.utility_functions import (
     comp_pcc,

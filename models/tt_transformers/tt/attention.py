@@ -702,8 +702,6 @@ class Attention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        last_five_unpadded = lambda x, mesh_device: first_five(x, mesh_device, start=-(96 - 80) - 5, end=-(96 - 80))
-
         ttnn.deallocate(xqkv_fused)
 
         ###
@@ -713,19 +711,13 @@ class Attention(LightweightModule):
         if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
 
-        # FIXME: workaround until rotary embeddings correctly supports sub-tile head dims
-        self.padded_head_dim = math.ceil(self.head_dim / self.tile_size) * self.tile_size
-        pad_head_dim = lambda x: ttnn.pad(
-            x, (x.shape[0], x.shape[1], x.shape[2], self.padded_head_dim), (0, 0, 0, 0), 0.0
-        )
-        rot_mats = [pad_head_dim(r) for r in rot_mats]
+        # workaround until rotary embeddings support sub-tile head dims
+        if self.head_dim != self.padded_head_dim:
+            pad_head_dim = lambda x: ttnn.pad(
+                x, (x.shape[0], x.shape[1], x.shape[2], self.padded_head_dim), (0, 0, 0, 0), 0.0
+            )
+            rot_mats = [pad_head_dim(r) for r in rot_mats]
 
-        # print(f"{q_heads_1QSD_pre_rot.shape=}")
-        # print(f"{k_heads_1KSD_pre_rot.shape=}")
-        # print(f"{v_heads_1VSD.shape=}")
-        # print(f"{rot_mats[0].shape=}")
-        # print(f"{rot_mats[1].shape=}")
-        # print(f'{self.transformation_mats["prefill"].shape=}')
         q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
             q_heads_1QSD_pre_rot,
             rot_mats[0],

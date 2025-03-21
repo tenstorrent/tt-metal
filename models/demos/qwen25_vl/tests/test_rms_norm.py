@@ -7,7 +7,6 @@ from loguru import logger
 import os
 import ttnn
 from models.common.rmsnorm import RMSNorm as RMSNorm
-from models.tt_transformers.tt.model_config import ModelArgs
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.utility_functions import (
     comp_pcc,
