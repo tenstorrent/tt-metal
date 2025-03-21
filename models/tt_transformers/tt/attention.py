@@ -8,7 +8,10 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce, tt_all_gather
-from models.tt_transformers.tt.common import first_five, last_five
+from loguru import logger
+
+# Potential warning that we don't want to show for every layer and token
+global_padded_head_warning_shown = False
 
 
 class Attention(LightweightModule):
@@ -463,6 +466,17 @@ class Attention(LightweightModule):
         )
 
         ttnn.deallocate(xqkv_fused)
+
+        if self.head_dim != self.padded_head_dim:
+            if not global_padded_head_warning_shown:
+                logger.warning(
+                    f"For decode mode, pad rot_mats to the padded head dim shape ahead of time for performance reasons. {rot_mats[0].shape=} {self.padded_head_dim=}"
+                )
+                global_padded_head_warning_shown = True
+            pad_head_dim = lambda x: ttnn.pad(
+                x, (x.shape[0], x.shape[1], x.shape[2], self.padded_head_dim), (0, 0, 0, 0), 0.0
+            )
+            rot_mats = [pad_head_dim(r) for r in rot_mats]
 
         # Q Rotary Embeddings
         q_heads_1BQD = ttnn.experimental.rotary_embedding_llama(
