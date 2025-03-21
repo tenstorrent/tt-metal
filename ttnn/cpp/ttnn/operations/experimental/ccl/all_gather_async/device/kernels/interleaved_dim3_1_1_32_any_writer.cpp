@@ -28,60 +28,7 @@ constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(7);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(8);
 constexpr bool last_dim = get_compile_time_arg_val(9);
 constexpr uint32_t num_banks = get_compile_time_arg_val(10);
-
-template <bool DRAM>
-inline void fabric_send_non_contig_tiles(
-    uint32_t num_tiles,
-    uint32_t& tile_id,
-    uint32_t ring_size,
-    uint32_t tile_cols_per_chip,
-    uint32_t tile_id_start,
-    InterleavedAddrGenFast<DRAM>& addrgen,
-    volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
-    volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
-    FabricConnectionManager& fabric_connection) {
-    uint32_t row = 0;
-    DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] BEGIN fabric_send_non_contig_tiles tile_id: " << tile_id
-           << ", num_tiles: " << num_tiles << ", packet_size_in_pages: " << packet_size_in_pages << "\n";
-    for (uint32_t i = 0; i < num_tiles; i += packet_size_in_pages) {
-        uint32_t num_pages_to_read = min(num_tiles - i, packet_size_in_pages);
-        DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] num_pages_to_read: " << num_pages_to_read << "\n";
-        cb_wait_front(cb0_id, num_pages_to_read);
-        size_t l1_read_addr = get_read_ptr(cb0_id);
-        for (uint32_t j = 0; j < num_pages_to_read; j++) {
-            uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, addrgen, 0 /*offset*/, 0 /*noc_id*/);
-            DPRINT << "\t\t\t[W][" << (uint32_t)my_chip_id << "] rest_tiles i: " << i << ", j: " << j
-                   << ", tile_id: " << tile_id << ", packet_size_in_pages: " << packet_size_in_pages << "\n";
-            write_and_advance_local_read_address_for_fabric_write(
-                noc0_dest_noc_addr,
-                pkt_hdr_forward,
-                pkt_hdr_backward,
-                fabric_connection,
-                l1_read_addr,
-                tensor0_page_size);
-            tile_id++;
-            if constexpr (last_dim) {
-                if (tile_id % tile_cols_per_chip == 0) {
-                    row++;
-                    tile_id = row * (tile_cols_per_chip * ring_size) + tile_id_start;
-                }
-            }
-        }
-        noc_async_writes_flushed();
-        cb_pop_front(cb0_id, num_pages_to_read);
-        DPRINT << "\t\t[W][" << (uint32_t)my_chip_id << "] outer DONE i: " << i << " -> " << i + num_pages_to_read
-               << "\n";
-    }
-    DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] DONE fabric_send_non_contig_tiles tile_id: " << tile_id
-           << ", num_tiles: " << num_tiles << "\n";
-}
-
-inline uint32_t dim3_rel2abs_tile_id(
-    uint32_t rel_tile_id, uint32_t tile_cols_per_chip, uint32_t ring_size, uint32_t ring_idx) {
-    uint32_t row = rel_tile_id / tile_cols_per_chip;
-    uint32_t idx = rel_tile_id % tile_cols_per_chip;
-    return idx + (tile_cols_per_chip * ring_idx) + row * ring_size * tile_cols_per_chip;
-}
+constexpr uint32_t bf8_dim3_type = get_compile_time_arg_val(11);
 
 template <bool DRAM>
 inline void fabric_send_contig_tiles_dim3_bf16(
@@ -102,10 +49,12 @@ inline void fabric_send_contig_tiles_dim3_bf16(
         uint32_t abs_tile_id = dim3_rel2abs_tile_id(tile_id, tile_cols_per_chip, ring_size, my_chip_id);
         uint64_t noc0_dest_noc_addr = get_noc_addr(abs_tile_id, addrgen, 0 /*offset*/, 0 /*noc_id*/);
         size_t l1_read_addr = get_read_ptr(cb0_id);
-        if ((abs_tile_id >= num_banks) &&
-            ((uint32_t)my_chip_id == ((abs_tile_id - num_banks) % total_cols) / tile_cols_per_chip)) {
-            if ((abs_tile_id >= 2 * num_banks) &&
-                ((uint32_t)my_chip_id == ((abs_tile_id - 2 * num_banks) % total_cols) / tile_cols_per_chip)) {
+
+        // check previous is sent: true -> current tiles was sent already as contiguous
+        if (dim3_was_stride_sent(abs_tile_id, total_cols, tile_cols_per_chip, num_banks, my_chip_id)) {
+            // check prev-prev is sent: true -> current tiles is not sent yet
+            if (dim3_was_stride_sent(
+                    abs_tile_id, total_cols, tile_cols_per_chip, packet_size_in_pages * num_banks, my_chip_id)) {
                 cb_wait_front(cb0_id, packet_size_in_pages);
                 DPRINT << "\t\t\t[W][" << (uint32_t)my_chip_id
                        << "] write non contig tiles abs_tile_id: " << abs_tile_id << "\n";
@@ -130,8 +79,9 @@ inline void fabric_send_contig_tiles_dim3_bf16(
             DPRINT << "\t\t[W][" << (uint32_t)my_chip_id << "] total: " << total << ", tile_id: " << tile_id
                    << ", abs_tile_id: " << abs_tile_id << "\n";
             cb_wait_front(cb0_id, packet_size_in_pages);
+            // check whether there is contiguous tile, the tile is in the local chip/buffer
             if ((abs_tile_id + num_banks) <= end_abs_tile_id &&
-                (uint32_t)my_chip_id == ((abs_tile_id + num_banks) % total_cols) / tile_cols_per_chip) {
+                dim3_is_tile_in_local(abs_tile_id + num_banks, total_cols, tile_cols_per_chip, my_chip_id)) {
                 DPRINT << "\t\t\t[W][" << (uint32_t)my_chip_id << "] write contig tiles: abs_tile_id: " << abs_tile_id
                        << "\n";
                 write_and_advance_local_read_address_for_fabric_write(
@@ -163,63 +113,6 @@ inline void fabric_send_contig_tiles_dim3_bf16(
     }
     DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] DONE fabric_send_contig_tiles_dim3_bf16 num_tiles: " << num_tiles
            << "\n";
-}
-
-template <bool DRAM>
-inline void fabric_send_llama70_t3k_prefill(
-    uint32_t num_tiles,
-    uint32_t ring_size,
-    uint32_t tile_cols_per_chip,
-    InterleavedAddrGenFast<DRAM>& addrgen,
-    volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
-    volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
-    FabricConnectionManager& fabric_connection) {
-    static const uint32_t input_width = 2004;
-    constexpr uint32_t contig_total =
-        ((input_width / (num_banks * packet_size_in_pages)) * (num_banks * packet_size_in_pages));
-    uint32_t tile_id = my_chip_id * input_width;  // abs
-    uint32_t total = 0;
-
-    DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] BEGIN fabric_send_llama70_t3k_prefill num_tiles: " << num_tiles
-           << ", contig_total: " << contig_total << ", num_banks: " << num_banks
-           << ", packet_size_in_pages: " << packet_size_in_pages << "\n";
-
-    while (total < contig_total) {  // 1792 (2004//(56*4) * 56*4) for DRAM bank
-        for (uint32_t i = 0; i < num_banks; i++) {
-            cb_wait_front(cb0_id, packet_size_in_pages);
-            size_t l1_read_addr = get_read_ptr(cb0_id);
-            DPRINT << "\t\t\t[W][" << (uint32_t)my_chip_id << "] write contig tiles: abs_tile_id: " << tile_id << "\n";
-            uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, addrgen, 0 /*offset*/, 0 /*noc_id*/);
-            write_and_advance_local_read_address_for_fabric_write(
-                noc0_dest_noc_addr,
-                pkt_hdr_forward,
-                pkt_hdr_backward,
-                fabric_connection,
-                l1_read_addr,
-                packet_size_in_pages * tensor0_page_size);
-
-            noc_async_writes_flushed();
-            cb_pop_front(cb0_id, packet_size_in_pages);
-            tile_id++;
-            total += packet_size_in_pages;
-        }
-        tile_id += num_banks * (packet_size_in_pages - 1);
-    }
-
-    while (total < num_tiles) {
-        cb_wait_front(cb0_id, 1);
-        size_t l1_read_addr = get_read_ptr(cb0_id);
-        DPRINT << "\t\t\t[W][" << (uint32_t)my_chip_id << "] write non contig tiles: abs_tile_id: " << tile_id << "\n";
-        uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, addrgen, 0 /*offset*/, 0 /*noc_id*/);
-        write_and_advance_local_read_address_for_fabric_write(
-            noc0_dest_noc_addr, pkt_hdr_forward, pkt_hdr_backward, fabric_connection, l1_read_addr, tensor0_page_size);
-        noc_async_writes_flushed();
-        cb_pop_front(cb0_id, 1);
-        tile_id++;
-        total++;
-    }
-    DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] DONE fabric_send_llama70_t3k_prefill num_tiles: " << num_tiles
-           << ", num_banks: " << num_banks << ", packet_size_in_pages: " << packet_size_in_pages << "\n";
 }
 
 template <bool DRAM>
@@ -258,40 +151,234 @@ inline void fabric_send_full_contig_tiles(
 }
 
 template <bool DRAM>
+inline void fabric_send_full_contig(
+    uint32_t contig_total,
+    uint32_t& tile_id,
+    InterleavedAddrGenFast<DRAM>& addrgen,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
+    FabricConnectionManager& fabric_connection) {
+    uint32_t total_local = 0;
+    while (total_local < contig_total) {
+        cb_wait_front(cb0_id, packet_size_in_pages);
+        size_t l1_read_addr = get_read_ptr(cb0_id);
+        DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] write 4contig tiles: tile_id: " << tile_id << "\n";
+        uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, addrgen, 0 /*offset*/, 0 /*noc_id*/);
+        write_and_advance_local_read_address_for_fabric_write(
+            noc0_dest_noc_addr,
+            pkt_hdr_forward,
+            pkt_hdr_backward,
+            fabric_connection,
+            l1_read_addr,
+            packet_size_in_pages * tensor0_page_size);
+        noc_async_writes_flushed();
+        cb_pop_front(cb0_id, packet_size_in_pages);
+        tile_id++;
+        total_local++;
+        if (total_local % num_banks == 0) {
+            tile_id += num_banks * (packet_size_in_pages - 1);
+        }
+    }
+}
+
+template <bool DRAM>
+inline void fabric_send_2contig_bf8(
+    uint32_t contig_total,
+    uint32_t& tile_id,
+    InterleavedAddrGenFast<DRAM>& addrgen,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
+    FabricConnectionManager& fabric_connection) {
+    uint32_t total_local = 0;
+    while (total_local < contig_total) {
+        cb_wait_front(cb0_id, 2);
+        size_t l1_read_addr = get_read_ptr(cb0_id);
+        DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] write 2contig tiles: tile_id: " << tile_id << "\n";
+        uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, addrgen, 0 /*offset*/, 0 /*noc_id*/);
+        write_and_advance_local_read_address_for_fabric_write(
+            noc0_dest_noc_addr,
+            pkt_hdr_forward,
+            pkt_hdr_backward,
+            fabric_connection,
+            l1_read_addr,
+            2 * tensor0_page_size);
+        tile_id++;
+        total_local++;
+        noc_async_writes_flushed();
+        cb_pop_front(cb0_id, 2);
+        if (tile_id % num_banks == 0) {
+            tile_id += num_banks;
+        }
+    }
+}
+
+template <bool DRAM>
+inline void fabric_send_non_contig(
+    uint32_t num_tiles,
+    uint32_t& tile_id,
+    InterleavedAddrGenFast<DRAM>& addrgen,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
+    FabricConnectionManager& fabric_connection) {
+    uint32_t total_local = 0;
+    while (total_local < num_tiles) {
+        cb_wait_front(cb0_id, packet_size_in_pages);
+        size_t l1_read_addr = get_read_ptr(cb0_id);
+        for (uint32_t i = 0; i < packet_size_in_pages; i++) {
+            DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] write non contig tiles: tile_id: " << tile_id << "\n";
+            uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, addrgen, 0 /*offset*/, 0 /*noc_id*/);
+            write_and_advance_local_read_address_for_fabric_write(
+                noc0_dest_noc_addr,
+                pkt_hdr_forward,
+                pkt_hdr_backward,
+                fabric_connection,
+                l1_read_addr,
+                tensor0_page_size);
+            tile_id++;
+        }
+        noc_async_writes_flushed();
+        cb_pop_front(cb0_id, packet_size_in_pages);
+        total_local += packet_size_in_pages;
+    }
+}
+
+template <bool DRAM>
+inline void fabric_send_llama_8b_n300(
+    uint32_t num_tiles,
+    uint32_t ring_size,
+    uint32_t tile_cols_per_chip,
+    InterleavedAddrGenFast<DRAM>& addrgen,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
+    FabricConnectionManager& fabric_connection) {
+    static const uint32_t input_width = 2004;
+    constexpr uint32_t num_full_contig = 41 * 12;
+    constexpr uint32_t num_2contig = 12;
+    constexpr uint32_t rest_tiles = 12;
+    uint32_t tile_id = input_width * my_chip_id;
+
+    DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] BEGIN fabric_send_llama70_t3k_prefill num_tiles: " << num_tiles
+           << ", packet_size_in_pages: " << packet_size_in_pages << "\n";
+    fabric_send_4contig_bf8(num_full_contig, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+    fabric_send_2contig_bf8(num_2contig, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+    fabric_send_non_contig_bf8(rest_tiles, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+    DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] DONE fabric_send_llama70_t3k_prefill num_tiles: " << num_tiles
+           << ", num_banks: " << num_banks << ", packet_size_in_pages: " << packet_size_in_pages << "\n";
+}
+
+template <bool DRAM>
+inline void fabric_send_falcon40_decode(
+    uint32_t num_tiles,
+    uint32_t ring_size,
+    uint32_t tile_cols_per_chip,
+    InterleavedAddrGenFast<DRAM>& addrgen,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
+    FabricConnectionManager& fabric_connection) {
+    if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == T3K_FALCON40_DECODE_8192) {
+        DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] T3K_FALCON40_DECODE_8192 \n";
+        static const uint32_t input_width = 32;  // 1024
+        uint32_t tile_id = input_width * my_chip_id;
+        uint32_t contig2_total = 12;
+        if (my_chip_id % 3 == 0) {
+            fabric_send_2contig_bf8(
+                contig2_total, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+            fabric_send_non_contig_bf8(8, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+        } else if (my_chip_id % 3 == 1) {
+            tile_id = 4 + input_width * my_chip_id;
+            fabric_send_2contig_bf8(
+                contig2_total, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+            fabric_send_non_contig_bf8(4, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+            tile_id = input_width * my_chip_id;
+            fabric_send_non_contig_bf8(4, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+        } else {
+            tile_id = 8 + input_width * my_chip_id;
+            fabric_send_2contig_bf8(
+                contig2_total, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+            tile_id = input_width * my_chip_id;
+            fabric_send_non_contig_bf8(8, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+        }
+    } else if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == T3K_FALCON40_DECODE_32768) {
+        DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] T3K_FALCON40_DECODE_32768 \n";
+        static const uint32_t input_width = 128;  // 1024
+        uint32_t num_full_contig = 24;
+        uint32_t num_contig2 = 12;
+        uint32_t tile_id = input_width * my_chip_id;
+        if (my_chip_id % 3 == 0) {
+            fabric_send_4contig_bf8(
+                num_full_contig, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+            fabric_send_2contig_bf8(
+                num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+            fabric_send_non_contig_bf8(8, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+        } else if (my_chip_id % 3 == 1) {
+            tile_id += 4;
+            fabric_send_4contig_bf8(
+                num_full_contig, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+            fabric_send_2contig_bf8(
+                num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+            fabric_send_non_contig_bf8(4, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+            tile_id = input_width * my_chip_id;
+            fabric_send_non_contig_bf8(4, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+        } else {
+            tile_id += 8;
+            fabric_send_4contig_bf8(
+                num_full_contig, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+            fabric_send_2contig_bf8(
+                num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+            tile_id = input_width * my_chip_id;
+            fabric_send_non_contig_bf8(8, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+        }
+    }
+}
+
+template <bool DRAM>
 inline void fabric_send_dim2_bf8(
     uint32_t filled_bank_tiles,
-    uint32_t rest_full_contig_cols,
+    uint32_t rest_full_contig_ids,
     uint32_t tile_id_start,
     uint32_t& total,
-    uint32_t rest_filled_bank,
+    uint32_t rest_tiles,
     uint32_t ring_size,
     uint32_t tile_cols_per_chip,
     InterleavedAddrGenFast<DRAM>& tensor0_addrgen,
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
     FabricConnectionManager& fabric_connection) {
-    uint32_t rest_2contig_cols, rest_tiles;
-    if (num_banks * 3 < rest_filled_bank) {
-        rest_2contig_cols = (num_banks - rest_full_contig_cols);
-        rest_tiles = rest_2contig_cols;
-    } else if (num_banks * 2 <= rest_filled_bank) {
-        rest_2contig_cols = num_banks;
-        rest_tiles = (rest_filled_bank) % (num_banks * 2);
-    } else if (num_banks < rest_filled_bank) {
-        rest_2contig_cols = (rest_filled_bank) % num_banks;
-        rest_tiles = num_banks - rest_2contig_cols;
+    // e.g. num_banks: 4, packet_size_in_pages: 4
+    //      |       chip0           |
+    //    0 | id 0|    1|    2|    3|
+    //      |    4|    5|    6|    7|
+    //      |    8|    9|   10|   11|
+    //    __|   12|   13|   14|   15|___  <- filled_bank_rows: 1, filled_bank_tiles: 1*4*4=16
+    //    1 |   16|   17|   18|   19|     <- rest_tiles: 14 (16-29)
+    //      |   20|   21|   22|   23|     <- rest_full_contig_ids: 2 (16, 17)
+    //      |   24|   25|   26|   27|     <- rest_half_contig_ids: 2 (18, 19)
+    //    __|   28|   29|            __   <- rest_orphan_tiles: 1 (26, 27)
+
+    uint32_t rest_half_contig_ids, rest_orphan_tiles;
+    if (num_banks * 3 < rest_tiles) {
+        rest_half_contig_ids = (num_banks - rest_full_contig_ids);
+        rest_orphan_tiles = rest_half_contig_ids;
+    } else if (num_banks * 2 <= rest_tiles) {
+        rest_half_contig_ids = num_banks;
+        rest_orphan_tiles = (rest_tiles) % (num_banks * 2);
+    } else if (num_banks < rest_tiles) {
+        rest_half_contig_ids = (rest_tiles) % num_banks;
+        rest_orphan_tiles = num_banks - rest_half_contig_ids;
     } else {
-        rest_2contig_cols = 0;
-        rest_tiles = rest_filled_bank;
+        rest_half_contig_ids = 0;
+        rest_orphan_tiles = rest_tiles;
     }
-    uint32_t num_tiles = rest_2contig_cols + (filled_bank_tiles + rest_full_contig_cols);
+    uint32_t num_tiles = rest_half_contig_ids + (filled_bank_tiles + rest_full_contig_ids);
     uint32_t outer_id = 0;
 
-    DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] fabric_send_dim2_bf8 rest_tiles:" << rest_tiles
-           << ", rest_2contig_cols: " << rest_2contig_cols << ", total: " << total << ", num_tiles: " << num_tiles
+    DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] fabric_send_dim2_bf8 rest_orphan_tiles:" << rest_orphan_tiles
+           << ", rest_half_contig_ids: " << rest_half_contig_ids << ", total: " << total << ", num_tiles: " << num_tiles
            << "\n";
+
+    // send half (2) contig tiles twice in one loop
     while (total < num_tiles) {
-        uint32_t num_2contig = min(rest_2contig_cols - outer_id, 2);
+        uint32_t num_2contig = min(rest_half_contig_ids - outer_id, 2);
         DPRINT << "\t\t[W][" << (uint32_t)my_chip_id << "] total: " << total << ", num_2contig: " << num_2contig
                << "\n";
         cb_wait_front(cb0_id, packet_size_in_pages);
@@ -313,56 +400,38 @@ inline void fabric_send_dim2_bf8(
         outer_id += num_2contig;
         total += num_2contig;
         if (total % num_banks == 0) {
-            total += num_banks + rest_full_contig_cols;
+            total += num_banks + rest_full_contig_ids;
         }
         noc_async_writes_flushed();
         cb_pop_front(cb0_id, packet_size_in_pages);
     }
     total += tile_id_start;
-    fabric_send_non_contig_tiles<DRAM>(
-        rest_tiles,
-        total,
-        ring_size,
-        tile_cols_per_chip,
-        tile_id_start,
-        tensor0_addrgen,
-        pkt_hdr_forward,
-        pkt_hdr_backward,
-        fabric_connection);
+    fabric_send_non_contig(
+        rest_orphan_tiles, total, tensor0_addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
 }
 
 template <bool DRAM>
 inline void fabric_send_dim2_bf16(
     uint32_t num_tiles_per_chip,
-    uint32_t tile_id_start,
     uint32_t& total,
-    uint32_t rest_filled_bank,
+    uint32_t rest_tiles,
     uint32_t ring_size,
     uint32_t tile_cols_per_chip,
     InterleavedAddrGenFast<DRAM>& tensor0_addrgen,
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
     FabricConnectionManager& fabric_connection) {
-    auto rest_tiles = 0;
-    if (num_banks * 1 < rest_filled_bank) {
-        rest_tiles = num_banks - (rest_filled_bank % (num_banks * (packet_size_in_pages - 1)));
+    auto rest_orphan_tiles = 0;
+    if (num_banks * 1 < rest_tiles) {
+        rest_orphan_tiles = num_banks - (rest_tiles % (num_banks * (packet_size_in_pages - 1)));
     } else {
-        rest_tiles = num_tiles_per_chip % (num_banks * packet_size_in_pages);
+        rest_orphan_tiles = num_tiles_per_chip % (num_banks * packet_size_in_pages);
     }
 
-    DPRINT << "[W][" << (uint32_t)my_chip_id << "] rest_tiles:" << rest_tiles << "\n";
+    DPRINT << "[W][" << (uint32_t)my_chip_id << "] rest_orphan_tiles:" << rest_orphan_tiles << "\n";
 
-    total += tile_id_start;
-    fabric_send_non_contig_tiles<DRAM>(
-        rest_tiles,
-        total,
-        ring_size,
-        tile_cols_per_chip,
-        tile_id_start,
-        tensor0_addrgen,
-        pkt_hdr_forward,
-        pkt_hdr_backward,
-        fabric_connection);
+    fabric_send_non_contig(
+        rest_orphan_tiles, total, tensor0_addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
 }
 
 template <bool DRAM>
@@ -375,33 +444,47 @@ inline void fabric_send_dim2(
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
     FabricConnectionManager& fabric_connection) {
+    // e.g. num_banks: 4, packet_size_in_pages: 2
+    //      |       chip0           |___
+    //    0 | id 0|    1|    2|    3|
+    //    __|    4|    5|    6|    7|___
+    //    1 |    8|    9|   10|   11|
+    //    __|   12|   13|   14|   15|___  <- filled_bank_rows: 2, filled_bank_tiles: 2*4*2=16
+    //    2 |   16|   17|   18|   19|     <- rest_tiles: 7 (16-22), rest_orphan_tiles: 1 (19)
+    //    __|   20|   21|   22|           <- rest_full_contig_ids: 3 (16,17,18,20,21,22)
+    //     ---------------------------------------------------
+    //      |       chip1           |
+    //      |   23|  24| ......
+
     auto filled_bank_rows = num_tiles_per_chip / (num_banks * packet_size_in_pages);
-    auto rest_filled_bank = num_tiles_per_chip % (num_banks * packet_size_in_pages);
+    auto rest_tiles = num_tiles_per_chip % (num_banks * packet_size_in_pages);
     auto filled_bank_tiles = filled_bank_rows * num_banks * packet_size_in_pages;
-    auto rest_full_contig_cols = 0;
+    auto rest_full_contig_ids = 0;
+    auto rest_full_contig_rows = 0;
     uint32_t total = 0;
-    if (num_banks * (packet_size_in_pages - 1) < rest_filled_bank) {
-        rest_full_contig_cols = (rest_filled_bank) % (num_banks * (packet_size_in_pages - 1));
+    if (num_banks * (packet_size_in_pages - 1) < rest_tiles) {
+        rest_full_contig_ids = (rest_tiles) % (num_banks * (packet_size_in_pages - 1));
     }
     DPRINT << "[W][" << (uint32_t)my_chip_id << "] filled_bank_rows:" << filled_bank_rows
-           << ", rest_filled_bank: " << rest_filled_bank << ", rest_full_contig_cols: " << rest_full_contig_cols
-           << "\n";
-    fabric_send_full_contig_tiles<DRAM>(
-        filled_bank_tiles + rest_full_contig_cols,
+           << ", rest_tiles: " << rest_tiles << ", rest_full_contig_ids: " << rest_full_contig_ids << "\n";
+    // send fully contig tiles. e.g. tileID: 0-15, 16-18, 20-22
+    total += tile_id_start;
+    fabric_send_full_contig(
+        filled_bank_rows * num_banks + rest_full_contig_ids,
         total,
         tensor0_addrgen,
         pkt_hdr_forward,
         pkt_hdr_backward,
-        fabric_connection,
-        tile_id_start);
+        fabric_connection);
+    total -= tile_id_start;
 
-    // total += tile_id_start;
     if constexpr (packet_size_in_pages == 2) {  // bf16
+        // e.g. tileID: 19
+        total += tile_id_start;
         fabric_send_dim2_bf16(
             num_tiles_per_chip,
-            tile_id_start,
             total,
-            rest_filled_bank,
+            rest_tiles,
             ring_size,
             tile_cols_per_chip,
             tensor0_addrgen,
@@ -411,10 +494,10 @@ inline void fabric_send_dim2(
     } else {  // bf8
         fabric_send_dim2_bf8(
             filled_bank_tiles,
-            rest_full_contig_cols,
+            rest_full_contig_ids,
             tile_id_start,
             total,
-            rest_filled_bank,
+            rest_tiles,
             ring_size,
             tile_cols_per_chip,
             tensor0_addrgen,
@@ -544,37 +627,44 @@ void kernel_main() {
     //
 
     if constexpr (last_dim) {
-        if constexpr (true) {
-            if constexpr (packet_size_in_pages == 2) {  // bf16
-                fabric_send_contig_tiles_dim3_bf16<is_dram>(
-                    num_tiles_per_chip,
-                    ring_size,
-                    tile_cols_per_chip,
-                    tensor0_addrgen,
-                    pkt_hdr_forward,
-                    pkt_hdr_backward,
-                    fabric_connection);
-            } else {
-                fabric_send_llama70_t3k_prefill<is_dram>(
-                    num_tiles_per_chip,
-                    ring_size,
-                    tile_cols_per_chip,
-                    tensor0_addrgen,
-                    pkt_hdr_forward,
-                    pkt_hdr_backward,
-                    fabric_connection);
-            }
-        } else {
-            fabric_send_non_contig_tiles<is_dram>(
+        if constexpr (packet_size_in_pages == 2) {  // bf16
+            fabric_send_contig_tiles_dim3_bf16<is_dram>(
                 num_tiles_per_chip,
-                tile_id_start,
                 ring_size,
                 tile_cols_per_chip,
-                tile_id_start,
                 tensor0_addrgen,
                 pkt_hdr_forward,
                 pkt_hdr_backward,
                 fabric_connection);
+        } else {
+            switch ((BF8_DIM3_TYPE)bf8_dim3_type) {
+                case T3K_FALCON40_DECODE_8192:
+                case T3K_FALCON40_DECODE_32768:
+                    fabric_send_falcon40_decode<is_dram>(
+                        num_tiles_per_chip,
+                        ring_size,
+                        tile_cols_per_chip,
+                        tensor0_addrgen,
+                        pkt_hdr_forward,
+                        pkt_hdr_backward,
+                        fabric_connection);
+                    break;
+                // case T3K_FALCON40_PREFILL_8192:
+                // case T3K_FALCON40_PREFILL_32768:
+                //     fabric_send_falcon40_prefill<is_dram>(num_tiles_per_chip, ring_size, tile_cols_per_chip,
+                //     tensor0_addrgen); break;
+                case LLAMA_8B_N300:
+                    fabric_send_llama_8b_n300<is_dram>(
+                        num_tiles_per_chip,
+                        ring_size,
+                        tile_cols_per_chip,
+                        tensor0_addrgen,
+                        pkt_hdr_forward,
+                        pkt_hdr_backward,
+                        fabric_connection);
+                    break;
+                default: break;
+            }
         }
     } else {
         fabric_send_dim2(

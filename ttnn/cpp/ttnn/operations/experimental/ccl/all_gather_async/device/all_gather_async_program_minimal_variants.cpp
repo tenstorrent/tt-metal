@@ -53,6 +53,15 @@ void append_fabric_connection_rt_args(
     }
 }
 
+enum BF8_DIM3_TYPE {
+    NONE,
+    LLAMA_8B_N300,
+    T3K_FALCON40_DECODE_8192,
+    T3K_FALCON40_DECODE_32768,
+    T3K_FALCON40_PREFILL_8192,
+    T3K_FALCON40_PREFILL_32768,
+};
+
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32_any(
     const Tensor& input_tensor,
     std::optional<IDevice*> forward_device,
@@ -150,6 +159,21 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const auto output_tensor_layout = output_tensor.buffer()->buffer_layout();
     const auto output_tensor_buffer_type = output_tensor.buffer()->buffer_type();
     const auto output_tensor_page_layout = output_tensor.layout();
+    BF8_DIM3_TYPE bf8_dim3_type = NONE;
+    if (dim == 3 && num_pages_per_packet == 4) {
+        if (input_tensor_shape[2] == 32 && input_tensor_shape[3] == 128256 / 2) {
+            bf8_dim3_type = LLAMA_8B_N300;
+        } else if (input_tensor_shape[2] == 2048 && input_tensor_shape[3] == 8192 / 8) {
+            bf8_dim3_type = T3K_FALCON40_PREFILL_8192;
+        } else if (input_tensor_shape[2] == 2048 && input_tensor_shape[3] == 32768 / 8) {
+            bf8_dim3_type = T3K_FALCON40_PREFILL_32768;
+        } else if (input_tensor_shape[2] == 32 && input_tensor_shape[3] == 8192 / 8) {
+            bf8_dim3_type = T3K_FALCON40_DECODE_8192;
+        } else if (input_tensor_shape[2] == 32 && input_tensor_shape[3] == 32768 / 8) {
+            bf8_dim3_type = T3K_FALCON40_DECODE_32768;
+        } else {
+        }
+    }
 
     // KERNEL CREATION
     // Reader
@@ -164,7 +188,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         num_pages_per_packet,                             // packet_size_in_pages
         op_config.get_page_size(),                        // tensor0_page_size
         last_dim,                                         // last_dim
-        num_banks,
+        num_banks,                                        // num_banks
+        static_cast<uint32_t>(bf8_dim3_type),             // bf8_dim3_type
     };
     log_trace(tt::LogOp, "Reader Compile Args:");
     for (const auto& arg : reader_kernel_config.compile_args) {
@@ -192,7 +217,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         num_targets_forward,                               // num_targets_forward_direction
         num_targets_backward,                              // num_targets_backward_direction
         last_dim,                                          // last_dim
-        num_banks,
+        num_banks,                                         // num_bansks
+        static_cast<uint32_t>(bf8_dim3_type),              // bf8_dim3_type
     };
     log_trace(tt::LogOp, "Writer Compile Args:");
     for (const auto& arg : writer_kernel_config.compile_args) {

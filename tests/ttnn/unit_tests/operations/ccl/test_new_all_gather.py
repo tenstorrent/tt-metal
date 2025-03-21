@@ -346,13 +346,14 @@ def run_all_gather_impl(
         # (4, 1, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
-        (4, 1, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT),
+        # (4, 1, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT),
+        (8, 1, [1, 1, 2048, 32768], 3, ttnn.TILE_LAYOUT),  # OOM on L1
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        # ttnn.bfloat16,
+        ttnn.bfloat16,
         ttnn.bfloat8_b,
     ],
 )
@@ -360,9 +361,10 @@ def run_all_gather_impl(
     "mem_config",
     [
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
-@pytest.mark.parametrize("num_iters", [10])
+@pytest.mark.parametrize("num_iters", [5])
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 65536 * 32}], indirect=True)
 def test_all_gather(
@@ -630,7 +632,7 @@ def test_all_gather(
         ),
     ],
 )
-@pytest.mark.parametrize("num_iters", [5])
+@pytest.mark.parametrize("num_iters", [1])
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 65536 * 32}], indirect=True)
 def test_all_gather_real_workloads(

@@ -10,6 +10,15 @@
 #include <cstdint>
 #include <utility>
 
+enum BF8_DIM3_TYPE {
+    NONE,
+    LLAMA_8B_N300,
+    T3K_FALCON40_DECODE_8192,
+    T3K_FALCON40_DECODE_32768,
+    T3K_FALCON40_PREFILL_8192,
+    T3K_FALCON40_PREFILL_32768,
+};
+
 FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     uint64_t noc0_dest_noc_addr,
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
@@ -45,4 +54,30 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     noc_async_writes_flushed();
 
     l1_read_addr += payload_size_bytes;
+}
+
+inline bool dim3_is_tile_in_local(
+    uint32_t tile_id, uint32_t total_cols, uint32_t tile_cols_per_chip, uint32_t my_chip_id) {
+    return (uint32_t)my_chip_id == (tile_id % total_cols) / tile_cols_per_chip;
+}
+
+inline bool dim3_was_stride_sent(
+    uint32_t tile_id, uint32_t total_cols, uint32_t tile_cols_per_chip, uint32_t stride, uint32_t my_chip_id) {
+    return (tile_id >= stride) && dim3_is_tile_in_local(tile_id - stride, total_cols, tile_cols_per_chip, my_chip_id);
+}
+
+// convert tile id from input based to output based
+inline uint32_t dim3_rel2abs_tile_id(
+    uint32_t rel_tile_id, uint32_t tile_cols_per_chip, uint32_t ring_size, uint32_t ring_idx) {
+    uint32_t row = rel_tile_id / tile_cols_per_chip;
+    uint32_t idx = rel_tile_id % tile_cols_per_chip;
+    return idx + (tile_cols_per_chip * ring_idx) + row * ring_size * tile_cols_per_chip;
+}
+
+// from output to input
+inline uint32_t dim3_abs2rel_tile_id(
+    uint32_t abs_tile_id, uint32_t tile_cols_per_chip, uint32_t ring_size, uint32_t ring_idx) {
+    uint32_t row = abs_tile_id / (tile_cols_per_chip * ring_size);
+    uint32_t id = (abs_tile_id % (tile_cols_per_chip * ring_size)) % tile_cols_per_chip;
+    return tile_cols_per_chip * row + id;
 }
