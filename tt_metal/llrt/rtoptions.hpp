@@ -130,7 +130,7 @@ class RunTimeOptions {
 
     tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
 
-    bool skip_deleting_built_cache = false;
+    bool skip_checking_built_cache = false;
 
     bool simulator_enabled = false;
     std::filesystem::path simulator_path = "";
@@ -323,7 +323,7 @@ public:
 
     tt_metal::DispatchCoreConfig get_dispatch_core_config() const;
 
-    inline bool get_skip_deleting_built_cache() { return skip_deleting_built_cache; }
+    inline bool get_skip_checking_built_cache() { return skip_checking_built_cache; }
 
     inline bool get_simulator_enabled() { return simulator_enabled; }
     inline const std::filesystem::path& get_simulator_path() { return simulator_path; }

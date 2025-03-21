@@ -146,8 +146,8 @@ RunTimeOptions::RunTimeOptions() {
         this->skip_loading_fw = true;
     }
 
-    if (getenv("TT_METAL_SKIP_DELETING_BUILT_CACHE")) {
-        this->skip_deleting_built_cache = true;
+    if (getenv("TT_METAL_SKIP_CHECKING_BUILT_CACHE")) {
+        this->skip_checking_built_cache = true;
     }
 
     this->enable_hw_cache_invalidation = (std::getenv("TT_METAL_ENABLE_HW_CACHE_INVALIDATION") != nullptr);
