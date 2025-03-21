@@ -31,8 +31,8 @@ namespace py = pybind11;
 // Trampoline class to clear virtual method errors
 
 void py_module_types(py::module& module) {
-    py::class_<MeshToTensor, std::unique_ptr<MeshToTensor>>(module, "MeshToTensor");
-    py::class_<TensorToMesh, std::unique_ptr<TensorToMesh>>(module, "TensorToMesh");
+    py::class_<MeshToTensor, std::unique_ptr<MeshToTensor>>(module, "CppMeshToTensor");
+    py::class_<TensorToMesh, std::unique_ptr<TensorToMesh>>(module, "CppTensorToMesh");
 
     py::class_<Shard2dConfig>(module, "Shard2dConfig");
     py::class_<Concat2dConfig>(module, "Concat2dConfig");
@@ -386,11 +386,11 @@ void py_module(py::module& module) {
            )doc");
 
     auto py_tensor_to_mesh =
-        static_cast<py::class_<TensorToMesh, std::unique_ptr<TensorToMesh>>>(module.attr("TensorToMesh"));
+        static_cast<py::class_<TensorToMesh, std::unique_ptr<TensorToMesh>>>(module.attr("CppTensorToMesh"));
     py_tensor_to_mesh.def("map", &TensorToMesh::map).def("config", &TensorToMesh::config);
 
     auto py_mesh_to_tensor =
-        static_cast<py::class_<MeshToTensor, std::unique_ptr<MeshToTensor>>>(module.attr("MeshToTensor"));
+        static_cast<py::class_<MeshToTensor, std::unique_ptr<MeshToTensor>>>(module.attr("CppMeshToTensor"));
     py_mesh_to_tensor.def("compose", &MeshToTensor::compose);
 
     module.def(
@@ -422,12 +422,6 @@ void py_module(py::module& module) {
             Tensor: The shard of the tensor corresponding to the device_id.
     )doc");
 
-    auto py_shard_mesh = static_cast<py::class_<ShardMesh>>(module.attr("ShardMesh"));
-    py_shard_mesh.def(py::init<>()).def_readwrite("y", &ShardMesh::y).def_readwrite("x", &ShardMesh::x);
-    auto py_shard_tensor2d = static_cast<py::class_<ShardTensor2D>>(module.attr("ShardTensor2d"));
-    py_shard_tensor2d.def(py::init<ShardMesh>(), py::arg("mesh"))
-        .def_readonly("shard_mesh", &ShardTensor2D::shard_mesh)
-        .def("__eq__", [](const ShardTensor2D& a, const ShardTensor2D& b) { return a == b; });
     auto py_shard2d_config = static_cast<py::class_<Shard2dConfig>>(module.attr("Shard2dConfig"));
     py_shard2d_config.def(py::init<int, int>(), py::arg("row_dim"), py::arg("col_dim"))
         .def_readwrite("row_dim", &Shard2dConfig::row_dim)
