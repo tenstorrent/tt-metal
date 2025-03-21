@@ -1505,7 +1505,7 @@ void test_matmul() {
             num_tiles_written += num_output_tiles_per_core;
         }
 
-        output = ttnn::generic_op(std::vector<Tensor>{a, b}, program_attributes);
+        // output = ttnn::generic_op(std::vector<Tensor>{a, b}, program_attributes, output);
 
         auto output_tensor = output.cpu();
 
@@ -1602,10 +1602,11 @@ void test_eltwise_sfpu() {
         .compute_attributes = {compute_attributes},
     };
 
-    Tensor device_output = ttnn::generic_op(std::vector<Tensor>{device_input_tensor}, program_attributes);
+    // Tensor device_output = ttnn::generic_op(std::vector<Tensor>{device_input_tensor}, program_attributes, device_output_tensor);
+    Tensor device_output = ttnn::generic_op(std::vector{device_input_tensor}, program_attributes, device_output_tensor);
     Tensor golden = ttnn::exp(device_input_tensor);
 
-    auto allclose = ttnn::allclose<bfloat16>(golden.cpu(), device_output_tensor.cpu(), 1e-1f, 1e-5f);
+    auto allclose = ttnn::allclose<bfloat16>(golden.cpu(), device_output.cpu(), 1e-1f, 1e-5f);
 
     TT_FATAL(allclose, "Error");
 
