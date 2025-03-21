@@ -208,6 +208,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     pandoc \
     sudo \
+    uuid-runtime \
     wget \
     libtbb-dev \
     libcapstone-dev \
@@ -248,10 +249,8 @@ RUN python3 -m pip config set global.extra-index-url https://download.pytorch.or
     python3 -m pip install -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
     python3 -m pip install -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt
 
-# Install test-infra specific apt requirements
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    uuid-runtime \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+# Adjust permissions to allow any user to use and modify the venv
+RUN chmod -R 777 $VIRTUAL_ENV
 
 #############################################################
 
