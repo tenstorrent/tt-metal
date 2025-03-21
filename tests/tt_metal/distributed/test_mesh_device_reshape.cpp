@@ -97,7 +97,7 @@ TEST_P(MeshDeviceReshapeRoundtripTest, ReshapeBetweenConfigurations) {
         1,
         tt::tt_metal::DispatchCoreType::WORKER);
 
-    EXPECT_EQ(mesh->shape(), old_shape);
+    EXPECT_EQ(mesh->shape(), new_shape);
 
     auto original_order = mesh->get_device_ids();
 
