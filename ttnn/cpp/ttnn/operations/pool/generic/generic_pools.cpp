@@ -9,6 +9,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/operations/data_movement/move/move.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/math.hpp>
 
@@ -46,7 +47,7 @@ Tensor Pool2DOp<pool_type>::invoke(
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
     bool ceil_mode) {
 
-    Conv2dConfig conv_config = Conv2dConfig();
+    conv::Conv2dConfig conv_config = conv::Conv2dConfig();
     const uint32_t output_height =
         ((input_h - kernel_size[0] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
     const uint32_t output_width =
@@ -117,7 +118,7 @@ Tensor Pool2DOp<pool_type>::invoke(
     TT_ASSERT(input_is_on_device);
 
     // call halo op
-    SlidingWindowConfig sliding_window_config = SlidingWindowConfig{
+    sliding_window::SlidingWindowConfig sliding_window_config = sliding_window::SlidingWindowConfig{
         .batch_size = batch_size,
         .input_hw = {input_h, input_w},
         .window_hw = {kernel_size[0], kernel_size[1]},
@@ -141,23 +142,6 @@ Tensor Pool2DOp<pool_type>::invoke(
             input_tensor_post_tm =
                 ttnn::to_layout(input_tensor_post_tm, Layout::ROW_MAJOR, std::nullopt, std::nullopt, input_tensor_post_tm.device());
         }
-        parallel_config = conv::determine_parallel_config(
-                                            shard_layout,
-                                            batch_size,
-                                            channels,
-                                            output_shape[1],
-                                            output_shape[2],
-                                            channels,
-                                            input_tensor.device()->compute_with_storage_grid_size(),
-                                            ShardOrientation::ROW_MAJOR,
-                                            false,
-                                            false,
-                                            false);
-        num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config);
-        num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
-        auto sharded_mem_config = conv::create_sharded_memory_config_from_parallel_config(input_tensor_sharded.get_padded_shape(), parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
-        input_tensor_sharded = ttnn::to_memory_config(input_tensor_sharded, sharded_mem_config, std::nullopt); // this converts interleaved to sharded
-        out_memory_config = input_tensor_sharded.memory_config();
     } else {
         // Call the halo uop
         Tensor halo_output = ttnn::halo(
@@ -182,6 +166,33 @@ Tensor Pool2DOp<pool_type>::invoke(
         }
     }
 
+    printf("----------------------TENSOR----------------------\n");
+    printf("-----------TensorLayout-----------\n");
+    printf("Mem Layout:%d\n", int(input_tensor_post_tm.tensor_attributes->tensor_spec.tensor_layout().get_memory_config().memory_layout));
+    // printf("Page shape:[%zu, %zu]\n", input_tensor_post_tm.tensor_attributes->tensor_spec.tensor_layout().get_page_config().get_page_shape().get<0>(),
+    //     input_tensor_post_tm.tensor_attributes->tensor_spec.tensor_layout().get_page_config().get_page_shape().get<1>());
+    // printf("Page size:%zu\n",input_tensor_post_tm.tensor_attributes->tensor_spec.tensor_layout().get_page_config().get_page_size_bytes());
+    // printf("Page tile:%d\n", int(input_tensor_post_tm.tensor_attributes->tensor_spec.tensor_layout().get_page_config().get_tile()));
+    printf("Page layout:%d\n", int(input_tensor_post_tm.tensor_attributes->tensor_spec.tensor_layout().get_page_config().get_layout()));
+
+    printf("logical_shape_:[rank: %d, volume: %d]\n", int(input_tensor_post_tm.tensor_attributes->tensor_spec.logical_shape().rank()), int(input_tensor_post_tm.tensor_attributes->tensor_spec.logical_shape().volume()));
+    printf("cached_padded_shape_:[rank: %d, volume: %d]\n", int(input_tensor_post_tm.tensor_attributes->tensor_spec.padded_shape().rank()), int(input_tensor_post_tm.tensor_attributes->tensor_spec.padded_shape().volume()));
+    printf("logical_2d_shape():[%zu, %zu]\n", input_tensor_post_tm.tensor_attributes->tensor_spec.logical_2d_shape().get<0>(), input_tensor_post_tm.tensor_attributes->tensor_spec.logical_2d_shape().get<1>());
+    printf("physical_shape():[%zu, %zu]\n", input_tensor_post_tm.tensor_attributes->tensor_spec.physical_shape().get<0>(), input_tensor_post_tm.tensor_attributes->tensor_spec.physical_shape().get<1>());
+
+    printf("num_shards_to_be_populated:%d\n", input_tensor_post_tm.tensor_attributes->num_shards_to_be_populated);
+    printf("main_thread_ref_count:%d\n", input_tensor_post_tm.tensor_attributes->main_thread_ref_count);
+    printf("num_sibling_workers_sharing_tensor:%d\n", input_tensor_post_tm.tensor_attributes->num_sibling_workers_sharing_tensor.load());
+    printf("main_thread_tensor:%d\n", input_tensor_post_tm.tensor_attributes->main_thread_tensor.load());
+    printf("metadata_populated:%d\n", input_tensor_post_tm.tensor_attributes->metadata_populated.load());
+    printf("num_workers_completed:%d\n", input_tensor_post_tm.tensor_attributes->num_workers_completed.load());
+    printf("deallocated:%d\n", input_tensor_post_tm.tensor_attributes->deallocated);
+    printf("dynamic_storage:%d\n", input_tensor_post_tm.tensor_attributes->dynamic_storage);
+    printf("track_ref_count:%d\n", input_tensor_post_tm.tensor_attributes->track_ref_count);
+
+    printf("\n----------------------SILDING WINDOW----------------------\n");
+    printf("cores_nhm:%d\n", opt_conv_op_parallel_config.num_cores_nhw);
+    printf("grid:%s\n", input_tensor_post_tm.memory_config().shard_spec.value().grid.str().c_str());
 
     auto output_tensor = ttnn::prim::pool2d(
         queue_id,
@@ -191,7 +202,7 @@ Tensor Pool2DOp<pool_type>::invoke(
         DataType::BFLOAT16,      // input_tensor.dtype(), // currently only bfp16 output is supported
         input_tensor_post_tm.memory_config());
 
-    if (memory_config.has_value() && memory_config.value() != out_memory_config) {
+    if (memory_config.has_value() && memory_config.value() != output_tensor.memory_config()) {
         output_tensor = ttnn::to_memory_config(output_tensor, memory_config.value(), std::nullopt);
     }
 

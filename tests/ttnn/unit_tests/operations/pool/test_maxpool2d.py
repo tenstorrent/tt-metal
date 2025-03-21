@@ -17,6 +17,8 @@ from tests.sweep_framework.sweep_utils.max_pool2d_common import run_max_pool2d, 
 
 import ttnn
 
+ttnn.set_printoptions(profile="Full")
+
 parameters = {
     "max_pool2d_short_sweep_suite": {
         "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
