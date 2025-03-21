@@ -77,7 +77,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
         with:
-          docker_os_arch: tt-metalium/${{ inputs.os }}-amd64
+          docker_os_arch: tt-metalium/${{ inputs.os }}-dev-amd64
           install_wheel: true
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
