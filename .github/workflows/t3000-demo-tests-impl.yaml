@@ -40,11 +40,11 @@ jobs:
       - pipeline-perf
       - ${{ inputs.extra-tag }}
     steps:
-      - uses: ./.github/actions/ensure-active-weka-mount
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
+      - uses: ./.github/actions/ensure-active-weka-mount
       - name: ⬇️ Download Build
         uses: actions/download-artifact@v4
         timeout-minutes: 10
