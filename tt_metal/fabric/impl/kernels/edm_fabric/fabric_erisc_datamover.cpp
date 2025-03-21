@@ -862,8 +862,8 @@ void run_receiver_channel_step(
         ROUTING_FIELDS_TYPE cached_routing_fields = const_cast<PACKET_HEADER_TYPE*>(packet_header)->routing_fields;
         bool can_send_to_all_local_chip_receivers =
             can_forward_packet_completely(cached_routing_fields, downstream_edm_interface);
-        bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
-        if (can_send_to_all_local_chip_receivers && trid_flushed) {
+        // remove trid check since we can still enqueue noc cmd to cmd_buf
+        if (can_send_to_all_local_chip_receivers) {
             uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
                 receiver_buffer_index);
             receiver_forward_packet(packet_header, cached_routing_fields, downstream_edm_interface, trid);
