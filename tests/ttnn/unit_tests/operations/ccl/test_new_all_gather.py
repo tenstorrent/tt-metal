@@ -555,7 +555,7 @@ def test_all_gather_sharded(
     ],
 )
 @pytest.mark.parametrize("num_iters", [8])
-@pytest.mark.parametrize("enable_async", [False])
+@pytest.mark.parametrize("enable_async", [True])
 def test_all_gather_sharded_ring(
     pcie_mesh_device,
     num_devices,
