@@ -106,7 +106,7 @@ void py_module(py::module& module) {
         module.def_submodule("ccl_experimental", "experimental collective communication operations");
     ccl::py_module(m_experimental_ccl);
 
-    broadcast_to::detail::py_bind_module(module);
+    broadcast_to::detail::py_bind_broadcast_to(module);
 }
 
 }  // namespace ttnn::operations::experimental

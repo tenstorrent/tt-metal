@@ -193,6 +193,7 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
         all_device_cores,
         tt::tt_metal::WriterDataMovementConfig({dst_is_dram}));
 
+    // COMPUTE KERNEL
     auto compute_id = tt::tt_metal::CreateKernel(
         program, get_kernel_file_path(kernel_config.compute_kernel), all_device_cores, tt::tt_metal::ComputeConfig{});
 
