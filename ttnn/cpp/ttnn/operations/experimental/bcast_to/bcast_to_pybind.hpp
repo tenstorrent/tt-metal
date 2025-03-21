@@ -9,5 +9,5 @@
 namespace py = pybind11;
 
 namespace ttnn::operations::experimental::broadcast_to::detail {
-void py_bind_module(py::module& module);
+void py_bind_broadcast_to(py::module& module);
 }  // namespace ttnn::operations::experimental::broadcast_to::detail
