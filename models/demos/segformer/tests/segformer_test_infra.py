@@ -126,6 +126,9 @@ class SegformerTestInfra:
         self.inputs = processor(images=image, return_tensors="pt")
         self.torch_output_tensor = reference_model(self.inputs.pixel_values)
         input_pixels_permuted = torch.permute(self.inputs.pixel_values, (0, 2, 3, 1))
+        # input_pixels_random = torch.rand(self.inputs.pixel_values.shape)
+        # input_pixels_permuted_random = torch.permute(input_pixels_random, (0, 2, 3, 1))
+        # self.torch_output_tensor = reference_model(input_pixels_random)
         self.input_tensor = ttnn.from_torch(input_pixels_permuted, ttnn.bfloat16)
 
     def run(self):
@@ -187,8 +190,8 @@ class SegformerTestInfra:
         return tt_inputs_host, sharded_mem_config_DRAM, input_mem_config
 
     def validate(self, output_tensor=None):
-        output_tensor = self.output_tensor if output_tensor is None else output_tensor
-        output_tensor = ttnn.to_torch(output_tensor.logits)
+        output_tensor = self.output_tensor.logits if output_tensor is None else output_tensor
+        output_tensor = ttnn.to_torch(output_tensor)
         output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
         h = w = int(math.sqrt(output_tensor.shape[-1]))
         final_output_tensor = torch.reshape(output_tensor, (output_tensor.shape[0], output_tensor.shape[1], h, w))
