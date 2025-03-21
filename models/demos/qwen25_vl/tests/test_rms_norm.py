@@ -51,13 +51,10 @@ def test_rms_norm_inference(
 ):
     dtype = ttnn.bfloat16
 
-    mesh_device.enable_async(True)
-
-    base_model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
-    vision_model_args = VisionModelArgs(base_model_args)
+    model_args = VisionModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
 
     reference_model = Qwen2RMSNorm(
-        vision_model_args.hf_config.vision_config.hidden_size, eps=vision_model_args.hf_config.rms_norm_eps
+        model_args.hf_config.vision_config.hidden_size, eps=model_args.hf_config.rms_norm_eps
     )
 
     state_dict = reference_model.state_dict()
@@ -66,20 +63,18 @@ def test_rms_norm_inference(
     # Create the inner RMSNorm
     tt_inner_norm = RMSNorm(
         device=mesh_device,
-        dim=vision_model_args.dim,
+        dim=model_args.dim,
         state_dict=state_dict,
         state_dict_prefix="",
         weight_key="norm1",
         weight_dtype=dtype,
         is_distributed=False,
-        # sharded_program_config=vision_model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
-        # sharded_output_config=vision_model_args.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
     )
 
     # Wrap it in DistributedNorm
-    tt_model = DistributedNorm(tt_inner_norm, vision_model_args, TG=vision_model_args.is_galaxy)
+    tt_model = DistributedNorm(tt_inner_norm, model_args, TG=model_args.is_galaxy)
 
-    input = torch.rand(1, 1, max_seq_len, vision_model_args.dim)
+    input = torch.rand(1, 1, max_seq_len, model_args.dim)
     reference_output = reference_model(input)
 
     # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
@@ -88,7 +83,7 @@ def test_rms_norm_inference(
         device=mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=vision_model_args.cluster_shape),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape),
         memory_config=(ttnn.DRAM_MEMORY_CONFIG),
     )
 
@@ -99,8 +94,8 @@ def test_rms_norm_inference(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
             mesh_device,
-            dims=(0, 3) if vision_model_args.is_galaxy else (3, 0),
-            mesh_shape=vision_model_args.cluster_shape,
+            dims=(0, 3) if model_args.is_galaxy else (3, 0),
+            mesh_shape=model_args.cluster_shape,
         ),
     )[:1, :, :, :]
 

@@ -48,23 +48,22 @@ def test_mlp_inference(rows, batch_size, mesh_device, use_program_cache, reset_s
 
     mesh_device.enable_async(True)
 
-    base_model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=rows)
-    vision_model_args = VisionModelArgs(base_model_args)
-    reference_model = Qwen2_5_VLMLP(base_model_args.hf_config.vision_config, bias=True)
-    state_dict = convert_hf_to_meta(reference_model.state_dict(), base_model_args.head_dim)
-    state_dict_prefix = vision_model_args.get_state_dict_prefix("MLP", 0)
+    model_args = VisionModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=rows)
+    reference_model = Qwen2_5_VLMLP(model_args.hf_config.vision_config, bias=True)
+    state_dict = convert_hf_to_meta(reference_model.state_dict(), model_args.head_dim)
+    state_dict_prefix = model_args.get_state_dict_prefix("MLP", 0)
     state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
 
     tt_model = MLP(
         mesh_device=mesh_device,
-        args=vision_model_args,
+        args=model_args,
         state_dict=state_dict,
-        weight_cache_path=base_model_args.weight_cache_path(dtype),
+        weight_cache_path=model_args.weight_cache_path(dtype),
         layer_num=0,
         dtype=dtype,
-        model_config=base_model_args.model_config,
+        model_config=model_args.model_config,
     )
-    torch_input = torch.randn(1, 1, rows, base_model_args.hf_config.vision_config.hidden_size)
+    torch_input = torch.randn(1, 1, rows, model_args.hf_config.vision_config.hidden_size)
     print(f"{torch_input.shape=}")
     for k, v in state_dict.items():
         print(f"{k}: {v.shape}")
@@ -74,8 +73,8 @@ def test_mlp_inference(rows, batch_size, mesh_device, use_program_cache, reset_s
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 3) if base_model_args.is_galaxy else (None, None),
-            mesh_shape=base_model_args.cluster_shape,
+            dims=(None, 3) if model_args.is_galaxy else (None, None),
+            mesh_shape=model_args.cluster_shape,
         ),  # When both dims are None, the mapper used is `ReplicateTensorToMesh`
         dtype=ttnn.bfloat8_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -87,7 +86,7 @@ def test_mlp_inference(rows, batch_size, mesh_device, use_program_cache, reset_s
 
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=base_model_args.cluster_shape),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
     )
 
     tt_output_torch = tt_output_torch[:, :1, :, :]
