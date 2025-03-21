@@ -377,9 +377,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         head_tiles,
         1,  // read the first phase
         in_num_cores,
-        process_qv,  // read and write q and v heads
-        process_k,   // read and write k heads
-        1,           // use_batch_offset
+        // process_qv,  qv vs k core will be passed in as rt args// read and write q and v heads
+        // process_k,   // read and write k heads
+        1,  // use_batch_offset
         0,
         batch_offset_index_stick_size,
         batch_offset_cb_index_reader};
@@ -398,9 +398,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         head_tiles,
         2,  // read the second phase
         in_num_cores,
-        process_qv,  // read and write q and v heads
-        process_k,   // read and write k heads
-        1,           // use_batch_offset
+        // process_qv,  // read and write q and v heads
+        // process_k,   // read and write k heads
+        1,  // use_batch_offset
         0,
         batch_offset_index_stick_size,
         batch_offset_cb_index_reader};
@@ -443,8 +443,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     // Now prepare rt args for the reader and writer kernels
 
     std::vector<uint32_t> reader_writer_runtime_args_template;
-    reader_writer_runtime_args_template.reserve(4 + 2 * in_num_cores);
-    reader_writer_runtime_args_template = {q_base_addr, batch_offset_tensor.buffer()->address(), 0};
+    reader_writer_runtime_args_template.reserve(5 + 2 * in_num_cores);
+    reader_writer_runtime_args_template = {q_base_addr, batch_offset_tensor.buffer()->address(), 0, 0};
     reader_writer_runtime_args_template.insert(
         reader_writer_runtime_args_template.end(), noc_x_coords.begin(), noc_x_coords.end());
     reader_writer_runtime_args_template.insert(
@@ -641,10 +641,21 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         const auto& core = q_cores_vector[i];
         auto& reader_args = reader_args_by_core[core.x][core.y];
         reader_args[2] = i;
+        reader_args[3] = 1;
         auto& writer_args = writer_args_by_core[core.x][core.y];
         writer_args[2] = i;
+        writer_args[3] = 1;
     }
 
+    for (uint32_t i = 0; i < k_cores_vector.size(); i++) {
+        const auto& core = k_cores_vector[i];
+        auto& reader_args = reader_args_by_core[core.x][core.y];
+        reader_args[2] = i;
+        reader_args[3] = 2;
+        auto& writer_args = writer_args_by_core[core.x][core.y];
+        writer_args[2] = i;
+        writer_args[3] = 2;
+    }
     auto override_runtime_arguments_callback =
         [worker_sender_reader_kernel_id, worker_sender_writer_kernel_id, sender_worker_cores, cb_out, cb_reduction](
             const void* operation,
