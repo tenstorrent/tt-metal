@@ -103,9 +103,8 @@ class Kernel : public JitBuildSettings {
     virtual void generate_binaries(IDevice* device, JitBuildOptions &build_options) const = 0;
     uint32_t get_binary_packed_size(IDevice* device, int index) const;
     uint32_t get_binary_text_size(IDevice* device, int index) const;
-    // void set_binary_path(const std::string &binary_path) { binary_path_ = binary_path; }
     void set_binaries(uint32_t build_key, std::vector<ll_api::memory const*>&& binaries);
-    bool binaries_exist_on_disk() const;
+    virtual bool binaries_exist_on_disk(const IDevice* device) const = 0;
     virtual void read_binaries(IDevice* device) = 0;
 
     void validate_runtime_args_size(size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core);
@@ -167,6 +166,7 @@ class DataMovementKernel : public Kernel {
     RISCV processor() const override;
 
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    bool binaries_exist_on_disk(const IDevice* device) const override;
     void read_binaries(IDevice* device) override;
 
     bool configure(IDevice* device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
@@ -199,6 +199,7 @@ class EthernetKernel : public Kernel {
     RISCV processor() const override;
 
     void generate_binaries(IDevice* device, JitBuildOptions &build_options) const override;
+    bool binaries_exist_on_disk(const IDevice* device) const override;
     void read_binaries(IDevice* device) override;
 
     bool configure(IDevice* device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
@@ -232,6 +233,7 @@ class ComputeKernel : public Kernel {
 
     void set_build_options(JitBuildOptions& build_options) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    bool binaries_exist_on_disk(const IDevice* device) const override;
     void read_binaries(IDevice* device) override;
 
     bool configure(IDevice* device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
