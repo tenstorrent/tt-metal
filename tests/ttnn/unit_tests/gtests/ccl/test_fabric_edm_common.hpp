@@ -2245,15 +2245,31 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
     // Get the inner 4 device ring on a WH T3K device so that we can use both links for all devices
     std::vector<IDevice*> devices_;
     if (use_tg) {
-        devices_ = {
-            view.get_device(MeshCoordinate(0, 0)),
-            view.get_device(MeshCoordinate(1, 0)),
-            view.get_device(MeshCoordinate(2, 0)),
-            view.get_device(MeshCoordinate(3, 0)),
-            view.get_device(MeshCoordinate(4, 0)),
-            view.get_device(MeshCoordinate(5, 0)),
-            view.get_device(MeshCoordinate(6, 0)),
-            view.get_device(MeshCoordinate(7, 0))};
+        if (line_size <= 4) {
+            if (topology == ttnn::ccl::Topology::Ring) {
+                devices_ = {
+                    view.get_device(MeshCoordinate(0, 0)),
+                    view.get_device(MeshCoordinate(1, 0)),
+                    view.get_device(MeshCoordinate(1, 1)),
+                    view.get_device(MeshCoordinate(0, 1))};
+            } else {
+                devices_ = {
+                    view.get_device(MeshCoordinate(0, 0)),
+                    view.get_device(MeshCoordinate(1, 0)),
+                    view.get_device(MeshCoordinate(2, 0)),
+                    view.get_device(MeshCoordinate(3, 0))};
+            }
+        } else {
+            devices_ = {
+                view.get_device(MeshCoordinate(0, 0)),
+                view.get_device(MeshCoordinate(1, 0)),
+                view.get_device(MeshCoordinate(2, 0)),
+                view.get_device(MeshCoordinate(3, 0)),
+                view.get_device(MeshCoordinate(4, 0)),
+                view.get_device(MeshCoordinate(5, 0)),
+                view.get_device(MeshCoordinate(6, 0)),
+                view.get_device(MeshCoordinate(7, 0))};
+        }
     } else {
         // Choosing pcie devices so that more links are supported. More links == more (likelihood of) congestion.
         if (line_size <= 4) {
