@@ -8,11 +8,9 @@
 #include <circular_buffer_types.hpp>
 #include "common/executor.hpp"
 #include <profiler.hpp>
-#include "jit_build/build.hpp"
 #include "tt_metal/detail/kernel_cache.hpp"
 #include <persistent_kernel_cache.hpp>
 #include <memory_reporter.hpp>
-#include <thread>
 #include <tt_metal.hpp>
 #include <graph_tracking.hpp>
 #include <host_api.hpp>
@@ -52,7 +50,6 @@ void GenerateBinaries(IDevice* device, JitBuildOptions &build_options, const std
     }
 }
 
-#define GENERATE_HASH_LOG (1)
 #ifdef GENERATE_HASH_LOG
 #include <fstream>
 #endif
@@ -1427,18 +1424,12 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
                         kernel,
                         build_options,
                         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
-                    std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
+
+                    const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
                     kernel->set_full_name(kernel_path_suffix);
                     build_options.set_name(kernel_path_suffix);
-                    bool cache_hit = true;
-                    bool path_exists =
-                        std::filesystem::exists(build_options.path + "/" + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
-                    log_info(
-                        "Program compile - thread {} enable_persistent_kernel_cache: {} kernel path suffix: {}",
-                        std::hash<std::thread::id>{}(std::this_thread::get_id()),
-                        enable_persistent_kernel_cache.load(),
-                        kernel_path_suffix);
-                    if (enable_persistent_kernel_cache && path_exists) {
+
+                    if (enable_persistent_kernel_cache && kernel->binaries_exist_on_disk(device)) {
                         if (not detail::HashLookup::inst().exists(kernel_hash)) {
                             detail::HashLookup::inst().add(kernel_hash);
                             detail::HashLookup::inst().add_generated_bin(kernel_hash);
@@ -1449,12 +1440,10 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
                             std::hash<std::thread::id>{}(std::this_thread::get_id()),
                             kernel_path_suffix);
                         GenerateBinaries(device, build_options, kernel);
-                        cache_hit = false;
                         detail::HashLookup::inst().add_generated_bin(kernel_hash);
                     }
                     while (not detail::HashLookup::inst().is_bin_generated(kernel_hash)) {
                     }
-                    // kernel->set_binary_path(build_options.path);
                 },
                 events);
         }
