@@ -108,7 +108,8 @@ std::shared_ptr<bfloat16[]> create_container_for_readback_data(const uint32_t bu
     }
 }
 
-TEST(GalaxyTests, TestAllGatherDeadlock) {
+// TODO: #18686 - Decide if this test should be re-enabled on mesh infra.
+TEST(GalaxyTests, DISABLED_TestAllGatherDeadlock) {
     if (not tt::Cluster::instance().is_galaxy_cluster()) {
         GTEST_SKIP() << "Skipping Galaxy test, since this is not a Galaxy System";
     }
@@ -159,9 +160,10 @@ TEST(GalaxyTests, TestAllGatherDeadlock) {
                 // Push inputs.
                 ttnn::write_buffer(ttnn::DefaultQueueId, input_tensor, {host_data});
                 // Configure CCL running on this device.
+                // TODO: #18686 - sender_device_id and receiver_device_id are not passed to `ReduceScatter` any more.
+                // Instead, they are calcualte when launching an Op based on `MeshCoordinate` that infra provides.
                 uint32_t receiver_device_id = device_ids[(dev_idx) + 1 % num_devices_in_row];
                 uint32_t sender_device_id = device_ids[(dev_idx + num_devices_in_row - 1) % num_devices_in_row];
-                // TODO: fix this.
                 auto all_gather_op = ttnn::AllGather{
                     3,
                     2,
@@ -196,7 +198,8 @@ TEST(GalaxyTests, TestAllGatherDeadlock) {
     ttnn::distributed::close_mesh_device(mesh);
 }
 
-TEST(GalaxyTests, TestReduceScatterDeadlock) {
+// TODO: #18686 - Decide if this test should be re-enabled on mesh infra.
+TEST(GalaxyTests, DISABLED_TestReduceScatterDeadlock) {
     if (not tt::Cluster::instance().is_galaxy_cluster()) {
         GTEST_SKIP() << "Skipping Galaxy test, since this is not a Galaxy System";
     }
@@ -268,7 +271,8 @@ TEST(GalaxyTests, TestReduceScatterDeadlock) {
             // Push inputs.
             ttnn::write_buffer(ttnn::DefaultQueueId, input_tensor, {host_data});
             // Configure CCL running on this device.
-            // TODO: fix this.
+            // TODO: #18686 - sender_device_id and receiver_device_id are not passed to `ReduceScatter` any more.
+            // Instead, they are calcualte when launching an Op based on `MeshCoordinate` that infra provides.
             uint32_t receiver_device_id = device_ids[(dev_idx + 1) % ring_devices.size()];
             uint32_t sender_device_id = device_ids[(dev_idx + ring_devices.size() - 1) % ring_devices.size()];
             auto all_gather_op = ttnn::ReduceScatter{
