@@ -2580,15 +2580,9 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
     for (IDevice* d : devices) {
         tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
     }
-    for (size_t i = 0; i < programs.size(); i++) {
-        auto d = worker_devices[i];
-        auto& program = programs[i];
-        tt_metal::DumpDeviceProfileResults(d, program);
-    }
-    for (size_t i = 0; i < fabric_programs->size(); i++) {
-        auto d = devices[i];
-        auto& program = fabric_programs.value()[i];
-        tt_metal::DumpDeviceProfileResults(d, program);
+
+    for (IDevice* d : devices) {
+        detail::DumpDeviceProfileResults(d);
     }
     log_info(tt::LogTest, "Finished");
 }

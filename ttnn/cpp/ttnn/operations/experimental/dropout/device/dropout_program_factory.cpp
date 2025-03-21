@@ -7,11 +7,13 @@
 #include "dropout_program_factory.hpp"
 
 #include "dropout_device_operation_types.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 
+namespace ttnn::operations::experimental::dropout::program {
 namespace {
 constexpr auto kWriterKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/dataflow/writer_dropout_interleaved_start_id.cpp";
@@ -28,9 +30,16 @@ constexpr auto kOutputCbIndex = tt::CBIndex::c_2;
 
 constexpr uint32_t kNumInputTiles = 2;
 constexpr uint32_t kNumOutputTiles = 2;
-}  // namespace
 
-namespace ttnn::operations::experimental::dropout::program {
+// Overrides the seed with a per-device seed by using the device ID as an offset.
+operation_attributes_t override_per_device_seed(
+    const operation_attributes_t& args, const ttnn::MeshCoordinate& mesh_coord, const ttnn::Tensor& input_tensor) {
+    operation_attributes_t args_with_per_device_seed = args;
+    args_with_per_device_seed.seed += input_tensor.mesh_device()->get_device(mesh_coord)->id();
+    return args_with_per_device_seed;
+}
+
+}  // namespace
 
 using namespace tt::constants;
 
@@ -337,6 +346,34 @@ void DropoutProgramFactory::override_runtime_arguments(
             TT_THROW("Core not in specified core ranges.");
         }
     }
+}
+
+DropoutProgramFactoryPerDeviceSeed::cached_program_t DropoutProgramFactoryPerDeviceSeed::create_at(
+    const operation_attributes_t& args,
+    const ttnn::MeshCoordinate& mesh_coord,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    TT_ASSERT(
+        args.use_per_device_seed,
+        "Expected to Dropout op to select DropoutProgramFactory if no per-device seed is used.");
+    return DropoutProgramFactory::create(
+        override_per_device_seed(args, mesh_coord, tensor_args.input), tensor_args, output);
+}
+
+void DropoutProgramFactoryPerDeviceSeed::override_runtime_arguments_at(
+    cached_program_t& cached_program,
+    const operation_attributes_t& args,
+    const ttnn::MeshCoordinate& mesh_coord,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    TT_ASSERT(
+        args.use_per_device_seed,
+        "Expected to Dropout op to select DropoutProgramFactory if no per-device seed is used.");
+    DropoutProgramFactory::override_runtime_arguments(
+        cached_program,
+        override_per_device_seed(args, mesh_coord, tensor_args.input),
+        tensor_args,
+        tensor_return_value);
 }
 
 }  // namespace ttnn::operations::experimental::dropout::program

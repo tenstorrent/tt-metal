@@ -13,7 +13,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
-
+#include "ttnn/distributed/types.hpp"
 
 #include "ttnn/run_operation.hpp"
 
@@ -133,7 +133,10 @@ struct AllGather {
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
+        const ttnn::MeshCoordinate& mesh_coord,
+        const std::vector<Tensor>& input_tensors,
+        std::vector<Tensor>& output_tensors) const;
 };
 
 namespace ccl{
