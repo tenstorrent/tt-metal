@@ -11,18 +11,20 @@
 #include <tt-metalium/tt_log.h>
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
+#include "fill_pad_program_factory.hpp"
+
 bool is_power_of_two_at_least_32(uint32_t value) { return value >= 32 && (value & (value - 1)) == 0; }
 
 using namespace tt;
 
-std::map<ttnn::DataType, uint32_t> data_type_to_size = {
-    {ttnn::DataType::BFLOAT16, 2},
-    {ttnn::DataType::FLOAT32, 4},
-    {ttnn::DataType::UINT32, 4},
-    {ttnn::DataType::UINT8, 1},
-};
-
 namespace ttnn::operations::data_movement::detail {
+
+// based off pack_two_bfloat16_into_uint32
+uint32_t pack_two_uint16_into_uint32(std::pair<uint16_t, uint16_t> two_uint16s) {
+    // first -> lower 16
+    // second -> upper 16
+    return (uint32_t)two_uint16s.first | ((uint32_t)two_uint16s.second << 16);
+}
 
 tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& input_tensor, float fill_value) {
     tt::tt_metal::IDevice* device = input_tensor.device();
@@ -33,7 +35,7 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
     tt::tt_metal::Buffer* tens_buffer = input_tensor.buffer();
     TT_ASSERT(tens_buffer != nullptr, "Input buffer should be allocated on device!");
 
-    uint32_t input_element_size_bytes = data_type_to_size[input_tensor.get_dtype()];
+    uint32_t input_element_size_bytes = data_type_to_size.at(input_tensor.get_dtype());
     uint32_t cb_page_size = input_element_size_bytes * tt::constants::FACE_HEIGHT + sizeof(uint16_t);
     uint32_t height = input_tensor.get_logical_shape()[-2];
     uint32_t width = input_tensor.get_logical_shape()[-1];
@@ -61,6 +63,8 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
     uint32_t packed_fill_value = (std::uint32_t)fill_value;
     if (input_tensor.get_dtype() == DataType::BFLOAT16) {
         packed_fill_value = pack_two_bfloat16_into_uint32({bfloat16(fill_value), bfloat16(fill_value)});
+    } else if (input_tensor.get_dtype() == DataType::UINT16) {
+        packed_fill_value = pack_two_uint16_into_uint32({fill_value, fill_value});
     }
 
     uint32_t padded_height = tt::div_up(height, tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
