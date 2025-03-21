@@ -6,8 +6,8 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "ckernel_sfpu_load_immediate_value.h"
-#include "ckernel_sfpu_copy_values.h"
+#include "llk_math_eltwise_unary_sfpu_load_immediate_value.h"
+#include "llk_math_eltwise_binary_sfpu_copy_values.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -33,7 +33,7 @@ namespace ckernel {
  * Any valid floating point value                        | True     |
  */
 ALWI void load_immediate_value(uint32_t idst, float val) {
-    MATH(sfpu::llk_math_eltwise_unary_sfpu_load_imm(idst, val));
+    MATH(llk_math_eltwise_unary_sfpu_load_imm(idst, val));
 }
 
 /**
@@ -52,18 +52,18 @@ ALWI void load_immediate_value(uint32_t idst, float val) {
  * to copy values from      | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void copy_values(uint idst0, uint32_t idst1) {
-    MATH(sfpu::llk_math_eltwise_binary_sfpu_copy_values(idst0, idst1));
+    MATH(llk_math_eltwise_binary_sfpu_copy_values(idst0, idst1));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
 ALWI void load_immediate_value_init() {
-    MATH(sfpu::llk_math_eltwise_unary_sfpu_load_imm_init());
+    MATH(llk_math_eltwise_unary_sfpu_load_imm_init());
 }
 
 ALWI void copy_values_init() {
-    MATH(sfpu::llk_math_eltwise_binary_sfpu_copy_values_init());
+    MATH(llk_math_eltwise_binary_sfpu_copy_values_init());
 }
 
 }  // namespace ckernel
