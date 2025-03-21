@@ -1544,14 +1544,14 @@ FORCE_INLINE void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 
     WAYPOINT("NWID");
 }
 
-FORCE_INLINE
-void noc_inline_dw_write_set_state(
+template <bool posted = false>
+FORCE_INLINE void noc_inline_dw_write_set_state(
     uint64_t addr, uint8_t be = 0xF, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
     WAYPOINT("NWIW");
     DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
 
     uint32_t noc_cmd_field = NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) | NOC_CMD_CPY | NOC_CMD_WR |
-                             NOC_CMD_WR_INLINE | 0x0 | NOC_CMD_RESP_MARKED;
+                             NOC_CMD_WR_INLINE | 0x0 | (posted ? 0x0 : NOC_CMD_RESP_MARKED);
 
     uint32_t be32 = be;
     uint32_t be_shift = (addr & (NOC_WORD_BYTES - 1));
@@ -1566,7 +1566,7 @@ void noc_inline_dw_write_set_state(
     WAYPOINT("NWID");
 }
 
-template <bool update_addr_lo = false>
+template <bool update_addr_lo = false, bool update_counter = true, bool posted = false>
 FORCE_INLINE void noc_inline_dw_write_with_state(
     uint32_t val, uint32_t addr = 0, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
     WAYPOINT("NWIW");
@@ -1577,6 +1577,23 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
     }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    if constexpr (update_counter) {
+        if constexpr (posted) {
+            if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+                inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+            } else {
+                noc_posted_writes_num_issued[noc] += 1;
+            }
+        } else {
+            if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
+            } else {
+                noc_nonposted_writes_num_issued[noc] += 1;
+                noc_nonposted_writes_acked[noc] += 1;
+            }
+        }
+    }
     WAYPOINT("NWID");
 }
 

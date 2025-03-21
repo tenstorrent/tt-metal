@@ -325,10 +325,11 @@ private:
     FORCE_INLINE void update_edm_buffer_slot_wrptr(uint8_t noc = noc_index) {
         if constexpr (stateful_api) {
             if constexpr (enable_ring_support) {
-                noc_inline_dw_write_with_state<true>(
+                noc_inline_dw_write_with_state<true, false, false>(
                     *this->buffer_slot_wrptr_ptr, this->edm_buffer_slot_wrptr_addr, this->sync_noc_cmd_buf, noc);
             } else {
-                noc_inline_dw_write_with_state<false>(*this->buffer_slot_wrptr_ptr, 0, this->sync_noc_cmd_buf, noc);
+                noc_inline_dw_write_with_state<false, false, false>(
+                    *this->buffer_slot_wrptr_ptr, 0, this->sync_noc_cmd_buf, noc);
             }
         } else {
             const uint64_t noc_sem_addr =
