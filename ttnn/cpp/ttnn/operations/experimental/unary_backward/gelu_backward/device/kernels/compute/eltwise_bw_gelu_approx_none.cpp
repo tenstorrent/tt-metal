@@ -15,7 +15,7 @@
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/eltwise_unary/erf_erfc.h"
 #include "compute_kernel_api/eltwise_unary/exp.h"
-#include "eltwise_bw_gelu_common.hpp"
+#include "compute_kernel_api/common_sfpu.h"
 
 namespace NAMESPACE {
 
