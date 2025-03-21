@@ -28,8 +28,15 @@ std::vector<ttnn::TensorSpec> AllReduce::compute_output_specs(const std::vector<
     return std::vector<ttnn::TensorSpec>(input_tensors.size(), spec);
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks AllReduce::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+tt::tt_metal::operation::ProgramWithCallbacks AllReduce::create_program_at(
+    const ttnn::MeshCoordinate& coord,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    auto devices = input_tensors[0].mesh_device()->get_devices();
+
+    auto [device_index, sender_device_id, receiver_device_id] = ccl::get_device_index_and_sender_receiver_ids(
+        input_tensors[0].mesh_device()->get_device(coord), devices, topology);
+
     return ccl::reduce_scatter_detail::reduce_scatter_with_workers(
         input_tensors.at(0),
         output_tensors.at(0),
@@ -37,9 +44,9 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduce::create_program(
         0,
         this->num_links,
         this->ring_size,
-        this->ring_index,
-        this->receiver_device_id,
-        this->sender_device_id,
+        device_index,
+        receiver_device_id,
+        sender_device_id,
         this->topology,
         this->user_defined_num_workers,
         this->user_defined_num_buffers_per_channel);

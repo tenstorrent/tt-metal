@@ -27,8 +27,7 @@ using CachedMeshWorkload = tt::tt_metal::program_cache::detail::CachedMeshWorklo
 template <typename device_operation_t, typename program_factory_t>
 auto uses_heterogenous_dispatch() {
     if constexpr (requires { device_operation_t::uses_heterogenous_dispatch(); }) {
-        auto res = device_operation_t::uses_heterogenous_dispatch();
-        return res;
+        return device_operation_t::uses_heterogenous_dispatch();
     } else {
         constexpr bool has_create_at = requires { &program_factory_t::create_at; };
         return has_create_at;

@@ -26,38 +26,32 @@ namespace ttnn {
 using ccl::EriscDatamoverBuilder;
 
 struct AllReduceAsync {
-    std::optional<IDevice*> forward_device;
-    std::optional<IDevice*> backward_device;
     const uint32_t num_links;
     const uint32_t ring_size;
-    const uint32_t ring_index;
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
     const GlobalSemaphore semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     bool enable_persistent_fabric_mode;
+    uint32_t cluster_axis;
 
     AllReduceAsync(
-        std::optional<IDevice*> forward_device,
-        std::optional<IDevice*> backward_device,
         uint32_t num_links,
         uint32_t ring_size,
-        uint32_t ring_index,
         MemoryConfig output_mem_config,
         ccl::Topology topology,
         GlobalSemaphore semaphore,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-        bool enable_persistent_fabric_mode) :
-        forward_device(forward_device),
-        backward_device(backward_device),
+        bool enable_persistent_fabric_mode,
+        uint32_t cluster_axis) :
         num_links(num_links),
         ring_size(ring_size),
-        ring_index(ring_index),
         output_mem_config(output_mem_config),
         topology(topology),
         semaphore(semaphore),
         sub_device_id(sub_device_id),
-        enable_persistent_fabric_mode(enable_persistent_fabric_mode) {}
+        enable_persistent_fabric_mode(enable_persistent_fabric_mode),
+        cluster_axis(cluster_axis) {}
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -66,7 +60,6 @@ struct AllReduceAsync {
 
         attrs.emplace_back("num_links", num_links);
         attrs.emplace_back("ring_size", ring_size);
-        attrs.emplace_back("ring_index", ring_index);
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("semaphore", semaphore);
@@ -76,25 +69,12 @@ struct AllReduceAsync {
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
+    tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
+        const ttnn::MeshCoordinate& coord,
+        const std::vector<Tensor>& input_tensors,
+        std::vector<Tensor>& output_tensors) const;
     const tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
-
-namespace ccl {
-namespace all_reduce_async_detail {
-AllReduceAsync create_all_reduce_async_struct(
-    const Tensor& input_tensor,
-    const uint32_t num_links,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::vector<IDevice*>& devices,
-    const ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphores,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    bool enable_persistent_fabric_mode);
-
-}  // namespace all_reduce_async_detail
-}  // namespace ccl
 
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_links, size_t num_workers_per_link, bool persistent_fabric_mode, const CoreRangeSet& available_cores);

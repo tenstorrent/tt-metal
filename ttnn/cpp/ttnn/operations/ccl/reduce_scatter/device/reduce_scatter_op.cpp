@@ -219,7 +219,6 @@ Tensor reduce_scatter(
          binary_op_type,
          num_links,
          output_mem_config,
-         mesh_view,
          cluster_axis,
          user_defined_num_workers,
          user_defined_num_buffers_per_channel,

@@ -14,68 +14,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn {
-namespace ccl {
-namespace reduce_scatter_detail {
-
-ReduceScatterAsync create_reduce_scatter_struct(
-    const Tensor& input_tensor,
-    const ttnn::operations::binary::BinaryOpType binary_op_type,
-    const uint32_t scatter_dim,
-    const MemoryConfig& output_mem_config,
-    const std::vector<IDevice*>& devices,
-    const ttnn::ccl::Topology topology,
-    std::optional<std::vector<Tensor>> forward_output_tensors,
-    std::optional<std::vector<Tensor>> backward_output_tensors,
-    std::optional<size_t> num_links_preferred,
-    const GlobalSemaphore& from_remote_sem,
-    const GlobalSemaphore& to_remote_sem,
-    std::optional<SubDeviceId> sub_device_id,
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle) {
-    uint32_t num_devices = devices.size();
-
-    // TODO: fix `devices[0]` arg this.
-    auto [device_index, sender_device_id, receiver_device_id] =
-        get_device_index_and_sender_receiver_ids(devices[0], devices, topology);
-
-    TT_FATAL(
-        receiver_device_id != std::nullopt || sender_device_id != std::nullopt,
-        "Error, Reduce-scatter was unable to identify either a sender or receiver device ID and atleast one must be "
-        "identified for a valid Reduce-scatter configuration. The input mesh tensor or Reduce-scatter arguments may be "
-        "incorrect");
-
-    auto find_device = [](const std::vector<IDevice*>& devices, std::optional<chip_id_t> id) -> std::optional<IDevice*> {
-        if (id == std::nullopt) {
-            return std::nullopt;
-        }
-        auto device = std::find_if(
-            devices.begin(), devices.end(), [id_ = id.value()](IDevice const* d) { return d->id() == id_; });
-        TT_FATAL(
-            device != devices.end(),
-            "Device with ID {} not found in the list of devices, but it should be here since it was provided "
-            "previously",
-            id.value());
-        return *device;
-    };
-
-    return ttnn::ReduceScatterAsync{
-        binary_op_type,
-        scatter_dim,
-        num_devices,
-        device_index,
-        find_device(devices, receiver_device_id),
-        find_device(devices, sender_device_id),
-        output_mem_config,
-        topology,
-        forward_output_tensors,
-        backward_output_tensors,
-        num_links_preferred,
-        from_remote_sem,
-        to_remote_sem,
-        sub_device_id,
-        fabric_handle};
-}
-}  // namespace reduce_scatter_detail
-}  // namespace ccl
 
 void ReduceScatterAsync::validate(const std::vector<Tensor>& input_tensors) const {
     for (auto const& t : input_tensors) {
@@ -131,8 +69,42 @@ std::vector<ttnn::TensorSpec> ReduceScatterAsync::compute_output_specs(const std
     return output_tensors;
 }
 
-operation::ProgramWithCallbacks ReduceScatterAsync::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+operation::ProgramWithCallbacks ReduceScatterAsync::create_program_at(
+    const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    std::vector<IDevice*> devices;
+    if (this->cluster_axis.has_value()) {
+        const auto& mesh_view = input_tensors[0].mesh_device()->get_view();
+        devices =
+            (cluster_axis == 0) ? mesh_view.get_devices_on_column(coord[1]) : mesh_view.get_devices_on_row(coord[0]);
+    } else {
+        auto devices = input_tensors[0].mesh_device()->get_devices();
+    }
+    uint32_t num_devices = devices.size();
+
+    auto [device_index, sender_device_id, receiver_device_id] = ccl::get_device_index_and_sender_receiver_ids(
+        input_tensors[0].mesh_device()->get_device(coord), devices, topology);
+
+    TT_FATAL(
+        receiver_device_id != std::nullopt || sender_device_id != std::nullopt,
+        "Error, Reduce-scatter was unable to identify either a sender or receiver device ID and atleast one must be "
+        "identified for a valid Reduce-scatter configuration. The input mesh tensor or Reduce-scatter arguments may be "
+        "incorrect");
+
+    auto find_device = [](const std::vector<IDevice*>& devices,
+                          std::optional<chip_id_t> id) -> std::optional<IDevice*> {
+        if (id == std::nullopt) {
+            return std::nullopt;
+        }
+        auto device = std::find_if(
+            devices.begin(), devices.end(), [id_ = id.value()](const IDevice* d) { return d->id() == id_; });
+        TT_FATAL(
+            device != devices.end(),
+            "Device with ID {} not found in the list of devices, but it should be here since it was provided "
+            "previously",
+            id.value());
+        return *device;
+    };
+
     std::optional<Tensor> foreward_direction_remote_output_tensor = std::nullopt;
     std::optional<Tensor> backward_direction_remote_output_tensor = std::nullopt;
     return ccl::reduce_scatter_detail::build_reduce_scatter_async_program(
@@ -144,12 +116,12 @@ operation::ProgramWithCallbacks ReduceScatterAsync::create_program(
         output_tensors.at(4),  // partial_output_tensor_backward_direction
         foreward_direction_remote_output_tensor,
         backward_direction_remote_output_tensor,
-        this->forward_device,
-        this->backward_device,
+        find_device(devices, sender_device_id),
+        find_device(devices, receiver_device_id),
         this->binary_op_type,
         this->scatter_dim,
         this->ring_size,
-        this->ring_index,
+        device_index,
         this->topology,
         this->num_links_preferred,
         this->from_remote_sem,
@@ -167,7 +139,6 @@ operation::Hash ReduceScatterAsync::compute_program_hash(const std::vector<Tenso
         this->binary_op_type,
         this->scatter_dim,
         this->ring_size,
-        this->ring_index,
         this->topology,
         input_shape,
         input_memory_layout,
@@ -210,7 +181,7 @@ Tensor reduce_scatter(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "reduce_scatter op is only supported for Fast Dispatch");
 
     ttnn::ccl::Topology ccl_topology = topology;
-    auto devices = input_tensor.get_workers();
+    auto devices = input_tensor.mesh_device()->get_devices();
     uint32_t num_devices = devices.size();
     TT_FATAL(num_devices > 1, "reduce_scatter op will only work for num_devices > 1, but has {}", num_devices);
     if (num_devices == 2) {
@@ -227,11 +198,11 @@ Tensor reduce_scatter(
         dim);
 
     std::vector<Tensor> output_tensors = {
-        Tensor(operation::get_workers_for_op_output({input_tensor})),
-        Tensor(operation::get_workers_for_op_output({input_tensor})),
-        Tensor(operation::get_workers_for_op_output({input_tensor})),
-        Tensor(operation::get_workers_for_op_output({input_tensor})),
-        Tensor(operation::get_workers_for_op_output({input_tensor}))};
+        Tensor(input_tensor.mesh_device()),
+        Tensor(input_tensor.mesh_device()),
+        Tensor(input_tensor.mesh_device()),
+        Tensor(input_tensor.mesh_device()),
+        Tensor(input_tensor.mesh_device())};
     TT_FATAL(
         output_tensors.size() == 5,
         "Reduce scatter requires 5 output tensors. 1 is real and the others are temporaries");
@@ -242,7 +213,7 @@ Tensor reduce_scatter(
          scatter_dim,
          output_mem_config,
          ccl_topology,
-         devices,
+         num_devices,
          num_links_preferred,
          output_tensors,
          worker_subdevice_id_opt,
@@ -253,20 +224,18 @@ Tensor reduce_scatter(
             const auto& input_tensor = input_tensors.at(0);
 
             return operation::run(
-                ttnn::ccl::reduce_scatter_detail::create_reduce_scatter_struct(
-                    input_tensor,
+                ttnn::ReduceScatterAsync(
                     binary_op_type,
                     scatter_dim,
+                    num_devices,
                     output_mem_config,
-                    devices,
                     ccl_topology,
-                    std::nullopt,
-                    std::nullopt,
                     num_links_preferred,
                     from_remote_multi_device_global_semaphore,
-                    from_remote_multi_device_global_semaphore,
+                    to_remote_multi_device_global_semaphore,
                     worker_subdevice_id_opt,
-                    fabric_handle),
+                    fabric_handle,
+                    /*cluster_axis=*/std::nullopt),
                 {input_tensor});
         },
         {input_tensor},
@@ -293,14 +262,17 @@ Tensor reduce_scatter(
     int16_t rank = input_tensor.get_logical_shape().rank();
     int16_t scatter_dim = (dim < 0) ? rank + dim : dim;
     const auto mesh_view = mesh_device.get_view();
-    auto devices = input_tensor.get_workers();
+    TT_FATAL(
+        mesh_view.is_mesh_2d(),
+        "reduce-scatter invoked with cluster_axis API on >2D mesh, which is currently unsupported");
+    const uint32_t num_devices = cluster_axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
 
     std::vector<Tensor> output_tensors = {
-        Tensor(operation::get_workers_for_op_output({input_tensor})),
-        Tensor(operation::get_workers_for_op_output({input_tensor})),
-        Tensor(operation::get_workers_for_op_output({input_tensor})),
-        Tensor(operation::get_workers_for_op_output({input_tensor})),
-        Tensor(operation::get_workers_for_op_output({input_tensor}))};
+        Tensor(input_tensor.mesh_device()),
+        Tensor(input_tensor.mesh_device()),
+        Tensor(input_tensor.mesh_device()),
+        Tensor(input_tensor.mesh_device()),
+        Tensor(input_tensor.mesh_device())};
     TT_FATAL(
         output_tensors.size() == 5,
         "Reduce scatter requires 5 output tensors. 1 is real and the others are temporaries");
@@ -310,10 +282,9 @@ Tensor reduce_scatter(
          to_remote_multi_device_global_semaphore,
          scatter_dim,
          output_mem_config,
-         mesh_view,
          cluster_axis,
          topology,
-         devices,
+         num_devices,
          num_links_preferred,
          output_tensors,
          worker_subdevice_id_opt,
@@ -321,32 +292,21 @@ Tensor reduce_scatter(
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            const auto& input_device_tensor = input_tensors.at(0);
-
-            TT_FATAL(
-                mesh_view.is_mesh_2d(),
-                "reduce-scatter invoked with cluster_axis API on >2D mesh, which is currently unsupported");
-            const auto coordinate = mesh_view.find_device(input_device_tensor.device()->id());
-            std::vector<IDevice*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(coordinate[1])
-                                                                : mesh_view.get_devices_on_row(coordinate[0]);
-
             const auto& input_tensor = input_tensors.at(0);
 
             return operation::run(
-                ttnn::ccl::reduce_scatter_detail::create_reduce_scatter_struct(
-                    input_tensor,
+                ttnn::ReduceScatterAsync(
                     binary_op_type,
                     scatter_dim,
+                    num_devices,
                     output_mem_config,
-                    devices,
                     topology,
-                    std::nullopt,
-                    std::nullopt,
                     num_links_preferred,
                     from_remote_multi_device_global_semaphore,
                     to_remote_multi_device_global_semaphore,
                     worker_subdevice_id_opt,
-                    fabric_handle),
+                    fabric_handle,
+                    /*cluster_axis=*/cluster_axis),
                 {input_tensor});
         },
         {input_tensor},
