@@ -7,32 +7,32 @@
 #include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
-inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    DPRINT << "===" << tile_id << "===" << ENDL();
-    for (uint16_t r = 0; r < 32; ++r) {
-        DPRINT << (uint)r << " : "
-               << TileSlice(
-                      cb_id,
-                      tile_id,
-                      SliceRange{
-                          .h0 = (uint8_t)r,
-                          .h1 = (uint8_t)(r + 1),
-                          .hs = (uint8_t)1,
-                          .w0 = (uint8_t)0,
-                          .w1 = (uint8_t)32,
-                          .ws = (uint8_t)1},
-                      true,
-                      untilize)
-               << ENDL();
-    }
-    DPRINT << "++++++" << ENDL();
-}
+// inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+//     DPRINT << "===" << tile_id << "===" << ENDL();
+//     for (uint16_t r = 0; r < 32; ++r) {
+//         DPRINT << (uint)r << " : "
+//                << TileSlice(
+//                       cb_id,
+//                       tile_id,
+//                       SliceRange{
+//                           .h0 = (uint8_t)r,
+//                           .h1 = (uint8_t)(r + 1),
+//                           .hs = (uint8_t)1,
+//                           .w0 = (uint8_t)0,
+//                           .w1 = (uint8_t)32,
+//                           .ws = (uint8_t)1},
+//                       true,
+//                       untilize)
+//                << ENDL();
+//     }
+//     DPRINT << "++++++" << ENDL();
+// }
 
-inline void print_tiles(uint32_t cb_id, uint32_t tile_start = 0, uint32_t num_tiles = 1, bool untilize = false) {
-    for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
-        print_full_tile(cb_id, tile_start + tile_idx, untilize);
-    }
-}
+// inline void print_tiles(uint32_t cb_id, uint32_t tile_start = 0, uint32_t num_tiles = 1, bool untilize = false) {
+//     for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
+//         print_full_tile(cb_id, tile_start + tile_idx, untilize);
+//     }
+// }
 
 template <uint8_t noc_ind = noc_index>
 FORCE_INLINE std::uint64_t static_noc_multicast_addr(
@@ -41,7 +41,6 @@ FORCE_INLINE std::uint64_t static_noc_multicast_addr(
     std::uint32_t noc_x_end,
     std::uint32_t noc_y_end,
     std::uint32_t addr) {
-    DPRINT << "noc_ind " << (uint32_t)noc_ind << ENDL();
     if constexpr (noc_ind == 0) {
         return get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, addr);
     } else {
@@ -50,7 +49,6 @@ FORCE_INLINE std::uint64_t static_noc_multicast_addr(
 }
 
 void kernel_main() {
-    DPRINT << "Starting kernel_main for reader" << ENDL();
     size_t ct_arg_idx = 0, rt_arg_idx = 0;
 
     // Define all compile-time arguments at the beginning
@@ -101,15 +99,12 @@ void kernel_main() {
     uint32_t bank_base_address = get_write_ptr(input_tensor_cb_id);
 
     if (sender_core) {
-        DPRINT << "SENDER CORE READER" << ENDL();
         for (auto target_device_id : device_order) {
             if (target_device_id == chip_id) {
                 break;
             }
 
             uint32_t base_core = target_device_id * input_shard_cores_per_device;
-            // DPRINT << "base_core " << base_core << " input_shard_cores_per_device " << input_shard_cores_per_device
-            //        << ENDL();
 
             // Precompute the number of bytes to transfer per tile group
             constexpr uint32_t bytes_per_tile_group = tiles_per_core_width * page_size_bytes;
@@ -118,17 +113,15 @@ void kernel_main() {
                 uint32_t x = input_core_xy[curr_core][x_index];
                 uint32_t y = input_core_xy[curr_core][y_index];
                 uint64_t shard_noc_addr = get_noc_addr(x, y, bank_base_address);
-                // DPRINT << "reserving " << tiles_per_core_width << " pages" << ENDL();
+                //
                 cb_reserve_back(fabric_sender_cb_id, tiles_per_core_width);
                 uint32_t sender_read_addr = get_write_ptr(fabric_sender_cb_id);
                 noc_async_read(shard_noc_addr, sender_read_addr, bytes_per_tile_group);
                 noc_async_read_barrier();
-                // print_tiles(fabric_sender_cb_id, 0, tiles_per_core_width, true);
                 cb_push_back(fabric_sender_cb_id, tiles_per_core_width);
             }
         }
     } else if (worker_core) {
-        DPRINT << "WORKER CORE READER" << ENDL();
         // Calculate core index and tile offset once
         uint32_t linear_input_core_idcs[num_pages_per_packet];
         uint32_t linear_input_tile_offsets[num_pages_per_packet];
@@ -143,52 +136,41 @@ void kernel_main() {
         uint32_t base_receiver_local_page_addr =
             get_write_ptr(fabric_receiver_cb_id) + chip_id * num_pages_per_packet * page_size_bytes;
         for (uint32_t i = 0; i < num_pages_per_packet; i++) {
-            DPRINT << "linear_input_core_idcs[" << i << "] " << linear_input_core_idcs[i] << ENDL();
-            DPRINT << "linear_input_tile_offsets[" << i << "] " << linear_input_tile_offsets[i] << ENDL();
             uint32_t core_x = input_core_xy[linear_input_core_idcs[i]][x_index];
             uint32_t core_y = input_core_xy[linear_input_core_idcs[i]][y_index];
-            DPRINT << "core_x " << core_x << " core_y " << core_y << ENDL();
 
             uint64_t tile_addr =
                 get_noc_addr(core_x, core_y, base_input_tensor_addr + (linear_input_tile_offsets[i] * page_size_bytes));
-            // DPRINT << "tile_addr[" << i << "] " << tile_addr << ENDL();
+            //
 
             noc_async_read(tile_addr, base_receiver_local_page_addr + i * page_size_bytes, page_size_bytes);
         }
         noc_async_read_barrier();
         if (receiver_core) {
-            DPRINT << "Designated receiver core " << ENDL();
             noc_semaphore_wait((uint32_t*)receiver_semaphore_address, num_devices - 1);
-            DPRINT << "Receiver semaphore wait done" << ENDL();
+
             // Now we have the block in the CB address, we can mcast to dests!
-            DPRINT << "noc_start_x " << noc_start_x << " noc_start_y " << noc_start_y << " noc_end_x " << noc_end_x
-                   << " noc_end_y " << noc_end_y << " num_dests " << num_dests << ENDL();
             uint64_t multicast_semaphore_addr =
                 static_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, local_semaphore_address);
-            // DPRINT << "multicast_semaphore_addr: " << multicast_semaphore_addr << ENDL();
+            //
             noc_semaphore_set_multicast(
                 receiver_semaphore_address,
                 multicast_semaphore_addr,
                 num_dests);  // could do different mcast for each device by having num_devices - 1 receiver cores
-            DPRINT << "sent semaphore inc" << ENDL();
+
             noc_async_atomic_barrier();
-            DPRINT << "resetting global semaphore" << ENDL();
+
             *(uint32_t*)receiver_semaphore_address = 0;
         } else {
-            DPRINT << "Non-designated receiver core" << ENDL();
             noc_semaphore_wait((uint32_t*)local_semaphore_address, (num_devices - 1));
-            DPRINT << "resetting local semaphore" << ENDL();
+
             *(uint32_t*)local_semaphore_address = 0;
         }
-        print_tiles(fabric_receiver_cb_id, 0, num_pages_per_packet * num_devices, true);
-        DPRINT << "pushing back to cb " << fabric_receiver_cb_id << " tiles: " << num_pages_per_packet * num_devices
-               << ENDL();
+
         cb_push_back(fabric_receiver_cb_id, num_pages_per_packet * num_devices);
-        DPRINT << "pushed back to cb " << fabric_receiver_cb_id << " tiles: " << num_pages_per_packet * num_devices
-               << ENDL();
+
     } else {
         // Do nothing
         // win
     }
-    DPRINT << "Kernel finished" << ENDL();
 }

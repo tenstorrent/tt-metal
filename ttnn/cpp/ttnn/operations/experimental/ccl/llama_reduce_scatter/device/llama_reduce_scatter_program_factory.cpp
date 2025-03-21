@@ -197,12 +197,12 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     auto input_grid = shard_spec.grid;
     auto output_grid = output_shard_spec.grid;
 
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "input_grid: " << input_grid.str() << std::endl;
-    }
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "output_grid: " << output_grid.str() << std::endl;
-    }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "input_grid: " << input_grid.str() << std::endl;
+    // }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "output_grid: " << output_grid.str() << std::endl;
+    // }
 
     tt::tt_metal::Program program{};
 
@@ -248,10 +248,10 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         num_workers_per_link * num_links,
         shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "packet_worker_cores_grid: " << packet_worker_cores_grid.str() << std::endl;
-        std::cout << "sender_core_grid: " << sender_core_grid.str() << std::endl;
-    }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "packet_worker_cores_grid: " << packet_worker_cores_grid.str() << std::endl;
+    //     std::cout << "sender_core_grid: " << sender_core_grid.str() << std::endl;
+    // }
 
     auto all_cores_grid = packet_worker_cores_grid.merge(sender_core_grid);
 
@@ -415,15 +415,15 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     reader_defines["INPUT_CORE_XY"] = detail::cores_to_string(to_worker_cores(input_cores));
     reader_defines["OUTPUT_CORE_XY"] = detail::cores_to_string(to_worker_cores(output_cores));
     reader_defines["PACKET_WORKER_CORES"] = detail::cores_to_string(to_worker_cores(packet_worker_cores));
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "input_cores: " << reader_defines["INPUT_CORE_XY"] << std::endl;
-    }
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "output_cores: " << reader_defines["OUTPUT_CORE_XY"] << std::endl;
-    }
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "packet_worker_cores: " << reader_defines["PACKET_WORKER_CORES"] << std::endl;
-    }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "input_cores: " << reader_defines["INPUT_CORE_XY"] << std::endl;
+    // }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "output_cores: " << reader_defines["OUTPUT_CORE_XY"] << std::endl;
+    // }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "packet_worker_cores: " << reader_defines["PACKET_WORKER_CORES"] << std::endl;
+    // }
     // create local semaphore
     auto local_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores_grid, INVALID);
     // std::cout << "Program factory local_semaphore: " << local_semaphore << std::endl;
@@ -447,9 +447,9 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             .compile_args = reader_compile_time_args,
             .defines = reader_defines});
 
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "packet_receiver_core: " << packet_receiver_core.str() << std::endl;
-    }
+    // if (operation_attributes.ring_index == 3) {
+    //     std::cout << "packet_receiver_core: " << packet_receiver_core.str() << std::endl;
+    // }
     auto packet_receiver_worker_core = to_worker_cores({packet_receiver_core}).at(0);
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -534,9 +534,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         uint32_t is_linear_output_page_start_idx = writer_runtime_args.size() - 1;
 
         if (sender_core_grid.contains(core)) {
-            if (operation_attributes.ring_index == 3) {
-                std::cout << "Sender core: " << core.str() << std::endl;
-            }
             reader_runtime_args[is_reader_sender_core_idx] = true;
             reader_runtime_args[is_reader_worker_core_idx] = false;
             reader_runtime_args[is_reader_receiver_core_idx] = false;
@@ -546,9 +543,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             detail::append_fabric_connection_rt_args(forward_fabric_connection, core, program, writer_runtime_args);
             detail::append_fabric_connection_rt_args(backward_fabric_connection, core, program, writer_runtime_args);
         } else if (packet_worker_cores_grid.contains(core)) {
-            if (operation_attributes.ring_index == 3) {
-                std::cout << "Packet worker core: " << core.str() << std::endl;
-            }
             reader_runtime_args[is_reader_sender_core_idx] = false;
             reader_runtime_args[is_reader_worker_core_idx] = true;
             reader_runtime_args[is_linear_input_packet_start_idx] = local_page + offset_for_input;
@@ -559,9 +553,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
 
             local_page += num_pages_per_packet;
             if (core == packet_receiver_core) {
-                if (operation_attributes.ring_index == 3) {
-                    std::cout << "Packet receiver core: " << core.str() << std::endl;
-                }
                 reader_runtime_args[is_reader_receiver_core_idx] = true;
             } else {
                 reader_runtime_args[is_reader_receiver_core_idx] = false;
