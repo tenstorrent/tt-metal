@@ -173,13 +173,14 @@ ttnn::Tensor gen_trans_mat() {
 
 RotaryEmbeddingParams build_rope_params(uint32_t sequence_length, uint32_t head_dim, float theta) {
     if (head_dim % 32U != 0U) {
-        throw std::invalid_argument("RoPE head_dim must be divisible by 32");
+        throw std::invalid_argument(fmt::format("RoPE head_dim must be divisible by 32, but is {}", head_dim));
     }
     if (head_dim > 256U) {
-        throw std::invalid_argument("RoPE head_dim must be less than or equal to 256");
+        throw std::invalid_argument(
+            fmt::format("RoPE head_dim must be less than or equal to 256, but is {}", head_dim));
     }
-    if (head_dim <= 0U) {
-        throw std::invalid_argument("RoPE head_dim must be greater than 0");
+    if (head_dim == 0U) {
+        throw std::invalid_argument("RoPE head_dim must be non-zero.");
     }
     auto [sin_freqs, cos_freqs] = gen_freqs(head_dim, sequence_length, theta);
     auto trans_mat = gen_trans_mat();

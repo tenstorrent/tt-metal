@@ -20,7 +20,7 @@ GroupedQueryAttention::GroupedQueryAttention(const GQAConfig& config) :
     m_kv_linear = std::make_shared<ttml::modules::LinearLayer>(m_embedding_dim, concat_kv_dim);
     m_dropout = std::make_shared<ttml::modules::DropoutLayer>(config.dropout_prob);
     m_out_linear = std::make_shared<ttml::modules::LinearLayer>(m_embedding_dim, m_embedding_dim);
-    m_embedding = std::make_shared<ttml::modules::RotaryEmbedding>(config.rope_params);
+    m_embedding = std::make_shared<ttml::modules::RotaryEmbedding>(*config.rope_params);
 
     // register modules
     create_name("grouped_query_attention");

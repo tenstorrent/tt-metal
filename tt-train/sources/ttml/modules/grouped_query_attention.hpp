@@ -15,7 +15,7 @@ struct GQAConfig {
     uint32_t num_heads{};
     uint32_t num_groups{};
     float dropout_prob{};
-    ops::RotaryEmbeddingParams rope_params;
+    const ops::RotaryEmbeddingParams* rope_params{};
 };
 
 class GroupedQueryAttention : public ttml::autograd::ModuleBase {
