@@ -429,6 +429,16 @@ private:
     std::unordered_map<uint32_t, uint32_t> phys_device_to_thread_id_;
 };
 
+// Pass Through - This data structure is not backed by any worker threads. When a user enqueues a task,
+// it is immediately executed.
+// Primary Use Case: Single Device/Unit Mesh Dispatch.
+class PassThroughThreadPool : public ThreadPool {
+public:
+    PassThroughThreadPool() = default;
+    void enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt) override { f(); }
+    void wait() override {}
+};
+
 }  // namespace thread_pool_impls
 
 std::shared_ptr<ThreadPool> create_boost_thread_pool(int num_threads) {
@@ -446,6 +456,10 @@ std::shared_ptr<ThreadPool> create_device_bound_thread_pool(int num_threads) {
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
     const std::vector<tt::tt_metal::IDevice*>& physical_devices) {
     return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(physical_devices);
+}
+
+std::shared_ptr<ThreadPool> create_passthrough_thread_pool() {
+    return std::make_shared<thread_pool_impls::PassThroughThreadPool>();
 }
 
 }  // namespace tt::tt_metal
