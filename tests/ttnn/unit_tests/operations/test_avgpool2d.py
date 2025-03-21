@@ -125,22 +125,10 @@ def run_avg_pool(
     ],
 )
 def test_run_avg_pool(device, input_shape, kernel_size, stride, padding, dilation, ceil_mode):
-    known_issues = [
-        ((2, 2), (2, 2)),
-        ((2, 2), (3, 3)),
-        ((4, 4), (2, 2)),
-        ((4, 4), (3, 3)),
-        ((4, 4), (5, 5)),
-        ((6, 6), (2, 2)),
-        ((6, 6), (3, 3)),
-        ((6, 6), (5, 5)),
-        ((6, 6), (9, 9)),
-    ]
-    if ((padding, kernel_size) in known_issues) or any(p > k // 2 for p, k in zip(padding, kernel_size)):
+    if any(p > k // 2 for p, k in zip(padding, kernel_size)):
         pytest.skip(
             "Known issue with this combination of parameters - RuntimeError: pad should be at most half of kernel size."
         )
-
     run_avg_pool(
         device,
         input_shape,
