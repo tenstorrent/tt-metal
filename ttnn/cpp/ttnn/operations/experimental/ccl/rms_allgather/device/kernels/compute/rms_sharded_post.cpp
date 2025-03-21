@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -42,7 +42,6 @@ void MAIN {
     constexpr uint32_t cb_gamma = tt::CBIndex::c_8;
     constexpr uint32_t cb_stats_reduced = tt::CBIndex::c_9;
     constexpr uint32_t cb_ex_global = tt::CBIndex::c_10;
-    // E[x]^2
 
     binary_op_init_common(cb_stats, cb_scaler_global, cb_var);
 
