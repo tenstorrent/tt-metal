@@ -128,7 +128,6 @@ class Kernel : public JitBuildSettings {
     KernelSource kernel_src_;
     std::string kernel_full_name_;  // Name + hash
     CoreRangeSet core_range_set_;
-    // std::string binary_path_;
     // DataMovement kernels have one binary each and Compute kernels have three binaries
     // Different set of binaries per device because kernel compilation is device dependent
     // TODO: break this dependency by https://github.com/tenstorrent/tt-metal/issues/3381

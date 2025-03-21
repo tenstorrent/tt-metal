@@ -248,7 +248,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixActiveEthTestSubDeviceMyLogic
         k_coordinates_kernel_path,
         sub_device_2_worker_cores,
         DataMovementConfig{
-            .noc = NOC::RISCV_1_default,
+            .noc = NOC::RISCV_0_default,
             .compile_args = {
                 cb_addr_worker,
             }});

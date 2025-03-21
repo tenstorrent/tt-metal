@@ -451,11 +451,4 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env, JitBuildOptions& opt
     }
 }
 
-// void jit_build_genfiles_binaries_built_success_marker(const JitBuildEnv& env, const JitBuildSettings& settings) {
-//     // Note: assumes dirs (and descriptors) already created
-//     const string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
-//     const string success_marker_file = out_dir + ".success";
-//     ofstream file(success_marker_file);
-// }
-
 }  // namespace tt::tt_metal
