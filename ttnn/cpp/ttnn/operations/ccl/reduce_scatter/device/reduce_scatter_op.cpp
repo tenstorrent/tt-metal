@@ -7,45 +7,6 @@
 #include <cstdint>
 
 namespace ttnn {
-namespace ccl {
-namespace reduce_scatter_detail {
-
-ReduceScatter create_reduce_scatter_struct(
-    const Tensor& input_tensor,
-    const ttnn::operations::binary::BinaryOpType binary_op_type,
-    const uint32_t scatter_dim,
-    const uint32_t num_links,
-    const MemoryConfig& output_mem_config,
-    const std::optional<size_t> user_defined_num_workers,
-    const std::optional<size_t> user_defined_num_buffers_per_channel,
-    const std::vector<IDevice*>& devices,
-    const ttnn::ccl::Topology topology) {
-    uint32_t num_devices = devices.size();
-
-    auto [device_index, sender_device_id, receiver_device_id] =
-        get_device_index_and_sender_receiver_ids(input_tensor, devices, topology);
-
-    TT_FATAL(
-        receiver_device_id != std::nullopt || sender_device_id != std::nullopt,
-        "Error, Reduce-scatter was unable to identify either a sender or receiver device ID and atleast one must be "
-        "identified for a valid Reduce-scatter configuration. The input mesh tensor or Reduce-scatter arguments may be "
-        "incorrect");
-
-    return ttnn::ReduceScatter{
-        binary_op_type,
-        scatter_dim,
-        num_links,
-        num_devices,
-        device_index,
-        receiver_device_id,
-        sender_device_id,
-        output_mem_config,
-        topology,
-        user_defined_num_workers,
-        user_defined_num_buffers_per_channel};
-}
-}  // namespace reduce_scatter_detail
-}  // namespace ccl
 
 void ReduceScatter::validate(const std::vector<Tensor>& input_tensors) const {
     for (auto const& t : input_tensors) {
@@ -76,8 +37,52 @@ std::vector<ttnn::TensorSpec> ReduceScatter::compute_output_specs(const std::vec
     return std::vector<ttnn::TensorSpec>(input_tensors.size(), spec);
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks ReduceScatter::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+tt::tt_metal::operation::ProgramWithCallbacks ReduceScatter::create_program_at(
+    const MeshCoordinate& mesh_coord,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    uint32_t device_index = 0;
+    std::optional<chip_id_t> sender_device_id;
+    std::optional<chip_id_t> receiver_device_id;
+    if (this->cluster_axis.has_value()) {
+        auto mesh_view = input_tensors.at(0).mesh_device()->get_view();
+        TT_FATAL(
+            mesh_view.is_mesh_2d(),
+            "reduce-scatter invoked with cluster_axis API on >2D mesh, which is currently unsupported");
+        const auto view_index = (cluster_axis == 0) ? mesh_coord[1] : mesh_coord[0];
+        device_index = (cluster_axis == 0) ? mesh_coord[0] : mesh_coord[1];
+
+        auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {
+            auto new_row = mesh_coord[0];
+            auto new_col = mesh_coord[1];
+            if (cluster_axis == 0) {
+                new_row = line_index % this->num_links;
+            } else {
+                new_col = line_index % this->num_links;
+            }
+            return mesh_view.find_device_id(MeshCoordinate(new_row, new_col));
+        };
+
+        bool is_last_chip_in_clockwise_direction = device_index == (this->num_links - 1);
+        bool is_last_chip_in_counter_clockwise_direction = device_index == 0;
+        receiver_device_id = is_last_chip_in_clockwise_direction ? std::nullopt : get_chip_id(device_index + 1);
+        sender_device_id = is_last_chip_in_counter_clockwise_direction
+                               ? std::nullopt
+                               : get_chip_id(device_index + this->num_links - 1);
+
+    } else {
+        std::tie(device_index, sender_device_id, receiver_device_id) = ccl::get_device_index_and_sender_receiver_ids(
+            input_tensors.at(0).mesh_device()->get_device(mesh_coord),
+            input_tensors.at(0).mesh_device()->get_devices(),
+            this->topology);
+
+        TT_FATAL(
+            receiver_device_id != std::nullopt || sender_device_id != std::nullopt,
+            "Error, Reduce-scatter was unable to identify either a sender or receiver device ID and atleast one must "
+            "be identified for a valid Reduce-scatter configuration. The input mesh tensor or Reduce-scatter arguments "
+            "may be incorrect");
+    }
+
     return ccl::reduce_scatter_detail::reduce_scatter_with_workers(
         input_tensors.at(0),
         output_tensors.at(0),
@@ -85,9 +90,9 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatter::create_program(
         this->scatter_dim,
         this->num_links,
         this->ring_size,
-        this->ring_index,
-        this->receiver_device_id,
-        this->sender_device_id,
+        device_index,
+        receiver_device_id,
+        sender_device_id,
         this->topology,
         this->user_defined_num_workers,
         this->user_defined_num_buffers_per_channel);
@@ -108,8 +113,8 @@ ttnn::operations::binary::BinaryOpType convert_reduce_type_to_eltwise_type(
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-namespace operations {
-namespace ccl {
+namespace operations::ccl {
+
 Tensor reduce_scatter(
     const Tensor& input_tensor,
     const int32_t dim,
@@ -125,7 +130,7 @@ Tensor reduce_scatter(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "reduce_scatter op is only supported for Fast Dispatch");
 
     ttnn::ccl::Topology ccl_topology = topology;
-    auto devices = input_tensor.get_workers();
+    auto devices = input_tensor.mesh_device()->get_devices();
     uint32_t num_devices = devices.size();
     TT_FATAL(num_devices > 1, "reduce_scatter op will only work for num_devices > 1, but has {}", num_devices);
     if (num_devices == 2) {
@@ -143,7 +148,7 @@ Tensor reduce_scatter(
         rank - 1,
         dim);
 
-    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
+    std::vector<Tensor> output_tensors = {Tensor(input_tensor.mesh_device())};
     tt::tt_metal::operation::launch_op(
         [binary_op_type,
          scatter_dim,
@@ -157,18 +162,18 @@ Tensor reduce_scatter(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor = input_tensors.at(0);
-
+            const auto num_devices = devices.size();
             return tt::tt_metal::operation::run(
-                ttnn::ccl::reduce_scatter_detail::create_reduce_scatter_struct(
-                    input_tensor,
+                ttnn::ReduceScatter{
                     binary_op_type,
                     scatter_dim,
                     num_links,
+                    num_devices,
                     output_mem_config,
+                    ccl_topology,
                     user_defined_num_workers,
                     user_defined_num_buffers_per_channel,
-                    devices,
-                    ccl_topology),
+                    /*cluster_axis=*/std::nullopt},
                 {input_tensor});
         },
         {input_tensor},
@@ -207,14 +212,13 @@ Tensor reduce_scatter(
         rank - 1,
         dim);
 
-    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
+    std::vector<Tensor> output_tensors = {Tensor(input_tensor.mesh_device())};
 
     tt::tt_metal::operation::launch_op(
         [scatter_dim,
          binary_op_type,
          num_links,
          output_mem_config,
-         mesh_view,
          cluster_axis,
          user_defined_num_workers,
          user_defined_num_buffers_per_channel,
@@ -224,46 +228,17 @@ Tensor reduce_scatter(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_device_tensor = input_tensors.at(0);
-
-            TT_FATAL(
-                mesh_view.is_mesh_2d(),
-                "reduce-scatter invoked with cluster_axis API on >2D mesh, which is currently unsupported");
-            const auto coordinate = mesh_view.find_device(input_device_tensor.device()->id());
-            const auto view_index = (cluster_axis == 0) ? coordinate[1] : coordinate[0];
-            const auto device_index = (cluster_axis == 0) ? coordinate[0] : coordinate[1];
-
-            auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {
-                auto new_row = coordinate[0];
-                auto new_col = coordinate[1];
-                if (cluster_axis == 0) {
-                    new_row = line_index % num_devices;
-                } else {
-                    new_col = line_index % num_devices;
-                }
-                return mesh_view.find_device_id(MeshCoordinate(new_row, new_col));
-            };
-
-            bool is_last_chip_in_clockwise_direction = device_index == (num_devices - 1);
-            bool is_last_chip_in_counter_clockwise_direction = device_index == 0;
-            auto receiver_device_id =
-                is_last_chip_in_clockwise_direction ? std::nullopt : get_chip_id(device_index + 1);
-            auto sender_device_id = is_last_chip_in_counter_clockwise_direction
-                                        ? std::nullopt
-                                        : get_chip_id(device_index + num_devices - 1);
-
             return tt::tt_metal::operation::run(
                 ttnn::ReduceScatter{
                     binary_op_type,
                     scatter_dim,
                     num_links,
                     num_devices,
-                    device_index,
-                    receiver_device_id,
-                    sender_device_id,
                     output_mem_config.value_or(input_device_tensor.memory_config()),
                     topology,
                     user_defined_num_workers,
-                    user_defined_num_buffers_per_channel},
+                    user_defined_num_buffers_per_channel,
+                    /*cluster_axis=*/cluster_axis},
                 {input_device_tensor});
         },
         {input_tensor},
@@ -271,7 +246,6 @@ Tensor reduce_scatter(
     return output_tensors.at(0);
 }
 
-}  // namespace ccl
-}  // namespace operations
+}  // namespace operations::ccl
 
 };  // namespace ttnn

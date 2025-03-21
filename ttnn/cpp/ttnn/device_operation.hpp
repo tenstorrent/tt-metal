@@ -610,9 +610,14 @@ void launch_on_mesh_device(
                 program_factory);
         };
 
+        const bool uses_heterogenous_dispatch = std::visit(
+            [&]<typename ProgramFactory>(const ProgramFactory&) {
+                return mesh_device_operation_utils::uses_heterogenous_dispatch<device_operation_t, ProgramFactory>();
+            },
+            program_factory);
+
         tt::tt_metal::distributed::MeshWorkload mesh_workload;
-        if (!mesh_device_operation_utils::uses_heterogenous_dispatch<device_operation_t, decltype(program_factory)>() &&
-            mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
+        if (!uses_heterogenous_dispatch && mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
             auto program = make_program(ttnn::MeshCoordinate::zero_coordinate(device->shape().dims()));
             mesh_workload.add_program(ttnn::MeshCoordinateRange(device->shape()), std::move(*program));
         } else {

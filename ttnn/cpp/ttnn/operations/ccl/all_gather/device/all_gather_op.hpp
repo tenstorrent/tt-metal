@@ -122,13 +122,11 @@ struct AllGather {
     const uint32_t dim;
     const uint32_t num_links;
     const uint32_t ring_size;
-    const uint32_t ring_index;
     const std::optional<size_t> user_defined_num_workers;
     const std::optional<size_t> user_defined_num_buffers_per_channel;
-    const std::optional<chip_id_t> receiver_device_id;
-    const std::optional<chip_id_t> sender_device_id;
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
+    std::optional<uint32_t> cluster_axis;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor> &input_tensors) const;

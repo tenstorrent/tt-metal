@@ -22,9 +22,6 @@ struct AllReduce {
     const ttnn::operations::binary::BinaryOpType binary_op_type;
     const uint32_t num_links;
     const uint32_t ring_size;
-    const uint32_t ring_index;
-    const std::optional<chip_id_t> receiver_device_id;
-    const std::optional<chip_id_t> sender_device_id;
     const MemoryConfig output_mem_config;
     const ttnn::ccl::Topology topology;
     const std::optional<size_t> user_defined_num_workers;
@@ -32,8 +29,10 @@ struct AllReduce {
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
+    tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
+        const ttnn::MeshCoordinate& coord,
+        const std::vector<Tensor>& input_tensors,
+        std::vector<Tensor>& output_tensors) const;
 };
 
 namespace operations {
