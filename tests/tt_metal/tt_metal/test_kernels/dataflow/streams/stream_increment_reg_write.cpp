@@ -33,7 +33,7 @@ void kernel_main() {
     // Write to stream register at `reg_addr` on core [target_noc_x, target_noc_y]
     uint32_t reg_addr = STREAM_REG_ADDR(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
     uint64_t dest_addr = NOC_XY_ADDR(target_noc_x, target_noc_y, reg_addr);
-    noc_inline_dw_write(dest_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+    noc_inline_dw_write<true>(dest_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
 
     if (target_core_value) {
         while (target_core_value != (NOC_STREAM_READ_REG(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX) &

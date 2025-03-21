@@ -382,7 +382,7 @@ public:
             eth_write_remote_reg(reg_addr, val);
         } else {
             const auto dest_addr = get_noc_addr(this->remote_x, this->remote_y, reg_addr);
-            noc_inline_dw_write(dest_addr, val);
+            noc_inline_dw_write<true>(dest_addr, val);
         }
     }
 
