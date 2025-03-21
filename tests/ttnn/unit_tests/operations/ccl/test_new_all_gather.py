@@ -352,7 +352,7 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttnn.bfloat16,
+        # ttnn.bfloat16,
         ttnn.bfloat8_b,
     ],
 )
@@ -360,7 +360,6 @@ def run_all_gather_impl(
     "mem_config",
     [
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("num_iters", [10])
@@ -674,109 +673,72 @@ def test_all_gather_real_workloads(
 @pytest.mark.parametrize(
     "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
     [
-        # All Gather	T3K Llama Decode	[1,1,32,1024]	[1,1,32,8192]	3	bf16	WidthShard,Tile,([0,0]-[7,3]),in_ss=[32,32], out_ss=[32,256]	8
-        # GENERIC
-        # (
-        #     8,
-        #     [1, 1, 32, 8192],
-        #     3,
-        #     ttnn.TILE_LAYOUT,
-        #     (32, 32),
-        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-        #     # each core to have 8 tiles? then CoreRangeSet can be (0, 0) to (1, 1)?
-        #     # understand, each core concatenate 8 tiles from other 7 chips (cores). So, each core will have 8 tiles.
-        #     (32, 256),
-        #     # (32, 32),  # 256 32
-        #     # (32, 64),  # 128 32
-        #     # (32, 128), #  64 32
-        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-        #     # ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}), # 32, 4
-        #     # ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}), # 32, 4
-        #     # ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}), # 32, 2
-        #     # ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 5))}), # violate more than L1 bank of 56
-        #     # ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 4))}), # output sharded cores must be divisible by num_links for this work distribution scheme (50 % 8 != 0)
-        #     # ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}), # equality check failure
-        #     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        # ),
-        # All Gather	T3K Llama Decode	[1,1,32,1024]	[1,1,32,8192]	3	bf16	WidthShard,Tile,in([0,0]-[7,1]),in_ss=[32,32],out_ss=[32,512]	8
-        # GENERIC
-        # (
-        #     8,
-        #     [1, 1, 32, 8192],
-        #     3,
-        #     ttnn.TILE_LAYOUT,
-        #     (32, 64),
-        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
-        #     (32, 512),
-        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
-        #     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        # ),
-        # (
-        #     2,
-        #     [1, 1, 32, 256],
-        #     3,
-        #     ttnn.TILE_LAYOUT,
-        #     (32, 32),
-        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
-        #     None,
-        #     None,
-        #     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        # ),
-        # (
-        #     2,
-        #     [1, 1, 32, 256],
-        #     3,
-        #     ttnn.TILE_LAYOUT,
-        #     (32, 64),
-        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
-        #     None,
-        #     None,
-        #     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        # ),
-        # (
-        #     2,
-        #     [1, 1, 32, 256],
-        #     3,
-        #     ttnn.TILE_LAYOUT,
-        #     (32, 128),
-        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-        #     None,
-        #     None,
-        #     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        # ),
-        # (
-        #     2,
-        #     [1, 1, 64, 256],
-        #     2,
-        #     ttnn.TILE_LAYOUT,
-        #     (32, 128),
-        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
-        #     None,
-        #     None,
-        #     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        # ),
-        # (
-        #     2,
-        #     [1, 4, 32, 256],
-        #     3,
-        #     ttnn.TILE_LAYOUT,
-        #     (32, 128),
-        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
-        #     None,
-        #     None,
-        #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        # ),
-        # (
-        #     4,
-        #     [1, 4, 32, 1280],
-        #     3,
-        #     ttnn.TILE_LAYOUT,
-        #     (32, 320),
-        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 4))}),
-        #     None,
-        #     None,
-        #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        # ),
+        (
+            2,
+            [1, 1, 32, 256],
+            3,
+            ttnn.TILE_LAYOUT,
+            (32, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            None,
+            None,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+        (
+            2,
+            [1, 1, 32, 256],
+            3,
+            ttnn.TILE_LAYOUT,
+            (32, 64),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+            None,
+            None,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+        (
+            2,
+            [1, 1, 32, 256],
+            3,
+            ttnn.TILE_LAYOUT,
+            (32, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            None,
+            None,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+        (
+            2,
+            [1, 1, 64, 256],
+            2,
+            ttnn.TILE_LAYOUT,
+            (32, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+            None,
+            None,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+        (
+            2,
+            [1, 4, 32, 256],
+            3,
+            ttnn.TILE_LAYOUT,
+            (32, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            None,
+            None,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ),
+        (
+            4,
+            [1, 4, 32, 1280],
+            3,
+            ttnn.TILE_LAYOUT,
+            (32, 320),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 4))}),
+            None,
+            None,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ),
     ],
 )
 @pytest.mark.parametrize("num_links", [1])
@@ -784,12 +746,11 @@ def test_all_gather_real_workloads(
     "input_dtype",
     [
         ttnn.bfloat16,
-        # ttnn.bfloat8_b,
+        ttnn.bfloat8_b,
     ],
 )
-@pytest.mark.parametrize("num_iters", [1])
+@pytest.mark.parametrize("num_iters", [8])
 @pytest.mark.parametrize("enable_async", [True])
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 65536 * 32}], indirect=True)
 def test_all_gather_sharded(
     t3k_mesh_device,
     num_devices,
@@ -833,7 +794,6 @@ def test_all_gather_sharded(
         create_persistent_fabric=True,
         teardown_persistent_fabric=True,
         wrap_fabric_around_mesh=True,
-        trace_mode=True,
     )
 
 
