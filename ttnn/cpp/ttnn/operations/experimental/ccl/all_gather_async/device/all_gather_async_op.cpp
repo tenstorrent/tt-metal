@@ -141,10 +141,9 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
 
     // Check for minimal interleaved case
     if (num_links == 1 &&  // 1 for T3K only
-        ((input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] % 32 == 0) ||
-         (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[3] % 32 == 0) ||
-         (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 8 &&
-          (input_tensor_shape[2] % 32 == 0 && input_tensor_shape[3] % 32 == 0))) &&
+        ((((input_tensor_shape[0] * input_tensor_shape[1] * input_tensor_shape[2]) / 32) % ring_size == 0 && dim < 3) ||
+         ((input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && (input_tensor_shape[3] / 32) % ring_size == 0 &&
+           dim == 3))) &&
         input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
         input_tensor_page_layout == tt::tt_metal::Layout::TILE && this->enable_persistent_fabric_mode) {
         return AllGatherAsyncVersion::MINIMAL_INTERLEAVED_32;
