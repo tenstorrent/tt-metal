@@ -138,6 +138,8 @@ def test_fabric_edm_mcast_half_ring_bw(
         FabricTestMode.HalfRing,
         expected_bw,
     )
+
+
 @pytest.mark.parametrize("num_mcasts", [200000])
 @pytest.mark.parametrize("num_unicasts", [0])
 @pytest.mark.parametrize("num_op_invocations", [1])
