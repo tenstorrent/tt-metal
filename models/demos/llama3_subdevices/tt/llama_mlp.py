@@ -193,6 +193,7 @@ class TtLlamaMLP(LightweightModule):
         pc_1 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len)
         pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
         pc_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len)
+
         w1_out = ttnn.linear(
             x,
             self.w1,
@@ -203,8 +204,7 @@ class TtLlamaMLP(LightweightModule):
             ),
             dtype=ttnn.bfloat8_b,
             program_config=pc_1,
-            # core_grid = ttnn.CoreGrid(y=8, x=4),
-            memory_config=x.memory_config(),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
         w3_out = ttnn.linear(
@@ -215,10 +215,9 @@ class TtLlamaMLP(LightweightModule):
                 if self.four_bit_mlp
                 else self.args.compute_kernel_config_hifi2_fp16
             ),
-            core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
             dtype=ttnn.bfloat8_b,
             program_config=pc_3,
-            memory_config=x.memory_config(),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(x)
 
@@ -256,7 +255,7 @@ class TtLlamaMLP(LightweightModule):
             compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
             dtype=ttnn.bfloat8_b,
             program_config=pc_2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             # core_grid=ttnn.CoreGrid(y=8, x=4),  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
         )
         ttnn.deallocate(w2_in)

@@ -457,24 +457,35 @@ class TtModelArgs:
             self.model_config[
                 "PREFILL_MLP_W1_W3_PRG_CONFIG"
             ] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(4, 7),
-                in0_block_w=2,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
+                compute_with_storage_grid_size=(7, 10),
+                in0_block_w=8,
                 out_subblock_h=1,  # Must be divisible by per_core_M
-                out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=max(
                     1, 4 if seq_len >= 2048 else seq_len // self.tile_size // 4  # 8 rows
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=math.ceil(self.hidden_dim / self.cluster_shape[1] / 32 / 7),  # N / TILE_WIDTH / grid width
+                per_core_N=math.ceil(self.hidden_dim / self.cluster_shape[0] / 32 / 7),  # N / TILE_WIDTH / grid width
                 transpose_mcast=False,
                 fused_activation=None,
                 fuse_batch=seq_len <= 2048,
             )
-            self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, 1024),
-                k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
-                n=self.dim,
-                grid_size=(4, 4) if self.is_galaxy else ((8, 8) if seq_len >= 1024 else (8, 4)),
+
+            self.model_config[
+                "PREFILL_MLP_W2_PRG_CONFIG"
+            ] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(7, 10),
+                in0_block_w=7,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
+                out_subblock_h=1,  # Must be divisible by per_core_M
+                out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                per_core_M=max(
+                    1, 4 if seq_len >= 2048 else seq_len // self.tile_size // 4  # 7 rows
+                ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                per_core_N=math.ceil(self.dim / self.cluster_shape[0] / 32 / 2),  # N / TILE_WIDTH / grid width
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=seq_len <= 2048,
             )
+
             self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, 1024 if self.is_galaxy else 2048),
                 k=self.dim // self.cluster_shape[0] if self.is_galaxy else self.dim,
