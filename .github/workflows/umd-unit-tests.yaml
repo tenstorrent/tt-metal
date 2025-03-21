@@ -39,6 +39,7 @@ jobs:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
+      max-parallel: 2
       matrix:
         runner-label: ["P150-quad-01", "P150-quad-02", "P150-quad-03", "P150-quad-04", "P150-173", "P150-174", "P150-175", "P150-194", "P150-178", "P150-199", "P150-206", "P150-201", "P150-195", "P150-196", "P150-197", "P150-198", "P150-200", "P150-207", "P150-208", "P150-210", "P150-211", "P150-213", "P150-214"]
     name: ${{ inputs.arch }} ${{ matrix.runner-label }}
