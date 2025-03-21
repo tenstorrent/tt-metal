@@ -57,19 +57,21 @@ void kernel_main() {
     DPRINT << "packet size in pages: " << (uint32_t)packet_size_in_pages << "\n";
 
     uint32_t tile_id = tile_id_start;
-    uint32_t num_tiles = tile_id_end - tile_id_start;
-    for (uint32_t i = 0; i < num_tiles; i += packet_size_in_pages) {
-        uint32_t num_pages_to_read = min(num_tiles - i, packet_size_in_pages);
-        cb_reserve_back(cb0_id, num_pages_to_read);
+    while (tile_id < tile_id_end) {
+        DPRINT << "tile_id: " << tile_id << "\n";
+        cb_reserve_back(cb0_id, packet_size_in_pages);
         const uint32_t l1_write_addr_base = get_write_ptr(cb0_id);
         uint32_t l1_write_addr = l1_write_addr_base;
+
+        uint32_t num_pages_to_read = std::min(tile_id_end - tile_id, packet_size_in_pages);
         for (uint32_t j = 0; j < num_pages_to_read; j++) {
             noc_async_read_tile(tile_id, tensor0_addrgen, l1_write_addr);
             l1_write_addr += tensor0_page_size;
             tile_id++;
         }
+
         noc_async_read_barrier();
-        cb_push_back(cb0_id, num_pages_to_read);
+        cb_push_back(cb0_id, packet_size_in_pages);
     }
 
     DPRINT << "DONE \n";
