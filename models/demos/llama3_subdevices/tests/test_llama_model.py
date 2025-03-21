@@ -309,7 +309,12 @@ def test_llama_model_inference(
                     ]
                 )
                 tt_out_gathered = tt_model.tt_ccl.line_all_gather(
-                    tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                    tt_out[0],
+                    dim=3,
+                    num_links=2,
+                    cluster_axis=0,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    buffer_key="SAMPLING",
                 )
                 tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
                 ttnn.deallocate(tt_out_gathered)

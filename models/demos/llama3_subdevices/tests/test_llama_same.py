@@ -79,12 +79,7 @@ def test_llama_decoder_same(
         [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
     )
 
-    tt_ccl = TT_CCL(
-        mesh_device,
-        model_args.sub_core_grids,
-        prefetcher_setup.worker_sub_device_id,
-        model_config=model_args.model_config,
-    )
+    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id)
 
     generation_start_pos = 127
     generation_length = 1000
