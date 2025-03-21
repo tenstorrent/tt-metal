@@ -97,7 +97,7 @@ TEST_P(MeshDeviceReshapeRoundtripTest, ReshapeBetweenConfigurations) {
         1,
         tt::tt_metal::DispatchCoreType::WORKER);
 
-    EXPECT_EQ(mesh->shape(), new_shape);
+    EXPECT_EQ(mesh->shape(), old_shape);
 
     auto original_order = mesh->get_device_ids();
 
@@ -108,8 +108,13 @@ TEST_P(MeshDeviceReshapeRoundtripTest, ReshapeBetweenConfigurations) {
     EXPECT_EQ(mesh->shape(), new_shape);
 
     // Verify device ordering is preserved
-    EXPECT_EQ(mesh->get_device_ids(), original_order)
-        << "Device ordering is not preserved " << MeshShape(old_shape) << " -> " << new_shape;
+    if (old_shape == new_shape) {
+        EXPECT_EQ(mesh->get_device_ids(), original_order)
+            << "Device ordering is preserved " << MeshShape(old_shape) << " -> " << new_shape;
+    } else {
+        EXPECT_NE(mesh->get_device_ids(), original_order)
+            << "Device ordering is not preserved " << MeshShape(old_shape) << " -> " << new_shape;
+    }
 }
 
 // Generate all possible combinations of shapes from kMeshShapes

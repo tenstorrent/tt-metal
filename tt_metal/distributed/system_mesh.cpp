@@ -148,9 +148,9 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(
     if (is_rotated) {
         TT_FATAL(rotations == 1 and system_shape.dims() == 2, "Mesh rotation is only supported for 2D meshes");
 
-        // Column iteration of the system mesh.
-        for (int i = 0; i < system_shape[1]; i++) {
-            for (int j = 0; j < system_shape[0]; j++) {
+        // Iterate through user-requested shape, transposing the rows and columns
+        for (int i = 0; i < shape[0]; i++) {
+            for (int j = 0; j < shape[1]; j++) {
                 auto system_coord = MeshCoordinate(j, i);
                 auto physical_device_id = get_physical_device_id(system_coord);
                 physical_device_ids.push_back(physical_device_id);
