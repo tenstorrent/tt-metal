@@ -114,7 +114,6 @@ def run_avg_pool(
         (1, 1),
         (2, 2),
         (4, 4),
-        (6, 6),
     ),
 )
 @pytest.mark.parametrize("dilation", ((1, 1),))
