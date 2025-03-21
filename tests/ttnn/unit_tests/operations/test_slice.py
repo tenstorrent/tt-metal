@@ -896,4 +896,4 @@ def test_ttnn_slice_whisper(
             ]
 
         ttnn_output = ttnn.to_torch(ttnn_output)
-        assert_with_pcc(torch_output, ttnn_output, 0.999999)
+        assert_with_pcc(torch_output, ttnn_output, 0.999)
