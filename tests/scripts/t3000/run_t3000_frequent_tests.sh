@@ -185,6 +185,26 @@ run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests() {
   fi
 }
 
+run_t3000_mistral_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_mistral_tests"
+
+  # mistral-7b
+  MESH_DEVICE=T3K WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" ; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/tt_transformers/tests/test_accuracy.py -k "attention-performance and file" ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_mistral_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_mixtral_tests() {
   # Record the start time
   fail=0
@@ -316,6 +336,9 @@ run_t3000_tests() {
 
   # Run Llama3.2-11B Vision tests on spoofed N300
   run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests
+
+  # Run mistral tests
+  run_t3000_mistral_tests
 
   # Run mixtral tests
   run_t3000_mixtral_tests
