@@ -111,7 +111,7 @@ void py_bind_all_gather_concat(pybind11::module& module) {
         module,
         ttnn::experimental::all_gather_concat,
         R"doc(
-        Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
+        Performs a fused all-gather/concat operation on multi-device (specific to llama model):attr:`input_tensor` across all devices.
         Args:
             input_tensor (ttnn.Tensor): multi-device tensor.
             dim (int): Dimension to perform operation.
@@ -121,23 +121,11 @@ void py_bind_all_gather_concat(pybind11::module& module) {
         Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md
         Keyword Args:
             num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
+            num_heads (int): Number of heads for NLP concat heads
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
             topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
         Returns:
             ttnn.Tensor: the output tensor.
-        Example:
-            >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
-            >>> physical_device_ids = ttnn.get_t3k_physical_device_ids_ring()
-            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), physical_device_ids=physical_device_ids[:8])
-            >>> ttnn_tensor = ttnn.from_torch(
-                            full_tensor,
-                            dtype=input_dtype,
-                            device=mesh_device,
-                            layout=layout,
-                            memory_config=mem_config,
-                            mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
-            >>> ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-            >>> output = ttnn.all_gather(ttnn_tensor, dim=0, topology=ttnn.Topology.Ring)
         )doc");
 }
 

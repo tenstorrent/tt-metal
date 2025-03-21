@@ -80,12 +80,11 @@ void kernel_main() {
 
     uint32_t arg_sem_idx = 2 + 2 * in_num_cores;
     DPRINT << "out_ready_sem_bank_addr_concat is at arg index: " << (uint32_t)(concat_arg_start + arg_sem_idx);
-    // uint32_t out_ready_sem_bank_addr_concat = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx);
-    uint32_t out_ready_sem_wait_value_concat = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 1);
-    uint32_t out_ready_sem_noc0_x_concat = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 2);
-    uint32_t out_ready_sem_noc0_y_concat = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 3);
-    uint32_t is_drain_core = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 4);
-    const uint32_t signal_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 5));
+    uint32_t out_ready_sem_wait_value_concat = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx);
+    uint32_t out_ready_sem_noc0_x_concat = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 1);
+    uint32_t out_ready_sem_noc0_y_concat = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 2);
+    uint32_t is_drain_core = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 3);
+    const uint32_t signal_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 4));
 
     DPRINT << "signal semaphore addr: " << (uint32_t)signal_semaphore_addr << ENDL();
 

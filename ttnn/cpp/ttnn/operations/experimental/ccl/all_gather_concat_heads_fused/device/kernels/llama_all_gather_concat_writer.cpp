@@ -50,22 +50,21 @@ void kernel_main() {
 
     const uint32_t concat_semaphore_send_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
-    uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(arg_idx++);
-
-    DPRINT << "mcast_dest_noc_start_x: " << (uint32_t)mcast_dest_noc_start_x << ENDL();
-    DPRINT << "mcast_dest_noc_start_y: " << (uint32_t)mcast_dest_noc_start_y << ENDL();
-    DPRINT << "mcast_dest_noc_end_x: " << (uint32_t)mcast_dest_noc_end_x << ENDL();
-    DPRINT << "mcast_dest_noc_end_y: " << (uint32_t)mcast_dest_noc_end_y << ENDL();
-
     DPRINT << "concat_semaphore_send_addr: " << (uint32_t)concat_semaphore_send_addr << ENDL();
 
     tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;
     tt_l1_ptr uint32_t* core_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;
+
+    tt_l1_ptr uint32_t* mcast_dest_noc_start_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    arg_idx += 3;
+    tt_l1_ptr uint32_t* mcast_dest_noc_start_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    arg_idx += 3;
+    tt_l1_ptr uint32_t* mcast_dest_noc_end_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    arg_idx += 3;
+    tt_l1_ptr uint32_t* mcast_dest_noc_end_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    arg_idx += 3;
 
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_idx);
@@ -227,22 +226,20 @@ void kernel_main() {
     }
 
     if (wait_output_semaphore) {
-        DPRINT << " before get noc multicast addr\n";
-        const uint64_t concat_sem_rcv_addr = get_noc_multicast_addr(
-            mcast_dest_noc_start_x,
-            mcast_dest_noc_start_y,
-            mcast_dest_noc_end_x,
-            mcast_dest_noc_end_y,
-            concat_semaphore_send_addr);
-        DPRINT << "concat_sem_rcv_addr: " << (uint32_t)concat_sem_rcv_addr << ENDL();
-        DPRINT << "before noc semaphore set multicast\n";
-        noc_semaphore_set_multicast(
-            concat_semaphore_send_addr,
-            concat_sem_rcv_addr,
-            7,
-            false,  // linked = false
-            true);  // multicast_path_reserve = true
-        DPRINT << "after noc semaphore set multicast\n";
+        for (uint32_t i = 0; i < 3; i++) {
+            const uint64_t concat_sem_rcv_addr = get_noc_multicast_addr(
+                mcast_dest_noc_start_x[i],
+                mcast_dest_noc_start_y[i],
+                mcast_dest_noc_end_x[i],
+                mcast_dest_noc_end_y[i],
+                concat_semaphore_send_addr);
+            noc_semaphore_set_multicast(
+                concat_semaphore_send_addr,
+                concat_sem_rcv_addr,
+                i == 1 ? 3 : 2,
+                false,  // linked = false
+                true);  // multicast_path_reserve = true
+        }
     }
 
     if (fabric_connection.is_logically_connected()) {
@@ -255,8 +252,6 @@ void kernel_main() {
         noc_semaphore_wait(signal_semaphore_addr_ptr, VALID);
         // noc_semaphore_set(signal_semaphore_addr_ptr, 0);
     }
-    DPRINT << "DONE ALL GATHER\n";
-    DPRINT << "START CONCAT HEADS\n";
 
     tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(2 + concat_arg_start));
     tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(2 + in_num_cores + concat_arg_start));
