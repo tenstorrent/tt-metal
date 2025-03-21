@@ -57,7 +57,6 @@ jobs:
           name: ${{ inputs.build-artifact-name }}
       - name: Extract files
         run: tar -xvf ttm_any.tar
-      - uses: ./.github/actions/install-python-deps
       - name: ⬇️ Download Wheel
         uses: actions/download-artifact@v4
         timeout-minutes: 10
@@ -67,9 +66,6 @@ jobs:
         if: ${{ matrix.test-group.name == 'N300_performance' }}
         run: |
           sudo cpupower frequency-set -g performance
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Run demo regression tests
         uses: ./.github/actions/docker-run
         timeout-minutes: 90
