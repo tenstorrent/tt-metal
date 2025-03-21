@@ -461,6 +461,19 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
             mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0],
             mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1],
             mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]);
+
+        if (tt::llrt::RunTimeOptions::get_instance().get_watcher_text_start()) {
+            uint32_t kernel_config_base = mbox_data->launch[launch_msg_read_ptr].kernel_config.kernel_config_base[0];
+            fprintf(f, " text_start:");
+            for (size_t i = 0; i < NUM_PROCESSORS_PER_CORE_TYPE; i++) {
+                const char* separator = (i > 0) ? "|" : "";
+                fprintf(
+                    f,
+                    "%s0x%x",
+                    separator,
+                    kernel_config_base + mbox_data->launch[launch_msg_read_ptr].kernel_config.kernel_text_offset[i]);
+            }
+        }
     }
 
     // Ring buffer at the end because it can print a bunch of data, same for stack usage
