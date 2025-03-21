@@ -573,10 +573,11 @@ def test_demo_text(
 
         # when doing repeating batches, set kv-caches to zero, to avoid context leaking
         if batch_idx != 0:
-            for layer in model.layers:
-                k_cache, v_cache = layer.attention.layer_past
-                k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
-                v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
+            for i in range(len(model)):
+                for layer in model[i].layers:
+                    k_cache, v_cache = layer.attention.layer_past
+                    k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
+                    v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
 
