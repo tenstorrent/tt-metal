@@ -38,12 +38,12 @@ std::pair<ttnn::SmallVector<int>, ttnn::SmallVector<int>> split_height_width_dim
     const ttnn::SmallVector<int>& dim, const Tensor& input_tensor_arg) {
     ttnn::SmallVector<int> non_height_width_dims{}, height_width_dims{};
     auto input_shape = input_tensor_arg.get_logical_shape();
-    auto rank = input_shape.size();
+    int rank = input_shape.size();
     for (int i = 0; i < dim.size(); i++) {
-        if (dim[i] < rank - 2) {
-            non_height_width_dims.push_back(dim[i]);
-        } else {
+        if (dim[i] >= (rank - 2)) {
             height_width_dims.push_back(dim[i]);
+        } else {
+            non_height_width_dims.push_back(dim[i]);
         }
     }
     return {non_height_width_dims, height_width_dims};
@@ -133,7 +133,7 @@ static Tensor reduce_impl(
 
     Tensor output_tensor;
     float pad_value = get_pad_value(reduce_type);
-    bool single_reduce_op = (dim.size() == 1 && (dim[0] == rank - 1 || dim[0] == rank - 2)) ||
+    bool single_reduce_op = (dim.size() == 0) || (dim.size() == 1 && (dim[0] == rank - 1 || dim[0] == rank - 2)) ||
                             (dim.size() == 2 && dim[1] == rank - 1 && dim[0] == rank - 2);
     if (!single_reduce_op) {
         auto reduce_nd_loop = [&](const bool use_reduce_type) -> Tensor {
@@ -187,7 +187,7 @@ static Tensor reduce_impl(
         }
     } else {
         tt::tt_metal::ReduceOpDim reduce_op_dim;
-        if (dim.size() == 1 and dim[0] == rank - 1) {
+        if ((dim.size() == 0) || (dim.size() == 1 and dim[0] == rank - 1)) {
             reduce_op_dim = tt::tt_metal::ReduceOpDim::W;
         } else if (dim.size() == 1 and dim[0] == rank - 2) {
             reduce_op_dim = tt::tt_metal::ReduceOpDim::H;
@@ -220,7 +220,7 @@ static Tensor reduce_impl(
                 input_tensor,
                 tt::tt_metal::ReduceOpMath::SUM,
                 reduce_op_dim,
-                1.0 / reduced_volume,
+                scalar / reduced_volume,
                 memory_config,
                 std::nullopt,
                 compute_kernel_config);
@@ -256,32 +256,36 @@ static Tensor std_var_impl(
     const bool keepdim,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    float scalar,
     const ttnn::SmallVector<int>& non_height_width_dims) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     auto input_shape = input_tensor_arg.get_logical_shape();
     auto rank = input_shape.size();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
 
-    int reduced_volume = 1;
-    for (int axis : dim) {
-        reduced_volume *= input_shape[axis];
+    if (dim.size()) {
+        int reduced_volume = 1;
+        for (int axis : dim) {
+            reduced_volume *= input_shape[axis];
+        }
+        scalar /= reduced_volume;
     }
 
     auto mean_tensor = reduce_impl<ReduceType::Sum>(
-        input_tensor_arg,
-        dim,
-        keepdim,
-        memory_config_arg,
-        compute_kernel_config,
-        1.0 / reduced_volume,
-        non_height_width_dims);
+        input_tensor_arg, dim, keepdim, memory_config_arg, compute_kernel_config, scalar, non_height_width_dims);
+
+    // This is a special case where the input tensor is a rank zero tensor
+    if (!dim.size()) {
+        return mean_tensor;  // TODO: Need to return NaN here
+    }
+
     auto mean_square_tensor = reduce_impl<ReduceType::Sum>(
         ttnn::pow(input_tensor_arg, 2.0f, memory_config),
         dim,
         keepdim,
         memory_config_arg,
         compute_kernel_config,
-        1.0 / reduced_volume,
+        scalar,
         non_height_width_dims);
     Tensor output_tensor =
         ttnn::subtract(mean_square_tensor, ttnn::pow(mean_tensor, 2.0f, memory_config), std::nullopt, memory_config);
@@ -355,7 +359,7 @@ Tensor Reduce<reduce_type>::invoke(
     }
     if constexpr (reduce_type == ReduceType::Std || reduce_type == ReduceType::Var) {
         return std_var_impl<reduce_type>(
-            input_tensor, dim, keepdim, memory_config_arg, compute_kernel_config, non_height_width_dims);
+            input_tensor, dim, keepdim, memory_config_arg, compute_kernel_config, scalar, non_height_width_dims);
     }
     return reduce_impl<reduce_type>(
         input_tensor, dim, keepdim, memory_config_arg, compute_kernel_config, scalar, non_height_width_dims);
