@@ -58,6 +58,7 @@ def run_with_trace(
     all_gather_topology,
     input_tensor,
     dim,
+    persistent_output_tensor,
     num_links,
     cluster_axis,
     output_mem_config,
@@ -83,6 +84,7 @@ def run_with_trace(
             multi_device_global_semaphore=ccl_semaphore_handles[0]
             if type(ccl_semaphore_handles) == list
             else ccl_semaphore_handles,
+            persistent_output_tensor=persistent_output_tensor,
             num_links=num_links,
             memory_config=output_mem_config,
             subdevice_id=worker_sub_device_id,
@@ -116,6 +118,7 @@ def run_with_trace(
                     multi_device_global_semaphore=ccl_semaphore_handles[i % NUM_BUFFERS]
                     if type(ccl_semaphore_handles) == list
                     else ccl_semaphore_handles,
+                    persistent_output_tensor=persistent_output_tensor,
                     num_links=num_links,
                     memory_config=output_mem_config,
                     subdevice_id=worker_sub_device_id,
@@ -194,6 +197,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     enable_persistent_fabric=False,
     create_persistent_fabric=False,
     teardown_persistent_fabric=False,
+    use_persistent_output=False,
 ):
     if create_persistent_fabric:
         assert use_all_gather_async
@@ -205,6 +209,9 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         assert not create_persistent_fabric
         assert not teardown_persistent_fabric
         assert not enable_persistent_fabric
+
+    if use_persistent_output and not use_all_gather_async:
+        pytest.skip("Persistent output tensor requires all-gather-async")
 
     mesh_device.enable_async(enable_async)
 
@@ -258,6 +265,18 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
     ttnn_tensor = ttnn.to_memory_config(ttnn_tensor, input_mem_config)
 
+    ttnn_persistent_output_tensor = None
+    if use_persistent_output:
+        ttnn_persistent_output_tensor = ttnn.from_torch(
+            torch.zeros(per_chip_output_shape),
+            tile=ttnn.Tile(tile),
+            dtype=input_dtype,
+            device=mesh_device,
+            layout=layout,
+            memory_config=output_mem_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
     sub_device_stall_group = []
     if use_all_gather_async:
         compute_grid_size = mesh_device.compute_with_storage_grid_size()
@@ -291,6 +310,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
                 dim=dim,
                 cluster_axis=cluster_axis,
                 mesh_device=mesh_device,
+                persistent_output_tensor=ttnn_persistent_output_tensor,
                 num_links=num_links,
                 output_mem_config=output_mem_config,
                 ccl_semaphore_handles=ccl_semaphore_handles,
@@ -315,6 +335,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
                         mesh_device=mesh_device,
                         topology=ttnn.Topology.Linear,
                         multi_device_global_semaphore=ccl_semaphore_handles[i % NUM_BUFFERS],
+                        persistent_output_tensor=ttnn_persistent_output_tensor,
                         num_links=num_links,
                         memory_config=output_mem_config,
                         subdevice_id=worker_sub_device_id,
@@ -348,6 +369,16 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     )
     output_tensors_list = torch.chunk(tt_output_tensor, num_all_gather_instances, dim=all_gather_instances_concat_dim)
     output_golden = torch.zeros(tt_output_tensor.shape)
+
+    # Check the tensor addresses
+    if use_persistent_output:
+        persistent_output_tensors = ttnn.get_device_tensors(ttnn_persistent_output_tensor)
+        output_tensors = ttnn.get_device_tensors(ttnn_tensor_out)
+
+        for persistent_tensor, output_tensor in zip(persistent_output_tensors, output_tensors):
+            assert (
+                persistent_tensor.buffer_address() == output_tensor.buffer_address()
+            ), "Persistent tensor address mismatch"
 
     # Repeat the input tensor to represent the fact that the full concatenated input tensor lives across every
     # device in the line

@@ -189,6 +189,7 @@ def test_all_gather_tg_llama(
         enable_persistent_fabric=True,
         create_persistent_fabric=True,
         teardown_persistent_fabric=True,
+        use_persistent_output=True,
     )
 
 
