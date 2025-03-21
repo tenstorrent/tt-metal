@@ -48,8 +48,9 @@ jobs:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
+      max-parallel: 1
       matrix:
-        os: ["${{ inputs.os }}"]
+        runner-label: ["P150-quad-01", "P150-quad-02", "P150-quad-03", "P150-quad-04", "P150-173", "P150-174", "P150-175", "P150-194", "P150-178", "P150-199", "P150-206", "P150-201", "P150-195", "P150-196", "P150-197", "P150-198", "P150-200", "P150-207", "P150-208", "P150-210", "P150-211", "P150-213", "P150-214"]
         test-group: [
           {name: eager unit tests 1, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 1 },
           # {name: eager unit tests 2, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 2 },
@@ -60,11 +61,11 @@ jobs:
           # {name: eager unit tests 7, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 7 },
           # {name: sweep, cmd: pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/ -xvvv },
         ]
-    name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
+    name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ matrix.runner-label }}
     env:
       LOGURU_LEVEL: INFO
     runs-on:
-      - ${{ inputs.runner-label }}
+      - ${{ matrix.runner-label }}
       - cloud-virtual-machine
       # - in-service
     steps:
@@ -72,7 +73,7 @@ jobs:
       - uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
-          name: eager-dist-${{ matrix.os }}-any
+          name: eager-dist-${{ inputs.os }}-any
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
