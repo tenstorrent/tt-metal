@@ -409,6 +409,8 @@ def run_llama3_demo(
 
         # Execute trace
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        tt_out_tok_cpu = tt_out_tok.cpu(blocking=True, cq_id=0)
+        iteration_time = time() - iteration_time_start
 
         # Update current pos and mat idxs on host and send to device
         # TODO This is required for now since we cannot ttnn.plus_one(rot_mat_idxs) while it being uint32.
@@ -419,7 +421,7 @@ def run_llama3_demo(
         # ttnn.synchronize_device(mesh_device)
         # Write to host
         tt_output_torch = ttnn.to_torch(
-            tt_out_tok.cpu(blocking=True, cq_id=0),
+            tt_out_tok_cpu,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
                 mesh_device,
                 dims=(3, 1),
@@ -440,9 +442,6 @@ def run_llama3_demo(
             all_outputs.append(tt_output_torch.tolist()[0])  # Update generated token to list of TT outputs
             if all_outputs[-1] in [128001, 128009]:  # EoT tokens
                 users_decoding = False
-
-        # Print out generated outputs for each user at the end of every iteration
-        iteration_time = time() - iteration_time_start
 
         # Ignore the first iteration for average speed calculation
         if iteration > 0:
