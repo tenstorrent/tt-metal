@@ -20,7 +20,7 @@ namespace detail {
 // supported and a new overload should be added
 
 // most ops just return a tensor
-Tensor extract_output_tensor(const Tensor& result) { return result; }
+inline Tensor extract_output_tensor(const Tensor& result) { return result; }
 
 // conv2d output
 template <typename... Args>
