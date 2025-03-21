@@ -83,7 +83,7 @@ def create_models(mesh_device, n_layers: int = 48):
 
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
-@pytest.mark.parametrize("n_layers", [1], ids=["L1"])
+@pytest.mark.parametrize("n_layers", [1, 2], ids=["L1", "L2"])
 @pytest.mark.parametrize(
     "mesh_device",
     [
