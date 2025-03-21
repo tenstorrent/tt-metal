@@ -1544,6 +1544,7 @@ FORCE_INLINE void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 
     WAYPOINT("NWID");
 }
 
+// on BH this api can only write to stream register, writing to L1 will cause hangs!
 template <bool posted = false>
 FORCE_INLINE void noc_inline_dw_write_set_state(
     uint64_t addr, uint8_t be = 0xF, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
@@ -1566,6 +1567,7 @@ FORCE_INLINE void noc_inline_dw_write_set_state(
     WAYPOINT("NWID");
 }
 
+// on BH this api can only write to stream register, writing to L1 will cause hangs!
 template <bool update_addr_lo = false, bool update_counter = true, bool posted = false>
 FORCE_INLINE void noc_inline_dw_write_with_state(
     uint32_t val, uint32_t addr = 0, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
