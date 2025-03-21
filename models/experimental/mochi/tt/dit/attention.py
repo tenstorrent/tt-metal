@@ -101,7 +101,7 @@ class AsymmetricAttention(LightweightModule):
 
         # TODO: using qkv_x program config leads to worse PCC
         self.qkv_x_config = partial(
-            matmul_config, k=dim_x, n=3 * self.num_heads * self.head_dim, grid_size=(8, 8), fp32_dest_acc_en=True
+            matmul_config, k=dim_x, n=3 * self.n_local_heads * self.head_dim, grid_size=(8, 8), fp32_dest_acc_en=True
         )
         self.proj_x_config = partial(
             matmul_config, k=dim_x, n=dim_x, in0_block_w=4, grid_size=(8, 8), fp32_dest_acc_en=True
@@ -175,6 +175,19 @@ class AsymmetricAttention(LightweightModule):
                 cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.bias"),
             )
         return w, b
+
+    def _seq_to_replicated_tensor(self, seq_parallel_tensor, N):
+        replicated_tensor = ttnn.all_gather(seq_parallel_tensor, dim=2)
+        tensors = ttnn.get_device_tensors(replicated_tensor)
+        tile_padded_seqlen = math.ceil(N / 32) * 32
+        for i in range(len(tensors)):
+            # Slice out local head and slice sequence padding
+            tensors[i] = tensors[i][:, :, :tile_padded_seqlen]
+            # Add padding information
+            tensors[i] = ttnn.reshape(
+                tensors[i], [tensors[i].shape[0], tensors[i].shape[1], N, tensors[i].shape[3]], tensors[i].shape
+            )
+        return ttnn.aggregate_as_tensor(tensors)
 
     def _seq_to_col_parallel_tensor(self, seq_parallel_tensor, N):
         dim = seq_parallel_tensor.shape[3]
@@ -272,6 +285,9 @@ class AsymmetricAttention(LightweightModule):
         # ), f"Visual sequence length must be divisible by {self.X_MM_SEQ_LEN}, got {seq_x}"
         x_1BNX = modulated_rmsnorm(x_1BNX, scale_x)
 
+        """
+        # When all-to-all is fast, move all-to-all below gather QKV.
+        # Until then, gather before QKV and do QKV proj col-parallel.
         # Process visual features
         qkv_x = ttnn.all_gather(self.qkv_x, dim=-1)
         qkv_x_1BNE = ttnn.linear(
@@ -285,6 +301,18 @@ class AsymmetricAttention(LightweightModule):
         )
 
         qkv_x_1BNE = self._seq_to_col_parallel_tensor(qkv_x_1BNE, N=N)
+        """
+
+        x_1BNX = self._seq_to_replicated_tensor(x_1BNX, N=N)
+        qkv_x_1BNE = ttnn.linear(
+            x_1BNX,
+            self.qkv_x,
+            bias=self.qkv_x_bias,
+            compute_kernel_config=self.mm_compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=self.qkv_x_config(m=x_1BNX.shape[2]),
+        )
 
         # Split qkv_x into q, k, v
         # Need to get these tensors to shape [B, H, L, D] for rotary embeddings

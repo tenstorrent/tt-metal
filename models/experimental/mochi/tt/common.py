@@ -98,6 +98,11 @@ def matmul_config(
     MAX_OUT_BLOCK_SIZE = TILE_SIZE * 96  # 3072
     num_out_blocks_h = math.ceil(m / MAX_OUT_BLOCK_SIZE)
     num_out_blocks_w = math.ceil(n / MAX_OUT_BLOCK_SIZE)
+
+    # Special case find divisible num_out_blocks_h
+    if per_core_M % num_out_blocks_h != 0:
+        num_out_blocks_h = min(i for i in range(num_out_blocks_h, m // TILE_SIZE) if per_core_M % i == 0)
+
     assert (
         per_core_M % num_out_blocks_h == 0
     ), f"num_out_blocks_h {num_out_blocks_h} must evenly divide per_core_M {per_core_M}"
