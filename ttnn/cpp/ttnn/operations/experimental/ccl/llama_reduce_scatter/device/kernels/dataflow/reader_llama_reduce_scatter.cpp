@@ -41,6 +41,7 @@ FORCE_INLINE std::uint64_t static_noc_multicast_addr(
     std::uint32_t noc_x_end,
     std::uint32_t noc_y_end,
     std::uint32_t addr) {
+    DPRINT << "noc_ind " << (uint32_t)noc_ind << ENDL();
     if constexpr (noc_ind == 0) {
         return get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, addr);
     } else {
@@ -49,7 +50,7 @@ FORCE_INLINE std::uint64_t static_noc_multicast_addr(
 }
 
 void kernel_main() {
-    // DPRINT << "Starting kernel_main for reader" << ENDL();
+    DPRINT << "Starting kernel_main for reader" << ENDL();
     size_t ct_arg_idx = 0, rt_arg_idx = 0;
 
     // Define all compile-time arguments at the beginning
@@ -100,7 +101,7 @@ void kernel_main() {
     uint32_t bank_base_address = get_write_ptr(input_tensor_cb_id);
 
     if (sender_core) {
-        // DPRINT << "input_shard_cores_per_device " << input_shard_cores_per_device << ENDL();
+        DPRINT << "SENDER CORE READER" << ENDL();
         for (auto target_device_id : device_order) {
             if (target_device_id == chip_id) {
                 break;
@@ -127,6 +128,7 @@ void kernel_main() {
             }
         }
     } else if (worker_core) {
+        DPRINT << "WORKER CORE READER" << ENDL();
         // Calculate core index and tile offset once
         uint32_t linear_input_core_idcs[num_pages_per_packet];
         uint32_t linear_input_tile_offsets[num_pages_per_packet];
@@ -138,10 +140,12 @@ void kernel_main() {
         }
         // coalesce across the
         for (uint32_t i = 0; i < num_pages_per_packet; i++) {
-            // DPRINT << "linear_input_core_idcs[" << i << "] " << linear_input_core_idcs[i] << ENDL();
-            // DPRINT << "linear_input_tile_offsets[" << i << "] " << linear_input_tile_offsets[i] << ENDL();
+            DPRINT << "linear_input_core_idcs[" << i << "] " << linear_input_core_idcs[i] << ENDL();
+            DPRINT << "linear_input_tile_offsets[" << i << "] " << linear_input_tile_offsets[i] << ENDL();
             uint32_t core_x = input_core_xy[linear_input_core_idcs[i]][x_index];
             uint32_t core_y = input_core_xy[linear_input_core_idcs[i]][y_index];
+            DPRINT << "core_x " << core_x << " core_y " << core_y << ENDL();
+
             uint32_t tile_offset = chip_id * num_pages_per_packet * page_size_bytes;
             uint64_t tile_addr = get_noc_addr(core_x, core_y, get_read_ptr(input_tensor_cb_id) + tile_offset);
             // DPRINT << "tile_addr[" << i << "] " << tile_addr << ENDL();
@@ -150,27 +154,38 @@ void kernel_main() {
         }
         noc_async_read_barrier();
         if (receiver_core) {
+            DPRINT << "Designated receiver core " << ENDL();
             noc_semaphore_wait((uint32_t*)receiver_semaphore_address, num_devices - 1);
+            DPRINT << "Receiver semaphore wait done" << ENDL();
             // Now we have the block in the CB address, we can mcast to dests!
+            DPRINT << "noc_start_x " << noc_start_x << " noc_start_y " << noc_start_y << " noc_end_x " << noc_end_x
+                   << " noc_end_y " << noc_end_y << " num_dests " << num_dests << ENDL();
             uint64_t multicast_semaphore_addr =
                 static_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, local_semaphore_address);
             // DPRINT << "multicast_semaphore_addr: " << multicast_semaphore_addr << ENDL();
-            noc_multicast_semaphore_inc(
+            noc_semaphore_set_multicast(
+                receiver_semaphore_address,
                 multicast_semaphore_addr,
-                num_devices - 1,
-                num_dests,
-                0);  // could do different mcast for each device by having num_devices - 1 receiver cores
+                num_dests);  // could do different mcast for each device by having num_devices - 1 receiver cores
+            DPRINT << "sent semaphore inc" << ENDL();
             noc_async_atomic_barrier();
+            DPRINT << "resetting global semaphore" << ENDL();
             *(uint32_t*)receiver_semaphore_address = 0;
         } else {
+            DPRINT << "Non-designated receiver core" << ENDL();
             noc_semaphore_wait((uint32_t*)local_semaphore_address, (num_devices - 1));
+            DPRINT << "resetting local semaphore" << ENDL();
+            *(uint32_t*)local_semaphore_address = 0;
         }
-        print_tiles(accumulator_cb_id, 0, num_pages_per_packet * num_devices, true);
-        cb_push_back(accumulator_cb_id, num_pages_per_packet * num_devices);
-        *(uint32_t*)local_semaphore_address = 0;
+        print_tiles(fabric_receiver_cb_id, 0, num_pages_per_packet * num_devices, true);
+        DPRINT << "pushing back to cb " << fabric_receiver_cb_id << " tiles: " << num_pages_per_packet * num_devices
+               << ENDL();
+        cb_push_back(fabric_receiver_cb_id, num_pages_per_packet * num_devices);
+        DPRINT << "pushed back to cb " << fabric_receiver_cb_id << " tiles: " << num_pages_per_packet * num_devices
+               << ENDL();
     } else {
         // Do nothing
         // win
     }
-    // DPRINT << "Kernel finished" << ENDL();
+    DPRINT << "Kernel finished" << ENDL();
 }

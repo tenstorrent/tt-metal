@@ -237,7 +237,10 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
          packet_worker_cores_group_2,
          num_packets_per_core_group_1,
          num_packets_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(device->compute_with_storage_grid_size(), num_packets_total_per_device);
+            tt::tt_metal::split_work_to_cores(
+                device->compute_with_storage_grid_size(),
+                num_packets_total_per_device,
+                shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
     auto sender_core_grid = detail::next_core_range_set(
         packet_worker_cores_grid,
@@ -246,10 +249,8 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
     if (operation_attributes.ring_index == 3) {
-        if (chip_id == 4) {
-            std::cout << "packet_worker_cores_grid: " << packet_worker_cores_grid.str() << std::endl;
-            std::cout << "sender_core_grid: " << sender_core_grid.str() << std::endl;
-        }
+        std::cout << "packet_worker_cores_grid: " << packet_worker_cores_grid.str() << std::endl;
+        std::cout << "sender_core_grid: " << sender_core_grid.str() << std::endl;
     }
 
     auto all_cores_grid = packet_worker_cores_grid.merge(sender_core_grid);
@@ -310,17 +311,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     //     std::cout << "CB packet header config total size: "
     //               << num_packet_headers_storable * packet_header_size_bytes * buffering_factor
     //               << " page size: " << packet_header_size_bytes << std::endl;
-    // }
-
-    // input shards are 5 tiles wide, and each goes to a different core on the next device
-    // max packet size is 4 tiles wide, so we only send 4/5 of the tiles at once
-    // ideally we send 5/5 of the tiles at once, but we need to make sure we don't overflow the fabric buffer
-    // so we send 0-3 of the first shard, then 4 of the first shard + 0-2 of the second shard, etc.
-    // if (operation_attributes.ring_index == 3) {
-    //     std::cout << "num_pages_per_packet: " << num_pages_per_packet << std::endl;
-    // }
-    // if (operation_attributes.ring_index == 3) {
-    //     std::cout << "tiles_per_core_width: " << tiles_per_core_width << std::endl;
     // }
 
     tt::tt_metal::CircularBufferConfig fabric_sender_cb_config =
@@ -420,6 +410,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         corerange_to_cores(all_cores_grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
     auto packet_worker_cores = corerange_to_cores(
         packet_worker_cores_grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    auto packet_receiver_core = packet_worker_cores.at(0);
 
     reader_defines["INPUT_CORE_XY"] = detail::cores_to_string(to_worker_cores(input_cores));
     reader_defines["OUTPUT_CORE_XY"] = detail::cores_to_string(to_worker_cores(output_cores));
@@ -431,7 +422,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         std::cout << "output_cores: " << reader_defines["OUTPUT_CORE_XY"] << std::endl;
     }
     if (operation_attributes.ring_index == 3) {
-        std::cout << "packet_receiver_cores: " << reader_defines["PACKET_WORKER_CORES"] << std::endl;
+        std::cout << "packet_worker_cores: " << reader_defines["PACKET_WORKER_CORES"] << std::endl;
     }
     // create local semaphore
     auto local_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores_grid, INVALID);
@@ -456,6 +447,11 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             .compile_args = reader_compile_time_args,
             .defines = reader_defines});
 
+    if (operation_attributes.ring_index == 3) {
+        std::cout << "packet_receiver_core: " << packet_receiver_core.str() << std::endl;
+    }
+    auto packet_receiver_worker_core = to_worker_cores({packet_receiver_core}).at(0);
+
     std::vector<uint32_t> writer_compile_time_args = {
         input_tensor_cb_id,
         fabric_sender_cb_index,
@@ -475,6 +471,8 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         packet_start_worker_core.at(0).y,
         packet_end_worker_core.at(0).x,
         packet_end_worker_core.at(0).y,
+        packet_receiver_worker_core.x,
+        packet_receiver_worker_core.y,
     };
 
     auto writer_defines = reader_defines;
@@ -513,7 +511,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
 
     // std::cout << "Sender core: " << sender_core_grid.x << ", " << sender_core_grid.y << std::endl;
     const std::vector<uint32_t> compute_compile_time_args = {
-        accumulator_cb_index, output_tensor_cb_id, num_devices, tiles_per_core_width_output, num_pages_per_packet};
+        fabric_receiver_cb_index, accumulator_cb_index, num_devices, tiles_per_core_width_output, num_pages_per_packet};
 
     bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32;
     const auto compute_kernel_file =
@@ -521,21 +519,24 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     const auto compute_kernel_id = tt_metal::CreateKernel(
         program,
         compute_kernel_file,
-        output_grid,
+        packet_worker_cores_grid,
         tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_compile_time_args});
 
-    uint32_t local_input_page = chip_id * input_shard_cores_per_device * tiles_per_core_width;
+    uint32_t offset_for_input = chip_id * input_shard_cores_per_device * tiles_per_core_width;
+    uint32_t local_page = 0;
     uint32_t reader_receiver_for_device_id = 0;
-    bool first_packet_core = true;
 
     for (auto core : all_cores) {
         std::vector<uint32_t> writer_runtime_args = {
-            cross_device_semaphore->address(), local_semaphore, false, false, chip_id};
+            cross_device_semaphore->address(), local_semaphore, false, false, 0};
         uint32_t is_writer_sender_core_idx = writer_runtime_args.size() - 3;
         uint32_t is_writer_worker_core_idx = writer_runtime_args.size() - 2;
         uint32_t is_linear_output_page_start_idx = writer_runtime_args.size() - 1;
+
         if (sender_core_grid.contains(core)) {
-            std::cout << "Sender core: " << core.str() << std::endl;
+            if (operation_attributes.ring_index == 3) {
+                std::cout << "Sender core: " << core.str() << std::endl;
+            }
             reader_runtime_args[is_reader_sender_core_idx] = true;
             reader_runtime_args[is_reader_worker_core_idx] = false;
             reader_runtime_args[is_reader_receiver_core_idx] = false;
@@ -545,18 +546,22 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             detail::append_fabric_connection_rt_args(forward_fabric_connection, core, program, writer_runtime_args);
             detail::append_fabric_connection_rt_args(backward_fabric_connection, core, program, writer_runtime_args);
         } else if (packet_worker_cores_grid.contains(core)) {
-            std::cout << "Packet worker core: " << core.str() << std::endl;
+            if (operation_attributes.ring_index == 3) {
+                std::cout << "Packet worker core: " << core.str() << std::endl;
+            }
             reader_runtime_args[is_reader_sender_core_idx] = false;
             reader_runtime_args[is_reader_worker_core_idx] = true;
-            reader_runtime_args[is_linear_input_packet_start_idx] = local_input_page;
+            reader_runtime_args[is_linear_input_packet_start_idx] = local_page + offset_for_input;
 
             writer_runtime_args[is_writer_sender_core_idx] = false;
             writer_runtime_args[is_writer_worker_core_idx] = true;
-            writer_runtime_args[is_linear_output_page_start_idx] = local_input_page;
+            writer_runtime_args[is_linear_output_page_start_idx] = local_page;
 
-            local_input_page += num_pages_per_packet;
-            if (first_packet_core) {
-                first_packet_core = false;
+            local_page += num_pages_per_packet;
+            if (core == packet_receiver_core) {
+                if (operation_attributes.ring_index == 3) {
+                    std::cout << "Packet receiver core: " << core.str() << std::endl;
+                }
                 reader_runtime_args[is_reader_receiver_core_idx] = true;
             } else {
                 reader_runtime_args[is_reader_receiver_core_idx] = false;
