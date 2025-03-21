@@ -44,12 +44,12 @@ private:
 
     // Helper functions for reading and writing individual shards
     void write_shard_to_device(
-        std::shared_ptr<Buffer>& shard_view,
+        Buffer* shard_view,
         const void* src,
         const BufferRegion& region,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {});
     void read_shard_from_device(
-        std::shared_ptr<Buffer>& shard_view,
+        Buffer* shard_view,
         void* dst,
         const BufferRegion& region,
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,

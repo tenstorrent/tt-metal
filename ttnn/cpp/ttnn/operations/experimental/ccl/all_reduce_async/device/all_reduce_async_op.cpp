@@ -20,19 +20,17 @@ AllReduceAsync create_all_reduce_async_struct(
     const std::optional<MemoryConfig>& memory_config,
     const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& semaphores,
+    const GlobalSemaphore& semaphore,
     std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode) {
     uint32_t num_devices = devices.size();
 
     std::optional<IDevice*> forward_device = std::nullopt;
     std::optional<IDevice*> backward_device = std::nullopt;
-    std::optional<GlobalSemaphore> semaphore = std::nullopt;
     uint32_t device_index = 0;  // Initialize device index
     for (uint32_t i = 0; i < num_devices; ++i) {
         if (devices.at(i) == input_tensor.device()) {
             device_index = i;
-            semaphore = semaphores.at(i);  // Get raw pointer
             if (i != 0) {
                 backward_device = devices.at(i - 1);
             }
@@ -50,7 +48,7 @@ AllReduceAsync create_all_reduce_async_struct(
         device_index,
         memory_config.value_or(input_tensor.memory_config()),
         topology,
-        semaphore.value(),
+        semaphore,
         sub_device_id,
         enable_persistent_fabric_mode};
 }
@@ -187,7 +185,7 @@ Tensor all_reduce_async(
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
-    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const GlobalSemaphore& multi_device_global_semaphore,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
@@ -200,7 +198,6 @@ Tensor all_reduce_async(
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
-    std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
 
     tt::tt_metal::operation::launch_op(
         [num_preferred_links,
@@ -209,7 +206,7 @@ Tensor all_reduce_async(
          cluster_axis,
          num_devices,
          topology,
-         semaphores,
+         multi_device_global_semaphore,
          subdevice_id,
          enable_persistent_fabric_mode](
             const std::vector<Tensor>& input_tensors,
@@ -234,7 +231,7 @@ Tensor all_reduce_async(
                     memory_config,
                     devices,
                     topology,
-                    semaphores,
+                    multi_device_global_semaphore,
                     subdevice_id,
                     enable_persistent_fabric_mode),
                 {input_tensor, buffer_tensor});

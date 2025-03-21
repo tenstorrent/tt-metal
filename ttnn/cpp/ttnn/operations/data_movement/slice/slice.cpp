@@ -209,7 +209,8 @@ ttnn::Tensor SliceOperation::invoke(
     tt::stl::Span<const T> step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor) {
-    return SliceOperation::invoke<T>(ttnn::DefaultQueueId, input_tensor, begins, ends, step, memory_config_arg);
+    return SliceOperation::invoke<T>(
+        ttnn::DefaultQueueId, input_tensor, begins, ends, step, memory_config_arg, optional_output_tensor);
 }
 
 // Specialization for uint32_t and N=4
@@ -343,7 +344,7 @@ ttnn::Tensor SliceOperation::invoke(
     tt::stl::Span<const T> start(output_tensor_start.begin(), output_tensor_start.end());
     tt::stl::Span<const T> end(output_tensor_end.begin(), output_tensor_end.end());
     tt::stl::Span<const T> step_vec(step.begin(), step.end());
-    return SliceOperation::invoke<T>(queue_id, input_tensor, start, end, step_vec, memory_config_arg);
+    return SliceOperation::invoke<T>(queue_id, input_tensor, start, end, step_vec, memory_config_arg, optional_output_tensor);
 }
 
 template <typename T, std::size_t N>
@@ -355,7 +356,7 @@ ttnn::Tensor SliceOperation::invoke(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor) {
     return SliceOperation::invoke<T, N>(
-        ttnn::DefaultQueueId, input_tensor, output_tensor_start, output_tensor_end, step, memory_config_arg);
+        ttnn::DefaultQueueId, input_tensor, output_tensor_start, output_tensor_end, step, memory_config_arg, optional_output_tensor);
 }
 
 template ttnn::Tensor SliceOperation::invoke<int>(

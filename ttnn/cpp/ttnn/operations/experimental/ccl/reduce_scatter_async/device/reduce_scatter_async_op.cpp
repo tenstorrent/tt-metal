@@ -27,8 +27,8 @@ ReduceScatterAsync create_reduce_scatter_struct(
     std::optional<std::vector<Tensor>> forward_output_tensors,
     std::optional<std::vector<Tensor>> backward_output_tensors,
     std::optional<size_t> num_links_preferred,
-    const std::vector<GlobalSemaphore>& from_remote_sems,
-    const std::vector<GlobalSemaphore>& to_remote_sems,
+    const GlobalSemaphore& from_remote_sem,
+    const GlobalSemaphore& to_remote_sem,
     std::optional<SubDeviceId> sub_device_id,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle) {
     uint32_t num_devices = devices.size();
@@ -55,9 +55,6 @@ ReduceScatterAsync create_reduce_scatter_struct(
             id.value());
         return *device;
     };
-
-    GlobalSemaphore from_remote_sem = from_remote_sems.at(device_index);
-    GlobalSemaphore to_remote_sem = to_remote_sems.at(device_index);
 
     return ttnn::ReduceScatterAsync{
         binary_op_type,
@@ -198,8 +195,8 @@ namespace ccl {
 Tensor reduce_scatter(
     const Tensor& input_tensor,
     const int32_t dim,
-    const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
-    const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
+    const GlobalSemaphore& from_remote_multi_device_global_semaphore,
+    const GlobalSemaphore& to_remote_multi_device_global_semaphore,
     ttnn::operations::reduction::ReduceType math_op,
     const MemoryConfig& output_mem_config,
     ttnn::ccl::Topology topology,
@@ -228,12 +225,6 @@ Tensor reduce_scatter(
         rank - 1,
         dim);
 
-    std::vector<GlobalSemaphore> from_remote_inputs_semaphores =
-        from_remote_multi_device_global_semaphore.global_semaphores;
-
-    std::vector<GlobalSemaphore> to_remote_inputs_semaphores =
-        to_remote_multi_device_global_semaphore.global_semaphores;
-
     std::vector<Tensor> output_tensors = {
         Tensor(operation::get_workers_for_op_output({input_tensor})),
         Tensor(operation::get_workers_for_op_output({input_tensor})),
@@ -245,8 +236,8 @@ Tensor reduce_scatter(
         "Reduce scatter requires 5 output tensors. 1 is real and the others are temporaries");
     operation::launch_op(
         [binary_op_type,
-         from_remote_inputs_semaphores,
-         to_remote_inputs_semaphores,
+         from_remote_multi_device_global_semaphore,
+         to_remote_multi_device_global_semaphore,
          scatter_dim,
          output_mem_config,
          ccl_topology,
@@ -271,8 +262,8 @@ Tensor reduce_scatter(
                     std::nullopt,
                     std::nullopt,
                     num_links_preferred,
-                    from_remote_inputs_semaphores,
-                    to_remote_inputs_semaphores,
+                    from_remote_multi_device_global_semaphore,
+                    from_remote_multi_device_global_semaphore,
                     worker_subdevice_id_opt,
                     fabric_handle),
                 {input_tensor});
@@ -287,8 +278,8 @@ Tensor reduce_scatter(
     const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
-    const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
-    const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
+    const GlobalSemaphore& from_remote_multi_device_global_semaphore,
+    const GlobalSemaphore& to_remote_multi_device_global_semaphore,
     ttnn::operations::reduction::ReduceType reduce_op,
     const MemoryConfig& output_mem_config,
     ttnn::ccl::Topology topology,
@@ -303,12 +294,6 @@ Tensor reduce_scatter(
     const auto mesh_view = mesh_device.get_view();
     auto devices = input_tensor.get_workers();
 
-    std::vector<GlobalSemaphore> from_remote_inputs_semaphores =
-        from_remote_multi_device_global_semaphore.global_semaphores;
-
-    std::vector<GlobalSemaphore> to_remote_inputs_semaphores =
-        to_remote_multi_device_global_semaphore.global_semaphores;
-
     std::vector<Tensor> output_tensors = {
         Tensor(operation::get_workers_for_op_output({input_tensor})),
         Tensor(operation::get_workers_for_op_output({input_tensor})),
@@ -320,8 +305,8 @@ Tensor reduce_scatter(
         "Reduce scatter requires 5 output tensors. 1 is real and the others are temporaries");
     operation::launch_op(
         [binary_op_type,
-         from_remote_inputs_semaphores,
-         to_remote_inputs_semaphores,
+         from_remote_multi_device_global_semaphore,
+         to_remote_multi_device_global_semaphore,
          scatter_dim,
          output_mem_config,
          mesh_view,
@@ -357,8 +342,8 @@ Tensor reduce_scatter(
                     std::nullopt,
                     std::nullopt,
                     num_links_preferred,
-                    from_remote_inputs_semaphores,
-                    to_remote_inputs_semaphores,
+                    from_remote_multi_device_global_semaphore,
+                    to_remote_multi_device_global_semaphore,
                     worker_subdevice_id_opt,
                     fabric_handle),
                 {input_tensor});

@@ -12,7 +12,6 @@ from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_and_load_sub_device_manager_with_fabric_interface,
     teardown_fabric_interface,
-    create_global_semaphore_with_same_address,
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
@@ -281,7 +280,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
 
         # create global semaphore handles
         ccl_semaphore_handles = [
-            create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(NUM_BUFFERS)
+            ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(NUM_BUFFERS)
         ]
     try:
         # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)

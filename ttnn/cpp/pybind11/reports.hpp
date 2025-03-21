@@ -28,7 +28,8 @@ void py_module(py::module& module) {
             "max_size_per_bank", [](const ttnn::reports::BufferInfo& self) { return self.max_size_per_bank; })
         .def_property_readonly("buffer_type", [](const ttnn::reports::BufferInfo& self) { return self.buffer_type; });
 
-    module.def("get_buffers", &get_buffers);
+    module.def("get_buffers", &get_buffers, py::arg("devices"));
+    module.def("get_buffers", [](MeshDevice* device) { return get_buffers({device}); }, py::arg("device"));
 
     auto py_buffer_page_info = static_cast<py::class_<ttnn::reports::BufferPageInfo>>(module.attr("BufferPageInfo"));
     py_buffer_page_info
@@ -44,7 +45,8 @@ void py_module(py::module& module) {
         .def_property_readonly(
             "buffer_type", [](const ttnn::reports::BufferPageInfo& self) { return self.buffer_type; });
 
-    module.def("get_buffer_pages", &get_buffer_pages);
+    module.def("get_buffer_pages", &get_buffer_pages, py::arg("devices"));
+    module.def("get_buffer_pages", [](MeshDevice* device) { return get_buffer_pages({device}); }, py::arg("device"));
 
     auto py_device_info = static_cast<py::class_<ttnn::reports::DeviceInfo>>(module.attr("DeviceInfo"));
     py_device_info

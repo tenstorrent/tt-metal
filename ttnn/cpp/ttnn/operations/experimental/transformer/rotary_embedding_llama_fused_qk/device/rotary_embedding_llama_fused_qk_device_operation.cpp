@@ -22,9 +22,7 @@ void RotaryEmbeddingLlamaFusedQK::validate(const std::vector<Tensor>& input_tens
 
     auto ref_device = q_input_tensor.device();
     for (const auto& input : input_tensors) {
-        TT_FATAL(
-            input.storage_type() == StorageType::DEVICE || input.storage_type() == StorageType::MULTI_DEVICE,
-            "Operands to rotary embedding need to be on device!");
+        TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
         TT_FATAL(input.buffer() != nullptr, "Operands to rotary embedding need to be allocated in buffers on device!");
         TT_FATAL(input.device() == ref_device, "Operands to rotary embedding need to be on same device!");
         TT_FATAL((input.get_layout() == Layout::TILE), "Inputs to rotary embedding must be tilized");

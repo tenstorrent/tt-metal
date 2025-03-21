@@ -172,8 +172,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     TT_ASSERT(remote_config1.get_dtype() == DataType::UINT16);
     TT_ASSERT(remote_config2.get_dtype() == DataType::UINT16);
 
-    auto padding_config_buffer1 = padding_config1.device_buffer();
+    auto padding_config_storage1 = padding_config1.device_storage();
     const uint32_t num_cores = all_cores.num_cores();
+    auto padding_config_buffer1 = padding_config_storage1.get_buffer();
     cb_indices.padding_config_cb_id1 = cb_indices.get_next_cb_id();
     auto padding_config_cb_config1 =
         CircularBufferConfig(
@@ -183,7 +184,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     CBHandle padding_config_cb1 = CreateCircularBuffer(program, all_cores, padding_config_cb_config1);
 
     cb_indices.padding_config_cb_id2 = cb_indices.get_next_cb_id();
-    auto padding_config_buffer2 = padding_config2.device_buffer();
+    auto padding_config_storage2 = padding_config2.device_storage();
+    auto padding_config_buffer2 = padding_config_storage2.get_buffer();
     auto padding_config_cb_config2 =
         CircularBufferConfig(
             padding_config_buffer2->size() / num_cores, {{cb_indices.padding_config_cb_id2, kernel_config_df}})
@@ -192,7 +194,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     CBHandle padding_config_cb2 = CreateCircularBuffer(program, all_cores, padding_config_cb_config2);
 
     cb_indices.local_config_cb_id1 = cb_indices.get_next_cb_id();
-    auto local_config_buffer1 = local_config1.device_buffer();
+    auto local_config_storage1 = local_config1.device_storage();
+    auto local_config_buffer1 = local_config_storage1.get_buffer();
     auto local_config_cb_config1 =
         CircularBufferConfig(
             local_config_buffer1->size() / num_cores, {{cb_indices.local_config_cb_id1, kernel_config_df}})
@@ -201,7 +204,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     CBHandle local_config_cb1 = CreateCircularBuffer(program, all_cores, local_config_cb_config1);
 
     cb_indices.local_config_cb_id2 = cb_indices.get_next_cb_id();
-    auto local_config_buffer2 = local_config2.device_buffer();
+    auto local_config_storage2 = local_config2.device_storage();
+    auto local_config_buffer2 = local_config_storage2.get_buffer();
     auto local_config_cb_config2 =
         CircularBufferConfig(
             local_config_buffer2->size() / num_cores, {{cb_indices.local_config_cb_id2, kernel_config_df}})
@@ -210,7 +214,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     CBHandle local_config_cb2 = CreateCircularBuffer(program, all_cores, local_config_cb_config2);
 
     cb_indices.remote_config_cb_id1 = cb_indices.get_next_cb_id();
-    auto remote_config_buffer1 = remote_config1.device_buffer();
+    auto remote_config_storage1 = remote_config1.device_storage();
+    auto remote_config_buffer1 = remote_config_storage1.get_buffer();
     auto remote_config_cb_config1 =
         CircularBufferConfig(
             remote_config_buffer1->size() / num_cores, {{cb_indices.remote_config_cb_id1, kernel_config_df}})
@@ -219,7 +224,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     CBHandle remote_config_cb1 = CreateCircularBuffer(program, all_cores, remote_config_cb_config1);
 
     cb_indices.remote_config_cb_id2 = cb_indices.get_next_cb_id();
-    auto remote_config_buffer2 = remote_config2.device_buffer();
+    auto remote_config_storage2 = remote_config2.device_storage();
+    auto remote_config_buffer2 = remote_config_storage2.get_buffer();
     auto remote_config_cb_config2 =
         CircularBufferConfig(
             remote_config_buffer2->size() / num_cores, {{cb_indices.remote_config_cb_id2, kernel_config_df}})
@@ -281,14 +287,14 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});
 
     if (!capture_buffers) {
-        padding_config_buffer1 = nullptr;
-        padding_config_buffer2 = nullptr;
-        local_config_buffer1 = nullptr;
-        local_config_buffer2 = nullptr;
-        remote_config_buffer1 = nullptr;
-        remote_config_buffer2 = nullptr;
+        padding_config_storage1 = {};
+        padding_config_storage2 = {};
+        local_config_storage1 = {};
+        local_config_storage2 = {};
+        remote_config_storage1 = {};
+        remote_config_storage2 = {};
     }
-    // Capture padding_config_buffer, local_config_buffer, remote_config_buffer to cache this with the program
+    // Capture padding_config_storage, local_config_storage, remote_config_storage to cache this with the program
     auto override_runtime_arguments_callback = [src_cb,
                                                 out_cb,
                                                 padding_config_cb1,
@@ -297,12 +303,12 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
                                                 local_config_cb2,
                                                 remote_config_cb1,
                                                 remote_config_cb2,
-                                                padding_config_buffer1,
-                                                padding_config_buffer2,
-                                                local_config_buffer1,
-                                                local_config_buffer2,
-                                                remote_config_buffer1,
-                                                remote_config_buffer2](
+                                                padding_config_storage1,
+                                                padding_config_storage2,
+                                                local_config_storage1,
+                                                local_config_storage2,
+                                                remote_config_storage1,
+                                                remote_config_storage2](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,

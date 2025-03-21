@@ -9,7 +9,6 @@ import torch
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_and_load_sub_device_manager_with_fabric_interface,
     teardown_fabric_interface,
-    create_global_semaphore_with_same_address,
 )
 
 
@@ -44,7 +43,7 @@ class TT_CCL:
         for i in range(2):
             for _ in range(self.num_cbs):
                 self.gather_semaphore_handles[i].append(
-                    create_global_semaphore_with_same_address(self.mesh_device, self.sub_device_crs, 0)
+                    create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
                 )
 
         self.gather_idx = [0, 0]

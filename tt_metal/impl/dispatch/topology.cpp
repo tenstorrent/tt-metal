@@ -809,7 +809,7 @@ std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
     }
 
     // Compile the program and return it so Device can register it
-    detail::CompileProgram(device, *cq_program, /*fd_bootloader_mode=*/true);
+    detail::CompileProgram(device, *cq_program, /*force_slow_dispatch=*/true);
     // Erase from map. Note: program in map is no longer valid
     // It is returned from this function and the caller will take ownership of it
     command_queue_pgms.erase(device->id());
@@ -932,7 +932,7 @@ std::unique_ptr<Program> create_and_compile_2d_fabric_program(IDevice* device, F
         tt_metal::SetRuntimeArgs(*fabric_program_ptr, kernel, router_logical_core, router_runtime_args);
     }
 
-    detail::CompileProgram(device, *fabric_program_ptr, /*fd_bootloader_mode=*/device->using_fast_dispatch());
+    detail::CompileProgram(device, *fabric_program_ptr, /*force_slow_dispatch=*/device->using_fast_dispatch());
     return fabric_program_ptr;
 }
 
@@ -1070,7 +1070,7 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, b
         tt::tt_metal::SetRuntimeArgs(*fabric_program_ptr, eth_sender_kernel, eth_logical_core, edm_kernel_rt_args);
     }
 
-    detail::CompileProgram(device, *fabric_program_ptr, /*fd_bootloader_mode=*/device->using_fast_dispatch());
+    detail::CompileProgram(device, *fabric_program_ptr, /*force_slow_dispatch=*/device->using_fast_dispatch());
     return fabric_program_ptr;
 }
 

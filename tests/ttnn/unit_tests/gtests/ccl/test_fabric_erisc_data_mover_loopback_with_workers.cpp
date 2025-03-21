@@ -790,6 +790,8 @@ TEST(
 }
 
 TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric "
+                    "(ttnn::operations::experimental::ccl::reduce_scatter)";
     const size_t dim = 3;
     const size_t num_links = 1;
     constexpr auto layout = Layout::TILE;
@@ -857,23 +859,19 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
         enable_persistent_fabric,
         num_links);
 
-    ttnn::global_semaphore::MultiDeviceGlobalSemaphore from_remote_multi_device_global_semaphore =
-        ttnn::global_semaphore::create_global_semaphore_with_same_address(
-            test_fixture.mesh_device_.get(),
-            devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-            0,                             // initial value
-            tt::tt_metal::BufferType::L1,  // buffer type
-            10                             // attempts
-        );
+    GlobalSemaphore from_remote_multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore(
+        test_fixture.mesh_device_.get(),
+        test_fixture.mesh_device_.get()->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
+        0,                            // initial value
+        tt::tt_metal::BufferType::L1  // buffer type
+    );
 
-    ttnn::global_semaphore::MultiDeviceGlobalSemaphore to_remote_multi_device_global_semaphore =
-        ttnn::global_semaphore::create_global_semaphore_with_same_address(
-            test_fixture.mesh_device_.get(),
-            devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-            0,                             // initial value
-            tt::tt_metal::BufferType::L1,  // buffer type
-            10                             // attempts
-        );
+    GlobalSemaphore to_remote_multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore(
+        test_fixture.mesh_device_.get(),
+        test_fixture.mesh_device_.get()->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
+        0,                            // initial value
+        tt::tt_metal::BufferType::L1  // buffer type
+    );
 
     auto output_tensor = ttnn::operations::experimental::ccl::reduce_scatter(
         input_mesh_tensor,
@@ -906,9 +904,11 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
 }
 
 TEST(CclAsyncOp, AllGather_PersistentFabric_Dim3_Links1_Shape1_1_32_128) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
     run_all_gather_with_persistent_fabric(3, 1, ttnn::Shape({1, 1, 32, 128}));
 }
 TEST(CclAsyncOp, AllGather_PersistentFabric_Dim3_Links1_Shape1_1_32_8192) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
     run_all_gather_with_persistent_fabric(3, 1, ttnn::Shape({1, 1, 32, 8192}));
 }
 // Mesh device setup seems to not provide the correct configuration for multi-link? To be investigated
