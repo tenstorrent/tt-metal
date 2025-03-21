@@ -3,14 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "bcast_to.hpp"
-
-#include <optional>
-
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/experimental/bcast_to/device/bcast_to_device_operation.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+
+#include <optional>
 namespace ttnn::operations::experimental {
 
 auto infer_size(const Tensor& input, const std::vector<int32_t>& sizes) {
@@ -59,6 +58,7 @@ auto infer_size(const Tensor& input, const std::vector<int32_t>& sizes) {
 }
 
 Tensor BcastTo::invoke(
+    QueueId queue_id,
     const Tensor& input,
     const std::vector<int32_t>& sizes,
 
@@ -67,6 +67,6 @@ Tensor BcastTo::invoke(
     auto output_shape = infer_size(input, sizes);
 
     // TT_FATAL(input.get_layout() == Layout::TILE, "BcastTo: Input tensor layout must be TILE");
-    return ttnn::prim::bcast_to(input, output_shape, output, memory_config);
+    return ttnn::prim::bcast_to(queue_id, input, output_shape, output, memory_config);
 }
 }  // namespace ttnn::operations::experimental
