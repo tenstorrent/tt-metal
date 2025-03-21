@@ -22,6 +22,12 @@ run_qwen7b_func() {
 run_llama3_func() {
   fail=0
 
+  # Falcon7B
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo -k "default_mode_1024_stochastic"; fail+=$?
+
+  # Qwen7B
+  QWEN_DIR=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml FAKE_DEVICE=N150 pytest -n auto models/demos/qwen/demo/demo.py -k instruct --timeout 420; fail+=$?
+
   # Llama3 Accuracy tests
   # Llama3.2-1B
   llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
@@ -55,6 +61,17 @@ run_bert_tiny_func() {
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/bert_tiny/demo/demo.py --timeout 600 || fail=1
 
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/bert_tiny/demo/demo.py --timeout 600 || fail=1
+  return $fail
+}
+
+run_n150_tests(){
+  fail=0
+
+  run_common_func_tests; fail+=$?
+  run_common_perf_tests; fail+=$?
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings --input-path="models/demos/wormhole/stable_diffusion/demo/input_data.json" models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo --timeout 900; fail+=$?
+>>>>>>> 4ce94c7a5e (Add support of Mistral-7B into TT-Transformers)
 
   if [[ $fail -ne 0 ]]; then
     exit 1
