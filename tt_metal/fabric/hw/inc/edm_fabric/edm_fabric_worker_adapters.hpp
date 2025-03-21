@@ -218,9 +218,11 @@ struct WorkerToFabricEdmSenderImpl {
     FORCE_INLINE void send_payload_non_blocking_from_address(uint32_t source_address, size_t size_bytes) {
         send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
     }
+    template <bool enable_ring_support>
     FORCE_INLINE void send_payload_non_blocking_from_address_with_trid(
         uint32_t source_address, size_t size_bytes, uint8_t trid) {
-        send_payload_from_address_with_trid_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes, trid);
+        send_payload_from_address_with_trid_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING, enable_ring_support>(
+            source_address, size_bytes, trid);
     }
 
     static constexpr size_t edm_sender_channel_field_stride_bytes = 16;
@@ -319,10 +321,15 @@ struct WorkerToFabricEdmSenderImpl {
     uint8_t sync_noc_cmd_buf;
 
 private:
-    template <bool stateful_api = false>
+    template <bool stateful_api = false, bool enable_ring_support = false>
     FORCE_INLINE void update_edm_buffer_slot_wrptr(uint8_t noc = noc_index) {
         if constexpr (stateful_api) {
-            noc_inline_dw_write_with_state(*this->buffer_slot_wrptr_ptr, this->sync_noc_cmd_buf, noc);
+            if constexpr (enable_ring_support) {
+                noc_inline_dw_write_with_state<true>(
+                    *this->buffer_slot_wrptr_ptr, this->edm_buffer_slot_wrptr_addr, this->sync_noc_cmd_buf, noc);
+            } else {
+                noc_inline_dw_write_with_state<false>(*this->buffer_slot_wrptr_ptr, 0, this->sync_noc_cmd_buf, noc);
+            }
         } else {
             const uint64_t noc_sem_addr =
                 get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr, noc);
@@ -360,10 +367,10 @@ private:
         }
     }
 
-    template <bool stateful_api = false>
+    template <bool stateful_api = false, bool enable_ring_support = false>
     FORCE_INLINE void post_send_payload_increment_pointers(uint8_t noc = noc_index) {
         this->advance_buffer_slot_wrptr();
-        this->update_edm_buffer_slot_wrptr<stateful_api>(noc);
+        this->update_edm_buffer_slot_wrptr<stateful_api, enable_ring_support>(noc);
     }
     template <EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_packet_header_and_notify_fabric(uint32_t source_address) {
@@ -391,7 +398,7 @@ private:
         send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address);
         post_send_payload_increment_pointers();
     }
-    template <EDM_IO_BLOCKING_MODE blocking_mode>
+    template <EDM_IO_BLOCKING_MODE blocking_mode, bool enable_ring_support>
     FORCE_INLINE void send_payload_from_address_with_trid_impl(
         uint32_t source_address, size_t size_bytes, uint8_t trid) {
         ASSERT(size_bytes <= this->buffer_size_bytes);
@@ -409,7 +416,7 @@ private:
             send_chunk_from_address_with_trid<blocking_mode>(
                 source_address, 1, size_bytes, this->edm_buffer_addr, trid, this->data_noc_cmd_buf);
         }
-        post_send_payload_increment_pointers<true>(edm_to_local_chip_noc);
+        post_send_payload_increment_pointers<true, enable_ring_support>(edm_to_local_chip_noc);
     }
 
     template <EDM_IO_BLOCKING_MODE blocking_mode>

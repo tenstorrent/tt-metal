@@ -149,8 +149,14 @@ struct EdmChannelWorkerInterface {
         return cached_worker_semaphore_address & 0xFFFFFFFF;
     }
 
+    template <bool enable_ring_support>
     FORCE_INLINE void update_worker_copy_of_read_ptr(BufferPtr new_ptr_val) {
-        noc_inline_dw_write_with_state(new_ptr_val, this->sender_sync_noc_cmd_buf);
+        if constexpr (enable_ring_support) {
+            noc_inline_dw_write_with_state<true>(
+                new_ptr_val, this->cached_worker_semaphore_address, this->sender_sync_noc_cmd_buf);
+        } else {
+            noc_inline_dw_write_with_state<false>(new_ptr_val, 0, this->sender_sync_noc_cmd_buf);
+        }
     }
 
     // Connection management methods

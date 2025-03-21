@@ -1566,11 +1566,15 @@ void noc_inline_dw_write_set_state(
     WAYPOINT("NWID");
 }
 
-FORCE_INLINE
-void noc_inline_dw_write_with_state(uint32_t val, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
+template <bool update_addr_lo = false>
+FORCE_INLINE void noc_inline_dw_write_with_state(
+    uint32_t val, uint32_t addr = 0, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
     WAYPOINT("NWIW");
 
     while (!noc_cmd_buf_ready(noc, cmd_buf));
+    if constexpr (update_addr_lo) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, addr);
+    }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     WAYPOINT("NWID");
