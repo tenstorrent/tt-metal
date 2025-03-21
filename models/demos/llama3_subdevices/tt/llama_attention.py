@@ -377,7 +377,7 @@ class TtLlamaAttention(LightweightModule):
             cluster_axis=1,
             num_links=3,
             memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1]),
-            sdpa=True,
+            buffer_key="SDPA",
         )
         # ttnn.deallocate(attn_output_1G4D)
 

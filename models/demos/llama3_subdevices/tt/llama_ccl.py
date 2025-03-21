@@ -18,20 +18,19 @@ class TT_CCL:
     def __init__(
         self,
         mesh_device,
-        sub_device_crs,
+        model_args,
         worker_sub_device_id,
         enable_persistent_fabric=True,
         create_persistent_fabric=True,
         teardown_persistent_fabric=True,
-        model_config=None,  # Used to create sub_device_manager
     ):
         self.mesh_device = mesh_device
-        self.sub_device_crs = sub_device_crs
+        self.sub_device_crs = model_args.sub_core_grids
         self.worker_sub_device_id = worker_sub_device_id
         self.enable_persistent_fabric = enable_persistent_fabric
         self.create_persistent_fabric = create_persistent_fabric
         self.teardown_persistent_fabric = teardown_persistent_fabric
-        self.model_config = model_config
+        self.model_config = model_args.model_config
 
         if create_persistent_fabric:
             assert enable_persistent_fabric
@@ -66,7 +65,7 @@ class TT_CCL:
 
         """
 
-        persistent_buffers = [None, None, None]
+        persistent_buffers = {}
 
         if self.model_config is None:
             return persistent_buffers
@@ -82,8 +81,8 @@ class TT_CCL:
             memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1]),
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        persistent_buffers.append(tt_buffer)
         check_mesh_tensor_alloc(tt_buffer)
+        persistent_buffers["SDPA"] = tt_buffer
 
         # Layernorm
         grid_offset = ttnn.CoreCoord(1, 0)
@@ -102,8 +101,8 @@ class TT_CCL:
             memory_config=tt_stats_sharded_config,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        persistent_buffers.append(tt_buffer)
         check_mesh_tensor_alloc(tt_buffer)
+        persistent_buffers["LAYERNORM"] = tt_buffer
 
         tt_buffer = ttnn.from_torch(
             torch.zeros((1, 1, 32, 128 * 1024)),
@@ -113,8 +112,8 @@ class TT_CCL:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        persistent_buffers.append(tt_buffer)
         check_mesh_tensor_alloc(tt_buffer)
+        persistent_buffers["SAMPLING"] = tt_buffer
 
         return persistent_buffers
 
@@ -250,10 +249,8 @@ class TT_CCL:
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
         return ttnn_tensor_out
 
-    def line_all_gather(self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, sdpa=False):
-        persistent_buffer = self.all_gather_buffers[0 if sdpa else 1]
-        if memory_config == ttnn.DRAM_MEMORY_CONFIG:
-            persistent_buffer = self.all_gather_buffers[2]  # LM head buffer
+    def line_all_gather(self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, buffer_key=None):
+        persistent_buffer = self.all_gather_buffers.get(buffer_key, None)
 
         ttnn_tensor_out = ttnn.experimental.all_gather_async(
             input_tensor_mesh,
@@ -559,7 +556,7 @@ def tt_sharded_distributed_rmsnorm(
     # ttnn.deallocate(tt_stats)
     # print("mem cfg")
     tt_global_stats_sharded = tt_ccl.line_all_gather(
-        tt_stats, dim=3, cluster_axis=1, num_links=1, memory_config=tt_stats_sharded_config
+        tt_stats, dim=3, cluster_axis=1, num_links=1, memory_config=tt_stats_sharded_config, buffer_key="LAYERNORM"
     )
     # ttnn.synchronize_device(tt_ccl.mesh_device, sub_device_ids=[tt_ccl.worker_sub_device_id])
     # ttnn.deallocate(tt_stats_dram)
