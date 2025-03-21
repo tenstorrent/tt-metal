@@ -9,12 +9,24 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
+    with:
+      version: 20.04
+      build-wheel: true
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
     with:
+      version: 20.04
+      build-wheel: true
       tracy: true
     secrets: inherit
   t3000-model-perf-tests:
     needs: [build-artifact, build-artifact-profiler]
     secrets: inherit
     uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      build-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      extra-tag: ${{ inputs.extra-tag || 'in-service' }}
