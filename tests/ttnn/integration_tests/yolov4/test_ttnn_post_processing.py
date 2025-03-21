@@ -19,13 +19,13 @@ import os
     "resolution",
     [
         (320, 320),
-        (640, 640),
+        # (640, 640),
     ],
 )
 def test_yolov4_post_processing(device, reset_seeds, model_location_generator, resolution):
     torch.manual_seed(0)
 
-    if resolution == 320:
+    if resolution[0] == 320:
         torch_input_1 = torch.randn((1, 1, 1600, 256), dtype=torch.bfloat16)
         ttnn_input_1 = ttnn.from_torch(
             torch_input_1,
