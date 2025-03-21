@@ -114,8 +114,9 @@ def test_sample_model(mesh_device, use_program_cache, reset_seeds, n_layers):
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("dump_performance", [True, False], ids=["intermediate_dump", "no_dump"])
 @pytest.mark.parametrize("n_layers", [1, 2, 4, 48], ids=["L1", "L2", "L4", "L48"])
-def test_sample_model_perf(mesh_device, use_program_cache, reset_seeds, n_layers):
+def test_sample_model_perf(mesh_device, use_program_cache, reset_seeds, n_layers, dump_performance):
     from genmo.lib.progress import get_new_progress_bar
     from genmo.mochi_preview.vae.vae_stats import dit_latents_to_vae_latents
 
@@ -252,6 +253,10 @@ def test_sample_model_perf(mesh_device, use_program_cache, reset_seeds, n_layers
             pred_1BNI = model_fn(z_1BNI=z_1BNI, sigma_B=sigma_B, cfg_scale=cfg_schedule[i])
             # assert pred_BCTHW.dtype == torch.float32
             z_1BNI = z_1BNI + dsigma * pred_1BNI
+            if dump_performance:
+                logger.info("Dumping performance")
+                for d in mesh_device.get_devices():
+                    ttnn.DumpDeviceProfiler(d)
         ttnn.synchronize_device(mesh_device)
         device_steps = time.perf_counter() - start
         # Postprocess z
