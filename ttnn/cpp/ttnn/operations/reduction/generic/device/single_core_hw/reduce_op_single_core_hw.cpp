@@ -35,6 +35,11 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
+    // If NOOP, return
+    if (!a.volume()) {
+        return {std::move(program)};
+    }
+
     CoreRange core({0, 0}, {0, 0});
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
