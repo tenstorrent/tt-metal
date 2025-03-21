@@ -13,8 +13,7 @@
 #include "compute_kernel_api/binary_bitwise_sfpu.h"
 #include "compute_kernel_api/binary_shift.h"
 #include "compute_kernel_api.h"
-
-#include "eltwise_bw_gelu_common.hpp"
+#include "compute_kernel_api/common_sfpu.h"
 
 #define M_SQRT2 1.41421356237309504880f    /* sqrt(2) */
 #define M_2_SQRTPI 1.12837916709551257390f /* 2/sqrt(pi) */
@@ -70,7 +69,7 @@ void MAIN {
             // tile[1] = tanh(sqrt(2/π) * (x + 0.044715 * x^3))
             tanh_tile_init();
             tanh_tile(1);
-            copy_value(4, 1);  // save tanh to tile[7]
+            copy_values(4, 1);  // save tanh to tile[7]
 
             // CDF term: tile[1] = 0.5 * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x^3)))
             load_immediate_value(3, 1.0f);
@@ -82,7 +81,7 @@ void MAIN {
             square_tile(4);
             load_immediate_value(3, 1.0f);
             sub_binary_tile(3, 4);
-            copy_value(4, 3);
+            copy_values(4, 3);
 
             // tile[2] = (1 + 0.134145 * x**2)
             load_immediate_value(3, kKappa * 3.0f);
@@ -97,7 +96,7 @@ void MAIN {
             mul_binary_tile(2, 3);
 
             // tile[2] = x * pdf tern
-            copy_value(3, 8);
+            copy_values(3, 8);
             mul_binary_tile(2, 3);
 
             // result: tile[1] = grad * (cdf_term + x * pdf_term)
