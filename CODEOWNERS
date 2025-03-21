@@ -171,9 +171,23 @@ tests/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @omilyutin-tt
 /models/*/**
 models/conv_on_device_utils*.py @tenstorrent/metalium-developers-convolutions
 functional_*/ @uaydonat @esmalTT
+models/common @yieldthought @mtairum @uaydonat
+models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat
 models/demos @uaydonat
+models/demos/bert @uaydonat
+models/demos/bert_tiny @uaydonat
+models/demos/wormhole/bert_tiny @uaydonat
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
+models/demos/convnet_mnist @uaydonat
+models/demos/distilbert @uaydonat
+models/demos/mnist @uaydonat
+models/demos/roberta @uaydonat
+models/demos/squeezebert @uaydonat
+models/demos/ttnn_falcon7b @cfjchu @uaydonat
+models/demos/vgg @uaydonat
 models/demos/wormhole @uaydonat
+models/demos/wormhole/distilbert @uaydonat
+models/demos/wormhole/vit @mbahnasTT @uaydonat
 models/demos/t3000 @uaydonat
 models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat
 models/demos/llama3_subdevices @johanna-rock-tt @kpaigwar @avoraTT @sraizada-tt @djordje-tt
@@ -197,13 +211,14 @@ models/demos/grayskull @uaydonat
 models/demos/yolov4 @dvartaniansTT @mbahnasTT @tenstorrent/metalium-developers-convolutions
 models/demos/wormhole/yolov4 @dvartaniansTT @mbahnasTT @tenstorrent/metalium-developers-convolutions
 models/demos/**/*resnet*  @tt-aho @tenstorrent/metalium-developers-convolutions
+models/experimental @uaydonat
 models/experimental/functional_unet @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions
 models/demos/wormhole/vit @mbahnasTT @dvartaniansTT @uaydonat
 models/demos/vit  @mbahnasTT @dvartaniansTT @uaydonat
 models/demos/segformer @mbahnasTT @uaydonat @tenstorrent/metalium-developers-convolutions
-models/perf/ @uaydonat
+models/perf/ @yieldthought @uaydonat
 models/perf/perf_report.py @yieldthought @uaydonat
-models/perf/benchmarking_utils.py @skhorasganiTT
+models/perf/benchmarking_utils.py @skhorasganiTT @uaydonat
 models/demos/utils/llm_demo_utils.py @skhorasganiTT @mtairum @uaydonat
 
 # docs
