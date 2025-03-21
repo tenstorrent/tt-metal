@@ -29,35 +29,10 @@ namespace ttnn::distributed {
 namespace py = pybind11;
 
 // Trampoline class to clear virtual method errors
-struct ConcreteTensorToMesh : TensorToMesh {
-    using TensorToMesh::TensorToMesh;  // Inherit constructors
-
-    std::vector<Tensor> map(const Tensor& tensor) const override {
-        PYBIND11_OVERRIDE(std::vector<Tensor>, TensorToMesh, map, tensor);
-    }
-
-    tt::tt_metal::DistributedTensorConfig config() const override {
-        PYBIND11_OVERRIDE(tt::tt_metal::DistributedTensorConfig, TensorToMesh, config);
-    }
-};
-
-// Trampoline class to clear virtual method errors
-struct ConcreteMeshToTensor : MeshToTensor {
-    Tensor compose(const std::vector<Tensor>& tensors) const override {
-        PYBIND11_OVERRIDE(Tensor, MeshToTensor, compose, tensors);
-    }
-};
 
 void py_module_types(py::module& module) {
-    py::class_<MeshToTensor, ConcreteMeshToTensor, std::unique_ptr<MeshToTensor>>(module, "CppMeshToTensor");
-    py::class_<TensorToMesh, ConcreteTensorToMesh, std::unique_ptr<TensorToMesh>>(module, "CppTensorToMesh");
-
-    py::class_<ReplicateTensor>(module, "ReplicateTensor");
-    py::class_<ShardTensor>(module, "ShardTensor");
-    py::class_<ShardTensor2D>(module, "ShardTensor2d");
-    py::class_<ShardMesh>(module, "ShardMesh");
-    py::class_<AllGatherTensor>(module, "AllGatherTensor");
-    py::class_<DistributedTensorConfig>(module, "DistributedTensorConfig");
+    py::class_<MeshToTensor, std::unique_ptr<MeshToTensor>>(module, "MeshToTensor");
+    py::class_<TensorToMesh, std::unique_ptr<TensorToMesh>>(module, "TensorToMesh");
 
     py::class_<Shard2dConfig>(module, "Shard2dConfig");
     py::class_<Concat2dConfig>(module, "Concat2dConfig");
@@ -410,18 +385,13 @@ void py_module(py::module& module) {
                back to all SubDevice IDs.
            )doc");
 
-    auto py_tensor_to_mesh = static_cast<py::class_<TensorToMesh, ConcreteTensorToMesh, std::unique_ptr<TensorToMesh>>>(
-        module.attr("CppTensorToMesh"));
-    py_tensor_to_mesh
-        .def(py::init([]() -> std::unique_ptr<TensorToMesh> { return std::make_unique<ConcreteTensorToMesh>(); }))
-        .def("map", &TensorToMesh::map)
-        .def("config", &TensorToMesh::config);
+    auto py_tensor_to_mesh =
+        static_cast<py::class_<TensorToMesh, std::unique_ptr<TensorToMesh>>>(module.attr("TensorToMesh"));
+    py_tensor_to_mesh.def("map", &TensorToMesh::map).def("config", &TensorToMesh::config);
 
-    auto py_mesh_to_tensor = static_cast<py::class_<MeshToTensor, ConcreteMeshToTensor, std::unique_ptr<MeshToTensor>>>(
-        module.attr("CppMeshToTensor"));
-    py_mesh_to_tensor
-        .def(py::init([]() -> std::unique_ptr<MeshToTensor> { return std::make_unique<ConcreteMeshToTensor>(); }))
-        .def("compose", &MeshToTensor::compose);
+    auto py_mesh_to_tensor =
+        static_cast<py::class_<MeshToTensor, std::unique_ptr<MeshToTensor>>>(module.attr("MeshToTensor"));
+    py_mesh_to_tensor.def("compose", &MeshToTensor::compose);
 
     module.def(
         "open_mesh_device",
@@ -452,29 +422,12 @@ void py_module(py::module& module) {
             Tensor: The shard of the tensor corresponding to the device_id.
     )doc");
 
-    auto py_replicate_tensor_config = static_cast<py::class_<ReplicateTensor>>(module.attr("ShardTensor"));
-    py_replicate_tensor_config.def(py::init<>())
-        .def(py::init<int>(), py::arg("replication_factor") = 1)
-        .def_readwrite("replication_factor", &ReplicateTensor::replication_factor)
-        .def("__eq__", [](const ReplicateTensor& a, const ReplicateTensor& b) {
-            return a.replication_factor == b.replication_factor;
-        });
-
-    auto py_shard_tensor_config = static_cast<py::class_<ShardTensor>>(module.attr("ShardTensor"));
-    py_shard_tensor_config.def(py::init<int>(), py::arg("shard_dimension"))
-        .def_readwrite("shard_dimension", &ShardTensor::shard_dimension)
-        .def("__eq__", [](const ShardTensor& a, const ShardTensor& b) { return a == b; });
     auto py_shard_mesh = static_cast<py::class_<ShardMesh>>(module.attr("ShardMesh"));
     py_shard_mesh.def(py::init<>()).def_readwrite("y", &ShardMesh::y).def_readwrite("x", &ShardMesh::x);
     auto py_shard_tensor2d = static_cast<py::class_<ShardTensor2D>>(module.attr("ShardTensor2d"));
     py_shard_tensor2d.def(py::init<ShardMesh>(), py::arg("mesh"))
         .def_readonly("shard_mesh", &ShardTensor2D::shard_mesh)
         .def("__eq__", [](const ShardTensor2D& a, const ShardTensor2D& b) { return a == b; });
-    auto py_allgather_config =
-        static_cast<py::class_<AllGatherTensor>>(module.attr("AllGatherTensor"))
-            .def(py::init<>())
-            .def("__eq__", [](const AllGatherTensor& a, const AllGatherTensor& b) { return a == b; });
-
     auto py_shard2d_config = static_cast<py::class_<Shard2dConfig>>(module.attr("Shard2dConfig"));
     py_shard2d_config.def(py::init<int, int>(), py::arg("row_dim"), py::arg("col_dim"))
         .def_readwrite("row_dim", &Shard2dConfig::row_dim)
@@ -484,18 +437,6 @@ void py_module(py::module& module) {
         .def_readwrite("row_dim", &Concat2dConfig::row_dim)
         .def_readwrite("col_dim", &Concat2dConfig::col_dim);
 
-    module.def(
-        "get_distributed_tensor_config",
-        &get_distributed_tensor_config,
-        py::arg("metadata"),
-        R"doc(
-            Returns a distributed_tensor_config object given a valid metadata object of the type
-
-            {
-                "item": "field",
-                "item": "field",
-            }
-        )doc");
     module.def(
         "get_device_tensor",
         py::overload_cast<const Tensor&, const IDevice*>(&ttnn::distributed::get_device_tensor),
@@ -514,20 +455,39 @@ void py_module(py::module& module) {
            Tensor: The shard of the tensor corresponding to the device.
    )doc");
     module.def("get_device_tensors", &get_device_tensors, py::arg("tensor"), py::kw_only());
-    // TODO: Add rdocs
     module.def(
         "replicate_tensor_to_mesh_mapper",
         [](MeshDevice& mesh_device) -> std::unique_ptr<TensorToMesh> {
             return replicate_tensor_to_mesh_mapper(mesh_device);
         },
-        py::arg("mesh_device"));
+        py::arg("mesh_device"),
+        R"doc(
+       Returns a mapper replicating a tensor over the given mesh.
+
+       Args:
+           mesh_device (MeshDevice): The mesh to replicate over.
+
+
+       Returns:
+           TensorToMesh: A mapper providing the desired sharding.
+   )doc");
     module.def(
         "shard_tensor_to_mesh_mapper",
         [](MeshDevice& mesh_device, int dim) -> std::unique_ptr<TensorToMesh> {
             return shard_tensor_to_mesh_mapper(mesh_device, dim);
         },
         py::arg("mesh_device"),
-        py::arg("dim"));
+        py::arg("dim"),
+        R"doc(
+       Returns a mapper sharding a tensor over the given dimension for the given mesh.
+
+       Args:
+           mesh_device (MeshDevice): The mesh to replicate over.
+           dim (int): The dimension to shard over.
+
+       Returns:
+           TensorToMesh: A mapper providing the desired sharding.
+   )doc");
     module.def(
         "shard_tensor_to_2d_mesh_mapper",
         [](MeshDevice& mesh_device,
@@ -537,7 +497,18 @@ void py_module(py::module& module) {
         },
         py::arg("mesh_device"),
         py::arg("mesh_shape"),
-        py::arg("config"));
+        py::arg("config"),
+        R"doc(
+       Returns a mapper sharding a tensor over the given dimension for the given mesh.
+
+       Args:
+           mesh_device (MeshDevice): The mesh to create the mapper for.
+           mesh_shape (MeshShape): The shape of the 2D mesh as (num_rows, num_cols).
+           config (Shard2dConfig): A config object representing the row and column to shard over.
+
+       Returns:
+           TensorToMesh: A mapper providing the desired sharding.
+   )doc");
     module.def(
         "shard_tensor_to_2d_mesh_mapper",
         [](MeshDevice& mesh_device,
@@ -552,7 +523,7 @@ void py_module(py::module& module) {
         py::arg("mesh_shape"),
         py::arg("dims"),
         R"doc(
-            Create a ShardTensorTo2dMesh mapper with the given mesh device, mesh shape, and dimensions.
+            Returns a mapper sharding a tensor over the given mesh device, mesh shape, and dimensions.
 
             Args:
                 mesh_device (MeshDevice): The mesh device to create the mapper for.
@@ -560,12 +531,30 @@ void py_module(py::module& module) {
                 dims (Tuple[int, int]): The dimensions to create the mapper for in (row, column) format.
 
             Returns:
-                TensorToMesh: The created ShardTensorTo2dMesh mapper.
+                TensorToMesh: A mapper providing the desired sharding.
    )doc");
     module.def(
         "concat_mesh_to_tensor_composer",
         [](int dim) -> std::unique_ptr<MeshToTensor> { return concat_mesh_to_tensor_composer(dim); },
         py::arg("dim"));
+    module.def(
+        "concat_2d_mesh_to_tensor_composer",
+        [](MeshDevice& mesh_device, const Concat2dConfig& config) -> std::unique_ptr<MeshToTensor> {
+            return concat_2d_mesh_to_tensor_composer(mesh_device, config);
+        },
+        py::arg("mesh_device"),
+        py::arg("dims"),
+        R"doc(
+            Returns a Concat2dMeshToTensor composer with the given mesh device and dimensions.
+
+            Args:
+                mesh_device (MeshDevice): The mesh device to create the composer for.
+                config (Concat2dConfig): A config object representing the row and column to concat over.
+
+            Returns:
+                TensorToMesh: A composer providing the desired concatenation.
+   )doc");
+
     module.def(
         "concat_2d_mesh_to_tensor_composer",
         [](MeshDevice& mesh_device, const std::tuple<int, int> dims) -> std::unique_ptr<MeshToTensor> {
@@ -580,10 +569,9 @@ void py_module(py::module& module) {
             Args:
                 mesh_device (MeshDevice): The mesh device to create the composer for.
                 dims (Tuple[int, int]): The dimensions to create the composer for in (row, column) format.
-                mesh_shape (Tuple[int, int]): The shape of the 2D mesh as (num_rows, num_cols).
 
             Returns:
-                TensorToMesh: The created Concat2dMeshToTensor composer.
+                TensorToMesh: A composer providing the desired concatenation.
    )doc");
     module.def(
         "distribute_tensor",
@@ -594,12 +582,33 @@ void py_module(py::module& module) {
         },
         py::arg("tensor"),
         py::arg("mapper"),
-        py::arg("mesh_device") = py::none());
+        py::arg("mesh_device") = py::none(),
+        R"doc(
+            Distributes a tensor across a mesh device according to provided mapper.
+
+            Args:
+                tensor (Tensor): The tensor to distribute.
+                mapper (TensorToMesh): The mapper to use for distribution.
+                mesh_device (MeshDevice): The mesh device to distribute the tensor over.
+
+            Returns:
+                Tensor: The distributed tensor.
+        )doc");
     module.def(
         "aggregate_tensor",
         [](const Tensor& tensor, const MeshToTensor& composer) -> Tensor { return aggregate_tensor(tensor, composer); },
         py::arg("tensor"),
-        py::arg("composer"));
+        py::arg("composer"),
+        R"doc(
+            Aggregates a tensor across a mesh device according to provided composer.
+
+            Args:
+                tensor (Tensor): The tensor to aggregate.
+                composer (MeshToTensor): The composer to use for aggregation.
+
+            Returns:
+                Tensor: The aggregated tensor.
+            )doc");
     module.def(
         "aggregate_tensor",
         [](const std::vector<Tensor>& tensors, const MeshToTensor& composer) -> Tensor {
@@ -608,12 +617,31 @@ void py_module(py::module& module) {
             return aggregate_tensor(aggregated_tensor, composer);
         },
         py::arg("tensor"),
-        py::arg("composer"));
+        py::arg("composer"),
+        R"doc(
+            Aggregates a set of shards across a mesh device according to provided composer.
+
+            Args:
+                tensor (Tensor): The tensor to aggregate.
+                composer (MeshToTensor): The composer to use for aggregation.
+
+            Returns:
+                Tensor: The aggregated tensor.
+            )doc");
     module.def(
         "aggregate_as_tensor",
         [](const std::vector<Tensor>& tensors) -> Tensor { return aggregate_as_tensor(tensors, AllGatherTensor{}); },
         py::arg("tensors"),
-        py::kw_only());
+        py::kw_only(),
+        R"doc(
+            Aggregates a set of shards into one tensor.
+
+            Args:
+                tensor (Tensor): The tensor to aggregate.
+
+            Returns:
+                Tensor: The aggregated tensor.
+            )doc"));
     module.def("get_t3k_physical_device_ids_ring", &get_t3k_physical_device_ids_ring);
 }
 
