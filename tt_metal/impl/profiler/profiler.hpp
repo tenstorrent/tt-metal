@@ -11,6 +11,7 @@
 #include <filesystem>
 
 #include "buffer.hpp"
+#include "mesh_buffer.hpp"
 #include "program_impl.hpp"
 #include "profiler_state.hpp"
 #include "profiler_types.hpp"
@@ -145,7 +146,7 @@ public:
     ~DeviceProfiler();
 
     // DRAM buffer for device side results
-    std::shared_ptr<tt::tt_metal::Buffer> output_dram_buffer = nullptr;
+    distributed::AnyBuffer output_dram_buffer;
     std::shared_ptr<tt::tt_metal::Program> sync_program = nullptr;
 
     // Device-core Syncdata

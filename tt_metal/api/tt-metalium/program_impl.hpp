@@ -158,7 +158,7 @@ class Program {
     // XXXXX TODO: this should return a const reference
     std::vector<std::vector<CoreCoord>> logical_cores() const;
 
-    void compile(IDevice* device, bool fd_bootloader_mode = false);
+    void compile(IDevice* device, bool force_slow_dispatch = false);
 
     void generate_dispatch_commands(IDevice* device);
 

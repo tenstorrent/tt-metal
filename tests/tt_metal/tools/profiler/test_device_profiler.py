@@ -215,7 +215,6 @@ def test_dispatch_cores():
         if stat in stats.keys():
             verifiedStat.append(stat)
             assert stats[stat]["stats"]["Count"] == REF_COUNT_DICT[ENV_VAR_ARCH_NAME][stat], "Wrong Dispatch zone count"
-
     statTypes = ["Dispatch", "Prefetch"]
     statTypesSet = set(statTypes)
     for statType in statTypes:
@@ -230,8 +229,8 @@ def test_dispatch_cores():
 @skip_for_grayskull()
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {
-        "Ethernet CQ Dispatch": [17, 12, 3899],
-        "Ethernet CQ Prefetch": [18, 1951],
+        "Ethernet CQ Dispatch": [17, 12, 3902],
+        "Ethernet CQ Prefetch": [18, 1954],
     }
     os.environ["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "1"
     devicesData = run_device_profiler_test(

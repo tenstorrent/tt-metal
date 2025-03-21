@@ -1638,6 +1638,8 @@ std::vector<std::pair<transfer_info_cores, uint32_t>> Device::extract_dst_noc_mu
 tt::WorkExecutorMode Device::get_worker_mode() { return work_executor_->get_worker_mode(); }
 bool Device::is_worker_queue_empty() const { return work_executor_->worker_queue.empty(); }
 
+std::shared_ptr<distributed::MeshDevice> Device::get_mesh_device() { return mesh_device.lock(); }
+
 }  // namespace tt_metal
 
 }  // namespace tt

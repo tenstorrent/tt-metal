@@ -168,7 +168,7 @@ void bind_current_thread_to_free_cores(const std::unordered_set<uint32_t>& free_
 
 DevicePool* DevicePool::_inst = nullptr;
 
-void DevicePool::init_profiler_devices() const {
+void DevicePool::init_profiler() const {
 #if defined(TRACY_ENABLE)
     for (const auto& dev : this->get_all_active_devices()) {
         // For Galaxy init, we only need to loop over mmio devices
@@ -204,7 +204,8 @@ void DevicePool::initialize(
     size_t l1_small_size,
     size_t trace_region_size,
     const DispatchCoreConfig& dispatch_core_config,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap) noexcept {
+    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    bool init_profiler) noexcept {
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool initialize");
     // Initialize the dispatch core manager, responsible for assigning dispatch cores
@@ -256,7 +257,9 @@ void DevicePool::initialize(
 
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true, target_mmio_ids);
     _inst->wait_for_fabric_router_sync();
-    _inst->init_profiler_devices();
+    if (init_profiler) {
+        _inst->init_profiler();
+    }
 }
 
 void DevicePool::initialize_host(IDevice* dev) const {

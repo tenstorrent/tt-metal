@@ -62,6 +62,7 @@ public:
     MeshWorkload();
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs() { return programs_; }
+    const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const { return programs_; }
 
     // For testing purposes only
     void set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq);
