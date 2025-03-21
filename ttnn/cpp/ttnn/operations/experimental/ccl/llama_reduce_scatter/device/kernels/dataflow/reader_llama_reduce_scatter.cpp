@@ -139,6 +139,9 @@ void kernel_main() {
             linear_input_tile_offsets[i] = rem % tiles_per_core_width;
         }
         // coalesce across the
+        uint32_t base_input_tensor_addr = get_read_ptr(input_tensor_cb_id);
+        uint32_t base_receiver_local_page_addr =
+            get_write_ptr(fabric_receiver_cb_id) + chip_id * num_pages_per_packet * page_size_bytes;
         for (uint32_t i = 0; i < num_pages_per_packet; i++) {
             DPRINT << "linear_input_core_idcs[" << i << "] " << linear_input_core_idcs[i] << ENDL();
             DPRINT << "linear_input_tile_offsets[" << i << "] " << linear_input_tile_offsets[i] << ENDL();
@@ -146,11 +149,11 @@ void kernel_main() {
             uint32_t core_y = input_core_xy[linear_input_core_idcs[i]][y_index];
             DPRINT << "core_x " << core_x << " core_y " << core_y << ENDL();
 
-            uint32_t tile_offset = chip_id * num_pages_per_packet * page_size_bytes;
-            uint64_t tile_addr = get_noc_addr(core_x, core_y, get_read_ptr(input_tensor_cb_id) + tile_offset);
+            uint64_t tile_addr =
+                get_noc_addr(core_x, core_y, base_input_tensor_addr + (linear_input_tile_offsets[i] * page_size_bytes));
             // DPRINT << "tile_addr[" << i << "] " << tile_addr << ENDL();
-            uint32_t dest_addr = get_write_ptr(accumulator_cb_id) + chip_id * num_pages_per_packet * page_size_bytes;
-            noc_async_read(tile_addr, dest_addr, page_size_bytes);
+
+            noc_async_read(tile_addr, base_receiver_local_page_addr + i * page_size_bytes, page_size_bytes);
         }
         noc_async_read_barrier();
         if (receiver_core) {
