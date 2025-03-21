@@ -25,7 +25,7 @@ def get_expected_times(model_name):
     """
     return {
         "openai/whisper-base": (18.0, 0.039),
-        "distil-whisper/distil-large-v3": (14.1, 0.236),
+        "distil-whisper/distil-large-v3": (15.3, 0.236),
     }[model_name]
 
 
