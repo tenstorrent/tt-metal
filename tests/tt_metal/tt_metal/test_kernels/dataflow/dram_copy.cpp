@@ -2,10 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <cstdint>
-#include "blackhole/noc/noc_parameters.h"
-#include "debug/pause.h"
 
 /**
  * NOC APIs are prefixed w/ "ncrisc" (legacy name) but there's nothing NCRISC specific, they can be used on BRISC or
@@ -57,6 +54,5 @@ void kernel_main() {
     // DRAM NOC dst address
     std::uint64_t dram_buffer_dst_noc_addr = get_noc_addr_from_bank_id<true>(dram_dst_bank_id, dram_buffer_dst_addr);
     noc_async_write(l1_buffer_addr, dram_buffer_dst_noc_addr, dram_buffer_size);
-    noc_async_read_barrier();
-    // noc_async_write_barrier();
+    noc_async_write_barrier();
 }

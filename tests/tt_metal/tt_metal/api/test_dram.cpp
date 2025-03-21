@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "allocator.hpp"
 #include "dispatch_fixture.hpp"
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
@@ -296,22 +295,6 @@ TEST_F(DispatchFixture, IdleEthDRAMLoopbackSingleCore) {
             tt::log_info("Single Idle Eth Loopback. Logical core {}", idle_eth_core.str());
             dram_test_config.core_range = {idle_eth_core, idle_eth_core};
             unit_tests_common::dram::test_dram::dram_single_core(this, devices_.at(id), dram_test_config);
-        }
-    }
-}
-
-// This wll be removed
-TEST_F(BlackholeSingleCardFixture, NopFixture) {
-    for (unsigned int id = 0; id < devices_.size(); id++) {
-        IDevice* device = this->devices_.at(id);
-        const auto& allocator = device->allocator();
-        auto address = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
-        auto num_banks = allocator->get_num_banks(BufferType::DRAM);
-        auto bank_size = allocator->get_bank_size(BufferType::DRAM);  // Or can hardcode to subset like 16MB.
-        auto fill = std::vector<uint32_t>(bank_size / sizeof(uint32_t), 0);
-
-        for (int bank_id = 0; bank_id < num_banks; bank_id++) {
-            tt::tt_metal::detail::WriteToDeviceDRAMChannel(device, bank_id, address, fill);
         }
     }
 }
