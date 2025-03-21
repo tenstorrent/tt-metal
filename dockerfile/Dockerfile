@@ -154,7 +154,7 @@ RUN mkdir -p /tmp/xtensor_xtl \
     && make -C /tmp/xtensor_xtl/build install \
     && rm -rf /tmp/xtensor_xtl
 
-# xtensor problemstic
+# xtensor problematic
 #ARG XTENSOR_VERSION=0.25.0
 #RUN mkdir -p /tmp/xtensor \
 #    && wget -O /tmp/xtensor/xtensor-${XTENSOR_VERSION}.tar.gz "https://github.com/xtensor-stack/xtensor/archive/refs/tags/${XTENSOR_VERSION}.tar.gz" \
@@ -213,6 +213,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcapstone-dev \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN git config --global --add safe.directory '*'
 
 ENV CCACHE_TEMPDIR=/tmp/ccache
 
