@@ -115,7 +115,7 @@ def run_fabric_edm(
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("packet_size", [4096])
-@pytest.mark.parametrize("line_size, num_links, expected_bw", [(4, 1, 7.1), (4, 2, 7.04)])
+@pytest.mark.parametrize("line_size, num_links, expected_bw", [(4, 1, 7.09), (4, 2, 7.03)])
 def test_fabric_edm_mcast_half_ring_bw(
     num_mcasts,
     num_unicasts,
@@ -206,7 +206,7 @@ def test_fabric_edm_mcast_full_ring_bw(
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("packet_size", [4096])
-@pytest.mark.parametrize("line_size, num_links, expected_bw", [(4, 1, 5.94), (4, 2, 5.8)])
+@pytest.mark.parametrize("line_size, num_links, expected_bw", [(4, 1, 6.04), (4, 2, 5.91)])
 def test_fabric_edm_mcast_saturate_chip_to_chip_ring_bw(
     num_mcasts,
     num_unicasts,
@@ -236,7 +236,7 @@ def test_fabric_edm_mcast_saturate_chip_to_chip_ring_bw(
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("packet_size", [4096])
-@pytest.mark.parametrize("line_size, num_links, expected_bw", [(4, 1, 7.12), (4, 2, 7.11)])
+@pytest.mark.parametrize("line_size, num_links, expected_bw", [(4, 1, 7.49), (4, 2, 7.42)])
 def test_fabric_edm_mcast_bw(
     num_mcasts,
     num_unicasts,
@@ -267,7 +267,7 @@ def test_fabric_edm_mcast_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [2])
 @pytest.mark.parametrize("packet_size", [4096])
-@pytest.mark.parametrize("num_links, expected_bw", [(1, 9.01), (2, 7.63)])
+@pytest.mark.parametrize("num_links, expected_bw", [(1, 8.93), (2, 7.72)])
 def test_fabric_edm_unicast_bw(
     num_mcasts,
     num_unicasts,
