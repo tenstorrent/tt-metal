@@ -110,8 +110,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     // output_cores_all is the bounding box of the output_tensor_cores but respecting boundaries of subdevice grids
     CoreRangeSet output_cores_all(output_cores);
 
-    std::optional<CoreRangeSet> reserved_cores = output_cores_all;
-    auto available_cores = reserved_cores.has_value() ? sub_device_cores.subtract(*reserved_cores) : sub_device_cores;
+    CoreRangeSet reserved_cores = output_cores_all;
+    auto available_cores = sub_device_cores.subtract(reserved_cores);
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
     const auto [sender_worker_core_range, sender_worker_cores] =
