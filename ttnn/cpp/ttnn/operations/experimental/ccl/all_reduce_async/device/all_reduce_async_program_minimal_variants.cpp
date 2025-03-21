@@ -100,11 +100,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     // Get worker cores, assuming 1 worker per link
     std::optional<CoreRangeSet> reserved_cores = output_tensor_cores;
     uint32_t num_workers_per_link = 1;
+
     auto sub_device_cores = device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value_or(device->get_sub_device_ids().at(0)));
     auto available_cores = reserved_cores.has_value() ? sub_device_cores.subtract(*reserved_cores) : sub_device_cores;
     const auto [sender_worker_core_range, sender_worker_cores] =
-        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, available_cores);
+        ar_choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, available_cores);
 
     std::vector<CoreRange> output_cores;
     for (const auto& cr : sub_device_cores.ranges()) {
