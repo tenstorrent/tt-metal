@@ -245,7 +245,6 @@ void kernel_main() {
                                 noc_async_read_barrier();
                             }
                         }
-                        out_block_start_id_offset += out_block_h * num_channels_tiles;
                         cb_push_back(cb_in0, out_block_hw);
 #endif
                         if (n == 0 || n == 1) {
@@ -308,9 +307,36 @@ void kernel_main() {
                                         false);
                                 }
                             }
-                        }
-                    }
+                        } else if (n == 2) {
+                            const InterleavedAddrGenFast<out_is_dram> dst_a = {
+                                .bank_base_address = out_addr,
+                                .page_size = single_tile_size_bytes,
+                                .data_format = out_data_format};
 
+                            // add or copy with previous output results
+                            uint32_t block_w_curr =
+                                index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
+
+                            const uint32_t dst_tile_bytes = get_tile_size(cb_reread_out);
+                            uint32_t l1_write_addr;
+                            l1_write_addr = get_write_ptr(cb_reread_out);
+                            cb_reserve_back(cb_reread_out, out_block_hw);
+
+                            for (uint32_t mt = 0; mt < out_block_h; mt++) {
+                                for (uint32_t nt = 0; nt < block_w_curr; nt++) {
+                                    noc_async_read_tile(
+                                        out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
+                                            index_b_offset + index_g_offset,
+                                        dst_a,
+                                        l1_write_addr);
+                                    l1_write_addr += dst_tile_bytes;
+                                    noc_async_read_barrier();
+                                }
+                            }
+                            cb_push_back(cb_reread_out, out_block_hw);
+                        }
+                        out_block_start_id_offset += out_block_h * num_channels_tiles;
+                    }
                     if (n == 0 || n == 1) {
                         cb_push_back(cb_ex_external, 1);
 
@@ -371,65 +397,36 @@ void kernel_main() {
                         }
                     }
                 }
+                if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
+                    if (row_offset == TILE_WIDTH) {
+                        index_g_offset += block_w;
+                        row_offset = num_cols_per_group;
 
-            const InterleavedAddrGenFast<out_is_dram> dst_a = {
-                .bank_base_address = out_addr, .page_size = single_tile_size_bytes, .data_format = out_data_format};
+                    } else {
+                        index_g_offset += block_w_minus_one;
+                        row_offset += num_cols_per_group;
+                    }
+                } else if constexpr (GROUP_SIZE_SMALLER_THAN_TILE_W) {
+                    if (row_offset == TILE_WIDTH) {
+                        index_g_offset += block_w_minus_one;
+                        row_offset = num_cols_per_group;
 
-            // add or copy with previous output results
-            uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
+                    } else if (row_offset > TILE_WIDTH) {
+                        index_g_offset += block_w_minus_one;
+                        row_offset = row_offset + group_row_offset;
 
-            uint32_t out_block_start_id_offset = 0;
-            for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; out_block_index++) {
-                const uint32_t dst_tile_bytes = get_tile_size(cb_reread_out);
-                uint32_t l1_write_addr;
-                l1_write_addr = get_write_ptr(cb_reread_out);
-                cb_reserve_back(cb_reread_out, out_block_hw);
-
-                for (uint32_t mt = 0; mt < out_block_h; mt++) {
-                    for (uint32_t nt = 0; nt < block_w_curr; nt++) {
-                        noc_async_read_tile(
-                            out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt + index_b_offset +
-                                index_g_offset,
-                            dst_a,
-                            l1_write_addr);
-                        l1_write_addr += dst_tile_bytes;
-                        noc_async_read_barrier();
+                    } else {
+                        row_offset += num_cols_per_group;
+                    }
+                } else {
+                    if (row_offset > TILE_WIDTH) {
+                        index_g_offset += block_w_minus_one;
+                        row_offset = row_offset - tile_w_minux_group_size;
+                    } else {
+                        row_offset += num_cols_per_group;
+                        index_g_offset += block_w_minus_two;
                     }
                 }
-                out_block_start_id_offset += out_block_h * num_channels_tiles;
-                cb_push_back(cb_reread_out, out_block_hw);
-            }
-
-            if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
-                if (row_offset == TILE_WIDTH) {
-                    index_g_offset += block_w;
-                    row_offset = num_cols_per_group;
-
-                } else {
-                    index_g_offset += block_w_minus_one;
-                    row_offset += num_cols_per_group;
-                }
-            } else if constexpr (GROUP_SIZE_SMALLER_THAN_TILE_W) {
-                if (row_offset == TILE_WIDTH) {
-                    index_g_offset += block_w_minus_one;
-                    row_offset = num_cols_per_group;
-
-                } else if (row_offset > TILE_WIDTH) {
-                    index_g_offset += block_w_minus_one;
-                    row_offset = row_offset + group_row_offset;
-
-                } else {
-                    row_offset += num_cols_per_group;
-                }
-            } else {
-                if (row_offset > TILE_WIDTH) {
-                    index_g_offset += block_w_minus_one;
-                    row_offset = row_offset - tile_w_minux_group_size;
-                } else {
-                    row_offset += num_cols_per_group;
-                    index_g_offset += block_w_minus_two;
-                }
-            }
             }
             index_b_offset += num_tiles_per_batch;
         }
