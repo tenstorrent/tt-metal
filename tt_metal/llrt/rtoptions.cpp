@@ -42,7 +42,7 @@ RunTimeOptions::RunTimeOptions() {
     const char* cache_dir_str = std::getenv(TT_METAL_CACHE_ENV_VAR);
     if (cache_dir_str != nullptr) {
         this->is_cache_dir_env_var_set = true;
-        this->cache_dir_ = std::string(cache_dir_str) + "/";
+        this->cache_dir_ = std::string(cache_dir_str) + "/tt-metal-cache/";
     }
 
     const char* kernel_dir_str = std::getenv(TT_METAL_KERNEL_PATH_ENV_VAR);
