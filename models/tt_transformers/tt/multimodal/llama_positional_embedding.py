@@ -98,10 +98,7 @@ class TtLlamaPositionalEmbedding(LightweightModule):
 
     def forward(self, x: ttnn.Tensor, ar: torch.Tensor):
         bsz, num_chunks, num_tokens, dim = x.shape
-
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, [bsz * num_chunks, num_tokens, dim])
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
         pos_embed_ = self.positional_embedding * self.gated_positional_embedding_gate
 
@@ -109,9 +106,7 @@ class TtLlamaPositionalEmbedding(LightweightModule):
         pos_embed_ = ttnn.concat([pos_embed_] * x.shape[0], dim=0)
         x = x + pos_embed_
 
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, [bsz, num_chunks, num_tokens, dim])
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
         # Get the correct embeddings for the given aspect ratios
         gated_pos_embed_ = []
