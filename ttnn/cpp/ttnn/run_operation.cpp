@@ -17,6 +17,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/mesh_execution.hpp"
 
 namespace tt::tt_metal::operation {
 
@@ -264,10 +265,10 @@ struct OldInfraDeviceOperation {
 }  // namespace tt::tt_metal::operation
 
 namespace ttnn::prim {
-constexpr auto old_infra_device_operation = ttnn::register_operation<
+constexpr auto old_infra_device_operation = ttnn::register_mesh_operation<
     "ttnn::prim::old_infra_device_operation",
     tt::tt_metal::operation::OldInfraDeviceOperation<tt::tt_metal::operation::Tensors>>();
-constexpr auto old_infra_device_operation_with_optional_output_tensors = ttnn::register_operation<
+constexpr auto old_infra_device_operation_with_optional_output_tensors = ttnn::register_mesh_operation<
     "ttnn::prim::old_infra_device_operation_with_optional_output_tensors",
     tt::tt_metal::operation::OldInfraDeviceOperation<tt::tt_metal::operation::OptionalTensors>>();
 }  // namespace ttnn::prim
