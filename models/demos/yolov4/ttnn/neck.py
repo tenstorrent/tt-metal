@@ -6,229 +6,194 @@ import torch
 import ttnn
 from models.demos.yolov4.ttnn.common import Conv
 from tt_lib.fallback_ops import fallback_ops
+import math
+
+
+def determine_num_cores_for_upsample(nhw: int, width: int, max_cores=64) -> int:
+    gcd_nhw_width = math.gcd(nhw, width)
+    cores = nhw // gcd_nhw_width
+    if cores <= max_cores:
+        return cores
+    for divisor in range(max_cores, 0, -1):
+        if nhw % divisor == 0 and (nhw // divisor) % width == 0:
+            return divisor
+    return cores
+
+
+def get_core_grid_from_num_cores(num_cores: int, grid_rows: int = 8, grid_cols: int = 8):
+    rows = num_cores // grid_cols
+    assert rows <= grid_rows, "Not enough cores for specified core grid"
+    ranges = []
+    if rows != 0:
+        ranges.append(
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(grid_rows - 1, rows - 1),
+            )
+        )
+    remainder = num_cores % grid_rows
+    if remainder != 0:
+        assert rows + 1 <= grid_rows, "Not enough cores for specified core grid"
+        ranges.append(
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, rows),
+                ttnn.CoreCoord(remainder - 1, rows),
+            )
+        )
+    return ttnn.CoreRangeSet({*ranges})
 
 
 class TtNeck:
-    def __init__(self, device, model) -> None:
-        if type(model) is str:
-            torch_model = torch.load(model)
-        else:
-            torch_model = model.torch_model
-        self.torch_model = torch_model
+    def __init__(self, device, parameters, conv_args) -> None:
+        self.conv_args = conv_args
+        self.parameters = parameters
         self.conv1 = Conv(
             device,
-            torch_model,
-            "neek.conv1",
-            [1, 10, 10, 1024],
-            (1, 1, 0, 0),
-            height_sharding=False,
-            reshard=True,
+            conv_args.c1,
+            parameters.c1,
         )
         self.conv2 = Conv(
             device,
-            torch_model,
-            "neek.conv2",
-            [1, 10, 10, 512],
-            (1, 1, 1, 1),
-            width_sharding=True,
+            conv_args.c2,
+            parameters.c2,
         )
         self.conv3 = Conv(
             device,
-            torch_model,
-            "neek.conv3",
-            [1, 10, 10, 1024],
-            (1, 1, 0, 0),
-            reshard=False,
-            height_sharding=False,
+            conv_args.c3,
+            parameters.c3,
         )
-
         self.conv4 = Conv(
             device,
-            torch_model,
-            "neek.conv4",
-            [1, 10, 10, 2048],
-            (1, 1, 0, 0),
-            height_sharding=False,
+            conv_args.c4,
+            parameters.c4,
         )
         self.conv5 = Conv(
             device,
-            torch_model,
-            "neek.conv5",
-            [1, 10, 10, 512],
-            (1, 1, 1, 1),
-            width_sharding=True,
+            conv_args.c5,
+            parameters.c5,
         )
         self.conv6 = Conv(
             device,
-            torch_model,
-            "neek.conv6",
-            [1, 10, 10, 1024],
-            (1, 1, 0, 0),
-            height_sharding=False,
+            conv_args.c6,
+            parameters.c6,
         )
         self.conv7 = Conv(
             device,
-            torch_model,
-            "neek.conv7",
-            [1, 10, 10, 512],
-            (1, 1, 0, 0),
-            width_sharding=True,
-            deallocate=False,
+            conv_args.c7,
+            parameters.c7,
         )
         self.conv7_2 = Conv(
             device,
-            torch_model,
-            "neek.conv8",
-            [1, 20, 20, 512],
-            (1, 1, 0, 0),
-            height_sharding=False,
-            enable_split_reader=True,
-            enable_act_double_buffer=True,
+            conv_args.c7_2,
+            parameters.c7_2,
         )
         self.conv7_3 = Conv(
             device,
-            torch_model,
-            "neek.conv9",
-            [1, 20, 20, 512],
-            (1, 1, 0, 0),
-            height_sharding=False,
-            enable_split_reader=True,
-            enable_act_double_buffer=True,
+            conv_args.c7_3,
+            parameters.c7_3,
         )
         self.conv8 = Conv(
             device,
-            torch_model,
-            "neek.conv10",
-            [1, 20, 20, 256],
-            (1, 1, 1, 1),
-            height_sharding=False,
+            conv_args.c8,
+            parameters.c8,
         )
         self.conv7_4 = Conv(
             device,
-            torch_model,
-            "neek.conv11",
-            [1, 20, 20, 512],
-            (1, 1, 0, 0),
-            height_sharding=False,
-            enable_split_reader=True,
-            enable_act_double_buffer=True,
+            conv_args.c7_4,
+            parameters.c7_4,
         )
         self.conv8_2 = Conv(
             device,
-            torch_model,
-            "neek.conv12",
-            [1, 20, 20, 256],
-            (1, 1, 1, 1),
-            height_sharding=False,
+            conv_args.c8_2,
+            parameters.c8_2,
         )
         self.conv7_5 = Conv(
             device,
-            torch_model,
-            "neek.conv13",
-            [1, 20, 20, 512],
-            (1, 1, 0, 0),
-            height_sharding=False,
-            enable_split_reader=True,
-            enable_act_double_buffer=True,
+            conv_args.c7_5,
+            parameters.c7_5,
         )
 
         self.conv9 = Conv(
             device,
-            torch_model,
-            "neek.conv14",
-            [1, 20, 20, 256],
-            (1, 1, 0, 0),
-            deallocate=False,
-            height_sharding=False,
-            enable_split_reader=True,
-            enable_act_double_buffer=True,
+            conv_args.c9,
+            parameters.c9,
         )
         self.conv9_2 = Conv(
             device,
-            torch_model,
-            "neek.conv15",
-            [1, 40, 40, 256],
-            (1, 1, 0, 0),
+            conv_args.c9_2,
+            parameters.c9_2,
         )
         self.conv9_3 = Conv(
             device,
-            torch_model,
-            "neek.conv16",
-            [1, 40, 40, 256],
-            (1, 1, 0, 0),
+            conv_args.c9_3,
+            parameters.c9_3,
         )
         self.conv10 = Conv(
             device,
-            torch_model,
-            "neek.conv17",
-            [1, 40, 40, 128],
-            (1, 1, 1, 1),
+            conv_args.c10,
+            parameters.c10,
         )
 
         self.conv9_4 = Conv(
             device,
-            torch_model,
-            "neek.conv18",
-            [1, 40, 40, 256],
-            (1, 1, 0, 0),
+            conv_args.c9_4,
+            parameters.c9_4,
         )
         self.conv10_2 = Conv(
             device,
-            torch_model,
-            "neek.conv19",
-            [1, 40, 40, 128],
-            (1, 1, 1, 1),
+            conv_args.c10_2,
+            parameters.c10_2,
         )
         self.conv9_5 = Conv(
             device,
-            torch_model,
-            "neek.conv20",
-            [1, 40, 40, 256],
-            (1, 1, 0, 0),
+            conv_args.c9_5,
+            parameters.c9_5,
         )
 
     def __call__(self, input_tensor):
-        output_tensor = self.conv1(input_tensor[0])
+        output_tensor = self.conv1(input_tensor[0])[0]
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv2(output_tensor)
+        output_tensor = self.conv2(output_tensor)[0]
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv3(output_tensor)
+        output_tensor = self.conv3(output_tensor)[0]
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
+
+        output_tensor_pool_in = output_tensor
 
         pool_1 = ttnn.max_pool2d(
-            input_tensor=output_tensor,
-            batch_size=1,
-            input_h=10,
-            input_w=10,
-            channels=512,
-            kernel_size=[5, 5],
-            stride=[1, 1],
-            padding=[2, 2],
-            dilation=[1, 1],
+            input_tensor=output_tensor_pool_in,
+            batch_size=self.conv_args.p1.batch_size,
+            input_h=self.conv_args.p1.input_height,
+            input_w=self.conv_args.p1.input_width,
+            channels=output_tensor.shape[3],
+            kernel_size=[self.conv_args.p1.kernel_size, self.conv_args.p1.kernel_size],
+            stride=[self.conv_args.p1.stride, self.conv_args.p1.stride],
+            padding=[self.conv_args.p1.padding, self.conv_args.p1.padding],
+            dilation=[self.conv_args.p1.dilation, self.conv_args.p1.dilation],
         )
         pool_2 = ttnn.max_pool2d(
-            input_tensor=output_tensor,
-            batch_size=1,
-            input_h=10,
-            input_w=10,
-            channels=512,
-            kernel_size=[9, 9],
-            stride=[1, 1],
-            padding=[4, 4],
-            dilation=[1, 1],
+            input_tensor=output_tensor_pool_in,
+            batch_size=self.conv_args.p2.batch_size,
+            input_h=self.conv_args.p2.input_height,
+            input_w=self.conv_args.p2.input_width,
+            channels=output_tensor.shape[3],
+            kernel_size=[self.conv_args.p2.kernel_size, self.conv_args.p2.kernel_size],
+            stride=[self.conv_args.p2.stride, self.conv_args.p2.stride],
+            padding=[self.conv_args.p2.padding, self.conv_args.p2.padding],
+            dilation=[self.conv_args.p2.dilation, self.conv_args.p2.dilation],
         )
         pool_3 = ttnn.max_pool2d(
-            input_tensor=output_tensor,
-            batch_size=1,
-            input_h=10,
-            input_w=10,
-            channels=512,
-            kernel_size=[13, 13],
-            stride=[1, 1],
-            padding=[6, 6],
-            dilation=[1, 1],
+            input_tensor=output_tensor_pool_in,
+            batch_size=self.conv_args.p3.batch_size,
+            input_h=self.conv_args.p3.input_height,
+            input_w=self.conv_args.p3.input_width,
+            channels=output_tensor.shape[3],
+            kernel_size=[self.conv_args.p3.kernel_size, self.conv_args.p3.kernel_size],
+            stride=[self.conv_args.p3.stride, self.conv_args.p3.stride],
+            padding=[self.conv_args.p3.padding, self.conv_args.p3.padding],
+            dilation=[self.conv_args.p3.dilation, self.conv_args.p3.dilation],
         )
 
         pool_1 = ttnn.sharded_to_interleaved(pool_1, ttnn.L1_MEMORY_CONFIG)
@@ -244,16 +209,16 @@ class TtNeck:
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
         output_tensor = ttnn.concat([pool_all, output_tensor], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        output_tensor = self.conv4(output_tensor)
+        output_tensor = self.conv4(output_tensor)[0]
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv5(output_tensor)
+        output_tensor = self.conv5(output_tensor)[0]
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv6(output_tensor)
+        output_tensor = self.conv6(output_tensor)[0]
         output_tensor_left_1 = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv7(output_tensor_left_1)
+        output_tensor = self.conv7(output_tensor_left_1)[0]
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_shape = output_tensor.shape
@@ -268,30 +233,68 @@ class TtNeck:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-        output_tensor = ttnn.reshape(output_tensor, (1, 10, 10, 256))
-        shard_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(7, 4),
-                ),
-            }
+        output_tensor = ttnn.reshape(
+            output_tensor,
+            (
+                1,
+                self.conv_args.c7.input_height,
+                self.conv_args.c7.input_width,
+                self.conv_args.c7.out_channels,
+            ),
         )
-        shard_spec = ttnn.ShardSpec(shard_grid, (20, 32), ttnn.ShardOrientation.ROW_MAJOR)
-        in_sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
-        output_tensor = ttnn.to_memory_config(output_tensor, memory_config=in_sharded_mem_config)
-        shard_spec = ttnn.ShardSpec(shard_grid, (80, 32), ttnn.ShardOrientation.ROW_MAJOR)
-        out_sharded_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
-        )
+        if self.parameters.resolution[0] == 320:
+            shard_grid = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(7, 4),
+                    ),
+                }
+            )
+            shard_spec = ttnn.ShardSpec(shard_grid, (20, 32), ttnn.ShardOrientation.ROW_MAJOR)
+            in_sharded_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec
+            )
+            output_tensor = ttnn.to_memory_config(output_tensor, memory_config=in_sharded_mem_config)
+            shard_spec = ttnn.ShardSpec(shard_grid, (80, 32), ttnn.ShardOrientation.ROW_MAJOR)
+            out_sharded_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+            )
 
-        output_tensor_upsample_1 = ttnn.upsample(output_tensor, (2, 2), memory_config=out_sharded_mem_config)
-        output_tensor_upsample_1 = ttnn.sharded_to_interleaved(output_tensor_upsample_1, ttnn.L1_MEMORY_CONFIG)
-        output_tensor_upsample_1 = ttnn.reshape(output_tensor_upsample_1, (1, 1, 400, 256))
+            output_tensor_upsample_1 = ttnn.upsample(output_tensor, (2, 2), memory_config=out_sharded_mem_config)
+            output_tensor_upsample_1 = ttnn.sharded_to_interleaved(output_tensor_upsample_1, ttnn.L1_MEMORY_CONFIG)
+        else:
+            nhw = output_tensor.shape[0] * output_tensor.shape[1] * output_tensor.shape[2]
+            num_cores = determine_num_cores_for_upsample(nhw, output_tensor.shape[2])
+            core_grid = get_core_grid_from_num_cores(num_cores)
+            shardspec = ttnn.create_sharded_memory_config_(
+                output_tensor.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
+            )
+
+            if output_tensor.is_sharded():
+                output_tensor = ttnn.reshard(output_tensor, shardspec)
+            else:
+                output_tensor = ttnn.interleaved_to_sharded(output_tensor, shardspec)
+
+            output_tensor_upsample_1 = ttnn.upsample(
+                output_tensor, scale_factor=2, memory_config=output_tensor.memory_config()
+            )
+            output_tensor_upsample_1 = ttnn.sharded_to_interleaved(output_tensor_upsample_1, ttnn.L1_MEMORY_CONFIG)
+
+        output_tensor_upsample_1 = ttnn.reshape(
+            output_tensor_upsample_1,
+            (
+                1,
+                1,
+                output_tensor_upsample_1.shape[1] * output_tensor_upsample_1.shape[2],
+                output_tensor_upsample_1.shape[3],
+            ),
+        )
         output_tensor_upsample_1 = ttnn.to_layout(output_tensor_upsample_1, layout=ttnn.TILE_LAYOUT)
 
         outDowSample5 = input_tensor[1]
-        output_tensor = self.conv7_2(outDowSample5)
+
+        output_tensor = self.conv7_2(outDowSample5)[0]
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
@@ -301,33 +304,37 @@ class TtNeck:
         )
         ttnn.deallocate(output_tensor_upsample_1)
 
-        output_tensor = self.conv7_3(output_tensor)
+        output_tensor = self.conv7_3(output_tensor)[0]
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv8(output_tensor)
+        output_tensor = self.conv8(output_tensor)[0]
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv7_4(output_tensor)
+        output_tensor = self.conv7_4(output_tensor)[0]
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv8_2(output_tensor)
+        output_tensor = self.conv8_2(output_tensor)[0]
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv7_5(output_tensor)
+        output_tensor = self.conv7_5(output_tensor)[0]
         output_tensor_left_2 = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        shard_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(6, 3),
-                ),
-            }
-        )
-        shard_spec = ttnn.ShardSpec(shard_grid, (64, 64), ttnn.ShardOrientation.COL_MAJOR)
-        in_sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
-        output_tensor_left_2 = ttnn.to_memory_config(output_tensor_left_2, memory_config=in_sharded_mem_config)
-        output_tensor = self.conv9(output_tensor_left_2)
+        if self.parameters.resolution[0] == 320:
+            shard_grid = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(6, 3),
+                    ),
+                }
+            )
+            shard_spec = ttnn.ShardSpec(shard_grid, (64, 64), ttnn.ShardOrientation.COL_MAJOR)
+            in_sharded_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec
+            )
+            output_tensor_left_2 = ttnn.to_memory_config(output_tensor_left_2, memory_config=in_sharded_mem_config)
+
+        output_tensor = self.conv9(output_tensor_left_2)[0]
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_shape = output_tensor.shape
@@ -342,31 +349,69 @@ class TtNeck:
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-        output_tensor = ttnn.reshape(output_tensor, (1, 20, 20, 128))
-        shard_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(7, 4),
-                ),
-            }
-        )
-        shard_spec = ttnn.ShardSpec(shard_grid, (80, 16), ttnn.ShardOrientation.ROW_MAJOR)
-        in_sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
-        output_tensor = ttnn.to_memory_config(output_tensor, memory_config=in_sharded_mem_config)
-        shard_spec = ttnn.ShardSpec(shard_grid, (80 * 4, 16), ttnn.ShardOrientation.ROW_MAJOR)
-        out_sharded_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+        output_tensor = ttnn.reshape(
+            output_tensor,
+            (
+                1,
+                self.conv_args.c9.input_height,
+                self.conv_args.c9.input_width,
+                self.conv_args.c9.out_channels,
+            ),
         )
 
-        output_tensor_upsample_2 = ttnn.upsample(output_tensor, (2, 2), memory_config=out_sharded_mem_config)
-        output_tensor_upsample_2 = ttnn.sharded_to_interleaved(output_tensor_upsample_2, ttnn.L1_MEMORY_CONFIG)
-        output_tensor_upsample_2 = ttnn.reshape(output_tensor_upsample_2, (1, 1, 1600, 128))
+        if self.parameters.resolution[0] == 320:
+            shard_grid = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(7, 4),
+                    ),
+                }
+            )
+            shard_spec = ttnn.ShardSpec(shard_grid, (80, 16), ttnn.ShardOrientation.ROW_MAJOR)
+            in_sharded_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec
+            )
+            output_tensor = ttnn.to_memory_config(output_tensor, memory_config=in_sharded_mem_config)
+            shard_spec = ttnn.ShardSpec(shard_grid, (80 * 4, 16), ttnn.ShardOrientation.ROW_MAJOR)
+            out_sharded_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+            )
+
+            output_tensor_upsample_2 = ttnn.upsample(output_tensor, (2, 2), memory_config=out_sharded_mem_config)
+            output_tensor_upsample_2 = ttnn.sharded_to_interleaved(output_tensor_upsample_2, ttnn.L1_MEMORY_CONFIG)
+        else:
+            nhw = output_tensor.shape[0] * output_tensor.shape[1] * output_tensor.shape[2]
+            num_cores = determine_num_cores_for_upsample(nhw, output_tensor.shape[2])
+            core_grid = get_core_grid_from_num_cores(num_cores)
+            shardspec = ttnn.create_sharded_memory_config_(
+                output_tensor.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
+            )
+
+            if output_tensor.is_sharded():
+                output_tensor = ttnn.reshard(output_tensor, shardspec)
+            else:
+                output_tensor = ttnn.interleaved_to_sharded(output_tensor, shardspec)
+
+            output_tensor_upsample_2 = ttnn.upsample(
+                output_tensor, scale_factor=2, memory_config=output_tensor.memory_config()
+            )
+            output_tensor_upsample_2 = ttnn.sharded_to_interleaved(output_tensor_upsample_2, ttnn.L1_MEMORY_CONFIG)
+
+        output_tensor_upsample_2 = ttnn.reshape(
+            output_tensor_upsample_2,
+            (
+                1,
+                1,
+                output_tensor_upsample_2.shape[1] * output_tensor_upsample_2.shape[2],
+                output_tensor_upsample_2.shape[3],
+            ),
+        )
         output_tensor_upsample_2 = ttnn.to_layout(output_tensor_upsample_2, ttnn.TILE_LAYOUT)
 
         outDowSample3 = input_tensor[2]
 
-        output_tensor = self.conv9_2(outDowSample3)
+        output_tensor = self.conv9_2(outDowSample3)[0]
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
@@ -375,19 +420,23 @@ class TtNeck:
         )
         ttnn.deallocate(output_tensor_upsample_2)
 
-        output_tensor = self.conv9_3(output_tensor)
+        output_tensor = self.conv9_3(output_tensor)[0]
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv10(output_tensor)
+        output_tensor = self.conv10(output_tensor)[0]
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv9_4(output_tensor)
+        output_tensor = self.conv9_4(output_tensor)[0]
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv10_2(output_tensor)
+        output_tensor = self.conv10_2(output_tensor)[0]
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv9_5(output_tensor)
+        output_tensor = self.conv9_5(output_tensor)[0]
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
+
+        ttnn.deallocate(input_tensor[0])
+        ttnn.deallocate(input_tensor[1])
+        ttnn.deallocate(input_tensor[2])
 
         return output_tensor, output_tensor_left_1, output_tensor_left_2

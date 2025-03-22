@@ -36,6 +36,7 @@ def run_resnet50_inference(
     weight_dtype,
     math_fidelity,
     model_location_generator,
+    resolution,
 ):
     test_infra = create_test_infra(
         device,
@@ -46,6 +47,7 @@ def run_resnet50_inference(
         dealloc_input=True,
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
         model_location_generator=model_location_generator,
+        resolution=resolution,
     )
 
     tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
@@ -77,6 +79,7 @@ def run_resnet50_trace_inference(
     weight_dtype,
     math_fidelity,
     model_location_generator,
+    resolution,
 ):
     test_infra = create_test_infra(
         device,
@@ -87,6 +90,7 @@ def run_resnet50_trace_inference(
         True,
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
         model_location_generator=model_location_generator,
+        resolution=resolution,
     )
     tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
 
@@ -196,6 +200,7 @@ def run_resnet50_trace_2cqs_inference(
     weight_dtype,
     math_fidelity,
     model_location_generator,
+    resolution,
 ):
     test_infra = create_test_infra(
         device,
@@ -206,6 +211,7 @@ def run_resnet50_trace_2cqs_inference(
         True,
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
         model_location_generator=model_location_generator,
+        resolution=resolution,
     )
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)

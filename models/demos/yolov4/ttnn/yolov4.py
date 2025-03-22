@@ -25,24 +25,20 @@ from models.demos.yolov4.ttnn.genboxes import TtGenBoxes
 
 
 class TtYOLOv4:
-    def __init__(self, path, device) -> None:
-        if type(path) is str:
-            self.torch_model = torch.load(path)
-        else:
-            self.torch_model = path
-        self.torch_keys = self.torch_model.keys()
-        self.down1 = Down1(device, self)
-        self.down2 = Down2(device, self)
-        self.down3 = Down3(device, self)
-        self.down4 = Down4(device, self)
-        self.down5 = Down5(device, self)
+    def __init__(self, parameters, device) -> None:
+        self.resolution = parameters.resolution
+        self.down1 = Down1(device, parameters.downsample1, parameters.conv_args.downsample1)
+        self.down2 = Down2(device, parameters.downsample2, parameters.conv_args.downsample2)
+        self.down3 = Down3(device, parameters.downsample3, parameters.conv_args.downsample3)
+        self.down4 = Down4(device, parameters.downsample4, parameters.conv_args.downsample4)
+        self.down5 = Down5(device, parameters.downsample5, parameters.conv_args.downsample5)
 
-        self.neck = TtNeck(device, self)
-        self.head = TtHead(device, self)
+        self.neck = TtNeck(device, parameters.neck, parameters.conv_args.neck)
+        self.head = TtHead(device, parameters.head, parameters.conv_args.head)
 
-        self.boxes_confs_0 = TtGenBoxes(device)
-        self.boxes_confs_1 = TtGenBoxes(device)
-        self.boxes_confs_2 = TtGenBoxes(device)
+        self.boxes_confs_0 = TtGenBoxes(device, self.resolution)
+        self.boxes_confs_1 = TtGenBoxes(device, self.resolution)
+        self.boxes_confs_2 = TtGenBoxes(device, self.resolution)
 
         self.downs = []  # [self.down1]
         self.device = device
@@ -70,10 +66,17 @@ class TtYOLOv4:
         boxes_1 = ttnn.to_layout(x4_boxes_confs[0], ttnn.ROW_MAJOR_LAYOUT)
         boxes_2 = ttnn.to_layout(x5_boxes_confs[0], ttnn.ROW_MAJOR_LAYOUT)
         boxes_3 = ttnn.to_layout(x6_boxes_confs[0], ttnn.ROW_MAJOR_LAYOUT)
-        boxes_1 = ttnn.reshape(boxes_1, (1, 4, 1, 4800))
-        boxes_2 = ttnn.reshape(boxes_2, (1, 4, 1, 1200))
-        boxes_3 = ttnn.pad(boxes_3, ((0, 0), (0, 0), (0, 0), (0, 28)), 0)
-        boxes_3 = ttnn.reshape(boxes_3, (1, 4, 1, 384))
+        if self.resolution[0] == 320:
+            boxes_1 = ttnn.reshape(boxes_1, (1, 4, 1, 4800))
+            boxes_2 = ttnn.reshape(boxes_2, (1, 4, 1, 1200))
+            boxes_3 = ttnn.pad(boxes_3, ((0, 0), (0, 0), (0, 0), (0, 28)), 0)
+            boxes_3 = ttnn.reshape(boxes_3, (1, 4, 1, 384))
+        else:
+            boxes_1 = ttnn.reshape(boxes_1, (1, 4, 1, 19200))
+            boxes_2 = ttnn.reshape(boxes_2, (1, 4, 1, 4800))
+            boxes_3 = ttnn.pad(boxes_3, ((0, 0), (0, 0), (0, 0), (0, 28)), 0)
+            boxes_3 = ttnn.reshape(boxes_3, (1, 4, 1, 1284))
+
         boxes_1 = ttnn.permute(boxes_1, (0, 2, 3, 1))
         boxes_2 = ttnn.permute(boxes_2, (0, 2, 3, 1))
         boxes_3 = ttnn.permute(boxes_3, (0, 2, 3, 1))
