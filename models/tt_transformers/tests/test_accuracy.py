@@ -13,11 +13,11 @@ from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
 )
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations
+from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations, DecodersPrecision, parse_decoder_json
 from pathlib import Path
 
 
-def get_accuracy_thresholds(base_model_name: str, device_name: str, optimizations: ModelOptimizations):
+def get_accuracy_thresholds(model_args, optimizations):
     """Parse accuracy thresholds from PERF.md for the given model, optimization mode, and device."""
     # Read PERF.md
     perf_file = Path(__file__).parent.parent / "PERF.md"
@@ -26,10 +26,13 @@ def get_accuracy_thresholds(base_model_name: str, device_name: str, optimization
 
     # Split into sections based on optimization mode
     sections = content.split("## ")
-    target_section = next(s for s in sections if s.lower().startswith(f"{optimizations.__name__}\n"))
+    first_decoder_conf = optimizations.decoder_optimizations[0]
+    target_section = next(s for s in sections if s.lower().startswith(f"{first_decoder_conf.__name__}\n"))
 
     # Parse the table and find the row for our model and device
     # Potential lines have the form "| Llama3.1-8b    | T3K    | 91        | 99        | 49.8          |"
+    base_model_name = model_args.base_model_name
+    device_name = model_args.device_name
     correct_line = (
         lambda line: "|" in line
         and base_model_name.lower() in line.split("|")[1].strip().lower()
@@ -129,7 +132,11 @@ def test_tt_model_acc(
 
     mesh_device.enable_async(True)
 
-    optimizations = request.config.getoption("--optimizations") or optimizations
+    json_config_file = request.config.getoption("--decoder_config_file")
+    if json_config_file:
+        optimizations = parse_decoder_json(json_config_file)
+    else:
+        optimizations = request.config.getoption("--optimizations") or optimizations
 
     # Load model args and tokenizer
     model_args = ModelArgs(mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len)
@@ -444,8 +451,7 @@ def test_tt_model_acc(
     if use_reference_file:
         # Get accuracy thresholds from PERF.md
         min_top1_acc, min_top5_acc = get_accuracy_thresholds(
-            model_args.base_model_name,
-            model_args.device_name,
+            model_args,
             optimizations,
         )
 
