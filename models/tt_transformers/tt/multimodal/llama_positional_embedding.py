@@ -40,9 +40,8 @@ class TtLlamaPositionalEmbedding(LightweightModule):
         positional_embedding = state_dict[f"{state_dict_prefix}positional_embedding"]
         gated_positional_embedding = state_dict[f"{state_dict_prefix}gated_positional_embedding"]
         gated_positional_embedding_gate = state_dict[f"{state_dict_prefix}gated_positional_embedding_gate"]
-
-        positional_embedding = positional_embedding.reshape(1, *positional_embedding.shape)  # Add batch dimensions
-        self.positional_embedding = ttnn.as_tensor(
+        positional_embedding = positional_embedding.unsqueeze(0)  # Add batch dimensions
+        pos_embed_device = ttnn.as_tensor(
             positional_embedding,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
@@ -50,16 +49,23 @@ class TtLlamaPositionalEmbedding(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
+        # as_tensor returns (padded_shape, dim) which is incorrect, this reshape updates the padded size to the correct size
+        self.positional_embedding = ttnn.reshape(pos_embed_device, positional_embedding.shape, pos_embed_device.shape)
+
         padded_gated_embeddings, self.ar_mapping = self.generate_padded_gated_embeddings(
             gated_positional_embedding, gated_positional_embedding_gate
         )
-        self.padded_gated_positional_embedding = ttnn.as_tensor(
+        padded_gated_embed = ttnn.as_tensor(
             padded_gated_embeddings,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        # as_tensor returns (padded_shape, dim) which is incorrect, this reshape updates the padded size to the correct size
+        self.padded_gated_positional_embedding = ttnn.reshape(
+            padded_gated_embed, padded_gated_embeddings.shape, padded_gated_embed.shape
         )
 
         # Add batch and ntok dimensions
@@ -68,7 +74,7 @@ class TtLlamaPositionalEmbedding(LightweightModule):
             (
                 1 - gated_positional_embedding_gate.tanh()
             ),  # NOTE: The reference code has does the 1 - gate.tanh() at inference time
-            dtype=dtype,
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

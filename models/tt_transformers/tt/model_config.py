@@ -79,7 +79,7 @@ class ModelOptimizations:
         """Configuration optimized for accuracy
         Only 70B models uses bfp4 MLPs in this configuration
         """
-        if model_name in ["Llama3.1-70B", "DeepSeek-R1-Distill-Llama-70B", "Qwen2.5-72B"]:
+        if model_name in ["Llama3.1-70B", "Llama3.2-90B-Instruct", "DeepSeek-R1-Distill-Llama-70B", "Qwen2.5-72B"]:
             inst = ModelOptimizations.performance(model_name)
         else:
             inst = cls()

@@ -50,8 +50,16 @@ def create_multimodal_model(
     from models.tt_transformers.tt.model_config import ModelArgs
 
     tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size)
+    assert tt_model_args.is_vision(), "This model is multimodal"
+
     # limit length or we'll run out of space
     tt_model_args.max_seq_len = max_seq_len
+    if tt_model_args.is_90b:
+        assert tt_model_args.device_name == "T3K", "90B model only supported on T3K right now"
+        # for 90B model on T3K, use bfp8 and performance optimizations or the model won't fit in memory
+        dtype = ttnn.bfloat8_b
+        logger.info(f"Setting dtype to bfloat8_b for 90B model on T3K to fit model in memory")
+
     if checkpoint is None:
         checkpoint = tt_model_args.load_state_dict()
     model = CrossAttentionTransformer(

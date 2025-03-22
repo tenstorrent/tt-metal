@@ -33,8 +33,8 @@ class TtLlamaClassEmbedding(LightweightModule):
 
         self.class_embedding = ttnn.as_tensor(
             class_embedding,
-            dtype=dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
