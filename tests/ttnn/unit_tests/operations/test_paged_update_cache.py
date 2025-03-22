@@ -113,7 +113,7 @@ def run_test_update_cache_decode(
 @pytest.mark.parametrize("num_heads", [8])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cache_idx_tensor", [True, False])
-@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16])
 def test_update_cache_decode(
     check_memory,
     share_cache,
@@ -127,6 +127,9 @@ def test_update_cache_decode(
     device,
     use_program_cache,
 ):
+    if cache_dtype == ttnn.bfloat4_b and (share_cache or max_seq_len == 2048 or not cache_idx_tensor):
+        pytest.skip("just need to sanity-check a select test case for bfp4")
+
     torch.manual_seed(0)
 
     if check_memory:
