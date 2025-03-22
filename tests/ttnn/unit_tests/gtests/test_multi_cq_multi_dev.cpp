@@ -216,9 +216,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
                      readback_data});
 
                 for (int j = 0; j < 3 * 2048 * 2048; j++) {
-                    if (readback_data[j].to_float() != -1 * (i + dev_idx) * 32 + 500) {
-                        ASSERT_EQ(readback_data[j].to_float(), -1 * (i + dev_idx) * 32 + 500);
-                    }
+                    ASSERT_EQ(readback_data[j].to_float(), -1 * (i + dev_idx) * 32 + 500);
                 }
             }
         }
