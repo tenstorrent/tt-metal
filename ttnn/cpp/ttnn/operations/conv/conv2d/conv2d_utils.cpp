@@ -283,6 +283,13 @@ static std::pair<uint32_t, uint32_t> determine_largest_subblock_size(
         {1, 5}, {5, 1}, {2, 2}, {1, 4}, {4, 1}, {1, 3}, {3, 1}, {1, 2}, {2, 1}, {1, 1},
     }};
 
+    // # Issue 18812. Temporarily solution for BH CI while hang is not resolved.
+    static bool conv2d_subblock_env_set = (std::getenv("TT_METAL_CONV2D_1_1_SUBBLOCK") != nullptr);
+
+    if (conv2d_subblock_env_set) {
+        return {1, 1};
+    }
+
     uint32_t subblock_h = 0;
     uint32_t subblock_w = 0;
     for (auto [subblock_height, subblock_width] : subblocks) {
