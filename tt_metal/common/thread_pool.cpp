@@ -226,6 +226,7 @@ public:
     }
 
     void enqueue(std::function<void()>&& f) {
+        std::unique_lock<std::mutex> lock(task_push_mutex);
         tasks_.push(std::move(f));  // Move the task directly into queue
         // Light-Weight counter increment to track the number of tasks in flight
         task_counter_.fetch_add(1, std::memory_order_relaxed);
@@ -252,6 +253,7 @@ private:
     std::thread worker;
     std::atomic<int> task_counter_ = 0;
     bool shutdown_ = false;
+    std::mutex task_push_mutex;
     mutable std::exception_ptr stored_exception_;
     // Variables managing the linear backoff strategy used by worker threads
     // when waiting on a task to be inserted in the queue

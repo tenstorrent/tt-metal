@@ -435,8 +435,8 @@ Tensor Tensor::from_vector(std::vector<T>&& buffer, const TensorSpec& spec, std:
 }
 
 template <>
-std::vector<float> Tensor::to_vector<float>() const {
-    Tensor cpu_tensor = this->cpu();
+std::vector<float> Tensor::to_vector<float>(ttnn::QueueId cq_id) const {
+    Tensor cpu_tensor = this->cpu(/*blocking=*/true, cq_id);
     switch (cpu_tensor.get_dtype()) {
         case DataType::BFLOAT16: {
             auto buffer = host_buffer::get_as<bfloat16>(cpu_tensor);
@@ -473,13 +473,13 @@ std::vector<float> Tensor::to_vector<float>() const {
 }
 
 template <typename T>
-std::vector<T> Tensor::to_vector() const {
+std::vector<T> Tensor::to_vector(ttnn::QueueId cq_id) const {
     TT_FATAL(
         this->get_dtype() == convert_to_data_type<T>(),
         "Unsupported data type for to_vector: got {}, expected: {}",
         this->get_dtype(),
         convert_to_data_type<T>());
-    auto cpu_tensor = this->cpu();
+    auto cpu_tensor = this->cpu(/*blocking=*/true, cq_id);
     auto data = host_buffer::get_as<T>(cpu_tensor);
     auto physical_data = std::vector<T>(data.begin(), data.end());
     return tensor_impl::decode_tensor_data(std::move(physical_data), cpu_tensor.tensor_spec());
@@ -543,11 +543,11 @@ template Tensor Tensor::from_vector<uint16_t>(
 template Tensor Tensor::from_vector<uint32_t>(
     std::vector<uint32_t>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
 
-template std::vector<bfloat16> Tensor::to_vector<bfloat16>() const;
-template std::vector<int32_t> Tensor::to_vector<int32_t>() const;
-template std::vector<uint8_t> Tensor::to_vector<uint8_t>() const;
-template std::vector<uint16_t> Tensor::to_vector<uint16_t>() const;
-template std::vector<uint32_t> Tensor::to_vector<uint32_t>() const;
+template std::vector<bfloat16> Tensor::to_vector<bfloat16>(ttnn::QueueId cq_id) const;
+template std::vector<int32_t> Tensor::to_vector<int32_t>(ttnn::QueueId cq_id) const;
+template std::vector<uint8_t> Tensor::to_vector<uint8_t>(ttnn::QueueId cq_id) const;
+template std::vector<uint16_t> Tensor::to_vector<uint16_t>(ttnn::QueueId cq_id) const;
+template std::vector<uint32_t> Tensor::to_vector<uint32_t>(ttnn::QueueId cq_id) const;
 
 Tensor Tensor::to_device(IDevice* target_device, const MemoryConfig& mem_config, QueueId cq_id) const {
     if (auto mesh_device = dynamic_cast<distributed::MeshDevice*>(target_device)) {

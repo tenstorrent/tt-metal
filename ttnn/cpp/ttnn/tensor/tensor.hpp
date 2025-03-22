@@ -156,7 +156,7 @@ public:
     //
     // If the tensor resides on a device, it will be brough back to host.
     template <typename T>
-    std::vector<T> to_vector() const;
+    std::vector<T> to_vector(ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
     Tensor to_device(
         IDevice* target_device,
