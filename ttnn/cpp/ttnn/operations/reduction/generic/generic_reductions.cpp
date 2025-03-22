@@ -140,9 +140,9 @@ static Tensor zero_volume_reduce(
     // min/max is unsupported when reduction dim is zero
     if constexpr (reduce_type == ReduceType::Max || reduce_type == ReduceType::Min) {
         // Check the shape of the reduction dims
-        for (auto red_dim : dim) {
-            if (input_shape[red_dim] == 0) {
-                TT_THROW("Expected reduction dim {} to have non-zero size", red_dim);
+        for (auto axis : dim) {
+            if (input_shape[axis] == 0) {
+                TT_THROW("Expected reduction dim {} to have non-zero size", axis);
             }
         }
     }
@@ -344,6 +344,14 @@ static Tensor std_var_impl(
     // Handle zero volume tensors: return with shape adjusted for keepdim
     if (input_tensor_arg.get_logical_volume() == 0) {
         return zero_volume_reduce<reduce_type>(input_tensor_arg, dim, keepdim, memory_config);
+    }
+
+    if (dim.size()) {
+        int reduced_volume = 1;
+        for (int axis : dim) {
+            reduced_volume *= input_shape[axis];
+        }
+        scalar /= reduced_volume;
     }
 
     auto mean_tensor = reduce_impl<ReduceType::Sum>(
