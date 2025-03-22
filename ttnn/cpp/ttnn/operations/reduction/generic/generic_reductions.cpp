@@ -115,11 +115,6 @@ Tensor adjust_shape(
             output_shape.push_back(input_shape[axis]);
         }
     }
-
-    // Print tensor contents as a warning
-    tt::log_warning(
-        "gajib: Before reshape contents: {}, output_shape: {}", tensor.write_to_string(), ttnn::Shape{output_shape});
-
     auto output_tensor = ttnn::reshape(tensor, ttnn::Shape{output_shape});
     return output_tensor;
 }
@@ -147,10 +142,9 @@ static Tensor zero_volume_reduce(
         }
     }
 
-    // Figure out output shape
     ttnn::SmallVector<uint32_t> output_shape;
 
-    // Iterate over the input shape and adjust the shape for keepdim
+    // Iterate over the input shape and adjust the output shape for keepdim
     for (int i = 0; i < input_shape.size(); i++) {
         // If this is in the reduction dims, keep it only if keepdim is true
         bool is_reduction_dim = std::find(dim.begin(), dim.end(), i) != dim.end();
@@ -189,14 +183,14 @@ static Tensor reduce_impl(
 
     Tensor output_tensor;
 
-    // If the input tensor is a rank 0 tensor, return the input tensor, adjusted for keepdim
+    // If the input is a rank 0 tensor, return a copy of it, adjusted for keepdim
     if (rank == 0) {
         // Create an output tensor with same shape and attributes as input tensor
         output_tensor = ttnn::clone(input_tensor_arg, /*dtype=*/std::nullopt, memory_config, compute_kernel_config);
         return adjust_shape(output_tensor, input_shape, keepdim, dim, non_height_width_dims);
     }
 
-    // Handle zero volume tensors: return with shape adjusted for keepdim
+    // If the input is a zero volume tensor, return output with shape adjusted for keepdim
     if (input_tensor_arg.get_logical_volume() == 0) {
         return zero_volume_reduce<reduce_type>(input_tensor_arg, dim, keepdim, memory_config);
     }
@@ -341,18 +335,19 @@ static Tensor std_var_impl(
         return adjust_shape(output_tensor, input_shape, keepdim, dim, non_height_width_dims);
     }
 
-    // Handle zero volume tensors: return with shape adjusted for keepdim
+    // If the input is a zero volume tensor, return output with shape adjusted for keepdim
     if (input_tensor_arg.get_logical_volume() == 0) {
         return zero_volume_reduce<reduce_type>(input_tensor_arg, dim, keepdim, memory_config);
     }
 
+    int reduced_volume = 1;
+    for (int axis : dim) {
+        reduced_volume *= input_shape[axis];
+    }
+    scalar /= reduced_volume;
+
     auto mean_tensor = reduce_impl<ReduceType::Sum>(
         input_tensor_arg, dim, keepdim, memory_config_arg, compute_kernel_config, scalar, non_height_width_dims);
-
-    // This is a special case where the input tensor is a rank zero tensor
-    if (!dim.size()) {
-        return mean_tensor;  // TODO: Need to return NaN here
-    }
 
     auto mean_square_tensor = reduce_impl<ReduceType::Sum>(
         ttnn::pow(input_tensor_arg, 2.0f, memory_config),

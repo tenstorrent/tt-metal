@@ -8,7 +8,7 @@ import random
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -101,7 +101,7 @@ def test_reduction(device, tensor_shape, keepdim, dim, op):
 
     if op not in ["std", "var"]:
         # There is a scale factor difference between torch and ttnn for std and var
-        # But for other operations, it should be close.
+        # But for other operations, it should be close. Issue #19478
         assert torch.allclose(
             torch_result, ttnn_result, atol=0.2, rtol=0.05, equal_nan=True
         ), f"torch: {torch_result}, ttnn: {ttnn_result}"
