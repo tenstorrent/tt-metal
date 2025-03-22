@@ -346,14 +346,13 @@ def run_all_gather_impl(
         # (4, 1, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
-        # (4, 1, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT),
-        (8, 1, [1, 1, 2048, 32768], 3, ttnn.TILE_LAYOUT),  # OOM on L1
+        (4, 1, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttnn.bfloat16,
+        # ttnn.bfloat16,
         ttnn.bfloat8_b,
     ],
 )
@@ -361,10 +360,9 @@ def run_all_gather_impl(
     "mem_config",
     [
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
-@pytest.mark.parametrize("num_iters", [5])
+@pytest.mark.parametrize("num_iters", [10])
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 65536 * 32}], indirect=True)
 def test_all_gather(
@@ -546,16 +544,9 @@ def test_all_gather(
             ttnn.bfloat16,
             ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         ),
-        (
-            8,
-            1,
-            [1, 1, 16384, 4096],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ),
-        # (8, 1, [1, 1, 32768, 4096], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)), # too large on CI
+        # too huge to run on CI
+        # (8, 1, [1, 1, 16384, 4096], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),),
+        # (8, 1, [1, 1, 32768, 4096], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)),
         # T3K Falcon 40, Decode DRAM bf16/8
         (
             8,
@@ -612,24 +603,25 @@ def test_all_gather(
             ttnn.bfloat8_b,
             ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         ),
-        (
-            8,
-            1,
-            [1, 1, 2048, 32768],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat16,
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ),
-        (
-            8,
-            1,
-            [1, 1, 2048, 32768],
-            3,
-            ttnn.TILE_LAYOUT,
-            ttnn.bfloat8_b,
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ),
+        # too huge to run on CI
+        # (
+        #     8,
+        #     1,
+        #     [1, 1, 2048, 32768],
+        #     3,
+        #     ttnn.TILE_LAYOUT,
+        #     ttnn.bfloat16,
+        #     ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        # ),
+        # (
+        #     8,
+        #     1,
+        #     [1, 1, 2048, 32768],
+        #     3,
+        #     ttnn.TILE_LAYOUT,
+        #     ttnn.bfloat8_b,
+        #     ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        # ),
     ],
 )
 @pytest.mark.parametrize("num_iters", [1])

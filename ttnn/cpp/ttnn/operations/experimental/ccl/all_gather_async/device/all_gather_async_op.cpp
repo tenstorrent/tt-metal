@@ -140,7 +140,7 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
     log_trace(tt::LogOp, "[select_version] output_shard_num_cores: {}", output_shard_num_cores);
 
     // Check for minimal interleaved case
-    if (std::getenv("TT_METAL_HANDCRAFT_INTERLEAVE") && num_links == 1 &&
+    if (num_links == 1 &&
         ((dim == 3 && (input_tensor.dtype() == DataType::BFLOAT16 ||
                        (input_tensor.dtype() == DataType::BFLOAT8_B &&
                         ((input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&

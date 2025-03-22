@@ -136,8 +136,7 @@ inline void pack_2contig_bf8(uint32_t contig_total, uint32_t& tile_id, Interleav
         DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] 2contig -- tile_id: " << tile_id << "\n";
         noc_async_read_barrier();
         cb_push_back(cb0_id, 2);
-        if (tile_id % num_banks == 0) {
-            DPRINT << "UPDATE!! from:" << tile_id << " to: " << tile_id + num_banks << "\n";
+        if (total_local % num_banks == 0) {
             tile_id += num_banks;
         }
     }
@@ -176,9 +175,9 @@ inline void pack_llama_8b_n300(
     uint32_t total = 0;
     DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] BEGIN pack_llama70_t3k_prefill num_tiles: " << num_tiles
            << ", packet_size_in_pages: " << packet_size_in_pages << "\n";
-    pack_4contig_bf8(num_full_contig, tile_id, addrgen);
+    pack_full_contig(num_full_contig, tile_id, addrgen);
     pack_2contig_bf8(num_2contig, tile_id, addrgen);
-    pack_non_contig_bf8(rest_tiles, tile_id, addrgen);
+    pack_non_contig(rest_tiles, tile_id, addrgen);
     DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] DONE pack_llama70_t3k_prefill num_tiles: " << num_tiles
            << ", num_banks: " << num_banks << ", packet_size_in_pages: " << packet_size_in_pages << "\n";
 }
@@ -189,45 +188,45 @@ inline void pack_falcon40_decode(
     uint32_t tile_id = 0;
     if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == T3K_FALCON40_DECODE_8192) {
         DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] T3K_FALCON40_DECODE_8192 \n";
-        static const uint32_t input_width = 32;  // 1024
+        static const uint32_t input_width = 32;  // 8192/8/32
         uint32_t contig2_total = 12;
-        if (my_chip_id % 3 == 0) {
+        if constexpr (my_chip_id % 3 == 0) {
             pack_2contig_bf8(contig2_total, tile_id, addrgen);
-            pack_non_contig_bf8(8, tile_id, addrgen);
-        } else if (my_chip_id % 3 == 1) {
+            pack_non_contig(8, tile_id, addrgen);
+        } else if constexpr (my_chip_id % 3 == 1) {
             tile_id = 4;
             pack_2contig_bf8(contig2_total, tile_id, addrgen);
-            pack_non_contig_bf8(4, tile_id, addrgen);
+            pack_non_contig(4, tile_id, addrgen);
             tile_id = 0;
-            pack_non_contig_bf8(4, tile_id, addrgen);
+            pack_non_contig(4, tile_id, addrgen);
         } else {
             tile_id = 8;
             pack_2contig_bf8(contig2_total, tile_id, addrgen);
             tile_id = 0;
-            pack_non_contig_bf8(8, tile_id, addrgen);
+            pack_non_contig(8, tile_id, addrgen);
         }
     } else if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == T3K_FALCON40_DECODE_32768) {
         DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] T3K_FALCON40_DECODE_32768 \n";
-        static const uint32_t input_width = 128;  // 1024
+        static const uint32_t input_width = 128;  // 32768/8/32
         uint32_t num_full_contig = 24;
         uint32_t num_contig2 = 12;
-        if (my_chip_id % 3 == 0) {
-            pack_4contig_bf8(num_full_contig, tile_id, addrgen);
+        if constexpr (my_chip_id % 3 == 0) {
+            pack_full_contig(num_full_contig, tile_id, addrgen);
             pack_2contig_bf8(num_contig2, tile_id, addrgen);
-            pack_non_contig_bf8(8, tile_id, addrgen);
-        } else if (my_chip_id % 3 == 1) {
+            pack_non_contig(8, tile_id, addrgen);
+        } else if constexpr (my_chip_id % 3 == 1) {
             tile_id = 4;
-            pack_4contig_bf8(num_full_contig, tile_id, addrgen);
+            pack_full_contig(num_full_contig, tile_id, addrgen);
             pack_2contig_bf8(num_contig2, tile_id, addrgen);
-            pack_non_contig_bf8(4, tile_id, addrgen);
+            pack_non_contig(4, tile_id, addrgen);
             tile_id = 0;
-            pack_non_contig_bf8(4, tile_id, addrgen);
+            pack_non_contig(4, tile_id, addrgen);
         } else {
             tile_id = 8;
-            pack_4contig_bf8(num_full_contig, tile_id, addrgen);
+            pack_full_contig(num_full_contig, tile_id, addrgen);
             pack_2contig_bf8(num_contig2, tile_id, addrgen);
             tile_id = 0;
-            pack_non_contig_bf8(8, tile_id, addrgen);
+            pack_non_contig(8, tile_id, addrgen);
         }
     } else {
         // assert
