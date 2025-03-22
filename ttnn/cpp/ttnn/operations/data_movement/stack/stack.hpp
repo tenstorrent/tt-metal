@@ -1,0 +1,19 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+#pragma once
+
+#include "ttnn/decorators.hpp"
+
+namespace ttnn {
+namespace operations::data_movement {
+
+struct StackOperation {
+    static ttnn::Tensor invoke(const std::vector<ttnn::Tensor>& input_tensors, const int dim);
+};
+
+}  // namespace operations::data_movement
+
+constexpr auto stack = ttnn::register_operation<"ttnn::stack", ttnn::operations::data_movement::StackOperation>();
+
+}  // namespace ttnn
