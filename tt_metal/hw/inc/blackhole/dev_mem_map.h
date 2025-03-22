@@ -48,7 +48,7 @@
 
 /////////////
 // Firmware/kernel code holes
-#define MEM_BRISC_FIRMWARE_SIZE (5 * 1024 + 1024)
+#define MEM_BRISC_FIRMWARE_SIZE (6 * 1024 + 1024)
 // TODO: perhaps put NCRISC FW in the scratch area and free 1.5K after init (GS/WH)
 #define MEM_NCRISC_FIRMWARE_SIZE 1536
 #define MEM_TRISC0_FIRMWARE_SIZE 1536
