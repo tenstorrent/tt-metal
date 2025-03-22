@@ -13,6 +13,7 @@
 
 #include "llrt.hpp"
 #include <string_view>
+#include <thread>
 #include <tt_metal.hpp>
 #include "logger.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
@@ -419,7 +420,12 @@ bool DataMovementKernel::binaries_exist_on_disk(const IDevice* device) const {
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
         device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
     const string build_success_marker_path =
-        build_state.get_out_path() + this->get_full_kernel_name() + "/" + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME;
+        build_state.get_out_path() + this->get_full_kernel_name() + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME;
+    log_debug(
+        "binaries_exist_on_disk - thread {} device {} path {}",
+        std::hash<std::thread::id>{}(std::this_thread::get_id()),
+        device->id(),
+        build_success_marker_path);
     return std::filesystem::exists(build_success_marker_path);
 }
 
