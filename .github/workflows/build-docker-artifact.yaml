@@ -46,8 +46,7 @@ on:
             - "amd64"
 
 env:
-  # Only build ci-test for now
-  IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-ci-test-${{ inputs.architecture }}
+  IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-dev-${{ inputs.architecture }}
 
 jobs:
   check-docker-images:
