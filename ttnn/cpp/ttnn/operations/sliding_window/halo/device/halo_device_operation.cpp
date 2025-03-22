@@ -81,6 +81,28 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
     return {TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), out_mem_config))};
 }
 
+template <typename T>
+std::vector<T> broadcast_config_per_row(
+    const std::vector<T>& config_vector,
+    uint32_t num_cols  // how many columns you want
+) {
+    // config_vector.size() = number of rows
+    const uint32_t num_rows = static_cast<uint32_t>(config_vector.size());
+
+    // Reserve space for (num_rows * num_cols) elements.
+    std::vector<T> expanded;
+    expanded.reserve(num_rows * num_cols);
+
+    // For each row, broadcast one value across 'num_cols' columns.
+    for (T val : config_vector) {
+        for (uint32_t c = 0; c < num_cols; ++c) {
+            expanded.push_back(val);
+        }
+    }
+
+    return expanded;
+}
+
 operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     const std::vector<Tensor>& inputs, std::vector<Tensor>& outputs) const {
     const auto& input_tensor = inputs.at(0);
@@ -101,7 +123,27 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     const auto& pad_config = kernel_config.pad_config;
     const auto& gather_config0 = kernel_config.gather_config0;
     const auto& gather_config1 = kernel_config.gather_config1;
-    const auto& number_of_blocks_per_core = kernel_config.number_of_blocks_per_core;
+
+    uint32_t ncores_y = parallel_config_.grid.ranges().begin()->end_coord.y + 1;
+    uint32_t ncores_x = parallel_config_.grid.ranges().begin()->end_coord.x + 1;
+    uint32_t repeat_factor = 0;
+    if (parallel_config_.shard_orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR) {
+        TT_ASSERT(
+            config.size() == ncores_y,
+            "Invalid config size {} (!= {}) for BLOCK_SHARDED ROW_MAJOR",
+            config.size(),
+            ncores_y);
+        repeat_factor = ncores_x;
+    } else if (parallel_config_.shard_orientation == tt::tt_metal::ShardOrientation::COL_MAJOR) {
+        TT_ASSERT(
+            config.size() == ncores_x,
+            "Invalid config size {} (!= {}) for BLOCK_SHARDED COL_MAJOR",
+            config.size(),
+            ncores_x);
+        repeat_factor = ncores_y;
+    }
+    const auto number_of_blocks_per_core =
+        broadcast_config_per_row(kernel_config.number_of_blocks_per_core, repeat_factor);
 
     const auto pad_config_tensor =
         sliding_window::construct_on_host_config_tensor(pad_config, this->config_, this->parallel_config_);
@@ -151,7 +193,8 @@ Tensor halo_op(
             input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
         "Only height, width or block sharded tensors are supported.");
     // NOTE: for HEIGHT_SHARDED, ncores_nhw == ncores
-    //       for BLOCK_SHARDED, ncores_nhw is just the ncores along height dim (last tensor dim is split along width)
+    //       for BLOCK_SHARDED, ncores_nhw is just the ncores along height dim (last tensor dim is split along
+    //       width)
     bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
     auto halo_func =
         [config,

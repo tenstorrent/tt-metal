@@ -119,7 +119,7 @@ struct HaloGatherKernelConfig {
     std::vector<std::vector<uint16_t>> pad_config;
     std::vector<std::vector<uint16_t>> gather_config0;
     std::vector<std::vector<uint16_t>> gather_config1;
-    std::vector<uint32_t> number_of_blocks_per_core;
+    std::vector<uint16_t> number_of_blocks_per_core;
 };
 
 HaloGatherKernelConfig generate_halo_kernel_config_tensors(
@@ -138,6 +138,50 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     bool pad_cores = false);
 
 std::vector<uint16_t> flatten(const std::vector<std::vector<uint16_t>>& input);
+
+template <typename T>
+std::pair<std::vector<T>, uint32_t> replicate_config_across_grid(
+    const std::vector<T>& config_vector, const SlidingWindowConfig& sw_config, const ParallelConfig& p_config) {
+    if (p_config.shard_scheme == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
+        return {config_vector, 1};
+    } else if (p_config.shard_scheme == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
+        uint32_t repeat_factor = p_config.grid.num_cores();
+        std::vector<T> repeat_config;
+        for (uint32_t i = 0; i < repeat_factor; ++i) {
+            repeat_config.insert(repeat_config.end(), config_vector.begin(), config_vector.end());
+        }
+        return {repeat_config, repeat_factor};
+    } else if (p_config.shard_scheme == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
+        TT_ASSERT(p_config.grid.ranges().size() == 1, "BLOCK_SHARDED should have just a single core range");
+        // NOTE: it is assumed that the range start is always (0, 0)
+        uint32_t ncores_y = p_config.grid.ranges().begin()->end_coord.y + 1;
+        uint32_t ncores_x = p_config.grid.ranges().begin()->end_coord.x + 1;
+        std::vector<T> repeat_config;
+        uint32_t repeat_factor = 0;
+        if (p_config.shard_orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR) {
+            TT_ASSERT(
+                config.size() == ncores_y,
+                "Invalid config size {} (!= {}) for BLOCK_SHARDED ROW_MAJOR",
+                config.size(),
+                ncores_y);
+            repeat_factor = ncores_x;
+        } else if (p_config.shard_orientation == tt::tt_metal::ShardOrientation::COL_MAJOR) {
+            TT_ASSERT(
+                config.size() == ncores_x,
+                "Invalid config size {} (!= {}) for BLOCK_SHARDED COL_MAJOR",
+                config.size(),
+                ncores_x);
+            repeat_factor = ncores_y;
+        } else {
+            TT_ASSERT(false, "Unsupported shard orientation");
+        }
+        for (uint32_t i = 0; i < repeat_factor; ++i) {
+            repeat_config.insert(repeat_config.end(), config_vector.begin(), config_vector.end());
+        }
+        return {repeat_config, repeat_factor};
+    }
+    TT_FATAL(false, "Unsupported shard scheme");
+}
 
 Tensor construct_on_host_config_tensor(
     const std::vector<std::vector<uint16_t>>& config,

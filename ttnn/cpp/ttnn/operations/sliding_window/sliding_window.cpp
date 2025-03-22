@@ -544,7 +544,6 @@ std::tuple<GatherConfig, GatherConfig, uint32_t> divide_blocks_between_cores(
         (block_id % NUM_RISCV_DATA_MOVEMENT_CORES == 0 ? first : second).push_back(transfer);
         number_of_blocks = std::max(number_of_blocks, static_cast<int32_t>(block_id + 1));
     }
-    tt::log_info("num blocks! = {}", number_of_blocks);
     return std::make_tuple(reduce_flattened_transfers(first), reduce_flattened_transfers(second), number_of_blocks);
 }
 
@@ -672,14 +671,14 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     const bool use_blocking = is_in_tiled;
     std::vector<GatherConfig> ordered_gather_configs0;
     std::vector<GatherConfig> ordered_gather_configs1;
-    std::vector<uint32_t> number_of_blocks_per_core;
+    std::vector<uint16_t> number_of_blocks_per_core;
     int core = 0;
     for (const auto& config : gather_configs) {
         if (use_blocking) {
             const auto quantized = quantize_transfers_along_block_boundaries(config, block_size);
             const auto ordered = reorder_transfers_globally(quantized);
             const auto [first, second, number_of_blocks] = divide_blocks_between_cores(ordered, block_size);
-            tt::log_info("num blcoks {}", number_of_blocks);
+            tt::log_info("core {} - \n {} \n {}", core++, first, second);
             ordered_gather_configs0.push_back(first);
             ordered_gather_configs1.push_back(second);
             number_of_blocks_per_core.push_back(number_of_blocks);
@@ -695,6 +694,7 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
 
     tt::log_info("gather conf = {}", serialized_gather_configs0);
     tt::log_info("gather conf 2 = {}", serialized_gather_configs1);
+    tt::log_info("core block data {}", number_of_blocks_per_core);
 
     // Flatten and uniformize the lengths of each config list
     auto flatten_pad_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
@@ -742,6 +742,8 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     };
 
     align_config(flattened_pad_config, 2);
+
+    tt::log_info("returning halot gather configs!");
 
     return HaloGatherKernelConfig{
         flattened_pad_config, serialized_gather_configs0, serialized_gather_configs1, number_of_blocks_per_core};
@@ -818,58 +820,18 @@ Tensor construct_on_host_config_tensor(
     const std::vector<std::vector<uint16_t>>& config,
     const SlidingWindowConfig& sw_config,
     const ParallelConfig& p_config) {
-    // we need the last dim of tensors to be multiple of 2, pad if needed
+    // We need the last dim of tensors to be multiple of 2, pad if needed
     uint32_t extend_with_zeroes = config[0].size() % 2;
     extend_with_zeroes = extend_with_zeroes > 0 ? 2 - extend_with_zeroes : 0;
-    ttnn::Shape config_shape({(uint32_t)config.size(), (uint32_t)config[0].size() + extend_with_zeroes});
+    ttnn::Shape config_shape(
+        {static_cast<uint32_t>(config.size()), static_cast<uint32_t>(config[0].size()) + extend_with_zeroes});
     std::vector<uint16_t> config_vector = flatten(config, extend_with_zeroes);
-    if (p_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
-        auto config_buffer = owned_buffer::create<uint16_t>(std::move(config_vector));
-        log_debug(tt::LogOp, "config_shape: ({}, {})", config_shape[0], config_shape[1]);
-        return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
-    } else if (p_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
-        uint32_t repeat_factor = p_config.grid.num_cores();
-        std::vector<uint16_t> repeat_config;
-        for (uint32_t i = 0; i < repeat_factor; ++i) {
-            repeat_config.insert(repeat_config.end(), config_vector.begin(), config_vector.end());
-        }
-        auto config_buffer = owned_buffer::create<uint16_t>(std::move(repeat_config));
-        config_shape = ttnn::Shape({config_shape[0] * repeat_factor, config_shape[1]});
-        return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
-    } else if (p_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
-        TT_ASSERT(p_config.grid.ranges().size() == 1, "BLOCK_SHARDED should have just a single core range");
-        // NOTE: it is assumed that the range start is always (0, 0)
-        uint32_t ncores_y = p_config.grid.ranges().begin()->end_coord.y + 1;
-        uint32_t ncores_x = p_config.grid.ranges().begin()->end_coord.x + 1;
-        std::vector<uint16_t> repeat_config;
-        uint32_t repeat_factor = 0;
-        if (p_config.shard_orientation == ShardOrientation::ROW_MAJOR) {
-            TT_ASSERT(
-                config.size() == ncores_y,
-                "Invalid config size {} (!= {}) for BLOCK_SHARDED ROW_MAJOR",
-                config.size(),
-                ncores_y);
-            repeat_factor = ncores_x;
-        } else if (p_config.shard_orientation == ShardOrientation::COL_MAJOR) {
-            TT_ASSERT(
-                config.size() == ncores_x,
-                "Invalid config size {} (!= {}) for BLOCK_SHARDED COL_MAJOR",
-                config.size(),
-                ncores_x);
-            repeat_factor = ncores_y;
-        } else {
-            TT_ASSERT(false, "Unsupported shard orientation");
-        }
-        for (uint32_t i = 0; i < repeat_factor; ++i) {
-            repeat_config.insert(repeat_config.end(), config_vector.begin(), config_vector.end());
-        }
-        auto config_buffer = owned_buffer::create<uint16_t>(std::move(repeat_config));
-        config_shape = ttnn::Shape({config_shape[0] * repeat_factor, config_shape[1]});
-        return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
-    } else {
-        TT_ASSERT(false, "Unsupported shard scheme");
-        return Tensor();
-    }
+
+    auto [repeat_config, repeat_factor] = replicate_config_across_grid(config_vector, sw_config, p_config);
+
+    auto config_buffer = owned_buffer::create<uint16_t>(std::move(repeat_config));
+    config_shape = ttnn::Shape({config_shape[0] * repeat_factor, config_shape[1]});
+    return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
 }
 
 Tensor move_config_tensor_to_device(

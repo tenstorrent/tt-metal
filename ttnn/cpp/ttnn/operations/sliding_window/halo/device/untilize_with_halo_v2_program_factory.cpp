@@ -28,7 +28,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const Tensor& padding_config,
     const Tensor& gather_config0,
     const Tensor& gather_config1,
-    const std::vector<uint32_t>& number_of_blocks_per_core,
+    const std::vector<uint16_t>& number_of_blocks_per_core,
     const bool remote_read,
     const bool transpose_mcast,
     Tensor& output_tensor,
@@ -66,14 +66,15 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     tt::log_info(
         "input shape = {}, shard shape = {}, nsticks padding last core = {}, , ntiles padding last core = {}, nblocks "
-        "last core = {}, num cores = {}, num_ciores nhw {}",
+        "last core = {}, num cores = {}, num_ciores nhw {}, rm shard orientation? = {}",
         input_shape,
         remapped_input_shard_shape_for_output_grid,
         nsticks_padding_on_last_shard,
         npages_padding_on_last_shard,
         input_nblocks_last_core,
         all_cores.num_cores(),
-        ncores_nhw);
+        ncores_nhw,
+        shard_orientation == ShardOrientation::ROW_MAJOR);
 
     uint32_t out_stick_nbytes = output_shard_shape[1] * out_nbytes;
 
@@ -101,9 +102,11 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", src_cb_id, input_npages, in_page_size);
 
     const uint32_t block_size_height = 32;  // TODO: Get this from a parameter
+    //
 
     // We need to clamp to avoid crashing in the case that the block size used was larger than the input
     const uint32_t clamped_block_size_height = std::min(block_size_height, input_npages * TILE_HEIGHT);
+    tt::log_info("block size = {} - clamped block size = {}", block_size_height, clamped_block_size_height);
     uint32_t input_to_writer_cb_id0 = src_cb_id;
     uint32_t input_to_writer_cb_id1 = src_cb_id;
     if (!skip_untilize) {
@@ -153,17 +156,15 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     // Gather data
     if (!skip_untilize) {
+        std::vector<uint32_t> fake_blocks{
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        };
         bool rm_orientation = shard_orientation == ShardOrientation::ROW_MAJOR;
         const auto cores = corerange_to_cores(all_cores, std::nullopt, rm_orientation);
-        TT_FATAL(
-            number_of_blocks_per_core.size() == ncores_nhw,
-            "Unexpected mismatch between config and specified NHW core count ({} != {})",
-            number_of_blocks_per_core.size(),
-            ncores_nhw);
         for (int core_id = 0; core_id < cores.size(); core_id++) {
             std::vector<uint32_t> compute_ct_args = {
-                number_of_blocks_per_core[core_id % ncores_nhw],  // TODO: We should do this mapping when generating
-                                                                  // config tensors
+                number_of_blocks_per_core[core_id],
                 ntiles_per_block,
                 src_cb_id,
                 input_to_writer_cb_id0,
