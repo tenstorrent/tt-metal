@@ -241,9 +241,6 @@ void test_dropout(tt_metal::IDevice* device, const DropoutConfig& test_config) {
 }  // namespace unit_tests::compute::sfpu::dropout
 
 TEST_F(DeviceFixture, TensixComputeDropout) {
-    if (this->arch_ != tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP();
-    }
     srand(0);
     int num_tests = 5;
     float fill_constant = 9.0;
