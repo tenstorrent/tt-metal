@@ -33,7 +33,9 @@ def get_device_freq():
     return freq
 
 
-def profile_results(zone_name, packets_per_src_chip, line_size, packet_size, fabric_mode):
+def profile_results(
+    zone_name, packets_per_src_chip, line_size, packet_size, fabric_mode, disable_sends_for_interior_workers
+):
     freq = get_device_freq() / 1000.0
     setup = device_post_proc_config.default_setup()
     setup.deviceInputLog = profiler_log_path
@@ -60,6 +62,8 @@ def profile_results(zone_name, packets_per_src_chip, line_size, packet_size, fab
         traffic_streams_through_boundary = 3
     else:
         traffic_streams_through_boundary = line_size / 2
+        if disable_sends_for_interior_workers:
+            traffic_streams_through_boundary = 1
     total_byte_sent = packets_per_src_chip * traffic_streams_through_boundary * packet_size
     bandwidth = total_byte_sent / max(main_loop_cycles)
 
@@ -77,11 +81,12 @@ def run_fabric_edm(
     packet_size,
     fabric_mode,
     expected_bw,
+    disable_sends_for_interior_workers,
 ):
     logger.warning("removing file profile_log_device.csv")
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
 
-    cmd = f"TT_METAL_DEVICE_PROFILER=1 \
+    cmd = f"TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_DEVICE_PROFILER=1 \
             {os.environ['TT_METAL_HOME']}/build/test/ttnn/unit_tests_ttnn_fabric_edm \
                 {num_mcasts} \
                 {num_unicasts} \
@@ -90,7 +95,8 @@ def run_fabric_edm(
                 {int(line_sync)} \
                 {line_size} \
                 {packet_size} \
-                {fabric_mode.value}"
+                {fabric_mode.value} \
+                {int(disable_sends_for_interior_workers)}"
     rc = os.system(cmd)
     if rc != 0:
         if os.WEXITSTATUS(rc) == 1:
@@ -103,8 +109,12 @@ def run_fabric_edm(
     zone_name_main = "MAIN-TEST-BODY"
 
     num_messages = num_mcasts + num_unicasts
-    bandwidth_inner_loop = profile_results(zone_name_inner, num_messages, line_size, packet_size, fabric_mode)
-    bandwidth = profile_results(zone_name_main, num_messages, line_size, packet_size, fabric_mode)
+    bandwidth_inner_loop = profile_results(
+        zone_name_inner, num_messages, line_size, packet_size, fabric_mode, disable_sends_for_interior_workers
+    )
+    bandwidth = profile_results(
+        zone_name_main, num_messages, line_size, packet_size, fabric_mode, disable_sends_for_interior_workers
+    )
     logger.info("bandwidth_inner_loop: {} B/c", bandwidth_inner_loop)
     logger.info("bandwidth: {} B/c", bandwidth)
     assert expected_bw - 0.07 <= bandwidth <= expected_bw + 0.07
@@ -115,7 +125,7 @@ def run_fabric_edm(
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("packet_size", [4096])
-@pytest.mark.parametrize("line_size, num_links, expected_bw", [(4, 1, 7.35), (4, 2, 7.24)])
+@pytest.mark.parametrize("line_size, num_links, expected_bw", [(4, 1, 8.23), (4, 2, 8.17)])
 def test_fabric_edm_mcast_half_ring_bw(
     num_mcasts,
     num_unicasts,
@@ -137,37 +147,7 @@ def test_fabric_edm_mcast_half_ring_bw(
         packet_size,
         FabricTestMode.HalfRing,
         expected_bw,
-    )
-
-
-@pytest.mark.parametrize("num_mcasts", [200000])
-@pytest.mark.parametrize("num_unicasts", [0])
-@pytest.mark.parametrize("num_op_invocations", [1])
-@pytest.mark.parametrize("line_sync", [True])
-@pytest.mark.parametrize("packet_size", [4096])
-@pytest.mark.parametrize("line_size", [4])
-@pytest.mark.parametrize("num_links, expected_bw", [(1, 7.35), (2, 7.24)])
-def test_fabric_edm_mcast_ring_bw(
-    num_mcasts,
-    num_unicasts,
-    num_links,
-    num_op_invocations,
-    line_sync,
-    line_size,
-    packet_size,
-    expected_bw,
-):
-    run_fabric_edm(
         False,
-        num_mcasts,
-        num_unicasts,
-        num_links,
-        num_op_invocations,
-        line_sync,
-        line_size,
-        packet_size,
-        FabricTestMode.HalfRing,
-        expected_bw,
     )
 
 
@@ -176,7 +156,7 @@ def test_fabric_edm_mcast_ring_bw(
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("packet_size", [4096])
-@pytest.mark.parametrize("line_size, num_links, expected_bw", [(4, 1, 5.38), (4, 2, 5.31), (8, 1, 4.03)])
+@pytest.mark.parametrize("line_size, num_links, expected_bw", [(4, 1, 5.81), (4, 2, 5.75), (8, 1, 4.46)])
 def test_fabric_edm_mcast_full_ring_bw(
     num_mcasts,
     num_unicasts,
@@ -198,6 +178,7 @@ def test_fabric_edm_mcast_full_ring_bw(
         packet_size,
         FabricTestMode.FullRing,
         expected_bw,
+        False,
     )
 
 
@@ -206,7 +187,7 @@ def test_fabric_edm_mcast_full_ring_bw(
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("packet_size", [4096])
-@pytest.mark.parametrize("line_size, num_links, expected_bw", [(4, 1, 6.04), (4, 2, 5.91)])
+@pytest.mark.parametrize("line_size, num_links, expected_bw", [(4, 1, 6.72), (4, 2, 6.54)])
 def test_fabric_edm_mcast_saturate_chip_to_chip_ring_bw(
     num_mcasts,
     num_unicasts,
@@ -228,6 +209,7 @@ def test_fabric_edm_mcast_saturate_chip_to_chip_ring_bw(
         packet_size,
         FabricTestMode.SaturateChipToChipRing,
         expected_bw,
+        False,
     )
 
 
@@ -236,7 +218,7 @@ def test_fabric_edm_mcast_saturate_chip_to_chip_ring_bw(
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("packet_size", [4096])
-@pytest.mark.parametrize("line_size, num_links, expected_bw", [(4, 1, 7.37), (4, 2, 7.31)])
+@pytest.mark.parametrize("line_size, num_links, expected_bw", [(4, 1, 7.75), (4, 2, 7.75)])
 def test_fabric_edm_mcast_bw(
     num_mcasts,
     num_unicasts,
@@ -258,6 +240,7 @@ def test_fabric_edm_mcast_bw(
         packet_size,
         FabricTestMode.Linear,
         expected_bw,
+        False,
     )
 
 
@@ -267,7 +250,7 @@ def test_fabric_edm_mcast_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [2])
 @pytest.mark.parametrize("packet_size", [4096])
-@pytest.mark.parametrize("num_links, expected_bw", [(1, 9.22), (2, 7.61)])
+@pytest.mark.parametrize("num_links, expected_bw", [(1, 11.03), (2, 11.03)])
 def test_fabric_edm_unicast_bw(
     num_mcasts,
     num_unicasts,
@@ -289,4 +272,69 @@ def test_fabric_edm_unicast_bw(
         packet_size,
         FabricTestMode.Linear,
         expected_bw,
+        False,
+    )
+
+
+@pytest.mark.parametrize("num_mcasts", [0])
+@pytest.mark.parametrize("num_unicasts", [200000])
+@pytest.mark.parametrize("num_op_invocations", [1])
+@pytest.mark.parametrize("line_sync", [True])
+@pytest.mark.parametrize("line_size", [4])
+@pytest.mark.parametrize("packet_size", [4096])
+@pytest.mark.parametrize("num_links, expected_bw", [(1, 9.74), (2, 9.63)])
+def test_fabric_edm_unicast_multiproducer_multihop_bw(
+    num_mcasts,
+    num_unicasts,
+    num_links,
+    num_op_invocations,
+    line_sync,
+    line_size,
+    packet_size,
+    expected_bw,
+):
+    run_fabric_edm(
+        True,
+        num_mcasts,
+        num_unicasts,
+        num_links,
+        num_op_invocations,
+        line_sync,
+        line_size,
+        packet_size,
+        FabricTestMode.Linear,
+        expected_bw,
+        False,
+    )
+
+
+@pytest.mark.parametrize("num_mcasts", [0])
+@pytest.mark.parametrize("num_unicasts", [200000])
+@pytest.mark.parametrize("num_op_invocations", [1])
+@pytest.mark.parametrize("line_sync", [True])
+@pytest.mark.parametrize("line_size", [4])
+@pytest.mark.parametrize("packet_size", [4096])
+@pytest.mark.parametrize("num_links, expected_bw", [(1, 9.35), (2, 9.26)])
+def test_fabric_edm_unicast_single_producer_multihop_bw(
+    num_mcasts,
+    num_unicasts,
+    num_links,
+    num_op_invocations,
+    line_sync,
+    line_size,
+    packet_size,
+    expected_bw,
+):
+    run_fabric_edm(
+        True,
+        num_mcasts,
+        num_unicasts,
+        num_links,
+        num_op_invocations,
+        line_sync,
+        line_size,
+        packet_size,
+        FabricTestMode.Linear,
+        expected_bw,
+        True,
     )

@@ -14,6 +14,7 @@ int main(int argc, char** argv) {
     std::size_t line_size = std::stoi(argv[arg_idx++]);
     std::size_t packet_payload_size_bytes = std::stoi(argv[arg_idx++]);
     uint32_t fabric_mode = std::stoi(argv[arg_idx++]);
+    bool disable_sends_for_interior_workers = std::stoi(argv[arg_idx++]);
 
     uint32_t min_test_num_devices = 8;
     if (tt::tt_metal::GetNumAvailableDevices() < min_test_num_devices) {
@@ -25,6 +26,7 @@ int main(int argc, char** argv) {
     params.line_sync = line_sync;
     params.line_size = line_size;
     params.fabric_mode = static_cast<FabricTestMode>(fabric_mode);
+    params.disable_sends_for_interior_workers = disable_sends_for_interior_workers;
     RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params, packet_payload_size_bytes);
 }
