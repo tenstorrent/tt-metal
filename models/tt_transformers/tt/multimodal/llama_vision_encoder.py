@@ -6,9 +6,6 @@ import collections
 import torch
 
 import ttnn
-from models.utility_functions import (
-    nearest_32,
-)
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.multimodal.llama_conv2d_patch import TtLlamaConv2dPatch
 from models.tt_transformers.tt.multimodal.llama_tile_position_embedding import TtLlamaTilePositionEmbedding

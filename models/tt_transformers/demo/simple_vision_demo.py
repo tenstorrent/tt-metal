@@ -6,7 +6,6 @@ from typing import Optional
 from loguru import logger
 
 from PIL import Image as PIL_Image
-from termcolor import cprint
 
 import llama_models.llama3.reference_impl.generation as llama_reference_generation
 from llama_models.llama3.api.tokenizer import Tokenizer

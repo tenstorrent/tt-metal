@@ -4,9 +4,6 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
-import torch
-import os
-
 TILE = 32
 SHARD_HEIGHT = TILE  # Current ttnn.rms_norm implementation requires shard height to be a single tile
 
