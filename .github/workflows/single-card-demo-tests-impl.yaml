@@ -45,11 +45,11 @@ jobs:
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib  
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
-      - uses: ./.github/actions/ensure-active-weka-mount
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
+      - uses: ./.github/actions/ensure-active-weka-mount
       - name: ⬇️ Download Build
         uses: actions/download-artifact@v4
         timeout-minutes: 10
@@ -78,8 +78,6 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e GITHUB_ACTIONS=true
-            -e CI=true
             -v /mnt/MLPerf:/mnt/MLPerf:ro
           install_wheel: true
           run_args: |
@@ -87,10 +85,19 @@ jobs:
             ${{ matrix.test-group.cmd }}
       - name: Save environment data
         if: ${{ matrix.test-group.name == 'N300_performance' && !cancelled() }}
+        uses: ./.github/actions/docker-run
         env:
-          PYTHONPATH: ${{ github.workspace }}
+          LOGURU_LEVEL: INFO
+        with:
+           docker_image: ${{ inputs.docker-image }}
+           docker_password: ${{ secrets.GITHUB_TOKEN }}
+           docker_opts: |
+             -e TT_METAL_HOME=${{ github.workspace }}
+             -e ARCH_NAME=${{ matrix.test-group.arch }}
+             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+             -v /mnt/MLPerf:/mnt/MLPerf:ro
+        install_wheel: true
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
           python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
       - name: Upload benchmark data
         if: ${{ matrix.test-group.name == 'N300_performance' && !cancelled() }}
