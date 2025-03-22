@@ -340,7 +340,6 @@ class TtLlamaAttention(LightweightModule):
         # This is because the SDPA op in decode mode has different number of reductions depending on batch size
         # Which leads to slightly different outputs from attention (due to accumulated errors)
         sdpa_out_mem_cfg = self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"](self.batch_size_per_device_group)
-
         if page_table:
             attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 q_heads_1BQD,
@@ -371,25 +370,32 @@ class TtLlamaAttention(LightweightModule):
 
         # attn_output_1G4D = ttnn.to_memory_config(attn_output_1G4D_sharded, ttnn.DRAM_MEMORY_CONFIG)
         # attn_output_1G4D_sharded.deallocate(True)
-        attn_output_gathered_sharded = self.tt_ccl.line_all_gather(
-            attn_output_1G4D_sharded,
-            dim=1,
-            cluster_axis=1,
-            num_links=3,
-            memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1]),
-        )
+
         # ttnn.deallocate(attn_output_1G4D)
 
         # attn_output_gathered_sharded = ttnn.to_memory_config(
         #     attn_output_gathered, self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1])
         # )
         # ttnn.deallocate(attn_output_gathered)
-
-        attn_output_cat_0 = ttnn.experimental.nlp_concat_heads_decode(
-            attn_output_gathered_sharded,
+        output_shard_shape = (32, 128)
+        output_shard_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
+                ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
+            }
+        )
+        output_shard_spec = ttnn.ShardSpec(output_shard_grid, output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        output_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
+        )
+        attn_output_cat_0 = self.tt_ccl.all_gather_concat(
+            attn_output_1G4D_sharded,
+            dim=1,
+            cluster_axis=1,
+            num_links=3,
+            memory_config=output_mem_config,
             num_heads=self.n_local_heads,
         )
-        ttnn.deallocate(attn_output_gathered_sharded)
         # print("done concat heads")
 
         # Original matmul on each device [1, 1, 32, 1024] @ [1, 1, 1024, 2048]
