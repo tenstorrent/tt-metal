@@ -115,8 +115,62 @@ Tensor adjust_shape(
             output_shape.push_back(input_shape[axis]);
         }
     }
+
+    // Print tensor contents as a warning
+    tt::log_warning(
+        "gajib: Before reshape contents: {}, output_shape: {}", tensor.write_to_string(), ttnn::Shape{output_shape});
+
     auto output_tensor = ttnn::reshape(tensor, ttnn::Shape{output_shape});
     return output_tensor;
+}
+
+/* Creates appropriate output tensor for a given zero volume input tensor.
+   The output tensor has the same shape as the input tensor, except that the dimensions
+   specified in dim are reduced to 1.
+   The output tensor is filled with NaN/0/inf based on the reduce_type.
+*/
+template <ReduceType reduce_type>
+static Tensor zero_volume_reduce(
+    const Tensor& input_tensor,
+    const ttnn::SmallVector<int>& dim,
+    const bool keepdim,
+    const MemoryConfig& memory_config) {
+    auto input_shape = input_tensor.get_logical_shape();
+
+    // min/max is unsupported when reduction dim is zero
+    if constexpr (reduce_type == ReduceType::Max || reduce_type == ReduceType::Min) {
+        // Check the shape of the reduction dims
+        for (auto red_dim : dim) {
+            if (input_shape[red_dim] == 0) {
+                TT_THROW("Expected reduction dim {} to have non-zero size", red_dim);
+            }
+        }
+    }
+
+    // Figure out output shape
+    ttnn::SmallVector<uint32_t> output_shape;
+
+    // Iterate over the input shape and adjust the shape for keepdim
+    for (int i = 0; i < input_shape.size(); i++) {
+        // If this is in the reduction dims, keep it only if keepdim is true
+        bool is_reduction_dim = std::find(dim.begin(), dim.end(), i) != dim.end();
+
+        if (is_reduction_dim && keepdim) {
+            output_shape.push_back(1);
+        } else if (!is_reduction_dim) {
+            output_shape.push_back(input_shape[i]);
+        }
+    }
+
+    constexpr float fill_value = (reduce_type == ReduceType::Sum) ? 0 : NAN;
+
+    return ttnn::full(
+        ttnn::Shape(output_shape),
+        fill_value,
+        input_tensor.get_dtype(),
+        input_tensor.get_layout(),
+        std::optional<std::reference_wrapper<tt::tt_metal::IDevice>>(*input_tensor.device()),
+        memory_config);
 }
 
 template <ReduceType reduce_type>
@@ -140,6 +194,11 @@ static Tensor reduce_impl(
         // Create an output tensor with same shape and attributes as input tensor
         output_tensor = ttnn::clone(input_tensor_arg, /*dtype=*/std::nullopt, memory_config, compute_kernel_config);
         return adjust_shape(output_tensor, input_shape, keepdim, dim, non_height_width_dims);
+    }
+
+    // Handle zero volume tensors: return with shape adjusted for keepdim
+    if (input_tensor_arg.get_logical_volume() == 0) {
+        return zero_volume_reduce<reduce_type>(input_tensor_arg, dim, keepdim, memory_config);
     }
 
     float pad_value = get_pad_value(reduce_type);
@@ -282,12 +341,9 @@ static Tensor std_var_impl(
         return adjust_shape(output_tensor, input_shape, keepdim, dim, non_height_width_dims);
     }
 
-    if (dim.size()) {
-        int reduced_volume = 1;
-        for (int axis : dim) {
-            reduced_volume *= input_shape[axis];
-        }
-        scalar /= reduced_volume;
+    // Handle zero volume tensors: return with shape adjusted for keepdim
+    if (input_tensor_arg.get_logical_volume() == 0) {
+        return zero_volume_reduce<reduce_type>(input_tensor_arg, dim, keepdim, memory_config);
     }
 
     auto mean_tensor = reduce_impl<ReduceType::Sum>(

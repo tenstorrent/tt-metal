@@ -45,6 +45,13 @@ ttnn::Tensor convert_tile_to_rm(
         "illegal dimensions for a bfloat8 tensor");
     auto new_tensor = (tensor.get_dtype() == DataType::BFLOAT8_B) ? ttnn::typecast(tensor, DataType::BFLOAT16) : tensor;
     new_tensor = ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (IDevice*)nullptr);
+
+    // Print tensor contents as a warning
+    tt::log_warning(
+        "gajib: Before reinvoke contents: {}, logical_shape: {}, padded_shape: {}",
+        new_tensor.write_to_string(),
+        logical_shape,
+        padded_shape);
     new_tensor =
         ReshapeViewOperation::invoke(queue_id, new_tensor, logical_shape, padded_shape, memory_config, pad_value);
     new_tensor =
@@ -420,6 +427,12 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     }
     // Catch-all
     // Do the reshape in row-major
+    // Print tensor contents as a warning
+    tt::log_warning(
+        "gajib: Before rm_convert contents: {}, logical_shape: {}, padded_shape: {}",
+        tensor.write_to_string(),
+        logical_shape,
+        padded_shape);
     return detail::convert_tensor_to_rm_reshape_convert_back_to_orig_layout(
         tensor,
         logical_shape,
