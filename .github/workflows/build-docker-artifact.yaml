@@ -16,12 +16,12 @@ on:
         type: string
         default: "amd64"
     outputs:
-      ci-build-tag:
-        description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
-        value: ${{ jobs.check-docker-images.outputs.ci-build-tag }}
-      #ci-test-tag:
-      #  description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
-      #  value: ${{ jobs.check-docker-images.outputs.ci-test-tag }}
+      ci-test-tag:
+        description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
+        value: ${{ jobs.check-docker-images.outputs.ci-test-tag }}
+      #dev-tag:
+      #  description: "Docker tag for the dev Docker image for developing TT-Metalium et al"
+      #  value: ${{ jobs.check-docker-images.outputs.dev-tag }}
   workflow_dispatch:
     inputs:
       distro:
@@ -53,7 +53,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       ci-build-exists: ${{ steps.images.outputs.ci-build-exists }}
-      ci-build-tag: ${{ steps.tags.outputs.ci-build-tag }}
+      ci-test-tag: ${{ steps.tags.outputs.ci-test-tag }}
       # ci-test-exists: ${{ steps.images.outputs.ci-test-exists }}
       # ci-test-tag: ${{ steps.tags.outputs.ci-test-tag }}
     steps:
@@ -65,27 +65,27 @@ jobs:
       - name: Compute tags
         id: tags
         run: |
-          BUILD_TAG=$(cat \
+          TEST_TAG=$(cat \
             install_dependencies.sh \
             dockerfile/Dockerfile \
             tt_metal/python_env/requirements-dev.txt \
             docs/requirements-docs.txt \
             tests/sweep_framework/requirements-sweeps.txt \
             | sha1sum | cut -d' ' -f1)
-          echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.IMAGE_NAME }}:${BUILD_TAG}" >> $GITHUB_OUTPUT
+          echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.IMAGE_NAME }}:${TEST_TAG}" >> $GITHUB_OUTPUT
 
           # TODO: When we have multiple Docker images, do something like this:
-          # TEST_TAG=$(cat tt_metal/python_env/requirements-dev.txt pyproject.toml | sha1sum | cut -d' ' -f1)
-          # echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.IMAGE_NAME }}:${TEST_TAG}" >> $GITHUB_OUTPUT
+          # DEV_TAG=$(cat tt_metal/python_env/requirements-dev.txt pyproject.toml | sha1sum | cut -d' ' -f1)
+          # echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.IMAGE_NAME }}:${DEV_TAG}" >> $GITHUB_OUTPUT
 
       - name: Query images exist
         id: images
         run: |
-          if docker manifest inspect ${{ steps.tags.outputs.ci-build-tag }} > /dev/null 2>&1; then
-            echo "${{ steps.tags.outputs.ci-build-tag }} exists"
+          if docker manifest inspect ${{ steps.tags.outputs.ci-test-tag }} > /dev/null 2>&1; then
+            echo "${{ steps.tags.outputs.ci-test-tag }} exists"
             echo "ci-build-exists=true" >> $GITHUB_OUTPUT
           else
-            echo "${{ steps.tags.outputs.ci-build-tag }} does not exist"
+            echo "${{ steps.tags.outputs.ci-test-tag }} does not exist"
             echo "ci-build-exists=false" >> $GITHUB_OUTPUT
           fi
 
@@ -111,9 +111,9 @@ jobs:
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
-          target: dev
+          target: ci-test
           push: true
-          tags: ${{ needs.check-docker-images.outputs.ci-build-tag }}
+          tags: ${{ needs.check-docker-images.outputs.ci-test-tag }}
           build-args: UBUNTU_VERSION=${{ inputs.version }}
           cache-to: type=inline
           pull: true
@@ -139,8 +139,8 @@ jobs:
         run: |
           IMAGE_REPO="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.IMAGE_NAME }}"
           LATEST_TAG="${IMAGE_REPO}:latest"
-          BUILD_TAG="${{ needs.check-docker-images.outputs.ci-build-tag }}"
-          echo "Tagging ${BUILD_TAG} as ${LATEST_TAG}"
-          docker pull ${BUILD_TAG}
-          docker tag ${BUILD_TAG} ${LATEST_TAG}
+          TEST_TAG="${{ needs.check-docker-images.outputs.ci-test-tag }}"
+          echo "Tagging ${TEST_TAG} as ${LATEST_TAG}"
+          docker pull ${TEST_TAG}
+          docker tag ${TEST_TAG} ${LATEST_TAG}
           docker push ${LATEST_TAG}
