@@ -10,6 +10,15 @@
 #include <cstdint>
 #include <utility>
 
+enum BF8_DIM3_TYPE {
+    NONE,
+    LLAMA_8B_N300,
+    T3K_FALCON40_DECODE_8192,
+    T3K_FALCON40_DECODE_32768,
+    T3K_FALCON40_PREFILL_8192,
+    T3K_FALCON40_PREFILL_32768,
+};
+
 FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     uint64_t noc0_dest_noc_addr,
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
