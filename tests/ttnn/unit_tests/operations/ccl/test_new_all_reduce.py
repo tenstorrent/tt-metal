@@ -32,7 +32,7 @@ SUB_DEVICE_CRS = ttnn.CoreRangeSet(
     ]
 )
 
-QKV_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 40, SUB_DEVICE_CRS, row_wise=True)
+QKV_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 10, SUB_DEVICE_CRS, row_wise=True)
 
 RING_CRS = ttnn.CoreRangeSet(
     [
@@ -43,6 +43,8 @@ RING_CRS = ttnn.CoreRangeSet(
         for x, y in PREFETCHER_NOC1_GRID
     ]
 )
+
+FF1_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 28, SUB_DEVICE_CRS, row_wise=True)
 
 NORM_CRS = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 7))])
 
@@ -329,12 +331,12 @@ def run_all_reduce_impl(
     "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
     [
         ([1, 1, 32, 2048], 0, 4, 24, RING_CRS, 16, NORM_CRS),  # FF2/DO all reduce
-        ([1, 1, 32, 1280], 1, 3, 24, RING_CRS, 40, QKV_CRS),  # QKV all reduce
-        ([1, 1, 32, 3584], 1, 3, 24, RING_CRS, 24, RING_CRS),  # FF1 all reduce
+        ([1, 1, 32, 1280], 1, 3, 24, RING_CRS, 10, QKV_CRS),  # QKV all reduce
+        ([1, 1, 32, 3584], 1, 3, 24, RING_CRS, 28, FF1_CRS),  # FF1 all reduce
         ([1, 1, 32, 2048], 0, 3, 24, RING_CRS, 16, NORM_CRS),  # FF2/DO all reduce
         ([1, 1, 32, 16 * 1024], 1, 3, 32, LM_HEAD_CRS, 32, LM_HEAD_CRS),  # LM Head all reduce
-        ([1, 1, 32, 1280], 1, 1, 24, RING_CRS, 40, QKV_CRS),  # QKV all reduce
-        ([1, 1, 32, 3584], 1, 1, 24, RING_CRS, 24, RING_CRS),  # FF1 all reduce
+        ([1, 1, 32, 1280], 1, 1, 24, RING_CRS, 10, QKV_CRS),  # QKV all reduce
+        ([1, 1, 32, 3584], 1, 1, 24, RING_CRS, 28, FF1_CRS),  # FF1 all reduce
         ([1, 1, 32, 2048], 0, 1, 24, RING_CRS, 16, NORM_CRS),  # FF2/DO all reduce
         ([1, 1, 32, 16 * 1024], 1, 1, 32, LM_HEAD_CRS, 32, LM_HEAD_CRS),  # LM Head all reduce
     ],
@@ -420,8 +422,8 @@ def test_all_reduce(
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
     [
-        ([1, 1, 32, 1280], 1, 1, 24, RING_CRS, 40, QKV_CRS),  # QKV all reduce
-        ([1, 1, 32, 3584], 1, 1, 24, RING_CRS, 24, RING_CRS),  # FF1 all reduce
+        ([1, 1, 32, 1280], 1, 1, 24, RING_CRS, 10, QKV_CRS),  # QKV all reduce
+        ([1, 1, 32, 3584], 1, 1, 24, RING_CRS, 28, FF1_CRS),  # FF1 all reduce
         ([1, 1, 32, 2048], 0, 1, 24, RING_CRS, 16, NORM_CRS),  # FF2/DO all reduce
     ],
 )
