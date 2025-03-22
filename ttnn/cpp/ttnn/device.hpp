@@ -11,6 +11,7 @@ namespace ttnn {
 namespace device {
 
 using IDevice = ttnn::IDevice;
+using MeshDevice = tt::tt_metal::distributed::MeshDevice;
 
 std::shared_ptr<MeshDevice> open_mesh_device(
     int device_id,

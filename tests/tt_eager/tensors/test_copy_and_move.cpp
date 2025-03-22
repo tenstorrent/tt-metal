@@ -17,7 +17,7 @@ using namespace tt;
 using namespace tt_metal;
 using namespace constants;
 
-bool test_tensor_copy_semantics(IDevice* device) {
+bool test_tensor_copy_semantics(distributed::MeshDevice* device) {
     bool pass = true;
     ttnn::Shape single_tile_shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
 
@@ -78,7 +78,7 @@ bool test_tensor_copy_semantics(IDevice* device) {
     return pass;
 }
 
-bool test_tensor_move_semantics(IDevice* device) {
+bool test_tensor_move_semantics(distributed::MeshDevice* device) {
     bool pass = true;
     ttnn::Shape single_tile_shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
 
@@ -145,7 +145,7 @@ bool test_tensor_move_semantics(IDevice* device) {
     return pass;
 }
 
-bool test_tensor_deallocate_semantics(IDevice* device) {
+bool test_tensor_deallocate_semantics(distributed::MeshDevice* device) {
     bool pass = true;
     ttnn::Shape single_tile_shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
 
@@ -187,7 +187,7 @@ bool test_tensor_deallocate_semantics(IDevice* device) {
     return pass;
 }
 
-bool test_tensor_deallocate_and_close_device(IDevice* device) {
+bool test_tensor_deallocate_and_close_device(distributed::MeshDevice* device) {
     bool pass = true;
     ttnn::Shape single_tile_shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
 
@@ -199,7 +199,7 @@ bool test_tensor_deallocate_and_close_device(IDevice* device) {
     // dev tensor allocate, deallocate, reallocate same address DRAM
     Tensor dev_a = ttnn::random::random(single_tile_shape).to_layout(Layout::TILE).to_device(device, dram_mem_config);
     uint32_t address_a = dev_a.buffer()->address();
-    pass &= tt_metal::CloseDevice(device);
+    device->close();
     dev_a.deallocate();
 
     return pass;
@@ -213,15 +213,15 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
-        pass &= test_tensor_copy_semantics(device);
+        pass &= test_tensor_copy_semantics(device.get());
 
-        pass &= test_tensor_move_semantics(device);
+        pass &= test_tensor_move_semantics(device.get());
 
-        pass &= test_tensor_deallocate_semantics(device);
+        pass &= test_tensor_deallocate_semantics(device.get());
 
-        pass &= test_tensor_deallocate_and_close_device(device);
+        pass &= test_tensor_deallocate_and_close_device(device.get());
 
     } catch (const std::exception& e) {
         pass = false;

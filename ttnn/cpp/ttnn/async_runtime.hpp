@@ -26,12 +26,15 @@ void read_buffer(
     bool blocking = true);
 
 void queue_synchronize(tt::tt_metal::CommandQueue& cq);
+void queue_synchronize(tt::tt_metal::distributed::MeshCommandQueue& cq);
 
 void event_synchronize(const std::shared_ptr<tt::tt_metal::Event>& event);
-
-bool event_query(const std::shared_ptr<tt::tt_metal::Event>& event);
+void event_synchronize(const tt::tt_metal::distributed::MeshEvent& event);
 
 void wait_for_event(tt::tt_metal::CommandQueue& cq, const std::shared_ptr<tt::tt_metal::Event>& event);
+void wait_for_event(tt::tt_metal::distributed::MeshCommandQueue& cq, const tt::tt_metal::distributed::MeshEvent& event);
 
 void record_event(tt::tt_metal::CommandQueue& cq, const std::shared_ptr<tt::tt_metal::Event>& event);
+tt::tt_metal::distributed::MeshEvent record_event(tt::tt_metal::distributed::MeshCommandQueue& cq);
+tt::tt_metal::distributed::MeshEvent record_event_to_host(tt::tt_metal::distributed::MeshCommandQueue& cq);
 }  // namespace ttnn
