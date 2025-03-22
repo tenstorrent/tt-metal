@@ -14,6 +14,7 @@
 #include "debug/dprint.h"
 #include "debug/dprint_pages.h"
 #include "debug/dprint_tensix.h"
+
 #endif
 
 template <uint32_t num_output_tiles, bool is_partial_tile, uint32_t split_reader, uint32_t unpA_face_r_dim>
@@ -40,12 +41,14 @@ inline void reduce_h_fused(
     for (uint32_t c_i = 0; c_i < num_output_tiles; ++c_i) {
         reduce_tile_math(c_i, num_faces_in_tile /* reduce 1 or 2 faces */);
     }
+
     cb_pop_front(curr_in_cb_id, 1);
     tile_regs_wait();
     tile_regs_commit();
     pack_untilize_dst<num_output_tiles>(
-        out_cb_id, 1 /*out_subblock_h*/, 0, num_out_rows, num_faces_in_tile); /* pack 1 row (1x16 or 1x32) */
+        out_cb_id, /*out_subblock_h=*/1, 0, num_out_rows, num_faces_in_tile); /* pack 1 row (1x16 or 1x32) */
     tile_regs_release();
+
     cb_push_back(out_cb_id, num_output_tiles);
 }
 
@@ -76,14 +79,19 @@ void MAIN {
     constexpr uint32_t num_out_rows = 1;
 
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
-
     constexpr uint32_t max_tiles_per_iter =
         in_ntiles_c < MAX_TILES_PER_REDUCTION ? in_ntiles_c : MAX_TILES_PER_REDUCTION;
     constexpr uint32_t partial_iter_output_tiles =
         in_ntiles_c % MAX_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : in_ntiles_c % MAX_TILES_PER_REDUCTION;
-    tilizeA_B_reduce_init(
+    // <<<<<<< HEAD:ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/pool_2d_multi_core.cpp
+
+    static_assert(REDUCE_OP == PoolType::MAX || REDUCE_OP == PoolType::SUM, "Only supports REDUCE_OP = MAX or Sum");
+    constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
+    constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::SUM) ? true : false;
+
+    tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
         in_cb_id_0, in_scalar_cb_id, max_tiles_per_iter, out_cb_id, num_faces_in_tile, window_size_hw);
-    pack_untilize_dst_init_short<in_ntiles_c>(out_cb_id, num_out_rows, num_faces_in_tile);
+    pack_untilize_dst_init_short<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_tile);
 
     cb_wait_front(in_scalar_cb_id, 1);
     for (uint32_t i = 0; i < nsticks_per_core; ++i) {
