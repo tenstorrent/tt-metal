@@ -141,7 +141,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             break;
         case UnaryOpType::REMAINDER:
             op_init_and_name = {
-                "remainder_tile_init();",
+                fmt::format(
+                    "remainder_tile_init({:#x}u, {:#x}u);",
+                    std::bit_cast<uint32_t>(param0),
+                    std::bit_cast<uint32_t>(1.0f / param0)),
                 fmt::format(
                     "remainder_tile({}, {:#x}u, {:#x}u);",
                     idst,
