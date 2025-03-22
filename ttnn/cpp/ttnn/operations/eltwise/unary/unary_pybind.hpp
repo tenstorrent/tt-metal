@@ -796,6 +796,68 @@ void bind_softplus(py::module& module, const unary_operation_t& operation) {
 }
 
 template <typename unary_operation_t>
+void bind_tanh(py::module& module, const unary_operation_t& operation) {
+    auto doc = fmt::format(
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
+
+        .. math::
+            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            accuracy (Boolean, optional): provides better accuracy for input range -3 to 3, for dtype BFLOAT16. Defaults to `False`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - BFLOAT16, BFLOAT8_B
+                 - TILE
+                 - 2, 3, 4
+
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(tensor, accuracy=False)
+        )doc",
+        ttnn::tanh.base_name(),
+        ttnn::tanh.python_fully_qualified_name());
+
+    bind_registered_operation(
+        module,
+        ttnn::tanh,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<Tensor>& output_tensor,
+               bool accuracy,
+               const QueueId queue_id) {
+                return self(queue_id, input, memory_config, output_tensor, accuracy);
+            },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("accuracy") = false,
+            py::arg("queue_id") = DefaultQueueId});
+}
+
+template <typename unary_operation_t>
 void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operation) {
     auto doc = fmt::format(
         R"doc(
@@ -1647,7 +1709,6 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::sqrt, R"doc(\mathrm{{output\_tensor}}_i = \verb|sqrt|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::square, R"doc(\mathrm{{output\_tensor}}_i = \verb|square|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::tan, R"doc(\mathrm{{output\_tensor}}_i = \verb|tan|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc" , "Supported input range is (-1.45, 1.45)");
-    detail::bind_unary_operation(module, ttnn::tanh, R"doc(\mathrm{{output\_tensor}}_i = \verb|tanh|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::log_sigmoid, R"doc(\mathrm{{output\_tensor}}_i = \verb|log_sigmoid|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::bitwise_not, R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_not|(\mathrm{{input\_tensor}}_i))doc", R"doc(INT32)doc",
     R"doc(Supported input range is [-2147483647, 2147483647]. Supported for Wormhole_B0 only.)doc",
@@ -1728,6 +1789,7 @@ void py_module(py::module& module) {
 
     // Other unaries (unary chain operations)
     detail::bind_softplus(module, ttnn::softplus);
+    detail::bind_tanh(module, ttnn::tanh);
     detail::bind_sigmoid_accurate(module, ttnn::sigmoid_accurate);
     detail::bind_unary_chain(module, ttnn::unary_chain);
     detail::bind_identity(module, ttnn::identity);

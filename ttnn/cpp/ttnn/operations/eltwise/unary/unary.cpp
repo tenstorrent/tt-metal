@@ -11,6 +11,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "ttnn/operations/eltwise/ternary/where.hpp"
 
 namespace ttnn::operations::unary {
 
@@ -110,7 +111,6 @@ template struct ExecuteUnary<UnaryOpType::SIN>;
 template struct ExecuteUnary<UnaryOpType::SQRT>;
 template struct ExecuteUnary<UnaryOpType::SQUARE>;
 template struct ExecuteUnary<UnaryOpType::TAN>;
-template struct ExecuteUnary<UnaryOpType::TANH>;
 template struct ExecuteUnary<UnaryOpType::SIGMOID, UnaryOpType::LOG>;
 template struct ExecuteUnary<UnaryOpType::TILED_PROD>;
 template struct ExecuteUnary<UnaryOpType::BITWISE_NOT>;
@@ -204,6 +204,32 @@ Tensor Softplus::invoke(
         {UnaryWithParam{UnaryOpType::SOFTPLUS, {beta, threshold}}},
         memory_config,
         optional_output_tensor);
+}
+
+// tanh[x] = (exp[x] - exp[-x]) / (exp[x] - exp[-x])
+Tensor Tanh::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    bool accuracy) {
+    UnaryOpType op_type = UnaryOpType::TANH;
+    if (!accuracy) {
+        return detail::unary_impl(
+            queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+    } else {
+        TT_FATAL(
+            input_tensor.get_dtype() == DataType::BFLOAT16,
+            "Supported dtypes for tanh with accuracy mode enabled is : BFLOAT16");
+        Tensor tanh_res = detail::unary_impl(
+            queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+        Tensor e_pos_x = ttnn::exp(input_tensor, false, memory_config);
+        Tensor e_neg_x = ttnn::exp(ttnn::neg(input_tensor, memory_config), false, memory_config);
+        Tensor nr_term_add = ttnn::add(e_pos_x, e_neg_x, std::nullopt, memory_config);
+        Tensor nr_term_sub = ttnn::subtract(e_pos_x, e_neg_x, std::nullopt, memory_config);
+        Tensor abs_val = ttnn::abs(input_tensor);
+        return ttnn::where(ttnn::gt(abs_val, 3.5f), tanh_res, ttnn::divide(nr_term_sub, nr_term_add));
+    }
 }
 
 Tensor Prelu::invoke(
