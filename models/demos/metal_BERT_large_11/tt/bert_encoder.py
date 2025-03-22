@@ -5,7 +5,6 @@
 
 import torch
 from typing import Optional
-from functools import partial
 
 import ttnn
 from models.demos.metal_BERT_large_11.tt.mha import TtMultiHeadAttentionModel

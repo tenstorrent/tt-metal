@@ -2,15 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
-import numpy as np
-from loguru import logger
-from pathlib import Path
-import sys
 import torch
 
 from models.experimental.yolov3.reference.models.common import autopad
-from models.experimental.yolov3.reference.models.yolo import Conv, Model
 import ttnn
 from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import (

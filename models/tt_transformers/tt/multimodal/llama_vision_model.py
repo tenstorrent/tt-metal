@@ -3,19 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
-import math
 from functools import partial
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import List, Tuple
 
 import torch
-import torch.nn.functional as F
 import collections
 
 from PIL import Image as PIL_Image
 
-from torch import nn, Tensor
+from torch import Tensor
 
-import llama_models.llama3.reference_impl.multimodal.model as llama_reference_model
 import llama_models.llama3.reference_impl.multimodal.image_transform as llama_reference_image_transforms
 
 import ttnn
@@ -27,7 +24,6 @@ from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text
 )
 from models.tt_transformers.tt.common import (
     get_prefill_rot_mat,
-    get_rot_transformation_mat,
     copy_host_to_device,
     get_padded_prefill_len,
 )

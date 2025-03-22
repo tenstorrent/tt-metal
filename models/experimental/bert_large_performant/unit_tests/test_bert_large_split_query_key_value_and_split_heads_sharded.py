@@ -3,18 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from loguru import logger
-import numpy as np
 import ttnn
 
-from tt_lib.utils import (
-    pad_weight,
-    tilize_to_list,
-    untilize,
-    is_close,
-)
 from models.utility_functions import (
     torch2tt_tensor,
-    tt2torch_tensor,
     comp_pcc,
 )
 import torch

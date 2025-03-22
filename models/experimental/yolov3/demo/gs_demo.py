@@ -13,7 +13,6 @@ from models.experimental.yolov3.reference.models.common import DetectMultiBacken
 from models.experimental.yolov3.tt.yolov3_detection_model import (
     yolov3_fused_model,
 )
-from models.experimental.yolov3.reference.models.common import autopad
 from models.experimental.yolov3.reference.utils.dataloaders import LoadImages
 from models.experimental.yolov3.reference.utils.general import (
     non_max_suppression,
@@ -24,7 +23,6 @@ from models.experimental.yolov3.reference.utils.general import (
 from models.experimental.yolov3.reference.utils.plots import (
     Annotator,
     colors,
-    save_one_box,
 )
 from models.utility_functions import torch2tt_tensor
 

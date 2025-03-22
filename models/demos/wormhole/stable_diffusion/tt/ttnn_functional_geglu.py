@@ -4,9 +4,7 @@
 
 import ttnn
 import torch
-import math
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    determine_largest_subblock_size,
     determine_blocking,
 )
 

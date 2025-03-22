@@ -7,7 +7,7 @@ from loguru import logger
 import ttnn
 
 from models.experimental.lenet.tt.lenet import lenet5
-from models.experimental.lenet.lenet_utils import load_torch_lenet, prepare_image
+from models.experimental.lenet.lenet_utils import prepare_image
 
 
 def test_gs_demo(device, mnist_sample_input, model_location_generator):

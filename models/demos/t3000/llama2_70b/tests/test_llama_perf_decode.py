@@ -6,8 +6,6 @@ import pytest
 from loguru import logger
 import torch
 import ttnn
-from ttnn import ConcatMeshToTensor
-import time
 
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 
@@ -15,7 +13,6 @@ from models.demos.t3000.llama2_70b.tt.llama_model_optimized import TtLlamaModel_
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
     check_mesh_device,
-    MAX_SEQ_LEN,
     BASE_URL,
     load_llama_state_dict,
     should_skip_model_load,
@@ -23,7 +20,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
 from models.utility_functions import (
     profiler,
     skip_for_grayskull,
-    is_wormhole_b0,
 )
 from models.perf.perf_utils import prep_perf_report
 

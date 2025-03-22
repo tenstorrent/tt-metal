@@ -5,7 +5,6 @@ import pytest
 from loguru import logger
 import torch
 import ttnn
-from ttnn import ReplicateTensorToMesh
 
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.t3000.llama2_70b.tt.llama_generation import (

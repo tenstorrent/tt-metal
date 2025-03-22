@@ -5,15 +5,11 @@
 import torch
 from tqdm.auto import tqdm
 from loguru import logger
-import pytest
 
 from transformers import CLIPTextModel, CLIPTokenizer
 from diffusers import (
     AutoencoderKL,
     UNet2DConditionModel,
-    PNDMScheduler,
-    HeunDiscreteScheduler,
-    DPMSolverMultistepScheduler,
 )
 from diffusers import LMSDiscreteScheduler
 from models.experimental.stable_diffusion.tt.unet_2d_condition import (
@@ -26,7 +22,6 @@ import ttnn
 from models.utility_functions import (
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
-    torch_to_tt_tensor,
 )
 from models.utility_functions import (
     comp_pcc,

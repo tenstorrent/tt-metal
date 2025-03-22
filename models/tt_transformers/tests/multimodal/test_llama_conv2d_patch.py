@@ -9,12 +9,10 @@ import os
 
 ##### PyTorch imports #####
 import torch
-import torch.nn.functional as F
 
 ##### TTNN imports #####
 import ttnn
-from ttnn import experimental as ttl
-from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
+from ttnn import ConcatMeshToTensor
 from models.utility_functions import skip_for_grayskull
 from models.utility_functions import (
     comp_pcc,

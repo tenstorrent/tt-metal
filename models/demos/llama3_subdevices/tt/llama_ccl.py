@@ -7,7 +7,6 @@ from loguru import logger
 import torch
 
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
-    create_and_load_sub_device_manager_with_fabric_interface,
     teardown_fabric_interface,
     create_global_semaphore_with_same_address,
 )

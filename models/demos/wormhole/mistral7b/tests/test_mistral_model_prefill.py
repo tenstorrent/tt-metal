@@ -10,7 +10,6 @@ from models.demos.wormhole.mistral7b.tt.mistral_common import (
     get_prefill_rot_mat,
     prepare_inputs_ttnn_prefill,
     get_rot_transformation_mat,
-    sample,
 )
 from models.demos.wormhole.mistral7b.tt.mistral_model import TtTransformer
 from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs

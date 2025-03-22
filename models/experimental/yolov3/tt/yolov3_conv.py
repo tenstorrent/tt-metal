@@ -3,21 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import numpy as np
 from loguru import logger
-from pathlib import Path
-import sys
-import torch
 import ttnn
 
 from models.experimental.yolov3.tt.yolov3_conv2d import TtConv2D
-from models.experimental.yolov3.reference.models.common import autopad
-from models.experimental.yolov3.reference.models.yolo import Conv, Model
-from models.utility_functions import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-    torch_to_tt_tensor_rm,
-)
 
 
 class TtConv(nn.Module):

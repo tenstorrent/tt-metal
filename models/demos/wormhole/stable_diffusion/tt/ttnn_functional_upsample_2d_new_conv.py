@@ -5,10 +5,6 @@
 import torch
 import ttnn
 
-from models.utility_functions import (
-    torch_to_tt_tensor_rm,
-    tt_to_torch_tensor,
-)
 
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upsample_nearest_2d import upsample_nearest2d
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (

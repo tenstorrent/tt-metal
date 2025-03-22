@@ -8,7 +8,6 @@ from torch import nn
 
 import ttnn
 
-from loguru import logger
 from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,

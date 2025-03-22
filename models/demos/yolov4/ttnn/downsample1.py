@@ -5,8 +5,6 @@
 import torch
 import ttnn
 from models.demos.yolov4.ttnn.common import Conv
-from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
-from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
 
 
 class Down1:

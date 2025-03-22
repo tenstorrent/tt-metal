@@ -8,9 +8,7 @@ from loguru import logger
 import ttnn
 from models.demos.wormhole.mamba.tt.mamba_model import TtTensorLoader
 from models.demos.wormhole.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
-from models.demos.wormhole.mamba.tt import model_config
 from models.demos.wormhole.mamba.tt.mamba_conv import MambaConv, MambaConvConfig
-from models.demos.wormhole.mamba.reference.args import ModelMode
 
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (

@@ -5,7 +5,6 @@
 import torch
 import transformers
 import pytest
-from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor
 

@@ -2,9 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Optional
 import torch
-import torch.nn as nn
 import itertools
 
 import ttnn
@@ -12,8 +10,6 @@ from models.utility_functions import (
     nearest_32,
 )
 from models.common.lightweightmodule import LightweightModule
-
-from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ReplicateTensorToMesh
 
 
 class TtLlamaTilePositionEmbedding(LightweightModule):

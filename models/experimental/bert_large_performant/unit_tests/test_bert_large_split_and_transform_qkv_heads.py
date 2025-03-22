@@ -6,8 +6,6 @@
 from loguru import logger
 
 
-import numpy as np
-
 from models.utility_functions import comp_pcc, skip_for_grayskull
 import torch
 import ttnn

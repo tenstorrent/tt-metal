@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import os
 import torch
-import pytest
 from loguru import logger
 
 # Set Grok flags for CI, if CI environment is setup

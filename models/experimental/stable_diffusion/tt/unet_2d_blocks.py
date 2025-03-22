@@ -2,14 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import numpy as np
 import torch.nn as nn
-import torch.nn.functional as F
 import torch
 
 import ttnn
 
-from typing import Optional
 
 from models.experimental.stable_diffusion.tt.residual_block import TtResnetBlock2D as ResnetBlock2D
 from models.experimental.stable_diffusion.tt.upsample_2d import TtUpsample2D as Upsample2D

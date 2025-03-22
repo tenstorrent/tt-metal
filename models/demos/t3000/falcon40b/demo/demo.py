@@ -10,10 +10,8 @@ import torch
 import torch.nn.functional as F
 from loguru import logger
 import time
-from pathlib import Path
 from transformers import AutoTokenizer
 from transformers.generation.utils import top_k_top_p_filtering
-import os
 from tqdm import tqdm
 
 from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
@@ -23,8 +21,6 @@ from models.demos.t3000.falcon40b.tt.model_config import get_model_config, model
 from models.utility_functions import (
     enable_persistent_kernel_cache,
     profiler,
-    torch2tt_tensor,
-    tt_tensors_to_torch_tensors,
     nearest_32,
 )
 

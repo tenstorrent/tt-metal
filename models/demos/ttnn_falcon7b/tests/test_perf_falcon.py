@@ -10,7 +10,6 @@ import numpy as np
 from sklearn.metrics import top_k_accuracy_score
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.ttnn_falcon7b.tt.common import create_custom_preprocessor
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 from models.demos.ttnn_falcon7b.tt.falcon_causallm import TtFalconCausalLM
 
