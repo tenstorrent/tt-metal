@@ -144,7 +144,11 @@ void DispatchKernel::GenerateStaticConfigs() {
             my_dispatch_constants.mux_buffer_pages(device_->num_hw_cqs()),
             GetCoreType());  // Apparently unused
 
-        static_config_.split_dispatch_page_preamble_size = sizeof(tt::packet_queue::dispatch_packet_header_t);
+        if (tt::llrt::RunTimeOptions::get_instance().get_fd_fabric()) {
+            static_config_.split_dispatch_page_preamble_size = 0;
+        } else {
+            static_config_.split_dispatch_page_preamble_size = sizeof(tt::packet_queue::dispatch_packet_header_t);
+        }
         static_config_.prefetch_h_max_credits = my_dispatch_constants.mux_buffer_pages(device_->num_hw_cqs());
 
         static_config_.packed_write_max_unicast_sub_cmds =

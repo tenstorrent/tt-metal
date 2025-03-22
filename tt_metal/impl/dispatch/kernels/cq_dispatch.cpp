@@ -56,9 +56,9 @@ constexpr uint32_t dev_completion_q_rd_ptr = get_compile_time_arg_val(28);
 
 // used for fd on fabric
 constexpr uint32_t downstream_mesh_id = get_compile_time_arg_val(29);
-constexpr uint32_t downstream_chip_id = get_compile_time_arg_val(30);
+constexpr uint32_t downstream_dev_id = get_compile_time_arg_val(30);
 constexpr uint32_t upstream_mesh_id = get_compile_time_arg_val(31);
-constexpr uint32_t upstream_chip_id = get_compile_time_arg_val(32);
+constexpr uint32_t upstream_dev_id = get_compile_time_arg_val(32);
 constexpr uint32_t fabric_router_noc_xy = get_compile_time_arg_val(33);
 constexpr uint32_t client_interface_addr = get_compile_time_arg_val(34);
 
@@ -104,7 +104,7 @@ static uint32_t write_offset[3];  // added to write address on non-host writes
 static uint32_t upstream_total_acquired_page_count;
 
 static auto client_interface =
-    reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
+    reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::fabric_pull_client_interface_t*>(client_interface_addr);
 
 constexpr uint32_t packed_write_max_multicast_sub_cmds =
     get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
@@ -1231,6 +1231,10 @@ static inline bool process_cmd_h(
 
 void kernel_main() {
     // DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start" << ENDL();
+    if constexpr (use_fabric(fabric_router_noc_xy)) {
+        tt::tt_fabric::fabric_endpoint_init(client_interface, 0 /*unused*/);
+    }
+
     // Initialize local state of any additional nocs used instead of the default
     static_assert(my_noc_index != upstream_noc_index);
     if constexpr (my_noc_index != upstream_noc_index) {

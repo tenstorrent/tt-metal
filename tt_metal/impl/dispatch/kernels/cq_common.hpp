@@ -10,6 +10,7 @@
 #include "debug/dprint.h"
 #include "debug/ring_buffer.h"
 #include "cq_helpers.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 
 // The command queue read interface controls reads from the issue region, host owns the issue region write interface
 // Commands and data to send to device are pushed into the issue region
@@ -120,6 +121,9 @@ enum CQNocSend {
     CQ_NOC_send = 0,
     CQ_NOC_SEND = 1,
 };
+
+// Returns true if the fabric_router_xy does not show a disabled value
+constexpr bool use_fabric(uint64_t fabric_router_xy) { return fabric_router_xy != 0xdeadbeef && fabric_router_xy != 0; }
 
 template <
     enum CQNocFlags flags,
