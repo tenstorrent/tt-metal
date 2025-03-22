@@ -116,6 +116,20 @@ def run_conv(
             "Untilize_out is not supported when out_c > 256 for Height Sharded. https://github.com/tenstorrent/tt-metal/issues/18633"
         )
 
+    if hasattr(pad_h, "__len__"):
+        pad_top = pad_h[0]
+        pad_bottom = pad_h[1]
+    else:
+        pad_top = pad_h
+        pad_bottom = pad_h
+
+    if hasattr(pad_w, "__len__"):
+        pad_left = pad_w[0]
+        pad_right = pad_w[1]
+    else:
+        pad_left = pad_w
+        pad_right = pad_w
+
     torch.manual_seed(0)
     conv_input_shape = (total_batch_size, input_channels, input_height, input_width)
     conv_weight_shape = (output_channels, input_channels // groups, filter_height, filter_width)
@@ -126,12 +140,18 @@ def run_conv(
     torch_weight_tensor = randomize_torch_tensor(torch_tensor_map, conv_weight_shape)
     torch_bias_tensor = randomize_torch_tensor(torch_tensor_map, conv_bias_shape) * 10 if has_bias else None
 
-    torch_out_golden_tensor = torch.nn.functional.conv2d(
+    torch_padded_input = torch.nn.functional.pad(
         torch_input_tensor_nchw,
+        (pad_left, pad_right, pad_top, pad_bottom),
+        mode="constant",
+        value=0,
+    )
+    torch_out_golden_tensor = torch.nn.functional.conv2d(
+        torch_padded_input,
         torch_weight_tensor,
         bias=torch_bias_tensor.reshape(-1) if has_bias else None,
         stride=(stride_h, stride_w),
-        padding=(pad_h, pad_w),
+        padding=(0, 0),
         dilation=(dilation, dilation),
         groups=groups,
     )
@@ -202,7 +222,7 @@ def run_conv(
         bias_tensor=tt_bias_tensor,
         kernel_size=(filter_height, filter_width),
         stride=(stride_h, stride_w),
-        padding=(pad_h, pad_w),
+        padding=(pad_top, pad_bottom, pad_left, pad_right),
         dilation=(dilation, dilation),
         batch_size=batch_size,
         input_height=input_height,
@@ -242,7 +262,6 @@ def run_conv(
         )
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
-
     # torch_output_tensor is in row major layout and NHWC shape
     # NHWC to NCHW
     torch_output_tensor = torch_output_tensor.reshape(
@@ -424,9 +443,9 @@ def run_conv_with_split(
 @pytest.mark.parametrize(
     "filter, pad",
     [
-        [3, 1],
+        [3, (1, 2)],
         [1, 0],
-        [5, 2],
+        [5, (2, 4)],
     ],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4])
@@ -452,6 +471,9 @@ def test_conv_features(
     fp32_accum,
     packer_l1_acc,
 ):
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and shard_layout == WS:
+        pytest.skip("Bug in Width Sharded Row Major Tensor Creation when height%32!=0. #19408")
+
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
 

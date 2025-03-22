@@ -562,8 +562,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
     uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw.first;
     uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw.second;
-    uint32_t pad_h = (uint32_t)sliding_window_config.pad_hw.first;
-    uint32_t pad_w = (uint32_t)sliding_window_config.pad_hw.second;
+    uint32_t pad_h = (uint32_t)sliding_window_config.get_pad_h();
+    uint32_t pad_w = (uint32_t)sliding_window_config.get_pad_w();
     uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
     uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
 
@@ -1348,7 +1348,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         (uint32_t)(split_reader ? act_block_num_tiles_split / conv_act_c_blocks
                                 : act_block_num_tiles / conv_act_c_blocks),
         (uint32_t)filter_w,
-        (uint32_t)conv_act_size_w + (2 * pad_w),
+        (uint32_t)conv_act_size_w + (pad_w),
         (uint32_t)act_block_w_extra_align_bytes,  // only used for 1d systolic variant
         (uint32_t)filter_h,
         (uint32_t)num_blocks_act_h_per_core,                              // act_num_blocks_h
@@ -1460,10 +1460,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             // (uint32_t)act_block_num_tiles / conv_act_c_blocks,
             (uint32_t)act_block_num_tiles_split_last / conv_act_c_blocks,
             (uint32_t)conv_act_c_read_bytes,
-            (uint32_t)filter_w * conv_act_c_read_bytes,                       // coalesced_read_bytes
-            (uint32_t)(conv_act_size_w + 2 * pad_w) * conv_act_c_read_bytes,  // window_outer_offset
-            (uint32_t)act_block_w_extra_align_bytes,                          // only used for 1d systolic variant
-            (uint32_t)act_block_h_datums_split,                               // only used for 1d systolic variant
+            (uint32_t)filter_w * conv_act_c_read_bytes,                   // coalesced_read_bytes
+            (uint32_t)(conv_act_size_w + pad_w) * conv_act_c_read_bytes,  // window_outer_offset
+            (uint32_t)act_block_w_extra_align_bytes,                      // only used for 1d systolic variant
+            (uint32_t)act_block_h_datums_split,                           // only used for 1d systolic variant
             (uint32_t)act_block_h_datums_last_block};
         writer_compile_time_args.insert(
             writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
