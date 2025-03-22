@@ -184,8 +184,8 @@ void kernel_main() {
         if (fvc_outbound_state[curr_outbound_buffer].forward_data_from_fvc_buffer(eth_outbound_wrptr)) {
             loop_count = 0;
         } else {
-            if (*fvc_outbound_state[next_outbound_buffer].noc_word_credits ||
-                *fvc_outbound_state[next_outbound_buffer].sender_words_cleared) {
+            if (*fvc_outbound_state[next_outbound_buffer].slot_credits ||
+                *fvc_outbound_state[next_outbound_buffer].sender_slots_cleared) {
                 curr_outbound_buffer = next_outbound_buffer;
             }
             next_outbound_buffer = (next_outbound_buffer + 1) & 0x3;

@@ -62,14 +62,10 @@ constexpr uint32_t e_depth = get_compile_time_arg_val(24);
 constexpr uint32_t w_depth = get_compile_time_arg_val(25);
 constexpr uint32_t n_depth = get_compile_time_arg_val(26);
 constexpr uint32_t s_depth = get_compile_time_arg_val(27);
+constexpr uint32_t router_mode = get_compile_time_arg_val(28);
 
-#ifdef FVC_MODE_PULL
-volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface =
-    (volatile tt_l1_ptr fabric_pull_client_interface_t*)client_interface_addr;
-#else
-volatile tt_l1_ptr fabric_push_client_interface_t* client_interface =
-    (volatile tt_l1_ptr fabric_push_client_interface_t*)client_interface_addr;
-#endif
+using ClientInterfaceType = typename ClientInterfaceSelector<router_mode>::type;
+volatile tt_l1_ptr ClientInterfaceType client_interface = (volatile tt_l1_ptr ClientInterfaceType)client_interface_addr;
 
 uint32_t target_address;
 uint32_t noc_offset;
@@ -216,8 +212,10 @@ void kernel_main() {
 #else
     fabric_client_router_reserve(client_interface, 0, dest_device >> 16, dest_device & 0xFFFF);
     uint64_t start_timestamp = get_timestamp();
-
+    uint32_t* payload = (uint32_t*)data_buffer_start_addr;
     while (true) {
+        packet_count++;
+        payload[12] = packet_count;
         fabric_async_write<(ClientDataMode)data_mode, AsyncWriteMode::PUSH>(
             (fabric_push_client_interface_t*)client_interface,
             0,                       // the network plane to use for this transaction
@@ -228,8 +226,7 @@ void kernel_main() {
             max_packet_size_words * 16  // number of bytes to write to remote destination
         );
         data_words_sent += max_packet_size_words;
-        packet_count++;
-        // noc_async_writes_flushed();
+        noc_async_writes_flushed();
 
         if (data_words_sent >= total_data_words) {
             break;
