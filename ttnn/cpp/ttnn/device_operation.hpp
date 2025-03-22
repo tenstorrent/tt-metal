@@ -575,7 +575,7 @@ void launch_on_mesh_device(
 
     const auto enqueue_mesh_workload = [=](tt::tt_metal::distributed::MeshWorkload& mesh_workload) {
         ZoneScopedN("EnqueueProgram");
-        tt::tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
+        tt::tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(*cq_id), mesh_workload, false);
     };
 
     if (is_program_cache_enabled) {
@@ -674,6 +674,7 @@ concept DeviceOperationWithMeshDeviceAdapter =
 
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void handle_mesh_adapter_cache_hit(
+    QueueId cq_id,
     uint64_t device_operation_id,
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
@@ -716,7 +717,7 @@ void handle_mesh_adapter_cache_hit(
         }
 
         tt::tt_metal::distributed::EnqueueMeshWorkload(
-            mesh_device->mesh_command_queue(), adapter.get_cached_mesh_workload().workload, false);
+            mesh_device->mesh_command_queue(*cq_id), adapter.get_cached_mesh_workload().workload, false);
 
         if (!adapter.get_cached_mesh_workload().workload.get_programs().empty()) {
             const auto& first_program = adapter.get_cached_mesh_workload().workload.get_programs().begin()->second;
@@ -735,6 +736,7 @@ void handle_mesh_adapter_cache_hit(
 // Helper for creating and caching a mesh workload
 template <DeviceOperationConcept mesh_device_operation_t>
 void create_and_cache_mesh_workload(
+    QueueId cq_id,
     uint64_t device_operation_id,
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
@@ -783,7 +785,7 @@ void create_and_cache_mesh_workload(
 
             // Enqueue the workload
             tt::tt_metal::distributed::EnqueueMeshWorkload(
-                mesh_device->mesh_command_queue(), cached_adapter.get_cached_mesh_workload().workload, false);
+                mesh_device->mesh_command_queue(*cq_id), cached_adapter.get_cached_mesh_workload().workload, false);
 
             // Log the first program for profiling
             const auto& programs = cached_adapter.get_cached_mesh_workload().workload.get_programs();
@@ -802,7 +804,7 @@ void create_and_cache_mesh_workload(
     } else {
         // Enqueue the workload directly (no caching)
         tt::tt_metal::distributed::EnqueueMeshWorkload(
-            mesh_device->mesh_command_queue(), cached_workload.workload, false);
+            mesh_device->mesh_command_queue(*cq_id), cached_workload.workload, false);
 
         // Log the first program for profiling
         if (!cached_workload.workload.get_programs().empty()) {
@@ -855,11 +857,11 @@ void launch_operation_with_adapter(
 
     if (program_cache_hit) {
         handle_mesh_adapter_cache_hit<mesh_device_operation_t>(
-            device_operation_id, operation_attributes, tensor_args, tensor_return_value,
+            cq_id, device_operation_id, operation_attributes, tensor_args, tensor_return_value,
             mesh_device, program_cache, program_hash);
     } else {
         create_and_cache_mesh_workload<mesh_device_operation_t>(
-            device_operation_id, operation_attributes, tensor_args, tensor_return_value,
+            cq_id, device_operation_id, operation_attributes, tensor_args, tensor_return_value,
             mesh_device, program_cache, program_hash);
     }
 }
