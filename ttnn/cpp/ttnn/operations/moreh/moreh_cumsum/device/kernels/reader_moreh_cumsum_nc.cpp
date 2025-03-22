@@ -28,7 +28,16 @@ void kernel_main() {
         float f;
         uint32_t u;
     } scaler;
-    scaler.f = 0.0f;
+
+    const DataFormat data_format = get_dataformat(cb_id_in1);
+    switch ((uint)data_format & 0x1F) {
+        case ((uint8_t)DataFormat::Int32):
+        case ((uint8_t)DataFormat::UInt32): scaler.u = 0; break;
+        case ((uint8_t)DataFormat::Float32):
+        case ((uint8_t)DataFormat::Float16_b):
+        default: scaler.f = 0.0f; break;
+    }
+
     fill_cb_with_value(cb_id_in1, scaler.u);
 
     uint32_t l1_write_addr_in0;
