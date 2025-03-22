@@ -483,7 +483,7 @@ def test_demo_for_conditional_generation(
         if is_blackhole():
             expected_perf_metrics = {"prefill_t/s": 7.74, "decode_t/s/u": 86.3}
         else:  # wormhole_b0
-            expected_perf_metrics = {"prefill_t/s": 3.84, "decode_t/s/u": 36.7}
+            expected_perf_metrics = {"prefill_t/s": 3.81, "decode_t/s/u": 37.5}
         expected_perf_metrics["decode_t/s"] = expected_perf_metrics["decode_t/s/u"]  # Only supporting batch 1
         measurements = {"prefill_t/s": 1 / ttft, "decode_t/s": decode_throughput, "decode_t/s/u": decode_throughput}
         verify_perf(measurements, expected_perf_metrics)
