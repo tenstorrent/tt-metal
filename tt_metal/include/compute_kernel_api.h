@@ -72,10 +72,10 @@ ALWI void rsqrt_tile_init() {
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     | 
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | fast_and_approx | Computation to be done faster and approximate                              | bool     |                                                       | False    |
  */
- // clang-format on
+// clang-format on
 template <bool fast_and_approx = true>
 ALWI void rsqrt_tile(uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_rsqrt<fast_and_approx>(idst)));
@@ -145,10 +145,10 @@ ALWI void log_with_base_tile_init() {
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     | 
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | base_scale      | The log base                                                               | uint32_t | Postive integers                                      | True     |
  */
- // clang-format on
+// clang-format on
 ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
     MATH((llk_math_eltwise_unary_sfpu_log_with_base<APPROX>(idst, base_scale)));
 }
@@ -444,10 +444,10 @@ ALWI void gez_tile_init() { MATH((llk_math_eltwise_unary_sfpu_gez_init<APPROX>()
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     | 
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | param0          | The value of the exponent in the power operation                           | uint32_t |                                                       | True     |
  */
- // clang-format on
+// clang-format on
 ALWI void power_tile(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_power<APPROX>(idst, param0)));
 }
@@ -473,10 +473,10 @@ ALWI void power_tile_init() { MATH((llk_math_eltwise_unary_sfpu_power_init<APPRO
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst0           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     | 
+ * | idst0           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | idst1           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
- // clang-format on
+// clang-format on
 ALWI void max_tile(uint32_t idst0, uint32_t idst1) { MATH((llk_math_eltwise_unary_sfpu_max<APPROX>(idst0))); }
 
 /**
@@ -518,10 +518,10 @@ ALWI void exp2_tile_init() { MATH((llk_math_eltwise_unary_sfpu_exp2_init<true>()
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     | 
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | param0          | The value the output is if the input is greater than 0                     | uint32_t |                                                       | True     |
  */
- // clang-format on
+// clang-format on
 ALWI void heaviside_tile(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_heaviside<APPROX>(idst, param0)));
 }
@@ -543,10 +543,10 @@ ALWI void heaviside_tile_init() { MATH((llk_math_eltwise_unary_sfpu_heaviside_in
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     | 
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
- // clang-format on
+// clang-format on
 ALWI void unary_ne_tile(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_unary_ne<APPROX>(idst, param0)));
 }
@@ -686,14 +686,14 @@ ALWI void silu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_silu_init<APPROX>
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     | 
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | idir            | The sorting direction of the local sort (0 == decreasing, 1 == increasing) | int32    | 0 to 1                                                | True     |
- * | i_end_phase     | The end phase of the local sort (should be set to log(K)-1)                | int32    | 1 to 5                                                | True     | 
- * | i_start_phase   | The start phase of the local sort (should be set to 0)                     | int32    | 0 to 5                                                | False    | 
- * | i_end_step      | The end step to perform if i_start_phase == i_end_phase                    | int32    | 4 to 6                                                | False    | 
+ * | i_end_phase     | The end phase of the local sort (should be set to log(K)-1)                | int32    | 1 to 5                                                | True     |
+ * | i_start_phase   | The start phase of the local sort (should be set to 0)                     | int32    | 0 to 5                                                | False    |
+ * | i_end_step      | The end step to perform if i_start_phase == i_end_phase                    | int32    | 4 to 6                                                | False    |
  * | i_start_step    | The start step to perform if i_start_phase == i_end_phase                  | int32    | 4 to 6                                                | False    |
  */
- // clang-format on
+// clang-format on
 ALWI void topk_local_sort(
     uint32_t idst, int idir, int i_end_phase, int i_start_phase = 0, int i_end_step = 0, int i_start_step = 0) {
     MATH((llk_math_eltwise_unary_sfpu_topk_local_sort<true>(
@@ -725,11 +725,11 @@ ALWI void topk_local_sort(
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     | 
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | m_iter          | The index of the merge & rebuild iteration of the algorithm                | int32    | 0 to 9                                                | True     |
  * | k               | The number of sorted values to return                                      | int32    | {4, 8, 16, 32, 64}                                    | True     |
  */
- // clang-format on
+// clang-format on
 template <bool idir = false>
 ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
     MATH((llk_math_eltwise_unary_sfpu_topk_merge<true, idir>(idst, m_iter, k)));
@@ -759,14 +759,14 @@ ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     | 
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | idir            | The sorting direction of the local sort (0 == decreasing, 1 == increasing) | bool     | 0 to 1                                                | True     |
- * | m_iter          | The index of the merge & rebuild iteration of the algorithm                | int32    | 0 to 9                                                | True     | 
- * | k               | The number of sorted values to return                                      | int32    | {4, 8, 16, 32, 64}                                    | True     | 
- * | logk            | The log of K                                                               | int32    | 2 to 6                                                | True     | 
+ * | m_iter          | The index of the merge & rebuild iteration of the algorithm                | int32    | 0 to 9                                                | True     |
+ * | k               | The number of sorted values to return                                      | int32    | {4, 8, 16, 32, 64}                                    | True     |
+ * | logk            | The log of K                                                               | int32    | 2 to 6                                                | True     |
  * | skip_second     | Whether or not to skip second tile                                         | int32    | 0 to 1                                                | True     |
  */
- // clang-format on
+// clang-format on
 ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, int skip_second) {
     MATH((llk_math_eltwise_unary_sfpu_topk_rebuild<true>(idst, idir, m_iter, k, logk, skip_second)));
 }
@@ -826,10 +826,10 @@ ALWI void dbg_read_dest_acc_row(int row_addr, uint32_t* rd_data) {
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     | 
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
- // clang-format on
+// clang-format on
 ALWI void unary_gt_tile(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_unary_gt<APPROX>(idst, param0)));
 }
@@ -851,10 +851,10 @@ ALWI void unary_gt_tile_init() { MATH((llk_math_eltwise_unary_sfpu_unary_gt_init
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     | 
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
- // clang-format on
+// clang-format on
 ALWI void unary_lt_tile(uint32_t idst, uint32_t param0) {
     MATH((llk_math_eltwise_unary_sfpu_unary_lt<APPROX>(idst, param0)));
 }
