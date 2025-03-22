@@ -17,6 +17,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     NORM_CRS,
     LM_HEAD_CRS,
     QKV_CRS,
+    FF1_CRS,
 )
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
     PREFETCHER_NOC1_GRID,
@@ -198,8 +199,8 @@ def test_all_gather_tg_llama(
     "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
     [
         ([1, 1, 32, 2048], 0, 4, 24, RING_CRS, 16, NORM_CRS),  # FF2/DO all reduce
-        ([1, 1, 32, 1280], 1, 3, 24, RING_CRS, 40, QKV_CRS),  # QKV all reduce
-        ([1, 1, 32, 3584], 1, 3, 24, RING_CRS, 24, RING_CRS),  # FF1 all reduce
+        ([1, 1, 32, 1280], 1, 3, 24, RING_CRS, 10, QKV_CRS),  # QKV all reduce
+        ([1, 1, 32, 3584], 1, 3, 24, RING_CRS, 28, FF1_CRS),  # FF1 all reduce
         ([1, 1, 32, 16 * 1024], 1, 3, 32, LM_HEAD_CRS, 32, LM_HEAD_CRS),  # LM head all reduce
     ],
     ids=[
