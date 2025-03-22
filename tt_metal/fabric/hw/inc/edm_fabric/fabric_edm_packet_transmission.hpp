@@ -96,11 +96,12 @@ FORCE_INLINE void execute_chip_unicast_to_local_chip(
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
             const auto dest_address = header.command_fields.unicast_write.noc_address;
-            noc_async_write_one_packet_with_trid(
+            noc_async_write_one_packet_with_trid<false, false>(
                 payload_start_address,
                 dest_address,
                 payload_size_bytes,
                 transaction_id,
+                tt::tt_fabric::local_chip_data_cmd_buf,
                 tt::tt_fabric::edm_to_local_chip_noc);
         } break;
 
@@ -164,7 +165,7 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 // !!!WARNING!!! * do NOT call before determining if the packet should be consumed locally or forwarded
 // !!!WARNING!!! * ENSURE DOWNSTREAM EDM HAS SPACE FOR PACKET BEFORE CALLING
 // !!!WARNING!!!
-template <uint8_t NUM_SENDER_BUFFERS>
+template <uint8_t NUM_SENDER_BUFFERS, bool enable_ring_support>
 FORCE_INLINE void forward_payload_to_downstream_edm(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint16_t payload_size_bytes,
@@ -177,6 +178,6 @@ FORCE_INLINE void forward_payload_to_downstream_edm(
     // This is a good place to print the packet header for debug if you are trying to inspect packets
     // because it is before we start manipulating the header for forwarding
     update_packet_header_for_next_hop(packet_header, cached_routing_fields);
-    downstream_edm_interface.send_payload_non_blocking_from_address_with_trid(
+    downstream_edm_interface.template send_payload_non_blocking_from_address_with_trid<enable_ring_support>(
         reinterpret_cast<size_t>(packet_header), payload_size_bytes + sizeof(PACKET_HEADER_TYPE), transaction_id);
 }
