@@ -132,7 +132,7 @@ Tensor ExecuteMaximum::invoke(
 
 Tensor ExecuteMaximum::invoke(
     const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor t_diff = ttnn::rsub(input_a, value, output_mem_config);
+    Tensor t_diff = ttnn::rsub(input_a, value, std::nullopt, output_mem_config);
     Tensor result = ttnn::where(t_diff, value, input_a);
     return result;
 }
@@ -645,8 +645,10 @@ Tensor ExecuteRsub::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<unary::FusedActivations>& activations,
-    const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) {
+    tt::stl::Span<const unary::UnaryWithParam> post_activations,
+    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    std::optional<bool> use_legacy) {
     return BinaryOperation<operations::binary::BinaryOpType::RSUB>::invoke(
         queue_id,
         input_tensor_a,
@@ -654,16 +656,37 @@ Tensor ExecuteRsub::invoke(
         output_dtype,
         memory_config,
         optional_output_tensor,
-        activations,
-        input_tensor_a_activation);
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy);
 }
 
 Tensor ExecuteRsub::invoke(
     QueueId queue_id,
     const Tensor& input_tensor_a,
     const float input_b,
+    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor,
+    tt::stl::Span<const unary::UnaryWithParam> post_activations,
+    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    std::optional<bool> use_legacy) {
+    if (use_legacy and not*use_legacy) {
+        return BinaryOperation<operations::binary::BinaryOpType::RSUB>::invoke(
+            queue_id,
+            input_tensor_a,
+            input_b,
+            output_dtype,
+            memory_config,
+            optional_output_tensor,
+            post_activations,
+            lhs_activations,
+            rhs_activations,
+            use_legacy);
+    }
+
     return ttnn::operations::unary::ExecuteUnaryWithFloatParameter<ttnn::operations::unary::UnaryOpType::RSUB>::invoke(
         queue_id, input_tensor_a, input_b, memory_config, optional_output_tensor);
 }

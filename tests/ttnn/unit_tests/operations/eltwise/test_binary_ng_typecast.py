@@ -13,9 +13,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 binary_fns = {
-    "gte",
+    "ge",
     "gt",
-    "lte",
+    "le",
     "lt",
     "eq",
     "ne",
@@ -60,7 +60,7 @@ binary_fns = {
 def test_opt_output_no_typecast(input_shapes, dtype, layout, ttnn_fn, device):
     torch.manual_seed(0)
     a_shape, b_shape, out_shape = input_shapes
-    ttnn_op = getattr(ttnn.experimental, ttnn_fn)
+    ttnn_op = getattr(ttnn, ttnn_fn)
 
     torch_input_tensor_a = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), dtype)(
         a_shape
@@ -78,7 +78,7 @@ def test_opt_output_no_typecast(input_shapes, dtype, layout, ttnn_fn, device):
     )
     out_tt = ttnn.from_torch(out, dtype=dtype, device=device, layout=layout, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     cq_id = 0
-    ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
+    ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
     output_tensor = ttnn.to_torch(out_tt)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)
@@ -109,7 +109,7 @@ def test_opt_output_no_typecast(input_shapes, dtype, layout, ttnn_fn, device):
 def test_opt_output_bf8b(input_shapes, dtype, ttnn_fn, device):
     torch.manual_seed(0)
     a_shape, b_shape, out_shape = input_shapes
-    ttnn_op = getattr(ttnn.experimental, ttnn_fn)
+    ttnn_op = getattr(ttnn, ttnn_fn)
 
     torch_input_tensor_a = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), dtype)(
         a_shape
@@ -129,7 +129,7 @@ def test_opt_output_bf8b(input_shapes, dtype, ttnn_fn, device):
         out, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     cq_id = 0
-    ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
+    ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
     output_tensor = ttnn.to_torch(out_tt)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)
@@ -174,10 +174,10 @@ def test_sub_typecast(input_shapes, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cq_id = 0
-    output_tensor = ttnn.experimental.sub(input_tensor_a, input_tensor_b, queue_id=cq_id)
+    output_tensor = ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, use_legacy=False)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    golden_fn = ttnn.get_golden_function(ttnn.experimental.sub)
+    golden_fn = ttnn.get_golden_function(ttnn.sub)
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
     status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
     assert status >= 0.999
@@ -219,10 +219,10 @@ def test_sub_typecast_a(input_shapes, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cq_id = 0
-    output_tensor = ttnn.experimental.sub(input_tensor_a, input_tensor_b, queue_id=cq_id)
+    output_tensor = ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, use_legacy=False)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    golden_fn = ttnn.get_golden_function(ttnn.experimental.sub)
+    golden_fn = ttnn.get_golden_function(ttnn.sub)
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
     status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
     assert status >= 0.999
@@ -264,10 +264,10 @@ def test_sub_typecast_b(input_shapes, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cq_id = 0
-    output_tensor = ttnn.experimental.sub(input_tensor_a, input_tensor_b, queue_id=cq_id)
+    output_tensor = ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    golden_fn = ttnn.get_golden_function(ttnn.experimental.sub)
+    golden_fn = ttnn.get_golden_function(ttnn.sub)
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
     status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
     assert status >= 0.999
@@ -313,10 +313,10 @@ def test_sub_opt_output_typecast_inputs(input_shapes, device):
         out, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     cq_id = 0
-    ttnn.experimental.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
+    ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
-    golden_fn = ttnn.get_golden_function(ttnn.experimental.sub)
+    golden_fn = ttnn.get_golden_function(ttnn.sub)
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
     status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
     assert status >= 0.999
@@ -362,10 +362,10 @@ def test_sub_opt_output_typecast_out(input_shapes, device):
         out, dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     cq_id = 0
-    ttnn.experimental.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
+    ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
-    golden_fn = ttnn.get_golden_function(ttnn.experimental.sub)
+    golden_fn = ttnn.get_golden_function(ttnn.sub)
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
     status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
     assert status >= 0.999
@@ -411,10 +411,10 @@ def test_sub_opt_output_typecast_a(input_shapes, device):
         out, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     cq_id = 0
-    ttnn.experimental.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
+    ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
-    golden_fn = ttnn.get_golden_function(ttnn.experimental.sub)
+    golden_fn = ttnn.get_golden_function(ttnn.sub)
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
     status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
     assert status >= 0.999
@@ -460,10 +460,10 @@ def test_sub_opt_output_typecast_b(input_shapes, device):
         out, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     cq_id = 0
-    ttnn.experimental.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
+    ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
-    golden_fn = ttnn.get_golden_function(ttnn.experimental.sub)
+    golden_fn = ttnn.get_golden_function(ttnn.sub)
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
     status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
     assert status >= 0.999
@@ -636,7 +636,7 @@ def test_inplace_sub_typecast_b(input_shapes, device):
 def test_opt_output_scalar(input_shapes, ttnn_fn, scalar, device):
     torch.manual_seed(0)
     a_shape, out_shape = input_shapes
-    ttnn_op = getattr(ttnn.experimental, ttnn_fn)
+    ttnn_op = getattr(ttnn, ttnn_fn)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat8_b
@@ -691,7 +691,7 @@ def test_edgecase_dims_eltwise_scalar_matrix_math(input_shape, scalar, ttnn_fn, 
     torch.manual_seed(0)
     a_shape = input_shape
 
-    ttnn_op = getattr(ttnn.experimental, ttnn_fn)
+    ttnn_op = getattr(ttnn, ttnn_fn)
     torch_input_tensor_a = torch.randn(a_shape, dtype=torch.bfloat16)
 
     input_tensor_a = ttnn.from_torch(
@@ -737,7 +737,7 @@ def test_edgecase_dims_eltwise_scalar_logical(input_shape, scalar, ttnn_fn, memo
     torch.manual_seed(0)
     a_shape = input_shape
 
-    ttnn_op = getattr(ttnn.experimental, ttnn_fn)
+    ttnn_op = getattr(ttnn, ttnn_fn)
     torch_input_tensor_a = torch.randint(low=-50, high=50, size=a_shape, dtype=torch.bfloat16)
     # guarantee a few equal values
     if (ttnn_fn == "eq" or ttnn_fn == "ne" or ttnn_fn == "gte" or ttnn_fn == "lte") and input_shape != (1, 1, 1, 1):
@@ -794,7 +794,7 @@ def test_edgecase_dims_eltwise_broadcast_matrix_math(input_shapes, ttnn_fn, memo
     torch.manual_seed(0)
     a_shape, b_shape = input_shapes
 
-    ttnn_op = getattr(ttnn.experimental, ttnn_fn)
+    ttnn_op = getattr(ttnn, ttnn_fn)
     torch_input_tensor_a = torch.randn(a_shape, dtype=torch.bfloat16)
     torch_input_tensor_b = torch.randn(b_shape, dtype=torch.bfloat16)
 
@@ -858,7 +858,7 @@ def test_edgecase_dims_eltwise_broadcast_logical(input_shapes, ttnn_fn, memory_c
     torch.manual_seed(0)
     a_shape, b_shape = input_shapes
 
-    ttnn_op = getattr(ttnn.experimental, ttnn_fn)
+    ttnn_op = getattr(ttnn, ttnn_fn)
     torch_input_tensor_a = torch.randn(a_shape, dtype=torch.bfloat16)
     torch_input_tensor_b = torch.randn(b_shape, dtype=torch.bfloat16)
     # guarantee at least one equal value

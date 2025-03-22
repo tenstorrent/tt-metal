@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "quantization.hpp"
-#include "ttnn/operations/eltwise/binary_ng/binary_ng.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
 
 namespace ttnn::operations::quantization {
@@ -18,8 +18,8 @@ Tensor QuantOp::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
     const ttnn::DataType a_dtype = input_tensor.get_dtype();
-    const bool typecast_a = needs_typecast_to_bfloat16(a_dtype);
-    Tensor input_a = typecast_a ? typecast_to(DataType::BFLOAT16, input_tensor) : input_tensor;
+    const bool typecast_a = binary::needs_typecast_to_bfloat16(a_dtype);
+    Tensor input_a = typecast_a ? binary::typecast_to(DataType::BFLOAT16, input_tensor) : input_tensor;
 
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations{};
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations{};
@@ -53,8 +53,8 @@ Tensor RequantOp::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
     const ttnn::DataType a_dtype = input_tensor.get_dtype();
-    const bool typecast_a = needs_typecast_to_bfloat16(a_dtype);
-    Tensor input_a = typecast_a ? typecast_to(DataType::BFLOAT16, input_tensor) : input_tensor;
+    const bool typecast_a = binary::needs_typecast_to_bfloat16(a_dtype);
+    Tensor input_a = typecast_a ? binary::typecast_to(DataType::BFLOAT16, input_tensor) : input_tensor;
 
     // Expansion of q' = [(q - z_in) * s_in] / s_out + z_out
     const float scale = in_scale / out_scale;
@@ -89,8 +89,8 @@ Tensor DequantOp::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
     const ttnn::DataType a_dtype = input_tensor.get_dtype();
-    const bool typecast_a = needs_typecast_to_bfloat16(a_dtype);
-    Tensor input_a = typecast_a ? typecast_to(DataType::BFLOAT16, input_tensor) : input_tensor;
+    const bool typecast_a = binary::needs_typecast_to_bfloat16(a_dtype);
+    Tensor input_a = typecast_a ? binary::typecast_to(DataType::BFLOAT16, input_tensor) : input_tensor;
 
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations{};
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations{};
