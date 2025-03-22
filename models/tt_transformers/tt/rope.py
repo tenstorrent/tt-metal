@@ -19,7 +19,7 @@ def compute_gather_cos_sin(dhead, end, theta, scale_factor, orig_context_len, po
 class RotarySetup(LightweightModule):
     def __init__(
         self,
-        device,
+        device: ttnn.MeshDevice,
         batch_size: int,
         head_dim: int,
         max_seq_len: int,

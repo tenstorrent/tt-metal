@@ -59,7 +59,7 @@ class MLP(LightweightModule):
         self.w2 = as_sharded_tensor("w2_sharded", self.model_config["FF2_DTYPE"], dims=w2_dims)
         self.w3 = as_sharded_tensor("w3_sharded", self.model_config["FF1_3_DTYPE"], dims=w1_dims)
 
-    def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, mode: ttnn.InferenceMode) -> ttnn.Tensor:
         """
         w1 -> gate_proj
         w2 -> down_proj
@@ -69,7 +69,7 @@ class MLP(LightweightModule):
         seq_len = x.shape[-2]
         TG = self.args.is_galaxy
 
-        if mode == "decode":  # Sharded config
+        if mode == ttnn.InferenceMode.DECODE:  # Sharded config
             if TG:  # TODO: Fix this when TG supports DRAM sharded matmuls
                 pc_1 = self.model_config["FF1_3_TG_PROGCFG"] if self.dim >= 4096 else None
                 pc_2 = self.model_config["FF2_TG_PROGCFG"] if self.dim >= 4096 else None
@@ -113,7 +113,7 @@ class MLP(LightweightModule):
             # if mode == "decode" and self.dim!=8192:
             #     w1_out = ttnn.to_memory_config(w1_out, ttnn.DRAM_MEMORY_CONFIG)
             #     w3_out = ttnn.to_memory_config(w3_out, ttnn.DRAM_MEMORY_CONFIG)
-            if self.dim == 8192 or mode == "prefill":
+            if self.dim == 8192 or mode == ttnn.InferenceMode.PREFILL:
                 input_mem_cfg = w1_out.memory_config()
                 w1_out = ttnn.reduce_scatter(
                     w1_out,
@@ -141,18 +141,22 @@ class MLP(LightweightModule):
                     self.mesh_device,
                     cluster_axis=1,
                     num_all_gather_links=2,
-                    sharded=True if mode == "decode" else False,
+                    sharded=True if mode == ttnn.InferenceMode.DECODE else False,
                     topology=self.args.ccl_topology(),
-                    memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
+                    memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"]
+                    if mode == ttnn.InferenceMode.DECODE
+                    else None,
                 )
                 w3_out = tt_all_reduce(
                     w3_out,
                     self.mesh_device,
                     cluster_axis=1,
                     num_all_gather_links=2,
-                    sharded=True if mode == "decode" else False,
+                    sharded=True if mode == ttnn.InferenceMode.DECODE else False,
                     topology=self.args.ccl_topology(),
-                    memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
+                    memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"]
+                    if mode == ttnn.InferenceMode.DECODE
+                    else None,
                 )
 
         w2_in = ttnn.mul(
@@ -163,14 +167,14 @@ class MLP(LightweightModule):
             memory_config=w1_out.memory_config(),
         )
 
-        if mode == "decode" and not TG:
+        if mode == ttnn.InferenceMode.DECODE and not TG:
             # w2 may use a different core grid, this is a no-op if they already match
             w2_in = ttnn.to_memory_config(w2_in, self.model_config["SHARDED_MLP2_INPUT_MEMCFG"])
 
         ttnn.deallocate(w3_out)
         ttnn.deallocate(w1_out)
 
-        if TG and (self.dim == 8192 or mode == "prefill"):
+        if TG and (self.dim == 8192 or mode == ttnn.InferenceMode.PREFILL):
             w2_in = ttnn.all_gather(
                 w2_in,
                 3,
@@ -180,7 +184,7 @@ class MLP(LightweightModule):
                 topology=ttnn.Topology.Linear,
                 memory_config=input_mem_cfg,
             )
-            if mode == "decode":
+            if mode == ttnn.InferenceMode.DECODE:
                 w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
 
         w2_out = ttnn.linear(
@@ -190,7 +194,7 @@ class MLP(LightweightModule):
             dtype=self.args.ccl_dtype if TG else self.model_config["ACTIVATION_DTYPE"] or ttnn.bfloat16,
             program_config=pc_2,
             memory_config=(
-                (ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG)
+                (ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == ttnn.InferenceMode.DECODE else ttnn.DRAM_MEMORY_CONFIG)
                 if TG
                 else w2_in.memory_config()
             ),
@@ -206,10 +210,10 @@ class MLP(LightweightModule):
             dim=0 if (TG and self.dim < 8192) else 3,
             num_reduce_scatter_links=self.args.num_reduce_scatter_links,
             num_all_gather_links=self.args.num_all_gather_links,
-            sharded=(mode == "decode"),
+            sharded=(mode == ttnn.InferenceMode.DECODE),
             memory_config=(
                 (self.model_config["FF2_OUT_REDUCE_SCATTER_MEMCFG"] if TG else w2_out.memory_config())
-                if mode == "decode"
+                if mode == ttnn.InferenceMode.DECODE
                 else ttnn.DRAM_MEMORY_CONFIG
             ),
             dtype=self.args.ccl_dtype,
@@ -222,7 +226,7 @@ class MLP(LightweightModule):
         w2_out_reduced = ttnn.reshape(
             w2_out_reduced, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
         )
-        if mode == "decode":
+        if mode == ttnn.InferenceMode.DECODE:
             w2_out_reduced = ttnn.to_memory_config(
                 w2_out_reduced,
                 self.model_config["SHARDED_ATTN_INPUT_MEMCFG"] if TG else self.model_config["DECODE_RESIDUAL_MEMCFG"],

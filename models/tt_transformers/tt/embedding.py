@@ -2,19 +2,21 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+import pathlib
+from typing import Dict
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.tt_transformers.tt.model_config import ModelArgs
 
 
 class Embedding(LightweightModule):
     def __init__(
         self,
-        mesh_device,
-        args,
-        weight_cache_path,
-        state_dict,
-        dtype,
+        mesh_device: ttnn.MeshDevice,
+        args: ModelArgs,
+        weight_cache_path: pathlib.Path,
+        state_dict: Dict[str, any],
+        dtype: ttnn.DataType,
     ):
         super().__init__()
 

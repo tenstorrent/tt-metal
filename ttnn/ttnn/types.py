@@ -58,12 +58,18 @@ class CoreRange:
     end: CoreGrid
 
 
+class InferenceMode(Enum):
+    PREFILL = 1
+    DECODE = 2
+
+
 class ShardStrategy(Enum):
     HEIGHT = 1
     WIDTH = 2
     BLOCK = 3
 
 
+MeshDevice = ttnn._ttnn.multi_device.MeshDevice
 MeshShape = ttnn._ttnn.multi_device.MeshShape
 MeshCoordinate = ttnn._ttnn.multi_device.MeshCoordinate
 MeshCoordinateRange = ttnn._ttnn.multi_device.MeshCoordinateRange

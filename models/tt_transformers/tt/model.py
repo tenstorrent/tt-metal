@@ -2,9 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
+import pathlib
+from typing import Dict, Optional
+
+# import ttnn
 import torch
-import torch.nn as nn
+
+# import torch.nn as nn
 from tqdm import tqdm
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.common.rmsnorm import RMSNorm
@@ -15,18 +19,20 @@ from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.rope import RotarySetup
 from models.tt_transformers.tt.embedding import Embedding
+from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
 class Transformer(LightweightModule):
     def __init__(
         self,
-        args,
-        dtype,
-        mesh_device,
-        state_dict,
-        weight_cache_path,
-        paged_attention_config=None,
-        use_paged_kv_cache=False,
+        args: ModelArgs,
+        dtype: ttnn.DataType,
+        mesh_device: ttnn.MeshDevice,
+        state_dict: Dict[str, any],
+        weight_cache_path: pathlib.Path,
+        paged_attention_config: Optional[PagedAttentionConfig] = None,
+        use_paged_kv_cache: bool = False,
     ):
         super().__init__()
         self.args = args
@@ -279,7 +285,7 @@ class Transformer(LightweightModule):
             current_pos=None,
             rot_mats=rot_mats,
             user_id=user_id,
-            mode="prefill",
+            mode=ttnn.InferenceMode.PREFILL,
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
@@ -304,7 +310,7 @@ class Transformer(LightweightModule):
             x,
             current_pos,
             rot_mats=rot_mats,
-            mode="decode",
+            mode=ttnn.InferenceMode.DECODE,
             page_table=page_table,
             kv_cache=kv_cache,
         )
@@ -341,7 +347,7 @@ class Transformer(LightweightModule):
         current_pos,
         rot_mats=None,
         user_id=0,
-        mode="decode",
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
@@ -349,7 +355,7 @@ class Transformer(LightweightModule):
         kv_cache=None,
     ):
         # No-op if callers already provide the right memory config
-        if mode == "decode" and not self.args.is_galaxy:
+        if mode == ttnn.InferenceMode.DECODE and not self.args.is_galaxy:
             x = ttnn.to_memory_config(
                 x, self.model_config["DECODE_RESIDUAL_MEMCFG"], self.model_config["ACTIVATION_DTYPE"]
             )
@@ -369,7 +375,7 @@ class Transformer(LightweightModule):
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
             )
 
-        if mode == "prefill" and get_last_token == -1:
+        if mode == ttnn.InferenceMode.PREFILL and get_last_token == -1:
             return x
 
         # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
@@ -379,12 +385,12 @@ class Transformer(LightweightModule):
         # Output norm
         x = self.norm(x, mode=mode)
 
-        if mode == "prefill" and self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
+        if mode == ttnn.InferenceMode.PREFILL and self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
             x = ttnn.interleaved_to_sharded(x, self.model_config["LM_HEAD_INPUT_MEMCFG"])
 
         x = self.lm_head(x)
 
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
             x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return x

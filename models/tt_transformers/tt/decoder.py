@@ -1,23 +1,26 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import pathlib
+from typing import Dict
 import ttnn
 from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.mlp import MLP
 from models.common.rmsnorm import RMSNorm
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
+from models.tt_transformers.tt.model_config import ModelArgs
 
 
 class TransformerBlock(LightweightModule):
     def __init__(
         self,
-        args,
-        mesh_device,
-        dtype,
-        state_dict,
-        layer_num,
-        weight_cache_path,
+        args: ModelArgs,
+        mesh_device: ttnn.MeshDevice,
+        dtype: ttnn.DataType,
+        state_dict: Dict[str, any],
+        layer_num: int,
+        weight_cache_path: pathlib.Path,
         transformation_mats,
         paged_attention_config=None,
         use_paged_kv_cache=False,
@@ -101,7 +104,7 @@ class TransformerBlock(LightweightModule):
         current_pos,
         rot_mats=None,
         user_id=0,
-        mode="decode",
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
@@ -109,7 +112,11 @@ class TransformerBlock(LightweightModule):
     ) -> ttnn.Tensor:
         TG = self.args.is_galaxy
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
-        skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        skip_mem_cfg = (
+            self.model_config["DECODE_RESIDUAL_MEMCFG"]
+            if mode == ttnn.InferenceMode.DECODE
+            else ttnn.DRAM_MEMORY_CONFIG
+        )
         assert (
             x.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
@@ -130,12 +137,12 @@ class TransformerBlock(LightweightModule):
         # Here x and attn_out are both fractured across devices
         h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
         ttnn.deallocate(attn_out)
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             x.deallocate(True)
 
         # Norms take fractured inputs and output replicated across devices
         ff_in = self.ff_norm(h, mode)
-        if TG and mode == "decode":
+        if TG and mode == ttnn.InferenceMode.DECODE:
             ff_in = ttnn.to_memory_config(ff_in, memory_config=self.model_config["MLP_ACT_MEMCFG"])
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in, mode)

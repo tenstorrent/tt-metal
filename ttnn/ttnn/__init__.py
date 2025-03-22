@@ -184,6 +184,8 @@ from ttnn.types import (
     BinaryOpType,
     BcastOpMath,
     BcastOpDim,
+    InferenceMode,
+    MeshDevice,
 )
 
 from ttnn.device import (

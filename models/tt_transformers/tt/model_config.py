@@ -1100,12 +1100,15 @@ class ModelArgs:
             )
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
-    def is_distributed_norm(self, mode):
+    def is_distributed_norm(self, mode: ttnn.InferenceMode):
+        assert isinstance(mode, ttnn.InferenceMode)
         if not self.is_multichip:
             return False
         if all([dim > 1 for dim in list(self.mesh_device.shape)]):  # 2D grid
             return True
-        elif self.dim > 4096 and mode == "prefill":  # Somewhere between 4k and 8k WH runs out of L1 if not distributed
+        elif (
+            self.dim > 4096 and mode == ttnn.InferenceMode.PREFILL
+        ):  # Somewhere between 4k and 8k WH runs out of L1 if not distributed
             return True
         return False
 
@@ -1414,7 +1417,12 @@ class ModelArgs:
         return state_dict
 
     def create_dram_sharded_mem_config(self, k, n):
-        """Create DRAM-sharded memory config for width-sharded tensors"""
+        """
+        Create DRAM-sharded memory config for width-sharded tensors.
+        @param k: int, the first dimension of the tensor
+        @param n: int, the second dimension of the tensor - this is the dimension that will be sharded across devices
+        @return: ttnn.MemoryConfig
+        """
         dram_cores = 8 if self.arch_name == "blackhole" else 12  # WH has 12 dram cores
         padded_size = math.ceil(n / (self.tile_size * dram_cores)) * (self.tile_size * dram_cores)
         shard_spec = ttnn.ShardSpec(
@@ -2023,7 +2031,7 @@ class HfModelWrapper:
         self.head_dim = head_dim
         self.past_key_values = DynamicCache()
 
-    def forward(self, inputs_embeds, start_pos, mode="decode"):
+    def forward(self, inputs_embeds, start_pos, mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE):
         position_ids = torch.tensor(
             [list(range(start_pos, start_pos + inputs_embeds.shape[1]))] * inputs_embeds.shape[0]
         )
@@ -2036,7 +2044,7 @@ class HfModelWrapper:
             output_hidden_states=True,
         )
         self.past_key_values = new_cache
-        return logits if mode == "decode" else hidden_states[-2]  # last hidden state is final norm
+        return logits if mode == ttnn.InferenceMode.DECODE else hidden_states[-2]  # last hidden state is final norm
 
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)

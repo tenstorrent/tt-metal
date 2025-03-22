@@ -3,23 +3,26 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import pathlib
+from typing import Dict
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce, tt_all_gather
+from models.tt_transformers.tt.model_config import ModelArgs
 
 
 class Attention(LightweightModule):
     def __init__(
         self,
-        mesh_device,
-        state_dict,
-        weight_cache_path,
-        layer_num,
-        dtype,
-        transformation_mats,
-        configuration,
+        mesh_device: ttnn.MeshDevice,
+        state_dict: Dict[str, any],
+        weight_cache_path: pathlib.Path,
+        layer_num: int,
+        dtype: ttnn.DataType,
+        transformation_mats: Dict[str, torch.Tensor],
+        configuration: ModelArgs,
         paged_attention_config=None,
         use_paged_kv_cache=False,
     ):
@@ -230,7 +233,7 @@ class Attention(LightweightModule):
 
         self.scale = self.head_dim**-0.5
 
-    def init_kv_cache(self, configuration, weight_cache_path):
+    def init_kv_cache(self, configuration: ModelArgs, weight_cache_path: pathlib.Path):
         """
         Generates empty KV cache and pushed to device memory
         """
@@ -269,7 +272,6 @@ class Attention(LightweightModule):
                     self.head_dim,
                 )
             )
-
         self.layer_past = [
             ttnn.as_tensor(
                 k_or_v,
@@ -278,6 +280,7 @@ class Attention(LightweightModule):
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                # TODO arekay - why are we using the same cache_file_name for both?
                 cache_file_name=(
                     f"{weight_cache_path}/kvcache_{k_or_v.shape}"
                     if weight_cache_path and not configuration.dummy_weights
@@ -531,7 +534,7 @@ class Attention(LightweightModule):
 
     def forward_prefill(
         self,
-        x_11SH,
+        x_11SH: ttnn.Tensor,
         rot_mats,
         user_id: int = 0,
         page_table=None,
@@ -558,6 +561,7 @@ class Attention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.model_config["LI_QKV_PREFILL_COMPUTE_KERNEL_CFG"],
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
+            # bias = self.wqkv_bias_prefill,
         )
 
         # FIXME: surely ttnn.linear bias should work?
@@ -763,17 +767,17 @@ class Attention(LightweightModule):
 
     def forward(
         self,
-        x,
+        x: ttnn.Tensor,
         current_pos,
-        rot_mats=None,
-        user_id=0,
-        mode="decode",
-        page_table=None,
+        rot_mats: list = None,
+        user_id: int = 0,
+        mode: ttnn.InferenceMode = ttnn.InferenceMode.DECODE,
+        page_table: ttnn.Tensor = None,
         chunk_page_table=None,
         chunk_start_idx=None,
-        kv_cache=None,
+        kv_cache: list = None,
     ):
-        if mode == "prefill":
+        if mode == ttnn.InferenceMode.PREFILL:
             return self.forward_prefill(
                 x,
                 rot_mats,

@@ -106,7 +106,7 @@ class RMSNorm(LightweightModule):
             packer_l1_acc=True,
         )
 
-    def forward(self, x: ttnn.Tensor, mode, in_sharded=False, out_sharded=False) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, mode: ttnn.InferenceMode, in_sharded=False, out_sharded=False) -> ttnn.Tensor:
         # If input is sharded do sharded RMSNorm and optionally return sharded output
         program_config = self.sharded_program_config if in_sharded else None
         memory_config = self.sharded_output_config if out_sharded else None
