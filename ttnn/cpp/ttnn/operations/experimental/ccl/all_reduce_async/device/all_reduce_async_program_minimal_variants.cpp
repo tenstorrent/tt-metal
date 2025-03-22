@@ -74,17 +74,30 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
             backward_device.value_or(nullptr),
             &program,
             enable_persistent_fabric_mode,
-            num_links);
+            num_links,
+            topology);
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
     std::vector<Tensor> output_tensors = {output_tensor};
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
-    LineTopology line_topology(ring_size, ring_index);
-    const size_t num_targets_forward =
-        line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
-    const size_t num_targets_backward =
-        line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
+    size_t num_targets_forward = 0;
+    size_t num_targets_backward = 0;
+    if (topology == ccl::Topology::Linear) {
+        LineTopology line_topology(ring_size, ring_index);
+        num_targets_forward =
+            line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
+        num_targets_backward =
+            line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
+    } else if (topology == ccl::Topology::Ring) {
+        // TODO: Commonize
+        num_targets_forward = tt::div_up(ring_size - 1, 2);
+        num_targets_backward = ring_size - 1 - num_targets_forward;
+        if (ring_index % 2 == 0) {
+            std::swap(num_targets_forward, num_targets_backward);
+        }
+    }
+
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto input_tensor_cores = input_tensor.memory_config().shard_spec->grid;
@@ -374,12 +387,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         }
 
         std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> forward_fabric_connection =
-            line_topology.is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
+            !forward_device.has_value()
                 ? std::nullopt
                 : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
                       device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
         std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> backward_fabric_connection =
-            line_topology.is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
+            !backward_device.has_value()
                 ? std::nullopt
                 : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
                       device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
