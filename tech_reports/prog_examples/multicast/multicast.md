@@ -52,9 +52,9 @@ Below is a flowchart of the entire process.  Feel free to refer back to this as 
 To specify which cores will participate, we set a logical range of cores on the host-side. Here, we first define a range of all the cores for creation of memory buffers and semaphores (all cores will have access to these addresses).  Then, we specifically define `{0, 0}` as a single "sender" (coordinator), and `{1, 0} .. {3, 0}` are the receivers.  Pay special attention to the CoreRange function.
 
 ```cpp
-CoreRange all_cores_logical({0, 0}, {3, 0});
+CoreRange all_cores_logical = CoreRange({0, 0}, {3, 0});
 CoreCoord sender_core_logical = {0, 0};
-CoreRange receiver_cores_logical({1, 0}, {3, 0});
+CoreRange receiver_cores_logical = CoreRange({1, 0}, {3, 0});
 ```
 
 Because METALIUM distinguishes between logical coordinates on host (generally static) and physical coordinates on device (potentially dynamic depending on which generation of HW and/or how many HW devices are used), we map these logical coordinates to the chip’s *physical coordinates*:
@@ -244,7 +244,7 @@ DPRINT << TileSlice(0, 0, sr, cb_id_in0, tile_l1_addr, true, false) << ENDL();
 
 - **Untilized Printing**: `false` → Disables untilized printing, meaning the tile is displayed in its standard matrix order rather than being grouped into a face-based format.  
 
-   \* *For the curious: what is a face-based format*?  Basically it's a grouping of elements that respects how the tile was originally packed (e.g., in BlockFP format) where the exponent will be displayed alongside mantissa (a.k.a. *facewise representation*).  For some uses cases it's ideal for inspecting low-level tilized representations, but can be harder to read as a traditional matrix.
+> *For the curious: what is a face-based format*?  Basically it's a grouping of elements that respects how the tile was originally packed (e.g., in BlockFP format). Each "face" holds part of the full precision (e.g., one face for the exponent, another for mantissa), and they're shown together in what's called a *facewise view*. This is great for inspecting how tilized data maps to compute layout, but can look less like a traditional 2D matrix.
 
 ### **3.4 Preparing Semaphores**
 
@@ -451,6 +451,6 @@ The real power of multicasting comes in scaling up and out. Here are a few fun i
 
 - **Modify the tile.** After multicasting, apply a transformation (e.g., scalar, convolution, hyperbolic warping...?!) in a Compute kernel.
 
-    >  *For the curious*: In computer vision, *hyperbolic warping* is a technique used to simulate extreme geometric distortions in images or data. It's similar to gravitational lensing, where massive objects like **Black Holes** bend light near their event horizons. Everyday objects can also be distorted through mediums like water or curved glass. Some AI models can be tested for robustness by evaluating how well they recognize these warped objects compared to standard undistorted ones.
+>  *For the curious*: In computer vision, *hyperbolic warping* is a technique used to simulate extreme geometric distortions in images or data. It's similar to gravitational lensing, where massive objects like **Black Holes** bend light near their event horizons. Everyday objects can also be distorted through mediums like water or curved glass. Some AI models can be tested for robustness by evaluating how well they recognize these warped objects compared to standard undistorted ones.
 
 [Back to top](#top)
