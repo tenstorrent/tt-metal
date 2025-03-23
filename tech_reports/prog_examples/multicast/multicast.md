@@ -33,7 +33,7 @@ Let's learn how the **Multicast** example orchestrates a single-tile broadcast a
 
 ## **1. Introduction**
 
-In large-scale parallel computations, distributing the same data tile to multiple cores often results in more efficient use of memory bandwidth than letting each core independently fetch from DRAM. METALIUM’s multicasting primitives allow you to designate "sender" cores to read a tile from a memory location, such as DRAM or SRAM, and replicate it to multiple “receiver” cores through an on-chip NoC. This example showcases how to do this while enforcing correct ordering with semaphores and local circular buffers on each core.
+In large-scale parallel computations, distributing the same data tile to multiple cores often results in more efficient use of memory bandwidth than letting each core independently fetch from DRAM. METALIUM’s multicasting primitives allow you to designate "sender" cores to read a tile from a memory location, such as DRAM or SRAM, and replicate it to multiple “receiver” cores through the NoC. This example showcases how to do this while enforcing correct ordering with semaphores and local circular buffers on each core.
 
 By the end of this tutorial, you will see how a 32×32 tile is loaded into DRAM, read into one core, and propagated to three other cores in a 1×4 grid layout. Semaphores ensure that the sender knows *exactly* when it's time to send the tile, and no receiver tries to consume garbage or partial tile data.
 
@@ -63,7 +63,7 @@ Because METALIUM distinguishes between logical coordinates on host (generally st
 CoreCoord sender_core_physical =
     device->worker_core_from_logical_core(sender_core_logical);
 
-CoreRange receiver_cores_physical(
+CoreRange receiver_cores_physical = CoreRange(
     device->worker_core_from_logical_core(receiver_cores_logical.start_coord),
     device->worker_core_from_logical_core(receiver_cores_logical.end_coord)
 );
