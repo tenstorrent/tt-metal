@@ -388,7 +388,7 @@ Recall each receiver core needs to know where to signal readiness to the coordin
 
 ### **4.4 Notifying Coordinator of Readiness**
 
-Before the tile arrives, each receiver signals its readiness by atomically incrementing the coordinator’s semaphore.  Since num_dests = 3 (three receiver cores), the coordinator will wait until all receivers have signaled their readiness before proceeding with the multicast operation.
+Before the tile arrives, each receiver signals its readiness by atomically incrementing the coordinator’s semaphore.  Since `num_dests = 3` (three receiver cores), the coordinator will wait until all receivers have signaled their readiness before proceeding with the multicast operation.
 
 A single increment is performed like so:
 
@@ -404,7 +404,7 @@ Each receiver waits for the coordinator to send the tile by monitoring the recei
 noc_semaphore_wait(receiver_addr_ptr, VALID);
 ```
 
-This function blocks any further execution until the coordinator has finished multicasting the tile and sets receiver_addr_ptr to VALID.  In parallel, the sender should now have successfully performed those tasks.
+This function blocks any further execution until the coordinator has finished multicasting the tile and sets `receiver_addr_ptr = VALID`.  In parallel, the sender should now have successfully performed those tasks.
 
 Abracadabra!  Each receiver core now has the tile in its L1 memory and is ready to process it however you want!
 
@@ -443,11 +443,11 @@ Notice there are **two void kernels**, a `void_compute_kernel.cpp` identical to 
 
 The real power of multicasting comes in scaling up and out. Here are a few fun ideas to try!
 
-- **Expand the grid.** Try a larger range instead of 1×4, an unconventional grid shape using `CoreRangeSet`, or expand across the entire card card.
+- **Expand the grid.** Try a larger range instead of 1×4, an unconventional grid shape using `CoreRangeSet`, or expand across the entire card's worth of Tensix cores.
 
 - **Selective multicast.** Not all receivers need the same data. Try producing more tiles on host, then modifying `noc_async_write_multicast` logic to selectively multicast different tiles to different cores.
 
-- **Multi-stage multicast.** After receiving a tile, send it to a different core group, adjacent chip (if available), or multiple devices. Take that tile on a journey.
+- **Multi-stage multicast.** After receiving a tile, send it to a different core group, adjacent chip (if available), or multiple devices. Send that tile on an epic journey.
 
 - **Modify the tile.** After multicasting, apply a transformation (e.g., scalar, convolution, hyperbolic warping...?!) in a Compute kernel.
 
