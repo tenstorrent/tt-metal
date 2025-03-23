@@ -359,6 +359,10 @@ inline void start_ncrisc_kernel_run(dispatch_core_processor_masks enables) {
         volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
         cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = mailboxes->ncrisc_halt.resume_addr;
         assert_just_ncrisc_reset();
+        // Wait a bit to ensure NCRISC has time to actually reset (otherwise it
+        // may just continue where it left off). This wait value was chosen
+        // empirically.
+        riscv_wait(5);
         deassert_all_reset();
     }
 #endif
