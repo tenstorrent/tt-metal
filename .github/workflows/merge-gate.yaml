@@ -59,7 +59,7 @@ jobs:
     uses: ./.github/workflows/docs-latest-public.yaml
     secrets: inherit
     with:
-      docker-image: ${{ needs.build.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 

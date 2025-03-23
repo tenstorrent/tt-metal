@@ -24,6 +24,6 @@ jobs:
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
     with:
-      base-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      base-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       version: dev-${{ needs.create-image-tag-name.outputs.image-tag-name }}
       is_major_version: false

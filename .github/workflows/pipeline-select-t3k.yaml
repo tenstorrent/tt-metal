@@ -68,7 +68,7 @@ jobs:
     uses: ./.github/workflows/t3000-unit-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     if: ${{ inputs.t3000-unit }}
@@ -78,7 +78,7 @@ jobs:
     uses: ./.github/workflows/t3000-demo-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     if: ${{ inputs.t3000-demo }}
@@ -88,7 +88,7 @@ jobs:
     uses: ./.github/workflows/t3000-frequent-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     if: ${{ inputs.t3000-frequent }}
@@ -98,7 +98,7 @@ jobs:
     uses: ./.github/workflows/t3000-nightly-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     if: ${{ inputs.t3000-nightly }}
@@ -108,7 +108,7 @@ jobs:
     uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact-profiler.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
@@ -120,7 +120,7 @@ jobs:
     uses: ./.github/workflows/t3000-profiler-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact-profiler.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
     if: ${{ inputs.t3000-profiler }}
@@ -130,7 +130,7 @@ jobs:
     uses: ./.github/workflows/t3000-perplexity-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     if: ${{ inputs.t3000-perplexity }}
