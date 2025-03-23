@@ -53,12 +53,15 @@ on:
         default: false
         description: "Profile the compilation"
     outputs:
-      ci-build-docker-image:
-        description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
-        value: ${{ jobs.build-docker-image.outputs.ci-build-tag }}
+      #ci-build-docker-image:
+      #  description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
+      #  value: ${{ jobs.build-docker-image.outputs.dev-tag }}
       #ci-test-docker-image:
       #  description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
       #  value: ${{ jobs.build-docker-image.outputs.ci-test-tag }}
+      dev-docker-image:
+        description: "Docker tag for the dev Docker image for developing TT-Metalium et al"
+        value: ${{ jobs.build-docker-image.outputs.dev-tag }}
       packages-artifact-name:
         description: "Name to give download-artifact to get the packages"
         value: ${{ jobs.build-artifact.outputs.packages-artifact-name }}
@@ -130,7 +133,7 @@ jobs:
       build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
       wheel_artifact_name: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name }}
     container:
-      image: ${{ needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!'}}
+      image: ${{ needs.build-docker-image.outputs.dev-tag || 'docker-image-unresolved!'}}
       env:
         CCACHE_TEMPDIR: /tmp/ccache
         CARGO_HOME: /tmp/.cargo
