@@ -78,6 +78,7 @@ def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, use_program_c
         state_dict_prefix=state_dict_prefix,
         weight_cache_path=model_args.weight_cache_path(dtype),
         tt_ccl=tt_ccl,
+        prefetcher_setup=prefetcher_setup,
     )
 
     torch_input = torch.randn(1, 1, seq_len, model_args.dim)
