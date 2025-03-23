@@ -2,7 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <stdint.h>
 #include "dataflow_api.h"
+#include "risc_attribs.h"
+#include <tt-metalium/constants.hpp>
+using namespace tt::constants;
 
 void kernel_main() {
     ///////////////////////////////////////////////////

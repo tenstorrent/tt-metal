@@ -250,7 +250,7 @@ std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
     CoreRangeSet q_shard_grid, k_shard_grid, v_shard_grid;
     // auto input_core_grid = input_tensor.shard_spec().value().grid;
     auto sub_core_grid = tt::tt_metal::CoreRangeSet(
-        tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(1, 0), tt::tt_metal::CoreCoord(3, 9)));
+        tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(7, 5)));
     auto start_core_coord = sub_core_grid.bounding_box().start_coord;
 
     q_shard_grid =
