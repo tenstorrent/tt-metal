@@ -12,8 +12,6 @@
 #include "conv2d.hpp"
 #include "conv2d_utils.hpp"
 #include "prepare_conv2d_weights.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
-#include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
