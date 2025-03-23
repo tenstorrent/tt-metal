@@ -1807,7 +1807,7 @@ def set_tg_attention_config(model_config, dim):
     )
     start_core = ttnn.CoreCoord(1, 0)
     shard_spec_n_cores_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-        start_core, 10, sub_core_grids, row_wise=True
+        start_core, 10, sub_core_grids, row_wise=False
     )
 
     model_config["CREATE_HEAD_INPUT_MEMCFG"] = (
