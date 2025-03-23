@@ -208,6 +208,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     pandoc \
     sudo \
+    uuid-runtime \
     wget \
     libtbb-dev \
     libcapstone-dev \
@@ -224,6 +225,17 @@ FROM ci-build AS ci-test
 
 ARG TT_METAL_INFRA_DIR=/opt/tt_metal_infra
 
+# Set up virtual environment
+ENV PYTHON_ENV_DIR=/opt/venv
+RUN python3 -m venv $PYTHON_ENV_DIR
+
+# Ensure the virtual environment is used for all Python-related commands
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Ensure the virtual environment is activated on shell startup
+RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
+
 # Create directories for infra
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/docs/
 RUN mkdir -p ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/
@@ -239,10 +251,8 @@ RUN python3 -m pip config set global.extra-index-url https://download.pytorch.or
     python3 -m pip install -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
     python3 -m pip install -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt
 
-# Install test-infra specific apt requirements
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    uuid-runtime \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+# Adjust permissions to allow any user to use and modify the venv
+RUN chmod -R 777 $VIRTUAL_ENV
 
 #############################################################
 
