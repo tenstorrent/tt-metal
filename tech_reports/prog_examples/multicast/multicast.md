@@ -6,7 +6,7 @@ Let's learn how the **Multicast** example orchestrates a single-tile broadcast a
 - [1. Introduction](#1-introduction)
 - [2. Host-Side Workflow in `multicast.cpp`](#2-host-side-workflow-in-multicastcpp)
   - [2.1 Defining Logical vs. Physical Core Coordinates](#21-defining-logical-vs-physical-core-coordinates)
-  - [2.2 Allocating DRAM Buffers and Loading the Tile](#22-allocating-dram-buffers-and-loading-the-tile)
+  - [2.2 Allocating DRAM Buffers and Storing the Tile](#22-allocating-dram-buffers-and-storing-the-tile)
   - [2.3 Circular Buffers for Inbound and Outbound Data](#23-circular-buffers-for-inbound-and-outbound-data)
   - [2.4 Semaphores for Synchronization](#24-semaphores-for-synchronization)
   - [2.5 Kernel Registration and Argument Setting](#25-kernel-registration-and-argument-setting)
@@ -14,7 +14,7 @@ Let's learn how the **Multicast** example orchestrates a single-tile broadcast a
   - [3.1 Parsing Runtime Arguments](#31-parsing-runtime-arguments)
   - [3.2 Buffer Setup and Tile Read from DRAM](#32-buffer-setup-and-tile-read-from-dram)
   - [3.3 DPRINTing a Tile Slice](#33-dprinting-a-tile-slice)
-  - [3.4 Synchronization with Semaphores](#34-synchronization-with-semaphores)
+  - [3.4 Preparing Semaphores](#34-preparing-semaphores)
   - [3.5 Waiting for Receiver Readiness](#35-waiting-for-receiver-readiness)
   - [3.6 Multicasting the Tile](#36-multicasting-the-tile)
   - [3.7 Signaling Multicast Completion](#37-signaling-multicast-completion)
@@ -22,10 +22,10 @@ Let's learn how the **Multicast** example orchestrates a single-tile broadcast a
 - [4. Receiver Core Workflow in `inbound_kernel.cpp`](#4-receiver-core-workflow-in-inbound_kernelcpp)
   - [4.1 Parsing Runtime Arguments](#41-parsing-runtime-arguments)
   - [4.2 Buffer Setup for Receiving Tile](#42-buffer-setup-for-receiving-tile)
-  - [4.3 Semaphore Setup for Synchronization](#43-semaphore-setup-for-synchronization)
+  - [4.3 Preparing Semaphores](#43-preparing-semaphores)
   - [4.4 Notifying Coordinator of Readiness](#44-notifying-coordinator-of-readiness)
-  - [4.5 Receiving Multicasted Tile](#45-receiving-multicasted-tile)
-  - [4.6 Printing Tile Data with DPRINT](#46-printing-tile-data-with-dprint)
+  - [4.5 Receiving the Multicasted Tile](#45-receiving-the-multicasted-tile)
+  - [4.6 DPRINTing a Tile Slice or Whole](#46-dprinting-a-tile-slice-or-whole)
   - [4.7 Completing Tile Processing and Acknowledgment](#47-completing-tile-processing-and-acknowledgment)
 - [Conclusion](#conclusion)
 
@@ -71,7 +71,7 @@ CoreRange receiver_cores_physical(
 
 By letting the compiler decide the physical core placement, we ensure our code is kept portable, and we will still end up with the correct addresses used for multicasting. You can imagine scaling up kernels to bigger designs with minimal rewriting.
 
-### **2.2 Allocating DRAM Buffers and Loading the Tile**
+### **2.2 Allocating DRAM Buffers and Storing the Tile**
 
 Previous examples allocate a DRAM buffer for vectors.  We can also let DRAM explicitly hold a 32×32 tile. The following function calls allocate the tile buffer and pass in a basic *identity matrix (1's along the main diagonal & 0's otherwise)* in bfloat16 format:
 
@@ -246,7 +246,7 @@ DPRINT << TileSlice(0, 0, sr, cb_id_in0, tile_l1_addr, true, false) << ENDL();
 
    \* *For the curious: what is a face-based format*?  Basically it's a grouping of elements that respects how the tile was originally packed (e.g., in BlockFP format) where the exponent will be displayed alongside mantissa (a.k.a. *facewise representation*).  For some uses cases it's ideal for inspecting low-level tilized representations, but can be harder to read as a traditional matrix.
 
-### **3.4 Synchronization with Semaphores**
+### **3.4 Preparing Semaphores**
 
 Now that the tile has been loaded and verified, the coordinator kernel must ensure that all receiver cores are ready before proceeding with the multicast. Synchronization is achieved using localized **semaphores**, which coordinate execution between the sender and receivers. The following code sets up the semaphore pointers:
 
@@ -353,7 +353,7 @@ uint32_t receiver_addr = get_semaphore(get_arg_val<uint32_t>(3));
 
 We prepare each receiver core with its own circular buffer (CB) for incoming tiles. Notice it is the exact same as in `coordinator_kernel.cpp`, minus the DRAM since we don't need to touch that here!
 
-### **4.3 Semaphore Setup for Synchronization**
+### **4.3 Preparing Semaphores**
 
 Here is the beginning of the *most critical* part of the code.  Let's get that tile safe and sound!
 
@@ -396,7 +396,7 @@ A single increment is performed like so:
 noc_semaphore_inc(remote_sender_semaphore_noc_addr, 1);
 ```
 
-### **4.5 Receiving Multicasted Tile**
+### **4.5 Receiving the Multicasted Tile**
 
 Each receiver waits for the coordinator to send the tile by monitoring the receiver semaphore:
 
@@ -408,7 +408,7 @@ This function blocks any further execution until the coordinator has finished mu
 
 Abracadabra!  Each receiver core now has the tile in its L1 memory and is ready to process it however you want!
 
-### **4.6 Printing Tile Data with DPRINT**
+### **4.6 DPRINTing a Tile Slice or Whole**
 
 To verify correctness, receivers can use DPRINT to log a sample of the tile data just like the coordinator. We use the same TileSlice function call.  If you want a full tile view (all 1024 glorious elements) then you can uncomment the following loop:
 
