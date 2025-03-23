@@ -26,7 +26,7 @@ After setting up the environment correctly, run a demo to test the environment.
 
 ### Implementation
 
-- For transformer based models, use [models/demos/llama3](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llama3) codebase as reference implementation. For other models, choose the model from [/models](https://github.com/tenstorrent/tt-metal/tree/main/models) that is the most similar:
+- For transformer based models, use [models/tt_transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers) codebase as reference implementation. For other models, choose the model from [/models](https://github.com/tenstorrent/tt-metal/tree/main/models) that is the most similar:
   - Most transformer based models can be run by changing the tensor dimensions of llama3 and can be added as a new model configuration to the existing codebase. For other models, make a copy of the model codebase for advanced changes.
   - Modify modules with model dimensions as needed.
   - First use a single device for simpler bring-up if models can fit on that single device; Wormhole has 12 GB DRAM storage and can support models of up to roughly 12B parameters in BFP8. If possible, use a smaller version of the model that fits on a single device. The model can be scaled up in size and on more devices.
