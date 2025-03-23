@@ -202,6 +202,7 @@ set(TTNN_BASE_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/global_circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/run_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/old_infra_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/distributed/api.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/distributed/distributed_tensor_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/distributed/distributed_tensor.cpp

@@ -271,7 +271,7 @@ inline auto& create_or_get_meshworkload_from_cache(
                 std::unordered_map<ttnn::MeshCoordinateRange, typename ProgramFactory::shared_variables_t>
                     coordinate_range_to_shared_variables;
 
-                if (!mesh_device_operation_utils::uses_heterogenous_dispatch<device_operation_t, ProgramFactory>() &&
+                if (!mesh_device_operation_utils::uses_heterogenous_dispatch<ProgramFactory>(operation_attributes) &&
                     mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
                     auto cached_program = make_program(ttnn::MeshCoordinate(0, 0));
                     const ttnn::MeshCoordinateRange coordinate_range(mesh_device->shape());
@@ -329,19 +329,19 @@ inline auto& create_or_get_meshworkload_from_cache(
              &tensor_return_value,
              &mesh_device,
              &cached_program_factory]<typename ProgramFactory>(const ProgramFactory&) -> auto& {
-                // Get the program adapter from the cached factory
-                auto& adapter = cached_program_factory.cached_program.template get<
-                    tt::tt_metal::program_cache::detail::ProgramAdapter<typename ProgramFactory::shared_variables_t>>();
+                using shared_variables_t = typename ProgramFactory::shared_variables_t;
 
-                // Override runtime arguments through the adapter
-                // TODO: override runtime args per coordinate
-                if constexpr (requires { &ProgramFactory::override_runtime_arguments_at; }) {
-                    ProgramFactory::override_runtime_arguments_at(
-                        adapter, operation_attributes, ttnn::MeshCoordinate(0, 0), tensor_args, tensor_return_value);
-                } else {
-                    ProgramFactory::override_runtime_arguments(
-                        adapter, operation_attributes, tensor_args, tensor_return_value);
-                }
+                // Get the program adapter from the cached factory
+                auto& adapter =
+                    cached_program_factory.cached_program
+                        .template get<tt::tt_metal::program_cache::detail::ProgramAdapter<shared_variables_t>>();
+
+                mesh_device_operation_utils::override_mesh_runtime_arguments<ProgramFactory>(
+                    adapter.get_cached_mesh_workload(),
+                    mesh_device,
+                    operation_attributes,
+                    tensor_args,
+                    tensor_return_value);
 
                 // Set runtime ID for all programs
                 auto& workload = adapter.get_cached_mesh_workload().workload;
@@ -628,7 +628,7 @@ void launch_on_mesh_device(
 
         const bool uses_heterogenous_dispatch = std::visit(
             [&]<typename ProgramFactory>(const ProgramFactory&) {
-                return mesh_device_operation_utils::uses_heterogenous_dispatch<device_operation_t, ProgramFactory>();
+                return mesh_device_operation_utils::uses_heterogenous_dispatch<ProgramFactory>(operation_attributes);
             },
             program_factory);
 

@@ -79,8 +79,8 @@ struct MeshDeviceOperationAdapter {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value) {
         return std::visit(
-            [&]<typename ConcreteFactory>(const ConcreteFactory& concrete_factory) {
-                return mesh_device_operation_utils::create_mesh_workload<DeviceOperation, ConcreteFactory>(
+            [&]<typename ConcreteProgramFactory>(const ConcreteProgramFactory&) {
+                return mesh_device_operation_utils::create_mesh_workload<DeviceOperation, ConcreteProgramFactory>(
                     mesh_device, attrs, tensor_args, tensor_return_value);
             },
             select_program_factory(attrs, tensor_args));
@@ -94,8 +94,8 @@ struct MeshDeviceOperationAdapter {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value) {
         std::visit(
-            [&]<typename ConcreteFactory>(const ConcreteFactory& concrete_factory) {
-                mesh_device_operation_utils::override_mesh_runtime_arguments<ConcreteFactory>(
+            [&]<typename ConcreteProgramFactory>(const ConcreteProgramFactory&) {
+                mesh_device_operation_utils::override_mesh_runtime_arguments<ConcreteProgramFactory>(
                     cached_workload, mesh_device, attrs, tensor_args, tensor_return_value);
             },
             select_program_factory(attrs, tensor_args));
