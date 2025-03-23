@@ -557,7 +557,7 @@ jobs:
         arch:
           - wormhole_b0
     container:
-      image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
@@ -629,7 +629,7 @@ jobs:
             }
           ]
     container:
-      image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
