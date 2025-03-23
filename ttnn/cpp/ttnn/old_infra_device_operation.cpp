@@ -1,0 +1,181 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "ttnn/old_infra_device_operation.hpp"
+
+#include "ttnn/operation.hpp"
+
+namespace tt::tt_metal::operation {
+namespace {
+
+template <class OutputTensors>
+void override_addresses(
+    const OverrideAddressesCallback& override_addresses_callback,
+    const Program& program,
+    const Tensors& input_tensors,
+    const OptionalConstTensors& optional_input_tensors,
+    const OutputTensors& output_tensors) {
+    std::vector<tt::tt_metal::Buffer*> input_buffers;
+    for (auto& tensor : input_tensors) {
+        input_buffers.push_back(tensor.buffer());
+    }
+    for (auto& tensor : optional_input_tensors) {
+        auto buffer = tensor.has_value() ? tensor.value().buffer() : nullptr;
+        input_buffers.push_back(buffer);
+    }
+
+    std::vector<tt::tt_metal::Buffer*> output_buffers;
+    for (auto& tensor : output_tensors) {
+        if constexpr (std::is_same_v<OptionalTensors, OutputTensors>) {
+            auto buffer = tensor.has_value() ? tensor.value().buffer() : nullptr;
+            output_buffers.push_back(buffer);
+        } else {
+            output_buffers.push_back(tensor.buffer());
+        }
+    }
+
+    override_addresses_callback(program, input_buffers, output_buffers);
+}
+
+// Explicit instantiations of override_addresses
+template void override_addresses<Tensors>(
+    const OverrideAddressesCallback& override_addresses_callback,
+    const Program& program,
+    const Tensors& input_tensors,
+    const OptionalConstTensors& optional_input_tensors,
+    const Tensors& output_tensors);
+
+template void override_addresses<OptionalTensors>(
+    const OverrideAddressesCallback& override_addresses_callback,
+    const Program& program,
+    const Tensors& input_tensors,
+    const OptionalConstTensors& optional_input_tensors,
+    const OptionalTensors& output_tensors);
+
+}  // namespace
+
+template <typename OutputTensors>
+typename OldInfraDeviceOperation<OutputTensors>::ProgramFactory::cached_program_t
+OldInfraDeviceOperation<OutputTensors>::ProgramFactory::create_at(
+    const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinate& mesh_coord,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto program_with_callbacks = operation_attributes.create_program_at(
+        mesh_coord, tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_return_value);
+    return cached_program_t{
+        std::move(program_with_callbacks.program),
+        shared_variables_t{
+            program_with_callbacks.override_addresses_callback,
+            program_with_callbacks.override_runtime_arguments_callback}};
+}
+
+template <typename OutputTensors>
+void OldInfraDeviceOperation<OutputTensors>::ProgramFactory::override_runtime_arguments_at(
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const ttnn::MeshCoordinate&,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto& override_addresses_callback = cached_program.shared_variables.override_addresses_callback;
+    auto& override_runtime_arguments_callback = cached_program.shared_variables.override_runtime_arguments_callback;
+    auto& program = cached_program.program;
+
+    if (override_addresses_callback.has_value()) {
+        // Deprecated
+        override_addresses(
+            override_addresses_callback.value(),
+            program,
+            tensor_args.input_tensors,
+            tensor_args.optional_input_tensors,
+            tensor_return_value);
+    }
+
+    if (override_runtime_arguments_callback.has_value()) {
+        operation_attributes.override_runtime_arguments(
+            override_runtime_arguments_callback.value(),
+            program,
+            tensor_args.input_tensors,
+            tensor_args.optional_input_tensors,
+            tensor_return_value);
+    }
+}
+
+template <typename OutputTensors>
+typename OldInfraDeviceOperation<OutputTensors>::program_factory_t
+OldInfraDeviceOperation<OutputTensors>::select_program_factory(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    return ProgramFactory{};
+}
+
+template <typename OutputTensors>
+void OldInfraDeviceOperation<OutputTensors>::validate_on_program_cache_miss(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    attributes.validate(
+        tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_args.optional_output_tensors);
+}
+
+template <typename OutputTensors>
+void OldInfraDeviceOperation<OutputTensors>::validate_on_program_cache_hit(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(attributes, tensor_args);
+}
+
+template <typename OutputTensors>
+typename OldInfraDeviceOperation<OutputTensors>::spec_return_value_t
+OldInfraDeviceOperation<OutputTensors>::compute_output_specs(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    return attributes.compute_output_specs(tensor_args.input_tensors, tensor_args.optional_output_tensors);
+}
+
+template <typename OutputTensors>
+typename OldInfraDeviceOperation<OutputTensors>::tensor_return_value_t
+OldInfraDeviceOperation<OutputTensors>::create_output_tensors(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    return attributes.create_output_tensors(tensor_args.input_tensors, tensor_args.optional_output_tensors);
+}
+
+template <typename OutputTensors>
+tt::stl::hash::hash_t OldInfraDeviceOperation<OutputTensors>::compute_program_hash(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    return attributes.compute_program_hash(tensor_args.input_tensors, tensor_args.optional_input_tensors);
+}
+
+template <typename OutputTensors>
+auto OldInfraDeviceOperation<OutputTensors>::create_op_performance_model(
+    const operation_attributes_t& attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    return attributes.create_op_performance_model(
+        tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_return_value);
+}
+
+template <typename OutputTensors>
+std::string OldInfraDeviceOperation<OutputTensors>::get_type_name(const operation_attributes_t& attributes) {
+    return attributes.get_type_name();
+}
+
+template <typename OutputTensors>
+bool OldInfraDeviceOperation<OutputTensors>::ProgramFactory::uses_heterogenous_dispatch(
+    const operation_attributes_t& attributes) {
+    return attributes.uses_heterogenous_dispatch();
+}
+
+template <typename OutputTensors>
+std::tuple<
+    typename OldInfraDeviceOperation<OutputTensors>::operation_attributes_t,
+    typename OldInfraDeviceOperation<OutputTensors>::tensor_args_t>
+OldInfraDeviceOperation<OutputTensors>::invoke(
+    operation_attributes_t&& operation_attributes,
+    const operation::Tensors& input_tensors,
+    const operation::OptionalConstTensors& optional_input_tensors,
+    const operation::OptionalTensors& optional_output_tensors) {
+    return std::make_tuple(
+        std::move(operation_attributes), tensor_args_t{input_tensors, optional_input_tensors, optional_output_tensors});
+}
+
+template struct OldInfraDeviceOperation<Tensors>;
+template struct OldInfraDeviceOperation<OptionalTensors>;
+
+}  // namespace tt::tt_metal::operation
