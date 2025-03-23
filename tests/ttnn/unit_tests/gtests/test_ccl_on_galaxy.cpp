@@ -113,6 +113,7 @@ TEST(GalaxyTests, DISABLED_TestAllGatherDeadlock) {
     if (not tt::Cluster::instance().is_galaxy_cluster()) {
         GTEST_SKIP() << "Skipping Galaxy test, since this is not a Galaxy System";
     }
+    tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::DISABLED);
     validate_num_tunnels_and_tunnel_depth();
 
     ttnn::MeshShape mesh_shape = get_mesh_shape();
@@ -203,6 +204,7 @@ TEST(GalaxyTests, DISABLED_TestReduceScatterDeadlock) {
     if (not tt::Cluster::instance().is_galaxy_cluster()) {
         GTEST_SKIP() << "Skipping Galaxy test, since this is not a Galaxy System";
     }
+    tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::DISABLED);
     validate_num_tunnels_and_tunnel_depth();
 
     ttnn::MeshShape mesh_shape = get_mesh_shape();

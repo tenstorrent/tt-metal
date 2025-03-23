@@ -77,7 +77,8 @@ struct AllGatherAsync {
         return attrs;
     }
 
-    void validate(const std::vector<Tensor>& input_tensors) const;
+    void validate_with_output_tensors(
+        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
         const ttnn::MeshCoordinate& coord,
@@ -156,6 +157,7 @@ Tensor all_gather_async(
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     const GlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<ttnn::Tensor>& persistent_output_tensor = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,

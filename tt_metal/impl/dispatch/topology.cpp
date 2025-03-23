@@ -962,6 +962,11 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, b
     std::unordered_map<chan_id_t, tt::tt_fabric::FabricEriscDatamoverBuilder> edm_builders;
     auto routing_directions = {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
 
+    if (device->is_mmio_capable() && (tt::Cluster::instance().get_cluster_type() == tt::ClusterType::TG)) {
+        // skip lauching on gateways for TG
+        return nullptr;
+    }
+
     for (const auto& direction : routing_directions) {
         auto active_eth_chans = control_plane->get_active_fabric_eth_channels_in_direction(
             mesh_chip_id.first, mesh_chip_id.second, direction);
@@ -1001,6 +1006,13 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, b
                 device, *fabric_program_ptr, eth_logical_core, device->id(), remote_chip_id, edm_config, true, false);
             edm_builders.insert({eth_chan, edm_builder});
         }
+    }
+
+    uint32_t num_edm_chans = edm_builders.size();
+    uint32_t master_edm_chan = *(tt::Cluster::instance().get_fabric_ethernet_channels(device->id()).begin());
+    uint32_t edm_channels_mask = 0;
+    for (const auto& [router_chan, _] : edm_builders) {
+        edm_channels_mask += 0x1 << (uint32_t)router_chan;
     }
 
     auto get_eth_chan_on_same_routing_plane = [&](chan_id_t src_eth_chan,
@@ -1056,9 +1068,22 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, b
 
     for (const auto& [eth_chan, edm_builder] : edm_builders) {
         const std::vector<uint32_t> edm_kernel_rt_args = edm_builder.get_runtime_args();
-        const std::vector<uint32_t> eth_sender_ct_args = edm_builder.get_compile_time_args();
+        std::vector<uint32_t> eth_sender_ct_args = edm_builder.get_compile_time_args();
+        uint32_t is_local_handshake_master = eth_chan == master_edm_chan;
+
+        eth_sender_ct_args.push_back(is_local_handshake_master);
+        eth_sender_ct_args.push_back(master_edm_chan);
+        eth_sender_ct_args.push_back(num_edm_chans);
+        eth_sender_ct_args.push_back(edm_channels_mask);
+
         auto eth_logical_core =
             tt::Cluster::instance().get_soc_desc(device->id()).get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
+
+        if (is_local_handshake_master) {
+            std::vector<uint32_t> router_zero_buf(1, 0);
+            detail::WriteToDeviceL1(
+                device, eth_logical_core, edm_config.edm_local_sync_address, router_zero_buf, CoreType::ETH);
+        }
 
         auto eth_sender_kernel = tt::tt_metal::CreateKernel(
             *fabric_program_ptr,

@@ -101,6 +101,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         mesh_device,
         topology,
         gather_multi_device_global_semaphore,
+        std::nullopt,  // persistent_output_tensor
         out_memory_config,
         num_preferred_links,
         worker_subdevice_id_opt,

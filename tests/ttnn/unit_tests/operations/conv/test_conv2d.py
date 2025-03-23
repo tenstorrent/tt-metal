@@ -2746,6 +2746,40 @@ def test_small_in_large_out_channels_auto_shard(device, torch_tensor_map):
     )
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_silu_auto_shard_mm_conv(device, torch_tensor_map):
+    batch_size = 1
+    in_channels = 64
+    out_channels = 64
+    kernel_size = (1, 1)
+    stride = (1, 1)
+    padding = (0, 0)
+    height = 160
+    width = 160
+
+    run_conv(
+        device,
+        torch_tensor_map,
+        ttnn.MathFidelity.LoFi,
+        ttnn.bfloat16,
+        ttnn.bfloat16,
+        batch_size,
+        out_channels,
+        in_channels,
+        height,
+        width,
+        kernel_size[0],
+        kernel_size[1],
+        stride[0],
+        stride[1],
+        padding[0],
+        padding[1],
+        None,
+        auto_shard=True,
+        activation="silu",
+    )
+
+
 # fmt: off
 @pytest.mark.parametrize(
     "batch, input_channels, output_channels, input_height, input_width, kernel, stride, padding",
