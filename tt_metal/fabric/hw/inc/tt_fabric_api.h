@@ -429,14 +429,22 @@ inline void fabric_async_write_multicast(
     }
 }
 
+template <ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA, typename T>
 inline void fabric_atomic_inc_add_header(
+    T client_interface,
     uint32_t src_addr,  // source address in sender’s memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
     uint64_t dst_addr,
     uint32_t atomic_inc,
-    uint32_t wrap_boundary) {
-    packet_header_t* packet_header = (packet_header_t*)(src_addr);
+    uint32_t wrap_boundary,
+    uint32_t header_id = 0) {
+    packet_header_t* packet_header;
+    if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
+        packet_header = (packet_header_t*)(src_addr);
+    } else {
+        packet_header = (packet_header_t*)&client_interface->header_buffer[header_id];
+    }
     packet_header->routing.flags = INLINE_FORWARD;
     packet_header->routing.packet_size_bytes = PACKET_HEADER_SIZE_BYTES;
     packet_header->routing.dst_mesh_id = dst_mesh_id;
@@ -464,13 +472,19 @@ inline void fabric_atomic_inc(
     uint16_t dst_dev_id,
     uint64_t dst_addr,
     uint32_t atomic_inc,
-    uint32_t wrap_boundary) {
+    uint32_t wrap_boundary,
+    uint32_t header_id = 0) {
     if constexpr (mode & AsyncWriteMode::ADD_HEADER) {
-        fabric_atomic_inc_add_header(src_addr, dst_mesh_id, dst_dev_id, dst_addr, atomic_inc, wrap_boundary);
+        fabric_atomic_inc_add_header<data_mode>(
+            client_interface, src_addr, dst_mesh_id, dst_dev_id, dst_addr, atomic_inc, wrap_boundary, header_id);
     }
 
     if constexpr (mode & AsyncWriteMode::ADD_PR) {
-        fabric_setup_pull_request(client_interface, src_addr, PACKET_HEADER_SIZE_BYTES);
+        if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
+            fabric_setup_pull_request<data_mode>(client_interface, src_addr, PACKET_HEADER_SIZE_BYTES);
+        } else {
+            fabric_setup_pull_request<data_mode>(client_interface, src_addr, 0);
+        }
     }
 
     if constexpr (mode & AsyncWriteMode::SEND_PR) {
