@@ -23,7 +23,6 @@ def test_run_mobilenetv2_inference(
     )
 
 
-@pytest.mark.skip(reason="This test is skipped due to: #18585")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 3686400}], indirect=True)
 @pytest.mark.parametrize("device_batch_size", [(1)])
 def test_run_mobilenetv2_trace_inference(
@@ -40,7 +39,6 @@ def test_run_mobilenetv2_trace_inference(
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 3686400, "num_command_queues": 2}], indirect=True
 )
-@pytest.mark.skip(reason="This test is skipped due to: #18585")
 @pytest.mark.parametrize("device_batch_size", [(1)])
 def test_run_mobilenetv2_trace_2cq_inference(
     device,

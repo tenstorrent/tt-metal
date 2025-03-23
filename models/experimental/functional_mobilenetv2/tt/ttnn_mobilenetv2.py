@@ -59,7 +59,7 @@ class MobileNetV2Conv2D:
             input_channels_alignment=16 if self.use_shallow_covariant else 32,
             act_block_w_div=1,
             transpose_shards=False,
-            deallocate_activation=False,
+            deallocate_activation=True,
             enable_act_double_buffer=self.enable_act_double_buffer,
             enable_split_reader=self.enable_split_reader,
             enable_subblock_padding=False,
