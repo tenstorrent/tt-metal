@@ -48,10 +48,10 @@ def manual_group_norm(input_tensor, num_groups, eps=1e-2):
         # (8, 768, 1, 512, 32, 3, 8, 8), # test batch size 8 (no multicast), but uneven num_out_blocks divisor
         # (9, 768, 1, 512, 32, 2, 8, 8), # test batch size 9 (uneven batch sizes)
         # (1, 128, 1, 512, 32, 2, 4, 8), # test all groups on core fit in less than one tile, so need to reduce col core count
-        #        (28, 768, 1, 6400, 32, 8, 8, 8), # Mochi VAE variant 1
-        #        (82, 512, 1, 25600, 32, 32, 8, 8), # Mochi VAE variant 2
-        #        (163, 256, 1, 102400, 32, 128, 8, 8), # Mochi VAE variant 3
-        #        (163, 128, 1, 409600, 32, 512, 4, 8), # Mochi VAE variant 4
+        # (4, 768, 1, 6400, 32, 8, 8, 8), # Mochi VAE variant 1 (sharded, so T=1/8th the full tensor)
+        # (11, 512, 1, 25600, 32, 32, 8, 8), # Mochi VAE variant 2 (sharded, so T=1/8th the full tensor)
+        # (21, 256, 1, 102400, 32, 128, 8, 8), # Mochi VAE variant 3 (sharded, so T=1/8th the full tensor)
+        # (21, 128, 1, 409600, 32, 512, 4, 8), # Mochi VAE variant 4 (sharded, so T=1/8th the full tensor)
     ],
 )
 def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x):
