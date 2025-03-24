@@ -279,14 +279,8 @@ void JitBuildState::finish_init() {
     std::string build_dir =
         llrt::RunTimeOptions::get_instance().get_root_dir() + "runtime/hw/lib/" + get_alias(env_.arch_) + "/";
     if (this->is_fw_) {
-        if (this->target_name_ == "brisc" and this->env_.arch_ == tt::ARCH::GRAYSKULL) {
-            this->link_objs_ += build_dir + "tdma_xmov.o ";
-        }
         if (this->target_name_ != "erisc") {
             this->link_objs_ += build_dir + "tmu-crt0.o ";
-        }
-        if (this->target_name_ == "ncrisc" and this->env_.arch_ == tt::ARCH::GRAYSKULL) {
-            this->link_objs_ += build_dir + "ncrisc-halt.o ";
         }
         if (this->target_name_ == "ncrisc" and this->env_.arch_ == tt::ARCH::WORMHOLE_B0) {
             this->link_objs_ += build_dir + "ncrisc-halt-wormhole.o ";
