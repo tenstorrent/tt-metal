@@ -300,6 +300,83 @@ operation::ProgramWithCallbacks ScaledDotProductAttention::create_program(
         this->program_config);
 }
 
+operation::OpPerformanceModel ScaledDotProductAttention::create_op_performance_model(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    auto& input_tensor_q = input_tensors.at(0);
+    auto& input_tensor_k = input_tensors.at(1);
+    auto& input_tensor_v = input_tensors.at(2);
+    auto& output_tensor = output_tensors.at(0);
+
+    if (output_tensor.storage_type() != StorageType::DEVICE) {
+        tt::log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
+    }
+
+    // calculate arch specific parameters
+    MathFidelity math_fidelity = ttnn::get_math_fidelity(compute_kernel_config);
+    auto arch = output_tensor.storage_type() == StorageType::DEVICE
+                    ? output_tensor.device()->arch()
+                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
+        tt::log_warning(tt::LogOp, "SDPA perf model does not support tt::arch '{}'", magic_enum::enum_name(arch));
+        return operation::OpPerformanceModel(input_tensors, output_tensors, 0);
+    }
+
+    // Get main dimensions for Q*K and softmax(QK^T/sqrt) * V matmuls
+    auto q_shape = input_tensor_q.get_logical_shape();
+    auto k_shape = input_tensor_k.get_logical_shape();
+    auto v_shape = input_tensor_v.get_logical_shape();
+    TT_ASSERT(q_shape.size() == 4, "ScaledDotProductAttention perf model: input tensor Q rank != 4");
+    TT_ASSERT(k_shape.size() == 4, "ScaledDotProductAttention perf model: input tensor K rank != 4");
+    TT_ASSERT(v_shape.size() == 4, "ScaledDotProductAttention perf model: input tensor V rank != 4");
+
+    bool is_chunked_prefill = this->chunk_start_idx.has_value();
+
+    uint32_t batch_size_q = q_shape[0];
+    uint32_t batch_size_k = k_shape[0];
+    // NB: number of Q heads determines the shape of first matmul; K is broadcast to match Q's shape
+    uint32_t num_heads_q = q_shape[1];
+
+    const auto Sq = q_shape[2];
+    const auto Sk = (is_chunked_prefill) ? q_shape[-2] + chunk_start_idx.value() : k_shape[2];
+    const auto Sv = v_shape[3];
+    const auto DH = q_shape[3];
+    const auto DV = v_shape[2];
+
+    TT_ASSERT(batch_size_q == batch_size_k, "ScaledDotProductAttention perf model: Q and K have unequal batch size!");
+    TT_ASSERT(q_shape[3] == k_shape[3], "ScaledDotProductAttention perf model: Q and K have unequal hidden dim!");
+
+    // Compute number of FLOPS for the two main matmuls
+    constexpr int64_t FLOPS_PER_FMA = 2;  // each FMA is 2 FLOPS
+    int64_t num_mul_adds = 0;
+    // Q * K matmul for raw attention scores
+    num_mul_adds += FLOPS_PER_FMA * DH * Sq * Sk * num_heads_q * batch_size_q;
+    // attention scores * V matmul
+    num_mul_adds += FLOPS_PER_FMA * DV * Sq * Sv * num_heads_q * batch_size_q;
+
+    // if causal, only half of the FMAs are actually performed
+    if (this->is_causal) {
+        num_mul_adds /= 2;
+    }
+
+    CoreCoord compute_grid_dims = output_tensor.device()->compute_with_storage_grid_size();
+    int num_cores = compute_grid_dims.x * compute_grid_dims.y;
+
+    // wormhole and blackhole have identical matmul throughput per cycle
+    const int tensix_mul_adds_per_cycle_lofi = 4096;
+
+    // ideal total cycles is ESTIMATED_FLOPS / IDEAL_THROUGHPUT
+    int ideal_dev_clock_cycles = std::ceil(
+        ((float)num_mul_adds / (float)(num_cores * tensix_mul_adds_per_cycle_lofi)) *
+        (float)operation::OpPerformanceModel::fidelity_multiplier(math_fidelity));
+
+    // TODO: somehow account for overhead of fused masking and softmax?
+
+    operation::OpPerformanceModel result(input_tensors, output_tensors, ideal_dev_clock_cycles);
+    return result;
+}
+
 operation::Hash ScaledDotProductAttention::compute_program_hash(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
