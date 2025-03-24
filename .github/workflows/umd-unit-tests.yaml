@@ -47,7 +47,7 @@ jobs:
       image: ${{ inputs.docker-image }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
-        GITHUB_ACTIONS: true
+        LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
       volumes:
@@ -64,10 +64,14 @@ jobs:
         with:
           submodules: recursive
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: ./.github/actions/prepare-metal-run
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: TTMetal_build_any
+          path: docker-job
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
       - name: Run UMD unit tests
         timeout-minutes: ${{ inputs.timeout }}
         run: build/test/umd/${{ inputs.arch }}/unit_tests

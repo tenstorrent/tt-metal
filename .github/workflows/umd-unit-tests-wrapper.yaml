@@ -22,6 +22,6 @@ jobs:
         ]
     uses: ./.github/workflows/umd-unit-tests.yaml
     with:
-        arch: ${{ matrix.test-group.arch }}
-        runner-label: ${{ matrix.test-group.runner-label }}
-        docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
