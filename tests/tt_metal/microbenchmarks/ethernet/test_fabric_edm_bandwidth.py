@@ -101,7 +101,7 @@ def run_fabric_edm(
     packet_size,
     fabric_mode,
     expected_bw,
-    expected_Mpps,
+    expected_Mpps,  # expected_Mpps = expected millions of packets per second
     disable_sends_for_interior_workers,
 ):
     logger.warning("removing file profile_log_device.csv")
@@ -230,7 +230,7 @@ def test_fabric_4chip_one_link_mcast_full_ring_bw(
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
     "packet_size, expected_bw, expected_Mpps", [(16, 0.025, None), (2048, 2.32, None), (4096, 4.46, 1.09)]
-)  #  _
+)  # Marked None if packets per second varies too much run to run (>= 5%)
 def test_fabric_8chip_one_link_edm_mcast_full_ring_bw(
     num_mcasts,
     num_unicasts,
@@ -294,7 +294,6 @@ def test_fabric_4_chip_one_link_mcast_saturate_chip_to_chip_ring_bw(
     )
 
 
-# expected_Mpps = expected millions of packets per second
 @pytest.mark.parametrize("num_mcasts", [200000])
 @pytest.mark.parametrize("num_unicasts", [0])
 @pytest.mark.parametrize("num_op_invocations", [1])
@@ -375,7 +374,7 @@ def test_fabric_4chip_two_link_mcast_bw(
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
     "packet_size, expected_bw, expected_Mpps", [(16, 0.044, 2.762), (2048, 5.64, 2.757), (4096, 11.03, 2.673)]
-)  # _ _ |
+)
 def test_fabric_one_link_non_forwarding_unicast_bw(
     num_mcasts,
     num_unicasts,
@@ -447,7 +446,7 @@ def test_fabric_two_link_non_forwarding_unicast_bw(
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
     "packet_size, expected_bw, expected_Mpps", [(16, 0.038, None), (2048, 4.897, 2.379), (4096, 9.72, 2.373)]
-)  # too unstable
+)  # Marked None if packets per second varies too much run to run (>= 5%)
 def test_fabric_one_link_forwarding_unicast_multiproducer_multihop_bw(
     num_mcasts,
     num_unicasts,
@@ -483,7 +482,7 @@ def test_fabric_one_link_forwarding_unicast_multiproducer_multihop_bw(
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
     "packet_size, expected_bw, expected_Mpps", [(16, 0.037, 2.348), (2048, 4.815, 2.351), (4096, 9.35, 2.2846)]
-)  # _ _
+)
 def test_fabric_one_link_forwarding_unicast_single_producer_multihop_bw(
     num_mcasts,
     num_unicasts,
