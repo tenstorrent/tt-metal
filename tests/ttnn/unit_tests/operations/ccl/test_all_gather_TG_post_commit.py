@@ -398,6 +398,9 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     # device in the line
     repeat_factor = [1] * len(output_golden.shape)
     repeat_factor[dim] = num_devices_per_line
+    # In case of llama post binary mult+silu case, slice the input tensor to remove the padding
+    if full_input_tensor_unfractured.shape[dim] == 3840:
+        full_input_tensor_unfractured = full_input_tensor_unfractured[..., :3584]
     output_golden[:, :, :, :] = full_input_tensor_unfractured.repeat(repeat_factor)
 
     eq = True
