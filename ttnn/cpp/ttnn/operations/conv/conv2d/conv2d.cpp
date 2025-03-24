@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include <optional>
 #include <utility>
 
@@ -174,6 +175,7 @@ Result conv2d_DRAM(
     bool first_run = true;
     bool auto_shard = false;
     std::optional<MemoryConfig> input_memory_config = std::nullopt;
+    uint32_t input_memory_config_slice_dim = 0;
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups, conv_config);
     if (dram_slice_config.slice_output_height) {
         for (int batch_index = 0; batch_index < batch_size; batch_index++) {
@@ -206,7 +208,7 @@ Result conv2d_DRAM(
                         batch_size,
                         in_channels,
                         out_channels,
-                        output_height,
+                        output_slice_height,
                         output_width,
                         weight_tensor.get_logical_shape()[3],
                         input_slice_height,
@@ -218,6 +220,10 @@ Result conv2d_DRAM(
                         groups,
                         bias_tensor.has_value(),
                         compute_config);
+                    auto_shard = true;
+                }
+
+                if (!input_memory_config.has_value() || input_slice_height != input_memory_config_slice_dim) {
                     input_memory_config = get_input_memory_config(
                         conv_config,
                         in_channels,
@@ -230,11 +236,12 @@ Result conv2d_DRAM(
                         compute_grid_size,
                         Layout::ROW_MAJOR,
                         mm_conv);
-                    auto_shard = true;
+                    input_memory_config_slice_dim = input_slice_height;
                     tt::log_info(
                         tt::LogOp,
-                        "DRAM Width slicing using {}, Input Memory Config = {} ",
+                        "DRAM Height slicing using {}, Input Slice Height = {}, Input Memory Config = {} ",
                         conv_config.shard_layout.value(),
+                        input_slice_height,
                         input_memory_config.value());
                 }
                 auto sliced_input_tensor = ttnn::slice(
@@ -248,8 +255,9 @@ Result conv2d_DRAM(
                         1,
                         1,
                     }  // Step,
-                );
-                //,input_memory_config);
+                    // );
+                    ,
+                    input_memory_config);
                 log_debug(tt::LogOp, "Sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
                 // if (pad_top > 0 || pad_bottom > 0) {
                 //     auto pad_top_tensor = ttnn::pad(
@@ -261,7 +269,8 @@ Result conv2d_DRAM(
                 //         std::nullopt);
                 //     sliced_input_tensor = pad_top_tensor;
                 // }
-                log_debug(tt::LogOp, "Padded sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
+                // log_debug(tt::LogOp, "Padded sliced input tensor shape: {}",
+                // sliced_input_tensor.get_logical_shape());
                 auto conv_config_l1 = conv_config;
                 conv_config_l1.reshard_if_not_optimal = true;
                 conv_config_l1.output_layout = Layout::TILE;
@@ -276,7 +285,7 @@ Result conv2d_DRAM(
                         in_channels,
                         out_channels,
                         1,
-                        input_slice_height + pad_top + pad_bottom,
+                        input_slice_height,
                         input_width,
                         kernel_size,
                         stride,
@@ -341,7 +350,7 @@ Result conv2d_DRAM(
                     in_channels,
                     out_channels,
                     output_height,
-                    output_width,
+                    output_slice_width,
                     weight_tensor.get_logical_shape()[3],
                     input_height,
                     input_slice_width,
@@ -352,6 +361,9 @@ Result conv2d_DRAM(
                     groups,
                     bias_tensor.has_value(),
                     compute_config);
+                auto_shard = true;
+            }
+            if (!input_memory_config.has_value() || input_slice_width != input_memory_config_slice_dim) {
                 input_memory_config = get_input_memory_config(
                     conv_config,
                     in_channels,
@@ -364,11 +376,12 @@ Result conv2d_DRAM(
                     compute_grid_size,
                     Layout::ROW_MAJOR,
                     mm_conv);
-                auto_shard = true;
+                input_memory_config_slice_dim = input_slice_width;
                 tt::log_info(
                     tt::LogOp,
-                    "DRAM Width slicing using {}, Input Memory Config = {} ",
+                    "DRAM Width slicing using {}, Input Slice Height = {}, Input Memory Config = {} ",
                     conv_config.shard_layout.value(),
+                    input_slice_width,
                     input_memory_config.value());
             }
             auto sliced_input_tensor = ttnn::slice(
@@ -382,9 +395,10 @@ Result conv2d_DRAM(
                     1,
                     1,
                 }  // Step
-            );
-            // ,input_memory_config);
-            log_debug(tt::LogOp, "Sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
+                // );
+                ,
+                input_memory_config);
+            log_info(tt::LogOp, "Sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
             // if (pad_left > 0 || pad_right > 0) {
             //     auto pad_top_tensor = ttnn::pad(
             //         queue_id,
@@ -395,7 +409,7 @@ Result conv2d_DRAM(
             //         std::nullopt);
             //     sliced_input_tensor = pad_top_tensor;
             // }
-            log_debug(tt::LogOp, "Padded sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
+            // log_info(tt::LogOp, "Padded sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
             auto conv_config_l1 = conv_config;
             conv_config_l1.reshard_if_not_optimal = true;
             conv_config_l1.output_layout = Layout::TILE;
@@ -410,7 +424,7 @@ Result conv2d_DRAM(
                     out_channels,
                     batch_size,
                     input_height,
-                    input_slice_width + pad_left + pad_right,
+                    input_slice_width,
                     kernel_size,
                     stride,
                     std::array<uint32_t, 4>({padding[0], padding[1], pad_left, pad_right}),
@@ -441,7 +455,7 @@ Result conv2d_DRAM(
                 std::array<uint32_t, 4>{0, 0, output_slice_width_start, 0},
                 std::array<uint32_t, 4>{batch_size, output_height, output_slice_width_end, out_channels},
                 std::array<uint32_t, 4>{1, 1, 1, 1});
-            log_debug(tt::LogOp, "Dram output tensor shape: {}", dram_output_tensor.get_logical_shape());
+            log_info(tt::LogOp, "Dram output tensor shape: {}", dram_output_tensor.get_logical_shape());
             first_run = false;
         }
     }

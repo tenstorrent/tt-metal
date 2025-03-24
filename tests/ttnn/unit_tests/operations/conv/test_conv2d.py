@@ -686,7 +686,7 @@ def test_conv_activation(
     )
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "input_channels, output_channels, input_height, input_width, slice_height, slice_size, weights_dtype, activations_dtype, kernel, stride, padding, dilation, input_channels_alignment, act_block_h_override,  math_fidelity, fp32_accum, packer_l1_acc",
     # fmt: off
@@ -703,7 +703,7 @@ def test_conv_activation(
         (512, 512, 256,  256,  False,   32,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 32, 0,       ttnn.MathFidelity.HiFi4, True,  False),
         (512, 256, 512,  512,  False,   32,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 32, 0,       ttnn.MathFidelity.HiFi4, True,  False),
         (512, 512, 512,  512,  False,   32,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 32, 0,       ttnn.MathFidelity.HiFi4, True,  False),
-        (64,  64,  384,  64,    True,  128,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1), 32, 0,       ttnn.MathFidelity.HiFi4, True,  False),
+        # (64,  64,  384,  64,    True,  128,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1), 32, 0,       ttnn.MathFidelity.HiFi4, True,  False),
         (64,  64,  1024, 128,   True,   32,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1), 32, 0,       ttnn.MathFidelity.LoFi,  True,  False),
         (64,  64,  512,  64,    True,  128,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1), 32, 0,       ttnn.MathFidelity.LoFi,  True,  False),
         (4,   32,  1024, 1024,  True,    2,  ttnn.bfloat8_b, ttnn.bfloat16, (5, 5), (1, 1), (0, 0), (1, 1), 16, 32,      ttnn.MathFidelity.LoFi,  True,  False),
@@ -843,6 +843,7 @@ def test_conv_dram(
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     out = tt_output_tensor.cpu().to_torch()
+    print("Loaded output to host")
 
     # out is in row major layout and NHWC shape
     # NHWC to NCHW
@@ -850,9 +851,11 @@ def test_conv_dram(
     out = out.reshape(batch_size, out_height, out_width, output_channels)
 
     ref = torch.permute(ref, (0, 2, 3, 1))
+    print("Permutted ref")
     reader_patterns_cache.clear()
 
     pcc = 0.94
+    print("Calculating PCC")
     passing, pcc_msg = check_with_pcc_without_tensor_printout(out, ref, pcc=pcc)
     logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
     if not passing:

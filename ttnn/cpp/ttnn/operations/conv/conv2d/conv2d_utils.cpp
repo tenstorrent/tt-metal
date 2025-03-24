@@ -894,7 +894,7 @@ MemoryConfig get_input_memory_config(
     uint32_t input_num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
     uint32_t input_num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
 
-    uint32_t round_up_size = tt::constants::TILE_HEIGHT;
+    uint32_t round_up_size = 1;  // tt::constants::TILE_HEIGHT;
     if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED && input_layout == Layout::ROW_MAJOR) {
         round_up_size = 1;
     }
