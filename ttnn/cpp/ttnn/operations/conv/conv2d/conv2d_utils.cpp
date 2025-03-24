@@ -184,6 +184,23 @@ ParallelConfig determine_output_parallel_config(
     return output_parallel_config;
 }
 
+std::tuple<uint32_t, uint32_t> calculate_output_image_size(
+    std::array<uint32_t, 2> input_image_size,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 2> padding,
+    std::array<uint32_t, 2> dilation) {
+    const uint32_t output_height =
+        ((input_image_size[0] - kernel_size[0] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[0]) /
+         stride[0]) +
+        1;
+    const uint32_t output_width =
+        ((input_image_size[1] - kernel_size[1] - ((kernel_size[1] - 1) * (dilation[1] - 1)) + 2 * padding[1]) /
+         stride[1]) +
+        1;
+    return {output_height, output_width};
+}
+
 uint32_t get_num_cores_nhw_from_parallel_config(const ParallelConfig& pconfig) {
     TT_ASSERT(!pconfig.grid.ranges().empty());
     TT_ASSERT(
