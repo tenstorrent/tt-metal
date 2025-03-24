@@ -93,6 +93,8 @@ void init_sync_registers() {
 }
 
 int main(int argc, char *argv[]) {
+    // Workaround for tt-metal#16439, making sure gathering is disabled
+    disable_gathering();
     configure_l1_data_cache();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
