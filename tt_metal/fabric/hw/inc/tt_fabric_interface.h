@@ -400,5 +400,14 @@ constexpr uint32_t FABRIC_ROUTER_REQ_QUEUE_SIZE = sizeof(chan_req_buf);
 constexpr uint32_t FABRIC_ROUTER_DATA_BUF_START = FABRIC_ROUTER_REQ_QUEUE_START + FABRIC_ROUTER_REQ_QUEUE_SIZE;
 constexpr uint32_t FABRIC_ROUTER_OUTBOUND_BUF_SIZE = 0x4000;
 constexpr uint32_t FABRIC_ROUTER_INBOUND_BUF_SIZE = 0x8000;
+constexpr uint32_t FABRIC_ROUTER_BUF_SLOT_SIZE = 0x1000;
+constexpr uint32_t FABRIC_ROUTER_OUTBOUND_BUF_SLOTS = FABRIC_ROUTER_OUTBOUND_BUF_SIZE / FABRIC_ROUTER_BUF_SLOT_SIZE;
+constexpr uint32_t FABRIC_ROUTER_INBOUND_BUF_SLOTS = FABRIC_ROUTER_INBOUND_BUF_SIZE / FABRIC_ROUTER_BUF_SLOT_SIZE;
+
+// Select the correct client interface for push vs pull router
+template <uint32_t router_mode>
+struct ClientInterfaceSelector {
+    using type = std::conditional_t<router_mode == 0, fabric_pull_client_interface_t*, fabric_push_client_interface_t*>;
+};
 
 }  // namespace tt::tt_fabric
