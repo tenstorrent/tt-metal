@@ -5,9 +5,8 @@
 import torch
 import pytest
 import ttnn
-import random
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
-from models.utility_functions import skip_for_blackhole, is_grayskull, skip_for_grayskull
+from models.utility_functions import skip_for_blackhole, skip_for_grayskull
 
 
 @pytest.mark.parametrize(
@@ -1002,4 +1001,4 @@ def test_unary_bitwise_not(input_shapes, device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
-    assert pcc >= 0.99
+    assert pcc == 1
