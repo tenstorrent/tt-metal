@@ -253,23 +253,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     if (in_place) {
         int32_t in_out_buffer_start_delta = max_out_nsticks_per_core - input_npages;
         const auto delta =
-            output_tensor.buffer()->aligned_size_per_bank() - output_tensor.buffer()->aligned_size_per_bank();
-        printf("delta = %ld\n", delta);
-        printf("num_cores_nhw = %d, num_cores_c = %d\n", ncores_nhw, ncores_c);
-        printf("in_out_buffer_start_delta = %d\n", in_out_buffer_start_delta);
-        printf("out_nbytes = %d\n", out_nbytes);
-        for (int i = 0; i < 64; ++i) {
-            printf(
-                "src_buffer->sharded_page_address(0,%d) = %ld, dst_buffer->sharded_page_address(0,%d) = %ld\n",
-                i,
-                src_buffer->sharded_page_address(0, i),
-                i,
-                dst_buffer->sharded_page_address(0, i));
-        }
-
+            output_tensor.buffer()->aligned_size_per_bank() - input_tensor.buffer()->aligned_size_per_bank();
         TT_ASSERT(
-            src_buffer->sharded_page_address(0, 0) ==
-                dst_buffer->sharded_page_address(0, 0) + ncores_nhw * ncores_c * in_out_buffer_start_delta * out_nbytes,
+            src_buffer->sharded_page_address(0, 0) == dst_buffer->sharded_page_address(0, 0) + delta,
             "In-place halo requires input and output buffers to be sharded at the same address");
         TT_ASSERT(!remote_read, "remote_read is not supported for in place operation");
 
