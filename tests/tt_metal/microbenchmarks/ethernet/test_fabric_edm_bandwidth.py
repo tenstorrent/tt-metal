@@ -321,6 +321,7 @@ def test_fabric_4_chip_one_link_mcast_saturate_chip_to_chip_ring_bw(
     )
 
 
+# expected_Mpps = expected millions of packets per second
 @pytest.mark.parametrize("num_mcasts", [200000])
 @pytest.mark.parametrize("num_unicasts", [0])
 @pytest.mark.parametrize("num_op_invocations", [1])
