@@ -10,6 +10,8 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
 )
 
+DEFAULT_SEED = 213919
+
 
 def data_gen_with_range_batch_norm(
     input_shapes,
@@ -20,9 +22,10 @@ def data_gen_with_range_batch_norm(
     required_grad=False,
     testing_dtype="bfloat16",
     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    seed=DEFAULT_SEED,
 ):
     assert high > low, "Incorrect range provided"
-    torch.manual_seed(213919)
+    torch.manual_seed(seed)
     channels = input_shapes[1]
     size = input_shapes if is_input else channels
     torch_dtype = getattr(torch, testing_dtype)
@@ -41,16 +44,16 @@ def data_gen_with_range_batch_norm(
     return pt_tensor, tt_tensor
 
 
-def data_gen_pt_tt(input_shapes, device, required_grad=False):
-    torch.manual_seed(213919)
+def data_gen_pt_tt(input_shapes, device, required_grad=False, seed=DEFAULT_SEED):
+    torch.manual_seed(seed)
     pt_tensor = torch.randn(input_shapes, requires_grad=required_grad).bfloat16()
     tt_tensor = ttnn.Tensor(pt_tensor, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
     return pt_tensor, tt_tensor
 
 
-def data_gen_with_range(input_shapes, low, high, device, required_grad=False, is_row_major=False):
+def data_gen_with_range(input_shapes, low, high, device, required_grad=False, is_row_major=False, seed=DEFAULT_SEED):
     assert high > low, "Incorrect range provided"
-    torch.manual_seed(213919)
+    torch.manual_seed(seed)
     pt_tensor = torch.rand(input_shapes, requires_grad=required_grad).bfloat16() * (high - low) + low
     if is_row_major:
         tt_tensor = ttnn.Tensor(pt_tensor, ttnn.bfloat16).to(ttnn.ROW_MAJOR_LAYOUT).to(device)
@@ -60,10 +63,17 @@ def data_gen_with_range(input_shapes, low, high, device, required_grad=False, is
 
 
 def data_gen_with_range_dtype(
-    input_shapes, low, high, device, required_grad=False, is_row_major=False, ttnn_dtype=ttnn.bfloat16
+    input_shapes,
+    low,
+    high,
+    device,
+    required_grad=False,
+    is_row_major=False,
+    ttnn_dtype=ttnn.bfloat16,
+    seed=DEFAULT_SEED,
 ):
     assert high > low, "Incorrect range provided"
-    torch.manual_seed(213919)
+    torch.manual_seed(seed)
     pt_tensor = torch.rand(input_shapes, requires_grad=required_grad).bfloat16() * (high - low) + low
     if is_row_major:
         tt_tensor = ttnn.Tensor(pt_tensor, ttnn_dtype).to(ttnn.ROW_MAJOR_LAYOUT).to(device)
@@ -72,9 +82,11 @@ def data_gen_with_range_dtype(
     return pt_tensor, tt_tensor
 
 
-def data_gen_with_range_int(input_shapes, low, high, device, required_grad=False, is_row_major=False):
+def data_gen_with_range_int(
+    input_shapes, low, high, device, required_grad=False, is_row_major=False, seed=DEFAULT_SEED
+):
     assert high > low, "Incorrect range provided"
-    torch.manual_seed(213919)
+    torch.manual_seed(seed)
     pt_tensor = torch.randint(low, high, input_shapes, dtype=torch.int32, requires_grad=required_grad)
 
     if is_row_major:
@@ -94,8 +106,8 @@ def data_gen_with_val(input_shapes, device, required_grad=False, val=1, is_row_m
     return pt_tensor, tt_tensor
 
 
-def data_gen_pt_tt_prod(input_shapes, device, all_dimensions=True, dim=0, required_grad=False):
-    torch.manual_seed(213919)
+def data_gen_pt_tt_prod(input_shapes, device, all_dimensions=True, dim=0, required_grad=False, seed=DEFAULT_SEED):
+    torch.manual_seed(seed)
     pt_tensor_temp = torch.zeros(input_shapes, requires_grad=required_grad).bfloat16()
     shape_Required = torch.Size(
         [
