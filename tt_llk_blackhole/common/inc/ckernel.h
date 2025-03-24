@@ -698,7 +698,9 @@ inline void load_replay_buf(F fn)
     // Send in the user's desired instructions
     fn();
 
-    enable_gathering();
+    // Workaround for tt-metal#16439, making sure gathering is disabled
+    // WE DON'T UNDERSTAND WHY ENABLING GATHERING DOESN'T WORK
+    // enable_gathering();
 }
 
 // Same as above, but used if start/len/exec_while_loading are not known
@@ -714,7 +716,9 @@ inline void load_replay_buf(uint start, uint len, bool exec_while_loading, F fn)
     // Send in the user's desired instructions
     fn();
 
-    enable_gathering();
+    // Workaround for tt-metal#16439, making sure gathering is disabled
+    // WE DON'T UNDERSTAND WHY ENABLING GATHERING DOESN'T WORK
+    // enable_gathering();
 }
 
 enum class CSR : uint16_t
