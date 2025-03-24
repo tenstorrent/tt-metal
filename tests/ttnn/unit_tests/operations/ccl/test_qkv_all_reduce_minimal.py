@@ -568,7 +568,8 @@ def run_all_reduce_qkv_heads_fuse_impl(
 
         # Get non-distributed tensors
         q_non_distributed = ttnn.to_torch(
-            q_heads_pre_rot_1BQD,
+            # q_heads_pre_rot_1BQD,
+            q_dummy,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
                 mesh_device,
                 dims=(0, 1),
@@ -577,7 +578,8 @@ def run_all_reduce_qkv_heads_fuse_impl(
         )
         # [1, 8, 1[32], 128] -> [8, 32, 1[32], 128]
         k_non_distributed = ttnn.to_torch(
-            k_heads_pre_rot_1BKD,
+            # k_heads_pre_rot_1BKD,
+            k_dummy,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
                 mesh_device,
                 dims=(0, 1),
@@ -586,7 +588,8 @@ def run_all_reduce_qkv_heads_fuse_impl(
         )
         # [1, 8, 1[32], 128] -> [8, 32, 1[32], 128]
         v_non_distributed = ttnn.to_torch(
-            v_heads_1BKD,
+            # v_heads_1BKD,
+            v_dummy,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
                 mesh_device,
                 dims=(0, 1),

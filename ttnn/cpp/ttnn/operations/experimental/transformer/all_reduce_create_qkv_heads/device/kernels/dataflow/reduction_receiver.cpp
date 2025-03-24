@@ -6,6 +6,7 @@
 #include "dataflow_api.h"
 #include "risc_attribs.h"
 #include <tt-metalium/constants.hpp>
+#include "debug/dprint.h"
 using namespace tt::constants;
 
 void kernel_main() {
@@ -32,7 +33,7 @@ void kernel_main() {
     constexpr bool index_is_dram = get_compile_time_arg_val(14) == 1;
     constexpr uint32_t index_stick_size = get_compile_time_arg_val(15);
     constexpr uint32_t cb_batch_offset_id = get_compile_time_arg_val(16);
-
+    constexpr uint32_t cb_id_reduction_out = get_compile_time_arg_val(17);
     // runtime args
     size_t arg_idx = 0;
     // rt args for QV/K read and write kernels
@@ -45,8 +46,9 @@ void kernel_main() {
     // rt args for reduction receiver kernel
     const uint32_t signal_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx + 2 * in_num_cores));
 
-    if constexpr (PHASES_TO_READ == 1) {  // only do the semaphore in reading kernel, as all reduce reduction only has
-                                          // reading kernel
+    if constexpr (PHASES_TO_READ == 1) {  // only do the semaphore in reading kernel(NCRISC), as all reduce reduction
+                                          // only has reading kernel
+        DPRINT << "PHASES_TO_READ = " << PHASES_TO_READ << " which is NCRISC" << ENDL();
         volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr);
 
@@ -56,10 +58,12 @@ void kernel_main() {
 
         // 2. Signal compute kernel to start processing
         cb_push_back(cb_id, total_num_reduction_tiles);
+        DPRINT << "total_num_reduction_tiles = " << total_num_reduction_tiles << " which is NCRISC" << ENDL();
     }
 
     // 3. QV/K read and write kernels start here:
     if (qv_k_process_flag != 0) {  // only run the QV/K part for qv_k cores
+        DPRINT << "qv_k_process_flag = " << qv_k_process_flag << " which qv cores or k cores" << ENDL();
         uint32_t device_batch_offset = 0;
 
         if constexpr (use_batch_offset) {
@@ -98,6 +102,7 @@ void kernel_main() {
 
         // Skip Q section if PROCESS_QV is False
         if (qv_k_process_flag == 1) {
+            DPRINT << "Q cores" << ENDL();
             for (uint32_t q = 0; q < num_q_heads; ++q) {
                 uint32_t wptr_offset =
                     q < SUBTILE_ROWS ? q * SUBTILE_LINE_BYTES
@@ -137,6 +142,7 @@ void kernel_main() {
 
         if (qv_k_process_flag == 2) {
             // K
+            DPRINT << "K cores" << ENDL();
             uint32_t k_write_addr = 0;
 
             // Read 2 phases per tile, where there are num_q_heads * q_num_tiles tiles

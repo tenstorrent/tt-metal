@@ -382,7 +382,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         1,  // use_batch_offset
         0,
         batch_offset_index_stick_size,
-        batch_offset_cb_index_reader};
+        batch_offset_cb_index_reader,
+        out_cb_index,
+    };
 
     std::vector<uint32_t> writer_compile_time_args = {
         reduction_cb_index,  // reduction_cb_index
@@ -403,7 +405,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         1,  // use_batch_offset
         0,
         batch_offset_index_stick_size,
-        batch_offset_cb_index_reader};
+        batch_offset_cb_index_reader,
+        out_cb_index};
 
     auto reduction_reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args);
     auto reduction_writer_kernel_config = tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args);
@@ -448,7 +451,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     reader_writer_runtime_args_template.insert(
         reader_writer_runtime_args_template.end(), noc_x_coords.begin(), noc_x_coords.end());
     reader_writer_runtime_args_template.insert(
-        reader_writer_runtime_args_template.end(), noc_x_coords.begin(), noc_x_coords.end());
+        reader_writer_runtime_args_template.end(), noc_y_coords.begin(), noc_y_coords.end());
 
     // KERNEL CREATION
     tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_1;

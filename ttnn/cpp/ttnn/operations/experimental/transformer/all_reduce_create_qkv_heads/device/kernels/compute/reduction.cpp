@@ -4,9 +4,10 @@
 
 #include <cstdint>
 #include "compute_kernel_api/eltwise_binary.h"
-
+#include "debug/dprint.h"
 namespace NAMESPACE {
 void MAIN {
+    DPRINT << "reduction kernel" << ENDL();
     constexpr uint32_t cb_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t cb_in1 = cb_in0;
@@ -15,7 +16,8 @@ void MAIN {
     const uint32_t num_blocks = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t block_num_tiles = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t copy_first_block = num_blocks % 2 != 0;
-
+    DPRINT << "num_blocks: " << num_blocks << " block_num_tiles: " << block_num_tiles
+           << " copy_first_block: " << copy_first_block << ENDL();
     constexpr uint32_t max_dst_tiles = 8;  // TODO: Make general
 
     cb_wait_front(cb_in0, num_blocks * block_num_tiles);
