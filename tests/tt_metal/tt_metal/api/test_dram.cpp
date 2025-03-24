@@ -248,7 +248,7 @@ TEST_F(DispatchFixture, TensixDRAMLoopbackSingleCoreDB) {
     }
 }
 
-TEST_F(BlackholeSingleCardFixture, ActiveEthDRAMLoopbackSingleCore) {
+TEST_F(DispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
     constexpr uint32_t buffer_size = 2 * 1024 * 25;
 
     if (!this->IsSlowDispatch()) {
