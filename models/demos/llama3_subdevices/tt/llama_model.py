@@ -71,7 +71,7 @@ class TtTransformer(LightweightModule):
         mesh_device.set_sub_device_stall_group(
             [self.prefetcher_setup.prefetcher_sub_device_id, self.prefetcher_setup.worker_sub_device_id]
         )
-        self.tt_ccl = TT_CCL(mesh_device, args.sub_core_grids, self.prefetcher_setup.worker_sub_device_id)
+        self.tt_ccl = TT_CCL(mesh_device, args, self.prefetcher_setup.worker_sub_device_id)
 
         self.layers = [
             TtTransformerBlock(

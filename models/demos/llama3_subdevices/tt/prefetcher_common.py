@@ -51,7 +51,11 @@ class TtLlamaPrefetcherSetup(LightweightModule):
         ) = get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_test=False)
 
         max_tile_size = 1088
-        self.global_cb_size = 750 * max_tile_size
+
+        # Global CB must be large enough to atleast double buffer weights
+        # This ensures that back to back matmuls (for eg. in MLP) can run
+        # without stalling on the weight prefetch
+        self.global_cb_size = 600 * max_tile_size
         self.sender_receiver_mapping = list(zip(self.all_sender_cores, self.all_receiver_cores))
         self.global_circular_buffer = ttnn.create_global_circular_buffer(
             self.mesh_device, self.sender_receiver_mapping, self.global_cb_size

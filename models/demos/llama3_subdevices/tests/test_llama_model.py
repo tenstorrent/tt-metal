@@ -89,7 +89,7 @@ def test_llama_model_inference(
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
     dtype = ttnn.bfloat8_b
-    mesh_device.enable_async(False)
+    mesh_device.enable_async(True)
     mode_accuracy = optimizations == LlamaOptimizations.accuracy
     instruct = True if weights == "instruct" else False
     dummy_weights = True if weights == "random" else False
@@ -309,7 +309,12 @@ def test_llama_model_inference(
                     ]
                 )
                 tt_out_gathered = tt_model.tt_ccl.line_all_gather(
-                    tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                    tt_out[0],
+                    dim=3,
+                    num_links=2,
+                    cluster_axis=0,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    buffer_key="SAMPLING",
                 )
                 tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
                 ttnn.deallocate(tt_out_gathered)
