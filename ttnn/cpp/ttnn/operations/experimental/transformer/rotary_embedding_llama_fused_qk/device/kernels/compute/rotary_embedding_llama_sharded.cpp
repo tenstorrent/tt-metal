@@ -14,12 +14,12 @@ ALWI void REL() { release_dst(); }
 
 namespace NAMESPACE {
 void MAIN {
-    uint32_t rt_args_idx = 0;
-    const bool has_work = get_arg_val<uint32_t>(rt_args_idx++);
+    const bool has_work = get_arg_val<uint32_t>(0);
+    const uint32_t core_type = get_arg_val<uint32_t>(1);
+    // const bool is_q = false;
     if (!has_work) {
         return;
     }
-    const bool is_q = get_arg_val<uint32_t>(rt_args_idx++);
 
     // First 6 args for q and k heads
     // - First 3 are for q
@@ -33,7 +33,7 @@ void MAIN {
     uint32_t in_cb = q_in_cb;
     uint32_t out_cb = q_out_cb;
     uint32_t Ht = q_Ht;
-    if (!is_q) {
+    if (core_type == 1) {
         in_cb = k_in_cb;
         out_cb = k_out_cb;
         Ht = k_Ht;
@@ -53,18 +53,18 @@ void MAIN {
     binary_op_init_common(rotated_in_interm_cb, sin_cb, sin_interm_cb);  // General Init for all binary ops
 
     // Get the trans_mat
-    constexpr uint32_t onetile = 1;
-    cb_reserve_back(trans_mat_cb, onetile);
-    cb_push_back(trans_mat_cb, onetile);
-    cb_wait_front(trans_mat_cb, onetile);
+    // constexpr uint32_t onetile = 1;
+    // cb_reserve_back(trans_mat_cb, 1);
+    // cb_push_back(trans_mat_cb, 1);
+    // cb_wait_front(trans_mat_cb, 1);
 
-    // Get the sin/cos matrices
-    // TODO: To parallelize across multiple batch, this should be in a batch loop
-    cb_reserve_back(sin_cb, Wt);
-    cb_reserve_back(cos_cb, Wt);
+    // // Get the sin/cos matrices
+    // // TODO: To parallelize across multiple batch, this should be in a batch loop
+    // cb_reserve_back(sin_cb, Wt);
+    // cb_reserve_back(cos_cb, Wt);
 
-    cb_push_back(sin_cb, Wt);
-    cb_push_back(cos_cb, Wt);
+    // cb_push_back(sin_cb, Wt);
+    // cb_push_back(cos_cb, Wt);
 
     for (uint32_t ht = 0; ht < Ht; ht++) {  // Over n_heads_t dimension
         cb_reserve_back(rotated_in_interm_cb, Wt);
@@ -127,10 +127,10 @@ void MAIN {
     }
 
     // Done with the sin/cos matrices, so remove from CB
-    cb_pop_front(sin_cb, Wt);
-    cb_pop_front(cos_cb, Wt);
+    // cb_pop_front(sin_cb, Wt);
+    // cb_pop_front(cos_cb, Wt);
 
     // Done with the transformation matrix, so remove from CB
-    cb_pop_front(trans_mat_cb, onetile);
+    // cb_pop_front(trans_mat_cb, 1);
 }
 }  // namespace NAMESPACE

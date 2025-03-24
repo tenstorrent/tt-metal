@@ -191,11 +191,14 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
             .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_kernel_args});
 
     // Runtime args to differentiate between q, k or no work groups
-    constexpr bool has_work = true;
-    constexpr bool is_q = true;  // If not q, must be k
-    tt::tt_metal::SetRuntimeArgs(program, rotary_embedding_kernel_id, q_cores, {has_work, is_q});
-    tt::tt_metal::SetRuntimeArgs(program, rotary_embedding_kernel_id, k_cores, {has_work, !is_q});
-    tt::tt_metal::SetRuntimeArgs(program, rotary_embedding_kernel_id, unused_cores, {!has_work});
+    enum CoreType {
+        NO_WORK = 0,
+        IS_Q = 1,
+        IS_K = 2,
+    };
+    tt::tt_metal::SetRuntimeArgs(program, rotary_embedding_kernel_id, q_cores, {1, 0});
+    tt::tt_metal::SetRuntimeArgs(program, rotary_embedding_kernel_id, k_cores, {1, 1});
+    tt::tt_metal::SetRuntimeArgs(program, rotary_embedding_kernel_id, unused_cores, {0});
 
     auto override_runtime_arguments_callback =
         [cb_q_input, cb_k_input, cb_cos, cb_sin, cb_trans_mat, cb_q_output, cb_k_output](
