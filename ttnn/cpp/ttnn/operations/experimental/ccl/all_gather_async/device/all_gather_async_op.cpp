@@ -198,7 +198,9 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
     const ttnn::MeshCoordinate& mesh_coord,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto mesh_device = dynamic_cast<MeshDevice*>(input_tensors[0].device());
+    // TODO (Issue #19569): Use create_mesh_workload instead, since the programs in the MeshWorkload
+    // share global semaphores.
+    auto mesh_device = input_tensors[0].mesh_device();
     const auto target_device = mesh_device->get_device(mesh_coord);
     AllGatherAsyncVersion version = select_version(input_tensors[0]);
 
@@ -366,7 +368,7 @@ Tensor all_gather_async(
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "all_gather_async op is only supported for Fast Dispatch");
-    auto mesh_device = dynamic_cast<MeshDevice*>(input_tensor.get_workers()[0]);
+    auto mesh_device = input_tensor.mesh_device();
     TT_FATAL(mesh_device, "Input tensor to all_gather_async must be allocated on a MeshDevice");
     uint32_t num_devices = input_tensor.device_storage().specs.size();
 
@@ -461,7 +463,7 @@ Tensor all_gather_async(
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "all_gather_async op is only supported for Fast Dispatch");
-    auto mesh_device = dynamic_cast<MeshDevice*>(input_tensor.get_workers()[0]);
+    auto mesh_device = input_tensor.mesh_device();
     TT_FATAL(mesh_device, "Input tensor to all_gather_async must be allocated on a MeshDevice");
     uint32_t num_devices = input_tensor.device_storage().specs.size();
     TT_FATAL(num_devices > 1, "all_gather_async op will only work for num_devices > 1, but has {}", num_devices);
