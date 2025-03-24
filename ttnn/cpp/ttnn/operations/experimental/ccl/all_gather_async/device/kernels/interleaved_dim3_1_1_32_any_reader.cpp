@@ -183,50 +183,112 @@ inline void pack_llama_8b_n300(
 }
 
 template <bool DRAM>
-inline void pack_falcon40_decode(
+inline void pack_falcon40(
     uint32_t num_tiles, uint32_t ring_size, uint32_t tile_cols_per_chip, InterleavedAddrGenFast<DRAM>& addrgen) {
     uint32_t tile_id = 0;
-    if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == T3K_FALCON40_DECODE_8192) {
-        DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] T3K_FALCON40_DECODE_8192 \n";
-        static const uint32_t input_width = 32;  // 8192/8/32
-        uint32_t contig2_total = 12;
+    const uint32_t num_contig2 = 12;
+    uint32_t row = num_tiles / tile_cols_per_chip;
+    if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == T3K_FALCON40_8192) {
+        DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] T3K_FALCON40_8192 row: " << row << " \n";
+        const uint32_t input_width = 32;  // 8192/8/32
         if constexpr (my_chip_id % 3 == 0) {
-            pack_2contig_bf8(contig2_total, tile_id, addrgen);
-            pack_non_contig(8, tile_id, addrgen);
+            for (uint32_t i = 0; i < row; i++) {
+                if (i % 3 == 0) {
+                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
+                    pack_non_contig(8, tile_id, addrgen);
+                } else if (i % 3 == 1) {
+                    pack_non_contig(8, tile_id, addrgen);
+                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
+                } else {
+                    pack_non_contig(4, tile_id, addrgen);
+                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
+                    pack_non_contig(4, tile_id, addrgen);
+                }
+            }
         } else if constexpr (my_chip_id % 3 == 1) {
-            tile_id = 4;
-            pack_2contig_bf8(contig2_total, tile_id, addrgen);
-            pack_non_contig(4, tile_id, addrgen);
-            tile_id = 0;
-            pack_non_contig(4, tile_id, addrgen);
+            for (uint32_t i = 0; i < row; i++) {
+                if (i % 3 == 0) {
+                    pack_non_contig(4, tile_id, addrgen);
+                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
+                    pack_non_contig(4, tile_id, addrgen);
+                } else if (i % 3 == 1) {
+                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
+                    pack_non_contig(8, tile_id, addrgen);
+                } else {
+                    pack_non_contig(8, tile_id, addrgen);
+                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
+                }
+            }
         } else {
-            tile_id = 8;
-            pack_2contig_bf8(contig2_total, tile_id, addrgen);
-            tile_id = 0;
-            pack_non_contig(8, tile_id, addrgen);
+            for (uint32_t i = 0; i < row; i++) {
+                if (i % 3 == 0) {
+                    pack_non_contig(8, tile_id, addrgen);
+                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
+                } else if (i % 3 == 1) {
+                    pack_non_contig(4, tile_id, addrgen);
+                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
+                    pack_non_contig(4, tile_id, addrgen);
+                } else {
+                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
+                    pack_non_contig(8, tile_id, addrgen);
+                }
+            }
         }
-    } else if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == T3K_FALCON40_DECODE_32768) {
-        DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] T3K_FALCON40_DECODE_32768 \n";
-        static const uint32_t input_width = 128;  // 32768/8/32
+    } else if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == T3K_FALCON40_32768) {
+        DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] T3K_FALCON40_32768 row: " << row << " \n";
+        const uint32_t input_width = 128;  // 32768/8/32
         uint32_t num_full_contig = 24;
-        uint32_t num_contig2 = 12;
         if constexpr (my_chip_id % 3 == 0) {
-            pack_full_contig(num_full_contig, tile_id, addrgen);
-            pack_2contig_bf8(num_contig2, tile_id, addrgen);
-            pack_non_contig(8, tile_id, addrgen);
+            for (uint32_t i = 0; i < row; i++) {
+                if (i % 3 == 0) {
+                    pack_full_contig(num_full_contig, tile_id, addrgen);
+                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
+                    pack_non_contig(8, tile_id, addrgen);
+                } else if (i % 3 == 1) {
+                    pack_non_contig(8, tile_id, addrgen);
+                    pack_full_contig(num_full_contig, tile_id, addrgen);
+                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
+                } else {
+                    pack_non_contig(4, tile_id, addrgen);
+                    pack_full_contig(num_full_contig, tile_id, addrgen);
+                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
+                    pack_non_contig(4, tile_id, addrgen);
+                }
+            }
         } else if constexpr (my_chip_id % 3 == 1) {
-            tile_id = 4;
-            pack_full_contig(num_full_contig, tile_id, addrgen);
-            pack_2contig_bf8(num_contig2, tile_id, addrgen);
-            pack_non_contig(4, tile_id, addrgen);
-            tile_id = 0;
-            pack_non_contig(4, tile_id, addrgen);
+            for (uint32_t i = 0; i < row; i++) {
+                if (i % 3 == 0) {
+                    pack_non_contig(4, tile_id, addrgen);
+                    pack_full_contig(num_full_contig, tile_id, addrgen);
+                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
+                    pack_non_contig(4, tile_id, addrgen);
+                } else if (i % 3 == 1) {
+                    pack_full_contig(num_full_contig, tile_id, addrgen);
+                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
+                    pack_non_contig(8, tile_id, addrgen);
+                } else {
+                    pack_non_contig(8, tile_id, addrgen);
+                    pack_full_contig(num_full_contig, tile_id, addrgen);
+                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
+                }
+            }
         } else {
-            tile_id = 8;
-            pack_full_contig(num_full_contig, tile_id, addrgen);
-            pack_2contig_bf8(num_contig2, tile_id, addrgen);
-            tile_id = 0;
-            pack_non_contig(8, tile_id, addrgen);
+            for (uint32_t i = 0; i < row; i++) {
+                if (i % 3 == 0) {
+                    pack_non_contig(8, tile_id, addrgen);
+                    pack_full_contig(num_full_contig, tile_id, addrgen);
+                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
+                } else if (i % 3 == 1) {
+                    pack_non_contig(4, tile_id, addrgen);
+                    pack_full_contig(num_full_contig, tile_id, addrgen);
+                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
+                    pack_non_contig(4, tile_id, addrgen);
+                } else {
+                    pack_full_contig(num_full_contig, tile_id, addrgen);
+                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
+                    pack_non_contig(8, tile_id, addrgen);
+                }
+            }
         }
     } else {
         // assert
@@ -364,6 +426,7 @@ void kernel_main() {
     DPRINT << "tensor0_page_size: " << (uint32_t)tensor0_page_size << "\n";
     DPRINT << "last_dim: " << (uint32_t)last_dim << "\n";
     DPRINT << "num_banks: " << (uint32_t)num_banks << "\n";
+    DPRINT << "bf8_dim3_type: " << (uint32_t)bf8_dim3_type << "\n";
 
     DPRINT << "rt args: \n";
     DPRINT << "tensor_address0: " << (uint32_t)tensor_address0 << "\n";
@@ -386,14 +449,10 @@ void kernel_main() {
             pack_contig_tiles_dim3_bf16<is_dram>(num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
         } else {
             switch ((BF8_DIM3_TYPE)bf8_dim3_type) {
-                case T3K_FALCON40_DECODE_8192:
-                case T3K_FALCON40_DECODE_32768:
-                    pack_falcon40_decode<is_dram>(num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
+                case T3K_FALCON40_8192:
+                case T3K_FALCON40_32768:
+                    pack_falcon40<is_dram>(num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
                     break;
-                // case T3K_FALCON40_PREFILL_8192:
-                // case T3K_FALCON40_PREFILL_32768:
-                // pack_falcon40_prefill<is_dram>(num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
-                // break;
                 case LLAMA_8B_N300:
                     pack_llama_8b_n300<is_dram>(num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
                     break;

@@ -267,7 +267,7 @@ inline void fabric_send_llama_8b_n300(
 }
 
 template <bool DRAM>
-inline void fabric_send_falcon40_decode(
+inline void fabric_send_falcon40(
     uint32_t num_tiles,
     uint32_t ring_size,
     uint32_t tile_cols_per_chip,
@@ -275,58 +275,144 @@ inline void fabric_send_falcon40_decode(
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
     FabricConnectionManager& fabric_connection) {
-    if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == T3K_FALCON40_DECODE_8192) {
-        DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] T3K_FALCON40_DECODE_8192 \n";
-        static const uint32_t input_width = 32;  // 8192/8/32
+    const uint32_t num_contig2 = 12;
+    uint32_t row = num_tiles / tile_cols_per_chip;
+    if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == T3K_FALCON40_8192) {
+        DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] T3K_FALCON40_DECODE_8192 row: " << row << "\n";
+        const uint32_t input_width = 32;  // 8192/8/32
         uint32_t tile_id = input_width * my_chip_id;
-        uint32_t contig2_total = 12;
         if constexpr (my_chip_id % 3 == 0) {
-            fabric_send_2contig_bf8(
-                contig2_total, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
-            fabric_send_non_contig(8, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+            for (uint32_t i = 0; i < row; i++) {
+                if (i % 3 == 0) {
+                    fabric_send_2contig_bf8(
+                        num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_non_contig(8, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                } else if (i % 3 == 1) {
+                    fabric_send_non_contig(8, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_2contig_bf8(
+                        num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                } else {
+                    fabric_send_non_contig(4, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_2contig_bf8(
+                        num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_non_contig(4, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                }
+                tile_id += input_width * 7;
+            }
         } else if constexpr (my_chip_id % 3 == 1) {
-            tile_id = 4 + input_width * my_chip_id;
-            fabric_send_2contig_bf8(
-                contig2_total, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
-            fabric_send_non_contig(4, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
-            tile_id = input_width * my_chip_id;
-            fabric_send_non_contig(4, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+            for (uint32_t i = 0; i < row; i++) {
+                if (i % 3 == 0) {
+                    fabric_send_non_contig(4, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_2contig_bf8(
+                        num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_non_contig(4, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                } else if (i % 3 == 1) {
+                    fabric_send_2contig_bf8(
+                        num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_non_contig(8, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                } else {
+                    fabric_send_non_contig(8, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_2contig_bf8(
+                        num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                }
+                tile_id += input_width * 7;
+            }
         } else {
-            tile_id = 8 + input_width * my_chip_id;
-            fabric_send_2contig_bf8(
-                contig2_total, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
-            tile_id = input_width * my_chip_id;
-            fabric_send_non_contig(8, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+            for (uint32_t i = 0; i < row; i++) {
+                if (i % 3 == 0) {
+                    fabric_send_non_contig(8, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_2contig_bf8(
+                        num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                } else if (i % 3 == 1) {
+                    fabric_send_non_contig(4, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_2contig_bf8(
+                        num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_non_contig(4, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                } else {
+                    fabric_send_2contig_bf8(
+                        num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_non_contig(8, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                }
+                tile_id += input_width * 7;
+            }
         }
-    } else if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == T3K_FALCON40_DECODE_32768) {
-        DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] T3K_FALCON40_DECODE_32768 \n";
-        static const uint32_t input_width = 128;  // 32768/8/32
-        uint32_t num_full_contig = 24;
-        uint32_t num_contig2 = 12;
+    } else if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == T3K_FALCON40_32768) {
+        const uint32_t input_width = 128;  // 32768/8/32
         uint32_t tile_id = input_width * my_chip_id;
+        uint32_t num_full_contig = 24;
+        DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] T3K_FALCON40_DECODE_32768 row: " << row << "\n";
         if constexpr (my_chip_id % 3 == 0) {
-            fabric_send_full_contig(
-                num_full_contig, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
-            fabric_send_2contig_bf8(
-                num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
-            fabric_send_non_contig(8, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+            for (uint32_t i = 0; i < row; i++) {
+                if (i % 3 == 0) {
+                    fabric_send_full_contig(
+                        num_full_contig, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_2contig_bf8(
+                        num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_non_contig(8, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                } else if (i % 3 == 1) {
+                    fabric_send_non_contig(8, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_full_contig(
+                        num_full_contig, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_2contig_bf8(
+                        num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                } else {
+                    fabric_send_non_contig(4, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_full_contig(
+                        num_full_contig, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_2contig_bf8(
+                        num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_non_contig(4, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                }
+                tile_id += input_width * 7;
+            }
         } else if constexpr (my_chip_id % 3 == 1) {
-            tile_id += 4;
-            fabric_send_full_contig(
-                num_full_contig, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
-            fabric_send_2contig_bf8(
-                num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
-            fabric_send_non_contig(4, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
-            tile_id = input_width * my_chip_id;
-            fabric_send_non_contig(4, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+            for (uint32_t i = 0; i < row; i++) {
+                if (i % 3 == 0) {
+                    fabric_send_non_contig(4, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_full_contig(
+                        num_full_contig, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_2contig_bf8(
+                        num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_non_contig(4, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                } else if (i % 3 == 1) {
+                    fabric_send_full_contig(
+                        num_full_contig, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_2contig_bf8(
+                        num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_non_contig(8, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                } else {
+                    fabric_send_non_contig(8, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_full_contig(
+                        num_full_contig, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_2contig_bf8(
+                        num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                }
+                tile_id += input_width * 7;
+            }
         } else {
-            tile_id += 8;
-            fabric_send_full_contig(
-                num_full_contig, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
-            fabric_send_2contig_bf8(
-                num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
-            tile_id = input_width * my_chip_id;
-            fabric_send_non_contig(8, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+            for (uint32_t i = 0; i < row; i++) {
+                if (i % 3 == 0) {
+                    fabric_send_non_contig(8, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_full_contig(
+                        num_full_contig, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_2contig_bf8(
+                        num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                } else if (i % 3 == 1) {
+                    fabric_send_non_contig(4, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_full_contig(
+                        num_full_contig, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_2contig_bf8(
+                        num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_non_contig(4, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                } else {
+                    fabric_send_full_contig(
+                        num_full_contig, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_2contig_bf8(
+                        num_contig2, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                    fabric_send_non_contig(8, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+                }
+                tile_id += input_width * 7;
+            }
         }
     }
 }
@@ -638,9 +724,9 @@ void kernel_main() {
                 fabric_connection);
         } else {
             switch ((BF8_DIM3_TYPE)bf8_dim3_type) {
-                case T3K_FALCON40_DECODE_8192:
-                case T3K_FALCON40_DECODE_32768:
-                    fabric_send_falcon40_decode<is_dram>(
+                case T3K_FALCON40_8192:
+                case T3K_FALCON40_32768:
+                    fabric_send_falcon40<is_dram>(
                         num_tiles_per_chip,
                         ring_size,
                         tile_cols_per_chip,
@@ -649,10 +735,6 @@ void kernel_main() {
                         pkt_hdr_backward,
                         fabric_connection);
                     break;
-                // case T3K_FALCON40_PREFILL_8192:
-                // case T3K_FALCON40_PREFILL_32768:
-                //     fabric_send_falcon40_prefill<is_dram>(num_tiles_per_chip, ring_size, tile_cols_per_chip,
-                //     tensor0_addrgen); break;
                 case LLAMA_8B_N300:
                     fabric_send_llama_8b_n300<is_dram>(
                         num_tiles_per_chip,

@@ -364,7 +364,6 @@ def run_all_gather_impl(
 )
 @pytest.mark.parametrize("num_iters", [10])
 @pytest.mark.parametrize("enable_async", [True])
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 65536 * 32}], indirect=True)
 def test_all_gather(
     t3k_mesh_device,
     # pcie_mesh_device,
