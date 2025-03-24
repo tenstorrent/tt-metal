@@ -97,6 +97,7 @@ jobs:
           WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/bert_tiny/tests -m models_device_performance_bare_metal
           WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov4/tests -m models_device_performance_bare_metal
           WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/distilbert/tests -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest tests/device_perf_tests/dram_bandwidth/test_dram_bandwidth.py::test_perf_device_bare_metal
           python3 models/perf/merge_device_perf_results.py
 
       - name: Check device perf report exists

@@ -169,6 +169,11 @@ void device_module(py::module& m_device) {
             .def(
                 "dram_grid_size", &IDevice::dram_grid_size, "Grid size (x, y) denoting dram cores that can be targeted")
             .def(
+                "get_optimal_dram_bank_to_logical_worker_assignment",
+                &IDevice::get_optimal_dram_bank_to_logical_worker_assignment,
+                "Top level function that users (ex: Op Writers) can use to assign Tensix Worker cores as DRAM readers "
+                "or writers. Returns logical coordinates of optimally placed workers.")
+            .def(
                 "worker_core_from_logical_core",
                 &IDevice::worker_core_from_logical_core,
                 "Convert a logical core coordinate into a physical worker core coordinate")
