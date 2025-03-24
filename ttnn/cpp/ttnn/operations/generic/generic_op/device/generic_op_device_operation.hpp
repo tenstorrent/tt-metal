@@ -28,9 +28,8 @@ struct GenericOpDeviceOperation {
     using spec_return_value_t = TensorSpec;
 
     struct tensor_args_t {
-        const std::vector<Tensor>& input_tensors;
-        // const Tensor& input_tensors;
-        const std::optional<Tensor>& output_tensor;
+        const std::vector<Tensor>& io_tensors;
+        // const Tensor& output_tensor;
         // reflections assume there are no two params of the same type?
         // note: in instantiation of function template specialization 'reflect::size<ttnn::operations::generic::GenericOpDeviceOperation::tensor_args_t>' requested here
     };
@@ -77,10 +76,9 @@ struct GenericOpDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const std::vector<Tensor>& input_tensors, 
-        // const Tensor& input_tensors,
-        const operation_attributes_t& operation_attributes, 
-        const std::optional<const Tensor>& output_tensor);
+        const std::vector<Tensor>& io_tensors, 
+        const operation_attributes_t& operation_attributes
+    );
 
     // static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };  // struct GenericOpDeviceOperation
