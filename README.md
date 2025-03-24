@@ -52,6 +52,13 @@
 > - The reported LLM performance is for an input sequence length (number of rows filled in the KV cache) of 128 for all models except Mamba (which can accept any sequence length).
 > - The t/s/u reported is the throughput of the first token generated after prefill, i.e. 1 / inter token latency.
 
+## Speech-to-Text
+
+| Model                              | Batch | Hardware                                                 | ttft (ms) | t/s/u | Target t/s/u | t/s    | TT-Metalium Release                                                       |
+|------------------------------------|-------|----------------------------------------------------------|-----------|-------|--------------|--------|---------------------------------------------------------------------------|
+| [Whisper (distil-large-v3)](./models/demos/whisper)  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 252       | 43.4  |              | 43.4   | [v0.57.0-rc33](https://github.com/tenstorrent/tt-metal/tree/v0.57.0-rc33) |
+
+
 ## CNNs
 
 | Model                                                                       | Batch | Hardware                                                 | fps     | Target fps | Release     |
