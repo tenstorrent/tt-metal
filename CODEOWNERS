@@ -174,19 +174,16 @@ functional_*/ @uaydonat @esmalTT
 models/common @yieldthought @mtairum @uaydonat
 models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat
 models/demos @uaydonat
-models/demos/bert @uaydonat
-models/demos/bert_tiny @uaydonat
-models/demos/wormhole/bert_tiny @uaydonat
+models/**/bert*/ @TT-BrianLiu @uaydonat
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
-models/demos/convnet_mnist @uaydonat
-models/demos/distilbert @uaydonat
-models/demos/mnist @uaydonat
-models/demos/roberta @uaydonat
-models/demos/squeezebert @uaydonat
+models/*/convnet_mnist/ @sjameelTT @uaydonat
+models/**/distilbert/ @tt-aho @uaydonat
+models/*/mnist/ @esmalTT @uaydonat
+models/*/roberta/ @sraizada-tt @uaydonat
+models/*/squeezebert/ @cfjchu @uaydonat
 models/demos/ttnn_falcon7b @cfjchu @uaydonat
-models/demos/vgg @uaydonat
+models/*/vgg/ @bbradelTT @uaydonat
 models/demos/wormhole @uaydonat
-models/demos/wormhole/distilbert @uaydonat
 models/demos/wormhole/vit @mbahnasTT @uaydonat
 models/demos/t3000 @uaydonat
 models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat
@@ -211,10 +208,12 @@ models/demos/grayskull @uaydonat
 models/demos/yolov4 @dvartaniansTT @mbahnasTT @tenstorrent/metalium-developers-convolutions
 models/demos/wormhole/yolov4 @dvartaniansTT @mbahnasTT @tenstorrent/metalium-developers-convolutions
 models/demos/**/*resnet*  @tt-aho @tenstorrent/metalium-developers-convolutions
-models/experimental @uaydonat
+models/experimental/ @ayerofieiev-tt @uaydonat
 models/experimental/functional_unet @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions
 models/demos/wormhole/vit @mbahnasTT @dvartaniansTT @uaydonat
 models/demos/vit  @mbahnasTT @dvartaniansTT @uaydonat
+models/experimental/*yolo* @mbahnasTT @uaydonat
+models/experimental/stable_diffusion @mbahnasTT @uaydonat
 models/demos/segformer @mbahnasTT @uaydonat @tenstorrent/metalium-developers-convolutions
 models/perf/ @yieldthought @uaydonat
 models/perf/perf_report.py @yieldthought @uaydonat
