@@ -98,6 +98,7 @@ jobs:
         GITHUB_ACTIONS: true
         LOGURU_LEVEL: DEBUG
         PYTHONPATH: /work
+        TT_METAL_HOME: /work
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -108,9 +109,9 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: Install Git
+      - name: Install Extra Tools
         run: |
-          yum install -y git
+          yum install -y git wget
           git --version  # Verify installation
 
       - name: ⬇️ Checkout
@@ -134,7 +135,12 @@ jobs:
         run: |
           source /opt/conda/etc/profile.d/conda.sh
           conda activate metalium_env
-          cp -r $CONDA_PREFIX/libexec/tt-metalium/tt_metal/soc_descriptors/ $CONDA_PREFIX/share/tt-metalium/tt_metal/
+          export SITE_PACKAGES_DIR="$CONDA_PREFIX/lib/python$(python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')/site-packages"
+          rm -rf $CONDA_PREFIX/share/tt-metalium/runtime/sfpi
+          wget https://github.com/tenstorrent/sfpi/releases/download/v6.5.0/sfpi-release.tgz
+          tar -xzf sfpi-release.tgz
+          mv sfpi $CONDA_PREFIX/share/tt-metalium/runtime/
+          ln -sf $SITE_PACKAGES_DIR/runtime runtime
           ${{ matrix.test-group.cmd }}
 
       - uses: ./.github/actions/slack-report
