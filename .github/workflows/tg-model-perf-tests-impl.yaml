@@ -81,13 +81,9 @@ jobs:
           docker_image: ${{ inputs.docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
-            -e LOGURU_LEVEL=INFO
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e PYTHONPATH=${{ github.workspace }}
-            -e GITHUB_ACTIONS=true
-            -e CI=true
             -v /mnt/MLPerf:/mnt/MLPerf:ro
           install_wheel: true
           run_args: |
@@ -102,13 +98,6 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e GITHUB_REPOSITORY=${{ env.GITHUB_REPOSITORY }}
-            -e GITHUB_SHA=${{ env.GITHUB_SHA }}
-            -e GITHUB_REF_NAME=${{ env.GITHUB_REF_NAME }}
-            -e GITHUB_RUN_ID=${{ github.run_id }}
-            -e GITHUB_TRIGGERING_ACTOR=${{ env.GITHUB_TRIGGERING_ACTOR }}
-            -e GITHUB_RUNNER_NAME=${{ env.GITHUB_RUNNER_NAME }}
-            -e RUNNER_NAME=${{ env.RUNNER_NAME }}
           install_wheel: true
           run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
       - name: Upload benchmark data
