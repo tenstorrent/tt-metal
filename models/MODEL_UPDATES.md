@@ -4,6 +4,15 @@
 >
 > Please refer to the front-page [README](../README.md) for the latest verified release for each model.
 
+## March 24, 2025
+
+### [TT-Transformers](tt_transformers)
+- Moved and renamed `models/demos/llama3` to [models/tt_transformers](tt_transformers) which is a commonized library for running LLMs similar to the Llama3 family.
+- Added support for hybrid data / tensor parallelism to the models that are part of [TT-Transformers](tt_transformers).
+
+### [Whisper](demos/whisper)
+- Added support for the Whisper (distil-large-v3) model on N150.
+
 ## March 10, 2025
 
 ### [QwQ-32B](tt_transformers)
