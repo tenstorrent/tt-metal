@@ -128,6 +128,142 @@ void append_fabric_connection_rt_args(
             writer_rt_args);
     }
 }
+
+struct ReadRequest {
+    uint32_t bank_id;
+    uint32_t read_offset;
+    uint32_t read_size;  // in pages
+};
+
+std::vector<std::vector<ReadRequest>> distributeWorkEvenly(
+    uint32_t num_shards, uint32_t num_workers, uint32_t tiles_per_core_width, uint32_t packet_size) {
+    // 1) Compute total number of pages and total packets
+    uint32_t total_pages = num_shards * tiles_per_core_width;
+    uint32_t total_packets = (total_pages + packet_size - 1) / packet_size;  // ceil division
+
+    // 2) Figure out how many packets each worker should handle
+    //    Distribute "total_packets" as evenly as possible among the "num_workers".
+    uint32_t base_packets = total_packets / num_workers;  // integer division
+    uint32_t remainder = total_packets % num_workers;     // leftover packets to distribute
+    // So the first 'remainder' workers get (base_packets + 1), the rest get base_packets
+    std::vector<uint32_t> packets_per_worker(num_workers, base_packets);
+    for (uint32_t w = 0; w < remainder; ++w) {
+        packets_per_worker[w] += 1;
+    }
+
+    // 3) Prepare the output structure: each worker gets a list of (bank_id, read_size).
+    std::vector<std::vector<ReadRequest>> schedule(num_workers);
+
+    // We'll iterate over all banks in order [0..num_shards-1],
+    // reading them chunk by chunk until we've assigned all pages.
+    uint32_t current_bank = 0;
+    uint32_t pages_left_in_bank = (num_shards > 0) ? tiles_per_core_width : 0;
+
+    // We'll move through workers [0..num_workers-1].
+    uint32_t current_worker = 0;
+    uint32_t formed_packets = 0;  // how many packets the current worker has formed
+
+    // leftover_in_packet tells us how many pages are *already* in the partial packet buffer
+    // for the current worker (mod packet_size).
+    uint32_t leftover_in_packet = 0;
+
+    while (current_bank < num_shards && current_worker < num_workers) {
+        // If this worker has already formed all of its allocated packets, move to the next one.
+        if (formed_packets == packets_per_worker[current_worker]) {
+            current_worker++;
+            // If we’re moving to a new worker, reset leftover/packets_formed
+            if (current_worker < num_workers) {
+                formed_packets = 0;
+                leftover_in_packet = 0;
+            }
+            continue;
+        }
+        // If we've also run out of workers entirely, break (though normally that means we have no pages left).
+        if (current_worker == num_workers) {
+            break;
+        }
+
+        // We will read some chunk of the current bank. Decide how large that chunk should be.
+        // Two constraints:
+        //   1) We cannot read more than "pages_left_in_bank"
+        //   2) We do not want to exceed the remaining packet quota for this worker
+
+        // The maximum # of new full packets the worker can still form is:
+        uint32_t packets_remaining_for_worker = packets_per_worker[current_worker] - formed_packets;
+
+        // The total # of pages we can still accumulate for this worker
+        // without exceeding its packet quota is:
+        //   packets_remaining_for_worker * packet_size - leftover_in_packet
+        //
+        // Because leftover_in_packet pages are already in the partial packet buffer.
+        uint32_t max_pages_for_worker = packets_remaining_for_worker * packet_size - leftover_in_packet;
+
+        // So the chunk we read must be <= pages_left_in_bank
+        // and <= max_pages_for_worker
+        uint32_t chunk_size = (pages_left_in_bank < max_pages_for_worker) ? pages_left_in_bank : max_pages_for_worker;
+
+        // Where in the bank does the chunk start
+        uint32_t read_offset = std::max(0, int(tiles_per_core_width) - int(pages_left_in_bank));
+
+        // Create a read request for that chunk
+        schedule[current_worker].push_back({current_bank, read_offset, chunk_size});
+
+        // Update leftover and count how many packets we formed by adding this chunk
+        uint32_t new_total = leftover_in_packet + chunk_size;
+        uint32_t new_packets = new_total / packet_size;  // how many full packets formed now
+        leftover_in_packet = new_total % packet_size;
+
+        formed_packets += new_packets;  // add the new fully formed packets
+
+        // We consumed 'chunk_size' pages from this bank
+        pages_left_in_bank -= chunk_size;
+
+        // If we've exhausted this bank, move on to the next
+        if (pages_left_in_bank == 0) {
+            current_bank++;
+            if (current_bank < num_shards) {
+                pages_left_in_bank = tiles_per_core_width;
+            }
+        }
+    }
+
+    // Return the schedule
+    return schedule;
+}
+
+uint32_t find_atomic_inc_core(std::vector<std::vector<ReadRequest>> schedule) {
+    uint32_t atomic_inc_core = 0;
+    uint32_t min_packets = schedule[0].size();
+    for (uint32_t i = 1; i < schedule.size(); ++i) {
+        if (schedule[i].size() < min_packets) {
+            min_packets = schedule[i].size();
+            atomic_inc_core = i;
+        }
+    }
+    return atomic_inc_core;
+}
+
+std::vector<ReadRequest> flatten_schedule(std::vector<std::vector<ReadRequest>> schedule) {
+    // create a flattened schedule
+    std::vector<ReadRequest> schedule_flattened;
+    for (uint32_t i = 0; i < schedule.size(); ++i) {
+        schedule_flattened.insert(schedule_flattened.end(), schedule[i].begin(), schedule[i].end());
+    }
+    return schedule_flattened;
+}
+
+std::string schedule_to_string(std::vector<std::vector<ReadRequest>> schedule) {
+    auto flattened_schedule = flatten_schedule(schedule);
+    std::string result = "{";
+    for (uint32_t i = 0; i < flattened_schedule.size(); ++i) {
+        result += "{" + std::to_string(flattened_schedule[i].bank_id) + ", " +
+                  std::to_string(flattened_schedule[i].read_offset) + ", " +
+                  std::to_string(flattened_schedule[i].read_size) + "}, ";
+    }
+    result += "}";
+    return result;
+}
+
 }  // namespace detail
 
 LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::cached_program_t
@@ -248,6 +384,15 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         num_workers_per_link * num_links,
         shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
+    auto schedule = detail::distributeWorkEvenly(
+        input_shard_cores_per_device, num_workers_per_link * num_links, tiles_per_core_width, num_pages_per_packet);
+    auto atomic_inc_core = detail::find_atomic_inc_core(schedule);
+    auto schedule_to_string = detail::schedule_to_string(schedule);
+    if (operation_attributes.ring_index == 3) {
+        std::cout << "schedule: " << schedule_to_string << std::endl;
+        std::cout << "atomic_inc_core: " << atomic_inc_core << std::endl;
+    }
+
     // if (operation_attributes.ring_index == 3) {
     //     std::cout << "packet_worker_cores_grid: " << packet_worker_cores_grid.str() << std::endl;
     //     std::cout << "sender_core_grid: " << sender_core_grid.str() << std::endl;
@@ -366,6 +511,18 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     auto cb_fabric_sender_handle = tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, fabric_sender_cb_config);
     auto cb_accumulator_handle = tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, accumulator_cb_config);
 
+    auto input_cores =
+        corerange_to_cores(input_grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    auto output_cores =
+        corerange_to_cores(output_grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    auto sender_cores =
+        corerange_to_cores(sender_core_grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    auto all_cores =
+        corerange_to_cores(all_cores_grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    auto packet_worker_cores = corerange_to_cores(
+        packet_worker_cores_grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    auto packet_receiver_core = packet_worker_cores.at(0);
+
     const uint32_t chip_id = ring_index;
 
     auto to_worker_cores = [device](const std::vector<CoreCoord>& cores) -> std::vector<CoreCoord> {
@@ -375,6 +532,13 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         }
         return worker_cores;
     };
+
+    auto sender_atomic_inc_core = sender_cores.at(atomic_inc_core);
+    auto sender_atomic_inc_core_worker_core = to_worker_cores({sender_atomic_inc_core}).at(0);
+    if (operation_attributes.ring_index == 3) {
+        std::cout << "sender_atomic_inc_core: " << sender_atomic_inc_core.str() << std::endl;
+        std::cout << "sender_atomic_inc_core_worker_core: " << sender_atomic_inc_core_worker_core.str() << std::endl;
+    }
 
     auto packet_bounding_box = packet_worker_cores_grid.bounding_box();
     auto packet_start_worker_core = to_worker_cores({packet_bounding_box.start_coord});
@@ -400,21 +564,10 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         packet_end_worker_core.at(0).y,
     };
 
-    auto input_cores =
-        corerange_to_cores(input_grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-    auto output_cores =
-        corerange_to_cores(output_grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-    auto sender_cores =
-        corerange_to_cores(sender_core_grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-    auto all_cores =
-        corerange_to_cores(all_cores_grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-    auto packet_worker_cores = corerange_to_cores(
-        packet_worker_cores_grid, std::nullopt, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-    auto packet_receiver_core = packet_worker_cores.at(0);
-
     reader_defines["INPUT_CORE_XY"] = detail::cores_to_string(to_worker_cores(input_cores));
     reader_defines["OUTPUT_CORE_XY"] = detail::cores_to_string(to_worker_cores(output_cores));
     reader_defines["PACKET_WORKER_CORES"] = detail::cores_to_string(to_worker_cores(packet_worker_cores));
+    reader_defines["SCHEDULE"] = schedule_to_string;
     // if (operation_attributes.ring_index == 3) {
     //     std::cout << "input_cores: " << reader_defines["INPUT_CORE_XY"] << std::endl;
     // }
@@ -426,6 +579,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     // }
     // create local semaphore
     auto local_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores_grid, INVALID);
+    auto sender_ready_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores_grid, INVALID);
     // std::cout << "Program factory local_semaphore: " << local_semaphore << std::endl;
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -466,6 +620,9 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         packet_end_worker_core.at(0).y,
         packet_receiver_worker_core.x,
         packet_receiver_worker_core.y,
+        sender_atomic_inc_core_worker_core.x,
+        sender_atomic_inc_core_worker_core.y,
+        sender_cores.size(),
     };
 
     auto writer_defines = reader_defines;
@@ -518,21 +675,39 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     uint32_t is_reader_receiver_core_idx = 5;
     uint32_t reader_device_start_idx = 6;
     uint32_t reader_device_end_idx = 7;
+    uint32_t reader_sender_packet_start_idx = 8;
+    uint32_t reader_sender_packet_end_idx = 9;
 
-    uint32_t is_writer_sender_core_idx = 2;
-    uint32_t is_writer_worker_core_idx = 3;
-    uint32_t is_linear_output_page_start_idx = 4;
-    uint32_t writer_device_start_idx = 5;
-    uint32_t writer_device_end_idx = 6;
+    uint32_t is_writer_sender_core_idx = 3;
+    uint32_t is_writer_worker_core_idx = 4;
+    uint32_t is_linear_output_page_start_idx = 5;
+    uint32_t writer_device_start_idx = 6;
+    uint32_t writer_device_end_idx = 7;
+    uint32_t is_atomic_inc_core_idx = 8;
+    uint32_t writer_sender_packet_start_idx = 9;
+    uint32_t writer_sender_packet_end_idx = 10;
 
     TT_FATAL(
         (num_devices - 1) % sender_core_grid.num_cores() == 0,
         "num_devices must be divisible by sender_core_grid.num_cores()");
     uint32_t work_per_sender = (num_devices - 1) / sender_core_grid.num_cores();
 
+    uint32_t sender_packet_start = 0;
+    uint32_t sender_core_idx = 0;
+
     for (auto core : all_cores) {
         std::vector<uint32_t> writer_runtime_args = {
-            cross_device_semaphore->address(), local_semaphore, false, false, 0, 0, 0};
+            cross_device_semaphore->address(),
+            local_semaphore,
+            sender_ready_semaphore,
+            false,
+            false,
+            0,
+            0,
+            0,
+            false,
+            0,
+            0};
 
         if (sender_core_grid.contains(core)) {
             reader_runtime_args[is_reader_sender_core_idx] = true;
@@ -540,17 +715,40 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             reader_runtime_args[is_reader_receiver_core_idx] = false;
             reader_runtime_args[reader_device_start_idx] = start_device_idx;
             reader_runtime_args[reader_device_end_idx] = start_device_idx + work_per_sender;
+            reader_runtime_args[reader_sender_packet_start_idx] = sender_packet_start;
+            reader_runtime_args[reader_sender_packet_end_idx] = sender_packet_start + schedule[sender_core_idx].size();
 
             writer_runtime_args[is_writer_sender_core_idx] = true;
             writer_runtime_args[is_writer_worker_core_idx] = false;
             writer_runtime_args[writer_device_start_idx] = start_device_idx;
             writer_runtime_args[writer_device_end_idx] = start_device_idx + work_per_sender;
+            writer_runtime_args[writer_sender_packet_start_idx] = sender_packet_start;
+            writer_runtime_args[writer_sender_packet_end_idx] = sender_packet_start + schedule[sender_core_idx].size();
+
+            if (core == sender_atomic_inc_core) {
+                if (operation_attributes.ring_index == 3) {
+                    std::cout << "core: " << core.str() << " is the atomic inc core" << std::endl;
+                }
+                writer_runtime_args[is_atomic_inc_core_idx] = true;
+            } else {
+                if (operation_attributes.ring_index == 3) {
+                    std::cout << "core: " << core.str() << " is not the atomic inc core" << std::endl;
+                }
+                writer_runtime_args[is_atomic_inc_core_idx] = false;
+            }
 
             // if (operation_attributes.ring_index == 2) {
             //     std::cout << "core: " << core.str() << " start_device_idx: " << start_device_idx << " end_device_idx:
             //     " << start_device_idx + work_per_sender << std::endl;
             // }
             start_device_idx += work_per_sender;
+            if (operation_attributes.ring_index == 3) {
+                std::cout << "core: " << core.str() << " sender_packet_start: " << sender_packet_start
+                          << " sender_core_end: " << writer_runtime_args[writer_sender_packet_end_idx] << std::endl;
+            }
+            sender_packet_start += schedule[sender_core_idx].size();
+            sender_core_idx++;
+
             std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> forward_fabric_connection =
                 line_topology.is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
                     ? std::nullopt

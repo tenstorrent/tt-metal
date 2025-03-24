@@ -77,6 +77,9 @@ void kernel_main() {
     constexpr uint32_t noc_end_y = get_compile_time_arg_val(17);
     constexpr uint32_t packet_receiver_core_x = get_compile_time_arg_val(18);
     constexpr uint32_t packet_receiver_core_y = get_compile_time_arg_val(19);
+    constexpr uint32_t sender_atomic_inc_core_x = get_compile_time_arg_val(20);
+    constexpr uint32_t sender_atomic_inc_core_y = get_compile_time_arg_val(21);
+    constexpr uint32_t num_sender_cores = get_compile_time_arg_val(22);
 
     // Derived compile-time constants
     constexpr uint32_t input_tensor_cores = input_shard_cores_per_device * num_devices;
@@ -97,17 +100,22 @@ void kernel_main() {
     // constexpr uint8_t input_core_xy[input_tensor_cores][2] = INPUT_CORE_XY;
     constexpr uint8_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
     constexpr uint8_t packet_worker_cores[num_packets_total_per_device][2] = PACKET_WORKER_CORES;
+    constexpr uint8_t schedule[num_packets_total_per_device][3] = SCHEDULE;
 
     constexpr uint32_t num_dests = (noc_end_x - noc_start_x + 1) * (noc_end_y - noc_start_y + 1);
 
     // Runtime arguments
     uint32_t receiver_semaphore_address = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t local_semaphore_address = get_semaphore(get_arg_val<uint32_t>(rt_arg_idx++));
+    uint32_t sender_ready_semaphore_address = get_semaphore(get_arg_val<uint32_t>(rt_arg_idx++));
     bool sender_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     bool worker_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t linear_output_page_start_idx = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t start_device_idx = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t end_device_idx = get_arg_val<uint32_t>(rt_arg_idx++);
+    bool is_atomic_inc_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t sender_packet_start = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t sender_packet_end = get_arg_val<uint32_t>(rt_arg_idx++);
 
     if (sender_core) {
         // Set up packet headers once
