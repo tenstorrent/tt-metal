@@ -59,13 +59,12 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
 ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
-    MeshDevice& mesh_device,
     const CoreRangeSet& cores,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology) {
     return ttnn::operations::experimental::ccl::all_gather_async(
-        input_tensor, dim, mesh_device, cores, num_links, memory_config, topology);
+        input_tensor, dim, cores, num_links, memory_config, topology);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

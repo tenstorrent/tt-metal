@@ -98,16 +98,14 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const int32_t dim,
-               MeshDevice& mesh_device,
                const CoreRangeSet& cores,
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const ttnn::ccl::Topology topology) -> ttnn::Tensor {
-                return self(input_tensor, dim, mesh_device, cores, num_links, memory_config, topology);
+                return self(input_tensor, dim, cores, num_links, memory_config, topology);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
-            py::arg("mesh_device"),
             py::arg("cores"),
             py::kw_only(),
             py::arg("num_links") = 1,

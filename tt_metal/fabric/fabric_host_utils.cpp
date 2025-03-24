@@ -7,11 +7,9 @@
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 
-#include "fabric_host_utils.hpp"
+#include <tt-metalium/fabric_host_utils.hpp>
 
 namespace tt::tt_fabric {
-
-namespace {
 
 tt::tt_fabric::FabricEriscDatamoverConfig get_default_fabric_config() {
     constexpr std::size_t edm_buffer_size =
@@ -19,8 +17,6 @@ tt::tt_fabric::FabricEriscDatamoverConfig get_default_fabric_config() {
         sizeof(tt::tt_fabric::PacketHeader);
     return tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
 }
-
-}  // namespace
 
 void append_fabric_connection_rt_args(
     chip_id_t src_chip_id,
