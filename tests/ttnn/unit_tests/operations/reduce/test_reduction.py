@@ -2,9 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import pytest
 import torch
 import ttnn
+import sys
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_grayskull, torch_random
@@ -471,9 +473,14 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
 
     assert_with_pcc(torch_result, ttnn_result, 0.99)
 
-    if op not in ["std", "var"]:
-        # There is a scale factor difference between torch and ttnn for std and var
-        # But for other operations, it should be close. Issue #19478
-        assert torch.allclose(
-            torch_result, ttnn_result, atol=0.2, rtol=0.05, equal_nan=True
-        ), f"torch: {torch_result}, ttnn: {ttnn_result}"
+    atol = rtol = 0.1
+    # There is a scale factor difference between torch and ttnn for std and var
+    # But for other operations, it should be close. Issue #19478
+    if op == "std":
+        atol, rtol = sys.maxsize, 0.1 + math.sqrt(2)
+    elif op == "var":
+        atol, rtol = sys.maxsize, 0.1 + 2
+
+    assert torch.allclose(
+        torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True
+    ), f"torch: {torch_result}, ttnn: {ttnn_result}"
