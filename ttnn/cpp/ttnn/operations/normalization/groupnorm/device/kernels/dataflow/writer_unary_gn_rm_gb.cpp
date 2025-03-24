@@ -93,8 +93,18 @@ void kernel_main() {
         .page_size = input_mask_single_tile_size_bytes,
         .data_format = input_mask_data_format};
 
-    uint32_t out_block_h = block_h / num_out_blocks;
-    uint32_t out_block_hw = out_block_h * block_w;
+    uint32_t out_block_h_normal = block_h / num_out_blocks;
+    uint32_t out_block_hw_normal = out_block_h_normal * block_w;
+    uint32_t num_out_blocks_padded = num_out_blocks;
+    uint32_t extra_out_block = false;
+    uint32_t out_block_h_last = out_block_h_normal;
+    uint32_t out_block_hw_last = out_block_hw_normal;
+    if (block_h % num_out_blocks != 0) {
+        extra_out_block = true;
+        num_out_blocks_padded++;
+        out_block_h_last = block_h % num_out_blocks;
+        out_block_hw_last = out_block_h_last * block_w;
+    }
 
     index_b_offset = 0;
     for (uint32_t b = 0; b < num_batches_per_core; ++b) {
@@ -183,10 +193,18 @@ void kernel_main() {
                 .bank_base_address = out_addr, .page_size = single_tile_size_bytes, .data_format = out_data_format};
 
             uint32_t out_block_start_id_offset = 0;
-            for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; out_block_index++) {
-                cb_wait_front(cb_out, out_block_hw);
+            for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
+                uint32_t out_block_h_actual, out_block_hw_actual;
+                if (extra_out_block && !out_block_index) {
+                    out_block_h_actual = out_block_h_last;
+                    out_block_hw_actual = out_block_hw_last;
+                } else {
+                    out_block_h_actual = out_block_h_normal;
+                    out_block_hw_actual = out_block_hw_normal;
+                }
+                cb_wait_front(cb_out, out_block_hw_normal);
                 uint32_t l1_read_addr = get_read_ptr(cb_out);
-                for (uint32_t mt = 0; mt < out_block_h; mt++) {
+                for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
                     for (uint32_t nt = 0; nt < block_w_curr; nt++) {
                         noc_async_write_tile(
                             out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt + index_b_offset +
@@ -197,9 +215,9 @@ void kernel_main() {
                     }
                     // l1_read_addr += (single_tile_size_bytes * (block_w-block_w_curr));
                 }
-                out_block_start_id_offset += out_block_h * num_channels_tiles;
+                out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
                 noc_async_write_barrier();
-                cb_pop_front(cb_out, out_block_hw);
+                cb_pop_front(cb_out, out_block_hw_normal);
             }
 
             if constexpr (GROUP_SIZE_IS_POWER_OF_2) {

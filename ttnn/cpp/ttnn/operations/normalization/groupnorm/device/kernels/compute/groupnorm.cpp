@@ -177,8 +177,18 @@ void MAIN {
 #endif
 
     index_b_offset = 0;
-    uint32_t out_block_h = block_h / num_out_blocks;
-    uint32_t out_block_hw = out_block_h * block_w;
+    uint32_t out_block_h_normal = block_h / num_out_blocks;
+    uint32_t out_block_hw_normal = out_block_h_normal * block_w;
+    uint32_t num_out_blocks_padded = num_out_blocks;
+    uint32_t extra_out_block = false;
+    uint32_t out_block_h_last = out_block_h_normal;
+    uint32_t out_block_hw_last = out_block_hw_normal;
+    if (block_h % num_out_blocks != 0) {
+        extra_out_block = true;
+        num_out_blocks_padded++;
+        out_block_h_last = block_h % num_out_blocks;
+        out_block_hw_last = out_block_h_last * block_w;
+    }
 
     for (uint32_t b = 0; b < batch; ++b) {
         index_g_offset = 0;
@@ -192,15 +202,23 @@ void MAIN {
 
         for (uint32_t g = 0; g < group; ++g) {
             cb_wait_front(cb_input_mask, block_w);
-            for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; out_block_index++) {
-                cb_wait_front(cb_in0, out_block_hw);
+            for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
+                uint32_t out_block_h_actual, out_block_hw_actual;
+                if (extra_out_block && !out_block_index) {
+                    out_block_h_actual = out_block_h_last;
+                    out_block_hw_actual = out_block_hw_last;
+                } else {
+                    out_block_h_actual = out_block_h_normal;
+                    out_block_hw_actual = out_block_hw_normal;
+                }
+                cb_wait_front(cb_in0, out_block_hw_normal);
 
                 index_h_offset = 0;
                 reconfig_data_format_srcb(cb_in0, cb_input_mask);
                 // mask input
                 mul_tiles_init(cb_in0, cb_input_mask);
-                cb_reserve_back(cb_x, out_block_hw);
-                for (uint32_t i = 0; i < out_block_h; ++i) {
+                cb_reserve_back(cb_x, out_block_hw_normal);
+                for (uint32_t i = 0; i < out_block_h_actual; ++i) {
                     index_subblock_w_offset = 0;
                     for (uint32_t j = 0; j < num_subblocks_w; ++j) {
                         tile_regs_acquire();
@@ -224,11 +242,11 @@ void MAIN {
                     index_h_offset += block_w;
                 }
 #ifdef TILIZE_IN
-                cb_pop_front(cb_in, out_block_hw);
+                cb_pop_front(cb_in, out_block_hw_actual);
 #else
-                cb_pop_front(cb_in0, out_block_hw);
+                cb_pop_front(cb_in0, out_block_hw_normal);
 #endif
-                cb_push_back(cb_x, out_block_hw);
+                cb_push_back(cb_x, out_block_hw_normal);
                 reconfig_data_format_srcb(cb_input_mask, cb_scaler);
 
                 // Partial-E[x]
@@ -237,9 +255,9 @@ void MAIN {
                 cb_reserve_back(cb_ex_partial, 1);
                 tile_regs_acquire();
                 cb_wait_front(cb_scaler, 1);
-                cb_wait_front(cb_x, out_block_hw);
+                cb_wait_front(cb_x, out_block_hw_normal);
 
-                for (uint32_t h = 0; h < out_block_h; ++h) {
+                for (uint32_t h = 0; h < out_block_h_actual; ++h) {
                     for (uint32_t w = 0; w < block_w; ++w) {
                         uint32_t index = index_h_offset + w;
                         reduce_tile(cb_x, cb_scaler, index, scaler0, dst0);
@@ -250,7 +268,7 @@ void MAIN {
                 tile_regs_wait();
                 pack_tile(dst0, cb_ex_partial);
                 tile_regs_release();
-                cb_pop_front(cb_x, out_block_hw);
+                cb_pop_front(cb_x, out_block_hw_normal);
                 cb_push_back(cb_ex_partial, 1);
                 reduce_revert_delta(cb_ex_partial);
 
@@ -279,14 +297,23 @@ void MAIN {
                 }
             }
 
-            for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; out_block_index++) {
-                cb_wait_front(cb_in0, out_block_hw);
+            for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
+                uint32_t out_block_h_actual, out_block_hw_actual;
+                if (extra_out_block && !out_block_index) {
+                    out_block_h_actual = out_block_h_last;
+                    out_block_hw_actual = out_block_hw_last;
+                } else {
+                    out_block_h_actual = out_block_h_normal;
+                    out_block_hw_actual = out_block_hw_normal;
+                }
+
+                cb_wait_front(cb_in0, out_block_hw_normal);
                 // x - E[x]
                 sub_tiles_bcast_scalar_init_short(cb_in0, cb_ex_global);
 
-                cb_reserve_back(cb_xmm, out_block_hw);
+                cb_reserve_back(cb_xmm, out_block_hw_normal);
                 cb_wait_front(cb_ex_global, 1);
-                for (uint32_t i = 0; i < out_block_h; i++) {
+                for (uint32_t i = 0; i < out_block_h_actual; i++) {
                     index_subblock_w_offset = 0;
                     for (uint32_t j = 0; j < num_subblocks_w; j++) {
                         tile_regs_acquire();
@@ -304,14 +331,17 @@ void MAIN {
                     }
                     cb_pop_front(cb_in0, block_w);
                 }
-                cb_push_back(cb_xmm, out_block_hw);
+                if (extra_out_block && !out_block_index) {
+                    cb_pop_front(cb_in0, out_block_hw_normal - out_block_hw_last);
+                }
+                cb_push_back(cb_xmm, out_block_hw_normal);
 
                 // zero out the garbage values by mult mask again
                 reconfig_data_format_srcb(cb_ex_global, cb_input_mask);
                 mul_tiles_init(cb_xmm, cb_input_mask);
-                cb_reserve_back(cb_x, out_block_hw);
-                cb_wait_front(cb_xmm, out_block_hw);
-                for (uint32_t i = 0; i < out_block_h; i++) {
+                cb_reserve_back(cb_x, out_block_hw_normal);
+                cb_wait_front(cb_xmm, out_block_hw_normal);
+                for (uint32_t i = 0; i < out_block_h_actual; i++) {
                     index_subblock_w_offset = 0;
                     for (uint32_t j = 0; j < num_subblocks_w; ++j) {
                         tile_regs_acquire();
@@ -330,15 +360,18 @@ void MAIN {
                     }
                     cb_pop_front(cb_xmm, block_w);
                 }
-                cb_push_back(cb_x, out_block_hw);
+                if (extra_out_block && !out_block_index) {
+                    cb_pop_front(cb_xmm, out_block_hw_normal - out_block_hw_last);
+                }
+                cb_push_back(cb_x, out_block_hw_normal);
 
                 reconfig_data_format_srcb(cb_input_mask, cb_x);
                 // (x - E[x])^2
                 index_h_offset = 0;
                 mul_tiles_init(cb_x, cb_x);
-                cb_reserve_back(cb_xmm, out_block_hw);
-                cb_wait_front(cb_x, out_block_hw);
-                for (uint32_t i = 0; i < out_block_h; i++) {
+                cb_reserve_back(cb_xmm, out_block_hw_normal);
+                cb_wait_front(cb_x, out_block_hw_normal);
+                for (uint32_t i = 0; i < out_block_h_actual; i++) {
                     index_subblock_w_offset = 0;
                     for (uint32_t j = 0; j < num_subblocks_w; j++) {
                         tile_regs_acquire();
@@ -356,17 +389,17 @@ void MAIN {
                     }
                     index_h_offset += block_w;
                 }
-                cb_pop_front(cb_x, out_block_hw);
-                cb_push_back(cb_xmm, out_block_hw);
+                cb_pop_front(cb_x, out_block_hw_normal);
+                cb_push_back(cb_xmm, out_block_hw_normal);
 
                 // Partial-Var(x)
                 index_h_offset = 0;
                 reduce_init_delta<false>(cb_xmm, cb_scaler, cb_ex2_partial);
                 cb_reserve_back(cb_ex2_partial, 1);
                 tile_regs_acquire();
-                cb_wait_front(cb_xmm, out_block_hw);
+                cb_wait_front(cb_xmm, out_block_hw_normal);
                 cb_wait_front(cb_scaler, 1);  // TODO DELETE THIS
-                for (uint32_t h = 0; h < out_block_h; ++h) {
+                for (uint32_t h = 0; h < out_block_h_actual; ++h) {
                     for (uint32_t w = 0; w < block_w; ++w) {
                         uint32_t index = index_h_offset + w;
                         reduce_tile(cb_xmm, cb_scaler, index, scaler0, dst0);
@@ -378,7 +411,7 @@ void MAIN {
                 pack_tile(dst0, cb_ex2_partial);
                 tile_regs_release();
                 cb_push_back(cb_ex2_partial, 1);
-                cb_pop_front(cb_xmm, out_block_hw);
+                cb_pop_front(cb_xmm, out_block_hw_normal);
                 reduce_revert_delta(cb_ex2_partial);
             }
 
@@ -432,13 +465,22 @@ void MAIN {
             uint32_t start_index_block_w = index_block_w;
 
             uint32_t out_block_h_offset = 0;
-            for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; out_block_index++) {
-                cb_wait_front(cb_in0, out_block_hw);
+            for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
+                uint32_t out_block_h_actual, out_block_hw_actual;
+                if (extra_out_block && !out_block_index) {
+                    out_block_h_actual = out_block_h_last;
+                    out_block_hw_actual = out_block_hw_last;
+                } else {
+                    out_block_h_actual = out_block_h_normal;
+                    out_block_hw_actual = out_block_hw_normal;
+                }
+
+                cb_wait_front(cb_in0, out_block_hw_normal);
                 // x - E[x]
                 sub_tiles_bcast_scalar_init_short(cb_in0, cb_ex_global);
-                cb_reserve_back(cb_xmm, out_block_hw);
+                cb_reserve_back(cb_xmm, out_block_hw_normal);
                 cb_wait_front(cb_ex_global, 1);
-                for (uint32_t i = 0; i < out_block_h; i++) {
+                for (uint32_t i = 0; i < out_block_h_actual; i++) {
                     index_subblock_w_offset = 0;
                     for (uint32_t j = 0; j < num_subblocks_w; j++) {
                         tile_regs_acquire();
@@ -456,14 +498,17 @@ void MAIN {
                     }
                     cb_pop_front(cb_in0, block_w);
                 }
-                cb_push_back(cb_xmm, out_block_hw);
+                if (extra_out_block && !out_block_index) {
+                    cb_pop_front(cb_in0, out_block_hw_normal - out_block_hw_last);
+                }
+                cb_push_back(cb_xmm, out_block_hw_normal);
 
                 // zero out the garbage values by mult mask again
                 reconfig_data_format_srcb(cb_ex_global, cb_input_mask);
                 mul_tiles_init(cb_xmm, cb_input_mask);
-                cb_reserve_back(cb_x, out_block_hw);
-                cb_wait_front(cb_xmm, out_block_hw);
-                for (uint32_t i = 0; i < out_block_h; i++) {
+                cb_reserve_back(cb_x, out_block_hw_normal);
+                cb_wait_front(cb_xmm, out_block_hw_normal);
+                for (uint32_t i = 0; i < out_block_h_actual; i++) {
                     index_subblock_w_offset = 0;
                     for (uint32_t j = 0; j < num_subblocks_w; ++j) {
                         tile_regs_acquire();
@@ -482,16 +527,19 @@ void MAIN {
                     }
                     cb_pop_front(cb_xmm, block_w);
                 }
-                cb_push_back(cb_x, out_block_hw);
+                if (extra_out_block && !out_block_index) {
+                    cb_pop_front(cb_xmm, out_block_hw_normal - out_block_hw_last);
+                }
+                cb_push_back(cb_x, out_block_hw_normal);
                 reconfig_data_format_srcb(cb_input_mask, cb_x);
 
                 // (x - Ex) * 1/[sqrt(Var + eps)]
                 index_h_offset = 0;
                 mul_tiles_bcast_scalar_init_short(cb_x, cb_ex2pe);
-                cb_reserve_back(cb_xmm, out_block_hw);
+                cb_reserve_back(cb_xmm, out_block_hw_normal);
                 cb_wait_front(cb_ex2pe, 1);
-                cb_wait_front(cb_x, out_block_hw);
-                for (uint32_t i = 0; i < out_block_h; i++) {
+                cb_wait_front(cb_x, out_block_hw_normal);
+                for (uint32_t i = 0; i < out_block_h_actual; i++) {
                     index_subblock_w_offset = 0;
                     for (uint32_t j = 0; j < num_subblocks_w; j++) {
                         tile_regs_acquire();
@@ -509,9 +557,9 @@ void MAIN {
                     }
                     index_h_offset += block_w;
                 }
-                cb_pop_front(cb_x, out_block_hw);
-                cb_push_back(cb_xmm, out_block_hw);
-                cb_wait_front(cb_xmm, out_block_hw);
+                cb_pop_front(cb_x, out_block_hw_normal);
+                cb_push_back(cb_xmm, out_block_hw_normal);
+                cb_wait_front(cb_xmm, out_block_hw_normal);
 
                 copy_or_add = start_copy_or_add;
                 group_reset_index = start_group_reset_index;
@@ -520,8 +568,8 @@ void MAIN {
                 // add or copy with previous output results
                 uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
 
-                cb_wait_front(cb_reread_out, out_block_hw);
-                cb_reserve_back(cb_reread_write_out, out_block_hw);
+                cb_wait_front(cb_reread_out, out_block_hw_normal);
+                cb_reserve_back(cb_reread_write_out, out_block_hw_normal);
                 for (uint32_t w = 0; w < block_w_curr; ++w) {
                     uint32_t index_h_offset = 0;
                     uint32_t index_h1_offset = 0;
@@ -532,7 +580,7 @@ void MAIN {
                         add_tiles_init(cb_reread_out, cb_xmm);
                     }
 
-                    for (uint32_t i = 0; i < out_block_h; ++i) {
+                    for (uint32_t i = 0; i < out_block_h_actual; ++i) {
                         tile_regs_acquire();
                         uint32_t index_reread_out = w + index_h_offset;
                         uint32_t index_xmm = w + index_h1_offset;
@@ -569,17 +617,17 @@ void MAIN {
                         index_block_w += 1;
                     }
                 }
-                cb_pop_front(cb_xmm, out_block_hw);
-                cb_pop_front(cb_reread_out, out_block_hw);
-                cb_push_back(cb_reread_write_out, out_block_hw);
+                cb_pop_front(cb_xmm, out_block_hw_normal);
+                cb_pop_front(cb_reread_out, out_block_hw_normal);
+                cb_push_back(cb_reread_write_out, out_block_hw_normal);
 
                 if constexpr (do_gamma) {
                     index_h_offset = 0;
                     mul_bcast_rows_init_short(cb_reread_write_out, cb_gamma);
-                    cb_reserve_back(cb_outgamma, out_block_hw);
+                    cb_reserve_back(cb_outgamma, out_block_hw_normal);
                     cb_wait_front(cb_gamma, per_core_N);  // TODO FIX THIS, ONLY LOAD ONCE ADD POP
-                    cb_wait_front(cb_reread_write_out, out_block_hw);
-                    for (uint32_t i = 0; i < out_block_h; ++i) {
+                    cb_wait_front(cb_reread_write_out, out_block_hw_normal);
+                    for (uint32_t i = 0; i < out_block_h_actual; ++i) {
                         for (uint32_t j = 0; j < block_w_curr; ++j) {
                             tile_regs_acquire();
                             uint32_t index = j + index_h_offset;
@@ -592,17 +640,17 @@ void MAIN {
                         }
                         index_h_offset += block_w_curr;
                     }
-                    cb_push_back(cb_outgamma, out_block_hw);
-                    cb_pop_front(cb_reread_write_out, out_block_hw);
-                    cb_wait_front(cb_outgamma, out_block_hw);
+                    cb_push_back(cb_outgamma, out_block_hw_normal);
+                    cb_pop_front(cb_reread_write_out, out_block_hw_normal);
+                    cb_wait_front(cb_outgamma, out_block_hw_normal);
                 }
 
                 if constexpr (do_beta) {
                     index_h_offset = 0;
                     add_bcast_rows_init_short(cb_inbeta, cb_beta);
-                    cb_reserve_back(cb_outbeta, out_block_hw);
+                    cb_reserve_back(cb_outbeta, out_block_hw_normal);
                     cb_wait_front(cb_beta, per_core_N);  // TODO FIX THIS, ONLY LOAD ONCE ADD POP
-                    for (uint32_t i = 0; i < out_block_h; ++i) {
+                    for (uint32_t i = 0; i < out_block_h_actual; ++i) {
                         for (uint32_t j = 0; j < block_w_curr; ++j) {
                             tile_regs_acquire();
                             uint32_t index = j + index_h_offset;
@@ -615,9 +663,9 @@ void MAIN {
                         }
                         index_h_offset += block_w_curr;
                     }
-                    cb_push_back(cb_outbeta, out_block_hw);
-                    cb_pop_front(cb_inbeta, out_block_hw);
-                    cb_wait_front(cb_outbeta, out_block_hw);
+                    cb_push_back(cb_outbeta, out_block_hw_normal);
+                    cb_pop_front(cb_inbeta, out_block_hw_normal);
+                    cb_wait_front(cb_outbeta, out_block_hw_normal);
                 }
 
 #ifdef UNTILIZE_OUT
@@ -663,7 +711,6 @@ void MAIN {
                     index_g_offset += block_w_minus_two;
                 }
             }
-
             cb_pop_front(cb_ex_global, 1);
             cb_pop_front(cb_ex2pe, 1);
             cb_pop_front(cb_input_mask, block_w);

@@ -40,11 +40,12 @@ def manual_group_norm(input_tensor, num_groups, eps=1e-2):
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
     [
         # (1, 2560, 1, 512, 32, 1, 8, 8), # base case
-        # (1, 2560, 1, 512, 32, 2, 8, 8), # test num_out_blocks 2
-        # (1, 2560, 1, 512, 32, 2, 8, 8), # test num_out_blocks 4
+        # (1, 2560, 1, 512, 32, 2, 8, 8), # test mcast num_out_blocks 2
+        # (1, 2560, 1, 1024, 32, 4, 8, 8), # test mcast num_out_blocks 4
         # (1, 768, 1, 512, 32, 2, 8, 8), # test group channel count is less than tile size
         # (2, 768, 1, 512, 32, 2, 8, 8), # test batch size 2 (still multicast)
         # (8, 768, 1, 512, 32, 2, 8, 8), # test batch size 8 (no multicast)
+        # (8, 768, 1, 512, 32, 3, 8, 8), # test batch size 8 (no multicast), but uneven num_out_blocks divisor
         # (9, 768, 1, 512, 32, 2, 8, 8), # test batch size 9 (uneven batch sizes)
         # (1, 128, 1, 512, 32, 2, 4, 8), # test all groups on core fit in less than one tile, so need to reduce col core count
         #        (28, 768, 1, 6400, 32, 8, 8, 8), # Mochi VAE variant 1
@@ -124,6 +125,6 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
 
     # output tensor
     output_tensor = ttnn.from_device(output_tensor)
-    # output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
 
-    # assert_with_pcc(torch_output_tensor, output_tensor, 0.9997)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9997)

@@ -210,8 +210,18 @@ void kernel_main() {
     }
 #endif
 
-    uint32_t out_block_h = block_h / num_out_blocks;
-    uint32_t out_block_hw = out_block_h * block_w;
+    uint32_t out_block_h_normal = block_h / num_out_blocks;
+    uint32_t out_block_hw_normal = out_block_h_normal * block_w;
+    uint32_t num_out_blocks_padded = num_out_blocks;
+    uint32_t extra_out_block = false;
+    uint32_t out_block_h_last = out_block_h_normal;
+    uint32_t out_block_hw_last = out_block_hw_normal;
+    if (block_h % num_out_blocks != 0) {
+        extra_out_block = true;
+        num_out_blocks_padded++;
+        out_block_h_last = block_h % num_out_blocks;
+        out_block_hw_last = out_block_h_last * block_w;
+    }
 
         index_b_offset = 0;
         for (uint32_t b = 0; b < num_batches; ++b) {
@@ -223,7 +233,16 @@ void kernel_main() {
                     uint32_t out_block_start_id_offset = 0;
                     uint32_t l1_write_addr_external = get_write_ptr(cb_ex_external);
                     cb_reserve_back(cb_ex_external, 1);
-                    for (uint32_t out_block_index = 0; out_block_index < num_out_blocks; out_block_index++) {
+                    for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
+                        uint32_t out_block_h_actual, out_block_hw_actual;
+                        if (extra_out_block && !out_block_index) {
+                            out_block_h_actual = out_block_h_last;
+                            out_block_hw_actual = out_block_hw_last;
+                        } else {
+                            out_block_h_actual = out_block_h_normal;
+                            out_block_hw_actual = out_block_hw_normal;
+                        }
+
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
                         const uint32_t src0_tile_bytes = get_tile_size(cb_in0);
                         const DataFormat src0_data_format = get_dataformat(cb_in0);
@@ -233,8 +252,8 @@ void kernel_main() {
                             .data_format = src0_data_format};
                         uint32_t l1_write_addr;
                         l1_write_addr = get_write_ptr(cb_in0);
-                        cb_reserve_back(cb_in0, out_block_hw);
-                        for (uint32_t mt = 0; mt < out_block_h; mt++) {
+                        cb_reserve_back(cb_in0, out_block_hw_normal);
+                        for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
                             for (uint32_t nt = 0; nt < block_w; nt++) {
                                 noc_async_read_tile(
                                     start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
@@ -245,7 +264,7 @@ void kernel_main() {
                                 noc_async_read_barrier();
                             }
                         }
-                        cb_push_back(cb_in0, out_block_hw);
+                        cb_push_back(cb_in0, out_block_hw_normal);
 #endif
                         if (n == 0 || n == 1) {
                             // wait for local data ready
@@ -320,9 +339,9 @@ void kernel_main() {
                             const uint32_t dst_tile_bytes = get_tile_size(cb_reread_out);
                             uint32_t l1_write_addr;
                             l1_write_addr = get_write_ptr(cb_reread_out);
-                            cb_reserve_back(cb_reread_out, out_block_hw);
+                            cb_reserve_back(cb_reread_out, out_block_hw_normal);
 
-                            for (uint32_t mt = 0; mt < out_block_h; mt++) {
+                            for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
                                 for (uint32_t nt = 0; nt < block_w_curr; nt++) {
                                     noc_async_read_tile(
                                         out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
@@ -333,9 +352,9 @@ void kernel_main() {
                                     noc_async_read_barrier();
                                 }
                             }
-                            cb_push_back(cb_reread_out, out_block_hw);
+                            cb_push_back(cb_reread_out, out_block_hw_normal);
                         }
-                        out_block_start_id_offset += out_block_h * num_channels_tiles;
+                        out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
                     }
                     if (n == 0 || n == 1) {
                         cb_push_back(cb_ex_external, 1);

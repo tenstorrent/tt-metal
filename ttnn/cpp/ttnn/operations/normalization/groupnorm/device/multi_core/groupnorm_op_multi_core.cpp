@@ -1317,10 +1317,6 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    TT_ASSERT(block_ht_group_1 % num_out_blocks == 0 && "block_ht_group_1 % num_out_blocks must be 0");
-    if (block_ht_group_2 > 0) {
-        TT_ASSERT(block_ht_group_2 % num_out_blocks == 0 && "block_ht_group_2 % num_out_blocks must be 0");
-    }
     // block size for in0 (tensor a)
     uint32_t in0_block_tiles_group_1 = block_ht_group_1 / num_out_blocks * block_wt;
     uint32_t in0_block_tiles_group_2 = 0;
