@@ -9,7 +9,6 @@ jobs:
     secrets: inherit
     with:
       version: 22.04
-
   umd-unit-tests:
     needs: build-artifact
     secrets: inherit
