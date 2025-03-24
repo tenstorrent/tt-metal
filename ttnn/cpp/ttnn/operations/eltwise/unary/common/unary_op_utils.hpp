@@ -73,4 +73,6 @@ bool is_parametrized_type(T val) {
 
 void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines);
 
+std::string get_compute_kernel_path(UnaryOpType op_type, const std::string& compute_root);
+
 }  // namespace ttnn::operations::unary::utils

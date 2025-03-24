@@ -176,6 +176,14 @@ struct AsymmetricBinop {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Mish {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 }  // namespace unary
 }  // namespace operations
 
@@ -278,6 +286,7 @@ constexpr auto abs = ttnn::register_operation_with_auto_launch_op<"ttnn::abs", t
 constexpr auto floor =
     ttnn::register_operation_with_auto_launch_op<"ttnn::floor", ttnn::operations::unary::Floor>();
 constexpr auto ceil = ttnn::register_operation_with_auto_launch_op<"ttnn::ceil", ttnn::operations::unary::Ceil>();
+constexpr auto mish = ttnn::register_operation_with_auto_launch_op<"ttnn::mish", ttnn::operations::unary::Mish>();
 constexpr auto softplus =
     ttnn::register_operation_with_auto_launch_op<"ttnn::softplus", ttnn::operations::unary::Softplus>();
 constexpr auto prelu_sfpu =
