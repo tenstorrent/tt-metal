@@ -342,7 +342,7 @@ class TtLlamaAttention(LightweightModule):
         sdpa_out_mem_cfg = self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"](self.batch_size_per_device_group)
 
         if page_table:
-            attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            attn_output_1G4D_sharded = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 q_heads_1BQD,
                 keys,
                 values,
@@ -371,12 +371,15 @@ class TtLlamaAttention(LightweightModule):
 
         # attn_output_1G4D = ttnn.to_memory_config(attn_output_1G4D_sharded, ttnn.DRAM_MEMORY_CONFIG)
         # attn_output_1G4D_sharded.deallocate(True)
+
+        # Note: Persistent output buffer used, do not deallocate output!
         attn_output_gathered_sharded = self.tt_ccl.line_all_gather(
             attn_output_1G4D_sharded,
             dim=1,
             cluster_axis=1,
             num_links=3,
             memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1]),
+            buffer_key="SDPA",
         )
         # ttnn.deallocate(attn_output_1G4D)
 
@@ -389,7 +392,6 @@ class TtLlamaAttention(LightweightModule):
             attn_output_gathered_sharded,
             num_heads=self.n_local_heads,
         )
-        ttnn.deallocate(attn_output_gathered_sharded)
         # print("done concat heads")
 
         # Original matmul on each device [1, 1, 32, 1024] @ [1, 1, 1024, 2048]

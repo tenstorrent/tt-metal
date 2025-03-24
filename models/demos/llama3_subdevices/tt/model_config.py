@@ -235,6 +235,12 @@ class TtModelArgs:
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
             self.max_prefill_chunk_size = 64 * 1024  # 70B on T3K maxes out at 64k tokens prefill
+        elif "3.3-70B-Instruct" in LLAMA_DIR:
+            local_params = "LLAMA3_1_70B_PARAMS"
+            self.model_name = "3.1-70B"
+            self.rope_scaling_factor = 8
+            self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
+            self.max_prefill_chunk_size = 64 * 1024  # 70B on T3K maxes out at 64k tokens prefill
         else:
             # NOTE: 3.2-90B and 3.3-70B also use scaling factor of 8
             raise ValueError(f"Unsupported LLAMA model: {LLAMA_DIR}")
@@ -269,6 +275,13 @@ class TtModelArgs:
         self.di_dt_workaround = os.getenv("DISABLE_DI_DT_WORKAROUND") != "1"
         if not self.di_dt_workaround:
             logger.info("Disabling di/dt workaround, re-enable if you see hangs")
+
+        self.TG = self.num_devices == 32
+        self.num_device_groups = self.num_devices // self.n_kv_heads
+        self.num_devices_per_group = self.n_kv_heads if self.TG else self.num_devices
+        self.batch_size_per_device_group = (
+            max(self.max_batch_size // self.num_device_groups, 1) if self.TG else self.max_batch_size
+        )
 
         DRAM_MEMCFG = ttnn.DRAM_MEMORY_CONFIG
         L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
@@ -788,6 +801,18 @@ class TtModelArgs:
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
+
+            mul_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                self.start_core, 28, self.sub_core_grids, row_wise=True
+            )
+            self.model_config["MUL_IN_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, 3584 // 28),  # Use padded K
+                core_grid=mul_core_range_set,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
             self.model_config["FF2_IN_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32, 3840 // RING_SIZE),  # Use padded K
                 core_grid=ring_core_range_set,
@@ -1795,7 +1820,7 @@ def set_tg_attention_config(model_config, dim):
     )
     start_core = ttnn.CoreCoord(1, 0)
     shard_spec_n_cores_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-        start_core, 10, sub_core_grids, row_wise=True
+        start_core, 10, sub_core_grids, row_wise=False
     )
 
     model_config["CREATE_HEAD_INPUT_MEMCFG"] = (
