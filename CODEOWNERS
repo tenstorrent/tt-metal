@@ -212,7 +212,7 @@ models/experimental/ @ayerofieiev-tt @uaydonat
 models/experimental/functional_unet @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions
 models/demos/wormhole/vit @mbahnasTT @dvartaniansTT @uaydonat
 models/demos/vit  @mbahnasTT @dvartaniansTT @uaydonat
-models/experimental/*yolo* @mbahnasTT @uaydonat
+models/experimental/*yolo*/ @mbahnasTT @uaydonat
 models/experimental/stable_diffusion @mbahnasTT @uaydonat
 models/demos/segformer @mbahnasTT @uaydonat @tenstorrent/metalium-developers-convolutions
 models/perf/ @yieldthought @uaydonat
