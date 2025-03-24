@@ -80,6 +80,7 @@ void kernel_main() {
         DEVICE_ORDER;  // this is code gen'd in the program factory using the defines
     constexpr uint8_t input_core_xy[input_tensor_cores][2] = INPUT_CORE_XY;
     constexpr uint8_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
+    constexpr uint8_t schedule[num_packets_total_per_device][3] = SCHEDULE;
     // constexpr uint8_t packet_worker_cores[num_packets_total_per_device][2] = PACKET_WORKER_CORES;
 
     constexpr uint32_t num_dests = (noc_end_x - noc_start_x + 1) * (noc_end_y - noc_start_y + 1);
@@ -92,6 +93,8 @@ void kernel_main() {
     bool receiver_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t start_device_idx = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t end_device_idx = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t sender_packet_start = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t sender_packet_end = get_arg_val<uint32_t>(rt_arg_idx++);
 
     // Constants for indexing
     constexpr uint8_t x_index = 0;
@@ -128,8 +131,8 @@ void kernel_main() {
         uint32_t linear_input_core_idcs = 0;
         uint32_t linear_input_tile_offsets = 0;
         uint32_t base_input_tensor_addr = get_read_ptr(input_tensor_cb_id);
-        uint64_t output_noc_addresses[num_pages_per_packet];
-        uint32_t receiver_l1_addresses[num_pages_per_packet];
+        // uint64_t output_noc_addresses[num_pages_per_packet];
+        // uint32_t receiver_l1_addresses[num_pages_per_packet];
         uint32_t base_receiver_l1_addresses =
             get_read_ptr(fabric_receiver_cb_id) + chip_id * num_pages_per_packet * page_size_bytes;
 
@@ -137,16 +140,14 @@ void kernel_main() {
             uint32_t rem = linear_input_packet_start_idx + i;
             linear_input_core_idcs = rem / tiles_per_core_width;
             linear_input_tile_offsets = rem % tiles_per_core_width;
-            output_noc_addresses[i] = get_noc_addr(
+            uint64_t output_noc_address = get_noc_addr(
                 input_core_xy[linear_input_core_idcs][x_index],
                 input_core_xy[linear_input_core_idcs][y_index],
                 base_input_tensor_addr + (linear_input_tile_offsets * page_size_bytes));
-            receiver_l1_addresses[i] = base_receiver_l1_addresses + i * page_size_bytes;
+            uint32_t receiver_l1_address = base_receiver_l1_addresses + i * page_size_bytes;
+            noc_async_read(output_noc_address, receiver_l1_address, page_size_bytes);
         }
 
-        for (uint32_t i = 0; i < num_pages_per_packet; i++) {
-            noc_async_read(output_noc_addresses[i], receiver_l1_addresses[i], page_size_bytes);
-        }
         if (receiver_core) {
             // Now we have the block in the CB address, we can mcast to dests!
             uint64_t multicast_semaphore_addr =
