@@ -134,6 +134,7 @@ jobs:
         run: |
           source /opt/conda/etc/profile.d/conda.sh
           conda activate metalium_env
+          cp -r $CONDA_PREFIX/libexec/tt-metalium/tt_metal/soc_descriptors/ $CONDA_PREFIX/share/tt-metalium/tt_metal/
           ${{ matrix.test-group.cmd }}
 
       - uses: ./.github/actions/slack-report
