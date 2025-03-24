@@ -28,8 +28,6 @@ namespace ttnn::distributed {
 
 namespace py = pybind11;
 
-// Trampoline class to clear virtual method errors
-
 void py_module_types(py::module& module) {
     py::class_<MeshToTensor, std::unique_ptr<MeshToTensor>>(module, "CppMeshToTensor");
     py::class_<TensorToMesh, std::unique_ptr<TensorToMesh>>(module, "CppTensorToMesh");
@@ -387,11 +385,9 @@ void py_module(py::module& module) {
 
     auto py_tensor_to_mesh =
         static_cast<py::class_<TensorToMesh, std::unique_ptr<TensorToMesh>>>(module.attr("CppTensorToMesh"));
-    py_tensor_to_mesh.def("map", &TensorToMesh::map).def("config", &TensorToMesh::config);
 
     auto py_mesh_to_tensor =
         static_cast<py::class_<MeshToTensor, std::unique_ptr<MeshToTensor>>>(module.attr("CppMeshToTensor"));
-    py_mesh_to_tensor.def("compose", &MeshToTensor::compose);
 
     module.def(
         "open_mesh_device",
@@ -504,30 +500,6 @@ void py_module(py::module& module) {
            TensorToMesh: A mapper providing the desired sharding.
    )doc");
     module.def(
-        "shard_tensor_to_2d_mesh_mapper",
-        [](MeshDevice& mesh_device,
-           const std::tuple<int, int> mesh_shape,
-           const std::tuple<int, int> dims) -> std::unique_ptr<TensorToMesh> {
-            return shard_tensor_to_2d_mesh_mapper(
-                mesh_device,
-                MeshShape(std::get<0>(mesh_shape), std::get<1>(mesh_shape)),
-                Shard2dConfig{.row_dim = std::get<0>(dims), .col_dim = std::get<1>(dims)});
-        },
-        py::arg("mesh_device"),
-        py::arg("mesh_shape"),
-        py::arg("dims"),
-        R"doc(
-            Returns a mapper sharding a tensor over the given mesh device, mesh shape, and dimensions.
-
-            Args:
-                mesh_device (MeshDevice): The mesh device to create the mapper for.
-                mesh_shape (MeshShape): The shape of the 2D mesh as (num_rows, num_cols).
-                dims (Tuple[int, int]): The dimensions to create the mapper for in (row, column) format.
-
-            Returns:
-                TensorToMesh: A mapper providing the desired sharding.
-   )doc");
-    module.def(
         "concat_mesh_to_tensor_composer",
         [](int dim) -> std::unique_ptr<MeshToTensor> { return concat_mesh_to_tensor_composer(dim); },
         py::arg("dim"));
@@ -537,32 +509,13 @@ void py_module(py::module& module) {
             return concat_2d_mesh_to_tensor_composer(mesh_device, config);
         },
         py::arg("mesh_device"),
-        py::arg("dims"),
+        py::arg("config"),
         R"doc(
             Returns a Concat2dMeshToTensor composer with the given mesh device and dimensions.
 
             Args:
                 mesh_device (MeshDevice): The mesh device to create the composer for.
                 config (Concat2dConfig): A config object representing the row and column to concat over.
-
-            Returns:
-                TensorToMesh: A composer providing the desired concatenation.
-   )doc");
-
-    module.def(
-        "concat_2d_mesh_to_tensor_composer",
-        [](MeshDevice& mesh_device, const std::tuple<int, int> dims) -> std::unique_ptr<MeshToTensor> {
-            return concat_2d_mesh_to_tensor_composer(
-                mesh_device, Concat2dConfig{.row_dim = std::get<0>(dims), .col_dim = std::get<1>(dims)});
-        },
-        py::arg("mesh_device"),
-        py::arg("dims"),
-        R"doc(
-            Create a Concat2dMeshToTensor composer with the given mesh device and dimensions.
-
-            Args:
-                mesh_device (MeshDevice): The mesh device to create the composer for.
-                dims (Tuple[int, int]): The dimensions to create the composer for in (row, column) format.
 
             Returns:
                 TensorToMesh: A composer providing the desired concatenation.
