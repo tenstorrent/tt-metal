@@ -29,11 +29,13 @@ void kernel_main() {
     constexpr uint32_t PHASES_TO_READ =
         get_compile_time_arg_val(11);  // 0 to read all phases, 1 to read only first phase, 2 to read only second phase
     constexpr uint32_t in_num_cores = get_compile_time_arg_val(12);
-    constexpr bool use_batch_offset = get_compile_time_arg_val(13) == 1;
-    constexpr bool index_is_dram = get_compile_time_arg_val(14) == 1;
-    constexpr uint32_t index_stick_size = get_compile_time_arg_val(15);
-    constexpr uint32_t cb_batch_offset_id = get_compile_time_arg_val(16);
-    constexpr uint32_t cb_id_reduction_out = get_compile_time_arg_val(17);
+    constexpr uint32_t q_num_cores = get_compile_time_arg_val(13);
+    constexpr uint32_t k_num_cores = get_compile_time_arg_val(14);
+    constexpr bool use_batch_offset = get_compile_time_arg_val(15) == 1;
+    constexpr bool index_is_dram = get_compile_time_arg_val(16) == 1;
+    constexpr uint32_t index_stick_size = get_compile_time_arg_val(17);
+    constexpr uint32_t cb_batch_offset_id = get_compile_time_arg_val(18);
+    constexpr uint32_t cb_id_reduction_out = get_compile_time_arg_val(19);
     // runtime args
     size_t arg_idx = 0;
     // rt args for QV/K read and write kernels
@@ -42,10 +44,19 @@ void kernel_main() {
     uint32_t index_in_cores = get_arg_val<uint32_t>(arg_idx++);
     uint32_t qv_k_process_flag = get_arg_val<uint32_t>(arg_idx++);
     uint32_t block_num_tiles = get_arg_val<uint32_t>(arg_idx++);
-    tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
-    tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx + in_num_cores));
+    // tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    // tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx + in_num_cores));
+
+    tt_l1_ptr uint32_t* q_in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    tt_l1_ptr uint32_t* q_in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx + q_num_cores));
+
+    tt_l1_ptr uint32_t* k_in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx + 2 * q_num_cores));
+    tt_l1_ptr uint32_t* k_in0_mcast_noc_y =
+        (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx + 2 * q_num_cores + k_num_cores));
+
     // rt args for reduction receiver kernel
-    const uint32_t signal_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx + 2 * in_num_cores));
+    const uint32_t signal_semaphore_addr =
+        get_semaphore(get_arg_val<uint32_t>(arg_idx + 2 * q_num_cores + 2 * k_num_cores));
 
     if constexpr (PHASES_TO_READ == 1) {  // only do the semaphore in reading kernel(NCRISC), as all reduce reduction
                                           // only has reading kernel
@@ -62,7 +73,33 @@ void kernel_main() {
         DPRINT << "total_num_reduction_tiles = " << total_num_reduction_tiles << " which is NCRISC" << ENDL();
     }
     // 3. QV/K read and write kernels start here:
+    // 3.1 set up the device batch offset for each of the device.
+    uint32_t device_batch_offset = 0;
+
+    if constexpr (use_batch_offset) {
+        const InterleavedAddrGen<index_is_dram> addrg = {
+            .bank_base_address = batch_offset_tensor_addr, .page_size = index_stick_size};
+        cb_reserve_back(cb_batch_offset_id, 1);
+        uint32_t index_cb_wr_ptr = get_write_ptr(cb_batch_offset_id);
+        // Read the batch offset 1 page to read
+        uint64_t batch_offset_index_noc_addr = get_noc_addr(0, addrg);
+        noc_async_read(batch_offset_index_noc_addr, index_cb_wr_ptr, index_stick_size);
+        noc_async_read_barrier();
+        cb_push_back(cb_batch_offset_id, 1);
+        volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
+        // Always pick 1st value in tensor as batch offset
+        device_batch_offset = index_ptr[0];
+    }
+    device_batch_offset += index_in_cores;
+    uint32_t in_tile_offset_by_batch = device_batch_offset < 16
+                                           ? device_batch_offset * SUBTILE_LINE_BYTES
+                                           : (device_batch_offset - 16) * SUBTILE_LINE_BYTES + 512 * ELEMENT_SIZE;
+
+    // 3.2 start to process the reading side of data(half of the data processed in NCRISC kernel and half on BRISC
+    // kernel)
     cb_wait_front(cb_id_reduction_out, block_num_tiles);
+    if constexpr (PHASES_TO_READ == 1) {  // reading kernel
+    }
 
     // The deprecated code starts here
     // The deprecated code starts here

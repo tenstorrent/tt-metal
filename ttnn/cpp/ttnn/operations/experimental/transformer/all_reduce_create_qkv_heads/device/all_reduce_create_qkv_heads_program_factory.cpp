@@ -394,6 +394,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         head_tiles,
         1,  // read the first phase
         in_num_cores,
+        q_num_cores,
+        k_num_cores,
         // process_qv,  qv vs k core will be passed in as rt args// read and write q and v heads
         // process_k,   // read and write k heads
         1,  // use_batch_offset
@@ -417,6 +419,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         head_tiles,
         2,  // read the second phase
         in_num_cores,
+        q_num_cores,
+        k_num_cores,
         // process_qv,  // read and write q and v heads
         // process_k,   // read and write k heads
         1,  // use_batch_offset
