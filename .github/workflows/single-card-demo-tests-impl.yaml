@@ -101,7 +101,7 @@ jobs:
             -e CI=true
             -v /mnt/MLPerf:/mnt/MLPerf:ro
           install_wheel: true
-        run: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+        run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
       - name: Upload benchmark data
         if: ${{ matrix.test-group.name == 'N300_performance' && !cancelled() }}
         uses: ./.github/actions/upload-data-via-sftp
