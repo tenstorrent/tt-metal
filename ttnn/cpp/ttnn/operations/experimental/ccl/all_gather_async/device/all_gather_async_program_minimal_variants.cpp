@@ -250,8 +250,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         }
         std::vector<uint32_t> writer_rt_args = {
             output_tensor.buffer()->address(),  // tensor_address0
-            semaphore.first.address(),          // out_ready_sem_bank_addr (absolute address)
-            semaphore.second.address(),         // out_ready_sem_bank_addr (absolute address)
+            semaphore.first.address(),          // out_ready_sem_bank_addr_wait (absolute address)
+            semaphore.second.address(),         // out_ready_sem_bank_addr_release (absolute address)
             output_tile_id_start,               // tile_id_start
             output_tile_id_end,                 // tile_id_end
             wait_output_semaphore,              // wait_output_semaphore
@@ -552,8 +552,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
         std::vector<uint32_t> writer_rt_args = {
             output_tensor.buffer()->address(),    // tensor_address0
-            semaphore.first.address(),            // out_ready_sem_bank_addr (absolute address)
-            semaphore.second.address(),           // out_ready_sem_bank_addr (absolute address)
+            semaphore.first.address(),            // out_ready_sem_bank_addr_wait (absolute address)
+            semaphore.second.address(),           // out_ready_sem_bank_addr_release (absolute address)
             output_tensor_shard_num_pages,        // num_tiles_per_core
             worker_num_tiles_to_read,             // num_tiles_to_read
             output_first_core_tile_start_offset,  // first_core_tile_start_offset
