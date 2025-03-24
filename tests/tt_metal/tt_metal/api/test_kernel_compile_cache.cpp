@@ -4,7 +4,6 @@
 
 #include <gtest/gtest.h>
 #include <filesystem>
-#include <thread>
 #include <unordered_set>
 
 #include "core_coord.hpp"
@@ -22,7 +21,7 @@
 
 using namespace tt::tt_metal;
 
-TEST_F(DeviceFixture, TensixTestIncompleteDataMovementKernelBinaryWithPersistentCache) {
+TEST_F(DeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
     const string kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
 
     for (IDevice* device : this->devices_) {
@@ -54,7 +53,6 @@ TEST_F(DeviceFixture, TensixTestIncompleteDataMovementKernelBinaryWithPersistent
 
         const string elf_file_path = build_state.get_target_out_path(full_kernel_name);
         const auto t0 = std::filesystem::last_write_time(elf_file_path);
-        // std::filesystem::remove(elf_file_path);
 
         detail::ClearKernelCache();
 
@@ -62,11 +60,11 @@ TEST_F(DeviceFixture, TensixTestIncompleteDataMovementKernelBinaryWithPersistent
         kernel_handle = CreateKernel(program, kernel_file, CoreCoord(0, 0), config);
         detail::CompileProgram(device, program);
 
+        detail::DisablePersistentKernelCache();
+
         const auto t1 = std::filesystem::last_write_time(elf_file_path);
 
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-
-        EXPECT_TRUE(std::filesystem::exists(elf_file_path));
         EXPECT_TRUE(std::filesystem::exists(successful_marker_path));
+        EXPECT_TRUE(t1 > t0);
     }
 }
