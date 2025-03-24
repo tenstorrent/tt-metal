@@ -1310,23 +1310,46 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
 
     uint32_t downstream_pages_left = (downstream_cb_end - downstream_data_ptr) >> downstream_cb_log_page_size;
     if (downstream_pages_left >= npages) {
-        noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), length);
+        relay_cb_async_write<
+            downstream_mesh_id,
+            downstream_dev_id,
+            fabric_router_noc_xy,
+            tt::tt_fabric::ClientDataMode::RAW_DATA>(
+            client_interface, data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), length);
         downstream_data_ptr += npages * downstream_cb_page_size;
     } else {
         uint32_t tail_pages = npages - downstream_pages_left;
         uint32_t available = downstream_pages_left * downstream_cb_page_size;
         if (available > 0) {
-            noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), available);
+            relay_cb_async_write<
+                downstream_mesh_id,
+                downstream_dev_id,
+                fabric_router_noc_xy,
+                tt::tt_fabric::ClientDataMode::RAW_DATA>(
+                client_interface, data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), available);
             data_ptr += available;
             length -= available;
         }
-
-        noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_base), length);
+        relay_cb_async_write<
+            downstream_mesh_id,
+            downstream_dev_id,
+            fabric_router_noc_xy,
+            tt::tt_fabric::ClientDataMode::RAW_DATA>(
+            client_interface, data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_base), length);
         downstream_data_ptr = downstream_cb_base + tail_pages * downstream_cb_page_size;
     }
 
-    noc_async_writes_flushed();
-    cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
+    // Raw data writes are already flushed
+    if constexpr (!use_fabric(fabric_router_noc_xy)) {
+        noc_async_writes_flushed();
+    }
+    relay_cb_release_pages<
+        downstream_mesh_id,
+        downstream_dev_id,
+        fabric_router_noc_xy,
+        my_noc_index,
+        downstream_noc_xy,
+        downstream_cb_sem_id>(client_interface, npages);
 
     return fence;
 }
@@ -1438,7 +1461,13 @@ void kernel_main_d() {
         // TODO: evaluate less costly free pattern (blocks?)
         uint32_t total_length = length + sizeof(CQPrefetchHToPrefetchDHeader);
         uint32_t pages_to_free = (total_length + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
-        cb_release_pages<my_noc_index, upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);
+        relay_cb_release_pages<
+            upstream_mesh_id,
+            0,
+            fabric_router_noc_xy,
+            my_noc_index,
+            upstream_noc_xy,
+            upstream_cb_sem_id>(client_interface, pages_to_free);
 
         // Move to next page
         cmd_ptr = round_up_pow2(cmd_ptr, cmddat_q_page_size);
@@ -1449,8 +1478,10 @@ void kernel_main_d() {
     // TODO: This should be replaced with a signal similar to what packetized
     // components use.
     // DPRINT << "prefetch_d done" << ENDL();
-    noc_semaphore_inc(
-        get_noc_addr_helper(upstream_noc_xy, get_semaphore<fd_core_type>(upstream_cb_sem_id)), 0x80000000);
+    if (!use_fabric(fabric_router_noc_xy)) {
+        noc_semaphore_inc(
+            get_noc_addr_helper(upstream_noc_xy, get_semaphore<fd_core_type>(upstream_cb_sem_id)), 0x80000000);
+    }
 }
 
 void kernel_main_hd() {

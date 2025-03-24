@@ -62,9 +62,9 @@ typedef struct prefetch_dependent_config {
     // Populated if fabric is being used to talk to downstream
     std::optional<uint32_t> fabric_router_noc_xy;
     std::optional<uint32_t> upstream_mesh_id;
-    std::optional<uint32_t> upstream_chip_id;
+    std::optional<uint32_t> upstream_dev_id;
     std::optional<uint32_t> downstream_mesh_id;
-    std::optional<uint32_t> downstream_chip_id;
+    std::optional<uint32_t> downstream_dev_id;
 } prefetch_dependent_config_t;
 
 class PrefetchKernel : public FDKernel {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -121,9 +121,6 @@ enum CQNocSend {
     CQ_NOC_send = 0,
     CQ_NOC_SEND = 1,
 };
-
-// Returns true if the fabric_router_xy does not show a disabled value
-constexpr bool use_fabric(uint64_t fabric_router_xy) { return fabric_router_xy != 0xdeadbeef && fabric_router_xy != 0; }
 
 template <
     enum CQNocFlags flags,
@@ -373,6 +370,75 @@ FORCE_INLINE void move_rd_to_next_block(uint32_t& rd_block_idx) {
 template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id, uint32_t cb_pages_per_block, uint32_t cb_blocks>
 FORCE_INLINE void move_rd_to_next_block_and_release_pages(uint32_t& block_noc_writes_to_clear, uint32_t& rd_block_idx) {
     cb_block_release_pages<noc_idx, noc_xy, sem_id, cb_pages_per_block>(block_noc_writes_to_clear);
+    move_rd_to_next_block<cb_blocks>(rd_block_idx);
+}
+
+// Returns true if the fabric_router_xy does not show a disabled value
+constexpr bool use_fabric(uint64_t fabric_router_xy) { return fabric_router_xy != 0xdeadbeef && fabric_router_xy != 0; }
+
+template <uint16_t mesh_id, uint16_t dev_id, uint32_t routing, tt::tt_fabric::ClientDataMode data_mode, typename T>
+inline void relay_cb_async_write(T client_interface, uint32_t src_addr, uint64_t dst_addr, uint32_t size) {
+    if constexpr (use_fabric(routing)) {
+        tt::tt_fabric::fabric_async_write<data_mode>(
+            client_interface,
+            routing,
+            src_addr,
+            mesh_id,
+            dev_id,
+            dst_addr,
+            size + tt::tt_fabric::PACKET_HEADER_SIZE_BYTES);
+        // We don't cycle headers yet. Need to wait for the header to be done
+        if constexpr (data_mode == tt::tt_fabric::ClientDataMode::RAW_DATA) {
+            tt::tt_fabric::fabric_wait_for_pull_request_bytes_flushed(client_interface, size);
+        }
+    } else {
+        noc_async_write(src_addr, dst_addr, size);
+    }
+}
+
+template <
+    uint16_t mesh_id,
+    uint16_t dev_id,
+    uint32_t routing,
+    uint8_t noc_idx,
+    uint32_t noc_xy,
+    uint32_t sem_id,
+    typename T>
+inline void relay_cb_release_pages(T client_interface, uint32_t n) {
+    constexpr uint32_t k_WrapBoundary = 31;  // Same as NOC API
+    if constexpr (use_fabric(routing)) {
+        tt::tt_fabric::fabric_atomic_inc<tt::tt_fabric::ClientDataMode::RAW_DATA>(
+            client_interface,
+            routing,
+            0 /* unused for inline */,
+            mesh_id,
+            dev_id,
+            get_noc_addr_helper(noc_xy, get_semaphore<fd_core_type>(sem_id)),
+            n,
+            k_WrapBoundary);
+    } else {
+        cb_release_pages<noc_idx, noc_xy, sem_id>(n);
+    }
+}
+
+template <
+    uint8_t noc_idx,
+    uint32_t noc_xy,
+    uint32_t sem_id,
+    uint32_t cb_pages_per_block,
+    uint32_t cb_blocks,
+    uint16_t mesh_id,
+    uint16_t dev_id,
+    uint32_t routing,
+    typename T>
+FORCE_INLINE void relay_cb_move_rd_to_next_block_and_release_pages(
+    T client_interface, uint32_t& block_noc_writes_to_clear, uint32_t& rd_block_idx) {
+    if constexpr (use_fabric(routing)) {
+        relay_cb_release_pages<mesh_id, dev_id, routing, noc_idx, noc_xy, sem_id>(
+            client_interface, block_noc_writes_to_clear);
+    } else {
+        cb_block_release_pages<noc_idx, noc_xy, sem_id, cb_pages_per_block>(block_noc_writes_to_clear);
+    }
     move_rd_to_next_block<cb_blocks>(rd_block_idx);
 }
 
