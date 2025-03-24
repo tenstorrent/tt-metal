@@ -88,7 +88,7 @@ jobs:
       fail-fast: false
       matrix:
         card: [N150, N300]
-        model: [common_models, functional_unet, llama3.2-1B, qwen, mistral7b, mistral7b_eth, resnet50, yolov4, whisper]
+        model: [common_models, functional_unet, llama3.2-1B, qwen, mistral-7B-v0.3, resnet50, yolov4, whisper]
     name: Nightly ${{ matrix.card }} ${{ matrix.model }}
     defaults:
       run:
@@ -125,15 +125,13 @@ jobs:
             -e ARCH_NAME=wormhole_b0
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
-          # Llama3 has a single pytest for multiple llama models, hence it requires calling it multiple times.
           # Due to host OOM issues in CI vm, we currently only run llama-1B in the model matrix.
+          # TT-Transformer models have a single ci-dispatch test that contains all tests.
           run_args: |
-            if [[ "${{ matrix.model }}" != "mistral7b" ]]; then
-              export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-            fi
+            export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
 
-            if [[ "${{ matrix.model }}" == *"llama3"* ]]; then
-              pytest -n auto tests/nightly/single_card/llama3 -k ${{ matrix.model }}
+            if [[ "${{ matrix.model }}" == *"llama3"* || "${{ matrix.model }}" == *"mistral-7B"* ]]; then
+              pytest -n auto tests/nightly/single_card/tt_transformers -k ${{ matrix.model }}
             else
               pytest tests/nightly/single_card/${{ matrix.model }}
             fi
