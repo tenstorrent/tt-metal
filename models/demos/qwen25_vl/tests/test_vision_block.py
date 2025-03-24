@@ -167,7 +167,7 @@ def test_vision_block_inference(
     tt_input = pt_input.clone()
     tt_input = torch.nn.functional.pad(tt_input, (0, 0, 0, seq_len - ref_seq_len))
     tt_input = model_args.prepare_residual_tensor_prefill(
-        tt_input,
+        tt_input.squeeze(0),
         force_replicated=False if model_args.is_galaxy else True,
     )
 
@@ -185,7 +185,9 @@ def test_vision_block_inference(
         tt_out,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
     )
-    tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, seq_len, -1)  # [batch, seq, hidden_dim]
+    tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].tt_out.view(
+        batch_size, seq_len, -1
+    )  # [batch, seq, hidden_dim]
 
     # Remove sequence padding
     tt_output_torch = tt_output_torch[0, :ref_seq_len, :]

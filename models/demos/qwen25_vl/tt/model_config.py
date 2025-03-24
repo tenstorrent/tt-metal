@@ -40,6 +40,7 @@ class VisionModelArgs(ModelArgs):
         for k, v in vision_state_dict.items():
             k = replace_whole_name("qkv", "qkv_proj")(k)
             k = replace_whole_name("proj", "o_proj")(k)
+            k = replace_whole_name("attn", "self_attn")(k)
             output[k] = v
         return output
 
