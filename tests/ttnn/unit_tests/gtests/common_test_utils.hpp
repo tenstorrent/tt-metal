@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <vector>
+
 namespace test_utils {
 
 // Pearson Correlation Coefficient for two float vectors

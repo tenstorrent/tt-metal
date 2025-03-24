@@ -6,6 +6,7 @@
 #include <iostream>
 #include <vector>
 #include "assert.hpp"
+#include "logger.hpp"
 #include "small_vector.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
@@ -127,89 +128,97 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
 
     IDevice* device = CreateDevice(device_id, 1, L1_small_size);
 
-    MemoryConfig dram_mem_config =
-        MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM};
+    try {
+        MemoryConfig dram_mem_config =
+            MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM};
 
-    // (N,Ci,H,W)
-    Shape dimensions{param.batch_size, param.input_channels, param.input_height, param.input_width};
-    // (Co,Ci,KH,KW)
-    Shape dimensions_weight{param.output_channels, param.input_channels, param.kernel_size[0], param.kernel_size[1]};
+        // (N,Ci,H,W)
+        Shape dimensions{param.batch_size, param.input_channels, param.input_height, param.input_width};
+        // (Co,Ci,KH,KW)
+        Shape dimensions_weight{
+            param.output_channels, param.input_channels, param.kernel_size[0], param.kernel_size[1]};
 
-    random::seed(42);
-    // Create input tensor on device
-    Tensor input_tensor =
-        ttnn::random::random(dimensions, tt::tt_metal::DataType::BFLOAT16).to_device(device, dram_mem_config);
+        random::seed(42);
+        // Create input tensor on device
+        Tensor input_tensor =
+            ttnn::random::random(dimensions, tt::tt_metal::DataType::BFLOAT16).to_device(device, dram_mem_config);
 
-    // Create weight tensor on device (weight tensor on device would require to be tiled if
-    // Conv2DConfig.always_preprocess_weights isn't used)
-    Tensor weight_tensor = ttnn::random::random(dimensions_weight, tt::tt_metal::DataType::BFLOAT16);
+        // Create weight tensor on device (weight tensor on device would require to be tiled if
+        // Conv2DConfig.always_preprocess_weights isn't used)
+        Tensor weight_tensor = ttnn::random::random(dimensions_weight, tt::tt_metal::DataType::BFLOAT16);
 
-    // Copy input tensor and weight tensor to host for reference implementation
-    std::vector<float> input_vector = input_tensor.to_vector<float>();
-    std::vector<float> weight_vector = weight_tensor.to_vector<float>();
+        // Copy input tensor and weight tensor to host for reference implementation
+        std::vector<float> input_vector = input_tensor.to_vector<float>();
+        std::vector<float> weight_vector = weight_tensor.to_vector<float>();
 
-    // (N,Ci,H,W) -> (N,H,W,Ci)
-    input_tensor = ttnn::permute(input_tensor, SmallVector<int64_t>{0, 2, 3, 1});
+        // (N,Ci,H,W) -> (N,H,W,Ci)
+        input_tensor = ttnn::permute(input_tensor, SmallVector<int64_t>{0, 2, 3, 1});
 
-    // Run Conv2D
-    auto [output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device] = conv2d::conv2d(
-        input_tensor,
-        weight_tensor,
-        device,
-        param.input_channels,
-        param.output_channels,
-        param.batch_size,
-        param.input_height,
-        param.input_width,
-        param.kernel_size,
-        param.stride,
-        param.padding,
-        {1, 1},  // dilation
-        1        // groups
-    );
+        // Run Conv2D
+        auto [output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device] =
+            conv2d::conv2d(
+                input_tensor,
+                weight_tensor,
+                device,
+                param.input_channels,
+                param.output_channels,
+                param.batch_size,
+                param.input_height,
+                param.input_width,
+                param.kernel_size,
+                param.stride,
+                param.padding,
+                {1, 1},  // dilation
+                1        // groups
+            );
 
-    // move output tensor to dram
-    output_tensor = ttnn::to_memory_config(output_tensor, dram_mem_config);
+        // move output tensor to dram
+        output_tensor = ttnn::to_memory_config(output_tensor, dram_mem_config);
 
-    // untilize output tensor because the default output tensor layout is TILE layout
-    output_tensor = ttnn::untilize(output_tensor);
+        // untilize output tensor because the default output tensor layout is TILE layout
+        output_tensor = ttnn::untilize(output_tensor);
 
-    // unpad output vector
-    output_tensor = ttnn::slice(
-        output_tensor,
-        std::array<uint32_t, 4>({0, 0, 0, 0}),
-        std::array<uint32_t, 4>({1, 1, param.batch_size * output_height * output_width, param.output_channels}),
-        std::array<uint32_t, 4>({1, 1, 1, 1}),
-        dram_mem_config);
+        // unpad output vector
+        output_tensor = ttnn::slice(
+            output_tensor,
+            std::array<uint32_t, 4>({0, 0, 0, 0}),
+            std::array<uint32_t, 4>({1, 1, param.batch_size * output_height * output_width, param.output_channels}),
+            std::array<uint32_t, 4>({1, 1, 1, 1}),
+            dram_mem_config);
 
-    // H'  - output_height
-    // W'  - output_width
-    // (1,1,NH'W',Co) -> (N,H',W',Co)
-    output_tensor =
-        ttnn::reshape(output_tensor, Shape({param.batch_size, output_height, output_width, param.output_channels}));
+        // H'  - output_height
+        // W'  - output_width
+        // (1,1,NH'W',Co) -> (N,H',W',Co)
+        output_tensor =
+            ttnn::reshape(output_tensor, Shape({param.batch_size, output_height, output_width, param.output_channels}));
 
-    // (N,H',W',Co) -> (N,Co,H',W')
-    output_tensor = ttnn::permute(output_tensor, SmallVector<int64_t>{0, 3, 1, 2});
+        // (N,H',W',Co) -> (N,Co,H',W')
+        output_tensor = ttnn::permute(output_tensor, SmallVector<int64_t>{0, 3, 1, 2});
 
-    // Copy output tensor to host for comparison
-    std::vector<float> res = output_tensor.to_vector<float>();
+        // Copy output tensor to host for comparison
+        std::vector<float> res = output_tensor.to_vector<float>();
 
-    // Run reference implementation of Conv2D
-    std::vector<float> ref_res = reference_implementation_conv2d(
-        input_vector,
-        weight_vector,
-        param.input_channels,
-        param.output_channels,
-        param.batch_size,
-        param.input_height,
-        param.input_width,
-        param.kernel_size,
-        param.stride,
-        param.padding);
+        // Run reference implementation of Conv2D
+        std::vector<float> ref_res = reference_implementation_conv2d(
+            input_vector,
+            weight_vector,
+            param.input_channels,
+            param.output_channels,
+            param.batch_size,
+            param.input_height,
+            param.input_width,
+            param.kernel_size,
+            param.stride,
+            param.padding);
 
-    float pcc_calculated = test_utils::pcc(res, ref_res);
-    TT_FATAL(pcc_calculated > 0.99, "PCC not high enough. Result PCC: {}, Expected PCC: 0.99", pcc_calculated);
-
+        float pcc_calculated = test_utils::pcc(res, ref_res);
+        TT_FATAL(pcc_calculated > 0.99, "PCC not high enough. Result PCC: {}, Expected PCC: 0.99", pcc_calculated);
+        TT_FATAL(false, "I just wanna fail");
+    } catch (const std::exception& e) {
+        CloseDevice(device);
+        tt::log_error("Caught exception in Conv2D test: {}", e.what());
+        throw e;
+    }
     bool pass = CloseDevice(device);
     TT_FATAL(pass, "Error closing device");
 }
