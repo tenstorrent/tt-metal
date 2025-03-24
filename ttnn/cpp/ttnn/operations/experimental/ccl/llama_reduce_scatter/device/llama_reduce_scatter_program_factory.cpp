@@ -428,13 +428,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     auto local_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores_grid, INVALID);
     // std::cout << "Program factory local_semaphore: " << local_semaphore << std::endl;
 
-    std::vector<uint32_t> reader_runtime_args = {
-        cross_device_semaphore->address(), local_semaphore, false, false, 0, false};
-    uint32_t is_reader_sender_core_idx = reader_runtime_args.size() - 4;
-    uint32_t is_reader_worker_core_idx = reader_runtime_args.size() - 3;
-    uint32_t is_linear_input_packet_start_idx = reader_runtime_args.size() - 2;
-    uint32_t is_reader_receiver_core_idx = reader_runtime_args.size() - 1;
-
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/kernels/dataflow/"
@@ -488,17 +481,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             .compile_args = writer_compile_time_args,
             .defines = writer_defines});
 
-    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> forward_fabric_connection =
-        line_topology.is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
-            ? std::nullopt
-            : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(
-                  local_fabric_handle->uniquely_connect_worker(device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
-    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> backward_fabric_connection =
-        line_topology.is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
-            ? std::nullopt
-            : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(
-                  local_fabric_handle->uniquely_connect_worker(device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
-
     // if (operation_attributes.ring_index == 3) {
     //     std::cout << "Writer runtime args after appending forward fabric connection: " << writer_runtime_args.size()
     //               << std::endl;
@@ -526,20 +508,62 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     uint32_t local_page = 0;
     uint32_t reader_receiver_for_device_id = 0;
 
+    uint32_t start_device_idx = 0;
+
+    std::vector<uint32_t> reader_runtime_args = {
+        cross_device_semaphore->address(), local_semaphore, false, false, 0, false, 0, 0};
+    uint32_t is_reader_sender_core_idx = 2;
+    uint32_t is_reader_worker_core_idx = 3;
+    uint32_t is_linear_input_packet_start_idx = 4;
+    uint32_t is_reader_receiver_core_idx = 5;
+    uint32_t reader_device_start_idx = 6;
+    uint32_t reader_device_end_idx = 7;
+
+    uint32_t is_writer_sender_core_idx = 2;
+    uint32_t is_writer_worker_core_idx = 3;
+    uint32_t is_linear_output_page_start_idx = 4;
+    uint32_t writer_device_start_idx = 5;
+    uint32_t writer_device_end_idx = 6;
+
+    TT_FATAL(
+        (num_devices - 1) % sender_core_grid.num_cores() == 0,
+        "num_devices must be divisible by sender_core_grid.num_cores()");
+    uint32_t work_per_sender = (num_devices - 1) / sender_core_grid.num_cores();
+
     for (auto core : all_cores) {
         std::vector<uint32_t> writer_runtime_args = {
-            cross_device_semaphore->address(), local_semaphore, false, false, 0};
-        uint32_t is_writer_sender_core_idx = writer_runtime_args.size() - 3;
-        uint32_t is_writer_worker_core_idx = writer_runtime_args.size() - 2;
-        uint32_t is_linear_output_page_start_idx = writer_runtime_args.size() - 1;
+            cross_device_semaphore->address(), local_semaphore, false, false, 0, 0, 0};
 
         if (sender_core_grid.contains(core)) {
             reader_runtime_args[is_reader_sender_core_idx] = true;
             reader_runtime_args[is_reader_worker_core_idx] = false;
             reader_runtime_args[is_reader_receiver_core_idx] = false;
+            reader_runtime_args[reader_device_start_idx] = start_device_idx;
+            reader_runtime_args[reader_device_end_idx] = start_device_idx + work_per_sender;
 
             writer_runtime_args[is_writer_sender_core_idx] = true;
             writer_runtime_args[is_writer_worker_core_idx] = false;
+            writer_runtime_args[writer_device_start_idx] = start_device_idx;
+            writer_runtime_args[writer_device_end_idx] = start_device_idx + work_per_sender;
+
+            // if (operation_attributes.ring_index == 2) {
+            //     std::cout << "core: " << core.str() << " start_device_idx: " << start_device_idx << " end_device_idx:
+            //     " << start_device_idx + work_per_sender << std::endl;
+            // }
+            start_device_idx += work_per_sender;
+            std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> forward_fabric_connection =
+                line_topology.is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
+                    ? std::nullopt
+                    : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(
+                          local_fabric_handle->uniquely_connect_worker(
+                              device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
+            std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> backward_fabric_connection =
+                line_topology.is_last_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
+                    ? std::nullopt
+                    : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(
+                          local_fabric_handle->uniquely_connect_worker(
+                              device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
+
             detail::append_fabric_connection_rt_args(forward_fabric_connection, core, program, writer_runtime_args);
             detail::append_fabric_connection_rt_args(backward_fabric_connection, core, program, writer_runtime_args);
         } else if (packet_worker_cores_grid.contains(core)) {

@@ -106,6 +106,8 @@ void kernel_main() {
     bool sender_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     bool worker_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t linear_output_page_start_idx = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t start_device_idx = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t end_device_idx = get_arg_val<uint32_t>(rt_arg_idx++);
 
     if (sender_core) {
         // Set up packet headers once
@@ -118,9 +120,10 @@ void kernel_main() {
             fabric_connection.open();
         }
 
-        for (auto target_device_id : device_order) {
+        for (uint32_t device_idx = start_device_idx; device_idx < end_device_idx; device_idx++) {
+            uint32_t target_device_id = device_order[device_idx];
             if (target_device_id == chip_id) {
-                break;
+                continue;
             }
 
             // Calculate device-specific constants once per device

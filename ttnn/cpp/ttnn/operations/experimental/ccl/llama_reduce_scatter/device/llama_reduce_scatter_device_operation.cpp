@@ -32,12 +32,21 @@ LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceO
     auto tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
     auto input_spec = input_tensor.get_tensor_spec();
     auto input_shape = input_spec.logical_shape();
-    auto input_shard_spec = input_tensor.shard_spec().value();
+
     uint32_t final_width = input_shape[attributes.dim] / attributes.ring_devices;
 
     auto output_shape = input_shape;
     output_shape[attributes.dim] = final_width;
+    if (attributes.output_mem_config.has_value()) {
+        return {TensorSpec(
+            Shape(output_shape),
+            TensorLayout(
+                input_tensor.get_dtype(),
+                PageConfig(input_tensor.get_layout()),
+                attributes.output_mem_config.value()))};
+    }
 
+    auto input_shard_spec = input_tensor.shard_spec().value();
     uint32_t num_cores = final_width / input_spec.tile().get_tile_shape()[1];
     auto device = input_tensor.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -83,7 +92,7 @@ LlamaReduceScatterDeviceOperation::invoke(
             .subdevice_id = subdevice_id,
             .ring_index = ring_index,
             .cluster_axis = cluster_axis,
-            .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
+            .output_mem_config = memory_config,
             .ring_devices = ring_devices,
             .num_links = num_links,
             .forward_device = forward_device,

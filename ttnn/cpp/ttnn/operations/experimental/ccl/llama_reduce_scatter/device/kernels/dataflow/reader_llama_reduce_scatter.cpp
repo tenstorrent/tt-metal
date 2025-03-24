@@ -90,6 +90,8 @@ void kernel_main() {
     bool worker_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t linear_input_packet_start_idx = get_arg_val<uint32_t>(rt_arg_idx++);
     bool receiver_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t start_device_idx = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t end_device_idx = get_arg_val<uint32_t>(rt_arg_idx++);
 
     // Constants for indexing
     constexpr uint8_t x_index = 0;
@@ -101,9 +103,10 @@ void kernel_main() {
     if (sender_core) {
         // Precompute the number of bytes to transfer per tile group
         constexpr uint32_t bytes_per_tile_group = tiles_per_core_width * page_size_bytes;
-        for (auto target_device_id : device_order) {
+        for (uint32_t device_idx = start_device_idx; device_idx < end_device_idx; device_idx++) {
+            uint32_t target_device_id = device_order[device_idx];
             if (target_device_id == chip_id) {
-                break;
+                continue;
             }
 
             uint32_t base_core = target_device_id * input_shard_cores_per_device;
