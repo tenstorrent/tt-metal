@@ -11,7 +11,7 @@
 #include "conv2d_utils.hpp"
 #include <tt-metalium/buffer_constants.hpp>
 #include "tt-metalium/constants.hpp"
-#include "tt-metalium/hal.hpp"
+#include <tt-metalium/hal_exp.hpp>
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -26,6 +26,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 
 using namespace tt;
+using namespace tt::tt_metal::experimental;
 namespace ttnn {
 namespace operations::conv {
 using sliding_window::ParallelConfig;
@@ -281,6 +282,13 @@ static std::pair<uint32_t, uint32_t> determine_largest_subblock_size(
         {2, 4}, {4, 2}, {1, 8}, {8, 1}, {1, 7}, {7, 1}, {2, 3}, {3, 2}, {1, 6}, {6, 1},
         {1, 5}, {5, 1}, {2, 2}, {1, 4}, {4, 1}, {1, 3}, {3, 1}, {1, 2}, {2, 1}, {1, 1},
     }};
+
+    // # Issue 18812. Temporarily solution for BH CI while hang is not resolved.
+    static bool conv2d_subblock_env_set = (std::getenv("TT_METAL_CONV2D_1_1_SUBBLOCK") != nullptr);
+
+    if (conv2d_subblock_env_set) {
+        return {1, 1};
+    }
 
     uint32_t subblock_h = 0;
     uint32_t subblock_w = 0;
@@ -937,7 +945,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     uint32_t output_tile_size = tt::tile_size(datatype_to_dataformat_converter(conv_config.dtype));
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(tt::tt_metal::hal.get_arch(), compute_kernel_config);
+        get_compute_kernel_config_args(hal::get_arch(), compute_kernel_config);
 
     uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
     uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
@@ -1127,9 +1135,8 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
             } else if (conv_config.dtype == DataType::FLOAT32) {
                 per_core_out_width_aligned *= 4;
             }
-            output_size =
-                round_up(per_core_out_width_aligned, tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1)) *
-                pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT;
+            output_size = round_up(per_core_out_width_aligned, hal::get_l1_alignment()) *
+                          pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT;
         } else {
             output_size = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * output_tile_size;
         }

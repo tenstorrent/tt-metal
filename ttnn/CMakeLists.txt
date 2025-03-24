@@ -64,7 +64,12 @@ function(build_library LIBRARY_NAME ALIAS)
         target_precompile_headers(${LIBRARY_NAME} REUSE_FROM ${PRECOMPILED_HEADER_TARGET})
     endif()
 
-    target_link_libraries(${LIBRARY_NAME} PUBLIC ${TARGET_LINK_LIBRARIES})
+    target_link_libraries(
+        ${LIBRARY_NAME}
+        PUBLIC
+            ${TARGET_LINK_LIBRARIES}
+            Boost::algorithm
+    )
 
     # Set compile options for the library
     target_compile_options(
@@ -733,6 +738,9 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/dropout/device/dropout_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/dropout/dropout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reshape/view.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/gelu_backward_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/gelu_backward_program_factory.cpp
 )
 
 set(TTNN_SRC)
@@ -783,6 +791,7 @@ set(TTNN_SUBLIBRARIES
     ttnn/operations/experimental/transformer
     ttnn/operations/experimental/dropout
     ttnn/operations/experimental/reshape
+    ttnn/operations/experimental/unary_backward
     ttnn/operations/full_like
     ttnn/operations/full
     ttnn/operations/index_fill
@@ -892,6 +901,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/rotate_half/rotate_half_pybind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/full/full_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/full_like/full_like_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/index_fill/index_fill_pybind.cpp

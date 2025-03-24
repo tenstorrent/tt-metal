@@ -21,19 +21,6 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
 from loguru import logger
 
 
-def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
-    input = ttnn.from_torch(input, ttnn.bfloat16)
-    input = ttnn.to_layout(input, layout)
-    input = ttnn.to_device(input, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    return input
-
-
-def ttnn_to_torch(input):
-    input = ttnn.from_device(input)
-    input = ttnn.to_torch(input)
-    return input
-
-
 config_override = {
     (320, 320, 64, 64): {"act_block_h": 64},
     (640, 640, 32, 32): {"act_block_h": 64},

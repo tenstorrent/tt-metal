@@ -16,6 +16,6 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/tg-frequent-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

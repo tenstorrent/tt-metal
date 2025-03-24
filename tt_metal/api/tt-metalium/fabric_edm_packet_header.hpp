@@ -9,6 +9,13 @@
 #include <climits>
 #include <limits>
 
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
+#else
+#include "assert.hpp"
+#endif
+
 namespace tt::tt_fabric {
 
 enum TerminationSignal : uint32_t {
@@ -26,13 +33,16 @@ enum EDMStatus : uint32_t {
     STARTED = 0xA0B0C0D0,
 
     // Handshake complete with remote
-    HANDSHAKE_COMPLETE = 0xA0B1C2D3,
+    REMOTE_HANDSHAKE_COMPLETE = 0xA1B1C1D1,
 
     // Ready to start listening for packets
-    READY_FOR_TRAFFIC = 0xA1B2C3D4,
+    LOCAL_HANDSHAKE_COMPLETE = 0xA2B2C2D2,
+
+    // Ready for traffic
+    READY_FOR_TRAFFIC = 0xA3B3C3D3,
 
     // EDM exiting
-    TERMINATED = 0xA2B3C4D5
+    TERMINATED = 0xA4B4C4D4
 };
 
 // 3 bits
@@ -156,16 +166,42 @@ struct PacketHeaderBase {
 
     inline Derived& to_noc_unicast_write(
         const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_WRITE;
-        this->command_fields.unicast_write = noc_unicast_command_header;
+        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
+            noc_address_components.first.x,
+            noc_address_components.first.y,
+            noc_address_components.second,
+            edm_to_local_chip_noc);
+        NocUnicastCommandHeader modified_command_header = noc_unicast_command_header;
+        modified_command_header.noc_address = noc_addr;
+
+        this->command_fields.unicast_write = modified_command_header;
         this->payload_size_bytes = payload_size_bytes;
+#else
+        TT_THROW("Calling to_noc_unicast_write from host is unsupported");
+#endif
         return *static_cast<Derived*>(this);
     }
 
     inline Derived& to_noc_unicast_inline_write(const NocUnicastInlineWriteCommandHeader& noc_unicast_command_header) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_INLINE_WRITE;
-        this->command_fields.unicast_inline_write = noc_unicast_command_header;
+        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
+            noc_address_components.first.x,
+            noc_address_components.first.y,
+            noc_address_components.second,
+            edm_to_local_chip_noc);
+        NocUnicastInlineWriteCommandHeader modified_command_header = noc_unicast_command_header;
+        modified_command_header.noc_address = noc_addr;
+
+        this->command_fields.unicast_inline_write = modified_command_header;
         this->payload_size_bytes = 0;
+#else
+        TT_THROW("Calling to_noc_unicast_inline_write from host is unsupported");
+#endif
         return *static_cast<Derived*>(this);
     }
 
@@ -179,9 +215,22 @@ struct PacketHeaderBase {
 
     inline Derived& to_noc_unicast_atomic_inc(
         const NocUnicastAtomicIncCommandHeader& noc_unicast_atomic_inc_command_header) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_ATOMIC_INC;
-        this->command_fields.unicast_seminc = noc_unicast_atomic_inc_command_header;
+        auto noc_address_components = get_noc_address_components(noc_unicast_atomic_inc_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
+            noc_address_components.first.x,
+            noc_address_components.first.y,
+            noc_address_components.second,
+            edm_to_local_chip_noc);
+        NocUnicastAtomicIncCommandHeader modified_command_header = noc_unicast_atomic_inc_command_header;
+        modified_command_header.noc_address = noc_addr;
+
+        this->command_fields.unicast_seminc = modified_command_header;
         this->payload_size_bytes = 0;
+#else
+        TT_THROW("Calling to_noc_unicast_atomic_inc from host is unsupported");
+#endif
         return *static_cast<Derived*>(this);
     }
 
@@ -206,18 +255,40 @@ struct PacketHeaderBase {
 
     inline volatile Derived* to_noc_unicast_write(
         const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_WRITE;
-        this->command_fields.unicast_write.noc_address = noc_unicast_command_header.noc_address;
+        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
+            noc_address_components.first.x,
+            noc_address_components.first.y,
+            noc_address_components.second,
+            edm_to_local_chip_noc);
+
+        this->command_fields.unicast_write.noc_address = noc_addr;
         this->payload_size_bytes = payload_size_bytes;
+#else
+        TT_THROW("Calling to_noc_unicast_write from host is unsupported");
+#endif
         return static_cast<volatile Derived*>(this);
     }
 
     inline volatile Derived* to_noc_unicast_inline_write(
         const NocUnicastInlineWriteCommandHeader& noc_unicast_command_header) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_INLINE_WRITE;
-        this->command_fields.unicast_inline_write.noc_address = noc_unicast_command_header.noc_address;
+        auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
+            noc_address_components.first.x,
+            noc_address_components.first.y,
+            noc_address_components.second,
+            edm_to_local_chip_noc);
+
+        this->command_fields.unicast_inline_write.noc_address = noc_addr;
         this->command_fields.unicast_inline_write.value = noc_unicast_command_header.value;
         this->payload_size_bytes = 0;
+#else
+        TT_THROW("Calling to_noc_unicast_inline_write from host is unsupported");
+#endif
         return static_cast<volatile Derived*>(this);
     }
 
@@ -235,11 +306,22 @@ struct PacketHeaderBase {
 
     inline volatile Derived* to_noc_unicast_atomic_inc(
         const NocUnicastAtomicIncCommandHeader& noc_unicast_atomic_inc_command_header) volatile {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_ATOMIC_INC;
-        this->command_fields.unicast_seminc.noc_address = noc_unicast_atomic_inc_command_header.noc_address;
+        auto noc_address_components = get_noc_address_components(noc_unicast_atomic_inc_command_header.noc_address);
+        auto noc_addr = safe_get_noc_addr(
+            noc_address_components.first.x,
+            noc_address_components.first.y,
+            noc_address_components.second,
+            edm_to_local_chip_noc);
+
+        this->command_fields.unicast_seminc.noc_address = noc_addr;
         this->command_fields.unicast_seminc.val = noc_unicast_atomic_inc_command_header.val;
         this->command_fields.unicast_seminc.wrap = noc_unicast_atomic_inc_command_header.wrap;
         this->payload_size_bytes = 0;
+#else
+        TT_THROW("Calling to_noc_unicast_atomic_inc from host is unsupported");
+#endif
         return static_cast<volatile Derived*>(this);
     }
 
@@ -262,7 +344,6 @@ struct PacketHeaderBase {
 };
 
 struct PacketHeader : public PacketHeaderBase<PacketHeader> {
-    static constexpr uint8_t default_high_vc_distance = 0;
     ChipSendType chip_send_type;
     RoutingFields routing_fields;
     // Sort of hack to work-around DRAM read alignment issues that must be 32B aligned
@@ -313,18 +394,15 @@ public:
 };
 
 struct LowLatencyRoutingFields {
-    static constexpr uint32_t FIELD_WIDTH = 3;
-    static constexpr uint32_t FIELD_MASK = 0b111;
-    static constexpr uint32_t PATH_ROUTING_FIELD_MASK = 0b011;
-    static constexpr uint32_t VC_FIELD_MASK = 0b100;
-    static constexpr uint32_t NOOP = 0b000;
-    static constexpr uint32_t WRITE_ONLY = 0b001;
-    static constexpr uint32_t FORWARD_ONLY = 0b010;
-    static constexpr uint32_t WRITE_AND_FORWARD = 0b011;
+    static constexpr uint32_t FIELD_WIDTH = 2;
+    static constexpr uint32_t FIELD_MASK = 0b11;
+    static constexpr uint32_t NOOP = 0b00;
+    static constexpr uint32_t WRITE_ONLY = 0b01;
+    static constexpr uint32_t FORWARD_ONLY = 0b10;
+    static constexpr uint32_t WRITE_AND_FORWARD = 0b11;
     static constexpr uint32_t MAX_NUM_ENCODINGS = sizeof(uint32_t) * CHAR_BIT / FIELD_WIDTH;
-    static constexpr uint32_t FWD_ONLY_FIELD = 0x92492492;
-    static constexpr uint32_t WR_ONLY_FIELD = 0x49249249;
-    static constexpr uint32_t HIGH_VC_FIELD = 0x24924924;
+    static constexpr uint32_t FWD_ONLY_FIELD = 0xAAAAAAAA;
+    static constexpr uint32_t WR_ONLY_FIELD = 0x55555555;
     uint32_t value;
 };
 
@@ -341,10 +419,7 @@ private:
         // the 3rd chip, we will write only Together this means the final encoding is 0b011010
         return (LowLatencyRoutingFields::FWD_ONLY_FIELD &
                 ((1 << (distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH) - 1)) |
-               (LowLatencyRoutingFields::WRITE_ONLY << (distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH) |
-               (LowLatencyRoutingFields::HIGH_VC_FIELD
-                << ((distance_in_hops - 1) >> 1) *
-                       LowLatencyRoutingFields::FIELD_WIDTH);  // Flip to high VC at the middle of the path
+               (LowLatencyRoutingFields::WRITE_ONLY << (distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH);
     }
     inline static uint32_t calculate_chip_multicast_routing_fields_value(
         const MulticastRoutingCommandHeader& chip_multicast_command_header) {
@@ -362,11 +437,7 @@ private:
                // of readability of the packet header
                ((LowLatencyRoutingFields::WR_ONLY_FIELD &
                  ((1 << (chip_multicast_command_header.range_hops) * LowLatencyRoutingFields::FIELD_WIDTH) - 1))
-                << ((chip_multicast_command_header.start_distance_in_hops - 1) *
-                    LowLatencyRoutingFields::FIELD_WIDTH)) |
-               (LowLatencyRoutingFields::HIGH_VC_FIELD
-                << ((distance_in_hops - 1) >> 1) *
-                       LowLatencyRoutingFields::FIELD_WIDTH);  // Flip to high VC at the middle of the path
+                << ((chip_multicast_command_header.start_distance_in_hops - 1) * LowLatencyRoutingFields::FIELD_WIDTH));
     }
 
 public:

@@ -41,7 +41,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig() {
     this->termination_signal_address =
         edm_channel_ack_addr +
         (4 * eth_channel_sync_size);  // pad extra bytes to match old EDM so handshake logic will still work
-    this->edm_status_address = termination_signal_address + field_size;
+    this->edm_local_sync_address = termination_signal_address + field_size;
+    this->edm_status_address = edm_local_sync_address + field_size;
 
     uint32_t buffer_address = edm_status_address + field_size;
     for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
@@ -361,7 +362,8 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
 
     const FabricEriscDatamoverConfig& config,
     bool enable_persistent_mode,
-    bool build_in_worker_connection_mode) :
+    bool build_in_worker_connection_mode,
+    bool dateline_connection) :
     my_eth_core_logical(my_eth_core_logical),
     my_noc_x(my_noc_x),
     my_noc_y(my_noc_y),
@@ -387,9 +389,11 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     local_receiver_channels_buffer_address(config.receiver_channels_base_address),
 
     termination_signal_ptr(config.termination_signal_address),
+    edm_local_sync_ptr(config.edm_local_sync_address),
     edm_status_ptr(config.edm_status_address),
     enable_persistent_mode(enable_persistent_mode),
-    build_in_worker_connection_mode(build_in_worker_connection_mode) {}
+    build_in_worker_connection_mode(build_in_worker_connection_mode),
+    dateline_connection(dateline_connection) {}
 
 std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const {
     const bool is_handshake_master = this->my_chip_id < this->peer_chip_id;
@@ -414,6 +418,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
         this->enable_first_level_ack,
         this->fuse_receiver_flush_and_completion_ptr,
         config.topology == Topology::Ring,
+        this->dateline_connection,
         is_handshake_master,
         this->handshake_address,
         this->channel_buffer_size,
@@ -437,6 +442,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
         config.sender_channels_base_address[2],
 
         this->termination_signal_ptr,
+        this->edm_local_sync_ptr,
         this->edm_status_ptr,
         this->enable_persistent_mode,
 
@@ -510,7 +516,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     chip_id_t peer_chip_id,
     const FabricEriscDatamoverConfig& config,
     bool enable_persistent_mode,
-    bool build_in_worker_connection_mode) {
+    bool build_in_worker_connection_mode,
+    bool dateline_connection) {
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_buffer_index_semaphore_id;
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_flow_control_semaphore_id;
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_connection_semaphore_id;
@@ -565,7 +572,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
 
             config,
             enable_persistent_mode,
-            build_in_worker_connection_mode);
+            build_in_worker_connection_mode,
+            dateline_connection);
 
     } else {
         for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
@@ -598,7 +606,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
             sender_channels_buffer_index_semaphore_id,
 
             config,
-            enable_persistent_mode);
+            enable_persistent_mode,
+            dateline_connection);
     }
 }
 

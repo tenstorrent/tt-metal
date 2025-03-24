@@ -47,6 +47,10 @@ namespace tt {
 
 namespace tt_metal {
 
+uint64_t IDevice::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
+    return hal.get_dev_addr(this->get_programmable_core_type(virtual_core), addr_type);
+}
+
 Device::Device(Device&& other) = default;
 Device& Device::operator=(Device&& other) = default;
 
@@ -693,6 +697,12 @@ void Device::initialize_and_launch_firmware() {
             CoreCoord logical_core(x, y);
             if (!this->storage_only_cores_.count(logical_core)) {
                 CoreCoord worker_core = this->worker_core_from_logical_core(logical_core);
+                // Setup the absolute logical coordinates of this worker which are relative to true origin. not the sub
+                // device. When running the user kernel, which potentially is on a sub device, send that info using the
+                // launch message using dispatch.
+                core_info->absolute_logical_x = logical_core.x;
+                core_info->absolute_logical_y = logical_core.y;
+                // Must write to core before starting it
                 tt::llrt::write_hex_vec_to_core(
                     this->id(), worker_core, core_info_vec, this->get_dev_addr(worker_core, HalL1MemAddrType::CORE_INFO));
                 this->initialize_firmware(HalProgrammableCoreType::TENSIX, worker_core, &launch_msg, &go_msg);
@@ -716,6 +726,8 @@ void Device::initialize_and_launch_firmware() {
     std::unordered_set<CoreCoord> active_eth_cores;
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
         CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
+        core_info->absolute_logical_x = eth_core.x;
+        core_info->absolute_logical_y = eth_core.y;
         tt::llrt::write_hex_vec_to_core(
             this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalL1MemAddrType::CORE_INFO));
         this->initialize_firmware(HalProgrammableCoreType::ACTIVE_ETH, phys_eth_core, &launch_msg, &go_msg);
@@ -727,6 +739,8 @@ void Device::initialize_and_launch_firmware() {
 
     for (const auto &eth_core : this->get_inactive_ethernet_cores()) {
         CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
+        core_info->absolute_logical_x = eth_core.x;
+        core_info->absolute_logical_y = eth_core.y;
         tt::llrt::write_hex_vec_to_core(
             this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalL1MemAddrType::CORE_INFO));
         this->initialize_firmware(HalProgrammableCoreType::IDLE_ETH, phys_eth_core, &launch_msg, &go_msg);
@@ -781,8 +795,7 @@ void Device::clear_l1_state() {
     // Clear erisc sync info
     for (const auto& eth_core : this->get_active_ethernet_cores()) {
         static const uint32_t max_l1_loading_size =
-            hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED) +
-            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+            hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
         static uint32_t zero_vec_size = max_l1_loading_size;
         auto zero_vec_addr = HalL1MemAddrType::UNRESERVED;
@@ -1022,8 +1035,8 @@ bool Device::close() {
 
     llrt::internal_::wait_until_cores_done(mmio_device_id, RUN_MSG_GO, wait_for_cores);
 
-    DprintServerDetach(this);
-    watcher_detach(this);
+    DprintServerDetach(this->id());
+    watcher_detach(this->id());
 
     // Assert worker cores
     CoreCoord grid_size = this->logical_grid_size();
@@ -1114,24 +1127,6 @@ CoreCoord Device::compute_with_storage_grid_size() const {
     return tt::get_compute_grid_size(id_, num_hw_cqs_, dispatch_core_config);
 }
 
-CoreType Device::core_type_from_physical_core(const CoreCoord &physical_coord) const {
-    const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    CoreType core_type = soc_desc.translate_coord_to(physical_coord, CoordSystem::PHYSICAL, CoordSystem::PHYSICAL).core_type;
-    if (core_type == CoreType::TENSIX) {
-        core_type = CoreType::WORKER;
-    }
-    return core_type;
-}
-
-CoreType Device::core_type_from_virtual_core(const CoreCoord &virtual_coord) const {
-    if (tt::Cluster::instance().is_worker_core(virtual_coord, this->id_)) {
-        return CoreType::WORKER;
-    } else if (tt::Cluster::instance().is_ethernet_core(virtual_coord, this->id_)) {
-        return CoreType::ETH;
-    }
-    return this->core_type_from_physical_core(virtual_coord);
-}
-
 CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {
     if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
@@ -1146,23 +1141,6 @@ CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) co
             hal.noc_coordinate(noc_index, grid_size.y, coord.y)
         };
         return virtual_coord;
-    }
-}
-
-CoreCoord Device::virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const {
-     if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y) {
-        // Coordinate already in virtual space: NOC0 and NOC1 are the same
-        return coord;
-    } else {
-        const auto& grid_size = this->grid_size();
-        // Coordinate passed in can be NOC0 or NOC1. The noc_index corresponds to
-        // the system this coordinate belongs to.
-        // Use this to convert to NOC0 coordinates and then derive Virtual Coords from it.
-        CoreCoord physical_coord = {
-            hal.noc_coordinate(noc_index, grid_size.x, coord.x),
-            hal.noc_coordinate(noc_index, grid_size.y, coord.y)
-        };
-        return this->virtual_core_from_physical_core(physical_coord);
     }
 }
 

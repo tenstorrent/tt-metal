@@ -24,6 +24,7 @@
 #include "llrt.hpp"
 
 #include "dprint_server.hpp"
+#include "rtoptions.hpp"
 
 namespace tt {
 
@@ -109,6 +110,9 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     auto device_id = device->id();
     auto core = device->worker_core_from_logical_core(logical_core);
 
+    const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(device_id);
+    auto phys_core = soc_desc.translate_coord_to(core, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
+
     deviceHostTimePair.emplace(device_id, (std::vector<std::pair<uint64_t, uint64_t>>){});
     smallestHostime.emplace(device_id, 0);
 
@@ -145,7 +149,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     const int64_t hostStartTime = TracyGetCpuTime();
     std::vector<int64_t> writeTimes(sampleCount);
 
-    profiler_msg_t* profiler_msg = device->get_dev_addr<profiler_msg_t*>(core, HalL1MemAddrType::PROFILER);
+    auto* profiler_msg = reinterpret_cast<profiler_msg_t*>(device->get_dev_addr(core, HalL1MemAddrType::PROFILER));
     uint64_t control_addr = reinterpret_cast<uint64_t>(&profiler_msg->control_vector[kernel_profiler::FW_RESET_L]);
     for (int i = 0; i < sampleCount; i++) {
         ZoneScopedC(tracy::Color::Tomato2);
@@ -257,8 +261,8 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         log_file << fmt::format(
                         "{:5},{:5},{:5},{:20},{:20},{:20.2f},{:20},{:20},{:20.2f},{:20.15f},{:20.15f},{:20},1.0,0",
                         device_id,
-                        core.x,
-                        core.y,
+                        phys_core.x,
+                        phys_core.y,
                         deviceHostTimePair[device_id][i].first,
                         deviceHostTimePair[device_id][i].second,
                         (double)deviceHostTimePair[device_id][i].second * tracyToSecRatio,
@@ -279,7 +283,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         frequencyFit);
 
     tt_metal_device_profiler_map.at(device_id).device_core_sync_info.emplace(
-        core, std::make_tuple(smallestHostime[device_id], delay, frequencyFit));
+        phys_core, std::make_tuple(smallestHostime[device_id], delay, frequencyFit));
 }
 void setShift(int device_id, int64_t shift, double scale) {
     if (std::isnan(scale)) {

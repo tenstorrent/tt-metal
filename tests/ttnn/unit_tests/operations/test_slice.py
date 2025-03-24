@@ -329,8 +329,8 @@ def test_stride_slice_four_dim(dims, begins, ends, strides, layout, device):
 
 
 @pytest.mark.parametrize("dims", [[1, 56, 56, 96]])
-@pytest.mark.parametrize("begins", [[0, 0, 0, 0]])
-@pytest.mark.parametrize("ends", [[1, -1, 56, 96]])
+@pytest.mark.parametrize("begins", [[0, 0, 0, 0], [0, 0, 0, 90]])
+@pytest.mark.parametrize("ends", [[1, -1, 56, 96], [1, 56, 56, 95], [-1, 1, -1, -1]])
 @pytest.mark.parametrize("strides", [[1, 2, 1, 1]])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 def test_stride_slice_four_dim_tiled(dims, begins, ends, strides, layout, device):
@@ -749,40 +749,16 @@ def test_slice_adversarial_fixed(input_shape, dim, start, end, step, layout, dev
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
 
 
+# Op parameters from pytorch2 sweep tests that failed prior to 2025-03
 @pytest.mark.parametrize(
     "input_shape, dim, start, end, step, layout",
     (
+        ((1, 145, 768), 1, 1, -1, 1, ttnn.TILE_LAYOUT),  # tile-unaligned slice start were previously not supported
+        ((1, 1445, 192), 1, -100, -1, 1, ttnn.TILE_LAYOUT),  # tile-unaligned slice start were previously not supported
         ([1, 7], 0, 0, -1, 1, ttnn.ROW_MAJOR_LAYOUT),  # page size must equal buffer size
         ([1, 8, 2, 2], 2, -1, -1, 1, ttnn.TILE_LAYOUT),  # Buffer size and page size should be larger than 0 bytes
-        ([3], 0, 0, -1, 1, ttnn.TILE_LAYOUT),  # Difference in expected shape as it's a 1D tensor
-    ),
-)
-def test_slice_adversarial(input_shape, dim, start, end, step, layout, device):
-    pytest.skip("These tests are known to fail")
-    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
-
-    slice_obj = slice(start, end, step)
-
-    # Prepare indices for slicing in the specified dimension
-    indices = [slice(None)] * len(input_shape)  # By default, select all elements along every dimension
-    indices[dim] = slice_obj  # Apply slicing to the target dimension
-    indices = tuple(indices)
-
-    # Apply slicing to the input_tensor
-    torch_output_tensor = torch_input[indices]
-
-    ttnn_tensor = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
-    ttnn_output = ttnn_tensor[indices]
-
-    ttnn_output_tensor = ttnn.to_torch(ttnn_output)
-
-    assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
-
-
-@pytest.mark.parametrize(
-    "input_shape, dim, start, end, step, layout",
-    (
         ([8732, 4], 1, 0, -1, 4, ttnn.TILE_LAYOUT),  # Need tensor for this or a padding aware tiled kernel
+        ([3], 0, 0, -1, 1, ttnn.TILE_LAYOUT),  # unaligned 1D
         (
             [1, 7, 71, 64],
             3,
@@ -793,7 +769,7 @@ def test_slice_adversarial(input_shape, dim, start, end, step, layout, device):
         ),  # An unpadding slice operations for a RowMajor layout on the output tensor requires the last dimension to be on a 32 bit boundary
     ),
 )
-def test_slice_adversarial_fixed(input_shape, dim, start, end, step, layout, device):
+def test_slice_former_pytorch2_failures(input_shape, dim, start, end, step, layout, device):
     torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
 
     slice_obj = slice(start, end, step)
@@ -812,3 +788,112 @@ def test_slice_adversarial_fixed(input_shape, dim, start, end, step, layout, dev
     ttnn_output_tensor = ttnn.to_torch(ttnn_output)
 
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    ([8, 8, 8, 33, 33],),
+)
+@pytest.mark.parametrize(
+    "layout",
+    (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+)
+@pytest.mark.parametrize(
+    "input_memory_config",
+    (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+)
+@pytest.mark.parametrize(
+    "indices",
+    (
+        [0, 0, 0, slice(0, 33, 1), slice(0, 33, 1)],
+        [1, -1, 2, slice(0, 33, 1), slice(0, 33, 1)],
+    ),
+)
+def test_slice_index(device, input_shape, layout, input_memory_config, indices):
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(
+        torch_input, device=device, dtype=ttnn.bfloat16, memory_config=input_memory_config, layout=layout
+    )
+
+    torch_output = torch_input[
+        indices[0],
+        indices[1],
+        indices[2],
+        indices[3],
+        indices[4],
+    ]
+
+    ttnn_output = ttnn_input[
+        indices[0],
+        indices[1],
+        indices[2],
+        indices[3],
+        indices[4],
+    ]
+
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_output, ttnn_output, 0.99)
+
+
+@pytest.mark.parametrize(
+    "input_shape, input_start, input_ends, input_steps",
+    (
+        ((1, 1504, 1280), (0, 0, 0), (1, 1500, 1280), (1, 1, 1)),  # fill pad case
+        ((448, 1280), (0, 0), (1, 1280), (1, 1)),  # fill pad case
+    ),
+)
+@pytest.mark.parametrize(
+    "layout",
+    (ttnn.TILE_LAYOUT,),
+)
+@pytest.mark.parametrize(
+    "memory_config",
+    (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+)
+def test_ttnn_slice_whisper(
+    input_shape, input_start, input_ends, input_steps, memory_config, layout, device, use_program_cache
+):
+    # A couple of slices in whisper that only work for "logical" slicing.
+
+    for _ in range(3):
+        torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
+        if len(input_shape) == 4:
+            torch_output = torch_input[
+                input_start[0] : input_ends[0] : input_steps[0],
+                input_start[1] : input_ends[1] : input_steps[1],
+                input_start[2] : input_ends[2] : input_steps[2],
+                input_start[3] : input_ends[3] : input_steps[3],
+            ]
+            ttnn_output = ttnn_input[
+                input_start[0] : input_ends[0] : input_steps[0],
+                input_start[1] : input_ends[1] : input_steps[1],
+                input_start[2] : input_ends[2] : input_steps[2],
+                input_start[3] : input_ends[3] : input_steps[3],
+            ]
+
+        if len(input_shape) == 3:
+            torch_output = torch_input[
+                input_start[0] : input_ends[0] : input_steps[0],
+                input_start[1] : input_ends[1] : input_steps[1],
+                input_start[2] : input_ends[2] : input_steps[2],
+            ]
+            ttnn_output = ttnn_input[
+                input_start[0] : input_ends[0] : input_steps[0],
+                input_start[1] : input_ends[1] : input_steps[1],
+                input_start[2] : input_ends[2] : input_steps[2],
+            ]
+
+        if len(input_shape) == 2:
+            torch_output = torch_input[
+                input_start[0] : input_ends[0] : input_steps[0],
+                input_start[1] : input_ends[1] : input_steps[1],
+            ]
+            ttnn_output = ttnn_input[
+                input_start[0] : input_ends[0] : input_steps[0],
+                input_start[1] : input_ends[1] : input_steps[1],
+            ]
+
+        ttnn_output = ttnn.to_torch(ttnn_output)
+        assert_with_pcc(torch_output, ttnn_output, 0.999)

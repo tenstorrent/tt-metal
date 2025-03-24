@@ -6,12 +6,13 @@
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
-
 #include "fold_device_op.hpp"
 #include "ttnn/operations/math.hpp"
+#include <tt-metalium/hal_exp.hpp>
 #include <tt-metalium/tt_align.hpp>
 
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement {
 
@@ -40,7 +41,7 @@ Fold::MultiCore::cached_program_t fold_multi_core(
 
     // input CB
     uint32_t cb_src0_index = tt::CBIndex::c_0;
-    uint32_t aligned_pixel_size = tt::align(pixel_size, hal.get_alignment(HalMemType::L1));
+    uint32_t aligned_pixel_size = tt::align(pixel_size, hal::get_l1_alignment());
     auto src_cb_config = CircularBufferConfig(num_pixels * aligned_pixel_size, {{cb_src0_index, cb_data_format}})
                              .set_page_size(cb_src0_index, aligned_pixel_size)
                              .set_globally_allocated_address(*input.buffer());
@@ -48,7 +49,7 @@ Fold::MultiCore::cached_program_t fold_multi_core(
 
     // output CB
     uint32_t cb_dst0_index = tt::CBIndex::c_16;
-    uint32_t aligned_dst_pixel_size = tt::align(dst_pixel_size, hal.get_alignment(HalMemType::L1));
+    uint32_t aligned_dst_pixel_size = tt::align(dst_pixel_size, hal::get_l1_alignment());
     auto dst_cb_config =
         CircularBufferConfig(num_dst_pixels * aligned_dst_pixel_size, {{cb_dst0_index, cb_data_format}})
             .set_page_size(cb_dst0_index, aligned_dst_pixel_size)

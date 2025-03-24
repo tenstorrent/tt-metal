@@ -18,6 +18,7 @@
 #include <kernel.hpp>
 #include "tt_metal/llrt/tt_elffile.hpp"
 #include "env_lib.hpp"
+#include "hal.hpp"
 
 namespace fs = std::filesystem;
 
@@ -50,8 +51,7 @@ static void build_failure(const string& target_name, const string& op, const str
     std::ifstream file{log_file};
     if (file.is_open()) {
         std::string log_contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-        log_error(tt::LogBuildKernels, "{}", log_contents);
-        TT_THROW("{} build failed", target_name);
+        TT_THROW("{} build failed. Log: {}", target_name, log_contents);
     } else {
         TT_THROW("Failed to open {} failure log file {}", op, log_file);
     }
@@ -193,6 +193,10 @@ void JitBuildEnv::init(
         this->defines_ += "-DDEBUG_NULL_KERNELS ";
     }
 
+    if (tt::llrt::RunTimeOptions::get_instance().get_kernels_early_return()) {
+        this->defines_ += "-DDEBUG_EARLY_RETURN_KERNELS ";
+    }
+
     if (tt::llrt::RunTimeOptions::get_instance().get_watcher_debug_delay()) {
         this->defines_ +=
             "-DWATCHER_DEBUG_DELAY=" + to_string(tt::llrt::RunTimeOptions::get_instance().get_watcher_debug_delay()) +
@@ -275,14 +279,8 @@ void JitBuildState::finish_init() {
     std::string build_dir =
         llrt::RunTimeOptions::get_instance().get_root_dir() + "runtime/hw/lib/" + get_alias(env_.arch_) + "/";
     if (this->is_fw_) {
-        if (this->target_name_ == "brisc" and this->env_.arch_ == tt::ARCH::GRAYSKULL) {
-            this->link_objs_ += build_dir + "tdma_xmov.o ";
-        }
         if (this->target_name_ != "erisc") {
             this->link_objs_ += build_dir + "tmu-crt0.o ";
-        }
-        if (this->target_name_ == "ncrisc" and this->env_.arch_ == tt::ARCH::GRAYSKULL) {
-            this->link_objs_ += build_dir + "ncrisc-halt.o ";
         }
         if (this->target_name_ == "ncrisc" and this->env_.arch_ == tt::ARCH::WORMHOLE_B0) {
             this->link_objs_ += build_dir + "ncrisc-halt-wormhole.o ";

@@ -37,6 +37,7 @@ jobs:
     with:
       version: "22.04"
       build-type: Debug
+      publish-artifact: false
 
   find-changed-files:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
@@ -64,7 +65,7 @@ jobs:
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
-      docker-image: ${{ needs.build.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
 

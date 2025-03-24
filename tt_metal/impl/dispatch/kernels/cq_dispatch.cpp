@@ -299,7 +299,16 @@ void relay_to_next_cb(
     // counter so we would only need to inc atomics downstream
     uint64_t dst = get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr);
     cq_noc_async_write_init_state<CQ_NOC_sNdl>(0, dst, 0);
+#ifdef ARCH_BLACKHOLE
+    // On Blackhole inline writes are disabled so use cq_noc_async_write_init_state with inline write cmd buf
+    // See comment in `noc_inline_dw_write` for more details
+    uint32_t inline_l1_src_addr = noc_get_interim_inline_value_addr(noc_index, dst);
+    volatile tt_l1_ptr uint32_t* inline_l1_src_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inline_l1_src_addr);
+    cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, NCRISC_WR_REG_CMD_BUF>(0, dst, 0);
+#else
     cq_noc_inline_dw_write_init_state<CQ_NOC_INLINE_Ndvb>(dst);
+#endif
 
     while (length > 0) {
         ASSERT(downstream_cb_end > downstream_cb_data_ptr);
@@ -318,8 +327,14 @@ void relay_to_next_cb(
 
         if constexpr (preamble_size > 0) {
             uint32_t flag;
+#ifdef ARCH_BLACKHOLE
+            *inline_l1_src_addr_ptr = xfer_size + preamble_size + not_end_of_cmd;
+            cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, CQ_NOC_SEND, NCRISC_WR_REG_CMD_BUF>(
+                inline_l1_src_addr, downstream_cb_data_ptr, 4);
+#else
             cq_noc_inline_dw_write_with_state<CQ_NOC_INLINE_nDVB>(
                 downstream_cb_data_ptr, xfer_size + preamble_size + not_end_of_cmd);
+#endif
             noc_nonposted_writes_num_issued[noc_index]++;
             noc_nonposted_writes_acked[noc_index]++;
             downstream_cb_data_ptr += preamble_size;
@@ -955,17 +970,32 @@ void process_go_signal_mcast_cmd() {
     // CQDispatchGoSignalMcastCmd).
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage = (volatile uint32_t tt_l1_ptr*)cmd_ptr;
     *aligned_go_signal_storage = cmd->mcast.go_signal;
-
-    while (!stream_wrap_ge(
-        NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), cmd->mcast.wait_count)) {
-    }
     uint8_t go_signal_noc_data_idx = cmd->mcast.noc_data_start_index;
-    // send go signal update here
-    for (uint32_t i = 0, num_mcasts = cmd->mcast.num_mcast_txns; i < num_mcasts; ++i) {
-        uint64_t dst = get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], mcast_go_signal_addr);
-        // packed_write_max_unicast_sub_cmds is the total number of compute cores (num_mcast_dests for this txn)
-        noc_async_write_multicast_one_packet(
-            (uint32_t)(aligned_go_signal_storage), dst, sizeof(uint32_t), go_signal_noc_data[go_signal_noc_data_idx++]);
+    if (cmd->mcast.num_mcast_txns > 0) {
+        // Setup registers before waiting for workers so only the NOC_CMD_CTRL register needs to be touched after.
+        uint64_t dst_noc_addr_multicast =
+            get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], mcast_go_signal_addr);
+        uint32_t num_dests = go_signal_noc_data[go_signal_noc_data_idx++];
+        cq_noc_async_write_init_state<CQ_NOC_SNDL, true>(
+            (uint32_t)aligned_go_signal_storage, dst_noc_addr_multicast, sizeof(uint32_t));
+        noc_nonposted_writes_acked[noc_index] += num_dests;
+
+        while (!stream_wrap_ge(
+            NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), cmd->mcast.wait_count)) {
+        }
+        cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0);
+        // Send GO signal to remaining destinations. Only the destination NOC needs to be modified.
+        for (uint32_t i = 1, num_mcasts = cmd->mcast.num_mcast_txns; i < num_mcasts; ++i) {
+            uint64_t dst = get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], mcast_go_signal_addr);
+            uint32_t num_dests = go_signal_noc_data[go_signal_noc_data_idx++];
+            cq_noc_async_write_with_state<CQ_NOC_sNdl>(0, dst, 0);
+            noc_nonposted_writes_acked[noc_index] += num_dests;
+        }
+        noc_nonposted_writes_num_issued[noc_index] += cmd->mcast.num_mcast_txns;
+    } else {
+        while (!stream_wrap_ge(
+            NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), cmd->mcast.wait_count)) {
+        }
     }
     for (uint32_t i = 0, num_unicasts = cmd->mcast.num_unicast_txns; i < num_unicasts; ++i) {
         uint64_t dst = get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], unicast_go_signal_addr);
@@ -1085,8 +1115,6 @@ re_run_command:
             // DPRINT << "cmd_wait" << ENDL();
             process_wait();
             break;
-
-        case CQ_DISPATCH_CMD_GO: DPRINT << "cmd_go" << ENDL(); break;
 
         case CQ_DISPATCH_CMD_SINK: DPRINT << "cmd_sink" << ENDL(); break;
 

@@ -82,11 +82,11 @@ SECTIONS
     *(.gnu.warning)
     . = ALIGN(4);
   } > REGION_CODE :text
-  .init.fini :
+  .empty.init.fini :
   {
-    /* We don't use .init/.fini (this isn't the '90s), make sure there aren't any.  */
+    /* Out elf loader checks that .empty* sections are empty, and
+       can give a helpful error, rather than an ASSERT here.  */
     KEEP (*(.init .fini))
-    ASSERT(SIZEOF(.init.fini) == 0, ".init/.fini sections have contents");
   } > REGION_CODE :text
 
 #if defined(TYPE_KERNEL)
@@ -137,13 +137,12 @@ SECTIONS
     . = ALIGN(4);
     __ldm_data_end = .;
   } > REGION_DATA :data
-  .ctors.dtors :
+  .empty.ctors.dtors :
   {
     /* We don't use .ctors/.dtors either (this still isn't the '90s), make sure there aren't any.  */
     KEEP (*(.ctors .ctors.* .dtors .dtors.*))
-    ASSERT(SIZEOF(.ctors.dtors) == 0, ".ctors/.dtors sections have contents");
   } > REGION_DATA :data
-  .init_array.fini_array :
+  .empty.init_array.fini_array :
   {
     /* We don't support global static constructors or destructors. make sure there aren't any.  */
     KEEP (*(.preinit_array))
@@ -151,7 +150,6 @@ SECTIONS
     KEEP (*(.init_array))
     KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*)))
     KEEP (*(.fini_array))
-    ASSERT(SIZEOF(.init_array.fini_array) == 0, ".{preinit,init,fini}_array sections have contents");
   } > REGION_DATA :data
   .bss : ALIGN(4)
   {
