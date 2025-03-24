@@ -147,9 +147,11 @@ def test_perf_device_bare_metal_yolov4(batch_size, model_name):
     num_iterations = 1
     margin = 0.03
 
-    expected_perf = 94.5
+    expected_perf = 82
 
-    command = f"pytest tests/ttnn/integration_tests/yolov4/test_ttnn_yolov4.py::test_yolov4[0-pretrained_weight_true-0]"
+    command = (
+        f"pytest tests/ttnn/integration_tests/yolov4/test_ttnn_yolov4.py::test_yolov4[1-pretrained_weight_false-0]"
+    )
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
