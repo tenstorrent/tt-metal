@@ -213,7 +213,6 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
 
         float pcc_calculated = test_utils::pcc(res, ref_res);
         TT_FATAL(pcc_calculated > 0.99, "PCC not high enough. Result PCC: {}, Expected PCC: 0.99", pcc_calculated);
-        TT_FATAL(false, "I just wanna fail");
     } catch (const std::exception& e) {
         CloseDevice(device);
         tt::log_error("Caught exception in Conv2D test: {}", e.what());
