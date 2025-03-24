@@ -47,9 +47,8 @@ void PagedUpdateCacheDeviceOperation::validate(
             "Inputs to update_cache must be tilized");
         TT_FATAL(
             cache_tensor.get_dtype() == DataType::FLOAT32 || cache_tensor.get_dtype() == DataType::BFLOAT16 ||
-                cache_tensor.get_dtype() == DataType::BFLOAT8_B || cache_tensor.get_dtype() == DataType::BFLOAT4_B,
-            "Data type of cache tensor must be FLOAT32, BFLOAT16, BFLOAT8_B, or BFLOAT4_B and is {}",
-            cache_tensor.get_dtype());
+                cache_tensor.get_dtype() == DataType::BFLOAT8_B,
+            "Data type of cache tensor must be FLOAT32, BFLOAT16 or BFLOAT8_B");
     };
 
     const auto validateTensorShapes = [](const Tensor& cache_tensor, const Tensor& input_tensor) {
@@ -157,7 +156,7 @@ void PagedUpdateCacheDeviceOperation::validate(
                                           uint32_t batch_idx) {
         TT_FATAL(
             input_tensor.get_dtype() == DataType::FLOAT32 || input_tensor.get_dtype() == DataType::BFLOAT16 ||
-                cache_tensor.get_dtype() == DataType::BFLOAT8_B || cache_tensor.get_dtype() == DataType::BFLOAT4_B,
+                cache_tensor.get_dtype() == DataType::BFLOAT8_B,
             "Data type of input tensor for fill cache must be FLOAT32, BFLOAT16, or BFLOAT8_b");
 
         TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
