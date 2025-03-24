@@ -1188,7 +1188,7 @@ class ModelArgs:
         )
         return xs_1BSH
 
-    def _set_params_from_dict(self, params):
+    def _set_params_from_dict(self, params, is_hf=False):
         # Common params with different names between Meta and HF
         self.dim = params.get("dim", params.get("hidden_size"))
         self.n_heads = params.get("n_heads", params.get("num_attention_heads"))
@@ -1211,7 +1211,12 @@ class ModelArgs:
             self.hidden_dim = calculate_hidden_dim(self.dim, self.ffn_dim_multiplier, self.multiple_of)
 
         if "_name_or_path" in params:
-            self.model_name = os.path.basename(params["_name_or_path"])
+            if is_hf:
+                # For HF paths, we expected to end with `<model_name>/snapshots/<snapshot_id>/`
+                normalized_path = os.path.normpath(params["_name_or_path"])
+                self.model_name = normalized_path.split(os.path.sep)[-3]
+            else:
+                self.model_name = os.path.basename(params["_name_or_path"])
 
         if self.base_model_name == "Qwen2.5-7B" and self.num_devices not in [0, 2, 4]:
             raise AssertionError(
@@ -1335,7 +1340,7 @@ class ModelArgs:
             assert os.path.exists(config_file), f"config.json file not found at {config_file}"
             with open(config_file, "r") as f:
                 config = json.load(f)
-        self._set_params_from_dict(config)
+        self._set_params_from_dict(config, is_hf=True)
 
     def __repr__(self):
         return f"""ModelArgs(
