@@ -12,7 +12,7 @@ ChipSpec: {
 Board: [
   { name: Galaxy,
     type: Mesh,
-    topology: [4, 8]}
+    topology: [8, 4]}
  ]
 
 Mesh: [
