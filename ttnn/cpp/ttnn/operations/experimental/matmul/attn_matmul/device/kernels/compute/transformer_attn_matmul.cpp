@@ -87,7 +87,11 @@ void MAIN {
                 tilize_uninit(cb_intermed2, out_cb_id);
 
                 pack_reconfig_data_format(out_cb_id, cb_intermed0);
-                mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed2, transpose_hw);
+                // #ifdef ARCH_BLACKHOLE
+                mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
+                // #else
+                //                 mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed2, transpose_hw);
+                // #endif
             }
         }
     }
