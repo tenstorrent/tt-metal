@@ -23,7 +23,7 @@ struct LlamaReduceScatterDeviceOperation {
         const std::optional<SubDeviceId> subdevice_id;
         const uint32_t ring_index;
         const uint32_t cluster_axis;
-        const MemoryConfig output_mem_config;
+        const std::optional<MemoryConfig> output_mem_config;
         const uint32_t ring_devices;
         const uint32_t num_links;
         std::optional<IDevice*> forward_device;
