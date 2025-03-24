@@ -326,7 +326,7 @@ class ModelArgs:
         elif HF_MODEL:
             self.CKPT_DIR = HF_MODEL
             self.TOKENIZER_PATH = HF_MODEL
-            self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
+            self.CACHE_PATH = os.getenv("TT_CACHE_PATH") + "/" + self.device_name
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
             self.model_name = HF_MODEL  # May be overridden by config
