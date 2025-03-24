@@ -661,6 +661,8 @@ void handle_mesh_adapter_cache_hit(
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     tt::stl::hash::hash_t program_hash) {
+    // Important! `TT_DNN_DEVICE_OP` must be used in conjunction with `TracyOpMeshWorkload` to feed profiler regresion
+    // tests well-formed data.
     ZoneScopedN("TT_DNN_DEVICE_OP");
     mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
 
@@ -711,7 +713,8 @@ void create_and_cache_mesh_workload(
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     tt::stl::hash::hash_t program_hash) {
-
+    // Important! `TT_DNN_DEVICE_OP` must be used in conjunction with `TracyOpMeshWorkload` to feed profiler regresion
+    // tests well-formed data.
     ZoneScopedN("TT_DNN_DEVICE_OP");
 
     mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
