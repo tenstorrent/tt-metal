@@ -235,7 +235,7 @@ void kernel_main() {
                     cb_reserve_back(cb_ex_external, 1);
                     for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
                         uint32_t out_block_h_actual, out_block_hw_actual;
-                        if (extra_out_block && !out_block_index) {
+                        if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                             out_block_h_actual = out_block_h_last;
                             out_block_hw_actual = out_block_hw_last;
                         } else {

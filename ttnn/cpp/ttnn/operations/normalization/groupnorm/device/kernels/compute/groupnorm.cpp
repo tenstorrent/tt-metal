@@ -204,7 +204,7 @@ void MAIN {
             cb_wait_front(cb_input_mask, block_w);
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
                 uint32_t out_block_h_actual, out_block_hw_actual;
-                if (extra_out_block && !out_block_index) {
+                if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
                     out_block_hw_actual = out_block_hw_last;
                 } else {
@@ -299,7 +299,7 @@ void MAIN {
 
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
                 uint32_t out_block_h_actual, out_block_hw_actual;
-                if (extra_out_block && !out_block_index) {
+                if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
                     out_block_hw_actual = out_block_hw_last;
                 } else {
@@ -331,7 +331,7 @@ void MAIN {
                     }
                     cb_pop_front(cb_in0, block_w);
                 }
-                if (extra_out_block && !out_block_index) {
+                if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     cb_pop_front(cb_in0, out_block_hw_normal - out_block_hw_last);
                 }
                 cb_push_back(cb_xmm, out_block_hw_normal);
@@ -360,7 +360,7 @@ void MAIN {
                     }
                     cb_pop_front(cb_xmm, block_w);
                 }
-                if (extra_out_block && !out_block_index) {
+                if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     cb_pop_front(cb_xmm, out_block_hw_normal - out_block_hw_last);
                 }
                 cb_push_back(cb_x, out_block_hw_normal);
@@ -467,7 +467,7 @@ void MAIN {
             uint32_t out_block_h_offset = 0;
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
                 uint32_t out_block_h_actual, out_block_hw_actual;
-                if (extra_out_block && !out_block_index) {
+                if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
                     out_block_hw_actual = out_block_hw_last;
                 } else {
@@ -498,7 +498,7 @@ void MAIN {
                     }
                     cb_pop_front(cb_in0, block_w);
                 }
-                if (extra_out_block && !out_block_index) {
+                if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     cb_pop_front(cb_in0, out_block_hw_normal - out_block_hw_last);
                 }
                 cb_push_back(cb_xmm, out_block_hw_normal);
@@ -527,7 +527,7 @@ void MAIN {
                     }
                     cb_pop_front(cb_xmm, block_w);
                 }
-                if (extra_out_block && !out_block_index) {
+                if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     cb_pop_front(cb_xmm, out_block_hw_normal - out_block_hw_last);
                 }
                 cb_push_back(cb_x, out_block_hw_normal);
