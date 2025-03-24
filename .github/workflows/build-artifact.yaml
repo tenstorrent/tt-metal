@@ -46,19 +46,22 @@ on:
         #        Fow now enabling an opt-out. But this should get removed.
         required: false
         type: boolean
-        default: false
+        default: true
       profile:
         required: false
         type: boolean
         default: false
         description: "Profile the compilation"
     outputs:
-      ci-build-docker-image:
-        description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
-        value: ${{ jobs.build-docker-image.outputs.ci-build-tag }}
+      #ci-build-docker-image:
+      #  description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
+      #  value: ${{ jobs.build-docker-image.outputs.dev-tag }}
       #ci-test-docker-image:
       #  description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
       #  value: ${{ jobs.build-docker-image.outputs.ci-test-tag }}
+      dev-docker-image:
+        description: "Docker tag for the dev Docker image for developing TT-Metalium et al"
+        value: ${{ jobs.build-docker-image.outputs.dev-tag }}
       packages-artifact-name:
         description: "Name to give download-artifact to get the packages"
         value: ${{ jobs.build-artifact.outputs.packages-artifact-name }}
@@ -130,7 +133,7 @@ jobs:
       build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
       wheel_artifact_name: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name }}
     container:
-      image: ${{ needs.build-docker-image.outputs.ci-build-tag }}
+      image: ${{ needs.build-docker-image.outputs.dev-tag || 'docker-image-unresolved!'}}
       env:
         CCACHE_TEMPDIR: /tmp/ccache
         CARGO_HOME: /tmp/.cargo
@@ -273,7 +276,12 @@ jobs:
 
       - name: 'Tar files'
         if: ${{ inputs.publish-artifact }}
-        run: tar -cvhf /work/ttm_any.tar ttnn/ttnn/*.so build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools build/tt-train data runtime
+        run: |
+          ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools runtime"
+          if [[ "${{ inputs.skip-tt-train }}" != "true" ]]; then
+            ARTIFACT_PATHS="$ARTIFACT_PATHS build/tt-train data"
+          fi
+          tar -cvhf /work/ttm_any.tar $ARTIFACT_PATHS
 
       - name: Set build artifact name
         id: set_build_artifact_name

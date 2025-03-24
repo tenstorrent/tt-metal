@@ -7,6 +7,8 @@
 #include <tt-metalium/dispatch_settings.hpp>
 #include <tt-metalium/command_queue_common.hpp>
 
+#include <tt_stl/indestructible.hpp>
+
 namespace tt::tt_metal {
 
 //
@@ -78,6 +80,8 @@ public:
     uint8_t get_dispatch_message_update_offset(uint32_t index) const;
 
 private:
+    friend class tt::stl::Indestructible<DispatchMemMap>;
+
     DispatchMemMap() = default;
 
     static DispatchMemMap& get_instance();

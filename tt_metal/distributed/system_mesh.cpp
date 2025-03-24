@@ -143,11 +143,28 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(
 
     MeshCoordinateRange system_range(system_offset, MeshCoordinate(end_coord));
 
-    for (const auto& system_coord : system_range) {
-        auto physical_device_id = get_physical_device_id(system_coord);
-        physical_device_ids.push_back(physical_device_id);
-        log_debug(LogMetal, "Logical coordinate: {}, Physical device ID: {}", system_coord, physical_device_id);
+    // Iterate over the system mesh and map the logical coordinates to physical device IDs.
+    bool is_rotated = rotations > 0;  // Track if we rotated the mesh.
+    if (is_rotated) {
+        TT_FATAL(rotations == 1 and system_shape.dims() == 2, "Mesh rotation is only supported for 2D meshes");
+
+        // Iterate through user-requested shape, transposing the rows and columns
+        for (int i = 0; i < shape[0]; i++) {
+            for (int j = 0; j < shape[1]; j++) {
+                auto system_coord = MeshCoordinate(j, i);
+                auto physical_device_id = get_physical_device_id(system_coord);
+                physical_device_ids.push_back(physical_device_id);
+                log_debug(LogMetal, "Logical coordinate: {}, Physical device ID: {}", system_coord, physical_device_id);
+            }
+        }
+    } else {
+        for (const auto& system_coord : system_range) {
+            auto physical_device_id = get_physical_device_id(system_coord);
+            physical_device_ids.push_back(physical_device_id);
+            log_debug(LogMetal, "Logical coordinate: {}, Physical device ID: {}", system_coord, physical_device_id);
+        }
     }
+
     return physical_device_ids;
 }
 

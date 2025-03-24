@@ -57,6 +57,26 @@ protected:
         }
     }
 
+    bool find_device_with_neighbor_in_direction(
+        std::pair<mesh_id_t, chip_id_t>& src_mesh_chip_id,
+        std::pair<mesh_id_t, chip_id_t>& dst_mesh_chip_id,
+        RoutingDirection direction) {
+        auto* control_plane = tt::Cluster::instance().get_control_plane();
+        for (auto* device : devices_) {
+            src_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
+
+            // Get neighbours within a mesh in the given direction
+            auto neighbors =
+                control_plane->get_intra_chip_neighbors(src_mesh_chip_id.first, src_mesh_chip_id.second, direction);
+            if (neighbors.size() > 0) {
+                dst_mesh_chip_id = {src_mesh_chip_id.first, neighbors[0]};
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     void RunProgramNonblocking(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::LaunchProgram(device, program, false);

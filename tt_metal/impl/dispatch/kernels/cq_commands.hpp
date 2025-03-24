@@ -40,17 +40,16 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_CMD_WRITE_PACKED = 5,         // write to multiple noc addresses with packed data
     CQ_DISPATCH_CMD_WRITE_PACKED_LARGE = 6,   // write to multiple noc/dst addresses and varying lengnths w/ packed data
     CQ_DISPATCH_CMD_WAIT = 7,                 // wait until workers are done
-    CQ_DISPATCH_CMD_GO = 8,                   // send go message
-    CQ_DISPATCH_CMD_SINK = 9,                 // act as a data sink (for testing)
-    CQ_DISPATCH_CMD_DEBUG = 10,               // log waypoint data to watcher, checksum
-    CQ_DISPATCH_CMD_DELAY = 11,               // insert delay (for testing)
-    CQ_DISPATCH_CMD_EXEC_BUF_END = 12,        // dispatch_d notify prefetch_h that exec_buf has completed
-    CQ_DISPATCH_CMD_SET_WRITE_OFFSET = 13,  // set the offset to add to all non-host destination addresses (relocation)
-    CQ_DISPATCH_CMD_TERMINATE = 14,         // quit
-    CQ_DISPATCH_CMD_SEND_GO_SIGNAL = 15,
-    CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL = 16,
-    CQ_DISPATCH_SET_NUM_WORKER_SEMS = 17,
-    CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA = 18,
+    CQ_DISPATCH_CMD_SINK = 8,                 // act as a data sink (for testing)
+    CQ_DISPATCH_CMD_DEBUG = 9,                // log waypoint data to watcher, checksum
+    CQ_DISPATCH_CMD_DELAY = 10,               // insert delay (for testing)
+    CQ_DISPATCH_CMD_EXEC_BUF_END = 11,        // dispatch_d notify prefetch_h that exec_buf has completed
+    CQ_DISPATCH_CMD_SET_WRITE_OFFSET = 12,  // set the offset to add to all non-host destination addresses (relocation)
+    CQ_DISPATCH_CMD_TERMINATE = 13,         // quit
+    CQ_DISPATCH_CMD_SEND_GO_SIGNAL = 14,
+    CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL = 15,
+    CQ_DISPATCH_SET_NUM_WORKER_SEMS = 16,
+    CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA = 17,
     CQ_DISPATCH_CMD_MAX_COUNT,  // for checking legal IDs
 };
 
