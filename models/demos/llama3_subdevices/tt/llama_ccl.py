@@ -254,7 +254,9 @@ class TT_CCL:
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
         return ttnn_tensor_out
 
-    def line_all_gather(self, input_tensor_mesh, semaphore, dim, cluster_axis, memory_config, num_links=1, buffer_key=None):
+    def line_all_gather(
+        self, input_tensor_mesh, semaphore, dim, cluster_axis, memory_config, num_links=1, buffer_key=None
+    ):
         persistent_buffer = self.all_gather_buffers.get(buffer_key, None)
         ttnn_tensor_out = ttnn.experimental.all_gather_async(
             input_tensor_mesh,
@@ -566,7 +568,13 @@ def tt_sharded_distributed_rmsnorm(
 
     # Note: Persistent output buffer used, do not deallocate output!
     tt_global_stats_sharded = tt_ccl.line_all_gather(
-        tt_stats, semaphore, dim=3, cluster_axis=cluster_axis, num_links=1, memory_config=tt_stats_sharded_config, buffer_key="LAYERNORM"
+        tt_stats,
+        semaphore,
+        dim=3,
+        cluster_axis=cluster_axis,
+        num_links=1,
+        memory_config=tt_stats_sharded_config,
+        buffer_key="LAYERNORM",
     )
     # ttnn.synchronize_device(tt_ccl.mesh_device, sub_device_ids=[tt_ccl.worker_sub_device_id])
     # ttnn.deallocate(tt_stats_dram)
