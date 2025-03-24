@@ -6,19 +6,16 @@
 
 #include <filesystem>
 #include <fstream>
-#include <functional>
 #include <span>
 #include <string>
 
 #include "common/executor.hpp"
 #include "jit_build/genfiles.hpp"
 #include "jit_build/kernel_args.hpp"
-#include "logger.hpp"
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
 #include <command_queue_interface.hpp>
 #include <kernel.hpp>
-#include <thread>
 #include "tt_metal/llrt/tt_elffile.hpp"
 #include "env_lib.hpp"
 #include "llrt/hal.hpp"
@@ -63,7 +60,6 @@ static void build_failure(const string& target_name, const string& op, const str
 static void write_successful_jit_build_marker(const JitBuildState& build, const JitBuildSettings* settings) {
     const string out_dir = (settings == nullptr) ? build.get_out_path() + "/"
                                                  : build.get_out_path() + settings->get_full_kernel_name() + "/";
-    log_info("thread {} path {}", std::hash<std::thread::id>{}(std::this_thread::get_id()), out_dir);
     std::ofstream file(out_dir + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
 }
 

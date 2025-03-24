@@ -13,9 +13,7 @@
 
 #include "llrt.hpp"
 #include <string_view>
-#include <thread>
 #include <tt_metal.hpp>
-#include "logger.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include <utils.hpp>
 #include <core_coord.hpp>
@@ -421,11 +419,6 @@ bool DataMovementKernel::binaries_exist_on_disk(const IDevice* device) const {
         device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
     const string build_success_marker_path =
         build_state.get_out_path() + this->get_full_kernel_name() + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME;
-    log_debug(
-        "binaries_exist_on_disk - thread {} device {} path {}",
-        std::hash<std::thread::id>{}(std::this_thread::get_id()),
-        device->id(),
-        build_success_marker_path);
     return std::filesystem::exists(build_success_marker_path);
 }
 
@@ -442,12 +435,9 @@ void DataMovementKernel::read_binaries(IDevice* device) {
         device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
     // TODO: from HAL
     auto load_type =
-        (riscv_id == 1 && (device->arch() == tt::ARCH::GRAYSKULL || device->arch() == tt::ARCH::WORMHOLE_B0)) ?
-        ll_api::memory::Loading::CONTIGUOUS : ll_api::memory::Loading::CONTIGUOUS_XIP;
-    log_info(
-        "read_binaries - thread {} full path {}",
-        std::hash<std::thread::id>{}(std::this_thread::get_id()),
-        build_state.get_target_out_path(this->kernel_full_name_));
+        (riscv_id == 1 && (device->arch() == tt::ARCH::GRAYSKULL || device->arch() == tt::ARCH::WORMHOLE_B0))
+            ? ll_api::memory::Loading::CONTIGUOUS
+            : ll_api::memory::Loading::CONTIGUOUS_XIP;
     ll_api::memory const& binary_mem = llrt::get_risc_binary(
         build_state.get_target_out_path(this->kernel_full_name_),
         load_type);
@@ -531,7 +521,6 @@ void ComputeKernel::read_binaries(IDevice* device) {
             ll_api::memory::Loading::CONTIGUOUS_XIP);
         binaries.push_back(&binary_mem);
         uint32_t binary_size = binary_mem.get_packed_size();
-        log_debug(LogLoader, "RISC={}, name={}, size={} (bytes)", trisc_id + 2, this->name(), binary_size);
     }
     this->set_binaries(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key, std::move(binaries));

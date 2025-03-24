@@ -10,8 +10,6 @@
 #include <assert.hpp>
 // C++
 #include <map>
-#include "logger.hpp"
-#include <thread>
 // C
 #include <errno.h>
 // OS
@@ -176,7 +174,6 @@ void ElfFile::ReadImage(std::string const& path) {
         // It is acceptable to close a mapped file -- the mapping stays.
         close(fd);
     }
-    tt::log_info("ReadImage - Thread {} file {}", std::hash<std::thread::id>{}(std::this_thread::get_id()), path);
     if (buffer == MAP_FAILED) {
         TT_THROW("{}: cannot map elf file into memory: {}", path, strerror(errno));
     }

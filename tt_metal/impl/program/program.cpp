@@ -72,11 +72,6 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
     }
     size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
 
-    log_info(
-        "thread: {} compile hash str: {} compile hash: {}",
-        std::hash<std::thread::id>{}(std::this_thread::get_id()),
-        compile_hash_str,
-        compile_hash);
 #ifdef GENERATE_HASH_LOG
     static std::ofstream f("/tmp/hashlog.txt");
     static std::mutex mutex_;
@@ -1435,10 +1430,6 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
                             detail::HashLookup::inst().add_generated_bin(kernel_hash);
                         }
                     } else if (detail::HashLookup::inst().add(kernel_hash)) {
-                        log_info(
-                            "Program compile - thread {} generating binaries kernel path suffix: {}",
-                            std::hash<std::thread::id>{}(std::this_thread::get_id()),
-                            kernel_path_suffix);
                         GenerateBinaries(device, build_options, kernel);
                         detail::HashLookup::inst().add_generated_bin(kernel_hash);
                     }
