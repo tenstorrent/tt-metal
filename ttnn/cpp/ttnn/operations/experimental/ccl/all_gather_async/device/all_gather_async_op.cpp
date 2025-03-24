@@ -272,6 +272,7 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
 tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     tt::log_debug(tt::LogOp, "DEBUG: create_program is called");
+
     AllGatherAsyncVersion version = select_version(input_tensors[0]);
 
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
