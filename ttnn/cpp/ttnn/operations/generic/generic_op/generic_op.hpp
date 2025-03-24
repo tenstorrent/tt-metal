@@ -14,10 +14,8 @@ enum CBIndex : std::uint8_t;
 
 struct GenericOp {
     static Tensor invoke(
-        const std::vector<Tensor>& input_tensors,
-        // const Tensor& input_tensors,
-        const program_attributes_t&, 
-        const std::optional<const Tensor>& output_tensor
+        const std::vector<Tensor>& io_tensors,
+        const program_attributes_t& program_attributes
     );
 };  // struct GenericOp
 
