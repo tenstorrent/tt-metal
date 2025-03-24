@@ -279,6 +279,20 @@ def test_tt_asymm_dit_joint_model_fn(mesh_device, use_program_cache, reset_seeds
         T, H, W = z_BCTHW.shape[-3:]
         cond_text = cond["cond"]
         cond_null = cond["null"]
+        tt_cfg_scale = ttnn.from_torch(
+            torch.tensor(cfg_scale),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.float32,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        tt_dsigma = ttnn.from_torch(
+            torch.tensor(dsigma),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.float32,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
         rope_cos_1HND, rope_sin_1HND, trans_mat = model.prepare_rope_features(T=latent_t, H=latent_h, W=latent_w)
         # Note that conditioning contains list of len 1 to index into
         cond_y_feat_1BLY, cond_y_pool_11BX = model.prepare_text_features(
@@ -317,14 +331,15 @@ def test_tt_asymm_dit_joint_model_fn(mesh_device, use_program_cache, reset_seeds
 
         # TODO: need to update pred in fp32 for correctness?
         # Push to float32 for higher precision
-        # cond_z_1BNI = ttnn.typecast(cond_z_1BNI, dtype=ttnn.float32)
-        # uncond_z_1BNI = ttnn.typecast(uncond_z_1BNI, dtype=ttnn.float32)
-        pred = uncond_z_1BNI + cfg_scale * (cond_z_1BNI - uncond_z_1BNI)
+        cond_z_1BNI = ttnn.typecast(cond_z_1BNI, dtype=ttnn.float32)
+        uncond_z_1BNI = ttnn.typecast(uncond_z_1BNI, dtype=ttnn.float32)
+        pred = uncond_z_1BNI + tt_cfg_scale * (cond_z_1BNI - uncond_z_1BNI)
 
         print(pred.shape)
         print(z_1BNI.shape)
-        # z_1BNI = ttnn.typecast(z_1BNI, dtype=ttnn.float32)
-        z = z_1BNI + dsigma * pred
+        z_1BNI = ttnn.typecast(z_1BNI, dtype=ttnn.float32)
+
+        z = z_1BNI + tt_dsigma * pred
 
         torch_output = model.reverse_preprocess(z, T, H, W, N)
 
