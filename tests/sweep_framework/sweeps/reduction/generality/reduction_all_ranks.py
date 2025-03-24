@@ -102,7 +102,7 @@ def run_reduction(device, tensor_shape, dim, keepdim, op) -> list:
 
 
 @pytest.mark.parametrize(**gen_pytest_parametrize_args(parameters))
-def test_matmul(
+def test_reduction(
     device,
     tensor_shape,
     dim,
