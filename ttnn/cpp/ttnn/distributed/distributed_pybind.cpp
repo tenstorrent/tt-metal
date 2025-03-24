@@ -594,7 +594,7 @@ void py_module(py::module& module) {
         py::arg("tensor"),
         py::arg("composer"),
         R"doc(
-            Aggregates a tensor across a mesh device according to provided composer.
+            Aggregates a set of shard tensors into a single host tensor using the provided composer.
 
             Args:
                 tensor (Tensor): The tensor to aggregate.
@@ -613,7 +613,7 @@ void py_module(py::module& module) {
         py::arg("tensor"),
         py::arg("composer"),
         R"doc(
-            Aggregates a set of shards across a mesh device according to provided composer.
+            Aggregates a set of shard tensors into a single host tensor using the provided composer.
 
             Args:
                 tensor (Tensor): The tensor to aggregate.
@@ -628,7 +628,7 @@ void py_module(py::module& module) {
         py::arg("tensors"),
         py::kw_only(),
         R"doc(
-            Aggregates a set of shards into one tensor.
+            Aggregates a set of shards into one tensor. Device shards will remain on device and be packed into a multidevice storage object.
 
             Args:
                 tensor (Tensor): The tensor to aggregate.
