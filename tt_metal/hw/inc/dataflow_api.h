@@ -1586,6 +1586,16 @@ FORCE_INLINE void noc_inline_dw_write_set_state(
 template <bool update_addr_lo = false, bool update_counter = true, bool posted = false>
 FORCE_INLINE void noc_inline_dw_write_with_state(
     uint32_t val, uint32_t addr = 0, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        if constexpr (update_counter) {
+            if constexpr (posted) {
+                inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+            } else {
+                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
+            }
+        }
+    }
     WAYPOINT("NWIW");
     while (!noc_cmd_buf_ready(noc, cmd_buf));
     if constexpr (update_addr_lo) {
@@ -1593,17 +1603,10 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
     }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    if constexpr (update_counter) {
-        if constexpr (posted) {
-            if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-                inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
-            } else {
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        if constexpr (update_counter) {
+            if constexpr (posted) {
                 noc_posted_writes_num_issued[noc] += 1;
-            }
-        } else {
-            if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
-                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
             } else {
                 noc_nonposted_writes_num_issued[noc] += 1;
                 noc_nonposted_writes_acked[noc] += 1;
