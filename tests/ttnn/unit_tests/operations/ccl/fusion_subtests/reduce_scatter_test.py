@@ -23,25 +23,31 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     FF1_CRS,
     FF1_CRS_RS_OUT,
     NORM_CRS,
+    check_mesh_tensor_alloc,
 )
 
 
-def gen_tensor(dim, shard_height, shard_width, num_devices, num_cores, scheme="random"):
-    torch_input_tensors = []
+def gen_tensor(dim, shard_height, shard_width, num_devices_scatter, num_devices_fracture, num_cores, scheme="random"):
     factor = 0
-    for _ in range(num_devices):
-        for _ in range(num_cores):
-            for _ in range(shard_width // 32):
-                if scheme == "random":
-                    torch_input_tensors.append(torch.rand(1, 1, shard_height, 32))
-                elif scheme == "sequential":
-                    torch_input_tensors.append(torch.ones(1, 1, shard_height, 32) * factor)
-                    factor += 1
-                else:
-                    raise ValueError(f"Invalid scheme: {scheme}")
-                # factor += 1
+    torch_fracture_tensors = []
+    for _ in range(num_devices_fracture):
+        torch_scatter_tensors = []
+        for _ in range(num_devices_scatter):
+            torch_input_tensors = []
+            for _ in range(num_cores):
+                for _ in range(shard_width // 32):
+                    if scheme == "random":
+                        torch_input_tensors.append(torch.rand(1, 1, shard_height, 32))
+                    elif scheme == "sequential":
+                        torch_input_tensors.append(torch.ones(1, 1, shard_height, 32) * factor)
+                        factor += 1
+                    else:
+                        raise ValueError(f"Invalid scheme: {scheme}")
+            torch_scatter_tensors.append(torch.cat(torch_input_tensors, dim=dim))
 
-    return torch.cat(torch_input_tensors, dim=dim)
+        torch_fracture_tensors.append(torch.cat(torch_scatter_tensors, dim=1))
+
+    return torch.cat(torch_fracture_tensors, dim=0)
 
 
 def run_reduce_scatter_test(
@@ -49,7 +55,8 @@ def run_reduce_scatter_test(
     dim,
     shard_height,
     shard_width,
-    num_devices,
+    num_devices_scatter,
+    num_devices_fracture,
     num_cores,
     num_iters,
     trace_mode,
@@ -86,23 +93,32 @@ def run_reduce_scatter_test(
     output_tensor_goldens_list = []
     tt_input_tensors_list = []
     for _ in range(num_iters):
-        input = gen_tensor(dim, shard_height, shard_width, num_devices, num_cores, scheme=scheme)
+        input = gen_tensor(
+            dim, shard_height, shard_width, num_devices_scatter, num_devices_fracture, num_cores, scheme=scheme
+        )
 
-        intermediate_outputs = torch.chunk(input, chunks=num_devices, dim=3)
+        intermediate_outputs = torch.chunk(input, chunks=num_devices_scatter, dim=1)
         output = torch.zeros(intermediate_outputs[0].shape)
+
         for i in range(0, len(intermediate_outputs)):
             output += intermediate_outputs[i]
 
-        output_tensor_goldens_list.append(output)
-        input_tensors_per_device = []
-        for j, t in enumerate(intermediate_outputs):
-            input_tensors_per_device.append(
-                ttnn.Tensor(t, ttnn.bfloat8_b)
-                .to(ttnn.TILE_LAYOUT)
-                .to(mesh_device.get_devices()[j], mem_config=sharded_mem_config)
-            )
+        scattered_output = torch.chunk(output, chunks=num_devices_scatter, dim=dim)
+        scattered_output = torch.cat(scattered_output, dim=1)
 
-        tt_input = ttnn.aggregate_as_tensor(input_tensors_per_device)
+        output_tensor_goldens_list.append(scattered_output)
+
+        tt_input = ttnn.from_torch(
+            input,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=sharded_mem_config,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, dims=(0, 1), mesh_shape=[num_devices_fracture, num_devices_scatter]
+            ),
+        )
+        check_mesh_tensor_alloc(tt_input)
         tt_input_tensors_list.append(tt_input)
 
     enable_persistent_fabric = True
@@ -136,6 +152,7 @@ def run_reduce_scatter_test(
             ccl_semaphore_handles[0],
             worker_sub_device_id,
             cluster_axis=1,
+            mesh_device=mesh_device,
             num_links=num_links,
             memory_config=output_mem_config,
         )
@@ -149,6 +166,7 @@ def run_reduce_scatter_test(
                 ccl_semaphore_handles[0],
                 worker_sub_device_id,
                 cluster_axis=1,
+                mesh_device=mesh_device,
                 num_links=num_links,
                 memory_config=output_mem_config,
             )
@@ -169,6 +187,7 @@ def run_reduce_scatter_test(
                 ccl_semaphore_handles[i],
                 worker_sub_device_id,
                 cluster_axis=1,
+                mesh_device=mesh_device,
                 num_links=num_links,
                 memory_config=output_mem_config,
             )
@@ -181,7 +200,10 @@ def run_reduce_scatter_test(
     passed = True
     for tensor_index in range(len(tt_out_tensor_list)):
         tt_torch_tensor = ttnn.to_torch(
-            tt_out_tensor_list[tensor_index], mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim)
+            tt_out_tensor_list[tensor_index],
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device, mesh_shape=[num_devices_fracture, num_devices_scatter], dims=(0, 1)
+            ),
         )
         eq, output_results = comp_pcc(tt_torch_tensor, output_tensor_goldens_list[tensor_index])
         logger.info(f"Output tensor {tensor_index} has result {output_results}")
@@ -189,7 +211,7 @@ def run_reduce_scatter_test(
             passed = False
             break
 
-    for i in range(num_devices):
+    for i in range(num_devices_scatter * num_devices_fracture):
         assert (
             mesh_device.get_devices()[i].num_program_cache_entries() == 1
             or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters
@@ -202,18 +224,36 @@ def run_reduce_scatter_test(
 @pytest.mark.parametrize(
     "device_params", [{"trace_region_size": 40960, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True
 )
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        (8, 4),
+    ],
+    indirect=True,
+)
 def test_fabric_reduce_scatter_tg_trace(mesh_device):
     torch.manual_seed(2005)
     dim = 3
     shard_height = 32
     shard_width = 160
-    num_devices = 4
+    num_devices_scatter = 4
+    num_devices_fracture = 8
     num_cores = 24
     num_iters = 5
     trace_mode = True
 
     run_reduce_scatter_test(
-        mesh_device, dim, shard_height, shard_width, num_devices, num_cores, num_iters, trace_mode, num_links=3
+        mesh_device,
+        dim,
+        shard_height,
+        shard_width,
+        num_devices_scatter,
+        num_devices_fracture,
+        num_cores,
+        num_iters,
+        trace_mode,
+        num_links=3,
+        scheme="random",
     )
 
 
@@ -222,12 +262,20 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device):
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        (8, 4),
+    ],
+    indirect=True,
+)
 def test_fabric_reduce_scatter_tg_no_trace(mesh_device):
     torch.manual_seed(2005)
     dim = 3
     shard_height = 32
     shard_width = 160
-    num_devices = 4
+    num_devices_scatter = 4
+    num_devices_fracture = 8
     num_cores = 24
     num_iters = 5
     trace_mode = False
@@ -237,10 +285,11 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device):
         dim,
         shard_height,
         shard_width,
-        num_devices,
+        num_devices_scatter,
+        num_devices_fracture,
         num_cores,
         num_iters,
         trace_mode,
         num_links=3,
-        scheme="sequential",
+        scheme="random",
     )

@@ -20,22 +20,23 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
     const global_semaphore::MultiDeviceGlobalSemaphore& cross_device_semaphore,
     const SubDeviceId& subdevice_id,
     const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
     bool enable_persistent_fabric = true;
-    TT_FATAL(
-        std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
-        "all_gather_async op is only supported for Fast Dispatch");
+
+    const auto mesh_view = mesh_device.get_view();
     auto devices = input_tensor.get_workers();
-    uint32_t ring_devices = devices.size();
-    TT_FATAL(ring_devices > 1, "all_gather_async op will only work for ring_devices > 1, but has {}", ring_devices);
+    uint32_t ring_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    TT_FATAL(ring_devices > 1, "reduce_scatter async op will only work for ring_devices > 1, but has {}", ring_devices);
+
     ttnn::ccl::Topology ccl_topology = ttnn::ccl::Topology::Linear;
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
 
     std::vector<GlobalSemaphore> semaphores = cross_device_semaphore.global_semaphores;
     operation::launch_op(
-        [dim, semaphores, subdevice_id, cluster_axis, ring_devices, memory_config, devices, num_links](
+        [dim, semaphores, subdevice_id, cluster_axis, ring_devices, memory_config, mesh_view, num_links](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -44,6 +45,9 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
             std::optional<IDevice*> forward_device = std::nullopt;
             std::optional<IDevice*> backward_device = std::nullopt;
             std::optional<GlobalSemaphore> semaphore = std::nullopt;
+            const auto coordinate = mesh_view.find_device(input_tensor.device()->id());
+            std::vector<IDevice*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(coordinate[1])
+                                                                : mesh_view.get_devices_on_row(coordinate[0]);
             for (uint32_t i = 0; i < ring_devices; ++i) {
                 if (devices.at(i) == input_tensor.device()) {
                     ring_index = i;
