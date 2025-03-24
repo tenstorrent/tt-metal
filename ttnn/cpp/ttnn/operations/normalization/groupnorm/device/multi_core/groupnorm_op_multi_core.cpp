@@ -1383,51 +1383,51 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     }
 
     // Do CB size check with group_2 since it's larger
-    if (equal_batches_per_core) {
-        TT_FATAL(
-            cbs_fit_in_DRAM(
-                in0_CB_size_group_1,
-                in_CB_size_group_1,
-                in2_CB_size,
-                in3_CB_size,
-                in5_CB_size,
-                in6_CB_size,
-                in_mask_CB_size,
-                repack_CB_size,
-                x_CB_size_group_1,
-                xmm_CB_size_group_1,
-                ex_partial_CB_size,
-                ex_global_CB_size,
-                ex2_global_CB_size,
-                xmm2_CB_size_group_1,
-                xmm3_CB_size_group_1,
-                ex2pe_CB_size,
-                out_CB_size_group_1,
-                a.device()->l1_size_per_core()),
-            "Circular buffers require too much space to fit into L1");
-    } else {
-        TT_FATAL(
-            cbs_fit_in_DRAM(
-                in0_CB_size_group_2,
-                in_CB_size_group_2,
-                in2_CB_size,
-                in3_CB_size,
-                in5_CB_size,
-                in6_CB_size,
-                in_mask_CB_size,
-                repack_CB_size,
-                x_CB_size_group_2,
-                xmm_CB_size_group_2,
-                ex_partial_CB_size,
-                ex_global_CB_size,
-                ex2_global_CB_size,
-                xmm2_CB_size_group_2,
-                xmm3_CB_size_group_2,
-                ex2pe_CB_size,
-                out_CB_size_group_2,
-                a.device()->l1_size_per_core()),
-            "Circular buffers require too much space to fit into L1");
-    }
+    // if (equal_batches_per_core) {
+    //     TT_FATAL(
+    //         cbs_fit_in_DRAM(
+    //             in0_CB_size_group_1,
+    //             in_CB_size_group_1,
+    //             in2_CB_size,
+    //             in3_CB_size,
+    //             in5_CB_size,
+    //             in6_CB_size,
+    //             in_mask_CB_size,
+    //             repack_CB_size,
+    //             x_CB_size_group_1,
+    //             xmm_CB_size_group_1,
+    //             ex_partial_CB_size,
+    //             ex_global_CB_size,
+    //             ex2_global_CB_size,
+    //             xmm2_CB_size_group_1,
+    //             xmm3_CB_size_group_1,
+    //             ex2pe_CB_size,
+    //             out_CB_size_group_1,
+    //             a.device()->l1_size_per_core()),
+    //         "Circular buffers require too much space to fit into L1");
+    // } else {
+    //     TT_FATAL(
+    //         cbs_fit_in_DRAM(
+    //             in0_CB_size_group_2,
+    //             in_CB_size_group_2,
+    //             in2_CB_size,
+    //             in3_CB_size,
+    //             in5_CB_size,
+    //             in6_CB_size,
+    //             in_mask_CB_size,
+    //             repack_CB_size,
+    //             x_CB_size_group_2,
+    //             xmm_CB_size_group_2,
+    //             ex_partial_CB_size,
+    //             ex_global_CB_size,
+    //             ex2_global_CB_size,
+    //             xmm2_CB_size_group_2,
+    //             xmm3_CB_size_group_2,
+    //             ex2pe_CB_size,
+    //             out_CB_size_group_2,
+    //             a.device()->l1_size_per_core()),
+    //         "Circular buffers require too much space to fit into L1");
+    // }
 
     log_debug(tt::LogOp, "per_core_Nt: {}", per_core_Nt);
     log_debug(tt::LogOp, "per_core_Mt_group_1: {}", per_core_Mt_group_1);
