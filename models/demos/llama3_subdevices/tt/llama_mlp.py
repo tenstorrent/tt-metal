@@ -212,7 +212,7 @@ class TtLlamaMLP(LightweightModule):
         ttnn.deallocate(w2_in)
 
         w2_out_reduced = self.tt_ccl.line_all_reduce(
-            w2_out, cluster_axis=0, num_links=3, memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"]
+            w2_out, cluster_axis=0, num_links=4, memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"]
         )
         # print("reduced", w2_out_reduced)
 

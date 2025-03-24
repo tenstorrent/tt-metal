@@ -206,7 +206,7 @@ class TT_CCL:
 
         return persistent_buffers
 
-    def line_all_reduce(self, input_tensor_mesh, cluster_axis, num_links, memory_config, lm_head=False):
+    def line_all_reduce(self, input_tensor_mesh, cluster_axis, num_links, memory_config, lm_head=False, dtype=None):
         if lm_head:
             persistent_buffer = self.tt_lm_head_buffer_l1
         else:
@@ -219,6 +219,7 @@ class TT_CCL:
             mesh_device=self.mesh_device,
             multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
             num_links=num_links,
+            dtype=dtype,
             memory_config=memory_config,
             topology=ttnn.Topology.Linear,
             subdevice_id=self.worker_sub_device_id,
