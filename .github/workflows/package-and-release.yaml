@@ -50,7 +50,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   t3000-model-perf:
-    needs: build-artifact
+    needs: [build-artifact, build-artifact-profiler]
     uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
     secrets: inherit
     with:
