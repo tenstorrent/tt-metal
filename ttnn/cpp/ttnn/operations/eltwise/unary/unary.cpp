@@ -22,6 +22,7 @@ inline Tensor unary_impl(
     const std::vector<UnaryWithParam>& op_chain,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+    TT_FATAL(op_chain.size() > 0, "Op chain cannot be empty");
     DataType output_dtype = (op_chain[0].op_type == UnaryOpType::TYPECAST)
                                 ? static_cast<DataType>(op_chain[0].params[1])
                                 : input_tensor.get_dtype();
@@ -267,6 +268,16 @@ Tensor Ceil::invoke(
     if (input_tensor.get_dtype() == DataType::FLOAT32) {
         op_type = UnaryOpType::CEIL_FLOAT32;
     }
+
+    return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+}
+
+Tensor Mish::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::MISH;
 
     return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }

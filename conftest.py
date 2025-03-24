@@ -116,7 +116,6 @@ def device(request, device_params):
     yield device
 
     ttnn.DumpDeviceProfiler(device)
-
     ttnn.close_device(device)
 
 

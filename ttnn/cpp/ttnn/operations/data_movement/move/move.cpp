@@ -10,7 +10,10 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/distributed/api.hpp"
 
+#include <tt-metalium/hal_exp.hpp>
+
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement {
 
@@ -84,10 +87,7 @@ static inline Tensor move(QueueId queue_id, const Tensor& input_tensor, const st
     auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
     uint32_t size_per_l1_bank = tt::tt_metal::detail::SizeBytesPerBank(
-        output_tensor.buffer()->size(),
-        output_tensor.buffer()->page_size(),
-        num_l1_banks,
-        hal.get_alignment(HalMemType::L1));
+        output_tensor.buffer()->size(), output_tensor.buffer()->page_size(), num_l1_banks, hal::get_l1_alignment());
 
     if (move_within_same_mem_space) {
         switch (input_mem_config.buffer_type) {

@@ -43,16 +43,7 @@ constexpr uint32_t RISCV_IC_TRISC1_MASK = 0x4;
 constexpr uint32_t RISCV_IC_TRISC2_MASK = 0x8;
 constexpr uint32_t RISCV_IC_TRISC_ALL_MASK = RISCV_IC_TRISC0_MASK | RISCV_IC_TRISC1_MASK | RISCV_IC_TRISC2_MASK;
 
-#define NCRISC_FIRMWARE_IN_IRAM (defined(ARCH_GRAYSKULL))
-
-#if NCRISC_FIRMWARE_IN_IRAM
-constexpr uint32_t num_cbs_to_early_init = 4;  // safe small number to overlap w/ ncrisc copy
-#else
-constexpr uint32_t num_cbs_to_early_init = 0;
-#endif
-
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
-uint32_t ncrisc_kernel_start_offset16;
 
 c_tensix_core core;
 
@@ -189,26 +180,6 @@ void set_deassert_addresses() {
 #endif
 }
 
-void l1_to_ncrisc_iram_copy(uint32_t src_addr, uint16_t size, uint32_t address_offset = 0) {
-#if NCRISC_FIRMWARE_IN_IRAM
-    // Always copy ncrisc even if its size is 0 (save branch)...
-    // Copy NCRISC firmware from L1 to local IRAM using tensix DMA
-    tdma_xmov(
-        TDMA_MOVER0,
-        src_addr,
-        MEM_MOVER_VIEW_IRAM_BASE_ADDR + address_offset,
-        size,
-        XMOV_L1_TO_L0);
-#endif
-}
-
-void l1_to_ncrisc_iram_copy_wait() {
-#if NCRISC_FIRMWARE_IN_IRAM
-    // Wait for DMA to finish
-    wait_tdma_movers_done(RISCV_TDMA_STATUS_FLAG_MOVER0_BUSY_MASK);
-#endif
-}
-
 void device_setup() {
     instrn_buf[0] = core.instrn_buf_base(0);
     instrn_buf[1] = core.instrn_buf_base(1);
@@ -276,49 +247,12 @@ void device_setup() {
     // core.ex_sem_init(semaphore::CFG_STATE_BUSY, MAX_CONFIG_STATES, 0, instrn_buf[0]);
 }
 
-inline void init_ncrisc_iram() {
-#if NCRISC_FIRMWARE_IN_IRAM
-    uint16_t fw_size16 = mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.ncrisc_kernel_size16;
-    ncrisc_kernel_start_offset16 = fw_size16;
-
-    // Copies from L1 to IRAM on chips where NCRISC has IRAM
-    l1_to_ncrisc_iram_copy(MEM_NCRISC_INIT_IRAM_L1_BASE >> 4, fw_size16);
-    l1_to_ncrisc_iram_copy_wait();
-#endif
-}
-
 inline void deassert_ncrisc_trisc() {
     // Below sets ncrisc to go so we can wait until it is cleared on first iteration
     mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_SLAVES_DONE;
 
-    init_ncrisc_iram();
-
     // Bring ncrisc/triscs out of reset
     deassert_all_reset();
-}
-
-inline __attribute__((always_inline)) void wait_for_ncrisc_to_halt() {
-#if NCRISC_FIRMWARE_IN_IRAM
-    WAYPOINT("INW");
-    while (mailboxes->slave_sync.dm1 != RUN_SYNC_MSG_DONE);
-    WAYPOINT("IND");
-#endif
-}
-
-inline __attribute__((always_inline)) void reset_ncrisc_with_iram() {
-#if NCRISC_FIRMWARE_IN_IRAM
-    assert_just_ncrisc_reset();
-#endif
-}
-
-inline void set_ncrisc_kernel_resume_deassert_address() {
-#if NCRISC_FIRMWARE_IN_IRAM
-    volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
-    WAYPOINT("INRW");
-    while (mailboxes->ncrisc_halt.resume_addr == 0);
-    WAYPOINT("INRD");
-    cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = mailboxes->ncrisc_halt.resume_addr;
-#endif
 }
 
 inline void run_triscs(dispatch_core_processor_masks enables) {
@@ -334,17 +268,13 @@ inline void run_triscs(dispatch_core_processor_masks enables) {
     }
 }
 
-inline void finish_ncrisc_copy_and_run(dispatch_core_processor_masks enables) {
-    // On Wormhole, start_ncrisc_kernel_run will reset NCRISC to start the kernel running.
+inline void start_ncrisc_kernel_run_early(dispatch_core_processor_masks enables) {
+    // On Wormhole, start_ncrisc_kernel_run will reset NCRISC to start the
+    // kernel running. We delay it until later to give the NCRISC time to load
+    // CBs before we wait on it.
 #if !defined(NCRISC_FIRMWARE_KERNEL_SPLIT)
     if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
-        l1_to_ncrisc_iram_copy_wait();
         mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_GO;
-
-#if NCRISC_FIRMWARE_IN_IRAM
-        // Note: only ncrisc is in reset, so just deasserts ncrisc
-        deassert_all_reset();
-#endif
     }
 #endif
 }
@@ -359,6 +289,10 @@ inline void start_ncrisc_kernel_run(dispatch_core_processor_masks enables) {
         volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
         cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = mailboxes->ncrisc_halt.resume_addr;
         assert_just_ncrisc_reset();
+        // Wait a bit to ensure NCRISC has time to actually reset (otherwise it
+        // may just continue where it left off). This wait value was chosen
+        // empirically.
+        riscv_wait(5);
         deassert_all_reset();
     }
 #endif
@@ -404,12 +338,6 @@ int main() {
     mailboxes->ncrisc_halt.resume_addr = 0;
     mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_GO;
     deassert_ncrisc_trisc();
-    // When NCRISC has IRAM, it needs to be halted before data can be copied from L1 to IRAM
-    // This routine allows us to resume NCRISC after the copy is done
-    set_ncrisc_kernel_resume_deassert_address();
-
-    // Wait for ncrisc to halt
-    wait_for_ncrisc_to_halt();
 
     mailboxes->go_message.signal = RUN_MSG_DONE;
 
@@ -423,8 +351,6 @@ int main() {
     trigger_sync_register_init();
 
     while (1) {
-        reset_ncrisc_with_iram();
-
         WAYPOINT("GW");
         uint8_t go_message_signal = RUN_MSG_DONE;
         // kernel_configs.preload is last in the launch message. so other data is
@@ -464,20 +390,13 @@ int main() {
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
             enum dispatch_core_processor_masks enables =
                 (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
-#if !NCRISC_FIRMWARE_IN_IRAM
-            // On Wormhole and Blackhole, trigger the NCRISC to start loading CBs and IRAM as soon as possible.
+            // Trigger the NCRISC to start loading CBs and IRAM as soon as possible.
             if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
                 mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_LOAD;
             }
-#endif
             // Copies from L1 to IRAM on chips where NCRISC has IRAM
-            uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM0);
-            int ncrisc_index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1);
-            uint32_t ncrisc_kernel_src_address =
-                kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[ncrisc_index];
-            l1_to_ncrisc_iram_copy(ncrisc_kernel_src_address >> 4,
-                launch_msg_address->kernel_config.ncrisc_kernel_size16,
-                ncrisc_kernel_start_offset16);
+            uint32_t kernel_config_base =
+                firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM0);
             // Invalidate the i$ now the kernels have loaded and before running
             volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
             cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
@@ -511,15 +430,13 @@ int main() {
 
             uint32_t tt_l1_ptr* cb_l1_base =
                 (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.local_cb_offset);
-            setup_local_cb_read_write_interfaces(cb_l1_base, 0, num_cbs_to_early_init, true, true, false);
-            finish_ncrisc_copy_and_run(enables);
+            start_ncrisc_kernel_run_early(enables);
 
             // Run the BRISC kernel
             WAYPOINT("R");
             if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
                 uint32_t end_cb_index = launch_msg_address->kernel_config.max_local_cb_end_index;
-                setup_local_cb_read_write_interfaces(
-                    cb_l1_base, num_cbs_to_early_init, end_cb_index, true, true, false);
+                setup_local_cb_read_write_interfaces(cb_l1_base, 0, end_cb_index, true, true, false);
                 cb_l1_base =
                     (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
                 end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;

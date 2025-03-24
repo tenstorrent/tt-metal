@@ -13,7 +13,7 @@
 
 // Do we really want to expose Hal like this?
 // This looks like an API level test
-#include <tt-metalium/hal.hpp>
+#include "hal.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher NOC sanitization.

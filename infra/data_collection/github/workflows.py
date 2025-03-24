@@ -191,8 +191,8 @@ def get_pydantic_test_from_testcase_(testcase, default_timestamp=datetime.now(),
             properties = junit_xml_utils.get_pytest_testcase_properties(testcase)
             # Check if properties is none to see if pytest recorded the timestamps
             if properties is not None:
-                test_start_ts = datetime.strptime(properties["start_timestamp"], "%Y-%m-%dT%H:%M:%S")
-                test_end_ts = datetime.strptime(properties["end_timestamp"], "%Y-%m-%dT%H:%M:%S")
+                test_start_ts = datetime.fromisoformat(properties["start_timestamp"])
+                test_end_ts = datetime.fromisoformat(properties["end_timestamp"])
             else:
                 test_start_ts = default_timestamp
                 test_end_ts = default_timestamp
@@ -283,8 +283,7 @@ def get_tests_from_test_report_path(test_report_path):
     if report_root.tag == "testsuite":
         logger.info("Root tag is testsuite, found ctest xml")
         tests = []
-        # ctest timestamp format is not the same as pytest/gtest
-        default_timestamp = datetime.strptime(report_root.attrib["timestamp"], "%Y-%m-%dT%H:%M:%S")
+        default_timestamp = datetime.fromisoformat(report_root.attrib["timestamp"])
         for testcase in report_root.findall("testcase"):
             if is_valid_testcase_(testcase):
                 # Process ctest testcase
@@ -303,7 +302,7 @@ def get_tests_from_test_report_path(test_report_path):
         for i in range(len(report_root)):
             testsuite = report_root[i]
             testsuite_name = testsuite.attrib.get("name") if is_gtest else None
-            default_timestamp = datetime.strptime(testsuite.attrib["timestamp"], "%Y-%m-%dT%H:%M:%S.%f")
+            default_timestamp = datetime.fromisoformat(testsuite.attrib["timestamp"])
             get_pydantic_test = partial(
                 get_pydantic_test_from_testcase_,
                 default_timestamp=default_timestamp,

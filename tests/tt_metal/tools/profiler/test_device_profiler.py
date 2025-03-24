@@ -230,8 +230,8 @@ def test_dispatch_cores():
 @skip_for_grayskull()
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {
-        "Ethernet CQ Dispatch": [17, 12, 3899],
-        "Ethernet CQ Prefetch": [18, 1951],
+        "Ethernet CQ Dispatch": [17, 12, 3896],
+        "Ethernet CQ Prefetch": [18, 1948],
     }
     os.environ["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "1"
     devicesData = run_device_profiler_test(
@@ -351,7 +351,6 @@ def test_timestamped_events():
         assert eventCount in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong event count"
 
 
-@pytest.mark.skip(reason="This test is currently broken")
 def test_noc_event_profiler():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in ["grayskull", "wormhole_b0", "blackhole"]
