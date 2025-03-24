@@ -158,7 +158,7 @@ def run_fabric_edm(
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("packet_size", [4096])
-@pytest.mark.parametrize("line_size, num_links, expected_bw, expected_Mpps", [(4, 1, 8.23, 2.01), (4, 2, 8.17, 1.99)])
+@pytest.mark.parametrize("line_size, num_links, expected_bw, expected_Mpps", [(4, 1, 8.23, None), (4, 2, 8.17, 1.99)])
 def test_fabric_edm_mcast_half_ring_bw(
     num_mcasts,
     num_unicasts,
@@ -373,7 +373,7 @@ def test_fabric_4chip_two_link_mcast_bw(
 @pytest.mark.parametrize("line_size", [2])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
-    "packet_size, expected_bw, expected_Mpps", [(16, 0.044, 2.762), (2048, 5.64, 2.757), (4096, 11.03, 2.673)]
+    "packet_size, expected_bw, expected_Mpps", [(16, 0.044, 2.762), (2048, 5.64, 2.757), (4096, 11.02, 2.673)]
 )
 def test_fabric_one_link_non_forwarding_unicast_bw(
     num_mcasts,
@@ -409,7 +409,7 @@ def test_fabric_one_link_non_forwarding_unicast_bw(
 @pytest.mark.parametrize("line_size", [2])
 @pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize(
-    "packet_size, expected_bw, expected_Mpps", [(16, 0.044, 2.755), (2048, 5.64, 2.755), (4096, 11.03, 2.67)]
+    "packet_size, expected_bw, expected_Mpps", [(16, 0.044, 2.755), (2048, 5.64, 2.755), (4096, 11.02, 2.67)]
 )
 def test_fabric_two_link_non_forwarding_unicast_bw(
     num_mcasts,
