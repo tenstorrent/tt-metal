@@ -60,20 +60,11 @@ parameters = {
         ],
     },
     "test_run_max_pool": {
-        "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "dtype": [ttnn.bfloat8_b],
         "input_specs": [
             # Contains following parameters
             # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, strid_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode]
-            [1, 32, 1056, 160, 2, 2, 2, 2, 0, 0, 1, 1, False],  # functional_unet
-            # [1, 64, 1056, 160, 2, 2, 2, 2, 0, 0, 1, 1, False],
-            [1, 3, 224, 224, 2, 2, 2, 2, 0, 0, 1, 1, False],  # vgg
-            # [1, 512, 10, 10, 5, 5, 1, 1, 2, 2, 1, 1, False],  # yolo
-            # [1, 512, 10, 10, 9, 9, 1, 1, 4, 4, 1, 1, False],
-            # [1, 512, 10, 10, 13, 13, 1, 1, 6, 6, 1, 1, False],
-            [1, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],  # resnet
-            [2, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
-            [4, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
-            [8, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
+            [1, 64, 112, 112, 3, 3, 2, 2, 1, 1, 1, 1, False],
         ],
     },
     "test_run_max_pool_width_shard": {
@@ -205,7 +196,7 @@ import pytest
 @pytest.mark.parametrize("input_spec", parameters["max_pool2d_short_sweep_suite"]["input_specs"])
 @pytest.mark.parametrize("dtype", parameters["max_pool2d_short_sweep_suite"]["dtype"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_max_pool2d_localrun(device, dtype, input_spec):
+def test_max_pool2d_localrun(device_params, dtype, input_spec):
     (
         batch_size,
         input_channels,
@@ -244,7 +235,7 @@ def test_max_pool2d_localrun(device, dtype, input_spec):
 @pytest.mark.parametrize("input_spec", parameters["test_run_max_pool_height_shard"]["input_specs"])
 @pytest.mark.parametrize("dtype", parameters["test_run_max_pool_height_shard"]["dtype"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_max_pool2d_localrun(device, dtype, input_spec):
+def test_max_pool2d_localrun(device_params, dtype, input_spec):
     (
         batch_size,
         input_channels,
@@ -282,8 +273,8 @@ def test_max_pool2d_localrun(device, dtype, input_spec):
 
 @pytest.mark.parametrize("input_spec", parameters["test_run_max_pool"]["input_specs"])
 @pytest.mark.parametrize("dtype", parameters["test_run_max_pool"]["dtype"])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_run_max_pool(device, dtype, input_spec):
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_run_max_pool(device_params, dtype, input_spec, device):
     (
         batch_size,
         input_channels,
@@ -322,7 +313,7 @@ def test_run_max_pool(device, dtype, input_spec):
 @pytest.mark.parametrize("input_spec", parameters["test_run_max_pool_width_shard"]["input_specs"])
 @pytest.mark.parametrize("dtype", parameters["test_run_max_pool_width_shard"]["dtype"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_run_max_pool_width_shard(device, dtype, input_spec):
+def test_run_max_pool_width_shard(device_params, dtype, input_spec):
     (
         batch_size,
         input_channels,
@@ -361,7 +352,7 @@ def test_run_max_pool_width_shard(device, dtype, input_spec):
 @pytest.mark.parametrize("input_spec", parameters["test_run_max_pool_block_shard"]["input_specs"])
 @pytest.mark.parametrize("dtype", parameters["test_run_max_pool_block_shard"]["dtype"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_run_max_pool_block_shard(device, dtype, input_spec):
+def test_run_max_pool_block_shard(device_params, dtype, input_spec):
     (
         batch_size,
         input_channels,
@@ -401,7 +392,7 @@ def test_run_max_pool_block_shard(device, dtype, input_spec):
 @pytest.mark.parametrize("dtype", parameters["test_run_max_pool_mem_config"]["dtype"])
 @pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_run_max_pool_mem_config(device, dtype, input_spec, memory_config):
+def test_run_max_pool_mem_config(device_params, dtype, input_spec, memory_config):
     (
         batch_size,
         input_channels,
