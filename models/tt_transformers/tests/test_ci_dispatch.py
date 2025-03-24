@@ -10,24 +10,31 @@ from models.utility_functions import skip_for_grayskull
 # This test will run all the nightly fast dispatch tests for all supported Llama3 models in CI [N150 / N300 only]
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
-    "llama3_model",
+    "model_weights",
     [
         "/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/",
         "/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/",
         "/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/",
         "/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/",
+        "/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db",
     ],
     ids=[
         "llama3.2-1B",
         "llama3.2-3B",
         "llama3.1-8B",
         "llama3.2-11B",
+        "mistral-7B-v0.3",
     ],
 )
-def test_ci_dispatch(llama3_model):
-    logger.info(f"Running fast dispatch tests for {llama3_model}")
-    os.environ["LLAMA_DIR"] = llama3_model
-    pytest.main(
+def test_ci_dispatch(model_weights):
+    logger.info(f"Running fast dispatch tests for {model_weights}")
+    if "llama" in model_weights.lower():
+        os.environ["LLAMA_DIR"] = model_weights
+    elif "mistral" in model_weights.lower():
+        os.environ["HF_MODEL"] = model_weights
+        os.environ["TT_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
+
+    exit_code = pytest.main(
         [
             "models/tt_transformers/tests/test_embedding.py",
             "models/tt_transformers/tests/test_rms_norm.py",
@@ -37,4 +44,10 @@ def test_ci_dispatch(llama3_model):
             "models/tt_transformers/tests/test_decoder.py",
             "models/tt_transformers/tests/test_decoder_prefill.py",
         ]
+        + ["-x"]  # Fail if one of the tests fails
     )
+    if exit_code == pytest.ExitCode.TESTS_FAILED:
+        pytest.fail(
+            f"One or more CI dispatch tests failed for {model_weights}. Please check the log above for more info",
+            pytrace=False,
+        )
