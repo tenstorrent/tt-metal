@@ -278,7 +278,16 @@ operation::ProgramWithCallbacks RMSAllGather::create_program(
                         program_config.compute_with_storage_grid_size,
                         program_config.subblock_w,
                         program_config.block_w,
-                        this->compute_kernel_config);
+                        this->compute_kernel_config,
+                        // New Parameters
+                        this->forward_device,
+                        this->backward_device,
+                        this->num_links,
+                        this->ring_size,
+                        this->ring_index,
+                        this->topology,
+                        this->semaphore.value(),
+                        this->sub_device_id);
                 } else {
                     return frmsnorm_post_multi_core_sharded(
                         a,
@@ -300,7 +309,22 @@ operation::ProgramWithCallbacks RMSAllGather::create_program(
                 CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
 
                 return frmsnorm_pre_multi_core_sharded(
-                    a, b, output_tensor, this->eps, grid_size, 1, 1, this->compute_kernel_config);
+                    a,
+                    b,
+                    output_tensor,
+                    this->eps,
+                    grid_size,
+                    1,
+                    1,
+                    this->compute_kernel_config,
+                    this->forward_device,
+                    this->backward_device,
+                    this->num_links,
+                    this->ring_size,
+                    this->ring_index,
+                    this->topology,
+                    this->semaphore.value(),
+                    this->sub_device_id);
             }
         },
         this->program_config);

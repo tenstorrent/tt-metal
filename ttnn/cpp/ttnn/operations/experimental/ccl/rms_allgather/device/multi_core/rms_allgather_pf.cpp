@@ -57,7 +57,18 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     CoreCoord compute_grid_size,
     uint32_t subblock_wt,
     uint32_t block_wt,
-    DeviceComputeKernelConfig compute_kernel_config) {
+    DeviceComputeKernelConfig compute_kernel_config,
+    // New Parameters
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    ccl::Topology topology,
+    const GlobalSemaphore& semaphore,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    bool enable_persistent_fabric_mode = true;
+    const uint32_t dim = 3;
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / TILE_WIDTH;
 

@@ -40,6 +40,9 @@ void bind_fused_rms_1_1_32_8192(py::module& module) {
             py::arg("epsilon") = 1e-12,  // constant 1e-12 on pre, value only affects post
             py::arg("weight") = std::nullopt,
             py::arg("stats") = std::nullopt,
-            py::arg("is_pre") = true});
+            py::arg("is_pre") = true,
+            py::arg("subdevice_id") = std::nullopt,
+            py::arg("num_links") = 1,
+        });
 }
 }  // namespace ttnn::operations::experimental::ccl

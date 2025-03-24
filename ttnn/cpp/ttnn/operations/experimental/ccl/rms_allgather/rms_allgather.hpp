@@ -27,7 +27,9 @@ struct ExecuteFusedRMSNorm {
         float epsilon = 1e-12,
         const std::optional<const ttnn::Tensor>& weight = std::nullopt,
         const std::optional<const ttnn::Tensor>& stats = std::nullopt,
-        bool is_pre = true);
+        bool is_pre = true,
+        std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
+        const uint32_t num_links = 1);
 };
 
 }  // namespace operations::fused::normalization

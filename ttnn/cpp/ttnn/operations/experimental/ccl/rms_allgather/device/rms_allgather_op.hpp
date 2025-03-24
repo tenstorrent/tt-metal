@@ -24,7 +24,16 @@ tt::tt_metal::operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     CoreCoord compute_grid_size,
     uint32_t subblock_wt,
     uint32_t block_wt,
-    DeviceComputeKernelConfig compute_kernel_config);
+    DeviceComputeKernelConfig compute_kernel_config,
+    // New Parameters
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    ccl::Topology topology,
+    const GlobalSemaphore& semaphore,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 
 tt::tt_metal::operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     const Tensor& a,
@@ -45,6 +54,13 @@ struct RMSAllGather {
     std::optional<DataType> dtype;
     const ttnn::ccl::Topology topology;
     const bool is_pre;
+    std::optional<IDevice*> forward_device;
+    std::optional<IDevice*> backward_device;
+    const uint32_t num_links;
+    const uint32_t ring_size;
+    const uint32_t ring_index;
+    std::optional<GlobalSemaphore> semaphore;
+    const std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     void validate(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
