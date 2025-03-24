@@ -41,7 +41,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig() {
     this->termination_signal_address =
         edm_channel_ack_addr +
         (4 * eth_channel_sync_size);  // pad extra bytes to match old EDM so handshake logic will still work
-    this->edm_status_address = termination_signal_address + field_size;
+    this->edm_local_sync_address = termination_signal_address + field_size;
+    this->edm_status_address = edm_local_sync_address + field_size;
 
     uint32_t buffer_address = edm_status_address + field_size;
     for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
@@ -388,6 +389,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     local_receiver_channels_buffer_address(config.receiver_channels_base_address),
 
     termination_signal_ptr(config.termination_signal_address),
+    edm_local_sync_ptr(config.edm_local_sync_address),
     edm_status_ptr(config.edm_status_address),
     enable_persistent_mode(enable_persistent_mode),
     build_in_worker_connection_mode(build_in_worker_connection_mode),
@@ -440,6 +442,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
         config.sender_channels_base_address[2],
 
         this->termination_signal_ptr,
+        this->edm_local_sync_ptr,
         this->edm_status_ptr,
         this->enable_persistent_mode,
 

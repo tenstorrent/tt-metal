@@ -65,7 +65,7 @@ jobs:
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
-      docker-image: ${{ needs.build.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
 

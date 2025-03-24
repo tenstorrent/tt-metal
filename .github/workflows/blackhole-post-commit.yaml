@@ -66,15 +66,17 @@ jobs:
       arch: "blackhole"
       timeout: 20
       runner-label: ${{ inputs.runner-label || 'BH' }}
-      docker-image: ${{ needs.build-artifact-profiler.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
   umd-unit-tests:
+    needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/umd-unit-tests.yaml
     with:
       arch: blackhole
       runner-label: ${{ inputs.runner-label || 'BH' }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
   sd-unit-tests:
     needs: build-artifact
     uses: ./.github/workflows/build-and-unit-tests.yaml

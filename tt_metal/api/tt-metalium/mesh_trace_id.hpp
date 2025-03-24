@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt_stl/strong_type.hpp>
+#include <cstdint>
 
 namespace tt::tt_metal::distributed {
 
