@@ -264,6 +264,23 @@ std::string schedule_to_string(std::vector<std::vector<ReadRequest>> schedule) {
     return result;
 }
 
+CoreRangeSet get_worker_cores(const CoreRangeSet& available_cores, const uint32_t num_workers, bool row_wise) {
+    CoreRangeSet worker_cores;
+    for (const auto& cr : available_cores.ranges()) {
+        auto cores = corerange_to_cores(cr, std::nullopt, row_wise);
+        for (const auto& core : cores) {
+            worker_cores = worker_cores.merge(CoreRangeSet(CoreRange(core, core)));
+            if (worker_cores.num_cores() == num_workers) {
+                break;
+            }
+        }
+        if (worker_cores.num_cores() == num_workers) {
+            break;
+        }
+    }
+    return worker_cores;
+}
+
 }  // namespace detail
 
 LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::cached_program_t
@@ -336,6 +353,10 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     auto input_grid = shard_spec.grid;
     auto output_grid = output_shard_spec.grid;
 
+    auto sub_device_cores = device->worker_cores(
+        tt::tt_metal::HalProgrammableCoreType::TENSIX,
+        operation_attributes.subdevice_id.value_or(device->get_sub_device_ids().at(0)));
+
     // if (operation_attributes.ring_index == 0) {
     //     std::cout << "input_grid: " << input_grid.str() << std::endl;
     // }
@@ -369,23 +390,24 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     uint32_t num_workers_per_link = 1;
     uint32_t num_packets_total_per_device =
         (input_shard_cores_per_device * tiles_per_core_width + num_pages_per_packet - 1) / num_pages_per_packet;
-    auto
-        [num_packet_workers,
-         packet_worker_cores_grid,
-         packet_worker_cores_group_1,
-         packet_worker_cores_group_2,
-         num_packets_per_core_group_1,
-         num_packets_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(
-                device->compute_with_storage_grid_size(),
-                num_packets_total_per_device,
-                shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    auto packet_worker_cores_grid = detail::get_worker_cores(
+        sub_device_cores, num_packets_total_per_device, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
-    auto sender_core_grid = detail::next_core_range_set(
-        packet_worker_cores_grid,
-        device->compute_with_storage_grid_size(),
-        num_workers_per_link * num_links,
-        shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    auto available_cores = sub_device_cores.subtract(packet_worker_cores_grid);
+
+    auto sender_core_grid = detail::get_worker_cores(
+        available_cores, num_workers_per_link * num_links, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+
+    // if (operation_attributes.ring_index == 0) {
+    //     std::cout << "packet_worker_cores_grid: " << packet_worker_cores_grid.str() << std::endl;
+    //     std::cout << "packet worker cores grid num cores: " << packet_worker_cores_grid.num_cores() << std::endl;
+    // }
+    // if (operation_attributes.ring_index == 0) {
+    //     std::cout << "available_cores: " << available_cores.str() << std::endl;
+    // }
+    // if (operation_attributes.ring_index == 0) {
+    //     std::cout << "sender_core_grid: " << sender_core_grid.str() << std::endl;
+    // }
 
     auto schedule = detail::distributeWorkEvenly(
         input_shard_cores_per_device, num_workers_per_link * num_links, tiles_per_core_width, num_pages_per_packet);
@@ -570,12 +592,17 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     reader_defines["SCHEDULE"] = schedule_to_string;
     // if (operation_attributes.ring_index == 0) {
     //     std::cout << "input_cores: " << reader_defines["INPUT_CORE_XY"] << std::endl;
+    //     std::cout << "input_shard_cores_per_device: " << input_shard_cores_per_device << std::endl;
     // }
     // if (operation_attributes.ring_index == 0) {
     //     std::cout << "output_cores: " << reader_defines["OUTPUT_CORE_XY"] << std::endl;
+    //     std::cout << "output_cores_per_device: " << output_cores_per_device << std::endl;
     // }
     // if (operation_attributes.ring_index == 0) {
     //     std::cout << "packet_worker_cores: " << reader_defines["PACKET_WORKER_CORES"] << std::endl;
+    // }
+    // if (operation_attributes.ring_index == 0) {
+    //     std::cout << "sender_core_grid: " << sender_core_grid.str() << std::endl;
     // }
     // create local semaphore
     auto local_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores_grid, INVALID);
