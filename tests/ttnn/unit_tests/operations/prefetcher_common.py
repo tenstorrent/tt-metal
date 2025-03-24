@@ -309,7 +309,8 @@ def run_prefetcher_mm(
     # Total: 1470
 
     # global_cb_size = 1000 * max_tile_size # works without profiler, fails with profiler, 900 doesn't provide tracy info
-    global_cb_size = 750 * max_tile_size
+    # calculated by fitting two largest tensor with extra room, ff2 has 391680B per global CB bank, ff1 has 207360B, plus 16320B gap (one block)
+    global_cb_size = 620000
     sender_receiver_mapping = list(zip(all_sender_cores, all_receiver_cores))
     global_circular_buffer = ttnn.create_global_circular_buffer(device, sender_receiver_mapping, global_cb_size)
     logger.info(f"global cb size {global_cb_size}")
