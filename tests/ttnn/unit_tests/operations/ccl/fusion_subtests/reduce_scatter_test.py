@@ -16,6 +16,15 @@ from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_global_semaphore_with_same_address,
 )
 
+from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
+    SUB_DEVICE_CRS,
+    QKV_CRS,
+    RING_CRS,
+    FF1_CRS,
+    FF1_CRS_RS_OUT,
+    NORM_CRS,
+)
+
 
 def gen_tensor(dim, shard_height, shard_width, num_devices, num_cores, scheme="random"):
     torch_input_tensors = []
@@ -50,14 +59,29 @@ def run_reduce_scatter_test(
     mesh_device.enable_async(True)
     mesh_device.enable_program_cache()
 
-    compute_grid_size = mesh_device.compute_with_storage_grid_size()
-    sharded_mem_config = ttnn.create_sharded_memory_config(
-        (shard_height, shard_width),
-        core_grid=ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True),
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            RING_CRS,
+            [shard_height, shard_width],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
     )
+
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            FF1_CRS_RS_OUT,
+            [shard_height, 32],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    # print(sharded_mem_config)
+    # print("--------------------------------")
+    # print(output_mem_config)
 
     output_tensor_goldens_list = []
     tt_input_tensors_list = []
@@ -82,9 +106,7 @@ def run_reduce_scatter_test(
         tt_input_tensors_list.append(tt_input)
 
     enable_persistent_fabric = True
-    ccl_sub_device_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
+    ccl_sub_device_crs = SUB_DEVICE_CRS
     worker_sub_device = ttnn.SubDevice(
         [
             ccl_sub_device_crs,
@@ -105,7 +127,6 @@ def run_reduce_scatter_test(
     ccl_semaphore_handles = [
         create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
     ]
-    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     tt_out_tensor_list = []
     if trace_mode:
@@ -116,6 +137,7 @@ def run_reduce_scatter_test(
             worker_sub_device_id,
             cluster_axis=1,
             num_links=num_links,
+            memory_config=output_mem_config,
         )
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
 
@@ -128,6 +150,7 @@ def run_reduce_scatter_test(
                 worker_sub_device_id,
                 cluster_axis=1,
                 num_links=num_links,
+                memory_config=output_mem_config,
             )
 
         tt_out_tensor_list.append(tt_out_tensor)
@@ -147,6 +170,7 @@ def run_reduce_scatter_test(
                 worker_sub_device_id,
                 cluster_axis=1,
                 num_links=num_links,
+                memory_config=output_mem_config,
             )
             tt_out_tensor_list.append(tt_out_tensor)
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
@@ -175,46 +199,9 @@ def run_reduce_scatter_test(
         assert eq, f"{i} FAILED: {output_results}"
 
 
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 40960}], indirect=True)
-def test_fabric_reduce_scatter_t3k_trace(t3k_mesh_device):
-    torch.manual_seed(2005)
-    dim = 3
-    shard_height = 32
-    shard_width = 160
-    num_devices = 4
-    num_cores = 24
-    num_iters = 5
-    trace_mode = True
-
-    run_reduce_scatter_test(
-        t3k_mesh_device, dim, shard_height, shard_width, num_devices, num_cores, num_iters, trace_mode
-    )
-
-
-def test_fabric_reduce_scatter_t3k_no_trace(t3k_mesh_device):
-    torch.manual_seed(2005)
-    dim = 3
-    shard_height = 32
-    shard_width = 160
-    num_devices = 4
-    num_cores = 24
-    num_iters = 5
-    trace_mode = False
-
-    run_reduce_scatter_test(
-        t3k_mesh_device,
-        dim,
-        shard_height,
-        shard_width,
-        num_devices,
-        num_cores,
-        num_iters,
-        trace_mode,
-        scheme="sequential",
-    )
-
-
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 40960}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"trace_region_size": 40960, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True
+)
 def test_fabric_reduce_scatter_tg_trace(mesh_device):
     torch.manual_seed(2005)
     dim = 3
@@ -230,6 +217,11 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device):
     )
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
 def test_fabric_reduce_scatter_tg_no_trace(mesh_device):
     torch.manual_seed(2005)
     dim = 3
