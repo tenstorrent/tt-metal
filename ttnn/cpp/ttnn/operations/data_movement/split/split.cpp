@@ -89,7 +89,7 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const SmallVector<int64_t>& split_sizes,
-    const int64_t& dim = 0,
+    const int64_t dim = 0,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt) {
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
 
@@ -129,7 +129,7 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
 std::vector<ttnn::Tensor> SplitOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const SmallVector<int64_t>& split_sizes,
-    const int64_t& dim = 0,
+    const int64_t dim = 0,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt) {
     return SplitOperation::invoke(DefaultQueueId, input_tensor, split_sizes, dim, memory_config_arg);
 }
@@ -137,8 +137,8 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
 std::vector<ttnn::Tensor> SplitOperation::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const int64_t& split_size,
-    const int64_t& dim = 0,
+    const int64_t split_size,
+    const int64_t dim = 0,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt) {
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
 
@@ -151,8 +151,8 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
 
 std::vector<ttnn::Tensor> SplitOperation::invoke(
     const ttnn::Tensor& input_tensor,
-    const int64_t& split_size,
-    const int64_t& dim = 0,
+    const int64_t split_size,
+    const int64_t dim = 0,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt) {
     return SplitOperation::invoke(DefaultQueueId, input_tensor, split_size, dim, memory_config_arg);
 }
