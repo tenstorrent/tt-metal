@@ -5,6 +5,7 @@
 import json
 import time
 import pandas as pd
+import pytest
 
 from loguru import logger
 from collections import defaultdict
@@ -15,6 +16,7 @@ from tt_metal.tools.profiler.process_model_log import (
     post_process_ops_log,
     run_device_profiler,
     get_samples_per_s,
+    TestStatus,
 )
 from models.perf.perf_utils import today, process_perf_results
 
@@ -32,7 +34,12 @@ def run_device_perf(command, subdir, num_iterations, cols, batch_size, op_name="
         results[f"MAX {d_col}"] = -float("inf")
 
     for _ in range(num_iterations):
-        run_device_profiler(command, subdir)
+        status = run_device_profiler(command, subdir)
+        if status == TestStatus.SKIPPED:
+            pytest.skip(f"{command}  was skipped")
+        if status == TestStatus.FAILED:
+            pytest.fail(f"{command} failed")
+
         r = post_process_ops_log(subdir, duration_cols, op_name=op_name, has_signposts=has_signposts)
         for d_col in duration_cols:
             results[f"AVG {d_col}"] += r[d_col]

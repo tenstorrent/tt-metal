@@ -8,6 +8,13 @@ from pathlib import Path
 import pandas as pd
 
 from tt_metal.tools.profiler.common import PROFILER_ARTIFACTS_DIR, PROFILER_SCRIPTS_ROOT, generate_reports_folder
+from enum import Enum
+
+
+class TestStatus(Enum):
+    PASSED = "PASSED"
+    SKIPPED = "SKIPPED"
+    FAILED = "FAILED"
 
 
 def get_profiler_folder(output_logs_subdir):
@@ -47,7 +54,16 @@ def post_process_ops_log(output_logs_subdir, columns, sum_vals=True, op_name="",
 def run_device_profiler(command, output_logs_subdir):
     output_profiler_dir = get_profiler_folder(output_logs_subdir)
     profiler_cmd = f"python3 -m tracy -p -r -o {output_profiler_dir} -t 5000 -m {command}"
-    subprocess.run([profiler_cmd], shell=True, check=True)
+    result = subprocess.run([profiler_cmd], shell=True, check=True, capture_output=True, text=True)
+
+    if "SKIPPED" in result.stdout:
+        return TestStatus.SKIPPED
+    elif "FAILED" in result.stdout:
+        return TestStatus.FAILED
+    elif "PASSED" in result.stdout:
+        return TestStatus.PASSED
+    else:
+        return TestStatus.FAILED
 
 
 def get_samples_per_s(time_ns, num_samples):

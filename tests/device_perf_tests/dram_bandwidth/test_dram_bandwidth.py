@@ -25,7 +25,7 @@ def test_dram_interleaved(
     core_grid,
 ):
     grid = device.compute_with_storage_grid_size()
-    if grid.x * grid.y == 64:
+    if grid.x * grid.y != 64:
         pytest.skip("Needs 8x8 grid for wormhole_b0")
 
     # helper function to create L1 width sharded memory config
@@ -94,7 +94,8 @@ def test_dram_sharded(
     shape,
 ):
     grid = device.compute_with_storage_grid_size()
-    assert grid.x * grid.y == 64, "Only valid on 64 cores grid"
+    if grid.x * grid.y != 64:
+        pytest.skip("Needs 8x8 grid for wormhole_b0")
 
     # helper function to create dram sharded memory config with height sharded tensor
     # where dram cores is equal to batch size
@@ -194,4 +195,12 @@ def test_perf_device_bare_metal(test, transfer_size_MB, expected_speed_GBps):
     post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
 
     print(post_processed_results)
-    check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=True)
+    expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=True)
+
+    prep_device_perf_report(
+        model_name=f"{test}",
+        batch_size=1,
+        post_processed_results=post_processed_results,
+        expected_results=expected_results,
+        comments="",
+    )
