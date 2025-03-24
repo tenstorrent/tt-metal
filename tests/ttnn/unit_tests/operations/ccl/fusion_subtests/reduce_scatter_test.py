@@ -36,7 +36,16 @@ def gen_tensor(dim, shard_height, shard_width, num_devices, num_cores, scheme="r
 
 
 def run_reduce_scatter_test(
-    mesh_device, dim, shard_height, shard_width, num_devices, num_cores, num_iters, trace_mode, scheme="random"
+    mesh_device,
+    dim,
+    shard_height,
+    shard_width,
+    num_devices,
+    num_cores,
+    num_iters,
+    trace_mode,
+    num_links=1,
+    scheme="random",
 ):
     mesh_device.enable_async(True)
     mesh_device.enable_program_cache()
@@ -101,7 +110,12 @@ def run_reduce_scatter_test(
     tt_out_tensor_list = []
     if trace_mode:
         tt_out_tensor = ttnn.experimental.llama_reduce_scatter(
-            tt_input_tensors_list[0], dim, ccl_semaphore_handles[0], worker_sub_device_id, cluster_axis=1, num_links=1
+            tt_input_tensors_list[0],
+            dim,
+            ccl_semaphore_handles[0],
+            worker_sub_device_id,
+            cluster_axis=1,
+            num_links=num_links,
         )
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
 
@@ -113,7 +127,7 @@ def run_reduce_scatter_test(
                 ccl_semaphore_handles[0],
                 worker_sub_device_id,
                 cluster_axis=1,
-                num_links=1,
+                num_links=num_links,
             )
 
         tt_out_tensor_list.append(tt_out_tensor)
@@ -132,7 +146,7 @@ def run_reduce_scatter_test(
                 ccl_semaphore_handles[i],
                 worker_sub_device_id,
                 cluster_axis=1,
-                num_links=1,
+                num_links=num_links,
             )
             tt_out_tensor_list.append(tt_out_tensor)
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
@@ -197,4 +211,43 @@ def test_fabric_reduce_scatter_t3k_no_trace(t3k_mesh_device):
         num_iters,
         trace_mode,
         scheme="sequential",
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 40960}], indirect=True)
+def test_fabric_reduce_scatter_tg_trace(mesh_device):
+    torch.manual_seed(2005)
+    dim = 3
+    shard_height = 32
+    shard_width = 160
+    num_devices = 4
+    num_cores = 24
+    num_iters = 5
+    trace_mode = True
+
+    run_reduce_scatter_test(
+        mesh_device, dim, shard_height, shard_width, num_devices, num_cores, num_iters, trace_mode, num_links=3
+    )
+
+
+def test_fabric_reduce_scatter_tg_no_trace(mesh_device):
+    torch.manual_seed(2005)
+    dim = 3
+    shard_height = 32
+    shard_width = 160
+    num_devices = 4
+    num_cores = 24
+    num_iters = 5
+    trace_mode = False
+
+    run_reduce_scatter_test(
+        mesh_device,
+        dim,
+        shard_height,
+        shard_width,
+        num_devices,
+        num_cores,
+        num_iters,
+        trace_mode,
+        num_links=3,
     )
