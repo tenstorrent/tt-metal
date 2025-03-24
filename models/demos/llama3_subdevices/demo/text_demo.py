@@ -177,7 +177,7 @@ def create_tt_model(
     [
         (  # Batch-1 run (Latency) - single user, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            False,  # instruct mode
+            True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
             1,  # batch_size
@@ -437,7 +437,7 @@ def test_demo_text(
         logger.info(f"Starting prefill...")
         profiler.start(f"inference_prefill", iteration=batch_idx)
         logits = generator.prefill_forward_text(
-            input_tokens_prefill_pt,
+            input_tokens_prefill_pt[0].unsqueeze(0),
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
@@ -445,20 +445,22 @@ def test_demo_text(
         prefilled_token = torch.argmax(logits, dim=-1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
-
+        prefilled_token = prefilled_token.repeat(batch_size, 1)
         # Keep track of generated outputs to print out every iteration
         all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(batch_size)]
         for user in range(batch_size):
-            user_tok = int(prefilled_token[user].item())
+            user_tok = int(prefilled_token[0].item())
             all_outputs[user].append(user_tok)
-
+        # print("Prefill outputs:", [tokenizer.decode(output) for output in all_outputs])
+        # model.tt_ccl.close()
+        # return True
         user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
 
         # TODO Argmax on device is only supported for batch_size=1
-        argmax_on_device = False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
+        argmax_on_device = True  # False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
 
         # Initial positions
-        current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
+        current_pos = torch.tensor([decoding_pos[0] for b in range(batch_size)])
 
         # Start decoding
         iteration = 0
@@ -497,6 +499,8 @@ def test_demo_text(
             # Get the next token
             if argmax_on_device:
                 out_tok = logits.unsqueeze(1)
+                for b in range(1, 32):
+                    out_tok[b][0] = 0
             else:
                 # TODO Fix use case with temperature > 0
                 _, out_tok = sample_host(
@@ -578,6 +582,7 @@ def test_demo_text(
                         logger.info(
                             f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
                         )
+                    break
                 profiler.end(f"log_saving_file", iteration=batch_idx)
 
         num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
