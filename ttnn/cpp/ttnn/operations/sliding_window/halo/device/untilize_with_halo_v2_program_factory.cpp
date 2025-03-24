@@ -247,7 +247,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     CoreCoord noc_00;
     uint32_t num_cores_x = 0;
-    uint32_t num_cores_y = 0;
     uint32_t semaphore_id = 0;
     uint32_t remote_temp_cb_id = 0;
     if (in_place) {
@@ -279,7 +278,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         };
         noc_00 = core_id_to_noc_coords(0);
         num_cores_x = device->compute_with_storage_grid_size().x;
-        num_cores_y = device->compute_with_storage_grid_size().y;
         semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
     }
 

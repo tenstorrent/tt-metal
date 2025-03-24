@@ -11,10 +11,6 @@ import math
 from models.utility_functions import is_wormhole_b0, is_grayskull, is_x2_harvested
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-import numpy as np
-import matplotlib.pyplot as plt
-import copy
-
 import ttnn
 
 output_shards = [[] for _ in range(64)]
@@ -234,38 +230,6 @@ def run_max_pool(
         ceil_mode=ceil_mode,
         in_place_halo=in_place_halo,
     )
-
-    # for core_id in range(0, 64):
-    #     output_shard = torch.Tensor(ttnn.to_torch(output.extract_shard(core_id).pad_to_tile(0.0).cpu()))
-    #     output_shards[core_id].append(output_shard)
-    # if len(output_shards[0]) == 2:
-    #     for core_id in range(0, 64):
-    #         print(f"Core ID: {core_id}")
-    #         # coord = ttnn.CoreCoord(x, y)
-    #         gold_shard = output_shards[core_id][0]
-    #         opt_shard = output_shards[core_id][1]
-    #         diff = gold_shard[0][0] - opt_shard[0][0]
-
-    #         print(gold_shard[0, 0, :, :1])
-    #         print(opt_shard[0, 0, :, :1])
-    #         print("--")
-
-    #         diff = diff.to(torch.float32)
-    #         # Replace -inf with zeros only where both gold_shard[0][0] and opt_shard[0][0] are -inf
-    #         mask = (gold_shard[0][0] == -float("inf")) & (opt_shard[0][0] == -float("inf"))
-    #         diff = torch.where(mask, torch.tensor(0.0, dtype=diff.dtype), diff)
-
-    #         # Plot the difference
-    #         plt.imshow(diff[:, -32:], cmap="viridis")
-    #         plt.colorbar()
-    #         plt.title("Difference between output shards")
-
-    #         # Save the plot
-    #         filename = "output_shard_pics/output_shard_difference_core_" + str(core_id) + ".png"
-    #         plt.savefig(filename)
-
-    #         # Clear the plot to avoid overlap in subsequent runs
-    #         plt.clf()
 
     output_host = output.cpu()
     output_pytorch_padded = torch.Tensor(ttnn.to_torch(output_host))

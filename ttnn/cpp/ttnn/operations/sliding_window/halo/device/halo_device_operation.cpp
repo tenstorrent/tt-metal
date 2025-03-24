@@ -111,7 +111,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         device,
         max_out_nsticks_per_core_,
         in_nsticks_per_core_,
-        this->in_place_);  // TODO: is this a valid way to get the input shard size?
+        this->in_place_);
 
     const auto& pad_config1 = std::get<0>(kernel_config)[0];
     const auto& pad_config2 = std::get<0>(kernel_config)[1];
@@ -153,7 +153,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     int stick_size = input_tensor.get_padded_shape()[3] / num_cores_c;
     std::optional<Tensor> remote_temp_device_tensor;
     if (max_ref_size > 0 && this->in_place_) {
-        // create the remote temp tensor, TODO do we need to vary this type for bfloat8?
+        // create the remote temp tensor
         int remote_temp_size = max_ref_size * stick_size * num_cores;
         auto remote_temp_buffer = owned_buffer::create<bfloat16>(std::vector<bfloat16>(remote_temp_size));
         ttnn::Shape remote_temp_shape = ttnn::Shape({num_cores, max_ref_size, stick_size});
