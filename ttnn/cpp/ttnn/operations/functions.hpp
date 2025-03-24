@@ -612,35 +612,4 @@ static bool allclose(const Tensor& tensor_a, const Tensor& tensor_b, Args... arg
     return true;
 }
 
-// Pearson Correlation Coefficient for two float vectors
-static float pcc(std::vector<float>& x, std::vector<float>& y) {
-    if (x.size() != y.size()) {
-        throw std::invalid_argument("Vectors must be of the same length.");
-    }
-    int n = x.size();
-    float mean_x = 0, mean_y = 0;
-    for (int i = 0; i < n; ++i) {
-        mean_x += x[i];
-        mean_y += y[i];
-    }
-    mean_x /= n;
-    mean_y /= n;
-
-    float numerator = 0, sum_sq_x = 0, sum_sq_y = 0;
-    for (int i = 0; i < n; ++i) {
-        float diff_x = x[i] - mean_x;
-        float diff_y = y[i] - mean_y;
-        numerator += diff_x * diff_y;
-        sum_sq_x += diff_x * diff_x;
-        sum_sq_y += diff_y * diff_y;
-    }
-
-    float denominator = std::sqrt(sum_sq_x * sum_sq_y);
-    if (denominator == 0) {
-        return 0;
-    }
-
-    return numerator / denominator;
-}
-
 }  // namespace ttnn

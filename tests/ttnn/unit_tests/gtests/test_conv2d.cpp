@@ -17,6 +17,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "common_test_utils.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -118,26 +119,30 @@ std::vector<float> reference_implementation_conv2d(
 TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
     const Conv2DParam param = GetParam();
     const chip_id_t device_id = 0;
-    IDevice* device = CreateDevice(device_id, 1, 16384);
+
+    // Sets the size for L1 small on the device - 16KB
+    // The halo op which is contained in the Conv2D op uses L1 small memory
+    // Without this, the convolution operation will fail due to L1_SMALL Out of Memory error
+    const size_t L1_small_size = 16384;
+
+    IDevice* device = CreateDevice(device_id, 1, L1_small_size);
 
     MemoryConfig dram_mem_config =
         MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM};
 
     // (N,Ci,H,W)
-    std::array<uint32_t, 4> dimensions = {
-        param.batch_size, param.input_channels, param.input_height, param.input_width};
+    Shape dimensions{param.batch_size, param.input_channels, param.input_height, param.input_width};
     // (Co,Ci,KH,KW)
-    std::array<uint32_t, 4> dimensions_weight = {
-        param.output_channels, param.input_channels, param.kernel_size[0], param.kernel_size[1]};
+    Shape dimensions_weight{param.output_channels, param.input_channels, param.kernel_size[0], param.kernel_size[1]};
 
     random::seed(42);
     // Create input tensor on device
     Tensor input_tensor =
-        ttnn::random::random(Shape(dimensions), tt::tt_metal::DataType::BFLOAT16).to_device(device, dram_mem_config);
+        ttnn::random::random(dimensions, tt::tt_metal::DataType::BFLOAT16).to_device(device, dram_mem_config);
 
-    // Create weight tensor on device (weight tensor on device would require to be tield if
+    // Create weight tensor on device (weight tensor on device would require to be tiled if
     // Conv2DConfig.always_preprocess_weights isn't used)
-    Tensor weight_tensor = ttnn::random::random(Shape(dimensions_weight), tt::tt_metal::DataType::BFLOAT16);
+    Tensor weight_tensor = ttnn::random::random(dimensions_weight, tt::tt_metal::DataType::BFLOAT16);
 
     // Copy input tensor and weight tensor to host for reference implementation
     std::vector<float> input_vector = input_tensor.to_vector<float>();
@@ -202,7 +207,7 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
         param.stride,
         param.padding);
 
-    float pcc_calculated = ttnn::pcc(res, ref_res);
+    float pcc_calculated = test_utils::pcc(res, ref_res);
     TT_FATAL(pcc_calculated > 0.99, "PCC not high enough. Result PCC: {}, Expected PCC: 0.99", pcc_calculated);
 
     bool pass = CloseDevice(device);

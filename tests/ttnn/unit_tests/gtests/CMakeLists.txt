@@ -13,6 +13,7 @@ set(TTNN_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_to_and_from_json.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sliding_window_infra.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_conv2d.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/common_test_utils.cpp
 )
 
 set(TTNN_CCL_UNIT_TESTS_SRC
