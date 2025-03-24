@@ -6,10 +6,10 @@
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/fabric_host_interface.h>
+#include <tt-metalium/fabric_host_utils.hpp>
 
 #include "fabric_fixture.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
-#include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 
 namespace tt::tt_fabric {

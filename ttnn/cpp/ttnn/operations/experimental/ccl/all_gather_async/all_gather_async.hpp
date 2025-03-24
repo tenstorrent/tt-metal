@@ -38,7 +38,6 @@ struct ExecuteAllGatherAsync {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const int32_t dim,
-        MeshDevice& mesh_device,
         const CoreRangeSet& cores,
         const uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
