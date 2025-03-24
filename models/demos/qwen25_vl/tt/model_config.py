@@ -48,6 +48,11 @@ class VisionModelArgs(ModelArgs):
         return False
 
     def get_state_dict_prefix(self, module_name, layer_num):
-        base_module_name = "Attention" if module_name == "VisionAttention" else module_name
-        base_prefix = super().get_state_dict_prefix(base_module_name, layer_num)
-        return "visual." + base_prefix.replace("layers.", "blocks.")
+        layer_prefix = f"visual.blocks.{layer_num}." if layer_num is not None else ""
+        module_map = {
+            "MLP": "feed_forward",
+            "VisionAttention": "attention",
+            "VisionBlock": "",
+            "": "",  # If no module is given, just get layer prefix
+        }
+        return layer_prefix + module_map[module_name]

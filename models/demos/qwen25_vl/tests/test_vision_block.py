@@ -6,22 +6,20 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.demos.qwen25_vl.tt.vision_attention import VisionAttention
-from models.tt_transformers.tt.model_config import ModelArgs
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
-from models.tt_transformers.tt.common import (
-    get_rot_transformation_mat,
-    PagedAttentionConfig,
-)
 from models.demos.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
-
-from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLVisionAttention
+from models.tt_transformers.tt.common import (
+    get_rot_transformation_mat,
+    PagedAttentionConfig,
+)
+from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLVisionBlock
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
+from models.demos.qwen25_vl.tt.vision_block import VisionBlock
 
 
 @torch.no_grad()
@@ -35,23 +33,22 @@ from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
     ],
     indirect=True,
 )
-# Model and attention prefill tests should run both with and without paged attention to debug any issues that may occur with default attention
 @pytest.mark.parametrize(
     "paged_attention",
     (
         True,
-        #        False,
+        # False,
     ),
     ids=(
         "paged_attention",
-        #        "default_attention",
+        # "default_attention",
     ),
 )
 @pytest.mark.parametrize(
     "page_params",
     [{"page_block_size": 32, "page_max_num_blocks": 1024}],
 )
-def test_vision_attention_inference(
+def test_vision_block_inference(
     paged_attention,
     page_params,
     mesh_device,
@@ -71,20 +68,23 @@ def test_vision_attention_inference(
     # for this test assume 1 image of size 98 x 146 as used in their repo as an example
     image_grid_thw = torch.tensor([[1, 98, 146]])
     ref_seq_len = image_grid_thw[0, 1] * image_grid_thw[0, 2]
-    # pad seq_len to be divisible by base_model_args.MAX_QKV_MM_SEQ_LEN
-    seq_len = ((ref_seq_len // ModelArgs.MAX_QKV_MM_SEQ_LEN) + 1) * ModelArgs.MAX_QKV_MM_SEQ_LEN
+    # pad seq_len to be divisible by base_model_args.MAX_QKV_MM_SEQ_LEN from the tt_transformers model
+    seq_len = ((ref_seq_len // 128) + 1) * 128  # Using 128 as MAX_QKV_MM_SEQ_LEN
 
     model_args = VisionModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len)
-    reference_model = Qwen2_5_VLVisionAttention(
-        model_args.hf_config.vision_config.hidden_size, num_heads=model_args.hf_config.vision_config.num_heads
-    )
+    reference_model = Qwen2_5_VLVisionBlock(model_args.hf_config.vision_config, attn_implementation="sdpa")
+
+    print("reference state dict keys:", list(reference_model.state_dict().keys()))
     state_dict = model_args.map_keys_to_hf_format(reference_model.state_dict())
+    print("mapped    state dict keys:", list(state_dict.keys()))
     state_dict = convert_hf_to_meta(state_dict, model_args.head_dim)
-    state_dict_prefix = model_args.get_state_dict_prefix("VisionAttention", 0)
-    state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
+    print("converted state dict keys:", list(state_dict.keys()))
+    state_dict_prefix = model_args.get_state_dict_prefix("VisionBlock", 0)
+    state_dict = {f"{state_dict_prefix}{k}": v for k, v in state_dict.items()}
+    print("final     state dict keys:", list(state_dict.keys()))
 
     # Example inputs and preprocessing
-    pt_attention_input = torch.randn(1, 1, ref_seq_len, model_args.dim)
+    pt_input = torch.randn(1, 1, ref_seq_len, model_args.dim)
     cu_seqlens, cu_window_seqlens, position_embeddings, window_index = qwen2_5_vision_transformer_preprocess(
         seq_len=ref_seq_len,
         grid_thw=image_grid_thw,
@@ -116,7 +116,6 @@ def test_vision_attention_inference(
     rot_mats = [cos, sin]
 
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
-    print(transformation_mat_torch)
 
     transformation_mats_prefill = ttnn.as_tensor(
         transformation_mat_torch,
@@ -152,54 +151,60 @@ def test_vision_attention_inference(
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-    tt_model = VisionAttention(
-        mesh_device,
-        state_dict,
-        weight_cache_path=None,  # NOCOMMIT during debug. model_args.weight_cache_path(dtype),
+    # Initialize TT model
+    tt_model = VisionBlock(
+        mesh_device=mesh_device,
+        state_dict=state_dict,
+        weight_cache_path=model_args.weight_cache_path(dtype),
         layer_num=0,
         dtype=dtype,
         transformation_mats=transformation_mats,
-        configuration=model_args,
+        args=model_args,
         paged_attention_config=paged_attention_config,
-        causal_mask=False,
     )
 
-    tt_attention_input = pt_attention_input.clone()
-    tt_attention_input = torch.nn.functional.pad(tt_attention_input, (0, 0, 0, seq_len - ref_seq_len))
-    attention_input = model_args.prepare_residual_tensor_prefill(
-        tt_attention_input,
+    # Prepare input tensor for the TT model
+    tt_input = pt_input.clone()
+    tt_input = torch.nn.functional.pad(tt_input, (0, 0, 0, seq_len - ref_seq_len))
+    tt_input = model_args.prepare_residual_tensor_prefill(
+        tt_input,
         force_replicated=False if model_args.is_galaxy else True,
     )
 
+    # Run our model
     tt_out = tt_model(
-        attention_input,
+        tt_input,
         cu_seqlens=cu_seqlens,
         rot_mats=rot_mats,
         user_id=0,
         page_table=page_table_tt,
     )
+
+    # Process the output
     tt_out = ttnn.to_torch(
         tt_out,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
     )
-    tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, seq_len, -1)  # [ batch, seq, hidden_dim]
+    tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, seq_len, -1)  # [batch, seq, hidden_dim]
 
     # Remove sequence padding
     tt_output_torch = tt_output_torch[0, :ref_seq_len, :]
 
+    # Run reference model
     reference_output = reference_model(
-        pt_attention_input.squeeze(0).squeeze(0),
+        pt_input.squeeze(0).squeeze(0),
         cu_seqlens=cu_seqlens,
         rotary_pos_emb=None,
         position_embeddings=position_embeddings,
     )
 
+    # Compare outputs
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
     if passing:
-        logger.info(f"Attention Passed!")
+        logger.info(f"Vision Block Passed!")
     else:
-        logger.warning(f"Attention Failed!")
+        logger.warning(f"Vision Block Failed!")
     assert passing, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"

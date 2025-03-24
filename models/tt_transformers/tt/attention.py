@@ -279,8 +279,7 @@ class Attention(LightweightModule):
                 mesh_shape=configuration.cluster_shape,
             ),
             cache_file_name=(
-                None  # NOCOMMIT
-                # cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
+                cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
             ),
         )
 

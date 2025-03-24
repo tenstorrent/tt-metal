@@ -63,9 +63,6 @@ def test_mlp_inference(rows, batch_size, mesh_device, use_program_cache, reset_s
         model_config=model_args.model_config,
     )
     torch_input = torch.randn(1, 1, rows, model_args.hf_config.vision_config.hidden_size)
-    print(f"{torch_input.shape=}")
-    for k, v in state_dict.items():
-        print(f"{k}: {v.shape}")
     reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(
         torch_input,
