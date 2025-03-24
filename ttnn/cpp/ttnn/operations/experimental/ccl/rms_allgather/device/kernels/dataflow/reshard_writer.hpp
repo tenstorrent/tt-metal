@@ -28,7 +28,7 @@ inline void write_minimal_resharded_data(
         uint32_t storage_core_x = segment_args[args_idx++];
         uint32_t storage_core_y = segment_args[args_idx++];
 
-        uint32_t num_tiles_to_write_in_current_segment = write_size / out_single_tile_size_bytes;
+        uint32_t num_tiles_to_write_in_current_segment = write_size;
 
         uint32_t worker_core_read_addr = cb_out_read_base_addr + worker_core_read_offset;
         uint32_t local_storage_core_write_addr = cb_out_reshard_write_base_addr;
@@ -49,7 +49,7 @@ inline void write_minimal_resharded_data(
         }
         worker_core_read_addr += worker_core_stride_w_bytes;
         remote_storage_core_write_addr += storage_core_stride_w_bytes;
-        worker_core_read_offset += write_size;
+        worker_core_read_offset += write_size * out_single_tile_size_bytes;
     }
     noc_async_write_barrier();
 }

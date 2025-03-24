@@ -1563,8 +1563,7 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
                 current_storage_core_offset,
                 num_tiles_to_write_back);
 
-            write_back_writer_args.push_back(
-                num_tiles_to_write_back * out_single_tile_size);                         // num_bytes_to_write_back
+            write_back_writer_args.push_back(num_tiles_to_write_back);                   // num_bytes_to_write_back
             write_back_writer_args.push_back(storage_core_noc_x[current_storage_core]);  // current_storage_core_noc_x
             write_back_writer_args.push_back(storage_core_noc_y[current_storage_core]);  // current_storage_core_noc_y
 
