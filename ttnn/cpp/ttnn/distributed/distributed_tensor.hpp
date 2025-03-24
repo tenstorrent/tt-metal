@@ -4,14 +4,8 @@
 
 #pragma once
 
-#include "tt-metalium/mesh_device.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/distributed/api.hpp"
-#include "ttnn/distributed/distributed_tensor_config.hpp"
-#include "ttnn/distributed/types.hpp"
-#include "ttnn/tensor/xtensor/partition.hpp"
-#include <tt-metalium/assert.hpp>
 
 namespace ttnn::distributed {
 
@@ -21,15 +15,15 @@ namespace ttnn::distributed {
 class TensorToMesh {
 public:
     virtual ~TensorToMesh() = default;
-    virtual __attribute__((weak)) std::vector<Tensor> map(const Tensor& tensor) const = 0;
-    virtual __attribute__((weak)) tt::tt_metal::DistributedTensorConfig config() const = 0;
+    virtual std::vector<Tensor> map(const Tensor& tensor) const = 0;
+    virtual tt::tt_metal::DistributedTensorConfig config() const = 0;
 };
 
 // Composer interface that aggregates a multi-device tensor into a host tensor.
 class MeshToTensor {
 public:
     virtual ~MeshToTensor() = default;
-    virtual __attribute__((weak)) Tensor compose(const std::vector<Tensor>& tensors) const = 0;
+    virtual Tensor compose(const std::vector<Tensor>& tensors) const = 0;
 };
 
 // Creates a mapper that replicates a tensor across all devices.
