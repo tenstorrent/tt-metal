@@ -10,17 +10,27 @@
 #include "reshard_writer.hpp"
 
 void kernel_main() {
+    // Run Parameters CTs
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
     constexpr bool fuse_gamma = get_compile_time_arg_val(1) == 1;
     constexpr bool gamma_is_dram = get_compile_time_arg_val(2) == 1;
     constexpr uint32_t block_w = get_compile_time_arg_val(3);
-#define stick_size_is_pow2 get_compile_time_arg_val(4) == 1
-    constexpr uint32_t stick_size = get_compile_time_arg_val(5);
-    constexpr bool FLOAT32_DTYPE_GAMMA = get_compile_time_arg_val(6) == 1;
+
+    // Circular Buffer CTs
+    constexpr uint32_t cb_out_resharded = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_out = get_compile_time_arg_val(5);
+    constexpr uint32_t eps_cb_id = get_compile_time_arg_val(6);
+    constexpr uint32_t cb_in_4 = get_compile_time_arg_val(7);
+    constexpr uint32_t cb_gamma = get_compile_time_arg_val(8);
+
+    // Data type CTs
+#define stick_size_is_pow2 get_compile_time_arg_val(9) == 1
+    constexpr uint32_t stick_size = get_compile_time_arg_val(10);
+    constexpr bool FLOAT32_DTYPE_GAMMA = get_compile_time_arg_val(11) == 1;
 
     // Reshard writer
-    constexpr uint32_t worker_core_stride_w_bytes = get_compile_time_arg_val(7);
-    constexpr uint32_t storage_core_stride_w_bytes = get_compile_time_arg_val(8);
+    constexpr uint32_t worker_core_stride_w_bytes = get_compile_time_arg_val(12);
+    constexpr uint32_t storage_core_stride_w_bytes = get_compile_time_arg_val(13);
     constexpr uint32_t block_ht = 1;
 
     const uint32_t gamma_addr = get_arg_val<uint32_t>(3);
@@ -33,17 +43,10 @@ void kernel_main() {
     tt_l1_ptr uint32_t* segment_args = (tt_l1_ptr uint32_t*)(get_arg_addr(7));
 #endif
 
-    constexpr uint32_t cb_out_resharded = tt::CBIndex::c_0;
-    constexpr uint32_t cb_out = tt::CBIndex::c_1;
-    constexpr uint32_t eps_cb_id = tt::CBIndex::c_4;
-
     if constexpr (is_all_to_all_worker) {
-        constexpr uint32_t cb_in_4 = tt::CBIndex::c_5;
         const uint32_t scalar_c = get_arg_val<uint32_t>(0);
         generate_reduce_scaler(cb_in_4, scalar_c);
     }
-
-    constexpr uint32_t cb_gamma = tt::CBIndex::c_8;
 
     const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out);
     const uint32_t eps = get_arg_val<uint32_t>(2);

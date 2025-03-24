@@ -25,6 +25,18 @@ void MAIN {
     constexpr uint32_t num_tiles_per_block = get_compile_time_arg_val(5);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(6) == 1;
     constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(7);
+
+    constexpr uint32_t cb_scaler = get_compile_time_arg_val(8);
+    constexpr uint32_t cb_scaler_global = get_compile_time_arg_val(9);
+    constexpr uint32_t cb_ex_partial2 = get_compile_time_arg_val(10);  // E[x^2] partial reduce
+    constexpr uint32_t cb_ex2 = get_compile_time_arg_val(11);          // E[(x-E[x])^2] global reduce
+    constexpr uint32_t fuse_preadd_cb_in = get_compile_time_arg_val(12);
+    constexpr uint32_t cb_ex_external2 = get_compile_time_arg_val(13);  // E[x^2] partials recieved from other cores
+    constexpr uint32_t cb_out = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_x = get_compile_time_arg_val(15);  // x minus mean
+    constexpr uint32_t cb_in1 = get_compile_time_arg_val(16);
+    constexpr uint32_t cb_in0 = get_compile_time_arg_val(17);
+
     constexpr uint32_t num_blocks_second_stage_reduction = num_blocks_first_stage + num_blocks_second_stage - 1;
 
     volatile uint32_t subblock_w_volatile = subblock_w_const;
@@ -36,24 +48,13 @@ void MAIN {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t scaler0 = 0;
-
-    constexpr uint32_t cb_in0 = tt::CBIndex::c_9;
 #ifdef FUSE_PRE_ADD
-    constexpr uint32_t cb_in1 = tt::CBIndex::c_8;
-    constexpr uint32_t cb_in = tt::CBIndex::c_4;
+    constexpr uint32_t cb_in = fuse_preadd_cb_in;
 #else
     constexpr uint32_t cb_in = cb_in0;
 #endif
-    constexpr uint32_t cb_scaler = tt::CBIndex::c_0;
-    constexpr uint32_t cb_scaler_global = tt::CBIndex::c_1;
-    constexpr uint32_t cb_x = tt::CBIndex::c_7;  // x minus mean
 
-    constexpr uint32_t cb_ex2 = tt::CBIndex::c_3;   // E[(x-E[x])^2] global reduce
-    constexpr uint32_t cb_x2 = cb_x;                // x^2
-    constexpr uint32_t cb_out = tt::CBIndex::c_6;
-
-    constexpr uint32_t cb_ex_partial2 = tt::CBIndex::c_2;   // E[x^2] partial reduce
-    constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_5;  // E[x^2] partials recieved from other cores
+    constexpr uint32_t cb_x2 = cb_x;  // x^2
 
     const uint32_t subblock_w = (block_w <= 2) ? subblock_w_volatile : subblock_w_const;
 

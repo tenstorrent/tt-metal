@@ -11,14 +11,13 @@ void kernel_main() {
     uint32_t reduce_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(0));
     constexpr uint32_t num_blocks = get_compile_time_arg_val(1);
     constexpr uint32_t tile_size = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_stats_reduced = get_compile_time_arg_val(3);  // [E[x], E[x^2]] local to sender
+    constexpr uint32_t cb_ex_global = get_compile_time_arg_val(4);      // [E[x], E[X^2]] global to all cores
 
     const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(0);
     const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(1);
     const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(2);
     const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(3);
-
-    constexpr uint32_t cb_stats_reduced = tt::CBIndex::c_9;  // [E[x], E[x^2]] local to sender
-    constexpr uint32_t cb_ex_global = tt::CBIndex::c_10;     // [E[x], E[X^2]] global to all cores
 
     const uint64_t multicast_data_noc = get_noc_multicast_addr(
         mcast_dest_noc_start_x, mcast_dest_noc_start_y, mcast_dest_noc_end_x, mcast_dest_noc_end_y, 0);

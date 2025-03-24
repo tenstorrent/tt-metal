@@ -8,17 +8,20 @@
 
 // split REDUCE across cores
 void kernel_main() {
-    uint32_t reduce_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(0));
-    uint32_t reduce_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(1));
+    constexpr uint32_t reduce_receiver_semaphore_id = get_compile_time_arg_val(0);
+    constexpr uint32_t reduce_sender_semaphore_id = get_compile_time_arg_val(1);
     constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
-    const bool is_all_to_all_worker = get_compile_time_arg_val(3) == 1;
+    constexpr bool is_all_to_all_worker = get_compile_time_arg_val(3) == 1;
     constexpr bool row_major = (bool)get_compile_time_arg_val(4);
     constexpr uint32_t num_x = get_compile_time_arg_val(5);
     constexpr uint32_t num_y = get_compile_time_arg_val(6);
     constexpr bool use_two_stage_reduce = (bool)get_compile_time_arg_val(7);
     constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(8);
     constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(9);
-    uint32_t reduce_second_stage_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
+    constexpr uint32_t reduce_second_stage_semaphore_id = get_compile_time_arg_val(10);
+    constexpr uint32_t cb_ex_partial2 = get_compile_time_arg_val(11);  // E[(x-E[x])^2] partial reduce
+    constexpr uint32_t cb_ex2 = get_compile_time_arg_val(12);          // E[(x-E[x])^2] global reduce
+    constexpr uint32_t cb_ex_external2 = get_compile_time_arg_val(13);
 
     const uint32_t all_to_all_tile_offset_bytes = get_arg_val<uint32_t>(0);
     const bool is_second_stage_reader = get_arg_val<uint32_t>(1);
@@ -27,12 +30,12 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* in0_remote_noc_x = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(4));
     volatile tt_l1_ptr uint32_t* in0_remote_noc_y = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(4 + num_x));
 
-    constexpr uint32_t cb_ex_partial2 = tt::CBIndex::c_2;  // E[(x-E[x])^2] partial reduce
-    constexpr uint32_t cb_ex2 = tt::CBIndex::c_3;          // E[(x-E[x])^2] global reduce
-    constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_5;
-
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial2);  // tile size
     const DataFormat data_format = get_dataformat(cb_ex_partial2);          // data format
+
+    uint32_t reduce_second_stage_semaphore_addr = get_semaphore(reduce_second_stage_semaphore_id);
+    uint32_t reduce_receiver_semaphore_addr = get_semaphore(reduce_receiver_semaphore_id);
+    uint32_t reduce_sender_semaphore_addr = get_semaphore(reduce_sender_semaphore_id);
 
     uint64_t remote_noc_addrs_first_stage[is_all_to_all_worker ? num_blocks_first_stage : 1];
     uint64_t remote_noc_addrs_second_stage[is_all_to_all_worker ? num_blocks_second_stage : 1];

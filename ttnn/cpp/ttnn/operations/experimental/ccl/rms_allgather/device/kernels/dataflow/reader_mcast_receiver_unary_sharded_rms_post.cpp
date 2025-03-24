@@ -8,9 +8,9 @@
 
 // split REDUCE across cores
 void kernel_main() {
-    uint32_t reduce_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(0));
-
-    constexpr uint32_t cb_ex_global = tt::CBIndex::c_10;  // [E[x], E[X^2]] global to all cores
+    constexpr uint32_t semaphore_id = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_ex_global = get_compile_time_arg_val(1);  // [E[x], E[X^2]] global to all cores
+    uint32_t reduce_sender_semaphore_addr = get_semaphore(semaphore_id);
 
     volatile tt_l1_ptr uint32_t* reduce_sender_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_sender_semaphore_addr);
