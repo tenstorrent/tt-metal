@@ -16,6 +16,7 @@
 #include "jit_build/build_env_manager.hpp"
 #include "kernel.hpp"
 #include "kernel_types.hpp"
+#include "logger.hpp"
 #include "persistent_kernel_cache.hpp"
 #include "tt_metal.hpp"
 
@@ -48,7 +49,6 @@ TEST_F(DeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
         const string successful_marker_path =
             build_state.get_out_path() + full_kernel_name + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME;
 
-        tt::log_info("Deleting .SUCCESS file");
         std::filesystem::remove(successful_marker_path);
 
         const string elf_file_path = build_state.get_target_out_path(full_kernel_name);
@@ -60,11 +60,46 @@ TEST_F(DeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
         kernel_handle = CreateKernel(program, kernel_file, CoreCoord(0, 0), config);
         detail::CompileProgram(device, program);
 
-        detail::DisablePersistentKernelCache();
-
         const auto t1 = std::filesystem::last_write_time(elf_file_path);
+
+        detail::DisablePersistentKernelCache();
 
         EXPECT_TRUE(std::filesystem::exists(successful_marker_path));
         EXPECT_TRUE(t1 > t0);
+    }
+}
+
+TEST_F(DeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentProcessors) {
+    const string kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
+
+    for (IDevice* device : this->devices_) {
+        detail::ClearKernelCache();
+
+        DataMovementConfig config_riscv_0 = {.processor = DataMovementProcessor::RISCV_0};
+        DataMovementConfig config_riscv_1 = {.processor = DataMovementProcessor::RISCV_1};
+
+        Program program = CreateProgram();
+        KernelHandle kernel_handle_riscv_0 = CreateKernel(program, kernel_file, CoreCoord(0, 0), config_riscv_0);
+        KernelHandle kernel_handle_riscv_1 = CreateKernel(program, kernel_file, CoreCoord(0, 0), config_riscv_1);
+        detail::CompileProgram(device, program);
+
+        const uint32_t tensix_core_type = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        const uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
+        const int riscv_0_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(config_riscv_0.processor);
+        const int riscv_1_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(config_riscv_1.processor);
+        const JitBuildState& build_state_riscv_0 = BuildEnvManager::get_instance().get_kernel_build_state(
+            device->build_id(), tensix_core_type, dm_class_idx, riscv_0_id);
+        const JitBuildState& build_state_riscv_1 = BuildEnvManager::get_instance().get_kernel_build_state(
+            device->build_id(), tensix_core_type, dm_class_idx, riscv_1_id);
+
+        const auto& kernels = program.get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
+        const string full_kernel_name_riscv_0 = kernels.at(kernel_handle_riscv_0)->get_full_kernel_name();
+        const string full_kernel_name_riscv_1 = kernels.at(kernel_handle_riscv_1)->get_full_kernel_name();
+
+        const string elf_file_path_riscv_0 = build_state_riscv_0.get_target_out_path(full_kernel_name_riscv_0);
+        const string elf_file_path_riscv_1 = build_state_riscv_1.get_target_out_path(full_kernel_name_riscv_1);
+
+        EXPECT_TRUE(std::filesystem::exists(elf_file_path_riscv_0));
+        EXPECT_TRUE(std::filesystem::exists(elf_file_path_riscv_1));
     }
 }
