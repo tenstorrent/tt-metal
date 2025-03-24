@@ -158,20 +158,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     tt::tt_metal::create_cb(in_scalar_cb_id, program, all_cores, in_scalar_cb_pagesize, in_scalar_cb_npages, in_df);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_scalar_cb_id, in_scalar_cb_pagesize, in_scalar_cb_npages);
 
-    // For avgpool, conditionally instantiate and use this CB, which consists of 1s. We don't want to divide
+    // For avgpool, instantiate and use this CB, which consists of 1s. We don't want to divide
     // twice by kernel size for large kernel case.
-    // uint32_t in_one_cb_id = 32; // invalid vlaue for cb index.
-    // if (pool_type == Pool2DType::AVG_POOL2D) {
-    //     // uint32_t in_one_cb_id = tt::CBIndex::c_5;
-    //     in_one_cb_id = next_cb_index++;
-    //     uint32_t in_one_cb_pagesize = tile_size(in_df);
-    //     uint32_t in_one_cb_npages = 1;
-    //     CircularBufferConfig in_one_cb_config =
-    //         CircularBufferConfig(in_one_cb_npages * in_one_cb_pagesize, {{in_one_cb_id, in_df}})
-    //             .set_page_size(in_one_cb_id, in_one_cb_pagesize);
-    //     auto in_one_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, in_one_cb_config);
-    //     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_one_cb_id, in_one_cb_pagesize, in_one_cb_npages);
-    // }
     uint32_t in_one_cb_id = 32;  // invalid vlaue for cb index.
     if (pool_type == Pool2DType::AVG_POOL2D) {
         in_one_cb_id = next_cb_index++;
