@@ -2921,3 +2921,181 @@ def test_conv2d_model_fruit(
         output_mesh_composer=None,
         enable_split_reader=enable_split_reader,
     )
+
+
+@pytest.mark.parametrize(
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, activations_dtype, groups, kernel, stride, padding, dilation, auto_shard, use_shallow_conv_variant, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, enable_split_reader, split_factor",
+    (
+        # 512x512 resolution
+        # kernel 3x3
+        # (1, 1280, 1280, 16, 16, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+        # (1, 1280, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+        # (1, 1280, 640, 32, 32, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+        # (1, 1920, 1280, 16, 16, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+        # (1, 1920, 640, 32, 32, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+        # (1, 2560, 1280, 16, 16, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+        # (1, 320, 640, 32, 32, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+        # (1, 320, 320, 64, 64, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+        # (1, 640, 1280, 16, 16, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+        # (1, 640, 640, 32, 32, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+        # (1, 640, 320, 64, 64, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+        # (1, 640, 640, 64, 64, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+        # (1, 960, 640, 32, 32, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+        # (1, 960, 320, 64, 64, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+
+        # stride 2x2
+        # (1, 320, 320, 64, 64, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (2, 2), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+        # (1, 640, 640, 32, 32, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (2, 2), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+
+        # # output_channels 4
+        # (1, 320, 4, 64, 64, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+
+        # # input_channels 4
+        # (1, 4, 320, 64, 64, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, True,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+
+
+        # # kernel 1x1
+        # (1, 1280, 640, 32, 32, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+        # (1, 1920, 1280, 16, 16, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+        # (1, 1920, 640, 32, 32, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+        # (1, 2560, 1280, 16, 16, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+        # (1, 320, 640, 32, 32, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+        # (1, 640, 1280, 16, 16, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+        # (1, 640, 320, 64, 64, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+        # (1, 960, 640, 32, 32, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+        # (1, 960, 320, 64, 64, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False),
+
+
+
+        # 1024x1024 resolution
+        # kernel 3x3
+        (1, 1280, 1280, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 1280, 1280, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 1280, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 1920, 1280, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 1920, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 2560, 1280, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 320, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 320, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 640, 1280, 32, 32,  ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 640, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 640, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 4),
+        (1, 640, 640, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 960, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 960, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 6),
+
+        # stride 2x2
+        (1, 320, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 640, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+
+        # output_channels 4
+        (1, 320, 4, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+
+        # input_channels 4
+        (1, 4, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, True,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+
+
+        # kernel 1x1
+        (1, 1280, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 1920, 1280, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 1920, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 2560, 1280, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 320, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 640, 1280, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 640, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 960, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 960, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+    ),
+)
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv2d_sdxl(
+    device,
+    torch_tensor_map,
+    batch,
+    input_channels,
+    output_channels,
+    input_height,
+    input_width,
+    weights_dtype,
+    activations_dtype,
+    groups,
+    kernel,
+    stride,
+    padding,
+    dilation,
+    auto_shard,
+    use_shallow_conv_variant,
+    act_block_h_override,
+    act_block_w_div,
+    deallocate_activation,
+    math_fidelity,
+    fp32_accum,
+    packer_l1_acc,
+    enable_split_reader,
+    split_factor
+):
+    config_override = {}
+    config_override["act_block_h"] = act_block_h_override
+    config_override["act_block_w_div"] = act_block_w_div
+
+    if split_factor > 1:
+        run_conv_with_split(
+            device,
+            torch_tensor_map,
+            math_fidelity,
+            activations_dtype,
+            weights_dtype,
+            batch,
+            output_channels,
+            input_channels,
+            input_height,
+            input_width,
+            kernel[0],
+            kernel[1],
+            stride[0],
+            stride[1],
+            padding[0],
+            padding[1],
+            config_override,
+            shard_layout=None,
+            split_factor=split_factor,
+            fp32_accum=fp32_accum,
+            packer_l1_acc=True,
+        )
+    else:
+        run_conv(
+            device=device,
+            torch_tensor_map=torch_tensor_map,
+            math_fidelity=math_fidelity,
+            activations_dtype=activations_dtype,
+            weights_dtype=weights_dtype,
+            batch_size=batch,
+            output_channels=output_channels,
+            input_channels=input_channels,
+            input_height=input_height,
+            input_width=input_width,
+            filter_height=kernel[0],
+            filter_width=kernel[1],
+            stride_h=stride[0],
+            stride_w=stride[1],
+            pad_h=padding[0],
+            pad_w=padding[1],
+            config_override=config_override,
+            dilation=dilation[0],
+            use_shallow_conv_variant=use_shallow_conv_variant,
+            fp32_accum=fp32_accum,
+            packer_l1_acc=packer_l1_acc,
+            output_layout=ttnn.TILE_LAYOUT,
+            deallocate_activation=deallocate_activation,
+            debug=False,
+            groups=groups,
+            has_bias=True,
+            shard_layout=None,
+            auto_shard=auto_shard,
+            memory_config=None,
+            input_mesh_mapper=None,
+            weight_mesh_mapper=None,
+            output_mesh_composer=None,
+            enable_split_reader=enable_split_reader,
+        )
