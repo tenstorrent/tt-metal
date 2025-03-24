@@ -12,13 +12,13 @@ void kernel_main() {
     constexpr uint32_t reduce_sender_semaphore_id = get_compile_time_arg_val(1);
     constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(3) == 1;
-    constexpr bool row_major = (bool)get_compile_time_arg_val(4);
-    constexpr uint32_t num_x = get_compile_time_arg_val(5);
-    constexpr uint32_t num_y = get_compile_time_arg_val(6);
-    constexpr bool use_two_stage_reduce = (bool)get_compile_time_arg_val(7);
-    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(8);
-    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(9);
-    constexpr uint32_t reduce_second_stage_semaphore_id = get_compile_time_arg_val(10);
+    constexpr uint32_t num_x = get_compile_time_arg_val(4);
+    constexpr uint32_t num_y = get_compile_time_arg_val(5);
+    constexpr bool use_two_stage_reduce = (bool)get_compile_time_arg_val(6);
+    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(7);
+    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(8);
+    constexpr uint32_t reduce_second_stage_semaphore_id = get_compile_time_arg_val(9);
+    constexpr uint32_t single_tile_size_bytes = get_compile_time_arg_val(10);
     constexpr uint32_t cb_ex_partial2 = get_compile_time_arg_val(11);  // E[(x-E[x])^2] partial reduce
     constexpr uint32_t cb_ex2 = get_compile_time_arg_val(12);          // E[(x-E[x])^2] global reduce
     constexpr uint32_t cb_ex_external2 = get_compile_time_arg_val(13);
@@ -30,7 +30,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* in0_remote_noc_x = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(4));
     volatile tt_l1_ptr uint32_t* in0_remote_noc_y = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(4 + num_x));
 
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial2);  // tile size
     const DataFormat data_format = get_dataformat(cb_ex_partial2);          // data format
 
     uint32_t reduce_second_stage_semaphore_addr = get_semaphore(reduce_second_stage_semaphore_id);
