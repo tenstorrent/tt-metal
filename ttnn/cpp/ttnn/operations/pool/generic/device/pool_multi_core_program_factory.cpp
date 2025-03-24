@@ -160,14 +160,14 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     // For avgpool, instantiate and use this CB, which consists of 1s. We don't want to divide
     // twice by kernel size for large kernel case.
-    uint32_t in_one_cb_id = 32;  // invalid vlaue for cb index.
-    if (pool_type == Pool2DType::AVG_POOL2D) {
-        in_one_cb_id = next_cb_index++;
-        uint32_t in_one_cb_pagesize = tile_size(in_df);
-        uint32_t in_one_cb_npages = 1;
-        tt::tt_metal::create_cb(in_one_cb_id, program, all_cores, in_one_cb_pagesize, in_one_cb_npages, in_df);
-        log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_one_cb_id, in_one_cb_pagesize, in_one_cb_npages);
-    }
+    // uint32_t in_one_cb_id = 32;  // invalid vlaue for cb index.
+    // if (pool_type == Pool2DType::AVG_POOL2D) {
+    uint32_t in_one_cb_id = next_cb_index++;
+    uint32_t in_one_cb_pagesize = tile_size(in_df);
+    uint32_t in_one_cb_npages = 1;
+    tt::tt_metal::create_cb(in_one_cb_id, program, all_cores, in_one_cb_pagesize, in_one_cb_npages, in_df);
+    log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_one_cb_id, in_one_cb_pagesize, in_one_cb_npages);
+    // }
 
     // incoming data is the input cb instead of raw l1/dram addr
     // this input shard has halo and padding inserted.
