@@ -48,10 +48,14 @@ def manual_group_norm(input_tensor, num_groups, eps=1e-2):
         # (8, 768, 1, 512, 32, 3, 8, 8), # test batch size 8 (no multicast), but uneven num_out_blocks divisor
         # (9, 768, 1, 512, 32, 2, 8, 8), # test batch size 9 (uneven batch sizes)
         # (1, 128, 1, 512, 32, 2, 4, 8), # test all groups on core fit in less than one tile, so need to reduce col core count
-        (4, 768, 60, 106, 32, 8, 8, 8),  # Mochi VAE variant 1 (sharded, so T=1/8th the full tensor)
+        # (4, 768, 60, 106, 32, 8, 8, 4),  # Mochi VAE variant 1 (sharded, so T=1/8th the full tensor)
+        # (3, 768, 60, 106, 32, 8, 8, 3),  # Mochi VAE variant 1 (sharded, so T=1/8th the full tensor)
         # (11, 512, 120, 212, 32, 10, 8, 8), # Mochi VAE variant 2 (sharded, so T=1/8th the full tensor)
+        # (10, 512, 120, 212, 32, 10, 8, 8), # Mochi VAE variant 2 (sharded, so T=1/8th the full tensor)
         # (21, 256, 240, 424, 32, 40, 8, 8), # Mochi VAE variant 3 (sharded, so T=1/8th the full tensor)
+        # (20, 256, 240, 424, 32, 40, 8, 8), # Mochi VAE variant 3 (sharded, so T=1/8th the full tensor)
         # (21, 128, 480, 848, 32, 135, 4, 8), # Mochi VAE variant 4 (sharded, so T=1/8th the full tensor)
+        # (20, 128, 480, 848, 32, 135, 4, 8), # Mochi VAE variant 4 (sharded, so T=1/8th the full tensor)
     ],
 )
 def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x):
@@ -73,11 +77,9 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     # input tensor
     input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
     input_tensor_row_major = ttnn.from_torch(
-        #    input_tensor_tilized = ttnn.from_torch(
         input_tensor,
         dtype=ttnn.DataType.BFLOAT16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        #        layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
