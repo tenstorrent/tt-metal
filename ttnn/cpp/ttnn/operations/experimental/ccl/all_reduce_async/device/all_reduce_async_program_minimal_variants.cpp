@@ -128,7 +128,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
     const auto [sender_worker_core_range, sender_worker_cores] =
-        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, available_cores);
+        ar_choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, available_cores);
 
     constexpr bool has_work = 1;
 
