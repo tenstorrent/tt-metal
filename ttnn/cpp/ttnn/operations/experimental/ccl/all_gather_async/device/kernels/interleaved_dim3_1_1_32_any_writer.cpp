@@ -122,6 +122,19 @@ void kernel_main() {
         fabric_connection.open();
     }
 
+    ccl_barrier<two_phase_release>(
+        fabric_connection,
+        out_ready_sem_bank_addr_wait,
+        out_ready_sem_bank_addr_release,
+        out_ready_sem_wait_value,
+        out_ready_sem_noc0_x,
+        out_ready_sem_noc0_y,
+        packet_header_buffer_seminc,
+        num_targets_forward_direction,
+        num_targets_backward_direction,
+        wait_output_semaphore,
+        reset_global_semaphore);
+
     // 1. mcast via fabric to remote tensor addresses
     DPRINT << "num_targets_forward_direction: " << num_targets_forward_direction << "\n";
     DPRINT << "num_targets_backward_direction: " << num_targets_backward_direction << "\n";
@@ -176,19 +189,6 @@ void kernel_main() {
         noc_async_writes_flushed();
         cb_pop_front(cb0_id, num_pages_to_read);
     }
-
-    ccl_barrier<two_phase_release>(
-        fabric_connection,
-        out_ready_sem_bank_addr_wait,
-        out_ready_sem_bank_addr_release,
-        out_ready_sem_wait_value,
-        out_ready_sem_noc0_x,
-        out_ready_sem_noc0_y,
-        packet_header_buffer_seminc,
-        num_targets_forward_direction,
-        num_targets_backward_direction,
-        wait_output_semaphore,
-        reset_global_semaphore);
 
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.close();
