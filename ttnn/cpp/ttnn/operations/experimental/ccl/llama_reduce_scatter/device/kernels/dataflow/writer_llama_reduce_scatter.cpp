@@ -12,32 +12,32 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 
-// inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-//     DPRINT << "===" << tile_id << "===" << ENDL();
-//     for (uint16_t r = 0; r < 32; ++r) {
-//         DPRINT << (uint)r << " : "
-//                << TileSlice(
-//                       cb_id,
-//                       tile_id,
-//                       SliceRange{
-//                           .h0 = (uint8_t)r,
-//                           .h1 = (uint8_t)(r + 1),
-//                           .hs = (uint8_t)1,
-//                           .w0 = (uint8_t)0,
-//                           .w1 = (uint8_t)32,
-//                           .ws = (uint8_t)1},
-//                       true,
-//                       untilize)
-//                << ENDL();
-//     }
-//     DPRINT << "++++++" << ENDL();
-// }
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "===" << tile_id << "===" << ENDL();
+    for (uint16_t r = 0; r < 32; ++r) {
+        DPRINT << (uint)r << " : "
+               << TileSlice(
+                      cb_id,
+                      tile_id,
+                      SliceRange{
+                          .h0 = (uint8_t)r,
+                          .h1 = (uint8_t)(r + 1),
+                          .hs = (uint8_t)1,
+                          .w0 = (uint8_t)0,
+                          .w1 = (uint8_t)32,
+                          .ws = (uint8_t)1},
+                      true,
+                      untilize)
+               << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
 
-// inline void print_tiles(uint32_t cb_id, uint32_t tile_start = 0, uint32_t num_tiles = 1, bool untilize = false) {
-//     for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
-//         print_full_tile(cb_id, tile_start + tile_idx, untilize);
-//     }
-// }
+inline void print_tiles(uint32_t cb_id, uint32_t tile_start = 0, uint32_t num_tiles = 1, bool untilize = false) {
+    for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
+        print_full_tile(cb_id, tile_start + tile_idx, untilize);
+    }
+}
 
 // template <uint8_t noc_ind = noc_index>
 // FORCE_INLINE std::uint64_t static_noc_multicast_addr(
@@ -128,12 +128,7 @@ void kernel_main() {
             fabric_connection.open();
         }
 
-        for (uint32_t device_idx = start_device_idx; device_idx < end_device_idx; device_idx++) {
-            uint32_t target_device_id = device_order[device_idx];
-            if (target_device_id == chip_id) {
-                continue;
-            }
-
+        for (uint32_t target_device_id : device_order) {
             // Calculate device-specific constants once per device
             uint32_t num_hops = std::abs(int(target_device_id) - int(chip_id));
             unicast_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
@@ -146,7 +141,7 @@ void kernel_main() {
             // 30/4 = 8 packets, with the last packet having 2 pages
             uint32_t packet_offset = base_receiver_l1_addr + chip_id * num_pages_per_packet * page_size_bytes;
 
-            for (uint32_t packet = 0; packet < num_packets_total_per_device; packet++) {
+            for (uint32_t packet = sender_packet_start; packet < sender_packet_end; packet++) {
                 // Determine packet size based on whether it's the last packet
                 uint32_t curr_packet_num_pages =
                     packet == num_packets_total_per_device - 1 ? last_packet_num_pages : num_pages_per_packet;
@@ -173,23 +168,36 @@ void kernel_main() {
                     (uint32_t)unicast_packet_header, packet_header_size);
 
                 noc_async_writes_flushed();  // flushed because cross chip?
-
                 cb_pop_front(fabric_sender_cb_id, curr_packet_num_pages);
             }
+            if (is_atomic_inc_core) {
+                noc_semaphore_wait((uint32_t*)sender_ready_semaphore_address, num_sender_cores - 1);
+                uint64_t sem_noc_addr =
+                    get_noc_addr(packet_receiver_core_x, packet_receiver_core_y, receiver_semaphore_address);
+                sem_inc_packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                    sem_noc_addr,
+                    static_cast<uint16_t>(1),  // increment 1
+                    32});
 
-            uint64_t sem_noc_addr =
-                get_noc_addr(packet_receiver_core_x, packet_receiver_core_y, receiver_semaphore_address);
-            sem_inc_packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                sem_noc_addr,
-                static_cast<uint16_t>(1),  // increment 1
-                32});
+                // Write the mcast packet (forward)
+                sem_inc_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
+                fabric_conn.wait_for_empty_write_slot();
 
-            // Write the mcast packet (forward)
-            sem_inc_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
-            fabric_conn.wait_for_empty_write_slot();
-
-            fabric_conn.send_payload_flush_blocking_from_address((uint32_t)sem_inc_packet_header, packet_header_size);
+                fabric_conn.send_payload_flush_blocking_from_address(
+                    (uint32_t)sem_inc_packet_header, packet_header_size);
+                *((uint32_t*)sender_ready_semaphore_address) = 0;
+            } else {
+                uint64_t sender_noc_addr =
+                    get_noc_addr(sender_atomic_inc_core_x, sender_atomic_inc_core_y, sender_ready_semaphore_address);
+                noc_semaphore_inc(sender_noc_addr, 1);
+                noc_async_atomic_barrier();
+            }
         }
+        // if (!is_atomic_inc_core) {
+        //     DPRINT << "waiting for atomic barrier" << ENDL();
+
+        //     DPRINT << "atomic barrier success" << ENDL();
+        // }
 
         if (fabric_connection.is_logically_connected()) {
             fabric_connection.close();

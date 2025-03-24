@@ -290,6 +290,9 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     //     std::cout << "ring_index: " << operation_attributes.ring_index << " device_order: " << device_order
     //               << std::endl;
     // }
+    if (operation_attributes.ring_index == 0) {
+        std::cout << "device id: " << input_tensor.device()->id() << std::endl;
+    }
 
     std::map<std::string, std::string> reader_defines = {{"DEVICE_ORDER", device_order}};
 
@@ -668,7 +671,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     uint32_t start_device_idx = 0;
 
     std::vector<uint32_t> reader_runtime_args = {
-        cross_device_semaphore->address(), local_semaphore, false, false, 0, false, 0, 0};
+        cross_device_semaphore->address(), local_semaphore, false, false, 0, false, 0, 0, 0, 0};
     uint32_t is_reader_sender_core_idx = 2;
     uint32_t is_reader_worker_core_idx = 3;
     uint32_t is_linear_input_packet_start_idx = 4;
