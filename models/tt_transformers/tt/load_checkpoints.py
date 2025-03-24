@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import re
 import os
 import torch
 from safetensors.torch import load_file as safetensors_load_file
@@ -194,7 +195,7 @@ def map_hf_to_meta_keys(loaded_weights):
     See replace_keys for more details on the format of replacements.
     """
     replacements = [
-        ("^weight", "emb.weight"),
+        ("^emb.weight", "weight"),
         ("model.", ""),
         ("embed_tokens", "tok_embeddings"),
         ("lm_head", "output"),
@@ -215,20 +216,21 @@ def map_hf_to_meta_keys(loaded_weights):
 
 def map_meta_to_hf_keys(loaded_weights):
     """
-    Map Meta checkpoint keys to Hugging Face checkpoint keys.
+    Map Meta checkpoint keys to Hugging Face checkpoint keys FOR UNIT TESTS.
     You can use this to support other models by adding more mappings.
     See replace_keys for more details on the format of replacements.
     """
     replacements = [
         ("^tok_embeddings", "model.embed_tokens"),
         ("^norm", "model.norm"),
-        ("^weight", "emb.weight"),
+        # ("^weight", "emb.weight"), don't include this or no module tests can load "weights"
+        ("^emb.weight", "weight"),  # unit test for embedding module does not include "emb"
         ("^layers", "model.layers"),
         ("output", "lm_head"),
         ("attention_norm", "input_layernorm"),
         ("ffn_norm", "post_attention_layernorm"),
         ("attention", "self_attn"),
-        ("mlp", "feed_forward"),
+        ("feed_forward", "mlp"),
         ("w1", "gate_proj"),
         ("w2", "down_proj"),
         ("w3", "up_proj"),
