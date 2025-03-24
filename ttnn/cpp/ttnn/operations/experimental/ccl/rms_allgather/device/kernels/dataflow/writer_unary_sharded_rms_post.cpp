@@ -62,6 +62,7 @@ void kernel_main() {
 #endif
 
         constexpr uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_GAMMA ? 64 : 32;
+        constexpr uint32_t mask_read_tile_face_bytes_double = mask_read_tile_face_bytes * 2;
         constexpr uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_GAMMA ? 1024 : 512;
 
         uint32_t l1_write_addr_gamma = get_write_ptr(cb_gamma);
@@ -69,7 +70,7 @@ void kernel_main() {
         for (uint32_t w = 0; w < block_w; w++) {
             uint32_t tile_id = gamma_tile_start_id + w;
             uint64_t gamma_noc_addr = get_noc_addr(tile_id, gamma);
-            noc_async_read(gamma_noc_addr, l1_write_addr_gamma, mask_read_tile_face_bytes * 2);
+            noc_async_read(gamma_noc_addr, l1_write_addr_gamma, mask_read_tile_face_bytes_double);
             gamma_noc_addr = get_noc_addr(l1_write_addr_gamma + mask_read_tile_face_bytes);
             noc_async_read_barrier();
             noc_async_read(

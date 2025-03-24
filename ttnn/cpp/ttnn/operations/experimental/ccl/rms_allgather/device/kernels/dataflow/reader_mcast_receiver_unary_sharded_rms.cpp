@@ -108,6 +108,7 @@ void kernel_main() {
         }
         cb_reserve_back(cb_ex_external2, num_blocks_first_stage);
         uint32_t l1_write_addr_external = get_write_ptr(cb_ex_external2);
+
         for (uint32_t block = 0; block < num_blocks_first_stage; block++) {
             uint64_t noc_addr_ex_par =
                 remote_noc_addrs_first_stage[block] | (l1_read_addr_ex_par);  // Updating read address for reading

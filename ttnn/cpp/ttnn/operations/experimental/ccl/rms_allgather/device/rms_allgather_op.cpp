@@ -22,6 +22,8 @@ void RMSAllGather::validate(
     TT_FATAL(
         input_tensors.size() == 1 and optional_input_tensors.size() <= 4, "Must have between 1 to 4 input tensors");
     auto& a = input_tensors.at(0);
+    uint32_t input_width = a.get_tensor_spec().tile().get_tile_shape()[1];
+    uint32_t input_height = a.get_tensor_spec().tile().get_tile_shape()[0];
     const auto& b = optional_input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(1);
     const auto& stats = optional_input_tensors.at(2);
@@ -61,7 +63,7 @@ void RMSAllGather::validate(
             "Operands to layernorm need to be on device!");
         TT_FATAL(stats.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         TT_FATAL(
-            stats.value().get_padded_shape()[-1] % TILE_WIDTH == 0,
+            stats.value().get_padded_shape()[-1] % input_width == 0,
             "Stats is expected to have E(x) for each device stacked in the last dimension");
     }
 
@@ -75,12 +77,12 @@ void RMSAllGather::validate(
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to frmsnorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma.value().device(), "Error");
-            TT_FATAL(gamma.value().get_padded_shape()[-2] == TILE_HEIGHT, "Error");
+            TT_FATAL(gamma.value().get_padded_shape()[-2] == input_height, "Error");
         } else {
             TT_FATAL(gamma.value().get_layout() == Layout::ROW_MAJOR, "Error");
             TT_FATAL(
-                (gamma.value().get_padded_shape()[-1] == TILE_WIDTH &&
-                 gamma.value().volume() / TILE_WIDTH == a.get_padded_shape()[-1] / TILE_WIDTH),
+                (gamma.value().get_padded_shape()[-1] == input_width &&
+                 gamma.value().volume() / input_width == a.get_padded_shape()[-1] / input_width),
                 "Error");
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to frmsnorm need to be allocated in buffers on device!");
@@ -107,10 +109,10 @@ void RMSAllGather::validate(
         }
     }
 
-    TT_FATAL(a.get_padded_shape()[-2] == TILE_HEIGHT, "Only activations with batch size = 32 are supported");
+    TT_FATAL(a.get_padded_shape()[-2] == input_height, "Only activations with batch size = 32 are supported");
     if (b.has_value()) {
         TT_FATAL(
-            b.value().get_padded_shape()[-2] == TILE_HEIGHT,
+            b.value().get_padded_shape()[-2] == input_height,
             "Only residual tensors with batch size = 32 are supported");
     }
     std::visit(
@@ -134,25 +136,26 @@ void RMSAllGather::validate(
                 const auto shape = a.get_padded_shape();
                 uint32_t M = a.volume() / shape[-1];
                 uint32_t K = shape[-1];
-                uint32_t Mt = M / TILE_HEIGHT;
-                uint32_t Kt = K / TILE_WIDTH;
+
+                uint32_t Mt = M / input_height;
+                uint32_t Kt = K / input_width;
                 // block
-                uint32_t block_w = program_config.block_w * TILE_WIDTH;
+                uint32_t block_w = program_config.block_w * input_width;
                 const auto shard_spec = a.shard_spec().value();
                 uint32_t num_subblocks_w = program_config.block_w / program_config.subblock_w;
                 // check dims
                 TT_FATAL(
                     program_config.block_w % program_config.subblock_w == 0,
                     "block_w must be divisible by subblock_w.");
-                TT_FATAL(M % TILE_HEIGHT == 0, "M must be divisible by tile height.");
-                TT_FATAL(K % TILE_WIDTH == 0, "K must be divisible by tile width.");
+                TT_FATAL(M % input_height == 0, "M must be divisible by tile height.");
+                TT_FATAL(K % input_width == 0, "K must be divisible by tile width.");
                 const auto bbox = shard_spec.grid.bounding_box();
                 TT_FATAL(
                     bbox.end_coord.x - bbox.start_coord.x < program_config.compute_with_storage_grid_size.x &&
                         bbox.end_coord.y - bbox.start_coord.y < program_config.compute_with_storage_grid_size.y,
                     "Error");
 
-                TT_FATAL(M == TILE_HEIGHT, "Minimal version assumes (1,1,TILE_HEIGHT,N) shape");
+                TT_FATAL(M == input_height, "Minimal version assumes (1,1,TILE_HEIGHT,N) shape");
                 TT_FATAL(program_config.block_h == 1, "Minimal version assumes block_h is 1");
                 bool row_wise = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
                 TT_FATAL(
@@ -164,7 +167,7 @@ void RMSAllGather::validate(
                     TT_FATAL(b.value().is_sharded(), "Error");
                     TT_FATAL(b.value().shard_spec() == shard_spec, "Error");
                 }
-                TT_FATAL(program_config.block_w * TILE_WIDTH == shard_spec.shape[1], "Error");
+                TT_FATAL(program_config.block_w * input_width == shard_spec.shape[1], "Error");
                 TT_FATAL(
                     program_config.block_w % program_config.subblock_w == 0,
                     "block_w must be divisible by subblock_w.");
@@ -179,7 +182,7 @@ std::vector<TensorSpec> RMSAllGather::compute_output_specs(const std::vector<Ten
 
     // WARNING!!!!! This line is ONLY true when only doing pre-allgather only
     if (this->is_pre) {
-        output_shape[3] = TILE_WIDTH;
+        output_shape[3] = input_tensor.get_tensor_spec().tile().get_tile_shape()[1];
     }
 
     return std::visit(
