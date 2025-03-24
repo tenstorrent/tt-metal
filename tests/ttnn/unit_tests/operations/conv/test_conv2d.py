@@ -2979,7 +2979,7 @@ def test_conv2d_model_fruit(
         (1, 320, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
         (1, 640, 1280, 32, 32,  ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
         (1, 640, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
-        (1, 640, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 4),
+        (1, 640, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 2),
         (1, 640, 640, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
         (1, 960, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
         (1, 960, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 6),
@@ -3061,7 +3061,8 @@ def test_conv2d_sdxl(
             shard_layout=None,
             split_factor=split_factor,
             fp32_accum=fp32_accum,
-            packer_l1_acc=True,
+            packer_l1_acc=packer_l1_acc,
+            auto_shard=auto_shard
         )
     else:
         run_conv(
