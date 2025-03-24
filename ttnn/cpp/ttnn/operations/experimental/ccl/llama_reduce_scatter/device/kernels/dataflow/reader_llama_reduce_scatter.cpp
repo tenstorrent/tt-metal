@@ -7,26 +7,26 @@
 #include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
-inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    DPRINT << "===" << tile_id << "===" << ENDL();
-    for (uint16_t r = 0; r < 32; ++r) {
-        DPRINT << (uint)r << " : "
-               << TileSlice(
-                      cb_id,
-                      tile_id,
-                      SliceRange{
-                          .h0 = (uint8_t)r,
-                          .h1 = (uint8_t)(r + 1),
-                          .hs = (uint8_t)1,
-                          .w0 = (uint8_t)0,
-                          .w1 = (uint8_t)32,
-                          .ws = (uint8_t)1},
-                      true,
-                      untilize)
-               << ENDL();
-    }
-    DPRINT << "++++++" << ENDL();
-}
+// inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+//     DPRINT << "===" << tile_id << "===" << ENDL();
+//     for (uint16_t r = 0; r < 32; ++r) {
+//         DPRINT << (uint)r << " : "
+//                << TileSlice(
+//                       cb_id,
+//                       tile_id,
+//                       SliceRange{
+//                           .h0 = (uint8_t)r,
+//                           .h1 = (uint8_t)(r + 1),
+//                           .hs = (uint8_t)1,
+//                           .w0 = (uint8_t)0,
+//                           .w1 = (uint8_t)32,
+//                           .ws = (uint8_t)1},
+//                       true,
+//                       untilize)
+//                << ENDL();
+//     }
+//     DPRINT << "++++++" << ENDL();
+// }
 
 // inline void print_tiles(uint32_t cb_id, uint32_t tile_start = 0, uint32_t num_tiles = 1, bool untilize = false) {
 //     for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
@@ -108,13 +108,17 @@ void kernel_main() {
         constexpr uint32_t bytes_per_tile_group = tiles_per_core_width * page_size_bytes;
         for (uint32_t target_device_id : device_order) {
             uint32_t base_core = target_device_id * input_shard_cores_per_device;
-
+            // DPRINT << "target_device_id: " << target_device_id << " base_core: " << base_core << ENDL();
             for (uint32_t packet_idx = sender_packet_start; packet_idx < sender_packet_end; packet_idx++) {
-                uint8_t curr_core = schedule[packet_idx][0];
-                uint8_t read_offset = schedule[packet_idx][1];
-                uint8_t read_size = schedule[packet_idx][2];
-                uint8_t x = input_core_xy[curr_core][x_index];
-                uint8_t y = input_core_xy[curr_core][y_index];
+                uint32_t curr_core = base_core + schedule[packet_idx][0];
+                uint32_t read_offset = schedule[packet_idx][1];
+                uint32_t read_size = schedule[packet_idx][2];
+                uint32_t x = input_core_xy[curr_core][x_index];
+                uint32_t y = input_core_xy[curr_core][y_index];
+                // DPRINT << "base_core " << base_core << " core offset " << (uint32_t)schedule[packet_idx][0] << "
+                // curr_core: " << curr_core << " x: " << x << " y: " << y << " read_offset: " << read_offset
+                //        << " read_size: " << read_size << " offset_bytes: " << (read_offset * page_size_bytes) << "
+                //        read_size_bytes: " << (read_size * page_size_bytes) << ENDL();
                 uint64_t shard_noc_addr = get_noc_addr(x, y, bank_base_address + (read_offset * page_size_bytes));
                 cb_reserve_back(fabric_sender_cb_id, read_size);
                 uint32_t sender_read_addr = get_write_ptr(fabric_sender_cb_id);
