@@ -33,13 +33,16 @@ enum EDMStatus : uint32_t {
     STARTED = 0xA0B0C0D0,
 
     // Handshake complete with remote
-    HANDSHAKE_COMPLETE = 0xA0B1C2D3,
+    REMOTE_HANDSHAKE_COMPLETE = 0xA1B1C1D1,
 
     // Ready to start listening for packets
-    READY_FOR_TRAFFIC = 0xA1B2C3D4,
+    LOCAL_HANDSHAKE_COMPLETE = 0xA2B2C2D2,
+
+    // Ready for traffic
+    READY_FOR_TRAFFIC = 0xA3B3C3D3,
 
     // EDM exiting
-    TERMINATED = 0xA2B3C4D5
+    TERMINATED = 0xA4B4C4D4
 };
 
 // 3 bits

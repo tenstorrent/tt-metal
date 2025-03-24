@@ -788,6 +788,18 @@ class TtModelArgs:
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
+
+            mul_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                self.start_core, 28, self.sub_core_grids, row_wise=True
+            )
+            self.model_config["MUL_IN_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, 3584 // 28),  # Use padded K
+                core_grid=mul_core_range_set,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
             self.model_config["FF2_IN_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32, 3840 // RING_SIZE),  # Use padded K
                 core_grid=ring_core_range_set,
@@ -1795,7 +1807,7 @@ def set_tg_attention_config(model_config, dim):
     )
     start_core = ttnn.CoreCoord(1, 0)
     shard_spec_n_cores_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-        start_core, 10, sub_core_grids, row_wise=True
+        start_core, 10, sub_core_grids, row_wise=False
     )
 
     model_config["CREATE_HEAD_INPUT_MEMCFG"] = (
