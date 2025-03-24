@@ -59,6 +59,11 @@ run_python_model_tests_wormhole_b0() {
         LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
         echo "LOG_METAL: Llama3 tests for $llama_dir completed"
     done
+
+    # Mistral-7B-v0.3
+    mistral_cache="/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
+    mistral_weights="/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db"
+    TT_CACHE_PATH=$mistral_cache HF_MODEL=$mistral_weights WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
 }
 
 run_python_model_tests_slow_runtime_mode_wormhole_b0() {
