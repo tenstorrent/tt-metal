@@ -286,13 +286,13 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     uint32_t ring_index = operation_attributes.ring_index;
     std::string device_order = detail::device_order_array_string(ring_size, ring_index);
 
-    // if (operation_attributes.ring_index == 3) {
+    // if (operation_attributes.ring_index == 0) {
     //     std::cout << "ring_index: " << operation_attributes.ring_index << " device_order: " << device_order
     //               << std::endl;
     // }
-    if (operation_attributes.ring_index == 0) {
-        std::cout << "device id: " << input_tensor.device()->id() << std::endl;
-    }
+    // if (operation_attributes.ring_index == 0) {
+    //     std::cout << "device id: " << input_tensor.device()->id() << std::endl;
+    // }
 
     std::map<std::string, std::string> reader_defines = {{"DEVICE_ORDER", device_order}};
 
@@ -336,10 +336,10 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     auto input_grid = shard_spec.grid;
     auto output_grid = output_shard_spec.grid;
 
-    // if (operation_attributes.ring_index == 3) {
+    // if (operation_attributes.ring_index == 0) {
     //     std::cout << "input_grid: " << input_grid.str() << std::endl;
     // }
-    // if (operation_attributes.ring_index == 3) {
+    // if (operation_attributes.ring_index == 0) {
     //     std::cout << "output_grid: " << output_grid.str() << std::endl;
     // }
 
@@ -391,12 +391,12 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         input_shard_cores_per_device, num_workers_per_link * num_links, tiles_per_core_width, num_pages_per_packet);
     auto atomic_inc_core = detail::find_atomic_inc_core(schedule);
     auto schedule_to_string = detail::schedule_to_string(schedule);
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "schedule: " << schedule_to_string << std::endl;
-        std::cout << "atomic_inc_core: " << atomic_inc_core << std::endl;
-    }
+    // if (operation_attributes.ring_index == 0) {
+    //     std::cout << "schedule: " << schedule_to_string << std::endl;
+    //     std::cout << "atomic_inc_core: " << atomic_inc_core << std::endl;
+    // }
 
-    // if (operation_attributes.ring_index == 3) {
+    // if (operation_attributes.ring_index == 0) {
     //     std::cout << "packet_worker_cores_grid: " << packet_worker_cores_grid.str() << std::endl;
     //     std::cout << "sender_core_grid: " << sender_core_grid.str() << std::endl;
     // }
@@ -416,7 +416,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     // accumulator before we perform the reduction
     uint32_t accumulator_cb_index = tt::CBIndex::c_5;
 
-    // if (operation_attributes.ring_index == 3) {
+    // if (operation_attributes.ring_index == 0) {
     //     std::cout << "ncores_input: " << ncores_input
     //               << " input_shard_cores_per_device: " << input_shard_cores_per_device
     //               << " output_cores_per_device: " << output_cores_per_device << std::endl;
@@ -428,7 +428,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             .set_page_size(input_tensor_cb_id, input_page_size)
             .set_globally_allocated_address(*input_tensor_buffer);
 
-    // if (operation_attributes.ring_index == 3) {
+    // if (operation_attributes.ring_index == 0) {
     //     std::cout << "CB src config total size: " << tiles_per_core_width * input_page_size
     //               << " page size: " << input_page_size << std::endl;
     // }
@@ -440,7 +440,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             .set_page_size(output_tensor_cb_id, input_page_size)
             .set_globally_allocated_address(*output_tensor_buffer);
 
-    // if (operation_attributes.ring_index == 3) {
+    // if (operation_attributes.ring_index == 0) {
     //     std::cout << "CB dst config total size: " << tiles_per_core_width_output * input_page_size
     //               << " page size: " << input_page_size << std::endl;
     // }
@@ -455,7 +455,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             {{packet_header_cb_index, DataFormat::RawUInt32}})
             .set_page_size(packet_header_cb_index, packet_header_size_bytes);
 
-    // if (operation_attributes.ring_index == 3) {
+    // if (operation_attributes.ring_index == 0) {
     //     std::cout << "CB packet header config total size: "
     //               << num_packet_headers_storable * packet_header_size_bytes * buffering_factor
     //               << " page size: " << packet_header_size_bytes << std::endl;
@@ -463,13 +463,10 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
 
     tt::tt_metal::CircularBufferConfig fabric_sender_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            buffering_factor *
-                (input_shard_cores_per_device * (tiles_per_core_width - num_pages_per_packet) + tiles_per_core_width) *
-                input_page_size,
-            {{fabric_sender_cb_index, cb_data_format}})
+            buffering_factor * (40) * input_page_size, {{fabric_sender_cb_index, cb_data_format}})
             .set_page_size(fabric_sender_cb_index, input_page_size);
 
-    // if (operation_attributes.ring_index == 3) {
+    // if (operation_attributes.ring_index == 0) {
     //     std::cout << "CB fabric sender config total size: "
     //               << buffering_factor * input_shard_cores_per_device * (tiles_per_core_width - num_pages_per_packet)
     //               *
@@ -485,7 +482,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             {{fabric_receiver_cb_index, cb_data_format}})
             .set_page_size(fabric_receiver_cb_index, input_page_size);
 
-    // if (operation_attributes.ring_index == 3) {
+    // if (operation_attributes.ring_index == 0) {
     //     std::cout << "CB fabric receiver config total size: "
     //               << buffering_factor * input_shard_cores_per_device * tiles_per_core_width * input_page_size
     //               << " page size: " << input_page_size << std::endl;
@@ -497,7 +494,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             {{accumulator_cb_index, cb_data_format}})
             .set_page_size(accumulator_cb_index, input_page_size);
 
-    // if (operation_attributes.ring_index == 3) {
+    // if (operation_attributes.ring_index == 0) {
     //     std::cout << "CB accumulator config total size: "
     //               << buffering_factor * tiles_per_core_width_output * input_page_size * num_devices
     //               << " page size: " << tiles_per_core_width_output * input_page_size << std::endl;
@@ -538,10 +535,10 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
 
     auto sender_atomic_inc_core = sender_cores.at(atomic_inc_core);
     auto sender_atomic_inc_core_worker_core = to_worker_cores({sender_atomic_inc_core}).at(0);
-    if (operation_attributes.ring_index == 3) {
-        std::cout << "sender_atomic_inc_core: " << sender_atomic_inc_core.str() << std::endl;
-        std::cout << "sender_atomic_inc_core_worker_core: " << sender_atomic_inc_core_worker_core.str() << std::endl;
-    }
+    // if (operation_attributes.ring_index == 0) {
+    //     std::cout << "sender_atomic_inc_core: " << sender_atomic_inc_core.str() << std::endl;
+    //     std::cout << "sender_atomic_inc_core_worker_core: " << sender_atomic_inc_core_worker_core.str() << std::endl;
+    // }
 
     auto packet_bounding_box = packet_worker_cores_grid.bounding_box();
     auto packet_start_worker_core = to_worker_cores({packet_bounding_box.start_coord});
@@ -571,13 +568,13 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     reader_defines["OUTPUT_CORE_XY"] = detail::cores_to_string(to_worker_cores(output_cores));
     reader_defines["PACKET_WORKER_CORES"] = detail::cores_to_string(to_worker_cores(packet_worker_cores));
     reader_defines["SCHEDULE"] = schedule_to_string;
-    // if (operation_attributes.ring_index == 3) {
+    // if (operation_attributes.ring_index == 0) {
     //     std::cout << "input_cores: " << reader_defines["INPUT_CORE_XY"] << std::endl;
     // }
-    // if (operation_attributes.ring_index == 3) {
+    // if (operation_attributes.ring_index == 0) {
     //     std::cout << "output_cores: " << reader_defines["OUTPUT_CORE_XY"] << std::endl;
     // }
-    // if (operation_attributes.ring_index == 3) {
+    // if (operation_attributes.ring_index == 0) {
     //     std::cout << "packet_worker_cores: " << reader_defines["PACKET_WORKER_CORES"] << std::endl;
     // }
     // create local semaphore
@@ -592,12 +589,12 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         all_cores_grid,
         // tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
         tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
             .compile_args = reader_compile_time_args,
             .defines = reader_defines});
 
-    // if (operation_attributes.ring_index == 3) {
+    // if (operation_attributes.ring_index == 0) {
     //     std::cout << "packet_receiver_core: " << packet_receiver_core.str() << std::endl;
     // }
     auto packet_receiver_worker_core = to_worker_cores({packet_receiver_core}).at(0);
@@ -636,17 +633,17 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         all_cores_grid,
         // tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
         tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
             .compile_args = writer_compile_time_args,
             .defines = writer_defines});
 
-    // if (operation_attributes.ring_index == 3) {
+    // if (operation_attributes.ring_index == 0) {
     //     std::cout << "Writer runtime args after appending forward fabric connection: " << writer_runtime_args.size()
     //               << std::endl;
     // }
 
-    // if (operation_attributes.ring_index == 3) {
+    // if (operation_attributes.ring_index == 0) {
     //     std::cout << "Writer runtime args after appending backward fabric connection: " << writer_runtime_args.size()
     //               << std::endl;
     // }
@@ -729,14 +726,14 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             writer_runtime_args[writer_sender_packet_end_idx] = sender_packet_start + schedule[sender_core_idx].size();
 
             if (core == sender_atomic_inc_core) {
-                if (operation_attributes.ring_index == 3) {
-                    std::cout << "core: " << core.str() << " is the atomic inc core" << std::endl;
-                }
+                // if (operation_attributes.ring_index == 0) {
+                //     std::cout << "core: " << core.str() << " is the atomic inc core" << std::endl;
+                // }
                 writer_runtime_args[is_atomic_inc_core_idx] = true;
             } else {
-                if (operation_attributes.ring_index == 3) {
-                    std::cout << "core: " << core.str() << " is not the atomic inc core" << std::endl;
-                }
+                // if (operation_attributes.ring_index == 0) {
+                //     std::cout << "core: " << core.str() << " is not the atomic inc core" << std::endl;
+                // }
                 writer_runtime_args[is_atomic_inc_core_idx] = false;
             }
 
@@ -745,10 +742,10 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             //     " << start_device_idx + work_per_sender << std::endl;
             // }
             start_device_idx += work_per_sender;
-            if (operation_attributes.ring_index == 3) {
-                std::cout << "core: " << core.str() << " sender_packet_start: " << sender_packet_start
-                          << " sender_core_end: " << writer_runtime_args[writer_sender_packet_end_idx] << std::endl;
-            }
+            // if (operation_attributes.ring_index == 0) {
+            //     std::cout << "core: " << core.str() << " sender_packet_start: " << sender_packet_start
+            //               << " sender_core_end: " << writer_runtime_args[writer_sender_packet_end_idx] << std::endl;
+            // }
             sender_packet_start += schedule[sender_core_idx].size();
             sender_core_idx++;
 

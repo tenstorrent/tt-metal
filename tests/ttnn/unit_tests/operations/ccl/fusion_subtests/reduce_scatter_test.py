@@ -19,7 +19,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
 
 def gen_tensor(dim, shard_height, shard_width, num_devices, num_cores, scheme="random"):
     torch_input_tensors = []
-    factor = 1
+    factor = 0
     for _ in range(num_devices):
         for _ in range(num_cores):
             for _ in range(shard_width // 32):
@@ -250,4 +250,5 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device):
         num_iters,
         trace_mode,
         num_links=3,
+        scheme="sequential",
     )
