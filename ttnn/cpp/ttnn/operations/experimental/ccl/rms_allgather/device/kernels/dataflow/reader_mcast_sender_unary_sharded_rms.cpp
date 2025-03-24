@@ -83,13 +83,6 @@ void kernel_main() {
 
         // read data from other cores - first stage reduce
         uint32_t l1_read_addr_ex_par = get_read_ptr(cb_partial);
-        // read data from other cores - second stage reduce
-        uint32_t l1_read_addr_ex = 0;
-        uint32_t block_index_stride = 0;
-        if constexpr (use_two_stage_reduce) {
-            l1_read_addr_ex = get_read_ptr(cb_reduce_first_stage);
-            block_index_stride = num_x;
-        }
         // read from both stage
         // first stage
         cb_reserve_back(cb_external, num_blocks_first_stage);
@@ -105,6 +98,8 @@ void kernel_main() {
 
         // sync with second-stage all-to-all workers
         if constexpr (use_two_stage_reduce) {
+            uint32_t l1_read_addr_ex = get_read_ptr(cb_reduce_first_stage);
+            uint32_t block_index_stride = num_x;
             noc_semaphore_wait(reduce_second_stage_semaphore_addr_ptr, num_blocks_second_stage - 1);
             noc_semaphore_set(reduce_second_stage_semaphore_addr_ptr, 0);
 

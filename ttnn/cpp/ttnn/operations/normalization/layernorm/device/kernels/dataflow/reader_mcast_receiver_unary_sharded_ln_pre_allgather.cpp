@@ -117,80 +117,74 @@ void kernel_main() {
     const uint64_t reduce_second_stage_receiver_semaphore_noc_addr =
         remote_noc_addrs_second_stage[0] | reduce_second_stage_semaphore_addr;
 
-    const auto& global_reduce_receiver = [&](
-        const uint32_t cb_partial, const uint32_t cb_external, const uint32_t cb_reduce_first_stage)
-        __attribute__((always_inline)) {
-        uint32_t num_tiles_per_partial_result = 2;
+    uint32_t num_tiles_per_partial_result = 2;
 #ifdef RMSNORM
-        num_tiles_per_partial_result = 1;
+    num_tiles_per_partial_result = 1;
 #endif
-        // global reduce
-        // wait for local data ready
-        cb_wait_front(cb_partial, num_tiles_per_partial_result * block_h);  // two tiles * block_h
+    // global reduce
+    // wait for local data ready
+    cb_wait_front(cb_ex_partial2, num_tiles_per_partial_result * block_h);  // two tiles * block_h
 
-        // inc mcast sender
-        noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
-        noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
-        noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
+    // inc mcast sender
+    noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
+    noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
+    noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
 
-        if constexpr (is_all_to_all_worker) {
-            // read data from other cores - reduce first stage
-            uint32_t l1_read_addr_ex_par = get_read_ptr(cb_partial);
-            l1_read_addr_ex_par += all_to_all_tile_offset_bytes;
-            // read data from other cores - second stage reduce
-            uint32_t l1_read_addr_ex = 0;
-            uint32_t block_index_stride = 0;
-            if constexpr (use_two_stage_reduce) {
-                l1_read_addr_ex = get_read_ptr(cb_reduce_first_stage);
-                if constexpr (row_major) {
-                    block_index_stride = num_x;
-                } else {
-                    block_index_stride = num_y;
+    if constexpr (is_all_to_all_worker) {
+        // read data from other cores - reduce first stage
+        uint32_t l1_read_addr_ex_par = get_read_ptr(cb_ex_partial2);
+        l1_read_addr_ex_par += all_to_all_tile_offset_bytes;
+        // read data from other cores - second stage reduce
+        uint32_t l1_read_addr_ex = 0;
+        uint32_t block_index_stride = 0;
+        if constexpr (use_two_stage_reduce) {
+            l1_read_addr_ex = get_read_ptr(cb_ex2);
+            if constexpr (row_major) {
+                block_index_stride = num_x;
+            } else {
+                block_index_stride = num_y;
+            }
+        }
+        for (uint32_t i = 0; i < num_tiles_to_read; i++) {
+            cb_reserve_back(cb_ex_external2, num_tiles_per_partial_result * num_blocks_first_stage);
+            uint32_t l1_write_addr_external = get_write_ptr(cb_ex_external2);
+            for (uint32_t block = 0; block < num_blocks_first_stage; block++) {
+                for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_partial_result;
+                     tile_idx++) {  // loops over Sum(X), Sum(X2) --> 2x
+                    uint64_t noc_addr_ex_par =
+                        remote_noc_addrs_first_stage[block] |
+                        (l1_read_addr_ex_par + tile_idx * single_tile_size_bytes);  // Updating read address for reading
+                                                                                    // SUm(X) and Sum(X2) per core
+                    noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, single_tile_size_bytes);
+                    l1_write_addr_external += single_tile_size_bytes;
                 }
             }
-            for (uint32_t i = 0; i < num_tiles_to_read; i++) {
-                cb_reserve_back(cb_external, num_tiles_per_partial_result * num_blocks_first_stage);
-                uint32_t l1_write_addr_external = get_write_ptr(cb_external);
-                for (uint32_t block = 0; block < num_blocks_first_stage; block++) {
-                    for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_partial_result;
-                         tile_idx++) {  // loops over Sum(X), Sum(X2) --> 2x
-                        uint64_t noc_addr_ex_par =
-                            remote_noc_addrs_first_stage[block] |
-                            (l1_read_addr_ex_par +
-                             tile_idx * single_tile_size_bytes);  // Updating read address for reading SUm(X) and
-                                                                  // Sum(X2) per core
-                        noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, single_tile_size_bytes);
+            l1_read_addr_ex_par += single_tile_size_bytes;
+            noc_async_read_barrier();
+            cb_push_back(cb_ex_external2, num_tiles_per_partial_result * num_blocks_first_stage);
+
+            // read data from other cores - reduce first stage
+            if constexpr (use_two_stage_reduce) {
+                if (is_second_stage_reader) {  // gather data from a column of cores (if row major)
+                    if (i == 0) {
+                        noc_semaphore_wait(reduce_second_stage_semaphore_addr_ptr, num_blocks_second_stage - 1);
+                        noc_semaphore_set(reduce_second_stage_semaphore_addr_ptr, 0);
+                    }
+                    // read data from other cores - second stage reduce
+                    for (uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
+                        uint64_t noc_addr_ex = remote_noc_addrs_second_stage[block + 1] | l1_read_addr_ex;
+                        noc_async_read_one_packet(noc_addr_ex, l1_write_addr_external, single_tile_size_bytes);
                         l1_write_addr_external += single_tile_size_bytes;
                     }
-                }
-                l1_read_addr_ex_par += single_tile_size_bytes;
-                noc_async_read_barrier();
-                cb_push_back(cb_external, num_tiles_per_partial_result * num_blocks_first_stage);
-
-                // read data from other cores - reduce first stage
-                if constexpr (use_two_stage_reduce) {
-                    if (is_second_stage_reader) {  // gather data from a column of cores (if row major)
-                        if (i == 0) {
-                            noc_semaphore_wait(reduce_second_stage_semaphore_addr_ptr, num_blocks_second_stage - 1);
-                            noc_semaphore_set(reduce_second_stage_semaphore_addr_ptr, 0);
-                        }
-                        // read data from other cores - second stage reduce
-                        for (uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
-                            uint64_t noc_addr_ex = remote_noc_addrs_second_stage[block + 1] | l1_read_addr_ex;
-                            noc_async_read_one_packet(noc_addr_ex, l1_write_addr_external, single_tile_size_bytes);
-                            l1_write_addr_external += single_tile_size_bytes;
-                        }
-                        l1_read_addr_ex += single_tile_size_bytes;
-                        noc_async_read_barrier();
-                        cb_push_back(cb_external, num_blocks_second_stage - 1);
-                    }
+                    l1_read_addr_ex += single_tile_size_bytes;
+                    noc_async_read_barrier();
+                    cb_push_back(cb_ex_external2, num_blocks_second_stage - 1);
                 }
             }
-
-            // sync with the gather worker
-            cb_wait_front(cb_reduce_first_stage, num_tiles_per_partial_result * num_tiles_to_read);
-            noc_semaphore_inc(reduce_second_stage_receiver_semaphore_noc_addr, 1);
         }
-    };
-    global_reduce_receiver(cb_ex_partial2, cb_ex_external2, cb_ex2);
+
+        // sync with the gather worker
+        cb_wait_front(cb_ex2, num_tiles_per_partial_result * num_tiles_to_read);
+        noc_semaphore_inc(reduce_second_stage_receiver_semaphore_noc_addr, 1);
+    }
 }
