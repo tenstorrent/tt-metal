@@ -505,22 +505,22 @@ def run_llama3_demo(
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
         ),
-        # (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
-        #     "models/demos/llama3/demo/input_data_long_64k.json",  # input_prompts
-        #     True,  # instruct mode
-        #     1,  # repeat_batches
-        #     64 * 1024,  # max_seq_len
-        #     1,  # batch_size
-        #     200,  # max_generated_tokens
-        #     False,  # paged_attention
-        #     {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params  # TODO This will be serviced by vLLM
-        #     {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-        # ),
+        (  # Batch-32 Long-context: stress test
+            "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128*1024,  # max_seq_len
+            32,  # batch_size
+            128*1024,  # max_generated_tokens
+            False,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
+            {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
+        ),
     ],
     ids=[
         # "batch-1",  # latency
         "batch-32",  # throughput
-        # "long-context",  # max-length
+        "batch-32-long-context",  # stress test with long context
     ],
 )
 @pytest.mark.parametrize(
