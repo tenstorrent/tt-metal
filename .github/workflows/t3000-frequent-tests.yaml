@@ -11,7 +11,7 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
-      version: 20.04
+      version: 22.04
   t3000-frequent-tests:
     needs: build-artifact
     secrets: inherit
