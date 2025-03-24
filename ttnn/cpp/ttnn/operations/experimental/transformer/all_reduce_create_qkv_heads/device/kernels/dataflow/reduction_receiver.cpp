@@ -41,6 +41,7 @@ void kernel_main() {
     uint32_t batch_offset_tensor_addr = get_arg_val<uint32_t>(arg_idx++);
     uint32_t index_in_cores = get_arg_val<uint32_t>(arg_idx++);
     uint32_t qv_k_process_flag = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t block_num_tiles = get_arg_val<uint32_t>(arg_idx++);
     tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx + in_num_cores));
     // rt args for reduction receiver kernel
@@ -60,8 +61,12 @@ void kernel_main() {
         cb_push_back(cb_id, total_num_reduction_tiles);
         DPRINT << "total_num_reduction_tiles = " << total_num_reduction_tiles << " which is NCRISC" << ENDL();
     }
-
     // 3. QV/K read and write kernels start here:
+    cb_wait_front(cb_id_reduction_out, block_num_tiles);
+
+    // The deprecated code starts here
+    // The deprecated code starts here
+    // The deprecated code starts here
     if (qv_k_process_flag != 0) {  // only run the QV/K part for qv_k cores
         DPRINT << "qv_k_process_flag = " << qv_k_process_flag << " which qv cores or k cores" << ENDL();
         uint32_t device_batch_offset = 0;

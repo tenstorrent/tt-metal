@@ -158,6 +158,23 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     noc_x_coords.reserve(in_num_cores);
     noc_y_coords.reserve(in_num_cores);
 
+    std::vector<uint32_t> qcores_noc_x_coords, qcores_noc_y_coords;
+    std::vector<uint32_t> kcores_noc_x_coords, kcores_noc_y_coords;
+    qcores_noc_x_coords.reserve(q_cores_vector.size());
+    qcores_noc_y_coords.reserve(q_cores_vector.size());
+    kcores_noc_x_coords.reserve(k_cores_vector.size());
+    kcores_noc_y_coords.reserve(k_cores_vector.size());
+    for (uint32_t i = 0; i < q_cores_vector.size(); i++) {
+        auto worker_core = device->worker_core_from_logical_core(q_cores_vector[i]);
+        qcores_noc_x_coords.push_back(worker_core.x);
+        qcores_noc_y_coords.push_back(worker_core.y);
+    }
+    for (uint32_t i = 0; i < k_cores_vector.size(); i++) {
+        auto worker_core = device->worker_core_from_logical_core(k_cores_vector[i]);
+        kcores_noc_x_coords.push_back(worker_core.x);
+        kcores_noc_y_coords.push_back(worker_core.y);
+    }
+
     for (uint32_t i = 0; i < in_num_cores; ++i) {
         auto worker_core = device->worker_core_from_logical_core(in_cores_vec[i]);
         noc_x_coords.push_back(worker_core.x);
@@ -446,12 +463,17 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     // Now prepare rt args for the reader and writer kernels
 
     std::vector<uint32_t> reader_writer_runtime_args_template;
-    reader_writer_runtime_args_template.reserve(5 + 2 * in_num_cores);
-    reader_writer_runtime_args_template = {q_base_addr, batch_offset_tensor.buffer()->address(), 0, 0};
+    reader_writer_runtime_args_template.reserve(6 + 2 * q_num_cores + 2 * k_num_cores);
+    reader_writer_runtime_args_template = {
+        q_base_addr, batch_offset_tensor.buffer()->address(), 0, 0, output_tensor_shard_num_pages};
     reader_writer_runtime_args_template.insert(
-        reader_writer_runtime_args_template.end(), noc_x_coords.begin(), noc_x_coords.end());
+        reader_writer_runtime_args_template.end(), qcores_noc_x_coords.begin(), qcores_noc_x_coords.end());
     reader_writer_runtime_args_template.insert(
-        reader_writer_runtime_args_template.end(), noc_y_coords.begin(), noc_y_coords.end());
+        reader_writer_runtime_args_template.end(), qcores_noc_y_coords.begin(), qcores_noc_y_coords.end());
+    reader_writer_runtime_args_template.insert(
+        reader_writer_runtime_args_template.end(), kcores_noc_x_coords.begin(), kcores_noc_x_coords.end());
+    reader_writer_runtime_args_template.insert(
+        reader_writer_runtime_args_template.end(), kcores_noc_y_coords.begin(), kcores_noc_y_coords.end());
 
     // KERNEL CREATION
     tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_1;
@@ -641,8 +663,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     auto& reader_args_by_core = GetRuntimeArgs(program, reduction_reader_kernel_id);
     auto& writer_args_by_core = GetRuntimeArgs(program, reduction_writer_kernel_id);
 
-    for (uint32_t i = 0; i < q_cores_vector.size(); i++) {
-        const auto& core = q_cores_vector[i];
+    for (uint32_t i = 0; i < in_num_cores; i++) {
+        const auto& core = in_cores_vec[i];
         auto& reader_args = reader_args_by_core[core.x][core.y];
         reader_args[2] = i;
         reader_args[3] = 1;
@@ -651,15 +673,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         writer_args[3] = 1;
     }
 
-    for (uint32_t i = 0; i < k_cores_vector.size(); i++) {
-        const auto& core = k_cores_vector[i];
-        auto& reader_args = reader_args_by_core[core.x][core.y];
-        reader_args[2] = i;
-        reader_args[3] = 2;
-        auto& writer_args = writer_args_by_core[core.x][core.y];
-        writer_args[2] = i;
-        writer_args[3] = 2;
-    }
     auto override_runtime_arguments_callback =
         [worker_sender_reader_kernel_id, worker_sender_writer_kernel_id, sender_worker_cores, cb_out, cb_reduction](
             const void* operation,
