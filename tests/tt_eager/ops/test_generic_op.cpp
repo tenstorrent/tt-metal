@@ -140,73 +140,6 @@ bool run_test(IDevice* device, const ttnn::Shape& shape, float low, float high, 
     TT_ASSERT(false, "Unsupported function");
     return false;
 }
-
-// void test_operation_infrastructure() {
-//     tt::log_info(tt::LogTest, "Running {}", __func__);
-
-//     using ttnn::operations::unary::UnaryWithParam;
-//     using ttnn::operations::unary::UnaryOpType;
-
-//     int device_id = 0;
-//     auto device = tt::tt_metal::CreateDevice(device_id);
-
-//     auto shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
-//     auto input_tensor = ttnn::random::uniform(bfloat16(0), bfloat16(1),
-//     shape).to_layout(Layout::TILE).to_device(device);
-
-//     auto op = tt::tt_metal::operation::DeviceOperation(ttnn::operations::unary::Unary{
-//         {UnaryWithParam{UnaryOpType::SQRT}},
-//         MemoryConfig{.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}});
-
-//     auto program_hash = op.compute_program_hash({input_tensor}, {});
-//     TT_FATAL(program_hash == 3018574135764717736ULL, fmt::format("Actual value is {}", program_hash));
-
-//     auto profiler_info = op.create_profiler_info({input_tensor});
-//     TT_FATAL(
-//         profiler_info.preferred_name.value() == "ttnn::operations::unary::Unary",
-//         fmt::format("Actual value is {}", profiler_info.preferred_name.value()));
-//     TT_FATAL(
-//         profiler_info.parallelization_strategy.value() == "UnaryOpParallelizationStrategy::MULTI_CORE",
-//         fmt::format("Actual value is {}", profiler_info.parallelization_strategy.value()));
-
-//     TT_FATAL(tt::tt_metal::CloseDevice(device));
-// }
-
-// void test_shape_padding() {
-//     tt::log_info(tt::LogTest, "Running {}", __func__);
-
-//     using ttnn::operations::unary::UnaryWithParam;
-//     using ttnn::operations::unary::UnaryOpType;
-
-//     int device_id = 0;
-//     auto device = tt::tt_metal::CreateDevice(device_id);
-//     tt::tt_metal::AutoFormat::SetDefaultDevice(device);
-
-//     tt::tt_metal::Array4D input_shape = {1, 1, 13, 18};
-//     tt::tt_metal::Array4D padded_input_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
-//     auto input_tensor = ttnn::random::uniform(bfloat16(0), bfloat16(1), input_shape);
-
-//     auto padded_input_tensor = ttnn::pad(input_tensor, padded_input_shape, tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
-
-//     padded_input_tensor = padded_input_tensor.to_layout(Layout::TILE);
-//     padded_input_tensor = padded_input_tensor.to_device(device);
-//     auto output_tensor =
-//         tt::tt_metal::operation::run(
-//             ttnn::operations::unary::Unary{
-//                 {UnaryWithParam{UnaryOpType::SQRT}},
-//                 tt::tt_metal::MemoryConfig{.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}},
-//             {padded_input_tensor})
-//             .at(0);
-//     output_tensor = output_tensor.cpu();
-
-//     auto output_shape = output_tensor.get_logical_shape();
-//     TT_FATAL(output_shape == tt::tt_metal::Shape(padded_input_shape));
-//     TT_FATAL(output_shape.without_padding() == tt::tt_metal::Shape(input_shape));
-
-//     TT_FATAL(tt::tt_metal::CloseDevice(device));
-// }
-
-
 namespace test {
     namespace detail {
         std::unordered_map<CoreCoord, std::vector<uint32_t>> cast_args_to_core_coords(const CoreRangeSet& core_spec, const std::vector<uint32_t>& args) {
@@ -889,6 +822,11 @@ struct exp_with_param {
 // void test_binary_add_interleaved() {
 //     // =================
 //     // run binary add interleaved original
+//     const std::map<std::string, std::string> defines_eltwise_add = {
+//         {"ELTWISE_OP", "add_tiles"},
+//         {"ELTWISE_OP_TYPE", "EltwiseBinaryType::ELWADD"},
+//         // {"SFPU_OP_CHAIN_0", ""},
+//     };
 //     int device_id = 0;
 //     auto device = tt::tt_metal::CreateDevice(device_id);
 //     {
@@ -940,62 +878,108 @@ struct exp_with_param {
 
 //         bool src0_is_dram = device_input_tensor_a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 //         bool src1_is_dram = device_input_tensor_b.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-//         std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram, (std::uint32_t)src1_is_dram};
+//         std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram, (std::uint32_t)src1_is_dram, 1};
 
 //         bool dst_is_dram = device_output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 //         std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)tt::CB::c_out0, (std::uint32_t)dst_is_dram};
 
+//         ttnn::operations::generic::circular_buffer_attributes_t input_cb0_atrributes = {
+//             .core_spec = all_cores,
+//             .total_size = 2 * tt::tt_metal::detail::TileSize(input_a_cb_data_format),
+//             .page_size = tt::tt_metal::detail::TileSize(input_a_cb_data_format),
+//             .data_format = input_a_cb_data_format,
+//         };
+//         ttnn::operations::generic::circular_buffer_attributes_t input_cb1_attributes = {
+//             .core_spec = all_cores,
+//             .total_size = 2 * tt::tt_metal::detail::TileSize(input_b_cb_data_format),
+//             .page_size = tt::tt_metal::detail::TileSize(input_b_cb_data_format),
+//             .data_format = input_b_cb_data_format,
+//         };
+//         ttnn::operations::generic::circular_buffer_attributes_t output_cb_attributes = {
+//             .core_spec = all_cores,
+//             .total_size = 2 * tt::tt_metal::detail::TileSize(output_cb_data_format),
+//             .page_size = tt::tt_metal::detail::TileSize(output_cb_data_format),
+//             .data_format = output_cb_data_format,
+//         };
+//         ttnn::operations::generic::data_movement_attributes_t reader_attributes = {
+//             .core_spec = all_cores,
+//         .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp",
+//             .config = tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args),
+//         };
+//         ttnn::operations::generic::data_movement_attributes_t writer_attributes = {
+//             .core_spec = all_cores,
+//             .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+//             .config = tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args),
+//         };
+//         ttnn::operations::generic::compute_attributes_t compute_attributes = {
+
+//             .core_spec = all_cores,
+//             .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp",
+//             .config = {
+//                 .math_fidelity = MathFidelity::HiFi4,
+//                 .fp32_dest_acc_en = false,
+//                 // .preserve_fp32_precision = false,
+//                 .math_approx_mode = false,
+//                 .compile_args = {},
+//                 .defines = defines_eltwise_add,
+//             },
+//         };
+
 //         ttnn::operations::generic::program_attributes_t
 //             program_attributes =
 //                 {
-//                     .circular_buffer_attributes =
-//                         {{tt::CB::c_in0,
-//                           {
-//                               .core_spec = all_cores,
-//                               .total_size = 2 * tt::tt_metal::detail::TileSize(input_a_cb_data_format),
-//                               .page_size = tt::tt_metal::detail::TileSize(input_a_cb_data_format),
-//                               .data_format = input_a_cb_data_format,
-//                           }},
-//                          {tt::CB::c_in1,
-//                           {
-//                               .core_spec = all_cores,
-//                               .total_size = 2 * tt::tt_metal::detail::TileSize(input_b_cb_data_format),
-//                               .page_size = tt::tt_metal::detail::TileSize(input_b_cb_data_format),
-//                               .data_format = input_b_cb_data_format,
-//                           }},
-//                          {tt::CB::c_out0,
-//                           {
-//                               .core_spec = all_cores,
-//                               .total_size = 2 * tt::tt_metal::detail::TileSize(input_b_cb_data_format),
-//                               .page_size = tt::tt_metal::detail::TileSize(input_b_cb_data_format),
-//                               .data_format = output_cb_data_format,
-//                           }}},
-//                     .data_movement_attributes =
-//                         {{.core_spec = all_cores,
-//                           .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/"
-//                                          "reader_binary_interleaved_start_id.cpp",
-//                           .config = tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args)},
-//                          {.core_spec = all_cores,
-//                           .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
-//                                          "writer_unary_interleaved_start_id.cpp",
-//                           .config = tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args)}},
-//                     .compute_attributes =
-//                         {
-//                             {
-//                                 .core_spec = all_cores,
-//                                 .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/"
-//                                                "eltwise_binary_kernel.cpp",
-//                                 .config =
-//                                     {
-//                                         .math_fidelity = MathFidelity::HiFi4,
-//                                         .fp32_dest_acc_en = false,
-//                                         .preserve_fp32_precision = false,
-//                                         .math_approx_mode = false,
-//                                         .compile_args = {},
-//                                         .defines = defines_eltwise_add,
-//                                     },
-//                             },
-//                         },
+//                     .circular_buffer_attributes = {
+//                         {tt::CBIndex::c_0, input_cb0_atrributes},
+//                         {tt::CBIndex::c_1, input_cb1_attributes},
+//                         {tt::CBIndex::c_16, output_cb_attributes},
+//                     },
+//                         // {{tt::CBIndex::c_0,
+//                         //   {
+//                         //       .core_spec = all_cores,
+//                         //       .total_size = 2 * tt::tt_metal::detail::TileSize(input_a_cb_data_format),
+//                         //       .page_size = tt::tt_metal::detail::TileSize(input_a_cb_data_format),
+//                         //       .data_format = input_a_cb_data_format,
+//                         //   }},
+//                         //  {tt::CBIndex::c_1,
+//                         //   {
+//                         //       .core_spec = all_cores,
+//                         //       .total_size = 2 * tt::tt_metal::detail::TileSize(input_b_cb_data_format),
+//                         //       .page_size = tt::tt_metal::detail::TileSize(input_b_cb_data_format),
+//                         //       .data_format = input_b_cb_data_format,
+//                         //   }},
+//                         //  {tt::CBIndex::c_16,
+//                         //   {
+//                         //       .core_spec = all_cores,
+//                         //       .total_size = 2 * tt::tt_metal::detail::TileSize(input_b_cb_data_format),
+//                         //       .page_size = tt::tt_metal::detail::TileSize(input_b_cb_data_format),
+//                         //       .data_format = output_cb_data_format,
+//                         //   }}},
+//                     .data_movement_attributes = {reader_attributes, writer_attributes},
+//                         // {{.core_spec = all_cores,
+//                         //   .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/"
+//                         //                  "reader_binary_interleaved_start_id.cpp",
+//                         //   .config = tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args)},
+//                         //  {.core_spec = all_cores,
+//                         //   .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+//                         //                  "writer_unary_interleaved_start_id.cpp",
+//                         //   .config = tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args)}},
+//                     .compute_attributes = {compute_attributes},
+//                         // {
+//                         //     {
+//                         //         .core_spec = all_cores,
+//                         //         .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/"
+//                         //                        "eltwise_binary_kernel.cpp",
+//                         //         .config =
+//                         //             {
+//                         //                 .math_fidelity = MathFidelity::HiFi4,
+//                         //                 .fp32_dest_acc_en = false,
+//                         //                 .preserve_fp32_precision = false,
+//                         //                 .math_approx_mode = false,
+//                         //                 .compile_args = {},
+//                         //                 .defines = defines_eltwise_add,
+//                         //             },
+//                         //     },
+//                         // },
 //                 };
 
 //         // setup runtime parameters - replicating element_wise_multi_core_program_factory.cpp
@@ -1046,8 +1030,8 @@ struct exp_with_param {
 //             }
 
 //         }
-//         ttnn::generic_op(std::vector<Tensor>{device_input_tensor_a, device_input_tensor_b}, device_output_tensor, program_attributes);
-//         auto device_output = device_output_tensor.cpu().to(Layout::ROW_MAJOR);
+//         ttnn::generic_op(std::vector<Tensor>{device_input_tensor_a, device_input_tensor_b, device_output_tensor}, program_attributes);
+//         auto device_output = device_output_tensor.cpu().to_layout(Layout::ROW_MAJOR);
 
 //         auto allclose = ttnn::allclose<bfloat16>(host_output, device_output);
 //         TT_FATAL(allclose, "Error");
@@ -1505,11 +1489,11 @@ void test_matmul() {
             num_tiles_written += num_output_tiles_per_core;
         }
 
-        // output = ttnn::generic_op(std::vector<Tensor>{a, b}, program_attributes, output);
+        ttnn::generic_op(std::vector<Tensor>{a, b, output}, program_attributes);
 
         auto output_tensor = output.cpu();
 
-        auto allclose = ttnn::allclose<bfloat16>(mm.cpu(), output_tensor);
+        auto allclose = ttnn::allclose<bfloat16>(mm.cpu(), output_tensor, 1e-1f, 1e-5f);
 
         TT_FATAL(allclose, "Error");
     }
@@ -1602,11 +1586,10 @@ void test_eltwise_sfpu() {
         .compute_attributes = {compute_attributes},
     };
 
-    // Tensor device_output = ttnn::generic_op(std::vector<Tensor>{device_input_tensor}, program_attributes, device_output_tensor);
-    Tensor device_output = ttnn::generic_op(std::vector{device_input_tensor}, program_attributes, device_output_tensor);
+    Tensor device_output = ttnn::generic_op(std::vector{device_input_tensor, device_output_tensor}, program_attributes);
     Tensor golden = ttnn::exp(device_input_tensor);
 
-    auto allclose = ttnn::allclose<bfloat16>(golden.cpu(), device_output.cpu(), 1e-1f, 1e-5f);
+    auto allclose = ttnn::allclose<bfloat16>(golden.cpu(), device_output.cpu());
 
     TT_FATAL(allclose, "Error");
 
@@ -1614,11 +1597,10 @@ void test_eltwise_sfpu() {
 }
 
 int main(int argc, char** argv) {
-    // test_operation_infrastructure();
-    // test_shape_padding();
     // test_numerically();
     // test_program_cache();
     // test_matmul();
+    // test_binary_add_interleaved();
     test_eltwise_sfpu();
     return 0;
 }
