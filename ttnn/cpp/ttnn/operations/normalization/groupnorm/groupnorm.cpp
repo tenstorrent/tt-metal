@@ -59,7 +59,8 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
         input_shape[-1],
         num_groups);
 
-    const auto nhw = input_shape[0] * input_shape[1] * input_shape[2];
+    const auto& input_padded_shape = input_tensor.get_padded_shape();
+    const auto nhw = input_padded_shape[0] * input_padded_shape[1] * input_padded_shape[2];
     TT_FATAL(
         (nhw % ttnn::types::TILE_SIZE) == 0,
         "Invalid tensor dimensions: The product of NHW dimensions ({}) must be divisible by the tile size ({}).",
