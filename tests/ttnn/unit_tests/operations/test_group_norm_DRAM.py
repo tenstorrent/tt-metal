@@ -48,13 +48,13 @@ def manual_group_norm(input_tensor, num_groups, eps=1e-2):
         # (8, 768, 1, 512, 32, 3, 8, 8), # test batch size 8 (no multicast), but uneven num_out_blocks divisor
         # (9, 768, 1, 512, 32, 2, 8, 8), # test batch size 9 (uneven batch sizes)
         # (1, 128, 1, 512, 32, 2, 4, 8), # test all groups on core fit in less than one tile, so need to reduce col core count
-        # (4, 768, 1, 6400, 32, 8, 8, 8), # Mochi VAE variant 1 (sharded, so T=1/8th the full tensor)
-        # (11, 512, 1, 25600, 32, 32, 8, 8), # Mochi VAE variant 2 (sharded, so T=1/8th the full tensor)
-        # (21, 256, 1, 102400, 32, 128, 8, 8), # Mochi VAE variant 3 (sharded, so T=1/8th the full tensor)
-        # (21, 128, 1, 409600, 32, 512, 4, 8), # Mochi VAE variant 4 (sharded, so T=1/8th the full tensor)
+        (4, 768, 60, 106, 32, 8, 8, 8),  # Mochi VAE variant 1 (sharded, so T=1/8th the full tensor)
+        # (11, 512, 120, 212, 32, 10, 8, 8), # Mochi VAE variant 2 (sharded, so T=1/8th the full tensor)
+        # (21, 256, 240, 424, 32, 40, 8, 8), # Mochi VAE variant 3 (sharded, so T=1/8th the full tensor)
+        # (21, 128, 480, 848, 32, 135, 4, 8), # Mochi VAE variant 4 (sharded, so T=1/8th the full tensor)
     ],
 )
-def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x):
+def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x):
     torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip()
@@ -72,13 +72,16 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
 
     # input tensor
     input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
-    input_tensor = ttnn.from_torch(
+    input_tensor_row_major = ttnn.from_torch(
+        #    input_tensor_tilized = ttnn.from_torch(
         input_tensor,
         dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        #        layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    input_tensor_tilized = ttnn.tilize_with_zero_padding(input_tensor_row_major, use_multicore=True)
 
     # input mask
     input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y)
@@ -111,7 +114,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
 
     # groupnorm
     output_tensor = ttnn.group_norm(
-        input_tensor,
+        input_tensor_tilized,
         num_groups=num_groups,
         input_mask=input_mask_tensor,
         weight=gamma_t,
