@@ -28,8 +28,8 @@ namespace ttnn {
 
 class TTNNFixtureWithDevice : public ::testing::Test {
 private:
-    int trace_region_size;
-    int l1_small_size;
+    int trace_region_size_ = DEFAULT_TRACE_REGION_SIZE;
+    int l1_small_size_ = DEFAULT_L1_SMALL_SIZE;
 
 protected:
     tt::tt_metal::IDevice* device_ = nullptr;
@@ -42,18 +42,18 @@ protected:
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         device_ = tt::tt_metal::CreateDevice(
             /*device_id=*/0,
-            /*num_hw_cqs*/ 1,
-            /*l1_small_size*/ l1_small_size,
-            /*trace_region_size*/ trace_region_size);
+            /*num_hw_cqs=*/1,
+            l1_small_size_,
+            trace_region_size_);
     }
 
     void TearDown() override { tt::tt_metal::CloseDevice(device_); }
 
 public:
-    TTNNFixtureWithDevice() : trace_region_size(DEFAULT_TRACE_REGION_SIZE), l1_small_size(DEFAULT_L1_SMALL_SIZE) {}
+    TTNNFixtureWithDevice() : trace_region_size_(DEFAULT_TRACE_REGION_SIZE), l1_small_size_(DEFAULT_L1_SMALL_SIZE) {}
 
     TTNNFixtureWithDevice(int trace_region_size, int l1_small_size) :
-        trace_region_size(trace_region_size), l1_small_size(l1_small_size) {}
+        trace_region_size_(trace_region_size), l1_small_size_(l1_small_size) {}
 };
 
 // TODO: deduplicate the code with `TTNNFixtureWithDevice`.
