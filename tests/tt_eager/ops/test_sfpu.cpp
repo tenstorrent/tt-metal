@@ -88,13 +88,14 @@ bool run_sfpu_test(const string& sfpu_name, int tile_factor = 1, bool use_DRAM =
         }
 
         tt_metal::BufferType buffType = (use_DRAM) ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1;
-        tt_metal::InterleavedBufferConfig buff_config{
-            .device = device.get(), .size = dram_buffer_size, .page_size = page_size, .buffer_type = buffType};
+        tt_metal::distributed::DeviceLocalBufferConfig buff_config{.page_size = page_size, .buffer_type = buffType};
+        tt_metal::distributed::MeshBufferConfig mesh_config =
+            tt_metal::distributed::ReplicatedBufferConfig{.size = dram_buffer_size};
 
-        auto src_dram_buffer = tt_metal::distributed::AnyBuffer::create(buff_config);
-        uint32_t dram_buffer_src_addr = src_dram_buffer.get_buffer()->address();
-        auto dst_dram_buffer = tt_metal::distributed::AnyBuffer::create(buff_config);
-        uint32_t dram_buffer_dst_addr = dst_dram_buffer.get_buffer()->address();
+        auto src_dram_buffer = tt_metal::distributed::MeshBuffer::create(mesh_config, buff_config, device.get());
+        uint32_t dram_buffer_src_addr = src_dram_buffer->address();
+        auto dst_dram_buffer = tt_metal::distributed::MeshBuffer::create(mesh_config, buff_config, device.get());
+        uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input
         // CB CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math
@@ -159,10 +160,7 @@ bool run_sfpu_test(const string& sfpu_name, int tile_factor = 1, bool use_DRAM =
             dram_buffer_size, std::chrono::system_clock::now().time_since_epoch().count());
 
         tt_metal::distributed::WriteShard(
-            device->mesh_command_queue(0),
-            src_dram_buffer.get_mesh_buffer(),
-            src_vec,
-            *device->get_view().coord_range().begin());
+            device->mesh_command_queue(0), src_dram_buffer, src_vec, *device->get_view().coord_range().begin());
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -191,10 +189,7 @@ bool run_sfpu_test(const string& sfpu_name, int tile_factor = 1, bool use_DRAM =
 
         std::vector<uint32_t> result_vec;
         tt_metal::distributed::ReadShard(
-            device->mesh_command_queue(0),
-            result_vec,
-            dst_dram_buffer.get_mesh_buffer(),
-            *device->get_view().coord_range().begin());
+            device->mesh_command_queue(0), result_vec, dst_dram_buffer, *device->get_view().coord_range().begin());
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
