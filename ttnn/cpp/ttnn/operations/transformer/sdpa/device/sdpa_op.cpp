@@ -28,7 +28,8 @@ void ScaledDotProductAttention::validate(
         TT_FATAL(
             input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::BFLOAT8_B ||
                 input_tensor.get_dtype() == DataType::BFLOAT4_B,
-            "Data type of input tensor must be BFLOAT16, BFLOAT8_B, or BFLOAT4_B");
+            "Data type of input tensor must be BFLOAT16, BFLOAT8_B, or BFLOAT4_B and is {}",
+            input_tensor.get_dtype());
         TT_FATAL(
             input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Operands to SDPA need to be in DRAM");
