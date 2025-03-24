@@ -209,8 +209,8 @@ models/demos/wormhole/yolov4 @dvartaniansTT @mbahnasTT @tenstorrent/metalium-dev
 models/demos/**/*resnet*  @tt-aho @tenstorrent/metalium-developers-convolutions
 models/experimental/ @ayerofieiev-tt @uaydonat
 models/experimental/functional_unet @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions
-models/experimental/*vit @mbahnasTT @uaydonat
-models/experimental/*yolo* @mbahnasTT @uaydonat
+models/experimental/*vit/ @mbahnasTT @uaydonat
+models/experimental/*yolo*/ @mbahnasTT @uaydonat
 models/experimental/stable_diffusion @mbahnasTT @uaydonat
 models/demos/segformer @mbahnasTT @uaydonat @tenstorrent/metalium-developers-convolutions
 models/perf/ @yieldthought @uaydonat
