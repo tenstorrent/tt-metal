@@ -58,7 +58,7 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
         for (int j = 0; j < kNumIterations; j++) {
             Tensor t0_tensor = t0_host_tensor.to_device(device, mem_cfg, t0_io_cq);
             EXPECT_TRUE(is_tensor_on_device(t0_tensor));
-            EXPECT_THAT(t0_tensor.to_vector<float>(), Pointwise(FloatEq(), t0_host_data));
+            EXPECT_THAT(t0_tensor.to_vector<float>(t0_io_cq), Pointwise(FloatEq(), t0_host_data));
         }
     });
 
@@ -66,7 +66,7 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
         for (int j = 0; j < kNumIterations; j++) {
             Tensor t1_tensor = t1_host_tensor.to_device(device, mem_cfg, t1_io_cq);
             EXPECT_TRUE(is_tensor_on_device(t1_tensor));
-            EXPECT_THAT(t1_tensor.to_vector<float>(), Pointwise(FloatEq(), t1_host_data));
+            EXPECT_THAT(t1_tensor.to_vector<float>(t1_io_cq), Pointwise(FloatEq(), t1_host_data));
         }
     });
 
