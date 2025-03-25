@@ -9,6 +9,7 @@
 //    double buffered ScratchBuf for out of band data (e.g., from DRAM)
 //  - syncs w/ dispatcher via 2 semaphores, page_ready, page_done
 
+#include "fabric_host_interface.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -71,9 +72,10 @@ constexpr uint32_t upstream_mesh_id = get_compile_time_arg_val(28);
 constexpr uint32_t upstream_dev_id = get_compile_time_arg_val(29);
 constexpr uint32_t fabric_router_noc_xy = get_compile_time_arg_val(30);
 constexpr uint32_t client_interface_addr = get_compile_time_arg_val(31);
+constexpr uint32_t header_rb = get_compile_time_arg_val(32);
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(32);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(33);
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(33);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(34);
 
 constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
@@ -119,6 +121,7 @@ constexpr uint32_t prefetch_q_log_minsize = 4;
 const uint32_t scratch_db_top[2] = {scratch_db_base0, scratch_db_base1};
 
 constexpr uint32_t cmddat_q_pages_per_block = cmddat_q_pages / cmddat_q_blocks;
+constexpr uint32_t header_rb_entries = header_rb / tt::tt_fabric::PACKET_HEADER_SIZE_BYTES;
 
 // Currently capping the same as dispatch
 constexpr uint32_t max_read_packed_cmd =
