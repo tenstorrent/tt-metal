@@ -20,8 +20,8 @@ from models.utility_functions import (
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.demos.ttnn_resnet.tt.custom_preprocessing import create_custom_mesh_preprocessor
-from models.experimental.functional_vit.tt import ttnn_optimized_sharded_vit_wh
-from models.experimental.vit.vit_helper_funcs import get_data_loader, get_batch
+from models.demos.vit.tt import ttnn_optimized_sharded_vit_wh
+from models.demos.vit.vit_helper_funcs import get_data_loader, get_batch
 import transformers
 from transformers import AutoImageProcessor
 
