@@ -102,7 +102,7 @@ def run_llama3_demo(
     print_to_file,
     weights,
     layers,
-    assert_tsu,
+    stress_test,
 ):
     # Creat batch output file
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -300,10 +300,11 @@ def run_llama3_demo(
         )
         logger.info(f"sampling done")
 
-    ttnn.plus_one(
-        current_pos_tensor,
-        sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
-    )
+    if not stress_test:
+        ttnn.plus_one(
+            current_pos_tensor,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        )
     # profiler.end(f"plus one position done")
 
     # Capture Trace
@@ -334,10 +335,11 @@ def run_llama3_demo(
         tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids
     )
 
-    ttnn.plus_one(
-        current_pos_tensor,
-        sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
-    )
+    if not stress_test:
+        ttnn.plus_one(
+            current_pos_tensor,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        )
     # ttnn.plus_one(rot_mat_idxs)  # FIXME <- This won't work since embedding requires uint32 and plus_one only works for int32
 
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
@@ -395,7 +397,8 @@ def run_llama3_demo(
         # Update current pos and mat idxs on host and send to device
         # TODO This is required for now since we cannot ttnn.plus_one(rot_mat_idxs) while it being uint32.
         # If this tensor is int32, it won't be supported by ttnn.embedding
-        current_pos += 1
+        if not stress_test:
+            current_pos += 1
         rot_mat_idxs_updated = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
         ttnn.copy_host_to_device_tensor(rot_mat_idxs_updated, rot_mat_idxs)
         # ttnn.synchronize_device(mesh_device)
@@ -448,7 +451,7 @@ def run_llama3_demo(
             f"Iteration {iteration}: {1000*iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
         )
         tsu_threshold = 128 if layers == 1 else 28
-        if assert_tsu:
+        if not stress_test:
             assert tokens_per_second_per_user > tsu_threshold, "Throughput is less than 28 tokens per second per user"
         profiler.end(f"log_printing_iter_{iteration}", iteration=iteration)
 
@@ -483,7 +486,7 @@ def run_llama3_demo(
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 # FAKE_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export FAKE_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, assert_tsu",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test",
     [
         # (  # Batch-1 run (Latency) - single user, small prompt
         #     "models/demos/llama3/demo/input_data_questions_prefill_128.json",  # input_prompts
@@ -506,19 +509,19 @@ def run_llama3_demo(
             False,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
-            True,  # assert_tsu
+            False,  # stress_test
         ),
-        (  # Batch-32 Long-context: stress test
+        (  # Stress test: batch-32 very long generations but at same token index
             "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
             32,  # batch_size
-            128*1024,  # max_generated_tokens
+            4*128*1024,  # max_generated_tokens (same index for stress test)
             False,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
-            False,  # assert_tsu
+            True,  # stress_test
         ),
     ],
     ids=[
@@ -569,7 +572,7 @@ def test_llama_demo(
     use_program_cache,
     is_ci_env,
     reset_seeds,
-    assert_tsu,
+    stress_test,
 ):
     if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
         pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
@@ -604,5 +607,5 @@ def test_llama_demo(
         print_to_file=False,
         weights=weights,
         layers=layers,
-        assert_tsu=assert_tsu,
+        stress_test=stress_test,
     )
