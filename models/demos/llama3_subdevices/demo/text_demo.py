@@ -398,7 +398,7 @@ def test_demo_text(
             ) = preprocess_inputs_prefill(
                 input_prompts,
                 tokenizer,
-                model_args,
+                [model_args],
                 instruct,
                 max_generated_tokens,
             )
