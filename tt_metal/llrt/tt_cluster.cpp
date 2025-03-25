@@ -132,7 +132,7 @@ bool Cluster::is_galaxy_cluster() const { return this->cluster_type_ == ClusterT
 
 ClusterType Cluster::get_cluster_type() const { return this->cluster_type_; }
 
-FabricConfig Cluster::get_fabric_config() const { return this->fabric_config_; }
+tt_metal::FabricConfig Cluster::get_fabric_config() const { return this->fabric_config_; }
 
 BoardType Cluster::get_board_type(chip_id_t chip_id) const {
   return this->cluster_desc_->get_board_type(chip_id);
@@ -994,9 +994,9 @@ tt::tt_fabric::ControlPlane* Cluster::get_control_plane() {
     return control_plane_.get();
 }
 
-void Cluster::initialize_fabric_config(FabricConfig fabric_config) {
+void Cluster::initialize_fabric_config(tt_metal::FabricConfig fabric_config) {
     this->fabric_config_ = fabric_config;
-    if (fabric_config != FabricConfig::DISABLED) {
+    if (fabric_config != tt_metal::FabricConfig::DISABLED) {
         this->reserve_ethernet_cores_for_fabric_routers();
     } else {
         this->release_ethernet_cores_for_fabric_routers();

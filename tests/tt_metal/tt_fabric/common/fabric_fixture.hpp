@@ -36,7 +36,7 @@ protected:
     std::vector<tt::tt_metal::IDevice*> devices_;
     bool slow_dispatch_;
 
-    void SetUpDevices(FabricConfig fabric_config) {
+    void SetUpDevices(tt_metal::FabricConfig fabric_config) {
         slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch_) {
             tt::log_info(tt::LogTest, "Running fabric api tests with slow dispatch");
@@ -99,16 +99,16 @@ protected:
 
     void TearDown() override {
         tt::tt_metal::detail::CloseDevices(devices_map_);
-        tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::DISABLED);
+        tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
     }
 };
 
 class Fabric1DFixture : public BaseFabricFixture {
-    void SetUp() override { this->SetUpDevices(tt::FabricConfig::FABRIC_1D); }
+    void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_1D); }
 };
 
 class Fabric2DFixture : public BaseFabricFixture {
-    void SetUp() override { this->SetUpDevices(tt::FabricConfig::FABRIC_2D); }
+    void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_2D); }
 };
 
 }  // namespace fabric_router_tests
