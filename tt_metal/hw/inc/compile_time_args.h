@@ -17,6 +17,11 @@ constexpr auto kernel_compile_time_args = make_array<std::uint32_t>(KERNEL_COMPI
 constexpr auto kernel_compile_time_args = make_array<std::uint32_t>();
 #endif
 
+template <uint32_t Idx>
+constexpr std::enable_if_t<(Idx < kernel_compile_time_args.size()), uint32_t> get_ct_arg() {
+    return kernel_compile_time_args[Idx];
+}
+
 // clang-format off
 /**
  * Returns the value of a constexpr argument from kernel_compile_time_args array provided during kernel creation using
@@ -29,5 +34,4 @@ constexpr auto kernel_compile_time_args = make_array<std::uint32_t>();
  * | arg_idx               | The index of the argument          | uint32_t              | 0 to 31     | True     |
  */
 // clang-format on
-#define get_compile_time_arg_val(arg_idx) \
-    ((arg_idx) < kernel_compile_time_args.size() ? kernel_compile_time_args[(arg_idx)] : 0)
+#define get_compile_time_arg_val(arg_idx) get_ct_arg<arg_idx>()
