@@ -202,7 +202,7 @@ template <bool DRAM>
 inline void pack_dim3_bf16_rest8_optimized(
     uint32_t num_tiles, uint32_t ring_size, uint32_t tile_cols_per_chip, InterleavedAddrGenFast<DRAM>& addrgen) {
     uint32_t tile_id = 0;
-    const uint32_t num_contig2 = 12 * 5;
+    const uint32_t num_contig2 = num_banks * 5;
     uint32_t row = num_tiles / tile_cols_per_chip;
     DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] BEGIN pack_dim3_bf16_rest8_optimized num_tiles: " << num_tiles
            << ", packet_size_in_pages: " << packet_size_in_pages << "\n";
@@ -256,7 +256,7 @@ template <bool DRAM>
 inline void pack_falcon40(
     uint32_t num_tiles, uint32_t ring_size, uint32_t tile_cols_per_chip, InterleavedAddrGenFast<DRAM>& addrgen) {
     uint32_t tile_id = 0;
-    const uint32_t num_contig2 = 12;
+    const uint32_t num_contig2 = num_banks;
     uint32_t row = num_tiles / tile_cols_per_chip;
     if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == T3K_FALCON40_8192) {
         DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] T3K_FALCON40_8192 row: " << row << " \n";
@@ -514,9 +514,9 @@ void kernel_main() {
 
     if constexpr (last_dim) {
         if constexpr (packet_size_in_pages == 2) {
-            if (tile_cols_per_chip == 128) {
+            if (is_dram && tile_cols_per_chip == 128) {
                 pack_dim3_bf16_rest8_optimized(num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
-            } else if (tile_cols_per_chip == 16) {
+            } else if (is_dram && tile_cols_per_chip == 16) {
                 pack_dim3_bf16_rest16_optimized(num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
             } else {
                 pack_contig_tiles_dim3_bf16<is_dram>(
