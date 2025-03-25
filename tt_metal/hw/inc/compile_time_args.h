@@ -18,7 +18,8 @@ constexpr auto kernel_compile_time_args = make_array<std::uint32_t>();
 #endif
 
 template <uint32_t Idx>
-constexpr std::enable_if_t<(Idx < kernel_compile_time_args.size()), uint32_t> get_ct_arg() {
+constexpr uint32_t get_ct_arg() {
+    static_assert(Idx < kernel_compile_time_args.size(), "Index out of range");
     return kernel_compile_time_args[Idx];
 }
 
