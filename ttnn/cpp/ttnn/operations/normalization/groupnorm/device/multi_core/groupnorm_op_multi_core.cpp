@@ -2452,13 +2452,13 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
 
             if (gamma_tensor.has_value()) {
-                runtime_args[3] = gamma_tensor.value().buffer()->address();
+                runtime_args[4] = gamma_tensor.value().buffer()->address();
             }
             if (beta_tensor.has_value()) {
-                runtime_args[4] = beta_tensor.value().buffer()->address();
+                runtime_args[5] = beta_tensor.value().buffer()->address();
             }
             if (mask_tensor.has_value()) {
-                runtime_args[5] = mask_tensor.value().buffer()->address();
+                runtime_args[6] = mask_tensor.value().buffer()->address();
             }
         }
     };

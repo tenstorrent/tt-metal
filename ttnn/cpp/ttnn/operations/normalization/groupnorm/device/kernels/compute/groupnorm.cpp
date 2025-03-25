@@ -623,16 +623,26 @@ void MAIN {
 
                 if constexpr (do_gamma) {
                     index_h_offset = 0;
-                    mul_bcast_rows_init_short(cb_reread_write_out, cb_gamma);
                     cb_reserve_back(cb_outgamma, out_block_hw_normal);
                     cb_wait_front(cb_gamma, per_core_N);  // TODO FIX THIS, ONLY LOAD ONCE ADD POP
                     cb_wait_front(cb_reread_write_out, out_block_hw_normal);
                     for (uint32_t i = 0; i < out_block_h_actual; ++i) {
                         for (uint32_t j = 0; j < block_w_curr; ++j) {
+                            if (((start_group_reset_index < num_groups_per_reset - 1) && (j < block_w_curr - 1)) ||
+                                (start_group_reset_index == num_groups_per_reset - 1)) {
+                                mul_bcast_rows_init_short(cb_reread_write_out, cb_gamma);
+                            } else {
+                                copy_tile_init(cb_reread_write_out);
+                            }
                             tile_regs_acquire();
                             uint32_t index = j + index_h_offset;
                             uint32_t index_gamma = j + index_g_offset;
-                            mul_tiles_bcast_rows(cb_reread_write_out, cb_gamma, index, index_gamma, dst0);
+                            if (((start_group_reset_index < num_groups_per_reset - 1) && (j < block_w_curr - 1)) ||
+                                (start_group_reset_index == num_groups_per_reset - 1)) {
+                                mul_tiles_bcast_rows(cb_reread_write_out, cb_gamma, index, index_gamma, dst0);
+                            } else {
+                                copy_tile(cb_reread_write_out, index, dst0);
+                            }
                             tile_regs_commit();
                             tile_regs_wait();
                             pack_tile(dst0, cb_outgamma);
@@ -647,15 +657,25 @@ void MAIN {
 
                 if constexpr (do_beta) {
                     index_h_offset = 0;
-                    add_bcast_rows_init_short(cb_inbeta, cb_beta);
                     cb_reserve_back(cb_outbeta, out_block_hw_normal);
                     cb_wait_front(cb_beta, per_core_N);  // TODO FIX THIS, ONLY LOAD ONCE ADD POP
                     for (uint32_t i = 0; i < out_block_h_actual; ++i) {
                         for (uint32_t j = 0; j < block_w_curr; ++j) {
+                            if (((start_group_reset_index < num_groups_per_reset - 1) && (j < block_w_curr - 1)) ||
+                                (start_group_reset_index == num_groups_per_reset - 1)) {
+                                add_bcast_rows_init_short(cb_inbeta, cb_beta);
+                            } else {
+                                copy_tile_init(cb_inbeta);
+                            }
                             tile_regs_acquire();
                             uint32_t index = j + index_h_offset;
                             uint32_t index_beta = j + index_g_offset;
-                            add_tiles_bcast_rows(cb_inbeta, cb_beta, index, index_beta, dst0);
+                            if (((start_group_reset_index < num_groups_per_reset - 1) && (j < block_w_curr - 1)) ||
+                                (start_group_reset_index == num_groups_per_reset - 1)) {
+                                add_tiles_bcast_rows(cb_inbeta, cb_beta, index, index_beta, dst0);
+                            } else {
+                                copy_tile(cb_inbeta, index, dst0);
+                            }
                             tile_regs_commit();
                             tile_regs_wait();
                             pack_tile(dst0, cb_outbeta);

@@ -41,11 +41,11 @@ void kernel_main() {
     constexpr uint32_t block_w = get_compile_time_arg_val(22);
     constexpr uint32_t block_hw = get_compile_time_arg_val(23);
 
-#define stick_size_is_pow2 get_compile_time_arg_val(22) == 1
+#define stick_size_is_pow2 get_compile_time_arg_val(24) == 1
 #if (stick_size_is_pow2)
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(23);
+    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(25);
 #else
-    constexpr uint32_t page_size = get_compile_time_arg_val(24);
+    constexpr uint32_t page_size = get_compile_time_arg_val(25);
 #endif
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
