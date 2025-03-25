@@ -2,9 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import pytest
 import torch
 import ttnn
+import sys
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_grayskull, torch_random
@@ -412,3 +414,73 @@ def run_reduce_sum_h(device, batch_size, h, w, dim):
 def test_run_reduce_sum_h_after_max_pool(device, input_shape, kernel_size):
     run_maxpool(device, input_shape, kernel_size, kernel_size, (0, 0), (1, 1))
     run_reduce_sum_h(device, 1, 32, 32, -2)
+
+
+@pytest.mark.parametrize(
+    argnames="tensor_shape, keepdim, dim, op",
+    argvalues=[
+        ([], True, None, "mean"),
+        ([], True, None, "std"),
+        ([32], False, -1, "sum"),
+        ([32, 0], True, 0, "max"),
+        ([0, 0, 0], True, 2, "min"),
+        ([0, 32, 0], False, -2, "std"),
+        ([32, 32, 32, 0], False, 3, "var"),
+    ],
+)
+def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
+    """
+    Test the compatibility of the torch and ttnn output for the given operation and different
+    tensor shapes, keepdim, and dim values.
+    Checks for the exactness of shape, values, and dtype of the output tensors.
+    Some operations raise exceptions in torch, we check if the same behavior is observed in ttnn.
+    Note: We do not enforce the same exception type or message.
+    """
+    rank = len(tensor_shape)
+
+    torch_tensor = torch.randn(*tensor_shape) if rank > 0 else torch.randn(())
+    ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    torch_op, ttnn_op = getattr(torch, op), getattr(ttnn, op)
+
+    # Run on both and flag exceptions
+    torch_errored = False
+    try:
+        torch_result = torch_op(torch_tensor, dim=dim, keepdim=keepdim) if dim is not None else torch_op(torch_tensor)
+    except IndexError:
+        torch_errored = True
+
+    ttnn_errored = False
+    try:
+        ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim) if dim is not None else ttnn_op(ttnn_tensor)
+    except RuntimeError:
+        ttnn_errored = True
+
+    assert torch_errored == ttnn_errored, f"torch: {torch_errored}, ttnn: {ttnn_errored}"
+
+    # Skip the rest of the test if an exception was raised in both
+    if torch_errored:
+        return
+
+    # torch's min/max double as argmin/argmax, so we need to extract the values only
+    torch_result = (
+        torch_result.values
+        if isinstance(torch_result, (torch.return_types.min, torch.return_types.max))
+        else torch_result
+    )
+
+    ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
+
+    assert_with_pcc(torch_result, ttnn_result, 0.99)
+
+    atol = rtol = 0.1
+    # There is a scale factor difference between torch and ttnn for std and var
+    # But for other operations, it should be close. Issue #19478
+    if op == "std":
+        atol, rtol = sys.maxsize, 0.1 + math.sqrt(2)
+    elif op == "var":
+        atol, rtol = sys.maxsize, 0.1 + 2
+
+    assert torch.allclose(
+        torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True
+    ), f"torch: {torch_result}, ttnn: {ttnn_result}"
