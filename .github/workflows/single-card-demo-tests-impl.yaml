@@ -63,7 +63,8 @@ jobs:
           name: ${{ inputs.wheel-artifact-name }}
       - name: Enable Performance mode
         if: ${{ matrix.test-group.name == 'N300_performance' }}
-        run: sudo cpupower frequency-set -g performance
+        run: |
+          sudo cpupower frequency-set -g performance
       - uses: ./.github/actions/ensure-active-weka-mount
       - name: Run demo regression tests
         uses: ./.github/actions/docker-run
@@ -77,6 +78,8 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GITHUB_ACTIONS=true
+            -e CI=true
             -v /mnt/MLPerf:/mnt/MLPerf:ro
           install_wheel: true
           run_args: |
@@ -116,4 +119,5 @@ jobs:
           prefix: "test_reports_"
       - name: Disable Performance mode
         if: ${{ matrix.test-group.name == 'N300_performance' }}
-        run: sudo cpupower frequency-set -g ondemand
+        run: |
+          sudo cpupower frequency-set -g ondemand
