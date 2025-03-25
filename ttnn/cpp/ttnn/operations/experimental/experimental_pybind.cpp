@@ -40,6 +40,7 @@
 #include "ttnn/operations/experimental/dropout/dropout_pybind.hpp"
 #include "ttnn/operations/experimental/reshape/view_pybind.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_pybind.hpp"
+#include "ttnn/operations/experimental/reduction/sort/sort_pybind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -88,6 +89,8 @@ void py_module(py::module& module) {
     reshape::detail::py_bind_view(module);
 
     gelu_backward::detail::bind_experimental_gelu_backward_operation(module);
+
+    reduction::detail::bind_reduction_sort_operation(module);
 
     // CCL ops
     auto m_experimental_ccl =
