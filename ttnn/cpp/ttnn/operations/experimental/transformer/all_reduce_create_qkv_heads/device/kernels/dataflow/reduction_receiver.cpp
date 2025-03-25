@@ -208,14 +208,14 @@ void kernel_main() {
 
         if constexpr (PHASES_TO_READ == 1) {  // reader kernel (NCRISC)
             DPRINT << "NCRISC WRITE" << ENDL();
-            // noc_async_write(read_addr, write_addr, SUBTILE_LINE_BYTES);
-            noc_async_write(get_read_ptr(cb_id_zero), write_addr, SUBTILE_LINE_BYTES);
+            noc_async_write(read_addr, write_addr, SUBTILE_LINE_BYTES);
+            // noc_async_write(get_read_ptr(cb_id_zero), write_addr, SUBTILE_LINE_BYTES);
         }
         if constexpr (PHASES_TO_READ == 2) {  // writer kernel(BRISC)
             DPRINT << "BRISC WRITE" << ENDL();
-            // noc_async_write(
-            //     read_addr + FACE_HW * ELEMENT_SIZE, write_addr + FACE_HW * ELEMENT_SIZE, SUBTILE_LINE_BYTES);
-            noc_async_write(get_read_ptr(cb_id_zero), write_addr + FACE_HW * ELEMENT_SIZE, SUBTILE_LINE_BYTES);
+            noc_async_write(
+                read_addr + FACE_HW * ELEMENT_SIZE, write_addr + FACE_HW * ELEMENT_SIZE, SUBTILE_LINE_BYTES);
+            // noc_async_write(get_read_ptr(cb_id_zero), write_addr + FACE_HW * ELEMENT_SIZE, SUBTILE_LINE_BYTES);
         }
         noc_async_read_barrier();
     }
