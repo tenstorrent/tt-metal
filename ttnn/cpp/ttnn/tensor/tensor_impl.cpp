@@ -1290,7 +1290,7 @@ Tensor pad(
         tensor.get_storage());
     return Tensor(
         OwnedStorage{output_buffer},
-        tensor.get_logical_shape(),
+        output_padded_shape,
         output_padded_shape,
         tensor.get_dtype(),
         tensor.get_layout(),
