@@ -255,22 +255,8 @@ Result conv2d_DRAM(
                         1,
                         1,
                     }  // Step,
-                    // );
-                    ,
-                    input_memory_config);
+                );
                 log_debug(tt::LogOp, "Sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
-                // if (pad_top > 0 || pad_bottom > 0) {
-                //     auto pad_top_tensor = ttnn::pad(
-                //         queue_id,
-                //         sliced_input_tensor,
-                //         std::vector<std::pair<uint32_t, uint32_t>>{{0, 0}, {pad_top, pad_bottom}, {0, 0}, {0, 0}},
-                //         0,
-                //         true,
-                //         std::nullopt);
-                //     sliced_input_tensor = pad_top_tensor;
-                // }
-                // log_debug(tt::LogOp, "Padded sliced input tensor shape: {}",
-                // sliced_input_tensor.get_logical_shape());
                 auto conv_config_l1 = conv_config;
                 conv_config_l1.reshard_if_not_optimal = true;
                 conv_config_l1.output_layout = Layout::TILE;
@@ -395,21 +381,8 @@ Result conv2d_DRAM(
                     1,
                     1,
                 }  // Step
-                // );
-                ,
-                input_memory_config);
+            );
             log_info(tt::LogOp, "Sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
-            // if (pad_left > 0 || pad_right > 0) {
-            //     auto pad_top_tensor = ttnn::pad(
-            //         queue_id,
-            //         sliced_input_tensor,
-            //         std::vector<std::pair<uint32_t, uint32_t>>{{0, 0}, {0, 0}, {pad_left, pad_right}, {0, 0}},
-            //         0,
-            //         true,
-            //         std::nullopt);
-            //     sliced_input_tensor = pad_top_tensor;
-            // }
-            // log_info(tt::LogOp, "Padded sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
             auto conv_config_l1 = conv_config;
             conv_config_l1.reshard_if_not_optimal = true;
             conv_config_l1.output_layout = Layout::TILE;
