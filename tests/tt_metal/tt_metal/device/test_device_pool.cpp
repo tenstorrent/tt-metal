@@ -46,12 +46,15 @@ TEST(DevicePool, DevicePoolReconfigDevices) {
     std::vector<chip_id_t> device_ids{0};
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
+    int worker_l1_size = 0;
     const auto& dispatch_core_config = llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
     DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     auto devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {
+        auto& config = dev->allocator()->get_config();
         ASSERT_TRUE((int)(dev->allocator()->get_config().l1_small_size) == l1_small_size);
         ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
+        EXPECT_NE(config.l1_unreserved_base, config.worker_l1_size);
         ASSERT_TRUE(dev->is_initialized());
     }
 
@@ -60,10 +63,14 @@ TEST(DevicePool, DevicePoolReconfigDevices) {
         dev->close();
     }
     l1_small_size = 2048;
-    DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
+    worker_l1_size = 4096;
+    DevicePool::initialize(
+        device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config, {}, worker_l1_size);
     devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {
-        ASSERT_TRUE((int)(dev->allocator()->get_config().l1_small_size) == l1_small_size);
+        auto& config = dev->allocator()->get_config();
+        ASSERT_TRUE((int)(config.l1_small_size) == l1_small_size);
+        EXPECT_EQ(config.worker_l1_size - config.l1_unreserved_base, worker_l1_size);
         ASSERT_TRUE(dev->is_initialized());
     }
     for (const auto& dev : devices) {

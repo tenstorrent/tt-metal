@@ -28,13 +28,16 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
     const std::optional<MeshCoordinate>& offset,
-    const std::vector<int>& physical_device_ids) {
+    const std::vector<int>& physical_device_ids,
+    size_t worker_l1_size) {
     return MeshDevice::create(
         MeshDeviceConfig(mesh_shape, offset, physical_device_ids),
         l1_small_size,
         trace_region_size,
         num_command_queues,
-        dispatch_core_config);
+        dispatch_core_config,
+        {},
+        worker_l1_size);
 }
 
 void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device) { mesh_device->close(); }

@@ -9,6 +9,7 @@
 #include <event.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <trace_buffer.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
 
@@ -93,7 +94,10 @@ HWCommandQueue::HWCommandQueue(
     // Set the affinity of the completion queue reader.
     set_device_thread_affinity(this->completion_queue_thread_, this->completion_queue_reader_core_);
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
-        this->config_buffer_mgr_, this->expected_num_workers_completed_, DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
+        this->config_buffer_mgr_,
+        this->expected_num_workers_completed_,
+        DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
+        device_->allocator()->get_config().l1_unreserved_base);
 }
 
 uint32_t HWCommandQueue::id() const { return this->id_; }
@@ -120,7 +124,10 @@ void HWCommandQueue::reset_worker_state(
     // on host, along with the config_buf_manager being reset, since we wait for all programs across SubDevices
     // to complete as part of resetting the worker state
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
-        this->config_buffer_mgr_, this->expected_num_workers_completed_, device_->num_sub_devices());
+        this->config_buffer_mgr_,
+        this->expected_num_workers_completed_,
+        device_->num_sub_devices(),
+        device_->allocator()->get_config().l1_unreserved_base);
     if (reset_launch_msg_state) {
         std::for_each(
             this->worker_launch_message_buffer_state_->begin(),

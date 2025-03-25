@@ -45,6 +45,7 @@ void ttnn_device(py::module& module) {
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
         py::arg("dispatch_core_config") = tt::tt_metal::DispatchCoreConfig{},
+        py::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE,
         py::return_value_policy::reference,
         R"doc(
             Open a device with the given device_id. If the device is already open, return the existing device.
@@ -53,6 +54,7 @@ void ttnn_device(py::module& module) {
                 device_id (int): The device ID to open.
                 l1_small_size (int, optional): The size of the L1 small buffer. Defaults to `ttnn.device.DEFAULT_L1_SMALL_SIZE`.
                 trace_region_size (int, optional): The size of the trace region. Defaults to `ttnn.device.DEFAULT_TRACE_REGION_SIZE`.
+                worker_l1_size (int, optional): The size of the user-allocatable L1 buffer. Defaults to a hardware-specific value.
                 dispatch_core_type (ttnn.device.DispatchCoreType, optional): The type of dispatch core to use. Defaults to `ttnn.device.DispatchCoreType.WORKER`.
 
             Returns:
@@ -305,15 +307,16 @@ void device_module(py::module& m_device) {
                 R"doc(Returns Infinity value for current architecture.)doc");
 
     auto pyDevice = static_cast<py::class_<tt::tt_metal::Device, IDevice, std::unique_ptr<tt::tt_metal::Device, py::nodelete>>>(m_device.attr("Device"));
-    pyDevice
-        .def(
-            py::init<>([](int device_id, size_t l1_small_size, size_t trace_region_size) {
-                return tt::tt_metal::Device(device_id, 1, l1_small_size, trace_region_size);
-            }),
-            "Create device.",
-            py::arg("device_id"),
-            py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
-            py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE);
+    pyDevice.def(
+        py::init<>([](int device_id, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size) {
+            return tt::tt_metal::Device(device_id, 1, l1_small_size, trace_region_size, {}, {}, worker_l1_size);
+        }),
+        "Create device.",
+        py::arg("device_id"),
+        py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
+        py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
+        py::kw_only(),
+        py::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
 
     m_device.def(
         "CreateDevice",
@@ -321,9 +324,16 @@ void device_module(py::module& m_device) {
            uint8_t num_command_queues,
            size_t l1_small_size,
            size_t trace_region_size,
-           const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
+           const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
+           size_t worker_l1_size) {
             return tt::tt_metal::CreateDevice(
-                device_id, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
+                device_id,
+                num_command_queues,
+                l1_small_size,
+                trace_region_size,
+                dispatch_core_config,
+                {},
+                worker_l1_size);
         },
         R"doc(
         Creates an instance of TT device.
@@ -338,16 +348,25 @@ void device_module(py::module& m_device) {
         py::arg("num_command_queues") = 1,
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
-        py::arg("DispatchCoreConfig") = tt::tt_metal::DispatchCoreConfig{});
+        py::arg("DispatchCoreConfig") = tt::tt_metal::DispatchCoreConfig{},
+        py::kw_only(),
+        py::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
     m_device.def(
         "CreateDevices",
         [](const std::vector<int>& device_ids,
            uint8_t num_command_queues,
            size_t l1_small_size,
            size_t trace_region_size,
-           const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
+           const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
+           size_t worker_l1_size) {
             return tt::tt_metal::detail::CreateDevices(
-                device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
+                device_ids,
+                num_command_queues,
+                l1_small_size,
+                trace_region_size,
+                dispatch_core_config,
+                {},
+                worker_l1_size);
         },
         R"doc(
         Creates an instance of TT device.
@@ -362,7 +381,9 @@ void device_module(py::module& m_device) {
         py::arg("num_command_queues") = 1,
         py::arg("l1_small_size") = DEFAULT_L1_SMALL_SIZE,
         py::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
-        py::arg("DispatchCoreConfig") = tt::tt_metal::DispatchCoreConfig{});
+        py::arg("DispatchCoreConfig") = tt::tt_metal::DispatchCoreConfig{},
+        py::kw_only(),
+        py::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
     m_device.def("CloseDevice", &tt::tt_metal::CloseDevice, R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 
@@ -643,6 +664,7 @@ void device_module(py::module& m_device) {
 
     m_device.attr("DEFAULT_L1_SMALL_SIZE") = py::int_(DEFAULT_L1_SMALL_SIZE);
     m_device.attr("DEFAULT_TRACE_REGION_SIZE") = py::int_(DEFAULT_TRACE_REGION_SIZE);
+    m_device.attr("DEFAULT_WORKER_L1_SIZE") = py::int_(DEFAULT_WORKER_L1_SIZE);
 
     m_device.attr("DefaultQueueId") = ttnn::DefaultQueueId;
 }

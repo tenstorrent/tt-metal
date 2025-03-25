@@ -160,6 +160,10 @@ RunTimeOptions::RunTimeOptions() {
     if (getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
         this->erisc_iram_enabled = true;
     }
+    const char* worker_ringbuffer_size_str = std::getenv("TT_METAL_WORKER_RINGBUFFER_SIZE");
+    if (worker_ringbuffer_size_str) {
+        this->default_worker_ringbuffer_size = std::stoul(worker_ringbuffer_size_str);
+    }
 }
 
 const std::string& RunTimeOptions::get_root_dir() {
