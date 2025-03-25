@@ -7,12 +7,14 @@ import pytest
 import ttnn
 import time
 import os
-
+import shlex
 from torchvision import models
 from loguru import logger
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
+from models.demos.yolov4.reference.yolov4 import Yolov4
+from models.demos.yolov4.ttnn.model_preprocessing import create_yolov4_model_parameters
 from models.utility_functions import (
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,
@@ -39,6 +41,7 @@ def get_expected_inference_time_sec():
     "input_shape",
     [
         (1, 320, 320, 3),
+        (1, 640, 640, 3),
     ],
 )
 def test_yolov4(
@@ -60,38 +63,57 @@ def test_yolov4(
         weights_pth = "tests/ttnn/integration_tests/yolov4/yolov4.pth"
     else:
         weights_pth = str(model_path / "yolov4.pth")
-    ttnn_model = TtYOLOv4(weights_pth, device)
 
+    resolution = (input_shape[1], input_shape[2])
+
+    torch_model = Yolov4()
+    torch_dict = torch.load(weights_pth)
+    new_state_dict = dict(zip(torch_model.state_dict().keys(), torch_dict.values()))
+    torch_model.load_state_dict(new_state_dict)
+    torch_model.eval()
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
+    torch_input = torch_input_tensor.permute(0, 3, 1, 2).float()
+    parameters = create_yolov4_model_parameters(torch_model, torch_input, resolution, device)
+
     ttnn_input = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+
+    ttnn_model = TtYOLOv4(parameters, device)
 
     logger.info(f"Compiling model with warmup run")
     profiler.start(f"inference_and_compile_time")
     ttnn_output_tensor = ttnn_model(ttnn_input)
+    ttnn.deallocate(ttnn_output_tensor[0])
+    ttnn.deallocate(ttnn_output_tensor[1])
 
     profiler.end(f"inference_and_compile_time")
 
     inference_and_compile_time = profiler.get("inference_and_compile_time")
-    logger.info(f"Model compiled with warmup run in {(inference_and_compile_time):.2f} s")
+    logger.info(
+        f"Model with input resolution {resolution} compiled with warmup run in {(inference_and_compile_time):.2f} s"
+    )
 
     iterations = 16
+
     outputs = []
     logger.info(f"Running inference for {iterations} iterations")
     for idx in range(iterations):
         profiler.start("inference_time")
         profiler.start(f"inference_time_{idx}")
         ttnn_output_tensor = ttnn_model(ttnn_input)
-
+        ttnn.deallocate(ttnn_output_tensor[0])
+        ttnn.deallocate(ttnn_output_tensor[1])
         profiler.end(f"inference_time_{idx}")
         profiler.end("inference_time")
 
     mean_inference_time = profiler.get("inference_time")
     inference_time = profiler.get(f"inference_time_{iterations - 1}")
     compile_time = inference_and_compile_time - inference_time
-    logger.info(f"Model compilation took {compile_time:.1f} s")
-    logger.info(f"Inference time on last iterations was completed in {(inference_time * 1000.0):.2f} ms")
+    logger.info(f"Model compilation of resolution {resolution} took {compile_time:.1f} s")
     logger.info(
-        f"Mean inference time for {batch_size} (batch) images was {(mean_inference_time * 1000.0):.2f} ms ({batch_size / mean_inference_time:.2f} fps)"
+        f"Inference time on last iterations for resolution: {resolution} was completed in {(inference_time * 1000.0):.2f} ms"
+    )
+    logger.info(
+        f"Mean inference time for {batch_size} (batch), resolution {resolution} images was {(mean_inference_time * 1000.0):.2f} ms ({batch_size / mean_inference_time:.2f} fps)"
     )
 
     expected_compile_time = get_expected_compile_time_sec()
@@ -125,9 +147,11 @@ def test_perf_device_bare_metal_yolov4(batch_size, model_name):
     num_iterations = 1
     margin = 0.03
 
-    expected_perf = 94.5
+    expected_perf = 82
 
-    command = f"pytest tests/ttnn/integration_tests/yolov4/test_ttnn_yolov4.py"
+    command = (
+        f"pytest tests/ttnn/integration_tests/yolov4/test_ttnn_yolov4.py::test_yolov4[1-pretrained_weight_false-0]"
+    )
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 

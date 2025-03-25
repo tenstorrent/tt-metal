@@ -12,6 +12,7 @@ import ttnn
 from models.demos.yolov4.reference.yolov4 import Yolov4
 from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
 from models.demos.yolov4.demo.demo import YoloLayer, get_region_boxes, gen_yolov4_boxes_confs
+from models.demos.yolov4.ttnn.model_preprocessing import create_yolov4_model_parameters
 
 
 from models.utility_functions import (
@@ -40,9 +41,9 @@ def load_yolov4_weight(model_location_generator=None):
     return model
 
 
-def load_yolov4_model(ttnn_model):
+def load_yolov4_model(torch_dict):
     torch_model = Yolov4()
-    new_state_dict = dict(zip(torch_model.state_dict().keys(), ttnn_model.torch_model.values()))
+    new_state_dict = dict(zip(torch_model.state_dict().keys(), torch_dict.values()))
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
     return torch_model
@@ -56,9 +57,11 @@ class Yolov4TestInfra:
         act_dtype,
         weight_dtype,
         model_location_generator=None,
+        resolution=(320, 320),
     ):
         super().__init__()
         torch.manual_seed(0)
+        self.resolution = resolution
         self.pcc_passed = False
         self.pcc_message = "Did you forget to call validate()?"
         self.device = device
@@ -66,13 +69,19 @@ class Yolov4TestInfra:
         self.act_dtype = act_dtype
         self.weight_dtype = weight_dtype
         self.model_location_generator = model_location_generator
-        self.ttnn_yolov4_model = TtYOLOv4(load_yolov4_weight(self.model_location_generator), device)
 
-        torch_model = load_yolov4_model(self.ttnn_yolov4_model)
-        input_shape = (1, 320, 320, 3)
+        torch_dict = load_yolov4_weight(self.model_location_generator)
+        torch_model = load_yolov4_model(torch_dict)
+
+        input_shape = (1, *resolution, 3)
+
         torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
         self.input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
         self.torch_input_tensor = torch_input_tensor.permute(0, 3, 1, 2)
+
+        parameters = create_yolov4_model_parameters(torch_model, self.torch_input_tensor, resolution, device)
+        self.ttnn_yolov4_model = TtYOLOv4(parameters, device)
+
         self.torch_output_tensor = torch_model(self.torch_input_tensor)
         ref1, ref2, ref3 = gen_yolov4_boxes_confs(self.torch_output_tensor)
         self.ref_boxes, self.ref_confs = get_region_boxes([ref1, ref2, ref3])
@@ -135,12 +144,21 @@ class Yolov4TestInfra:
         # That ttnn tensor is the concat output of 3 padded tensors
         # As a perf workaround I'm doing the unpadding on the torch output here.
         # TODO: cleaner ttnn code when ttnn.untilize() is fully optimized
-        box_1_start_i = 0
-        box_1_end_i = 6100
-        box_2_start_i = 6128
-        box_2_end_i = 6228
-        box_3_start_i = 6256
-        box_3_end_i = 6356
+        if self.resolution[0] == 320:
+            box_1_start_i = 0
+            box_1_end_i = 6100
+            box_2_start_i = 6128
+            box_2_end_i = 6228
+            box_3_start_i = 6256
+            box_3_end_i = 6356
+        else:
+            box_1_start_i = 0
+            box_1_end_i = 24400
+            box_2_start_i = 24428
+            box_2_end_i = 24828
+            box_3_start_i = 24856
+            box_3_end_i = 25256
+
         result_boxes_list.append(result_boxes_padded[:, box_1_start_i:box_1_end_i])
         result_boxes_list.append(result_boxes_padded[:, box_2_start_i:box_2_end_i])
         result_boxes_list.append(result_boxes_padded[:, box_3_start_i:box_3_end_i])
@@ -171,6 +189,7 @@ def create_test_infra(
     act_dtype,
     weight_dtype,
     model_location_generator=None,
+    resolution=(320, 320),
 ):
     return Yolov4TestInfra(
         device,
@@ -178,4 +197,5 @@ def create_test_infra(
         act_dtype,
         weight_dtype,
         model_location_generator,
+        resolution=resolution,
     )
