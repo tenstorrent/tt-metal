@@ -28,8 +28,7 @@ Tensor QuantOp::invoke(
 
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations{};
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations{};
-
-    std::array<const ttnn::operations::unary::UnaryWithParam, 1> post_activations{
+    const std::array post_activations{
         ttnn::operations::unary::UnaryWithParam{unary::UnaryOpType::ZERO_POINT, static_cast<float>(zero_point)}};
 
     // LLK quant kernel expects the reciprocal of the actual scale to avoid doing div on the device
@@ -55,23 +54,36 @@ Tensor QuantOp::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
+    const ttnn::DataType a_dtype = input_tensor.get_dtype();
     const ttnn::DataType b_dtype = scale.get_dtype();
+    constexpr ttnn::DataType c_dtype = ttnn::DataType::INT32;
 
+    TT_FATAL(tt::tt_metal::is_floating_point(a_dtype), "Quantize only takes floating-point number inputs");
     TT_FATAL(tt::tt_metal::is_floating_point(b_dtype), "Quantize only takes floating-point number scales");
     TT_FATAL(!tt::tt_metal::is_block_float(b_dtype), "Unsupported scale tensor format");
     TT_FATAL(scale.get_logical_volume() == 1u, "Per-tensor quantize only takes a single scale value");
+    TT_FATAL(output_dtype.value_or(c_dtype) == c_dtype, "Quantize only supports int32 outputs for now");
+    if (optional_output_tensor.has_value()) {
+        TT_FATAL(optional_output_tensor->dtype() == c_dtype, "Quantize only supports int32 outputs for now");
+    }
 
-    // The alternative is to pass ttnn::reciprocal(scale) to binary_ng, but it's expensive
-    const float scale_scalar = [](const DataType b_dtype, const Tensor& scale) {
-        if (b_dtype == DataType::FLOAT32) {
-            return scale.to_vector<float>()[0];
-        } else {
-            return scale.to_vector<bfloat16>()[0].to_float();
-        }
-    }(b_dtype, scale);
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations{};
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations{};
+    const std::array post_activations{
+        ttnn::operations::unary::UnaryWithParam{unary::UnaryOpType::ZERO_POINT, static_cast<float>(zero_point)}};
 
-    return invoke(
-        queue_id, input_tensor, scale_scalar, zero_point, axis, output_dtype, memory_config, optional_output_tensor);
+    // TODO: do reciprocal using an activation containing an UnaryWithParam that does rdiv(scale, 1), benchmark it
+    return ttnn::prim::binary_ng(
+        queue_id,
+        tt::tt_metal::is_block_float(a_dtype) ? ttnn::typecast(input_tensor, DataType::BFLOAT16) : input_tensor,
+        ttnn::reciprocal(scale),
+        binary_ng::BinaryOpType::QUANT,
+        c_dtype,
+        memory_config,
+        optional_output_tensor,
+        lhs_activations,
+        rhs_activations,
+        post_activations);
 }
 
 Tensor RequantOp::invoke(
@@ -96,12 +108,12 @@ Tensor RequantOp::invoke(
 
     // Expansion of q' = [(q - z_in) * s_in] / s_out + z_out
     const float scale = out_scale / in_scale;
+    // ZP is passed to and consumed by the kernel as f32 anyway, might as well preserve some accuracy here
     const float zero_point = out_zero_point - in_zero_point / scale;
 
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations{};
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations{};
-
-    std::array<const ttnn::operations::unary::UnaryWithParam, 1> post_activations{
+    const std::array post_activations{
         ttnn::operations::unary::UnaryWithParam{unary::UnaryOpType::ZERO_POINT, zero_point}};
 
     return ttnn::prim::binary_ng(
@@ -257,9 +269,8 @@ Tensor DequantOp::invoke(
 
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations{};
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations{};
-
     // LLK dequant kernel does addition, so we need to negate zero_point
-    std::array<const ttnn::operations::unary::UnaryWithParam, 1> post_activations{
+    const std::array post_activations{
         ttnn::operations::unary::UnaryWithParam{unary::UnaryOpType::ZERO_POINT, static_cast<float>(-zero_point)}};
 
     return ttnn::prim::binary_ng(
@@ -304,9 +315,8 @@ Tensor DequantOp::invoke(
 
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations{};
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations{};
-
     // LLK dequant kernel does addition, so we need to negate zero_point
-    std::array<const ttnn::operations::unary::UnaryWithParam, 1> post_activations{
+    const std::array post_activations{
         ttnn::operations::unary::UnaryWithParam{unary::UnaryOpType::ZERO_POINT, static_cast<float>(-zero_point)}};
 
     return ttnn::prim::binary_ng(

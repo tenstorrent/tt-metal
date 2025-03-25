@@ -402,7 +402,9 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     const auto& b = tensor_args.input_tensor_b;
     const bool is_sfpu_op = operation_attributes.is_sfpu;
     const bool is_quant_op = operation_attributes.is_quant_op;
-    TT_FATAL(is_quant_op ? operation_attributes.is_sfpu : true, "Quantization op is SFPU-only");
+    if (is_quant_op) {
+        TT_FATAL(is_sfpu_op, "Quantization op is SFPU-only");
+    }
 
     auto program = CreateProgram();
     auto* device = a.device();
@@ -541,8 +543,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     auto kernel_config = CMAKE_UNIQUE_NAMESPACE::BinaryNgKernelConfig(operation_attributes.subtile_broadcast_type);
 
     // READER KERNEL
-    std::map<std::string, std::string> reader_defines;
-    add_dataflow_defines(reader_defines, a_dtype, is_sfpu_op);
+    auto reader_defines = make_dataflow_defines(a_dtype, is_sfpu_op);
     reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
 
     auto reader_kernel_id = tt_metal::CreateKernel(
@@ -559,8 +560,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         writer_kernel = kernel_config.writer_kernel;
         compute_kernel = kernel_config.compute_kernel;
     }
-    std::map<std::string, std::string> writer_defines;
-    add_dataflow_defines(writer_defines, b_dtype, is_sfpu_op);
+    auto writer_defines = make_dataflow_defines(b_dtype, is_sfpu_op);
     writer_defines["SRC_SHARDED"] = b_sharded ? "1" : "0";
     writer_defines["DST_SHARDED"] = c_sharded ? "1" : "0";
 

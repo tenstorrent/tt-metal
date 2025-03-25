@@ -331,7 +331,8 @@ void add_activation_defines(
         });
 }
 
-void add_dataflow_defines(std::map<std::string, std::string>& defines, const DataType dtype, const bool is_sfpu_op) {
+std::map<std::string, std::string> make_dataflow_defines(const DataType dtype, const bool is_sfpu_op) {
+    std::map<std::string, std::string> defines;
     if (is_sfpu_op && dtype == DataType::FLOAT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
@@ -348,6 +349,7 @@ void add_dataflow_defines(std::map<std::string, std::string>& defines, const Dat
         defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfloat16";
         defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16";
     }
+    return defines;
 }
 
 bool OpConfig::is_sfpu_op() const { return std::holds_alternative<SfpuBinaryOp>(binary_op); }
@@ -356,11 +358,11 @@ uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const
     // Always pass the more accurate fp32 when the quantization scale is passed as a scalar
     if ((dtype == DataType::FLOAT32) || is_quant_op) {
         return std::bit_cast<uint32_t>(scalar);
-    } else if (dtype == DataType::INT32) {
-        return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
-    } else {
-        return pack_two_bfloat16_into_uint32({scalar, scalar});
     }
+    if (dtype == DataType::INT32) {
+        return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
+    }
+    return pack_two_bfloat16_into_uint32({scalar, scalar});
 }
 
 template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>);
