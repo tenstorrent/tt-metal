@@ -29,7 +29,9 @@ on:
           - eltwise.unary.log2.log2_sharded
           - eltwise.unary.nez.nez_sharded
           - eltwise.unary.relu6.relu6_sharded
+          - composite.binary.rsub.rsub_survey
           - composite.binary.gcd.gcd
+          - composite.binary.lcm.lcm
           - composite.binary.lcm.lcm
           - eltwise.unary.abs.abs_pytorch2
           - eltwise.unary.relu.relu
