@@ -3,15 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import numpy as np
-from loguru import logger
-from pathlib import Path
-import sys
-import torch
 
-from models.experimental.yolov3.reference.models.common import autopad
 import ttnn
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 
 class TtConcat(nn.Module):

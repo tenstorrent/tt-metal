@@ -3,14 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import time
 import random
-import numpy as np
 from loguru import logger
 
 import torch
 
-from tt_lib.utils import untilize, tilize_to_list, print_diff_argmax, is_close
+from tt_lib.utils import is_close
 
 
 def ref_stable_softmax(x):
