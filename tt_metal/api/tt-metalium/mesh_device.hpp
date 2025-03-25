@@ -80,7 +80,7 @@ private:
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
     std::unordered_map<MeshTraceId, std::shared_ptr<MeshTraceBuffer>> trace_buffer_pool_;
     uint32_t trace_buffers_size_ = 0;
-
+    uint32_t max_num_eth_cores_ = 0;
     std::shared_ptr<ThreadPool> dispatch_thread_pool_;
     std::shared_ptr<ThreadPool> reader_thread_pool_;
 
@@ -138,6 +138,7 @@ public:
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
     std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
+    uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) override;
     CoreCoord compute_with_storage_grid_size() const override;
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;

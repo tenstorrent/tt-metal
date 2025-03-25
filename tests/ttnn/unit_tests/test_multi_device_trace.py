@@ -25,8 +25,7 @@ NUM_TRACE_LOOPS = int(os.getenv("NUM_TRACE_LOOPS", 15))
 def test_multi_device_single_trace(t3k_mesh_device, shape, use_all_gather, enable_async, enable_multi_cq):
     if t3k_mesh_device.get_num_devices() <= 1:
         pytest.skip("This test requires multiple devices")
-    if use_all_gather:
-        pytest.skip("TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)")
+
     # Trace requires program cache to be enabled
     t3k_mesh_device.enable_async(enable_async)
     t3k_mesh_device.enable_program_cache()
@@ -137,8 +136,6 @@ def test_multi_device_multi_trace(t3k_mesh_device, shape, use_all_gather, enable
     torch.manual_seed(0)
     if t3k_mesh_device.get_num_devices() <= 1:
         pytest.skip("This test requires multiple devices")
-    if use_all_gather:
-        pytest.skip("TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)")
     # Trace requires program cache to be enabled
     t3k_mesh_device.enable_async(enable_async)
     t3k_mesh_device.enable_program_cache()

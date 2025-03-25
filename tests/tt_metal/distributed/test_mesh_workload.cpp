@@ -146,25 +146,36 @@ using MeshWorkloadTestT3000 = T3000MeshDeviceFixture;
 using MeshWorkloadTestTG = TGMeshDeviceFixture;
 using MeshWorkloadTestSuite = GenericMeshDeviceFixture;
 
-TEST_F(MeshWorkloadTestSuite, MeshWorkloadOnActiveEthAsserts) {
-    if (mesh_device_->num_devices() == 1) {
-        // Unit mesh devices (such as N150) do not have ethernet cores.
-        GTEST_SKIP() << "Skipping test for a unit-size mesh device";
+TEST_F(MeshWorkloadTestSuite, TestMeshWorkloadOnActiveEth) {
+    uint32_t num_workloads = 10;
+    auto random_seed = 0;
+    uint32_t num_iters = 500;
+    uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
+    std::vector<std::shared_ptr<MeshWorkload>> workloads = {};
+    log_info("Create {} workloads", num_workloads);
+    for (int i = 0; i < num_workloads; i++) {
+        std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
+        for (std::size_t logical_x = 0; logical_x < mesh_device_->num_cols(); logical_x++) {
+            for (std::size_t logical_y = 0; logical_y < mesh_device_->num_rows(); logical_y++) {
+                IDevice* device = mesh_device_->get_device(logical_y, logical_x);
+                auto programs = utils::create_random_programs(
+                    1, mesh_device_->compute_with_storage_grid_size(), seed, device->get_active_ethernet_cores(true));
+                MeshCoordinateRange devices(MeshCoordinate{logical_y, logical_x}, MeshCoordinate{logical_y, logical_x});
+                AddProgramToMeshWorkload(*workload, std::move(*programs[0]), devices);
+            }
+        }
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+        workloads.push_back(workload);
     }
-    // A MeshWorkload cannot be run on ethernet core - Runtime should assert if the
-    // user tries this. Verify this functionality here.
-    std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
-    uint32_t seed = 0;
-    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-        IDevice* device = mesh_device_->get_device(coord);
-        auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
-            /*num_programs=*/1,
-            mesh_device_->compute_with_storage_grid_size(),
-            seed,
-            device->get_active_ethernet_cores(true));
-        AddProgramToMeshWorkload(*workload, std::move(*programs[0]), MeshCoordinateRange(coord, coord));
+    for (int i = 0; i < num_iters; i++) {
+        if (i % 100 == 0) {
+            log_info(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
+        }
+        for (auto& workload : workloads) {
+            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+        }
     }
-    EXPECT_THROW(EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false), std::exception);
+    Finish(mesh_device_->mesh_command_queue());
 }
 
 TEST_F(MeshWorkloadTestSuite, OverlappingProgramRanges) {

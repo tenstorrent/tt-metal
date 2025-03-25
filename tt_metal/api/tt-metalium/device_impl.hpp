@@ -88,6 +88,7 @@ public:
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
     std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
+    uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) override;
 
     CoreCoord compute_with_storage_grid_size() const override;
 
@@ -148,7 +149,8 @@ public:
     void init_command_queue_device() override;
 
     void init_fabric() override;
-
+    void set_ethernet_core_count_on_dispatcher(uint32_t num_ethernet_cores);
+    uint32_t get_ethernet_core_count_on_dispatcher() const;
     // Puts device into reset
     bool close() override;
 
@@ -269,6 +271,7 @@ private:
     uint32_t trace_buffers_size_ = 0;
     bool uninitialized_error_fired_ =
         false;  // To avoid spam with warnings about calling Device methods when it's not initialized.
+    uint32_t ethernet_core_count_on_dispatcher_ = 0;
 };
 
 }  // namespace tt::tt_metal

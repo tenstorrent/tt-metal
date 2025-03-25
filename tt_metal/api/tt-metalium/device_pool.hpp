@@ -45,7 +45,8 @@ public:
         size_t trace_region_size,
         const tt_metal::DispatchCoreConfig& dispatch_core_config,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
-        bool init_profiler = true) noexcept;
+        bool init_profiler = true,
+        bool use_max_eth_core_count_on_all_devices = false) noexcept;
 
     tt_metal::IDevice* get_active_device(chip_id_t device_id) const;
     std::vector<tt_metal::IDevice*> get_all_active_devices() const;
@@ -75,6 +76,9 @@ private:
     std::unordered_set<std::thread::id> worker_thread_ids;
     std::thread::id device_pool_creation_thread_id;
     bool skip_remote_devices;
+    // Issue #19729: use_max_eth_core_count_on_all_devices_ is a workaround
+    // to allow TT-Mesh Workload dispatch to target active ethernet cores.
+    bool use_max_eth_core_count_on_all_devices_;
     std::unordered_set<uint32_t> firmware_built_keys;
 
     // Determine which CPU cores the worker threads need to be placed on for each device

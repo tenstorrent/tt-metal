@@ -321,7 +321,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
 
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded_WithReshard0) {
     ttnn::Shape tensor_shape({1, 1, 32, 128});
-    Layout const layout = Layout::TILE;
+    const Layout layout = Layout::TILE;
     auto input_mem_config = MemoryConfig(
         TensorMemoryLayout::WIDTH_SHARDED,
         BufferType::L1,
@@ -351,7 +351,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
 
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded_WithReshard0_UniquePerStream) {
     ttnn::Shape tensor_shape({1, 1, 32, 128});
-    Layout const layout = Layout::TILE;
+    const Layout layout = Layout::TILE;
     size_t in_shard_grid_x = 1;
     size_t in_shard_grid_y = 1;
     size_t out_shard_grid_x = 4;
@@ -415,11 +415,11 @@ TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SingleP
     ttnn::Shape tensor_shape({1, 1, 32, 32});
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
-    Layout const layout = Layout::TILE;
-    MemoryConfig const in0_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
-    MemoryConfig const in1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
-    MemoryConfig const out0_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
-    MemoryConfig const out1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+    const Layout layout = Layout::TILE;
+    const MemoryConfig in0_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+    const MemoryConfig in1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+    const MemoryConfig out0_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+    const MemoryConfig out1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
 
     auto num_elems = std::reduce(tensor_shape.cbegin(), tensor_shape.cend(), 1, std::multiplies<uint32_t>());
     Tensor input_tensor0 =
@@ -454,10 +454,10 @@ TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SingleP
         worker_slice_shape,
         worker_slice_offset};
 
-    auto const in0_tensor_slice = tensor_slice;
-    auto const in1_tensor_slice = tensor_slice;
-    auto const out0_tensor_slice = tensor_slice;
-    auto const out1_tensor_slice = tensor_slice;
+    const auto in0_tensor_slice = tensor_slice;
+    const auto in1_tensor_slice = tensor_slice;
+    const auto out0_tensor_slice = tensor_slice;
+    const auto out1_tensor_slice = tensor_slice;
 
     ttnn::ccl::cmd::CclCommandDestArgs dest_args = ttnn::ccl::cmd::UnicastCommandDestArgs{distance_dest_device, true};
     auto pass = TestMultiInputReaderKernel(
@@ -768,8 +768,8 @@ TEST(
                         tensor_shape,
                         split_dim,
 
-                        // In this test we will have n stages with anywhere from 1 to 8 workers per stage (this will be
-                        // configurable)
+                        // In this test we will have n stages with anywhere from 1 to 8 workers per stage (this will
+                        // be configurable)
                         num_stages,
                         num_workers_per_stage,
                         slices_per_stage,

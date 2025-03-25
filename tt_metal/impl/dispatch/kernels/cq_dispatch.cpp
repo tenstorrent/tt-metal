@@ -64,8 +64,12 @@ constexpr uint32_t client_interface_addr = get_compile_time_arg_val(34);
 
 constexpr uint32_t first_stream_used = get_compile_time_arg_val(35);
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(36);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(37);
+constexpr uint32_t virtualize_unicast_cores = get_compile_time_arg_val(36);
+constexpr uint32_t num_virtual_unicast_cores = get_compile_time_arg_val(37);
+constexpr uint32_t num_physical_unicast_cores = get_compile_time_arg_val(38);
+
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(39);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(40);
 
 constexpr uint8_t upstream_noc_index = UPSTREAM_NOC_INDEX;
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
@@ -997,10 +1001,32 @@ void process_go_signal_mcast_cmd() {
             NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), cmd->mcast.wait_count)) {
         }
     }
-    for (uint32_t i = 0, num_unicasts = cmd->mcast.num_unicast_txns; i < num_unicasts; ++i) {
+
+    uint32_t num_unicasts = cmd->mcast.num_unicast_txns;
+    if constexpr (virtualize_unicast_cores) {
+        // Issue #19729: Workaround to allow TT-Mesh Workload dispatch to target active ethernet cores.
+        // This chip is virtualizing cores the go signal is uncasted to
+        // In this case, the number of unicasts specified in the command can exceed
+        // the number of actual cores on this chip.
+        if (cmd->mcast.num_unicast_txns > num_physical_unicast_cores) {
+            // If this is the case, cap the number of unicasts to avoid invalid NOC txns
+            num_unicasts = num_physical_unicast_cores;
+            // Fake updates from non-existent workers here. The dispatcher expects an ack from
+            // the number of cores specified inside cmd->mcast.num_unicast_txns. If this is
+            // greater than the number of cores actually on the chip, we must account for acks
+            // from non-existent cores here.
+            NOC_STREAM_WRITE_REG(
+                stream,
+                STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX,
+                (num_virtual_unicast_cores - num_physical_unicast_cores) << REMOTE_DEST_BUF_WORDS_FREE_INC);
+        }
+    }
+
+    for (uint32_t i = 0; i < num_unicasts; ++i) {
         uint64_t dst = get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], unicast_go_signal_addr);
         noc_async_write_one_packet((uint32_t)(aligned_go_signal_storage), dst, sizeof(uint32_t));
     }
+
     cmd_ptr += sizeof(CQDispatchCmd);
 }
 
