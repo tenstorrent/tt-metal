@@ -65,6 +65,8 @@ OPS_CSV_HEADER = [
     "DEVICE ERISC KERNEL DURATION [ns]",
     "DEVICE COMPUTE CB WAIT FRONT [ns]",
     "DEVICE COMPUTE CB RESERVE BACK [ns]",
+    "DISPATCH TOTAL CQ CMD OP TIME [ns]",
+    "DISPATCH GO SEND WAIT TIME [ns]",
     "INPUTS",
     "OUTPUTS",
     "METAL TRACE ID",
@@ -258,6 +260,16 @@ def get_device_op_data(ops):
     return deviceOps, hasTraceRuns
 
 
+def extract_dispatch_op_id(dispatchOps):
+    opId = 0
+    for ts in dispatchOps["timeseries"]:
+        if "meta_data" in ts[0] and "workers_runtime_id" in ts[0]["meta_data"]:
+            metaData = eval(ts[0]["meta_data"])
+            opId = metaData["workers_runtime_id"]
+            break
+    return opId
+
+
 # Append device data to device ops and return the list of mapped device op ref list
 def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces):
     traceReplayCounts = {}
@@ -277,6 +289,7 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces):
         for device in devicesOps:
             assert device in deviceData["devices"].keys()
             deviceOpsTime = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]
+            deviceDispatchOpsTime = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["dispatch_ops"]
             deviceOpsTime.sort(key=device_op_compare_time)
             if hasTraceRuns:
                 generatedHostData = []
@@ -322,6 +335,22 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces):
 
             deviceOpsTime.sort(key=device_op_compare_opID_time)
             devicesOps[device].sort(key=host_device_op_compare)
+
+            dispatchOPAnalysis = {}
+            for deviceDispatchOp in deviceDispatchOpsTime:
+                dispatchOpID = extract_dispatch_op_id(deviceDispatchOp)
+                dispatchOPAnalysis[dispatchOpID] = deviceDispatchOp["analysis"]
+
+            # attach op dispatch analysis to op analysis
+            for deviceOp in deviceOpsTime:
+                opID = deviceOp["timeseries"][0][0]["run_host_id"]
+                if opID in dispatchOPAnalysis:
+                    for dispatchAnalysis in dispatchOPAnalysis[opID]:
+                        deviceOp["analysis"][dispatchAnalysis] = dispatchOPAnalysis[opID][dispatchAnalysis]
+                    del dispatchOPAnalysis[opID]
+
+            assert len(dispatchOPAnalysis) == 0, "Unrecognized dispatch OPs are presentent by dispatch cores"
+
             if len(devicesOps[device]) != len(deviceOpsTime):
                 deviceOPId = None
                 hostOPId = None

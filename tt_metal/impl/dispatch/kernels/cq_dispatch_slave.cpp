@@ -133,7 +133,6 @@ uint32_t stream_wrap_gt(uint32_t a, uint32_t b) {
 
 FORCE_INLINE
 void wait_for_workers(volatile CQDispatchCmd tt_l1_ptr* cmd) {
-    DeviceZoneScopedN("WAIT-FOR-WORKERS");
     volatile uint32_t* worker_sem =
         (volatile uint32_t*)STREAM_REG_ADDR(cmd->mcast.wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
     while (stream_wrap_gt(cmd->mcast.wait_count, *worker_sem)) {
