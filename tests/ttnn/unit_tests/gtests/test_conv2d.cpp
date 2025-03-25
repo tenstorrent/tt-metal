@@ -175,17 +175,6 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
         // move output tensor to dram
         output_tensor = ttnn::to_memory_config(output_tensor, dram_mem_config);
 
-        // untilize output tensor because the default output tensor layout is TILE layout
-        output_tensor = ttnn::untilize(output_tensor);
-
-        // unpad output vector
-        output_tensor = ttnn::slice(
-            output_tensor,
-            std::array<uint32_t, 4>({0, 0, 0, 0}),
-            std::array<uint32_t, 4>({1, 1, param.batch_size * output_height * output_width, param.output_channels}),
-            std::array<uint32_t, 4>({1, 1, 1, 1}),
-            dram_mem_config);
-
         // H'  - output_height
         // W'  - output_width
         // (1,1,NH'W',Co) -> (N,H',W',Co)
@@ -242,6 +231,16 @@ INSTANTIATE_TEST_SUITE_P(
             .batch_size = 2,
             .input_height = 256,
             .input_width = 256,
+            .kernel_size = {3, 3},
+            .stride = {1, 1},
+            .padding = {1, 1},
+        },
+        Conv2DParam{
+            .input_channels = 3,
+            .output_channels = 15,
+            .batch_size = 7,
+            .input_height = 3,
+            .input_width = 3,
             .kernel_size = {3, 3},
             .stride = {1, 1},
             .padding = {1, 1},
