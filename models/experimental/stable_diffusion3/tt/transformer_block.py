@@ -13,7 +13,7 @@ import tracy
 from .attention import TtAttention, TtAttentionParameters
 from .feed_forward import TtFeedForward, TtFeedForwardParameters
 from .linear import TtLinear, TtLinearParameters
-from .normalization import TtLayerNorm, TtLayerNormParameters
+from .normalization import TtDistributedLayerNorm, TtLayerNorm, TtLayerNormParameters
 from .substate import has_substate, substate
 
 if TYPE_CHECKING:
@@ -41,6 +41,10 @@ class TtTransformerBlockParameters:
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
     ) -> TtTransformerBlockParameters:
+        has_spatial_attn = has_substate(state, "attn2")
+        has_context_pre_only = has_substate(state, "ff_context")
+        spatial_time_embed_chunks = 9 if has_spatial_attn else 6
+        prompt_time_embed_chunks = 2 if has_context_pre_only else 6
         return cls(
             dual_attn=TtAttentionParameters.from_torch(
                 substate(state, "attn"), num_heads=num_heads, dtype=dtype, device=device
@@ -48,28 +52,34 @@ class TtTransformerBlockParameters:
             spatial_attn=TtAttentionParameters.from_torch(
                 substate(state, "attn2"), num_heads=num_heads, dtype=dtype, device=device
             )
-            if has_substate(state, "attn2")
+            if has_spatial_attn
             else None,
-            spatial_norm_1=TtLayerNormParameters.from_torch(substate(state, "norm1.norm"), dtype=dtype, device=device),
-            spatial_norm_2=TtLayerNormParameters.from_torch(substate(state, "norm2"), dtype=dtype, device=device),
+            spatial_norm_1=TtLayerNormParameters.from_torch(
+                substate(state, "norm1.norm"), dtype=dtype, device=device, shard_dim=-1
+            ),
+            spatial_norm_2=TtLayerNormParameters.from_torch(
+                substate(state, "norm2"), dtype=dtype, device=device, shard_dim=-1
+            ),
             prompt_norm_1=TtLayerNormParameters.from_torch(
-                substate(state, "norm1_context.norm"), dtype=dtype, device=device
+                substate(state, "norm1_context.norm"), dtype=dtype, device=device, shard_dim=-1
             ),
             spatial_time_embed=TtLinearParameters.from_torch(
                 substate(state, "norm1.linear"),
                 dtype=dtype,
                 device=device,
-                shard_dim=None,
+                shard_dim=-1,
+                # num_chunks=spatial_time_embed_chunks
             ),
             prompt_time_embed=TtLinearParameters.from_torch(
                 substate(state, "norm1_context.linear"),
                 dtype=dtype,
                 device=device,
-                shard_dim=None,
+                shard_dim=-1,
+                # num_chunks=prompt_time_embed_chunks
             ),
             spatial_ff=TtFeedForwardParameters.from_torch(substate(state, "ff"), dtype=dtype, device=device),
             prompt_ff=TtFeedForwardParameters.from_torch(substate(state, "ff_context"), dtype=dtype, device=device)
-            if has_substate(state, "ff_context")
+            if has_context_pre_only
             else None,
         )
 
@@ -91,10 +101,10 @@ class TtTransformerBlock:
             else None
         )
 
-        self._spatial_norm_1 = TtLayerNorm(parameters.spatial_norm_1, eps=eps)
-        self._spatial_norm_2 = TtLayerNorm(parameters.spatial_norm_2, eps=eps)
-        self._prompt_norm_1 = TtLayerNorm(parameters.prompt_norm_1, eps=eps)
-        self._prompt_norm_2 = TtLayerNorm(TtLayerNormParameters(), eps=eps)
+        self._spatial_norm_1 = TtDistributedLayerNorm(parameters.spatial_norm_1, eps=eps)
+        self._spatial_norm_2 = TtDistributedLayerNorm(parameters.spatial_norm_2, eps=eps)
+        self._prompt_norm_1 = TtDistributedLayerNorm(parameters.prompt_norm_1, eps=eps)
+        self._prompt_norm_2 = TtDistributedLayerNorm(TtLayerNormParameters(), eps=eps)
 
         self._spatial_ff = TtFeedForward(parameters.spatial_ff)
         self._prompt_ff = TtFeedForward(parameters.prompt_ff) if parameters.prompt_ff is not None else None
@@ -107,7 +117,7 @@ class TtTransformerBlock:
     def _spatial_attn_block(
         self, inp: ttnn.Tensor, *, gate: ttnn.Tensor, scale: ttnn.Tensor, shift: ttnn.Tensor
     ) -> ttnn.Tensor:
-        assert self._spatial_attn is not Non
+        assert self._spatial_attn is not None
         scaled = inp * (1 + scale) + shift
         attn, _ = self._spatial_attn(spatial=scaled, deallocate=True)
 
@@ -136,6 +146,8 @@ class TtTransformerBlock:
         # )
         # spatial = ttnn.to_memory_config(spatial, spatial_memory_config)
 
+        spatial = ttnn.all_gather(spatial, dim=-1)
+        prompt = ttnn.all_gather(prompt, dim=-1)
         spatial_scaled = spatial * (1 + spatial_scale) + spatial_shift
         # ttnn.deallocate(spatial)
         # spatial_scaled = ttnn.to_memory_config(spatial_scaled, ttnn.DRAM_MEMORY_CONFIG)
@@ -144,9 +156,14 @@ class TtTransformerBlock:
         prompt_scaled = prompt * (1 + prompt_scale) + prompt_shift
 
         spatial_attn, prompt_attn = self._dual_attn(spatial=spatial_scaled, prompt=prompt_scaled, deallocate=True)
+        spatial_attn = ttnn.all_gather(spatial_attn, dim=-1)
+        prompt_attn = ttnn.all_gather(prompt_attn, dim=-1)
 
         spatial_attn_scaled = spatial_gate * spatial_attn
         prompt_attn_scaled = prompt_gate * prompt_attn if prompt_gate is not None else None
+
+        # spatial_attn_scaled = ttnn.all_gather(spatial_attn_scaled, dim=-1)
+        # prompt_attn_scaled = ttnn.all_gather(prompt_attn_scaled, dim=-1)
 
         ttnn.deallocate(spatial_attn)
         ttnn.deallocate(prompt_attn)
@@ -156,7 +173,9 @@ class TtTransformerBlock:
         self, inp: ttnn.Tensor, *, gate: ttnn.Tensor, scale: ttnn.Tensor, shift: ttnn.Tensor
     ) -> ttnn.Tensor:
         scaled = inp * (1 + scale) + shift
-        result = gate * self._spatial_ff(scaled)
+        # scaled = ttnn.all_gather(scaled, dim=-1)
+        result = gate * ttnn.all_gather(self._spatial_ff(scaled), dim=-1)
+        # result = ttnn.all_gather(result, dim=-1)
         ttnn.deallocate(scaled)
         return result
 
@@ -166,7 +185,9 @@ class TtTransformerBlock:
         assert self._prompt_ff is not None
 
         scaled = inp * (1 + scale) + shift
-        result = gate * self._prompt_ff(scaled)
+        # scaled = ttnn.all_gather(scaled, dim=-1)
+        result = gate * ttnn.all_gather(self._prompt_ff(scaled), dim=-1)
+        # result = ttnn.all_gather(result, dim=-1)
         ttnn.deallocate(scaled)
         return result
 
@@ -174,9 +195,16 @@ class TtTransformerBlock:
         self, *, spatial: ttnn.Tensor, prompt: ttnn.Tensor, time_embed: ttnn.Tensor
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         t = ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
         spatial_time = self._spatial_time_embed(t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         prompt_time = self._prompt_time_embed(t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        spatial_time = ttnn.reshape(
+            spatial_time, (1, spatial_time.shape[0], spatial_time.shape[1], spatial_time.shape[2])
+        )
+        prompt_time = ttnn.reshape(prompt_time, (1, prompt_time.shape[0], prompt_time.shape[1], prompt_time.shape[2]))
+        spatial_time = ttnn.all_gather(spatial_time, dim=len(spatial_time.shape) - 1)
+        prompt_time = ttnn.all_gather(prompt_time, dim=len(prompt_time.shape) - 1)
+        spatial_time = ttnn.reshape(spatial_time, (spatial_time.shape[1], spatial_time.shape[2], spatial_time.shape[3]))
+        prompt_time = ttnn.reshape(prompt_time, (prompt_time.shape[1], prompt_time.shape[2], prompt_time.shape[3]))
         ttnn.deallocate(t)
         if self._spatial_attn is not None:
             [
@@ -225,8 +253,11 @@ class TtTransformerBlock:
             ] = chunk_time(prompt_time, 6)
 
         spatial_normed = self._spatial_norm_1(spatial)
+        # spatial_normed = ttnn.all_gather(spatial_normed, dim=-1)
+        spatial = ttnn.all_gather(spatial, dim=-1)
         prompt_normed = self._prompt_norm_1(prompt)
-
+        # prompt_normed = ttnn.all_gather(prompt_normed, dim=-1)
+        prompt = ttnn.all_gather(prompt, dim=-1)
         spatial_attn, prompt_attn = self._dual_attn_block(
             spatial=spatial_normed,
             prompt=prompt_normed,
@@ -250,6 +281,7 @@ class TtTransformerBlock:
         ttnn.deallocate(spatial_attn)
 
         if self._spatial_attn is not None:
+            assert False, "Not supporting right now on Colman's branch"
             assert spatial_gate_attn is not None
             assert spatial_scale_attn is not None
             assert spatial_shift_attn is not None

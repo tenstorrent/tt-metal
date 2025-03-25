@@ -237,12 +237,14 @@ class TtLinearParameters:
                 dtype=dtype,
                 mesh_device=device,
                 shard_dim=-1,
+                layout=ttnn.TILE_LAYOUT,
             ),
             bias=from_torch(
                 shuffle_chunks(torch_bias),
                 dtype=dtype,
                 mesh_device=device,
                 shard_dim=-1,
+                layout=ttnn.TILE_LAYOUT,
             )
             if torch_bias is not None
             else None,
@@ -269,6 +271,7 @@ class TtLinear:
         *,
         memory_config: ttnn.MemoryConfig | None = None,
         program_config: ttnn.MatmulProgramConfig | None = None,
+        compute_kernel_config: ttnn.ComputeKernelConfig | None = None,
         core_grid: ttnn.CoreGrid | None = None,
         output_tile: list[int] | None = None,
         dtype: ttnn.DataType | None = None,
@@ -285,6 +288,7 @@ class TtLinear:
             bias=bias,
             memory_config=memory_config,
             program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
             core_grid=core_grid,
             output_tile=output_tile,
             dtype=dtype,

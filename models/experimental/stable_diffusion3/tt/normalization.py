@@ -60,10 +60,15 @@ class TtLayerNormParameters:
         *,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
+        shard_dim: int | None = None,
     ) -> TtLayerNormParameters:
         return cls(
-            weight=from_torch(state["weight"], dtype=dtype, mesh_device=device) if "weight" in state else None,
-            bias=from_torch(state["bias"], dtype=dtype, mesh_device=device) if "bias" in state else None,
+            weight=from_torch(state["weight"], dtype=dtype, mesh_device=device, shard_dim=shard_dim)
+            if "weight" in state
+            else None,
+            bias=from_torch(state["bias"], dtype=dtype, mesh_device=device, shard_dim=shard_dim)
+            if "bias" in state
+            else None,
         )
 
 
@@ -91,3 +96,41 @@ class TtLayerNorm:
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
         )
+
+
+class TtDistributedLayerNorm:
+    def __init__(self, parameters: TtLayerNormParameters, *, eps: float) -> None:
+        super().__init__()
+
+        self._eps = eps
+        self._weight = parameters.weight
+        self._bias = parameters.bias
+
+    def __call__(
+        self,
+        x: ttnn.Tensor,
+        memory_config: ttnn.MemoryConfig | None = None,
+        program_config: ttnn.ProgramConfig | None = None,
+        compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
+    ) -> ttnn.Tensor:
+        tt_stats = ttnn.layer_norm_pre_all_gather(x, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
+        # AllGather stats
+        tt_stats = ttnn.all_gather(
+            tt_stats,
+            dim=3,
+            memory_config=memory_config,
+        )
+        # Run distributed rmsnorm part 2
+        tt_out = ttnn.layer_norm_post_all_gather(
+            x,
+            tt_stats,
+            epsilon=self._eps,
+            weight=self._weight,
+            bias=self._bias,
+            memory_config=memory_config,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+        tt_stats.deallocate(True)
+
+        return tt_out
