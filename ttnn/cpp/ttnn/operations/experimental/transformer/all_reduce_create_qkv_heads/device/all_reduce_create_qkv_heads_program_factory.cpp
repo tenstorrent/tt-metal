@@ -111,34 +111,39 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         tt::tt_metal::CircularBufferConfig(
             single_batch_offset_tile_size, {{batch_offset_cb_index_reader, cb_batch_offset_data_format}})
             .set_page_size(batch_offset_cb_index_reader, 1);
-    cb_batch_offset_reader = tt::tt_metal::CreateCircularBuffer(program, qk_cores, cb_batch_offset_config_reader);
+    cb_batch_offset_reader = tt::tt_metal::CreateCircularBuffer(
+        program, output_tensor.memory_config().shard_spec->grid, cb_batch_offset_config_reader);
 
     tt::tt_metal::CircularBufferConfig cb_batch_offset_config_writer =
         tt::tt_metal::CircularBufferConfig(
             single_batch_offset_tile_size, {{batch_offset_cb_index_writer, cb_batch_offset_data_format}})
             .set_page_size(batch_offset_cb_index_writer, 1);
-    cb_batch_offset_writer = tt::tt_metal::CreateCircularBuffer(program, qk_cores, cb_batch_offset_config_writer);
+    cb_batch_offset_writer = tt::tt_metal::CreateCircularBuffer(
+        program, output_tensor.memory_config().shard_spec->grid, cb_batch_offset_config_writer);
 
     uint32_t q_output_cb_index = tt::CBIndex::c_16;
     tt::tt_metal::CircularBufferConfig cb_q_output_config =
         tt::tt_metal::CircularBufferConfig(q_num_tiles * single_tile_size, {{q_output_cb_index, cb_data_format}})
             .set_page_size(q_output_cb_index, single_tile_size)
             .set_globally_allocated_address(*q_output_tensor.buffer());
-    auto cb_q_output = tt::tt_metal::CreateCircularBuffer(program, q_cores, cb_q_output_config);
+    auto cb_q_output =
+        tt::tt_metal::CreateCircularBuffer(program, output_tensor.memory_config().shard_spec->grid, cb_q_output_config);
 
     uint32_t k_output_cb_index = tt::CBIndex::c_17;
     tt::tt_metal::CircularBufferConfig cb_k_output_config =
         tt::tt_metal::CircularBufferConfig(k_num_tiles * single_tile_size, {{k_output_cb_index, cb_data_format}})
             .set_page_size(k_output_cb_index, single_tile_size)
             .set_globally_allocated_address(*k_output_tensor.buffer());
-    auto cb_k_output = tt::tt_metal::CreateCircularBuffer(program, k_cores, cb_k_output_config);
+    auto cb_k_output =
+        tt::tt_metal::CreateCircularBuffer(program, output_tensor.memory_config().shard_spec->grid, cb_k_output_config);
 
     uint32_t v_output_cb_index = tt::CBIndex::c_18;
     tt::tt_metal::CircularBufferConfig cb_v_output_config =
         tt::tt_metal::CircularBufferConfig(v_num_tiles * single_tile_size, {{v_output_cb_index, cb_data_format}})
             .set_page_size(v_output_cb_index, single_tile_size)
             .set_globally_allocated_address(*v_output_tensor.buffer());
-    auto cb_v_output = tt::tt_metal::CreateCircularBuffer(program, v_cores, cb_v_output_config);
+    auto cb_v_output =
+        tt::tt_metal::CreateCircularBuffer(program, output_tensor.memory_config().shard_spec->grid, cb_v_output_config);
 
     uint32_t q_base_addr = q_output_tensor.buffer()->address();
     uint32_t k_base_addr = k_output_tensor.buffer()->address();
@@ -380,6 +385,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     auto cb_out = tt::tt_metal::CreateCircularBuffer(
         program, output_tensor_cores, out_cb_config);  // TODO: This should be the output cores instead
 
+    uint32_t zero_cb_index = tt::CBIndex::c_3;
+    tt::tt_metal::CircularBufferConfig zero_cb_config =
+        tt::tt_metal::CircularBufferConfig(sub_tile_line_bytes, {{zero_cb_index, df}})
+            .set_page_size(zero_cb_index, sub_tile_line_bytes);
+    auto cb_zero = tt::tt_metal::CreateCircularBuffer(program, output_tensor_cores, zero_cb_config);
+
     // Create reduction dataflow kernel
     std::vector<uint32_t> reader_compile_time_args = {
         reduction_cb_index,  // reduction_cb_index
@@ -405,6 +416,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         batch_offset_index_stick_size,
         batch_offset_cb_index_reader,
         out_cb_index,
+        zero_cb_index,
     };
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -429,7 +441,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         1,
         batch_offset_index_stick_size,
         batch_offset_cb_index_reader,
-        out_cb_index};
+        out_cb_index,
+        zero_cb_index,
+    };
 
     auto reduction_reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args);
     auto reduction_writer_kernel_config = tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args);
@@ -678,11 +692,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     for (uint32_t i = 0; i < in_num_cores; i++) {
         const auto& core = in_cores_vec[i];
         auto& reader_args = reader_args_by_core[core.x][core.y];
-        reader_args[2] = i;
-        reader_args[3] = 1;
+        reader_args[4] = i;
         auto& writer_args = writer_args_by_core[core.x][core.y];
-        writer_args[2] = i;
-        writer_args[3] = 1;
+        writer_args[4] = i;
     }
 
     auto override_runtime_arguments_callback =
