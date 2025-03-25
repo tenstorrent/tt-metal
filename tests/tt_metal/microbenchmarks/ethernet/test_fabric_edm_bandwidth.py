@@ -35,7 +35,7 @@ def get_device_freq():
     return freq
 
 
-def summarize_to_csv(test_name, packet_size, bandwidth, packets_per_second):
+def summarize_to_csv(test_name, packet_size, line_size, num_links, bandwidth, packets_per_second):
     """Write test results to a CSV file organized by packet size"""
     csv_path = os.path.join(os.environ["TT_METAL_HOME"], "generated/profiler/.logs/bandwidth_summary.csv")
 
@@ -43,12 +43,34 @@ def summarize_to_csv(test_name, packet_size, bandwidth, packets_per_second):
     if not os.path.exists(csv_path):
         with open(csv_path, "w") as f:
             writer = csv.writer(f)
-            writer.writerow(["Test Name", "Packet Size", "Bandwidth (B/c)", "Packets/Second"])
+            writer.writerow(["Test Name", "Packet Size", "Line Size", "Num Links", "Bandwidth (B/c)", "Packets/Second"])
 
     # Append results
     with open(csv_path, "a") as f:
         writer = csv.writer(f)
-        writer.writerow([test_name, packet_size, bandwidth, packets_per_second])
+        writer.writerow([test_name, packet_size, line_size, num_links, bandwidth, packets_per_second])
+
+
+def read_golden_results(test_name, packet_size, line_size, num_links):
+    """Print a summary table of all test results by packet size"""
+    csv_path = os.path.join(
+        os.environ["TT_METAL_HOME"], "tests/tt_metal/microbenchmarks/ethernet/fabric_edm_bandwidth_golden.csv"
+    )
+
+    if not os.path.exists(csv_path):
+        logger.warning("No golden data found")
+        return 0, 0
+
+    df = pd.read_csv(csv_path)
+    df = df.replace({float("nan"): None})
+    results = df[
+        (df["Test Name"] == test_name)
+        & (df["Packet Size"] == packet_size)
+        & (df["Line Size"] == line_size)
+        & (df["Num Links"] == num_links)
+    ]
+
+    return results["Bandwidth (B/c)"].values[0], results["Packets/Second"].values[0]
 
 
 def profile_results(
@@ -100,8 +122,6 @@ def run_fabric_edm(
     line_size,
     packet_size,
     fabric_mode,
-    expected_bw,
-    expected_Mpps,  # expected_Mpps = expected millions of packets per second
     disable_sends_for_interior_workers,
 ):
     logger.warning("removing file profile_log_device.csv")
@@ -144,13 +164,15 @@ def run_fabric_edm(
 
     # Add summary to CSV
     test_name = f"{'unicast' if is_unicast else 'mcast'}_{fabric_mode.name}"
-    summarize_to_csv(test_name, packet_size, bandwidth, packets_per_second)
+    summarize_to_csv(test_name, packet_size, line_size, num_links, bandwidth, packets_per_second)
+    expected_bw, expected_pps = read_golden_results(test_name, packet_size, line_size, num_links)
+    expected_Mpps = expected_pps / 1000000 if expected_pps is not None else None
     bw_threshold = 0.07
     if packet_size <= 2048 and fabric_mode != FabricTestMode.Linear:
         bw_threshold = 0.12
-    assert expected_bw - bw_threshold <= bandwidth <= expected_bw + bw_threshold
+    assert expected_bw - bw_threshold <= bandwidth <= expected_bw + bw_threshold, "Bandwidth mismatch"
     if expected_Mpps is not None:
-        assert expected_Mpps - 0.01 <= mega_packets_per_second <= expected_Mpps + 0.01
+        assert expected_Mpps - 0.01 <= mega_packets_per_second <= expected_Mpps + 0.01, "Packets per second mismatch"
 
 
 @pytest.mark.parametrize("num_mcasts", [200000])
@@ -158,7 +180,7 @@ def run_fabric_edm(
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("packet_size", [4096])
-@pytest.mark.parametrize("line_size, num_links, expected_bw, expected_Mpps", [(4, 1, 8.23, None), (4, 2, 8.17, 1.99)])
+@pytest.mark.parametrize("line_size, num_links", [(4, 1), (4, 2)])
 def test_fabric_edm_mcast_half_ring_bw(
     num_mcasts,
     num_unicasts,
@@ -167,8 +189,6 @@ def test_fabric_edm_mcast_half_ring_bw(
     line_sync,
     line_size,
     packet_size,
-    expected_bw,
-    expected_Mpps,
 ):
     run_fabric_edm(
         False,
@@ -180,8 +200,6 @@ def test_fabric_edm_mcast_half_ring_bw(
         line_size,
         packet_size,
         FabricTestMode.HalfRing,
-        expected_bw,
-        expected_Mpps,
         False,
     )
 
@@ -192,9 +210,7 @@ def test_fabric_edm_mcast_half_ring_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize(
-    "packet_size, expected_bw, expected_Mpps", [(16, 0.029, 1.864), (2048, 3.33, 1.626), (4096, 5.8, 1.419)]
-)
+@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 def test_fabric_4chip_one_link_mcast_full_ring_bw(
     num_mcasts,
     num_unicasts,
@@ -203,8 +219,6 @@ def test_fabric_4chip_one_link_mcast_full_ring_bw(
     line_sync,
     line_size,
     packet_size,
-    expected_bw,
-    expected_Mpps,
 ):
     run_fabric_edm(
         False,
@@ -216,8 +230,6 @@ def test_fabric_4chip_one_link_mcast_full_ring_bw(
         line_size,
         packet_size,
         FabricTestMode.FullRing,
-        expected_bw,
-        expected_Mpps,
         False,
     )
 
@@ -228,9 +240,7 @@ def test_fabric_4chip_one_link_mcast_full_ring_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [8])
 @pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize(
-    "packet_size, expected_bw, expected_Mpps", [(16, 0.025, None), (2048, 2.32, None), (4096, 4.46, 1.09)]
-)  # Marked None if packets per second varies too much run to run (>= 5%)
+@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 def test_fabric_8chip_one_link_edm_mcast_full_ring_bw(
     num_mcasts,
     num_unicasts,
@@ -239,8 +249,6 @@ def test_fabric_8chip_one_link_edm_mcast_full_ring_bw(
     line_sync,
     line_size,
     packet_size,
-    expected_bw,
-    expected_Mpps,
 ):
     run_fabric_edm(
         False,
@@ -252,8 +260,6 @@ def test_fabric_8chip_one_link_edm_mcast_full_ring_bw(
         line_size,
         packet_size,
         FabricTestMode.FullRing,
-        expected_bw,
-        expected_Mpps,
         False,
     )
 
@@ -264,9 +270,7 @@ def test_fabric_8chip_one_link_edm_mcast_full_ring_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("line_size", [4])
-@pytest.mark.parametrize(
-    "packet_size, expected_bw, expected_Mpps", [(16, 0.032, 2.037), (2048, 3.74, 1.825), (4096, 6.72, 1.642)]
-)
+@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 def test_fabric_4_chip_one_link_mcast_saturate_chip_to_chip_ring_bw(
     num_mcasts,
     num_unicasts,
@@ -275,8 +279,6 @@ def test_fabric_4_chip_one_link_mcast_saturate_chip_to_chip_ring_bw(
     line_sync,
     line_size,
     packet_size,
-    expected_bw,
-    expected_Mpps,
 ):
     run_fabric_edm(
         False,
@@ -288,8 +290,6 @@ def test_fabric_4_chip_one_link_mcast_saturate_chip_to_chip_ring_bw(
         line_size,
         packet_size,
         FabricTestMode.SaturateChipToChipRing,
-        expected_bw,
-        expected_Mpps,
         False,
     )
 
@@ -300,9 +300,7 @@ def test_fabric_4_chip_one_link_mcast_saturate_chip_to_chip_ring_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize(
-    "packet_size, expected_bw, expected_Mpps", [(16, 0.034, 2.13), (2048, 4.36, 2.13), (4096, 7.75, 1.89)]
-)
+@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 def test_fabric_4chip_one_link_mcast_bw(
     num_mcasts,
     num_unicasts,
@@ -311,8 +309,6 @@ def test_fabric_4chip_one_link_mcast_bw(
     line_sync,
     line_size,
     packet_size,
-    expected_bw,
-    expected_Mpps,
 ):
     run_fabric_edm(
         False,
@@ -324,8 +320,6 @@ def test_fabric_4chip_one_link_mcast_bw(
         line_size,
         packet_size,
         FabricTestMode.Linear,
-        expected_bw,
-        expected_Mpps,
         False,
     )
 
@@ -336,9 +330,7 @@ def test_fabric_4chip_one_link_mcast_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [2])
-@pytest.mark.parametrize(
-    "packet_size, expected_bw, expected_Mpps", [(16, 0.034, 2.13), (2048, 4.35, 2.13), (4096, 7.75, 1.89)]
-)
+@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 def test_fabric_4chip_two_link_mcast_bw(
     num_mcasts,
     num_unicasts,
@@ -347,8 +339,6 @@ def test_fabric_4chip_two_link_mcast_bw(
     line_sync,
     line_size,
     packet_size,
-    expected_bw,
-    expected_Mpps,
 ):
     run_fabric_edm(
         False,
@@ -360,8 +350,6 @@ def test_fabric_4chip_two_link_mcast_bw(
         line_size,
         packet_size,
         FabricTestMode.Linear,
-        expected_bw,
-        expected_Mpps,
         False,
     )
 
@@ -372,9 +360,7 @@ def test_fabric_4chip_two_link_mcast_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [2])
 @pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize(
-    "packet_size, expected_bw, expected_Mpps", [(16, 0.044, 2.762), (2048, 5.64, 2.757), (4096, 11.02, 2.673)]
-)
+@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 def test_fabric_one_link_non_forwarding_unicast_bw(
     num_mcasts,
     num_unicasts,
@@ -383,8 +369,6 @@ def test_fabric_one_link_non_forwarding_unicast_bw(
     line_sync,
     line_size,
     packet_size,
-    expected_bw,
-    expected_Mpps,
 ):
     run_fabric_edm(
         True,
@@ -396,8 +380,6 @@ def test_fabric_one_link_non_forwarding_unicast_bw(
         line_size,
         packet_size,
         FabricTestMode.Linear,
-        expected_bw,
-        expected_Mpps,
         False,
     )
 
@@ -408,9 +390,7 @@ def test_fabric_one_link_non_forwarding_unicast_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [2])
 @pytest.mark.parametrize("num_links", [2])
-@pytest.mark.parametrize(
-    "packet_size, expected_bw, expected_Mpps", [(16, 0.044, 2.755), (2048, 5.64, 2.755), (4096, 11.02, 2.67)]
-)
+@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 def test_fabric_two_link_non_forwarding_unicast_bw(
     num_mcasts,
     num_unicasts,
@@ -419,8 +399,6 @@ def test_fabric_two_link_non_forwarding_unicast_bw(
     line_sync,
     line_size,
     packet_size,
-    expected_bw,
-    expected_Mpps,
 ):
     run_fabric_edm(
         True,
@@ -432,8 +410,6 @@ def test_fabric_two_link_non_forwarding_unicast_bw(
         line_size,
         packet_size,
         FabricTestMode.Linear,
-        expected_bw,
-        expected_Mpps,
         False,
     )
 
@@ -444,9 +420,7 @@ def test_fabric_two_link_non_forwarding_unicast_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize(
-    "packet_size, expected_bw, expected_Mpps", [(16, 0.038, None), (2048, 4.897, 2.379), (4096, 9.72, 2.373)]
-)  # Marked None if packets per second varies too much run to run (>= 5%)
+@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 def test_fabric_one_link_forwarding_unicast_multiproducer_multihop_bw(
     num_mcasts,
     num_unicasts,
@@ -455,8 +429,6 @@ def test_fabric_one_link_forwarding_unicast_multiproducer_multihop_bw(
     line_sync,
     line_size,
     packet_size,
-    expected_bw,
-    expected_Mpps,
 ):
     run_fabric_edm(
         True,
@@ -468,8 +440,6 @@ def test_fabric_one_link_forwarding_unicast_multiproducer_multihop_bw(
         line_size,
         packet_size,
         FabricTestMode.Linear,
-        expected_bw,
-        expected_Mpps,
         False,
     )
 
@@ -480,9 +450,7 @@ def test_fabric_one_link_forwarding_unicast_multiproducer_multihop_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize(
-    "packet_size, expected_bw, expected_Mpps", [(16, 0.037, 2.348), (2048, 4.815, 2.351), (4096, 9.35, 2.2846)]
-)
+@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 def test_fabric_one_link_forwarding_unicast_single_producer_multihop_bw(
     num_mcasts,
     num_unicasts,
@@ -491,8 +459,6 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_bw(
     line_sync,
     line_size,
     packet_size,
-    expected_bw,
-    expected_Mpps,
 ):
     run_fabric_edm(
         True,
@@ -504,8 +470,6 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_bw(
         line_size,
         packet_size,
         FabricTestMode.Linear,
-        expected_bw,
-        expected_Mpps,
         True,
     )
 
@@ -521,11 +485,14 @@ def print_bandwidth_summary():
     df = pd.read_csv(csv_path)
 
     # Sort by test name and packet size
-    df = df.sort_values(["Test Name", "Packet Size"])
+    df = df.sort_values(["Test Name", "Packet Size", "Line Size", "Num Links"])
 
     # Format table with raw values
     table = tabulate(
-        df, headers=["Test Name", "Packet Size", "Bandwidth (B/c)", "Packets/Second"], tablefmt="grid", floatfmt=".2f"
+        df,
+        headers=["Test Name", "Packet Size", "Line Size", "Num Links", "Bandwidth (B/c)", "Packets/Second"],
+        tablefmt="grid",
+        floatfmt=".2f",
     )
     logger.info("\nBandwidth Test Results:\n{}", table)
 

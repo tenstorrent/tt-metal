@@ -647,7 +647,7 @@ FORCE_INLINE bool can_forward_packet_completely(
 template <uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE void receiver_forward_packet(
     // TODO: have a separate cached copy of the packet header to save some additional L1 loads
-    volatile PACKET_HEADER_TYPE* packet_start,
+    tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
     ROUTING_FIELDS_TYPE cached_routing_fields,
     tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>& downstream_edm_interface,
     uint8_t transaction_id) {
@@ -761,9 +761,9 @@ void run_sender_channel_step(
     }
     if (can_send) {
         did_something = true;
-        auto packet_header = reinterpret_cast<PACKET_HEADER_TYPE*>(local_sender_channel.get_buffer_address(
-            local_sender_channel_worker_interface.local_wrptr.get_buffer_index()));
         if constexpr (enable_packet_header_recording) {
+            auto packet_header = reinterpret_cast<PACKET_HEADER_TYPE*>(local_sender_channel.get_buffer_address(
+                local_sender_channel_worker_interface.local_wrptr.get_buffer_index()));
             tt::tt_fabric::validate(*packet_header);
             packet_header_recorder.record_packet_header(reinterpret_cast<volatile uint32_t*>(packet_header));
         }
@@ -857,10 +857,10 @@ void run_receiver_channel_step(
     bool unwritten_packets = !wr_sent_ptr.is_caught_up_to(ack_ptr);
     if (unwritten_packets) {
         auto receiver_buffer_index = wr_sent_ptr.get_buffer_index();
-        volatile auto packet_header =
-            local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index);
+        tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
+            local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
 
-        ROUTING_FIELDS_TYPE cached_routing_fields = const_cast<PACKET_HEADER_TYPE*>(packet_header)->routing_fields;
+        ROUTING_FIELDS_TYPE cached_routing_fields = packet_header->routing_fields;
         bool can_send_to_all_local_chip_receivers =
             can_forward_packet_completely(cached_routing_fields, downstream_edm_interface);
         bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
