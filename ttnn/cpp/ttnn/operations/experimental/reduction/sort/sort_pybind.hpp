@@ -4,14 +4,10 @@
 
 #pragma once
 
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-#include <optional>
+#include "pybind11/decorators.hpp"
 
-#include "cpp/pybind11/decorators.hpp"
-
-#include "ttnn/operations/experimental/reduction/sort/sort.hpp"
-#include "ttnn/operations/experimental/reduction/sort/device/sort_device_operation.hpp"
+#include "sort.hpp"
+#include "device/sort_device_operation.hpp"
 
 namespace ttnn::operations::experimental::reduction::detail {
 namespace py = pybind11;

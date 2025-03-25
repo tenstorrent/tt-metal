@@ -3,28 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sort.hpp"
+#include "device/sort_device_operation.hpp"
 
-#include "ttnn/types.hpp"
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
-#include "tt-metalium/logger.hpp"
-#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 
 namespace ttnn::operations::experimental::reduction {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
+
 template <class Tuple, class T = std::decay_t<std::tuple_element_t<0, std::decay_t<Tuple>>>>
 std::vector<std::optional<T>> tuple_to_vector_optional(Tuple&& tuple) {
     return std::apply(
         [](auto&&... elems) { return std::vector<std::optional<T>>{std::forward<decltype(elems)>(elems)...}; },
         std::forward<Tuple>(tuple));
 }
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -36,14 +31,16 @@ std::vector<Tensor> ExecuteSort::invoke(
     const bool stable,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors) {
-    // TODO: DEBUG:
-    tt::log_error("1. invoke !!!!!!!!!!!!");
-    // ---
-    auto aa = optional_output_tensors.has_value()
-                  ? CMAKE_UNIQUE_NAMESPACE::tuple_to_vector_optional(optional_output_tensors.value())
-                  : std::vector<std::optional<Tensor>>{};
-    std::vector<Tensor> a = {input_tensor, input_tensor};
-    return a;
+    auto output_vectors = tt::tt_metal::operation::run(
+        SortDeviceOperation{dim, descending, stable, memory_config.value_or(input_tensor.memory_config())},
+        {input_tensor},
+        {},
+        optional_output_tensors.has_value()
+            ? CMAKE_UNIQUE_NAMESPACE::tuple_to_vector_optional(optional_output_tensors.value())
+            : std::vector<std::optional<Tensor>>{},
+        queue_id);
+
+    return output_vectors;
 }
 
 std::vector<Tensor> ExecuteSort::create_async_output_tensors(

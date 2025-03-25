@@ -5,7 +5,6 @@
 #pragma once
 
 #include <optional>
-#include <functional>
 
 #include "ttnn/decorators.hpp"
 
