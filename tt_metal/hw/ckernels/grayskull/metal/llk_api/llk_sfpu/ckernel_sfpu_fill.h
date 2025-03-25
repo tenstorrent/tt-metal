@@ -14,14 +14,11 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 4>
-inline void calculate_fill(const uint value) {
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void calculate_fill(const float value) {
     // SFPU microcode
-    Converter c_value;
-    c_value.u = value;
-    vFloat fill_val = c_value.f;
+    vFloat fill_val = value;
 
-#pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         dst_reg[0] = fill_val;
         dst_reg++;
