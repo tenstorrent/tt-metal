@@ -52,8 +52,12 @@ jobs:
   single-card-demo-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/single-card-demo-tests-impl.yaml
     if: ${{ inputs.single-card-demo }}
+    uses: ./.github/workflows/single-card-demo-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   single-card-perf-models-tests:
     needs: build-artifact
     secrets: inherit
