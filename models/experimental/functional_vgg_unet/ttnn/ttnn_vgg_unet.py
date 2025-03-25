@@ -224,6 +224,7 @@ class Conv_transpose:
 
 class Tt_decoder_block:
     def __init__(self, device, conv_args, parameters) -> None:
+        self.conv_args = conv_args
         self.up = Conv_transpose(device, conv_args.up, parameters.up)
         self.conv1 = Conv(device, conv_args.conv_block.conv1, parameters.conv1)
         self.conv2 = Conv(device, conv_args.conv_block.conv2, parameters.conv2)
@@ -231,9 +232,11 @@ class Tt_decoder_block:
     def __call__(self, x, cat_in):
         x = self.up(x)
         x = sharded_concat([x, cat_in])
-        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+        if self.conv_args.conv_block.conv1.do_sharded_to_interleaved:
+            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
         x = self.conv1(x)
-        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+        if self.conv_args.conv_block.conv2.do_sharded_to_interleaved:
+            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
         x = self.conv2(x)
         return x
 
@@ -295,9 +298,21 @@ class Tt_vgg_unet:
             padding=[self.conv_args.s3["9"].padding, self.conv_args.s3["9"].padding],
             dilation=[self.conv_args.s3["9"].dilation, self.conv_args.s3["9"].dilation],
         )
-        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+
         x = self.s3_10(x)
-        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+
+        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+        sharded_memory_config = ttnn.create_sharded_memory_config(
+            [
+                512,
+                32,
+            ],
+            core_grid=shard_grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            use_height_and_width_as_shard_shape=True,
+        )
+        x = ttnn.to_memory_config(x, sharded_memory_config)
+
         x = self.s3_12(x)
         x = self.s3_14(x)
         x = self.s3_16(x)
@@ -333,19 +348,34 @@ class Tt_vgg_unet:
             padding=[self.conv_args.b1["27"].padding, self.conv_args.b1["27"].padding],
             dilation=[self.conv_args.b1["27"].dilation, self.conv_args.b1["27"].dilation],
         )
-        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+
         x = self.b1_28(x)
         x = self.b1_30(x)
         x = self.b1_32(x)
         x = self.b1_34(x)
 
         x = self.d1(x, s4)
+        ttnn.deallocate(s4)
         x = self.d2(x, s3)
+        ttnn.deallocate(s3)
         x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
         x = self.d3(x, s2)
+        ttnn.deallocate(s2)
         x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
         x = self.d4(x, s1)
+        ttnn.deallocate(s1)
         x = self.out(x)
-        x = ttnn.sigmoid(x)
+
+        sharded_memory_config = ttnn.create_sharded_memory_config(
+            [
+                x.memory_config().shard_spec.shape[0],
+                x.memory_config().shard_spec.shape[1],
+            ],
+            core_grid=x.memory_config().shard_spec.grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        x = ttnn.sigmoid_accurate(x, memory_config=sharded_memory_config)
 
         return x

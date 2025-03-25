@@ -5,7 +5,6 @@
 import torch
 import ttnn
 from ttnn.model_preprocessing import infer_ttnn_module_args
-import torch.nn as nn
 from ttnn.model_preprocessing import preprocess_model_parameters, fold_batch_norm2d_into_conv2d
 from models.experimental.functional_vgg_unet.reference.vgg_unet import UNetVGG19
 
@@ -144,7 +143,7 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s3["10"]["enable_act_double_buffer"] = False
     parameters.conv_args.s3["10"]["deallocate_activation"] = True
     parameters.conv_args.s3["10"]["reshard_if_not_optimal"] = False
-    parameters.conv_args.s3["10"]["shard_layout"] = None
+    parameters.conv_args.s3["10"]["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     parameters.conv_args.s3["10"]["transpose_shards"] = False
     parameters.conv_args.s3["10"]["activation"] = "relu"
 
@@ -265,6 +264,7 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d1.conv_block.conv1["transpose_shards"] = False
     parameters.conv_args.d1.conv_block.conv1["activation"] = "relu"
     parameters.conv_args.d1.conv_block.conv1["padding"] = (1, 1)
+    parameters.conv_args.d1.conv_block.conv1["do_sharded_to_interleaved"] = True
 
     parameters.conv_args.d1.conv_block.conv2["act_block_h"] = None
     parameters.conv_args.d1.conv_block.conv2["enable_split_reader"] = False
@@ -275,6 +275,7 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d1.conv_block.conv2["transpose_shards"] = False
     parameters.conv_args.d1.conv_block.conv2["activation"] = "relu"
     parameters.conv_args.d1.conv_block.conv2["padding"] = (1, 1)
+    parameters.conv_args.d1.conv_block.conv2["do_sharded_to_interleaved"] = True
 
     parameters.conv_args.d2.up["act_block_h"] = None
     parameters.conv_args.d2.up["enable_split_reader"] = False
@@ -294,6 +295,7 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d2.conv_block.conv1["transpose_shards"] = False
     parameters.conv_args.d2.conv_block.conv1["activation"] = "relu"
     parameters.conv_args.d2.conv_block.conv1["padding"] = (1, 1)
+    parameters.conv_args.d2.conv_block.conv1["do_sharded_to_interleaved"] = True
 
     parameters.conv_args.d2.conv_block.conv2["act_block_h"] = None
     parameters.conv_args.d2.conv_block.conv2["enable_split_reader"] = False
@@ -304,6 +306,7 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d2.conv_block.conv2["transpose_shards"] = False
     parameters.conv_args.d2.conv_block.conv2["activation"] = "relu"
     parameters.conv_args.d2.conv_block.conv2["padding"] = (1, 1)
+    parameters.conv_args.d2.conv_block.conv2["do_sharded_to_interleaved"] = False
 
     parameters.conv_args.d3.up["act_block_h"] = None
     parameters.conv_args.d3.up["enable_split_reader"] = False
@@ -323,6 +326,7 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d3.conv_block.conv1["transpose_shards"] = False
     parameters.conv_args.d3.conv_block.conv1["activation"] = "relu"
     parameters.conv_args.d3.conv_block.conv1["padding"] = (1, 1)
+    parameters.conv_args.d3.conv_block.conv1["do_sharded_to_interleaved"] = True
 
     parameters.conv_args.d3.conv_block.conv2["act_block_h"] = None
     parameters.conv_args.d3.conv_block.conv2["enable_split_reader"] = False
@@ -333,6 +337,7 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d3.conv_block.conv2["transpose_shards"] = False
     parameters.conv_args.d3.conv_block.conv2["activation"] = "relu"
     parameters.conv_args.d3.conv_block.conv2["padding"] = (1, 1)
+    parameters.conv_args.d3.conv_block.conv2["do_sharded_to_interleaved"] = True
 
     parameters.conv_args.d4.up["act_block_h"] = None
     parameters.conv_args.d4.up["enable_split_reader"] = False
@@ -352,6 +357,7 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d4.conv_block.conv1["transpose_shards"] = False
     parameters.conv_args.d4.conv_block.conv1["activation"] = "relu"
     parameters.conv_args.d4.conv_block.conv1["padding"] = (1, 1)
+    parameters.conv_args.d4.conv_block.conv1["do_sharded_to_interleaved"] = True
 
     parameters.conv_args.d4.conv_block.conv2["act_block_h"] = None
     parameters.conv_args.d4.conv_block.conv2["enable_split_reader"] = False
@@ -362,6 +368,7 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.d4.conv_block.conv2["transpose_shards"] = False
     parameters.conv_args.d4.conv_block.conv2["activation"] = "relu"
     parameters.conv_args.d4.conv_block.conv2["padding"] = (1, 1)
+    parameters.conv_args.d4.conv_block.conv2["do_sharded_to_interleaved"] = True
 
     parameters.conv_args.out["act_block_h"] = None
     parameters.conv_args.out["enable_split_reader"] = False
