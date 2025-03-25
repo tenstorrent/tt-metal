@@ -48,7 +48,6 @@ struct LlamaReduceScatterDeviceOperation {
             tt::tt_metal::KernelHandle compute_kernel_id;
             std::vector<tt::tt_metal::CBHandle> cb_handles;
             CoreRangeSet core_range;
-            CoreRangeSet sender_core_range;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
@@ -83,12 +82,6 @@ struct LlamaReduceScatterDeviceOperation {
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    // API call to map user arguments to operation attributes and tensor args.
-    // This is the only method that is called by the user
-    // The user will be able to call the operation using `tensor_return_value_t output =
-    // ttnn::prim::example(input_tensor)` after the op is registered Keep in mind that the the overload with `queue_id`
-    // argument will be added automatically for primitive operations So, the user can also call this operation using
-    // `tensor_return_value_t output = ttnn::prim::example(queue_id, input_tensor)`
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const ttnn::Tensor& input_tensor,
         ttnn::Tensor& intermediate_packet_buffer,
