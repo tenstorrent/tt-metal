@@ -603,6 +603,7 @@ static OptimizedConvBlockConfig get_opt_block_config(
             true,
             conv_config.act_block_h_override);
     }
+
     auto output_parallel_config = parallel_config;
     if (conv_config.shard_layout.value() == ttnn::TensorMemoryLayout::WIDTH_SHARDED && !mm_conv) {
         uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
@@ -618,7 +619,12 @@ static OptimizedConvBlockConfig get_opt_block_config(
 
     auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
         ttnn::Shape(
-            {1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, tt::constants::TILE_WIDTH)}),
+            {1,
+             1,
+             batch_size * output_height * output_width,
+             tt::round_up(
+                 out_channels,
+                 get_num_cores_channels_from_parallel_config(output_parallel_config) * tt::constants::TILE_WIDTH)}),
         output_parallel_config,
         tt::constants::TILE_HEIGHT);
     auto largest_parallel_config = output_parallel_config.grid.num_cores() > parallel_config.grid.num_cores()
