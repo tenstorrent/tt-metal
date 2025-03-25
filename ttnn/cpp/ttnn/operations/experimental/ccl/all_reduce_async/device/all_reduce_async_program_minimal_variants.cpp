@@ -41,6 +41,133 @@ CoreRangeSet cores_to_corerangeset(const std::vector<CoreCoord>& cores) {
     }
     return CoreRangeSet(core_ranges);
 }
+std::vector<CoreCoord> compute_top_row_ethernet_cores(
+    IDevice* device, std::optional<IDevice*> forward_device, std::optional<IDevice*> backward_device) {
+    std::vector<CoreCoord> reordered_ethernet_cores;
+    if (forward_device.has_value()) {
+        for (auto core : device->get_ethernet_sockets(forward_device.value()->id())) {
+            auto core_virtual = device->virtual_core_from_logical_core(core, CoreType::ETH);
+            reordered_ethernet_cores.push_back(core_virtual);
+        }
+        std::sort(reordered_ethernet_cores.begin(), reordered_ethernet_cores.end(), [](auto& a, auto& b) {
+            return a.x < b.x;
+        });
+    } else if (backward_device.has_value()) {
+        for (auto core : device->get_ethernet_sockets(backward_device.value()->id())) {
+            auto core_virtual = device->virtual_core_from_logical_core(core, CoreType::ETH);
+            reordered_ethernet_cores.push_back(core_virtual);
+        }
+        std::sort(reordered_ethernet_cores.begin(), reordered_ethernet_cores.end(), [](auto& a, auto& b) {
+            return a.x < b.x;
+        });
+    }
+    for (auto& eth_core : reordered_ethernet_cores) {
+        eth_core.y = 16;
+    }
+    return reordered_ethernet_cores;
+}
+
+bool core_vector_contains_core(std::vector<CoreCoord> core_vector, CoreCoord core) {
+    auto it = std::find(core_vector.begin(), core_vector.end(), core);
+    return it != core_vector.end();
+}
+
+CoreCoord wh_glx_physical_worker_core_from_logical_core(CoreCoord logical_core) {
+    auto physical_x = logical_core.x <= 3 ? logical_core.x + 1 : logical_core.x + 2;
+    auto physical_y = logical_core.y <= 4 ? logical_core.y + 1 : logical_core.y + 2;
+    return CoreCoord(physical_x, physical_y);
+}
+
+std::tuple<bool, CoreRangeSet, std::vector<CoreCoord>> get_optimal_worker_core_placement(
+    IDevice* device,
+    std::vector<CoreCoord> ethernet_cores_virtual,
+    std::optional<CoreRangeSet> reserved_cores,
+    uint32_t num_links,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    bool success = true;
+    std::vector<CoreCoord> sender_worker_cores;
+    std::vector<CoreCoord> sender_worker_cores_physical;
+
+    auto available_cores_corerangeset = device->worker_cores(
+        tt::tt_metal::HalProgrammableCoreType::TENSIX,
+        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+    auto available_cores = corerange_to_cores(available_cores_corerangeset, std::nullopt, true);
+    std::vector<CoreCoord> available_cores_physical;
+    for (auto available_core : available_cores) {
+        auto available_core_physical = wh_glx_physical_worker_core_from_logical_core(available_core);
+        available_cores_physical.push_back(available_core_physical);
+    }
+    auto available_cores_bbox = available_cores_corerangeset.bounding_box();
+    auto available_core_start = available_cores_bbox.start_coord;
+    auto available_core_end = available_cores_bbox.end_coord;
+    auto available_core_start_physical = wh_glx_physical_worker_core_from_logical_core(available_core_start);
+    auto available_core_end_physical = wh_glx_physical_worker_core_from_logical_core(available_core_end);
+
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    // Get all logical cores in the worker grid
+    std::vector<CoreCoord> compute_cores_logical;
+    for (int i = 0; i < num_cores_x; ++i) {
+        for (int j = 0; j < num_cores_y; ++j) {
+            compute_cores_logical.push_back(CoreCoord(i, j));
+        }
+    }
+
+    for (uint32_t link = 0; link < num_links; link++) {
+        auto core_virtual = ethernet_cores_virtual[link];
+        CoreCoord eth_core_physical;
+        eth_core_physical.x = core_virtual.x >= 22 ? (core_virtual.x - 16) : (core_virtual.x - 17);
+        eth_core_physical.y = (core_virtual.y - 16) * 6;
+        // shift down the worker core
+        auto worker_core_physical = CoreCoord(eth_core_physical.x, eth_core_physical.y + 1);
+        // // check if we need to shift left for left-end cores
+        // if (available_core_start_physical.x > worker_core_physical.x) {
+        //     worker_core_physical.x += (available_core_start_physical.x - worker_core_physical.x);
+        // }
+        // // check if we need to shift left for right-end cores
+        // if (worker_core_physical.x > available_core_end_physical.x) {
+        //     worker_core_physical.x -= (worker_core_physical.x - available_core_end_physical.x);
+        // }
+        // // check the reserved cores
+        // uint32_t start_core_y = worker_core_physical.y;
+        // uint32_t end_core_y = available_core_end_physical.y;
+        // for (uint32_t core_y = start_core_y; core_y < end_core_y + 1; ++core_y) {
+        //     worker_core_physical.y = core_y;
+        //     if (!core_vector_contains_core(sender_worker_cores_physical, worker_core_physical) &&
+        //         core_vector_contains_core(available_cores_physical, worker_core_physical)) {  // not find
+        //         break;
+        //     }
+        // }
+        // if (not(core_vector_contains_core(available_cores_physical, worker_core_physical) &&
+        //         !core_vector_contains_core(sender_worker_cores_physical, worker_core_physical))) {
+        //     success = false;
+        // }
+        sender_worker_cores_physical.push_back(worker_core_physical);
+    }
+
+    // Convert to physical worker coordinates to logical.
+    for (int i = 0; i < sender_worker_cores_physical.size(); ++i) {
+        for (int j = 0; j < compute_cores_logical.size(); ++j) {
+            auto core = wh_glx_physical_worker_core_from_logical_core(compute_cores_logical[j]);
+            if (sender_worker_cores_physical[i] == core) {
+                sender_worker_cores.push_back(compute_cores_logical[j]);
+            }
+        }
+    }
+
+    if (device->id() == 4) {
+        tt::log_info("sender_worker_cores: {}", sender_worker_cores);
+    }
+
+    std::set<CoreRange> sender_worker_cores_set;
+    for (int i = 0; i < sender_worker_cores.size(); ++i) {
+        sender_worker_cores_set.insert(CoreRange(sender_worker_cores[i]));
+    }
+    CoreRangeSet sender_worker_corerangeset = CoreRangeSet(sender_worker_cores_set);
+
+    return {success, sender_worker_corerangeset, sender_worker_cores};
+}
 
 tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers(
     const Tensor& input_tensor,
@@ -122,6 +249,17 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value_or(device->get_sub_device_ids().at(0)));
     const auto [sender_worker_core_range, sender_worker_cores] =
         choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, sub_device_cores);
+
+    // std::vector<CoreCoord> ethernet_cores_virtual =
+    //     compute_top_row_ethernet_cores(device, forward_device, backward_device);
+    // tt::log_info("dev {} ethernet_cores: {}", device->id(), ethernet_cores_virtual);
+    // auto [success, sender_worker_core_range, sender_worker_cores] =
+    //     get_optimal_worker_core_placement(device, ethernet_cores_virtual, std::nullopt, num_links, sub_device_id);
+
+    tt::log_info("worker_cores: {}", sender_worker_cores);
+    // if (device->id() == 4) {
+    //     tt::log_info("success: {}", success);
+    // }
 
     auto worker_reducer_cores = output_tensor_cores.merge(sender_worker_core_range);
 
@@ -290,8 +428,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         program, output_tensor_cores, out_cb_config);  // TODO: This should be the output cores instead
 
     // KERNEL CREATION
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_1;
-    tt::tt_metal::NOC writer_noc = tt::tt_metal::NOC::NOC_0;
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_0;
+    tt::tt_metal::NOC writer_noc = tt::tt_metal::NOC::NOC_1;
     // Reader
     std::vector<uint32_t> reader_compile_args = {
         ring_index,                 // my_chip_id

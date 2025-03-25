@@ -253,7 +253,7 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> ar_choose_worker_cores(
     size_t num_links, size_t num_workers_per_link, bool persistent_fabric_mode, const CoreRangeSet& available_cores) {
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
-    if (persistent_fabric_mode) {
+    if (!persistent_fabric_mode) {
         const size_t num_workers_preferred = num_workers_per_link * num_links;
         if (available_cores.num_cores() < num_workers_preferred) {
             log_warning(
@@ -286,8 +286,10 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> ar_choose_worker_cores(
             }
         }
     } else {
-        sender_worker_core_range =
-            CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_workers_per_link - 1, num_links - 1)));
+        sender_worker_core_range = CoreRangeSet(std::vector<CoreRange>{
+            CoreRange(CoreCoord(2, 0), CoreCoord(2, 0)),
+            CoreRange(CoreCoord(3, 0), CoreCoord(3, 0)),
+            CoreRange(CoreCoord(5, 0), CoreCoord(5, 0))});
     }
     return {sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true)};
 }
