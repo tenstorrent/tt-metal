@@ -5,8 +5,6 @@
 import math
 import ttnn
 from models.demos.segformer.tt.ttnn_segformer_mlp import TtSegformerMLP
-from torch import nn
-import tt_lib
 from models.demos.segformer.tt.common import Conv
 from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 

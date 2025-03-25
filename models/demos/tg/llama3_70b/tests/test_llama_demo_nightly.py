@@ -2,13 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
-import os
-import json
-import torch
-import torch.nn.functional as F
 
-from time import time
 import pytest
 from loguru import logger
 from models.utility_functions import skip_for_grayskull

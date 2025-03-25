@@ -6,10 +6,6 @@ from typing import Optional, Tuple, Union
 import torch
 import torch.nn as nn
 
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-)
 
 from models.experimental.swin.tt.swin_stage import TtSwinStage
 from models.experimental.swin.tt.swin_patch_merging import TtSwinPatchMerging

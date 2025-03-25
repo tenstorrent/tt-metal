@@ -2,20 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import math
 import ttnn
 import torch
-import torch.nn as nn
 from tqdm import tqdm
 from models.demos.llama3_subdevices.tt.llama_decoder import TtTransformerBlock
 from models.common.rmsnorm import RMSNorm
 import ttnn
-from typing import Optional
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3_subdevices.tt.distributed_norm import DistributedNorm
 from models.demos.llama3_subdevices.tt.lm_head import LMHead
-from models.demos.llama3_subdevices.tt.llama_common import copy_host_to_device, get_prefill_rot_mat, HostEmbedding
+from models.demos.llama3_subdevices.tt.llama_common import copy_host_to_device, get_prefill_rot_mat
 from models.demos.llama3_subdevices.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3_subdevices.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_subdevices.tt.prefetcher_common import TtLlamaPrefetcherSetup

@@ -4,20 +4,17 @@
 
 from loguru import logger
 import os
-import pytest
 import torch
-import torchvision
 from tests.ttnn.utils_for_testing import assert_with_pcc
 import ttnn
 from models.demos.yolov4.reference.yolov4 import Yolov4
 from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
-from models.demos.yolov4.demo.demo import YoloLayer, get_region_boxes, gen_yolov4_boxes_confs
+from models.demos.yolov4.demo.demo import get_region_boxes, gen_yolov4_boxes_confs
 from models.demos.yolov4.ttnn.model_preprocessing import create_yolov4_model_parameters
 
 
 from models.utility_functions import (
     is_wormhole_b0,
-    is_grayskull,
     divup,
 )
 

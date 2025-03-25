@@ -3,22 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 import torch
 import pytest
-from loguru import logger
 import os
 import ttnn
-from models.tt_transformers.tt.attention import Attention
-from models.tt_transformers.tt.rope import RotarySetup
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.common import (
-    precompute_freqs,
-    PagedAttentionConfig,
-)
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
 from models.utility_functions import skip_for_grayskull
-from models.tt_transformers.tt.load_checkpoints import convert_meta_to_hf, convert_hf_to_meta, map_hf_to_meta_keys
 
 
 @torch.no_grad()

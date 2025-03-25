@@ -4,23 +4,18 @@
 
 import torch
 import json
-from time import time, sleep
+from time import time
 from datetime import datetime
 from loguru import logger
 import os
 import ttnn
-import math
 import pytest
 import requests
 from pathlib import Path
 import hashlib
 
-from models.utility_functions import nearest_32
 from models.demos.llama3_subdevices.tt.llama_common import (
-    HostEmbedding,
-    encode_prompt_llama_instruct,
     PagedAttentionConfig,
-    sample_host,
 )
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
 from models.demos.llama3_subdevices.tt.llama_embedding import TtLlamaEmbedding
@@ -29,7 +24,6 @@ from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
 from models.demos.llama3_subdevices.tt.sampling import TTSampling
 
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 
 

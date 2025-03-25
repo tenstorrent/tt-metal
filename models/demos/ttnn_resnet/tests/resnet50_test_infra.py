@@ -20,7 +20,7 @@ from models.utility_functions import (
     divup,
 )
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
+from tests.ttnn.utils_for_testing import check_with_pcc
 from models.demos.ttnn_resnet.tt.custom_preprocessing import create_custom_mesh_preprocessor
 
 from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50 import resnet50
