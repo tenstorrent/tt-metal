@@ -2,8 +2,6 @@ name: "(T3K) T3000 fast tests"
 
 on:
   workflow_dispatch:
-  push:
-    branches: ["main"]
 
 jobs:
   build-artifact:
