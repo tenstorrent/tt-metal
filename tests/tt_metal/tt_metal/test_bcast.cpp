@@ -259,9 +259,7 @@ int main(int argc, char** argv) {
                               : "tt_metal/kernels/dataflow/writer_unary.cpp",
                     core,
                     tt_metal::DataMovementConfig{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                        .noc = tt_metal::NOC::RISCV_0_default,
-                        .compile_args = {0}});
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
                 uint32_t nc1 = 0;
                 tt_metal::SetRuntimeArgs(

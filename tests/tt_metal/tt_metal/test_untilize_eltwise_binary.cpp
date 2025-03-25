@@ -166,9 +166,7 @@ int main(int argc, char** argv) {
                       : "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt_metal::NOC::RISCV_0_default,
-                .compile_args = {0}});
+                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
         vector<uint32_t> compute_kernel_args = {num_blocks, num_tiles_r, num_tiles_c};
 
