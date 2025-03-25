@@ -11,9 +11,9 @@ struct BcastTo {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input,
-        const std::vector<int32_t>& sizes,
-        const std::optional<Tensor>& output,
-        const std::optional<MemoryConfig>& memory_config);
+        const Shape& output_shape,
+        const std::optional<MemoryConfig>& memory_config,
+        const std::optional<Tensor>& output);
 };
 }  // namespace ttnn::operations::experimental
 

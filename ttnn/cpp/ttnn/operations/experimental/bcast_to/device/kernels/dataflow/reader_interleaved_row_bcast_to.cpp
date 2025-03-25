@@ -5,7 +5,6 @@
 #include <stdint.h>
 
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/experimental/bcast_to/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
