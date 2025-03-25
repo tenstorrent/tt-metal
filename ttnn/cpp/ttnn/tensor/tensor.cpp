@@ -1001,6 +1001,16 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
     }
 }
 
+std::vector<IDevice*> Tensor::active_physical_devices() const {
+    auto mesh_device = this->mesh_device();
+    std::vector<IDevice*> devices = {};
+    devices.reserve(this->device_storage().specs.size());
+    for (const auto& spec : this->device_storage().specs) {
+        devices.push_back(mesh_device->get_device(spec.first));
+    }
+    return devices;
+}
+
 Tensor set_tensor_id(const Tensor& tensor) {
     if (not GraphTracker::instance().is_enabled()) {
         return tensor;

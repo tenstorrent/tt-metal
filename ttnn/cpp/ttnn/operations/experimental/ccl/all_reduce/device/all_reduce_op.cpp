@@ -147,7 +147,6 @@ static Tensor all_gather_local_reduce(
 
     std::vector<int32_t> new_shape{1, merged_dim_size, shape[rank - 2], shape[rank - 1]};
     auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
-
     const auto& gathered_tensor = tt::tt_metal::operation::run(
         ttnn::AllGather{
             .dim = 0,
@@ -271,12 +270,7 @@ Tensor all_reduce(
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "All Reduce op is only supported for Fast Dispatch");
 
-    auto mesh_device = input_tensor.mesh_device();
-    std::vector<IDevice*> devices = {};
-    for (const auto& spec : input_tensor.device_storage().specs) {
-        devices.push_back(mesh_device->get_device(spec.first));
-    }
-
+    std::vector<IDevice*> devices = input_tensor.active_physical_devices();
     uint32_t num_devices = devices.size();
     TT_FATAL(num_devices > 1, "all_reduce op will only work for num_devices > 1, but has {}", num_devices);
 

@@ -158,11 +158,7 @@ std::vector<ttnn::Tensor> all_gather_matmul(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "AllGatherMatmul is only supported for Fast Dispatch");
 
     std::vector<std::optional<const ttnn::Tensor>> optional_input_tensors = {std::nullopt};
-    auto mesh_device = input_tensor.mesh_device();
-    std::vector<IDevice*> devices = {};
-    for (const auto& spec : input_tensor.device_storage().specs) {
-        devices.push_back(mesh_device->get_device(spec.first));
-    }
+    std::vector<IDevice*> devices = input_tensor.active_physical_devices();
 
     /* AllGather setup */
     ttnn::AllGather all_gather_struct{

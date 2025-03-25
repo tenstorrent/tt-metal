@@ -583,8 +583,9 @@ std::vector<CoreCoord> MeshDevice::get_ethernet_sockets(chip_id_t connected_chip
 uint32_t MeshDevice::num_virtual_eth_cores(SubDeviceId sub_device_id) {
     // Issue #19729: Return the maximum number of active ethernet cores across physical devices in the Mesh.
     TT_FATAL(
-        *sub_device_id == 0,
-        "Virtualizing Ethernet Cores across a MeshDevice is not supported when a SubDeviceManager is loaded.");
+        *(sub_device_manager_tracker_->get_active_sub_device_manager()->id()) ==
+            *(this->get_default_sub_device_manager_id()),
+        "Virtualizing Ethernet Cores across a MeshDevice is not supported when a custom SubDeviceManager is loaded.");
     if (not max_num_eth_cores_) {
         for (auto device : this->get_devices()) {
             max_num_eth_cores_ = std::max(device->num_virtual_eth_cores(SubDeviceId{0}), max_num_eth_cores_);
