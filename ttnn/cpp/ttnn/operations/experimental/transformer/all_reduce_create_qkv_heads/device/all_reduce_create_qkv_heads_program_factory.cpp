@@ -140,7 +140,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
             .set_globally_allocated_address(*v_output_tensor.buffer());
     auto cb_v_output = tt::tt_metal::CreateCircularBuffer(program, v_cores, cb_v_output_config);
 
-    uint32_t q_base_addr = output_tensor.buffer()->address();
+    uint32_t q_base_addr = q_output_tensor.buffer()->address();
+    uint32_t k_base_addr = k_output_tensor.buffer()->address();
+    uint32_t v_base_addr = v_output_tensor.buffer()->address();
 
     // cores for q
     const uint32_t q_num_cores = q_cores.num_cores();  // number of cores of the output
@@ -399,7 +401,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         // process_qv,  qv vs k core will be passed in as rt args// read and write q and v heads
         // process_k,   // read and write k heads
         1,  // use_batch_offset
-        0,
+        1,
         batch_offset_index_stick_size,
         batch_offset_cb_index_reader,
         out_cb_index,
@@ -424,7 +426,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         // process_qv,  // read and write q and v heads
         // process_k,   // read and write k heads
         1,  // use_batch_offset
-        0,
+        1,
         batch_offset_index_stick_size,
         batch_offset_cb_index_reader,
         out_cb_index};
@@ -467,9 +469,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     // Now prepare rt args for the reader and writer kernels
 
     std::vector<uint32_t> reader_writer_runtime_args_template;
-    reader_writer_runtime_args_template.reserve(6 + 2 * q_num_cores + 2 * k_num_cores);
+    reader_writer_runtime_args_template.reserve(8 + 2 * q_num_cores + 2 * k_num_cores);
     reader_writer_runtime_args_template = {
-        q_base_addr, batch_offset_tensor.buffer()->address(), 0, 0, output_tensor_shard_num_pages};
+        q_base_addr,
+        k_base_addr,
+        v_base_addr,
+        batch_offset_tensor.buffer()->address(),
+        0,
+        0,
+        output_tensor_shard_num_pages};
     reader_writer_runtime_args_template.insert(
         reader_writer_runtime_args_template.end(), qcores_noc_x_coords.begin(), qcores_noc_x_coords.end());
     reader_writer_runtime_args_template.insert(
