@@ -137,9 +137,7 @@ void add_reader_writer_kernels(
                                                                                          // output since output Ht=1
                 logical_core,
                 tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt_metal::NOC::RISCV_0_default,
-                    .compile_args = {0}});
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
             tt_metal::SetRuntimeArgs(
                 program, unary_reader_kernel, logical_core, {src_dram_buffer->address(), N, Ht, Wt, Ht * Wt});
@@ -172,9 +170,7 @@ void add_reader_writer_kernels(
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
                 logical_core,
                 tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt_metal::NOC::RISCV_0_default,
-                    .compile_args = {0}});
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
             tt_metal::SetRuntimeArgs(
                 program,

@@ -7,9 +7,8 @@
 
 // #include "debug/dprint.h"
 
-template <size_t N>
-constexpr bool should_read_from_dram(const std::array<uint32_t, N>&) {
-    if constexpr (N > 0) {
+constexpr bool get_read_from_dram() {
+    if constexpr (kernel_compile_time_args.size() > 0) {
         return get_compile_time_arg_val(0);
     } else {
         return true;
@@ -50,7 +49,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
-    constexpr bool read_from_dram = should_read_from_dram(kernel_compile_time_args);
+    constexpr bool read_from_dram = get_read_from_dram();
 
     const InterleavedPow2AddrGen<read_from_dram> src_a = {src_addr, 11};
 

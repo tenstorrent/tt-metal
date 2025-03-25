@@ -4,9 +4,8 @@
 
 #include "dataflow_api.h"
 
-template <size_t N>
-constexpr bool should_read_from_dram(const std::array<uint32_t, N>&) {
-    if constexpr (N > 0) {
+constexpr bool get_write_to_dram() {
+    if constexpr (kernel_compile_time_args.size() > 0) {
         return get_compile_time_arg_val(0);
     } else {
         return true;
@@ -22,7 +21,7 @@ void kernel_main() {
     uint32_t tile_bytes = get_tile_size(cb_id_out0);
     const DataFormat data_format = get_dataformat(cb_id_out0);
 
-    constexpr bool write_to_dram = should_read_from_dram(kernel_compile_time_args);
+    constexpr bool write_to_dram = get_write_to_dram();
 
     const InterleavedAddrGenFast<write_to_dram> s = {
         .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};

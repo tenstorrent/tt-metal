@@ -83,9 +83,7 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
         cores_for_program,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = {0}});
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     std::vector<uint32_t> compute_kernel_args = {};
 
