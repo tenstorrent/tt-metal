@@ -271,6 +271,8 @@ TYPED_TEST(WritePackedCommandTest, RandomAddDispatchWritePacked) {
                 sub_cmds,
                 data_collection,
                 packed_write_max_unicast_sub_cmds,
+                0,
+                false,
                 curr_sub_cmd_idx);
             curr_sub_cmd_idx += sub_cmd_ct;
         }
