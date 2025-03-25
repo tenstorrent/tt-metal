@@ -98,7 +98,7 @@ concept DeviceOperationConcept = requires {
  */
 template <typename device_operation_t>
 concept DeviceOperationWithMeshDeviceAdapter =
-    DeviceOperationConcept<device_operation_t> && MeshDeviceOperationAdapterType<device_operation_t>;
+    DeviceOperationConcept<device_operation_t> && is_mesh_device_operation_adapter_v<device_operation_t>;
 
 
 template <typename device_operation_t>
@@ -245,7 +245,7 @@ struct CheckDeviceBufferIsAllocated {
 
 template <typename device_operation_t>
 auto get_operation_name(const typename device_operation_t::operation_attributes_t& operation_attributes) {
-    if constexpr (DeviceOperationWithMeshDeviceAdapter<device_operation_t>) {
+    if constexpr (is_mesh_device_operation_adapter_v<device_operation_t>) {
         // For MeshAdapter operations, we recurse to get the name of the underlying device operation
         return get_operation_name<typename device_operation_t::device_operation_t>(operation_attributes);
     } else if constexpr (requires { device_operation_t::get_type_name(operation_attributes); }) {
@@ -588,7 +588,7 @@ typename device_operation_t::tensor_return_value_t launch_on_single_device(
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
     if (auto mesh_device = first_tensor.mesh_device(); mesh_device != nullptr) {
-        if constexpr (MeshDeviceOperationAdapterType<device_operation_t>) {
+        if constexpr (is_mesh_device_operation_adapter_v<device_operation_t>) {
             launch_operation_with_adapter<device_operation_t>(
                 cq_id, operation_attributes, tensor_args, tensor_return_value, mesh_device);
         } else {

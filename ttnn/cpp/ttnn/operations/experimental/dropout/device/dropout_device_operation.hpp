@@ -52,6 +52,6 @@ struct DropoutDeviceOperation {
 }  // namespace ttnn::operations::experimental::dropout
 
 namespace ttnn::prim {
-constexpr auto dropout = ttnn::
-    register_mesh_operation<"ttnn::prim::dropout", ttnn::operations::experimental::dropout::DropoutDeviceOperation>();
+constexpr auto dropout =
+    ttnn::register_operation<"ttnn::prim::dropout", ttnn::operations::experimental::dropout::DropoutDeviceOperation>();
 }  // namespace ttnn::prim
