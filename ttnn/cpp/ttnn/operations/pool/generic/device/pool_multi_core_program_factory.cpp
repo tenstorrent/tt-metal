@@ -21,10 +21,12 @@ namespace ttnn::operations::pool {
 namespace {
 
 ReduceOpMath get_reduce_op(Pool2DType pool_type) {
+    ReduceOpMath reduce_op_math;
     switch (pool_type) {
-        case Pool2DType::MAX_POOL2D: return tt::tt_metal::ReduceOpMath::MAX;
-        case Pool2DType::AVG_POOL2D: return tt::tt_metal::ReduceOpMath::SUM;
+        case Pool2DType::MAX_POOL2D: reduce_op_math = tt::tt_metal::ReduceOpMath::MAX;
+        case Pool2DType::AVG_POOL2D: reduce_op_math = tt::tt_metal::ReduceOpMath::SUM;
     }
+    return reduce_op_math;
 }
 
 // Return a single bf16 scalar for the pool type in u32 (packed in the least 16 bits)
