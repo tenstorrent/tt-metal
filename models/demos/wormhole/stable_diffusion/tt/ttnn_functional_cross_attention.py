@@ -520,14 +520,23 @@ class cross_attention:
                 is_causal_mask=False,
             )
         else:
-            # This needs to be updated when optional output tensors are available
-            attention_scores_temp = attention_scores
+            memory_config = attention_scores.memory_config()
+            attention_scores = ttnn.sharded_to_interleaved(attention_scores)
+            attention_scores = ttnn.typecast(attention_scores, ttnn.float32)
             attention_scores = ttnn.multiply(
-                attention_scores_temp,
+                attention_scores,
                 self.scale,
-                memory_config=attention_scores.memory_config(),
             )
-            attention_scores_temp.deallocate()
+
+            attention_scores = ttnn.typecast(attention_scores, ttnn.bfloat8_b)
+            attention_scores = ttnn.interleaved_to_sharded(
+                attention_scores,
+                memory_config.shard_spec.grid,
+                memory_config.shard_spec.shape,
+                memory_config.memory_layout,
+                memory_config.shard_spec.orientation,
+            )
+
             attention_scores = ttnn.softmax_in_place(
                 attention_scores,
                 program_config=softmax_program_config,
@@ -646,6 +655,8 @@ class cross_attention:
         cross_attention_kwargs={},
         index=-1,
     ):
+        with open("stable-diffusion.txt", "a") as file:
+            print("CROSS ATTN", file=file)
         assert dim_head == self.dim_head
 
         if not hidden_states.is_sharded():
