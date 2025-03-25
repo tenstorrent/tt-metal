@@ -828,6 +828,11 @@ typename device_operation_t::tensor_return_value_t launch_on_single_device(
 
     // Create output tensor first
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
+    if (!mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
+        mesh_device_operation_utils::filter_tensor_shards(
+            mesh_device_operation_utils::extract_tensor_coordinates(tensor_args), tensor_return_value);
+    }
+
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
     if (auto mesh_device = first_tensor.mesh_device(); mesh_device != nullptr) {
         if constexpr (MeshDeviceOperationAdapterType<device_operation_t>) {
