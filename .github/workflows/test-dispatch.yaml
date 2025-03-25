@@ -91,7 +91,7 @@ jobs:
       - name: Run regression in loop in docker
         uses: ./.github/actions/docker-run
         with:
-          docker_image: ${{ needs.build-artifact.dev-docker-image }}
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           install_wheel: true
           docker_opts: |
