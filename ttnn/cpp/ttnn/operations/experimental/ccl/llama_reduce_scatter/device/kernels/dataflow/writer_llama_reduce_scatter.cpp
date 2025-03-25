@@ -12,47 +12,6 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 
-// inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-//     DPRINT << "===" << tile_id << "===" << ENDL();
-//     for (uint16_t r = 0; r < 32; ++r) {
-//         DPRINT << (uint)r << " : "
-//                << TileSlice(
-//                       cb_id,
-//                       tile_id,
-//                       SliceRange{
-//                           .h0 = (uint8_t)r,
-//                           .h1 = (uint8_t)(r + 1),
-//                           .hs = (uint8_t)1,
-//                           .w0 = (uint8_t)0,
-//                           .w1 = (uint8_t)32,
-//                           .ws = (uint8_t)1},
-//                       true,
-//                       untilize)
-//                << ENDL();
-//     }
-//     DPRINT << "++++++" << ENDL();
-// }
-
-// inline void print_tiles(uint32_t cb_id, uint32_t tile_start = 0, uint32_t num_tiles = 1, bool untilize = false) {
-//     for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
-//         print_full_tile(cb_id, tile_start + tile_idx, untilize);
-//     }
-// }
-
-// template <uint8_t noc_ind = noc_index>
-// FORCE_INLINE std::uint64_t static_noc_multicast_addr(
-//     std::uint32_t noc_x_start,
-//     std::uint32_t noc_y_start,
-//     std::uint32_t noc_x_end,
-//     std::uint32_t noc_y_end,
-//     std::uint32_t addr) {
-//     if constexpr (noc_ind == 0) {
-//         return get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, addr);
-//     } else {
-//         return get_noc_multicast_addr(noc_x_end, noc_y_end, noc_x_start, noc_y_start, addr);
-//     }
-// }
-
 void kernel_main() {
     size_t ct_arg_idx = 0, rt_arg_idx = 0;
 
@@ -97,7 +56,6 @@ void kernel_main() {
 
     constexpr uint8_t device_order[num_devices - 1] =
         DEVICE_ORDER;  // this is code gen'd in the program factory using the defines
-    // constexpr uint8_t input_core_xy[input_tensor_cores][2] = INPUT_CORE_XY;
     constexpr uint8_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
     constexpr uint8_t packet_worker_cores[num_packets_total_per_device][2] = PACKET_WORKER_CORES;
     constexpr uint8_t schedule[num_packets_total_per_device][3] = SCHEDULE;
@@ -138,7 +96,6 @@ void kernel_main() {
             // for LLaMa - 6 cores * 5 tiles per core = 30 tiles to each other device
             // 30/4 = 8 packets, with the last packet having 2 pages
             uint32_t packet_offset = base_receiver_l1_addr + chip_id * num_pages_per_packet * page_size_bytes;
-            // DPRINT << "target_device_id: " << target_device_id << " packet_offset: " << packet_offset << ENDL();
             for (uint32_t packet = sender_packet_start; packet < sender_packet_end; packet++) {
                 // Determine packet size based on whether it's the last packet
                 uint32_t curr_packet_num_pages =
@@ -150,8 +107,6 @@ void kernel_main() {
 
                 cb_wait_front(fabric_sender_cb_id, curr_packet_num_pages);
                 auto sender_l1_addr = get_read_ptr(fabric_sender_cb_id);
-                // DPRINT << "packet: " << packet << " curr_packet_num_pages: " << curr_packet_num_pages << ENDL();
-                // print_tiles(fabric_sender_cb_id, 0, curr_packet_num_pages, true);
 
                 uint64_t noc0_dest_noc_addr = get_noc_addr(receiver_core_x, receiver_core_y, packet_offset);
 
@@ -195,12 +150,6 @@ void kernel_main() {
             noc_async_atomic_barrier();
         }
 
-        // if (!is_atomic_inc_core) {
-        //     DPRINT << "waiting for atomic barrier" << ENDL();
-
-        //     DPRINT << "atomic barrier success" << ENDL();
-        // }
-
         if (fabric_connection.is_logically_connected()) {
             fabric_connection.close();
         }
@@ -232,32 +181,9 @@ void kernel_main() {
 
         // Process all tiles
         for (uint32_t tile = 0; tile < num_packets; tile++) {
-            // one tile to each core
-
-            // uint32_t output_core = linear_output_core_idcs[tile];
-            // if (linear_output_core_idcs[tile] >= output_cores_per_device) {
-            //     break;
-            // }
-            // uint32_t output_core_x = output_core_xy[output_core][x_index];
-            // uint32_t output_core_y = output_core_xy[output_core][y_index];
-
-            // Compute addresses
-            // uint64_t noc_accumulator_addr = get_noc_addr(
-            //     output_core_x,
-            //     output_core_y,
-            //     output_tensor_base_addr + linear_output_tile_offsets[tile] * page_size_bytes);
-            // uint64_t local_receiver_semaphore_noc_addr =
-            //     get_noc_addr(output_core_x, output_core_y, local_semaphore_address);
-
-            // print_full_tile(fabric_receiver_cb_id, tile, true);
             noc_async_write(accumulator_l1_addresses[tile], noc_addresses[tile], page_size_bytes);
-            // noc_async_write_barrier();
-            // noc_semaphore_inc(local_receiver_semaphore_noc_addr, 1);  // mcast inc is needed, this will tank latency
         }
         noc_async_write_barrier();
-        // Now we have the block in the CB address, we can mcast to dests!
-        // Reset semaphore
-        // *(uint32_t*)receiver_semaphore_address = 0;
         cb_pop_front(accumulator_cb_id, num_pages_per_packet);
     }
 }

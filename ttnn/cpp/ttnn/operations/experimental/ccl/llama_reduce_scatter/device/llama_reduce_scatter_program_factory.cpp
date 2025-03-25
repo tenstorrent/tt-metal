@@ -19,59 +19,6 @@
 namespace ttnn::operations::experimental::ccl {
 
 namespace detail {
-CoreCoord next_core(const CoreCoord& current, const CoreCoord& grid_size, bool row_wise = true) {
-    CoreCoord next = current;
-    if (row_wise) {
-        // Move right, then down
-        next.x++;
-        if (next.x >= grid_size.x) {
-            next.x = 0;
-            next.y++;
-            if (next.y >= grid_size.y) {
-                next.y = 0;
-            }
-        }
-    } else {
-        // Move down, then right
-        next.y++;
-        if (next.y >= grid_size.y) {
-            next.y = 0;
-            next.x++;
-            if (next.x >= grid_size.x) {
-                next.x = 0;
-            }
-        }
-    }
-    return next;
-}
-
-// Get the next core in the core range set that is outside of the bounding box
-// This is used to get the next core to assign as a receiver worker
-CoreCoord next_core_bounded(const CoreRangeSet& range, const CoreCoord& grid_size, bool row_wise = true) {
-    // Get the bounding box of the range set and use its end coordinate
-    CoreRange bbox = range.bounding_box();
-    return next_core(bbox.end_coord, grid_size, row_wise);
-}
-
-CoreRangeSet next_core_range_set(
-    const CoreRangeSet& range, const CoreCoord& grid_size, const uint32_t num_cores, bool row_wise = true) {
-    TT_FATAL(num_cores > 0, "num_cores requested must be greater than 0");
-    TT_FATAL(
-        num_cores <= grid_size.x * grid_size.y,
-        "num_cores requested must be less than or equal to the number of cores in the range set");
-    auto first = next_core_bounded(range, grid_size, row_wise);
-    std::vector<CoreRange> cores;
-    cores.reserve(num_cores);
-    cores.push_back(CoreRange(first));
-    CoreCoord last = first;
-    for (uint32_t i = 0; i < num_cores - 1; i++) {
-        last = next_core(last, grid_size, row_wise);
-        cores.push_back(CoreRange(last));
-    }
-    CoreRangeSet res(cores);
-    TT_FATAL(res.num_cores() == num_cores, "num_cores requested must be equal to the number of cores in the range set");
-    return res;
-}
 
 std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index) {
     ttnn::SmallVector<uint32_t> device_order;
@@ -321,20 +268,16 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     auto& padded_output_shape = output_tensor.get_padded_shape();
     const auto& tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
     const auto& face_shape = input_tensor.get_tensor_spec().tile().get_face_shape();
-    TT_FATAL(input_tensor.shard_spec().has_value(), "Shard spec is not present");
     auto shard_spec = input_tensor.shard_spec().value();
     auto output_shard_spec = output_tensor.shard_spec().value();
     const auto& cross_device_semaphore = operation_attributes.cross_device_semaphore;
-    // All of them should have the same address, noticed that the address value is uint64_t though, which we can't pass
-    // into NOC
-    TT_FATAL(cross_device_semaphore.has_value(), "Cross device semaphore is not present");
+
     auto input_tensor_buffer = input_tensor.buffer();
     auto output_tensor_buffer = output_tensor.buffer();
     auto packet_buffer = tensor_args.intermediate_packet_buffer.buffer();
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
-    uint32_t input_page_size = tile_size(
-        cb_data_format);  // doesn't work for tiny tiles, there is likely some API somewhere but I don't know where
+    uint32_t input_page_size = tile_size(cb_data_format);
     uint32_t output_page_size = tile_size(cb_data_format);
 
     // Get OP Config, topology config
@@ -371,14 +314,8 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
 
     const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
     uint32_t num_pages_per_packet = packet_size_bytes / input_page_size;
-    TT_FATAL(
-        num_pages_per_packet <= tiles_per_core_width,
-        "num_pages_per_packet {} is less than tiles_per_core_width {}",
-        num_pages_per_packet,
-        tiles_per_core_width);
 
     uint32_t ncores_input = shard_spec.num_cores();
-    TT_FATAL(ncores_input % num_devices == 0, "ncores_input must be divisible by num_devices");
     uint32_t input_shard_cores_per_device = ncores_input / num_devices;
     uint32_t output_cores_per_device = output_grid.num_cores();
     uint32_t num_workers_per_link = 1;
@@ -680,10 +617,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     uint32_t is_atomic_inc_core_idx = 6;
     uint32_t writer_sender_packet_start_idx = 7;
     uint32_t writer_sender_packet_end_idx = 8;
-
-    TT_FATAL(
-        (num_devices - 1) % sender_core_grid.num_cores() == 0,
-        "num_devices must be divisible by sender_core_grid.num_cores()");
 
     uint32_t sender_packet_start = 0;
     uint32_t sender_core_idx = 0;
