@@ -41,26 +41,23 @@ void signal_handler(int signum) {
     exit(signum);
 }
 
-using Model = std::variant<
-    std::shared_ptr<ttml::models::llama::Llama>,
-    std::shared_ptr<ttml::models::gpt2::Transformer>,
-    std::shared_ptr<ttml::models::distributed::gpt2::DistributedTransformer>>;
+using Model = std::shared_ptr<ttml::autograd::ModuleBase>;
 
 void model_to_eval(Model &model) {
-    std::visit([](auto &model) { model->eval(); }, model);
+    model->eval();
 }
 
 void model_to_train(Model &model) {
-    std::visit([](auto &model) { model->train(); }, model);
+    model->train();
 }
 
 ttml::autograd::TensorPtr run_model(
     Model &model, const ttml::autograd::TensorPtr &data, const ttml::autograd::TensorPtr &mask) {
-    return std::visit([&data, &mask](auto &model) { return (*model)(data, mask); }, model);
+    return (*model)(data, mask);
 }
 
 ttml::serialization::NamedParameters get_model_parameters(Model &model) {
-    return std::visit([](auto &model) { return model->parameters(); }, model);
+    return model->parameters();
 }
 
 uint64_t get_number_of_parameters(Model &model, bool enable_tp) {

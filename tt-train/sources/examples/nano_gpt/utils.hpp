@@ -47,7 +47,7 @@ void save_training_state(
     const std::string &model_name,
     const std::string &optimizer_name) {
     ttml::serialization::MsgPackFile serializer;
-    std::visit([&](auto &model) { ttml::serialization::write_module(serializer, model_name, model.get()); }, model);
+    ttml::serialization::write_module(serializer, model_name, model.get());
     ttml::serialization::write_optimizer(serializer, optimizer_name, scheduler->get_optimizer().get());
     ttml::serialization::write_state_dict(serializer, "scheduler", scheduler->get_state_dict());
     serializer.serialize(model_path);
@@ -62,7 +62,7 @@ void load_training_state(
     const std::string &optimizer_name) {
     ttml::serialization::MsgPackFile deserializer;
     deserializer.deserialize(model_path);
-    std::visit([&](auto &model) { ttml::serialization::read_module(deserializer, model_name, model.get()); }, model);
+    ttml::serialization::read_module(deserializer, model_name, model.get());
     ttml::serialization::read_optimizer(deserializer, optimizer_name, scheduler->get_optimizer().get());
     auto state_dict = scheduler->get_state_dict();
     ttml::serialization::read_state_dict(deserializer, "scheduler", state_dict);
