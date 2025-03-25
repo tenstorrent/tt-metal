@@ -15,20 +15,32 @@ public:
     // make the connection live
     inline void open() {
         if (has_forward_connection()) {
-            forward_fabric_sender.open();
+            forward_fabric_sender.open_start();
         }
         if (has_backward_connection()) {
-            backward_fabric_sender.open();
+            backward_fabric_sender.open_start();
+        }
+        if (has_forward_connection()) {
+            forward_fabric_sender.open_finish();
+        }
+        if (has_backward_connection()) {
+            backward_fabric_sender.open_finish();
         }
     }
     inline bool has_forward_connection() const { return connection_flags & FORWARD_CONNECTION_FLAG_MASK; }
     inline bool has_backward_connection() const { return connection_flags & BACKWARD_CONNECTION_FLAG_MASK; }
     inline void close() {
         if (has_forward_connection()) {
-            forward_fabric_sender.close();
+            forward_fabric_sender.close_start();
         }
         if (has_backward_connection()) {
-            backward_fabric_sender.close();
+            backward_fabric_sender.close_start();
+        }
+        if (has_forward_connection()) {
+            forward_fabric_sender.close_finish();
+        }
+        if (has_backward_connection()) {
+            backward_fabric_sender.close_finish();
         }
     }
 

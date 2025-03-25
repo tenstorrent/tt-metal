@@ -227,7 +227,7 @@ struct WorkerToFabricEdmSenderImpl {
 
     static constexpr size_t edm_sender_channel_field_stride_bytes = 16;
 
-    void open() {
+    void open_start() {
         const auto dest_noc_addr_coord_only = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
 
         const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
@@ -256,9 +256,11 @@ struct WorkerToFabricEdmSenderImpl {
 
         const uint64_t edm_connection_handshake_noc_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
         noc_inline_dw_write(edm_connection_handshake_noc_addr, open_connection_value);
+    }
+
+    void open_finish() {
         noc_async_read_barrier();
         this->buffer_slot_wrptr = *this->buffer_slot_wrptr_ptr;
-
         if constexpr (!USER_DEFINED_NUM_BUFFER_SLOTS) {
             this->edm_buffer_addr =
                 this->edm_buffer_base_addr +
@@ -267,7 +269,12 @@ struct WorkerToFabricEdmSenderImpl {
         ASSERT(this->buffer_slot_wrptr < 20);
     }
 
-    void close() {
+    void open() {
+        open_start();
+        open_finish();
+    }
+
+    void close_start() {
         const auto dest_noc_addr_coord_only =
             get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr) &
             ~(uint64_t)NOC_COORDINATE_MASK;
@@ -278,11 +285,17 @@ struct WorkerToFabricEdmSenderImpl {
         // buffer index stored at location after handshake addr
         const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
         noc_inline_dw_write(remote_buffer_index_addr, this->buffer_slot_wrptr);
+    }
 
+    void close_finish() {
         // Need to wait for the ack to teardown notice, from edm
         noc_semaphore_wait(this->worker_teardown_addr, 1);
-
         noc_async_write_barrier();
+    }
+
+    void close() {
+        close_start();
+        close_finish();
     }
 
     uint32_t edm_buffer_addr;
