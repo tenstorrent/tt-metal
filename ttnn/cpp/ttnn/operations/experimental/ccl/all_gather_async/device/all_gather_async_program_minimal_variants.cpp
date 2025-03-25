@@ -282,9 +282,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
                     // semaphore Update the RTAs pointing to it.
                     log_trace(
                         tt::LogOp,
-                        "DEBUG: semaphore.first: {}, semaphore.second: {}",
+                        "DEBUG: semaphore.wait: {}, semaphore.release: {}",
                         semaphore->wait.address(),
-                        semaphore->wait.address());
+                        semaphore->release.address());
                     worker_writer_sender_runtime_args[1] = semaphore->wait.address();
                     worker_writer_sender_runtime_args[2] = semaphore->release.address();
                 }
@@ -579,7 +579,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
                     // semaphore Update the RTAs pointing to it.
                     log_trace(
                         tt::LogOp,
-                        "DEBUG: semaphore.first: {}, semaphore.second: {}",
+                        "DEBUG: semaphore.wait: {}, semaphore.release: {}",
                         semaphore->wait.address(),
                         semaphore->release.address());
                     worker_writer_sender_runtime_args[1] = semaphore->wait.address();
