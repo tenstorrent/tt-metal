@@ -14,7 +14,7 @@ from datasets import load_dataset
 from transformers import AutoImageProcessor
 
 import ttnn
-from models.experimental.functional_vit.tt import ttnn_optimized_sharded_vit
+from models.demos.vit.tt import ttnn_optimized_sharded_vit
 from models.utility_functions import torch_random, is_wormhole_b0, torch2tt_tensor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
