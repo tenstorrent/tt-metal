@@ -41,7 +41,6 @@ def get_core_grid_from_num_cores(num_cores: int, grid_rows: int = 8, grid_cols: 
         )
     return ttnn.CoreRangeSet({*ranges})
 
-
 def sharded_concat(input_tensors, num_cores=56, dim=3):
     shard_grid = get_core_grid_from_num_cores(num_cores=num_cores)
     in_shard_width = input_tensors[0].shape[-1]

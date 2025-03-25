@@ -11,9 +11,6 @@ import time
 import numpy as np
 import ttnn
 from ttnn import ConcatMeshToTensor
-from models.demos.t3000.falcon40b.tt.falcon_common import (
-    PytorchFalconCausalLM,
-)
 from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
 from models.demos.t3000.falcon40b.tests.test_utils import load_hf_model
@@ -23,7 +20,7 @@ from models.datasets.llm_dataset_utils import (
     calculate_acc_metrics,
     verify_acc_metrics,
 )
-from models.utility_functions import is_wormhole_b0, tt_tensors_to_torch_tensors
+from models.utility_functions import is_wormhole_b0
 
 
 def calculate_perplexity(

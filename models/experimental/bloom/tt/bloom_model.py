@@ -4,14 +4,13 @@
 
 import torch
 import math
-from torch.nn import functional as F
 from functools import partial
 
 import ttnn
 
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_block as bloom_block
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple
 from models.utility_functions import pad_by_zero
 
 

@@ -4,7 +4,6 @@
 
 import pytest
 import torch
-from torch import nn
 from loguru import logger
 import ttnn
 
