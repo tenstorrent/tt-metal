@@ -208,7 +208,7 @@ class TtLlamaMLP(LightweightModule):
             ),
             dtype=ttnn.bfloat8_b,
             program_config=pc_1,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         w3_out = ttnn.linear(
@@ -221,22 +221,16 @@ class TtLlamaMLP(LightweightModule):
             ),
             dtype=ttnn.bfloat8_b,
             program_config=pc_3,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(x)
 
         try:
             w1_out_reduced = self.tt_ccl.line_all_reduce(
-                w1_out,
-                cluster_axis=1,
-                num_links=3,
-                memory_config=w1_out.memory_config(),
+                w1_out, cluster_axis=1, num_links=3, memory_config=w1_out.memory_config(), buffer_key="FF1"
             )
             w3_out_reduced = self.tt_ccl.line_all_reduce(
-                w3_out,
-                cluster_axis=1,
-                num_links=3,
-                memory_config=w3_out.memory_config(),
+                w3_out, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3"
             )
 
         except Exception as e:
@@ -259,12 +253,12 @@ class TtLlamaMLP(LightweightModule):
             compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
             dtype=ttnn.bfloat8_b,
             program_config=pc_2,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             # core_grid=ttnn.CoreGrid(y=8, x=4),  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
         )
         ttnn.deallocate(w2_in)
         w2_out_reduced = self.tt_ccl.line_all_reduce(
-            w2_out, cluster_axis=0, num_links=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            w2_out, cluster_axis=0, num_links=3, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="FF2"
         )
 
         original_shape = w2_out_reduced.shape

@@ -453,7 +453,11 @@ class TtLlamaAttention(LightweightModule):
         )
 
         xqkv_fused = self.tt_ccl.line_all_reduce(
-            xqkv_fused, cluster_axis=1, num_links=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            xqkv_fused,
+            cluster_axis=1,
+            num_links=3,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            buffer_key="QKV",
         )
 
         if seq_len > 2048:
@@ -619,7 +623,11 @@ class TtLlamaAttention(LightweightModule):
 
         # Reduce-scatter
         output_11SH = self.tt_ccl.line_all_reduce(
-            output_11SH, cluster_axis=0, num_links=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            output_11SH,
+            cluster_axis=0,
+            num_links=3,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            buffer_key="WO",
         )
 
         return output_11SH
