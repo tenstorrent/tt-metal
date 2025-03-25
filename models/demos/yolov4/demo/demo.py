@@ -14,6 +14,7 @@ import os
 from models.demos.yolov4.reference.yolov4 import Yolov4
 from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
 from models.demos.yolov4.ttnn.weight_parameter_update import update_weight_parameters
+from models.demos.yolov4.ttnn.model_preprocessing import create_yolov4_model_parameters
 from collections import OrderedDict
 import ttnn
 from models.utility_functions import skip_for_grayskull
@@ -533,8 +534,15 @@ def gen_yolov4_boxes_confs(output):
 
 
 @skip_for_grayskull()
+@pytest.mark.parametrize(
+    "resolution",
+    [
+        (320, 320),
+        (640, 640),
+    ],
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_yolov4(device, reset_seeds, model_location_generator):
+def test_yolov4(device, reset_seeds, model_location_generator, resolution):
     torch.manual_seed(0)
     model_path = model_location_generator("models", model_subdir="Yolo")
 
@@ -548,13 +556,10 @@ def test_yolov4(device, reset_seeds, model_location_generator):
     else:
         weights_pth = str(model_path / "yolov4.pth")
 
-    ttnn_model = TtYOLOv4(weights_pth, device)
-
     imgfile = "models/demos/yolov4/demo/giraffe_320.jpg"
-    width = 320
-    height = 320
+
     img = cv2.imread(imgfile)
-    img = cv2.resize(img, (width, height))
+    img = cv2.resize(img, resolution)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     if type(img) == np.ndarray and len(img.shape) == 3:  # cv2 image
         img = torch.from_numpy(img.transpose(2, 0, 1)).float().div(255.0).unsqueeze(0)
@@ -568,11 +573,16 @@ def test_yolov4(device, reset_seeds, model_location_generator):
     ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16)
 
     torch_model = Yolov4()
-    new_state_dict = dict(zip(torch_model.state_dict().keys(), ttnn_model.torch_model.values()))
+    torch_dict = torch.load(weights_pth)
+    new_state_dict = dict(zip(torch_model.state_dict().keys(), torch_dict.values()))
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
 
     torch_output_tensor = torch_model(torch_input)
+
+    parameters = create_yolov4_model_parameters(torch_model, torch_input, resolution, device)
+
+    ttnn_model = TtYOLOv4(parameters, device)
 
     ref1, ref2, ref3 = gen_yolov4_boxes_confs(torch_output_tensor)
     ref_boxes, ref_confs = get_region_boxes([ref1, ref2, ref3])
@@ -587,12 +597,21 @@ def test_yolov4(device, reset_seeds, model_location_generator):
     # That ttnn tensor is the concat output of 3 padded tensors
     # As a perf workaround I'm doing the unpadding on the torch output here.
     # TODO: cleaner ttnn code when ttnn.untilize() is fully optimized
-    box_1_start_i = 0
-    box_1_end_i = 6100
-    box_2_start_i = 6128
-    box_2_end_i = 6228
-    box_3_start_i = 6256
-    box_3_end_i = 6356
+    if resolution[0] == 320:
+        box_1_start_i = 0
+        box_1_end_i = 6100
+        box_2_start_i = 6128
+        box_2_end_i = 6228
+        box_3_start_i = 6256
+        box_3_end_i = 6356
+    else:
+        box_1_start_i = 0
+        box_1_end_i = 24400
+        box_2_start_i = 24428
+        box_2_end_i = 24828
+        box_3_start_i = 24856
+        box_3_end_i = 25256
+
     result_boxes_list.append(result_boxes_padded[:, box_1_start_i:box_1_end_i])
     result_boxes_list.append(result_boxes_padded[:, box_2_start_i:box_2_end_i])
     result_boxes_list.append(result_boxes_padded[:, box_3_start_i:box_3_end_i])
@@ -607,4 +626,4 @@ def test_yolov4(device, reset_seeds, model_location_generator):
     namesfile = "models/demos/yolov4/demo/coco.names"
     class_names = load_class_names(namesfile)
     img = cv2.imread(imgfile)
-    plot_boxes_cv2(img, boxes[0], "ttnn_yolov4_320_prediction_demo.jpg", class_names)
+    plot_boxes_cv2(img, boxes[0], "ttnn_yolov4_prediction_demo.jpg", class_names)

@@ -184,6 +184,23 @@ ParallelConfig determine_output_parallel_config(
     return output_parallel_config;
 }
 
+std::tuple<uint32_t, uint32_t> calculate_output_image_size(
+    std::array<uint32_t, 2> input_image_size,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 2> padding,
+    std::array<uint32_t, 2> dilation) {
+    const uint32_t output_height =
+        ((input_image_size[0] - kernel_size[0] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[0]) /
+         stride[0]) +
+        1;
+    const uint32_t output_width =
+        ((input_image_size[1] - kernel_size[1] - ((kernel_size[1] - 1) * (dilation[1] - 1)) + 2 * padding[1]) /
+         stride[1]) +
+        1;
+    return {output_height, output_width};
+}
+
 uint32_t get_num_cores_nhw_from_parallel_config(const ParallelConfig& pconfig) {
     TT_ASSERT(!pconfig.grid.ranges().empty());
     TT_ASSERT(
@@ -282,6 +299,13 @@ static std::pair<uint32_t, uint32_t> determine_largest_subblock_size(
         {2, 4}, {4, 2}, {1, 8}, {8, 1}, {1, 7}, {7, 1}, {2, 3}, {3, 2}, {1, 6}, {6, 1},
         {1, 5}, {5, 1}, {2, 2}, {1, 4}, {4, 1}, {1, 3}, {3, 1}, {1, 2}, {2, 1}, {1, 1},
     }};
+
+    // # Issue 18812. Temporarily solution for BH CI while hang is not resolved.
+    static bool conv2d_subblock_env_set = (std::getenv("TT_METAL_CONV2D_1_1_SUBBLOCK") != nullptr);
+
+    if (conv2d_subblock_env_set) {
+        return {1, 1};
+    }
 
     uint32_t subblock_h = 0;
     uint32_t subblock_w = 0;
