@@ -16,20 +16,26 @@ void py_bind_llama_reduce_scatter(py::module& module) {
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
+                intermediate_packet_buffer (ttnn.Tensor): the intermediate packet buffer tensor.
                 dim (number): the reduce dimension
+                cross_device_semaphore (ttnn.MultiDeviceGlobalSemaphore): the cross device semaphore.
+                subdevice_id (ttnn.SubDeviceId): the subdevice id.
+                cluster_axis (number): the cluster axis.
+                mesh_device (ttnn.MeshDevice): the mesh device.
+                num_links (number, optional): the number of links. Defaults to `3`.
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 queue_id (int, optional): command queue id. Defaults to `0`.
 
            Returns:
-               List of ttnn.Tensor: the output tensor.
+               ttnn.Tensor: the output tensor.
 
             Example:
 
                 >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16)), device)
                 >>> output = ttnn.llama_reduce_scatter(tensor, ))doc";
-    std::cout << "py bind definitions" << std::endl;
+
     using OperationType = decltype(ttnn::experimental::llama_reduce_scatter);
     ttnn::bind_registered_operation(
         module,
@@ -67,7 +73,7 @@ void py_bind_llama_reduce_scatter(py::module& module) {
             py::arg("cluster_axis"),
             py::arg("mesh_device"),
             py::kw_only(),
-            py::arg("num_links") = 1,
+            py::arg("num_links") = 3,
             py::arg("memory_config") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId,
         });

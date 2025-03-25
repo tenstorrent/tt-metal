@@ -78,12 +78,7 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
         },
         {input_tensor, intermediate_packet_buffer},
         output_tensors);
-    auto output = output_tensors.at(0);
-    // auto output = ttnn::prim::llama_reduce_scatter(input_tensor, dim, cross_device_semaphore, subdevice_id,
-    // cluster_axis, forward_device, backward_device, ring_devices, memory_config);
-    // std::cout << output.memory_config() << std::endl;
-    // std::cout << output.get_logical_shape() << std::endl;
-    return output;
+    return output_tensors.at(0);
 }
 
 }  // namespace ttnn::operations::experimental::ccl
