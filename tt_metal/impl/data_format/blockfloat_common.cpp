@@ -174,7 +174,7 @@ uint32_t convert_bfp_to_u32(tt::DataFormat bfp_format, uint8_t data, uint8_t sha
             man = man & 0x7f;
 
             // adjust exponent
-            // TT_ASSERT(exp >= (uint32_t)shift_cnt, "incorrect shift_cnt");
+            TT_ASSERT(exp >= (uint32_t)shift_cnt, "incorrect shift_cnt");
             exp = exp - shift_cnt;
 
             // if exp_a rebias exp to 127
