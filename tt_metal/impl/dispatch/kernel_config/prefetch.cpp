@@ -8,7 +8,7 @@
 #include "eth_router.hpp"
 
 #include <host_api.hpp>
-#include <tt_metal.hpp>
+#include <tt_metal_detail.hpp>
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
 #include <tt-metalium/command_queue_interface.hpp>

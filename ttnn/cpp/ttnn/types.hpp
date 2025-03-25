@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/global_circular_buffer_impl.hpp>
 #include <tt-metalium/global_semaphore.hpp>

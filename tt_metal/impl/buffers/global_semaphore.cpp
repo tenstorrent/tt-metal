@@ -10,7 +10,7 @@
 
 #include <assert.hpp>
 #include <core_coord.hpp>
-#include <tt_metal.hpp>
+#include <tt_metal_detail.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <host_api.hpp>
 #include <buffer.hpp>

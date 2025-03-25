@@ -8,7 +8,7 @@
 #include "llrt.hpp"
 #include <buffer.hpp>
 #include <global_circular_buffer_impl.hpp>
-#include <tt_metal.hpp>
+#include <tt_metal_detail.hpp>
 #include <device.hpp>
 #include <command_queue.hpp>
 

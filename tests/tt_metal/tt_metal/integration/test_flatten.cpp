@@ -5,7 +5,7 @@
 #include "dispatch_fixture.hpp"
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
 namespace tt::tt_metal {

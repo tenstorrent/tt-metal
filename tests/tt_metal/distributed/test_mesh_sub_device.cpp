@@ -4,7 +4,7 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 #include <tt-metalium/sub_device.hpp>
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"

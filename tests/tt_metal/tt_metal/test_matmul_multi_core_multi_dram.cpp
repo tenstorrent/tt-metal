@@ -11,7 +11,7 @@
 #include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 
 #include "test_common.hpp"
 

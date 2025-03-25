@@ -14,7 +14,7 @@
 #include <host_api.hpp>
 #include <trace.hpp>
 #include <core_descriptor.hpp>
-#include <tt_metal.hpp>
+#include <tt_metal_detail.hpp>
 #include <utils.hpp>
 #include <dev_msgs.h>
 #include <device_pool.hpp>

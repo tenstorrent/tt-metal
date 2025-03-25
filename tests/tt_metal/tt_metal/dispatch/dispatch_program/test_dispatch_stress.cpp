@@ -4,7 +4,7 @@
 
 #include <tt-metalium/logger.hpp>
 #include "gtest/gtest.h"
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>

@@ -5,7 +5,7 @@
 #include <mesh_buffer.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_workload.hpp>
-#include <tt_metal.hpp>
+#include <tt_metal_detail.hpp>
 
 #include <tt_metal/impl/program/program_command_sequence.hpp>
 #include "tt_metal/impl/dispatch/device_command.hpp"

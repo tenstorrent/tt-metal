@@ -24,7 +24,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/graph_tracking.hpp>

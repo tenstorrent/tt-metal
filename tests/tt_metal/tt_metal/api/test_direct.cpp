@@ -9,7 +9,7 @@
 #include <random>
 
 #include "device_fixture.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include "tt_metal/test_utils/comparison.hpp"

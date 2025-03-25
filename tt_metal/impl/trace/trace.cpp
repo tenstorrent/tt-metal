@@ -7,7 +7,7 @@
 #include <memory>
 
 #include <logger.hpp>
-#include <tt_metal.hpp>
+#include <tt_metal_detail.hpp>
 #include <host_api.hpp>
 #include <device.hpp>
 #include <command_queue.hpp>

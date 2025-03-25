@@ -8,7 +8,7 @@
 #include "kernel_config/fd_kernel.hpp"
 #include <device_pool.hpp>
 #include <memory>
-#include <tt_metal.hpp>
+#include <tt_metal_detail.hpp>
 #include <host_api.hpp>
 #include <unordered_map>
 #include "kernel_config/fd_kernel.hpp"

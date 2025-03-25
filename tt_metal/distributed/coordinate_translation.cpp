@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/distributed/coordinate_translation.hpp"
-#include "tt_metal/api/tt-metalium/tt_metal.hpp"
+#include "tt_metal/api/tt-metalium/tt_metal_detail.hpp"
 
 #include "indestructible.hpp"
 namespace tt::tt_metal::distributed {

@@ -10,7 +10,7 @@
 #include <tt-metalium/device_impl.hpp>
 #include "umd/device/types/cluster_descriptor_types.h"
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/kernel.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>

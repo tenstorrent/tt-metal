@@ -14,7 +14,7 @@
 #include "multi_command_queue_fixture.hpp"
 #include "dispatch_test_utils.hpp"
 #include "gtest/gtest.h"
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_settings.hpp>

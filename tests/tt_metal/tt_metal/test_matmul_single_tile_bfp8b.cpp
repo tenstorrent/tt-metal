@@ -7,7 +7,7 @@
 #include <random>
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/util.hpp>
 

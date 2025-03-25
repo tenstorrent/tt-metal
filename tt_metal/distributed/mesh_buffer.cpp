@@ -7,7 +7,7 @@
 #include <mesh_coord.hpp>
 #include <mesh_device_view.hpp>
 #include <tt_stl/overloaded.hpp>
-#include <tt_metal.hpp>
+#include <tt_metal_detail.hpp>
 #include <host_api.hpp>
 
 namespace tt::tt_metal::distributed {

@@ -6,7 +6,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program_impl.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "erisc_datamover_builder_helper.hpp"

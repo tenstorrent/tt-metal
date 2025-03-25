@@ -23,7 +23,7 @@
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 #include <assert.hpp>
 #include <logger.hpp>
-#include <tt_metal.hpp>
+#include <tt_metal_detail.hpp>
 #include <host_api.hpp>
 #include <circular_buffer_constants.h>
 #include <circular_buffer.hpp>

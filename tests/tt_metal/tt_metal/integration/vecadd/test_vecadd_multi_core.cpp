@@ -7,7 +7,7 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include "tests/tt_metal/test_utils/print_helpers.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"

@@ -6,7 +6,7 @@
 
 #include <assert.hpp>
 #include <math.hpp>
-#include <tt_metal.hpp>
+#include <tt_metal_detail.hpp>
 #include <allocator.hpp>
 #include <device.hpp>
 #include <graph_tracking.hpp>

@@ -10,7 +10,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn_test_fixtures.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include "ttnn/async_runtime.hpp"
 #include <tt-metalium/event.hpp>

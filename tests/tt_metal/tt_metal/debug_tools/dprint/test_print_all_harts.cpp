@@ -6,7 +6,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include "gtest/gtest.h"
 #include "debug_tools_test_utils.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 #include <tt-metalium/host_api.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////

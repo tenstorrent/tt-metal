@@ -10,7 +10,7 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/host_api.hpp>
 #include "dprint_server.hpp"

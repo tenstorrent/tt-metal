@@ -13,7 +13,7 @@
 #include "multi_device_fixture.hpp"
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <thread>
 #include "tt_metal/test_utils/stimulus.hpp"

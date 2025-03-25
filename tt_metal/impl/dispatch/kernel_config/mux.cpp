@@ -7,7 +7,7 @@
 #include "eth_tunneler.hpp"
 
 #include <host_api.hpp>
-#include <tt_metal.hpp>
+#include <tt_metal_detail.hpp>
 
 #include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/dispatch_settings.hpp>

@@ -7,7 +7,7 @@
 #include "mux.hpp"
 
 #include <host_api.hpp>
-#include <tt_metal.hpp>
+#include <tt_metal_detail.hpp>
 
 using namespace tt::tt_metal;
 

@@ -8,7 +8,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 
 namespace ttnn::fabric {
 

@@ -11,7 +11,7 @@
 #include "tt_metal/detail/kernel_cache.hpp"
 #include <persistent_kernel_cache.hpp>
 #include <memory_reporter.hpp>
-#include <tt_metal.hpp>
+#include <tt_metal_detail.hpp>
 #include <graph_tracking.hpp>
 #include <host_api.hpp>
 #include <allocator.hpp>

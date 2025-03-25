@@ -16,7 +16,7 @@
 #include <magic_enum/magic_enum.hpp>
 #include <tt-metalium/kernel.hpp>
 #include "ttnn/operation.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyC.h"

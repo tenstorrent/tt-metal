@@ -10,7 +10,7 @@
 #include "mux.hpp"
 
 #include <host_api.hpp>
-#include <tt_metal.hpp>
+#include <tt_metal_detail.hpp>
 #include "rtoptions.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 

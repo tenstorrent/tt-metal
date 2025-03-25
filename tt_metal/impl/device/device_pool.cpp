@@ -18,7 +18,7 @@
 #include "dprint_server.hpp"
 #include "host_api.hpp"
 #include "erisc_datamover_builder.hpp"
-#include <tt_metal.hpp>
+#include <tt_metal_detail.hpp>
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"

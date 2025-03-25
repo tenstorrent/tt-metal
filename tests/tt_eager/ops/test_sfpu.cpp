@@ -11,7 +11,7 @@
 #include <magic_enum/magic_enum.hpp>
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include "tests_common/sfpu_helper/sfpu_helper.hpp"

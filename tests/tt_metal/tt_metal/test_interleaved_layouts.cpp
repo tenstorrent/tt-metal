@@ -8,7 +8,7 @@
 #include <math.h>
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
 #include "llrt.hpp"

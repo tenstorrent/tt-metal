@@ -12,7 +12,7 @@
 
 #include <host_api.hpp>
 #include "env_lib.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 #include <tt-metalium/trace_buffer.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device_impl.hpp>

@@ -9,7 +9,7 @@
 #include "conv2d_op.hpp"
 #include <tt-metalium/math.hpp>
 
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 #include <tt-metalium/constants.hpp>
 
 #include <tt-metalium/work_split.hpp>

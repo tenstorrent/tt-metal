@@ -12,7 +12,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tt_memory.h>
 #include "tt_metal/detail/kernel_cache.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/kernel.hpp>

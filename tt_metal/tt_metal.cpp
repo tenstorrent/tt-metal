@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_metal.hpp>
+#include <tt_metal_detail.hpp>
 
 #include <algorithm>
 #include <optional>

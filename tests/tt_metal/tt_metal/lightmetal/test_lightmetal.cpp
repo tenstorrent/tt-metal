@@ -7,7 +7,7 @@
 
 #include "lightmetal_fixture.hpp"
 #include "env_lib.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 #include "env_lib.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/allocator.hpp>

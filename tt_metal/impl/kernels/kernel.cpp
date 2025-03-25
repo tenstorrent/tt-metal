@@ -13,7 +13,7 @@
 
 #include "llrt.hpp"
 #include <string_view>
-#include <tt_metal.hpp>
+#include <tt_metal_detail.hpp>
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include <utils.hpp>
 #include <core_coord.hpp>

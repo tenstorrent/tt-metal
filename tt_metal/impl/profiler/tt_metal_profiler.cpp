@@ -13,7 +13,7 @@
 #include <profiler.hpp>
 #include "hostdevcommon/profiler_common.h"
 
-#include <tt_metal.hpp>
+#include <tt_metal_detail.hpp>
 
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyTTDevice.hpp"

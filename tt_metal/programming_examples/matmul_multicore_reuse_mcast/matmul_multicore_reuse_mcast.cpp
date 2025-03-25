@@ -9,7 +9,7 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 #include <matmul_common/bmm_op.hpp>
 #include <algorithm>
 

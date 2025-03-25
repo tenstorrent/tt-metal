@@ -201,7 +201,8 @@ void InitDeviceProfiler(IDevice* device);
  *
  * Return value: void
  *
- * | Argument      | Description                                       | Type            | Valid Range               | Required |
+ * | Argument      | Description                                       | Type            | Valid Range               |
+ * Required |
  * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
  * */
 void ProfilerSync(ProfilerSyncState state);
@@ -234,7 +235,10 @@ void DumpDeviceProfileResults(
  * | device        | The device holding the program being profiled.    | Device * |                           | True |
  * | satate        | Dumpprofiler various states                       | ProfilerDumpState |                  | False |
  * */
-void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState = ProfilerDumpState::NORMAL, const std::optional<ProfilerOptionalMetadata>& metadata = {});
+void DumpDeviceProfileResults(
+    IDevice* device,
+    ProfilerDumpState = ProfilerDumpState::NORMAL,
+    const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
 /**
  * Set the directory for device-side CSV logs produced by the profiler instance in the tt-metal module

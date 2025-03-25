@@ -5,7 +5,7 @@
 #include "umd/device/types/cluster_descriptor_types.h"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/hal_exp.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_detail.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
