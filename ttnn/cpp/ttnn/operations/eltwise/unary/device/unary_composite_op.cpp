@@ -301,21 +301,6 @@ Tensor _log1p(const Tensor& x, const std::optional<MemoryConfig>& output_mem_con
     return result_log1p;
 }
 
-// log[exp[x] + 1] => softplus[x]
-// mish[x] = x*tanh[softplus[x]]
-Tensor ExecuteMish::invoke(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    using ttnn::operations::unary::UnaryOpType;
-    using ttnn::operations::unary::UnaryWithParam;
-    std::vector<UnaryWithParam> ops_chain = {
-        UnaryWithParam{UnaryOpType::EXP, 1.0f},
-        UnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
-        UnaryWithParam{UnaryOpType::LOG},
-        UnaryWithParam{UnaryOpType::TANH}};
-    Tensor result = ttnn::unary_chain(x, ops_chain, output_mem_config);
-    Tensor mish_x = ttnn::multiply(x, result, std::nullopt, output_mem_config);
-    return mish_x;
-}
-
 // multivariate log-gamma function
 // Ref : https://pytorch.org/docs/stable/special.html#torch.special.multigammaln
 Tensor _multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {

@@ -11,7 +11,7 @@ int main(int argc, char** argv) {
     using namespace tt::tt_metal;
     using namespace tt::tt_metal::distributed;
 
-    auto mesh_device = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape(2, 4)});
+    auto mesh_device = MeshDevice::create(MeshDeviceConfig(MeshShape(2, 4)));
     auto& cq = mesh_device->mesh_command_queue();
 
     // In a typical single-device fashion, instantiate a program with

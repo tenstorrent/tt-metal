@@ -11,7 +11,8 @@
 
 namespace tt::tt_fabric {
 
-FORCE_INLINE void wait_for_notification(uint32_t address, uint32_t value) {
+// !!!FORCE_INLINE could potentially cause stack corruption as seen in the past
+inline void wait_for_notification(uint32_t address, uint32_t value) {
     volatile tt_l1_ptr uint32_t* poll_addr = (volatile tt_l1_ptr uint32_t*)address;
     while (*poll_addr != value) {
         // context switch while waiting to allow slow dispatch traffic to go through
@@ -19,7 +20,8 @@ FORCE_INLINE void wait_for_notification(uint32_t address, uint32_t value) {
     }
 }
 
-FORCE_INLINE void notify_master_router(uint32_t master_eth_chan, uint32_t address) {
+// !!!FORCE_INLINE could potentially cause stack corruption as seen in the past
+inline void notify_master_router(uint32_t master_eth_chan, uint32_t address) {
     // send semaphore increment to master router on this device.
     // semaphore notifies all other routers that this router has completed
     // startup handshake with its ethernet peer.
@@ -36,7 +38,8 @@ FORCE_INLINE void notify_master_router(uint32_t master_eth_chan, uint32_t addres
         MEM_NOC_ATOMIC_RET_VAL_ADDR);
 }
 
-FORCE_INLINE void notify_slave_routers(
+// !!!FORCE_INLINE could potentially cause stack corruption as seen in the past
+inline void notify_slave_routers(
     uint32_t router_eth_chans_mask, uint32_t master_eth_chan, uint32_t address, uint32_t notification) {
     uint32_t remaining_cores = router_eth_chans_mask;
     for (uint32_t i = 0; i < 16; i++) {

@@ -180,6 +180,12 @@ class LMHead(LightweightModule):
 
         # ttnn.device.dump_device_memory_state(self.mesh_device.get_device(self.mesh_device.get_device_ids()[0]), prefix="")
         x = ttnn.to_memory_config(x, self.args.model_config["SHARDED_LM_HEAD_INPUT_32_RING_MEMCFG"])
+
+        # Pre-allocated output of AllReduce to avoid memory cloberring
+        self.tt_ccl.tt_lm_head_buffer_l1 = ttnn.to_memory_config(
+            self.tt_ccl.tt_lm_head_buffer, self.tt_ccl.lm_head_buffer_mem_cfg
+        )
+
         outputs = []
         for weight, pc in zip(self.output_weights, self.program_configs):
             weight_l1 = weight  # ttnn.to_memory_config(weight, self.args.model_config["LM_HEAD_RING_MEMCFG"])

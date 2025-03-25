@@ -53,7 +53,7 @@ jobs:
     needs: build-artifact
     uses: ./.github/workflows/tg-quick.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   tg-unit-tests:
@@ -61,7 +61,7 @@ jobs:
     needs: build-artifact
     uses: ./.github/workflows/tg-unit-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   tg-frequent-tests:
@@ -70,20 +70,24 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/tg-frequent-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   tg-model-perf-tests:
+    if: ${{ inputs.tg-model-perf }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tg-model-perf-tests-impl.yaml
-    if: ${{ inputs.tg-model-perf }}
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   tg-nightly-tests:
     needs: build-artifact
     if: ${{ inputs.tg-nightly }}
     secrets: inherit
     uses: ./.github/workflows/tg-nightly-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

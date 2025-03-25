@@ -81,5 +81,5 @@ run_python_model_tests_blackhole() {
         echo "LOG_METAL: Llama3 tests for $llama_dir completed"
     done
 
-    pytest tests/ttnn/integration_tests/resnet/test_ttnn_functional_resnet50_batch_16.py
+    TT_METAL_CONV2D_1_1_SUBBLOCK=1 pytest tests/ttnn/integration_tests/resnet/test_ttnn_functional_resnet50_batch_16.py
 }
