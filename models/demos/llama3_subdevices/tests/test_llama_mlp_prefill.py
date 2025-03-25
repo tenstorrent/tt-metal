@@ -53,8 +53,7 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
 
     prefetcher_setup = TtLlamaPrefetcherSetup(mesh_device, n_tensors=0, n_layers=1, mode="prefill")
     mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
-    crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
-    tt_ccl = TT_CCL(mesh_device, crs, prefetcher_setup.worker_sub_device_id, mode="prefill")
+    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, mode="prefill")
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = model_args.get_state_dict_prefix("TtLlamaMLP", 0)
     partial_state_dict = {

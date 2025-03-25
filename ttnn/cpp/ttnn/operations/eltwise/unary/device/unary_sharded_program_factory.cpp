@@ -7,13 +7,17 @@
 #include <algorithm>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal_exp.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 namespace ttnn::operations::unary::program {
 
+static const std::string compute_root_sharded = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/";
+
 using namespace tt::constants;
+using namespace tt::tt_metal::experimental;
 
 UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
@@ -21,6 +25,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     using namespace tt::tt_metal;
 
     const auto& input = tensor_args.input;
+    const auto& ops_chain = args.op_chain;
 
     tt::tt_metal::Program program = CreateProgram();
     tt::tt_metal::IDevice* device = input.device();
@@ -52,9 +57,9 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
         num_tile_per_core = ntiles_along_width * ntiles_along_height;
     } else {
         TT_FATAL(
-            (shard_spec.shape[1] * datum_size(act_df)) % hal.get_alignment(HalMemType::L1) == 0,
+            (shard_spec.shape[1] * datum_size(act_df)) % hal::get_l1_alignment() == 0,
             "Shard width should be multiple of {} to satisfy L1 alignment",
-            hal.get_alignment(HalMemType::L1));
+            hal::get_l1_alignment());
         size_t shard_height = shard_spec.shape[0];
         size_t shard_width = round_up_to_mul16(
             shard_spec.shape[1]);  // rounding up is done to aligned with  --> tt-metal/tt_metal/detail/util.hpp:31
@@ -118,9 +123,11 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     bool math_approx_mode = std::all_of(
         args.op_chain.begin(), args.op_chain.end(), [](const auto& u) { return utils::get_op_approx_mode(u.op_type); });
     std::map<string, string> unary_defines = utils::get_block_defines(args.op_chain);
+    auto path = utils::get_compute_kernel_path(ops_chain[0].op_type, compute_root_sharded);
+
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
+        path,
         all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,

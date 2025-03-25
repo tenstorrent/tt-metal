@@ -93,6 +93,7 @@ def run_conv(
     enable_split_reader=False,
     activation="",
     preprocess_weights_on_device=True,
+    run_twice=False,
 ):
     if isinstance(device, ttnn.MeshDevice):
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when using device mesh"
@@ -215,6 +216,30 @@ def run_conv(
         return_output_dim=True,
         return_weights_and_bias=True,
     )
+    if run_twice:
+        [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
+            input_tensor=tt_input_tensor,
+            weight_tensor=tt_weight_tensor,
+            in_channels=input_channels,
+            out_channels=output_channels,
+            device=device,
+            bias_tensor=tt_bias_tensor,
+            kernel_size=(filter_height, filter_width),
+            stride=(stride_h, stride_w),
+            padding=(pad_h, pad_w),
+            dilation=(dilation, dilation),
+            batch_size=batch_size,
+            input_height=input_height,
+            input_width=input_width,
+            conv_config=conv_config,
+            compute_config=compute_config,
+            conv_op_cache=reader_patterns_cache,
+            debug=debug,
+            groups=groups,
+            memory_config=memory_config,
+            return_output_dim=True,
+            return_weights_and_bias=True,
+        )
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
 
@@ -457,6 +482,7 @@ def test_conv_features(
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
         preprocess_weights_on_device=True,
+        run_twice=True,
     )
 
 
@@ -2719,6 +2745,40 @@ def test_small_in_large_out_channels_auto_shard(device, torch_tensor_map):
         padding[1],
         None,
         auto_shard=True,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_silu_auto_shard_mm_conv(device, torch_tensor_map):
+    batch_size = 1
+    in_channels = 64
+    out_channels = 64
+    kernel_size = (1, 1)
+    stride = (1, 1)
+    padding = (0, 0)
+    height = 160
+    width = 160
+
+    run_conv(
+        device,
+        torch_tensor_map,
+        ttnn.MathFidelity.LoFi,
+        ttnn.bfloat16,
+        ttnn.bfloat16,
+        batch_size,
+        out_channels,
+        in_channels,
+        height,
+        width,
+        kernel_size[0],
+        kernel_size[1],
+        stride[0],
+        stride[1],
+        padding[0],
+        padding[1],
+        None,
+        auto_shard=True,
+        activation="silu",
     )
 
 

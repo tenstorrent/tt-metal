@@ -144,6 +144,8 @@ class TransformerBlock(LightweightModule):
             h,
             ff_out,
             memory_config=skip_mem_cfg,
-            dtype=self.args.ccl_dtype if TG and not self.args.is_distributed_norm(mode) else ttnn.bfloat16,
+            dtype=self.args.ccl_dtype
+            if TG and not self.args.is_distributed_norm(mode)
+            else self.model_config["ACTIVATION_DTYPE"] or ttnn.bfloat16,
         )
         return out  # fractured across devices

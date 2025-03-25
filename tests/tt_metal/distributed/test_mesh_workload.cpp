@@ -363,8 +363,7 @@ TEST_F(MeshWorkloadTestTG, SimultaneousMeshWorkloads) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
-// TODO: #19149 - Re-enable the test.
-TEST_F(MeshWorkloadTestSuite, DISABLED_RandomizedMeshWorkload) {
+TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkload) {
     uint32_t num_programs = 60;
     uint32_t num_iterations = 1500;
     auto random_seed = 10;

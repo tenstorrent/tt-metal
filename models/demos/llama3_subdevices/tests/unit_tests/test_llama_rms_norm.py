@@ -66,7 +66,7 @@ def test_llama_rms_norm_inference(
 
     prefetcher_setup = TtLlamaPrefetcherSetup(mesh_device, n_tensors=0, n_layers=1, mode=mode)
     mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
-    tt_ccl = TT_CCL(mesh_device, model_args.sub_core_grids, prefetcher_setup.worker_sub_device_id, mode=mode)
+    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, mode=mode)
 
     # Create the inner RMSNormxw
     tt_inner_norm = TtRMSNorm(

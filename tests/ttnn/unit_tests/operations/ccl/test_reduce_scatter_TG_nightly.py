@@ -126,6 +126,7 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
     enable_persistent_fabric=False,
     create_persistent_fabric=False,
     teardown_persistent_fabric=False,
+    use_persistent_output=False,
 ):
     if create_persistent_fabric:
         assert use_reduce_scatter_async
@@ -250,6 +251,56 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
         )
     else:
         logger.info(f"Running {num_iters} iterations of reduce scatter")
+        persistent_buffers = None
+        if use_persistent_output:
+            tile = (32, 32)
+            persistent_buffers = [
+                ttnn.from_torch(
+                    torch.zeros(per_chip_output_shape),
+                    tile=ttnn.Tile(tile),
+                    dtype=input_dtype,
+                    device=mesh_device,
+                    layout=layout,
+                    memory_config=output_mem_config,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                ),
+                ttnn.from_torch(
+                    torch.zeros(per_chip_input_shape),
+                    tile=ttnn.Tile(tile),
+                    dtype=input_dtype,
+                    device=mesh_device,
+                    layout=layout,
+                    memory_config=output_mem_config,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                ),
+                ttnn.from_torch(
+                    torch.zeros(per_chip_input_shape),
+                    tile=ttnn.Tile(tile),
+                    dtype=input_dtype,
+                    device=mesh_device,
+                    layout=layout,
+                    memory_config=output_mem_config,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                ),
+                ttnn.from_torch(
+                    torch.zeros(per_chip_output_shape),
+                    tile=ttnn.Tile(tile),
+                    dtype=input_dtype,
+                    device=mesh_device,
+                    layout=layout,
+                    memory_config=output_mem_config,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                ),
+                ttnn.from_torch(
+                    torch.zeros(per_chip_output_shape),
+                    tile=ttnn.Tile(tile),
+                    dtype=input_dtype,
+                    device=mesh_device,
+                    layout=layout,
+                    memory_config=output_mem_config,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                ),
+            ]
         for _ in range(num_iters):
             if use_reduce_scatter_async:
                 ttnn_tensor_out = ttnn.experimental.reduce_scatter_async(
@@ -260,6 +311,7 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
                     from_remote_multi_device_global_semaphore=from_remote_semaphore_handles,
                     to_remote_multi_device_global_semaphore=to_remote_semaphore_handles,
                     math_op=math_op,
+                    persistent_output_tensors=persistent_buffers,
                     memory_config=output_mem_config,
                     topology=ttnn.Topology.Linear,
                     num_links=num_links,
@@ -293,6 +345,15 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
     output_tensors_list = torch.chunk(
         tt_output_tensor, num_reduce_scatter_instances, dim=reduce_scatter_instances_concat_dim
     )
+    # Check the tensor addresses
+    if use_persistent_output:
+        persistent_output_tensors = ttnn.get_device_tensors(persistent_buffers[0])
+        output_tensors = ttnn.get_device_tensors(ttnn_tensor_out)
+
+        for persistent_tensor, output_tensor in zip(persistent_output_tensors, output_tensors):
+            assert (
+                persistent_tensor.buffer_address() == output_tensor.buffer_address()
+            ), "Persistent tensor address mismatch"
 
     passed = True
     for i in range(num_reduce_scatter_instances):

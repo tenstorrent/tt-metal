@@ -548,13 +548,37 @@ void generate_runtime_args_cmds(
     }
 }
 
-void assemble_runtime_args_commands(
+struct Transfer {
+    uint32_t start;
+    tt::stl::Span<const uint8_t> data;
+    // Keep track of what CBs contributed to this transfer, so we can update the data in
+    // update_program_dispatch_commands.
+    std::vector<std::shared_ptr<CircularBuffer>> cbs;
+    // RTAs must be updated from data every time update_program_dispatch_commmands is called.
+    RuntimeArgsData* rta_data = nullptr;
+    size_t end() const { return start + data.size(); }
+};
+struct PairHash {
+    std::size_t operator()(const std::pair<uint32_t, uint32_t> pair) const {
+        return std::hash<uint32_t>()(pair.first) ^ std::hash<uint32_t>()(pair.second);
+    }
+};
+// Map each corerange to the set of transfer-vectors that need to be sent to it. Each transfer-vector will be sent
+// as a single CQDispatchWritePackedLargeSubCmd.
+using BatchedTransfers = std::unordered_map<
+    std::pair</*noc_xy_addr*/ uint32_t, /*num_mcast_dests*/ uint32_t>,
+    std::map</*start_addr*/ uint32_t, std::vector<Transfer>>,
+    PairHash>;
+
+BatchedTransfers assemble_runtime_args_commands(
     ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device) {
     static const uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
     NOC noc_index = k_dispatch_downstream_noc;
     auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     auto dispatch_core_type = dispatch_core_config.get_core_type();
     const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
+
+    BatchedTransfers transfers = {};
 
     // Dispatch Commands to Unicast Unique Runtime Args to Workers
     std::vector<CQDispatchWritePackedUnicastSubCmd> unique_sub_cmds;
@@ -589,12 +613,59 @@ void assemble_runtime_args_commands(
             }
         }
     }
-    // Common RTAs
+
+    // Calculate the best way to multicast common RTAs.
+
+    // Per-kernel is best when there are a lot of kernel groups and few kernels (which should be rare).
+    uint32_t per_kernel_crta_multicast_count = 0;
+    for (size_t kernel_index = 0; kernel_index < program.num_kernels(); kernel_index++) {
+        auto kernel_id = get_device_local_kernel_handle(kernel_index);
+        auto kernel = detail::GetKernel(program, kernel_id);
+        if (kernel->get_kernel_core_type() != CoreType::WORKER) {
+            continue;  // TODO: fixme, need list of kernels by core_typexdispatch_class
+        }
+
+        const auto& common_rt_args = kernel->common_runtime_args();
+        if (common_rt_args.empty()) {
+            continue;
+        }
+        per_kernel_crta_multicast_count += kernel->logical_coreranges().size();
+    }
+
+    // kernel_group multicast is best when multiple kernels on the same kernel group have common RTAs. It may also merge
+    // CRTA writes with CB and semaphore writes.
+    uint32_t kernel_group_crta_multicast_count = 0;
+    {
+        uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        for (auto& kg : program.get_kernel_groups(index)) {
+            bool has_crtas = false;
+            for (auto kernel_id : kg->kernel_ids) {
+                if (kernel_id) {
+                    auto device_local_kernel_handle = get_device_local_kernel_handle(kernel_id.value());
+                    auto kernel = detail::GetKernel(program, device_local_kernel_handle);
+                    if (!kernel->common_runtime_args().empty()) {
+                        has_crtas = true;
+                        break;
+                    }
+                }
+            }
+            if (has_crtas) {
+                kernel_group_crta_multicast_count += kg->core_ranges.size();
+            }
+        }
+    }
+
+    // kernel group multicast can merge with CB multicast, so prefer it in general.
+    bool use_kernel_group_crta_multicast = kernel_group_crta_multicast_count <= per_kernel_crta_multicast_count;
+
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         auto kernel = detail::GetKernel(program, kernel_id);
         auto programmable_core_type = kernel->get_kernel_programmable_core_type();
         if (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) {
             // Fast dispatch not supported on IDLE_ETH yet
+            continue;
+        }
+        if ((programmable_core_type == HalProgrammableCoreType::TENSIX) && use_kernel_group_crta_multicast) {
             continue;
         }
         uint32_t programmable_core_type_index = hal.get_programmable_core_type_index(programmable_core_type);
@@ -624,6 +695,38 @@ void assemble_runtime_args_commands(
     }
 
     program_command_sequence.runtime_args_command_sequences.reserve(command_count);
+
+    if (use_kernel_group_crta_multicast) {
+        uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+        for (auto& kg : program.get_kernel_groups(index)) {
+            for (auto kernel_id : kg->kernel_ids) {
+                if (kernel_id) {
+                    auto device_local_kernel_handle = get_device_local_kernel_handle(kernel_id.value());
+                    auto kernel = detail::GetKernel(program, device_local_kernel_handle);
+                    if (kernel->common_runtime_args().empty()) {
+                        continue;
+                    }
+                    uint32_t dispatch_class = kernel->dispatch_class();
+                    const uint32_t crta_offset = program.get_program_config(index).crta_offsets[dispatch_class];
+                    for (auto& [transfer_info, dests] :
+                         device->extract_dst_noc_multicast_info(kg->core_ranges.ranges(), CoreType::WORKER)) {
+                        auto noc_xy_addr =
+                            device->get_noc_multicast_encoding(noc_index, std::get<CoreRange>(transfer_info));
+                        size_t size =
+                            kernel->common_runtime_args().size() * sizeof(*kernel->common_runtime_args().data());
+                        RecordDispatchData(program, DISPATCH_DATA_RTARGS, size);
+                        transfers[std::make_pair(noc_xy_addr, dests)][crta_offset] = std::vector<Transfer>{Transfer{
+                            .start = crta_offset,
+                            .data =
+                                tt::stl::Span(reinterpret_cast<uint8_t*>(kernel->common_runtime_args().data()), size),
+                            .cbs = {},
+                            .rta_data = &kernel->common_runtime_args_data()}};
+                    }
+                }
+            }
+        }
+    }
+
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         if (hal.get_programmable_core_type(index) == HalProgrammableCoreType::IDLE_ETH) {
             // Fast dispatch not supported on IDLE_ETH yet
@@ -696,92 +799,95 @@ void assemble_runtime_args_commands(
         // Common RTAs
         // Set by the user based on the kernel ID. All cores running that kernel ID will get these RTAs
         // On ETH use unicast
-        for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
-            const uint32_t crta_offset = program.get_program_config(index).crta_offsets[dispatch_class];
-            uint32_t common_size = program.get_program_config(index).crta_sizes[dispatch_class];
-            if (common_size == 0) {
-                continue;
-            }
-
-            for (size_t kernel_index = 0; kernel_index < program.num_kernels(); kernel_index++) {
-                auto kernel_id = get_device_local_kernel_handle(kernel_index);
-                auto kernel = detail::GetKernel(program, kernel_id);
-                if (kernel->get_kernel_core_type() != core_type) {
-                    continue;  // TODO: fixme, need list of kernels by core_typexdispatch_class
-                }
-                if (kernel->dispatch_class() != dispatch_class) {
-                    continue;  // TODO: fixme, need list of kernels by core_typexdispatch_class
-                }
-
-                const auto& common_rt_args = kernel->common_runtime_args();
-                if (common_rt_args.empty()) {
+        if (!use_kernel_group_crta_multicast || (core_type != CoreType::WORKER)) {
+            for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
+                const uint32_t crta_offset = program.get_program_config(index).crta_offsets[dispatch_class];
+                uint32_t common_size = program.get_program_config(index).crta_sizes[dispatch_class];
+                if (common_size == 0) {
                     continue;
                 }
 
-                common_rt_args_data.resize(common_rt_args_data.size() + 1);
-                common_rt_data_and_sizes.resize(common_rt_data_and_sizes.size() + 1);
-
-                TT_ASSERT(kernel->common_runtime_args_data().size() * sizeof(uint32_t) == common_size);
-                TT_ASSERT(common_rt_args.size() * sizeof(uint32_t) <= common_size);
-                common_rt_data_and_sizes.back().emplace_back(
-                    common_rt_args.data(), common_rt_args.size() * sizeof(uint32_t), common_size);
-                common_rt_args_data.back().emplace_back(kernel->common_runtime_args_data());
-
-                if (core_type == CoreType::ETH) {
-                    common_sub_cmds.emplace<std::vector<CQDispatchWritePackedUnicastSubCmd>>(
-                        std::vector<CQDispatchWritePackedUnicastSubCmd>());
-                    auto& unicast_sub_cmd = std::get<std::vector<CQDispatchWritePackedUnicastSubCmd>>(common_sub_cmds);
-                    unicast_sub_cmd.reserve(kernel->logical_cores().size());
-                    for (auto& core_coord : kernel->logical_cores()) {
-                        // can make a vector of unicast encodings here
-                        CoreCoord virtual_core_coords =
-                            device->virtual_core_from_logical_core(core_coord, CoreType::ETH);
-                        unicast_sub_cmd.emplace_back(CQDispatchWritePackedUnicastSubCmd{
-                            .noc_xy_addr = device->get_noc_unicast_encoding(noc_index, virtual_core_coords)});
+                for (size_t kernel_index = 0; kernel_index < program.num_kernels(); kernel_index++) {
+                    auto kernel_id = get_device_local_kernel_handle(kernel_index);
+                    auto kernel = detail::GetKernel(program, kernel_id);
+                    if (kernel->get_kernel_core_type() != core_type) {
+                        continue;  // TODO: fixme, need list of kernels by core_typexdispatch_class
                     }
-                } else {
-                    std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
-                        device->extract_dst_noc_multicast_info(kernel->logical_coreranges(), core_type);
-                    common_sub_cmds.emplace<std::vector<CQDispatchWritePackedMulticastSubCmd>>(
-                        std::vector<CQDispatchWritePackedMulticastSubCmd>());
-                    auto& multicast_sub_cmd =
-                        std::get<std::vector<CQDispatchWritePackedMulticastSubCmd>>(common_sub_cmds);
-                    multicast_sub_cmd.reserve(dst_noc_multicast_info.size());
-                    for (const auto& mcast_dests : dst_noc_multicast_info) {
-                        multicast_sub_cmd.emplace_back(CQDispatchWritePackedMulticastSubCmd{
-                            .noc_xy_addr =
-                                device->get_noc_multicast_encoding(noc_index, std::get<CoreRange>(mcast_dests.first)),
-                            .num_mcast_dests = mcast_dests.second});
+                    if (kernel->dispatch_class() != dispatch_class) {
+                        continue;  // TODO: fixme, need list of kernels by core_typexdispatch_class
                     }
+
+                    const auto& common_rt_args = kernel->common_runtime_args();
+                    if (common_rt_args.empty()) {
+                        continue;
+                    }
+
+                    common_rt_args_data.resize(common_rt_args_data.size() + 1);
+                    common_rt_data_and_sizes.resize(common_rt_data_and_sizes.size() + 1);
+
+                    TT_ASSERT(kernel->common_runtime_args_data().size() * sizeof(uint32_t) == common_size);
+                    TT_ASSERT(common_rt_args.size() * sizeof(uint32_t) <= common_size);
+                    common_rt_data_and_sizes.back().emplace_back(
+                        common_rt_args.data(), common_rt_args.size() * sizeof(uint32_t), common_size);
+                    common_rt_args_data.back().emplace_back(kernel->common_runtime_args_data());
+
+                    if (core_type == CoreType::ETH) {
+                        common_sub_cmds.emplace<std::vector<CQDispatchWritePackedUnicastSubCmd>>(
+                            std::vector<CQDispatchWritePackedUnicastSubCmd>());
+                        auto& unicast_sub_cmd =
+                            std::get<std::vector<CQDispatchWritePackedUnicastSubCmd>>(common_sub_cmds);
+                        unicast_sub_cmd.reserve(kernel->logical_cores().size());
+                        for (auto& core_coord : kernel->logical_cores()) {
+                            // can make a vector of unicast encodings here
+                            CoreCoord virtual_core_coords =
+                                device->virtual_core_from_logical_core(core_coord, CoreType::ETH);
+                            unicast_sub_cmd.emplace_back(CQDispatchWritePackedUnicastSubCmd{
+                                .noc_xy_addr = device->get_noc_unicast_encoding(noc_index, virtual_core_coords)});
+                        }
+                    } else {
+                        std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
+                            device->extract_dst_noc_multicast_info(kernel->logical_coreranges(), core_type);
+                        common_sub_cmds.emplace<std::vector<CQDispatchWritePackedMulticastSubCmd>>(
+                            std::vector<CQDispatchWritePackedMulticastSubCmd>());
+                        auto& multicast_sub_cmd =
+                            std::get<std::vector<CQDispatchWritePackedMulticastSubCmd>>(common_sub_cmds);
+                        multicast_sub_cmd.reserve(dst_noc_multicast_info.size());
+                        for (const auto& mcast_dests : dst_noc_multicast_info) {
+                            multicast_sub_cmd.emplace_back(CQDispatchWritePackedMulticastSubCmd{
+                                .noc_xy_addr = device->get_noc_multicast_encoding(
+                                    noc_index, std::get<CoreRange>(mcast_dests.first)),
+                                .num_mcast_dests = mcast_dests.second});
+                        }
+                    }
+
+                    // Fill out the command for this kernel group and then reset the vectors for the next group
+                    // NOTE: Common rtas are always expected to fit in one prefetch cmd
+                    // TODO: use a linear write instead of a packed-write
+                    std::visit(
+                        [&](auto&& sub_cmds) {
+                            generate_runtime_args_cmds(
+                                program_command_sequence.runtime_args_command_sequences,
+                                crta_offset,
+                                sub_cmds,
+                                common_rt_data_and_sizes,
+                                common_size / sizeof(uint32_t),
+                                common_rt_args_data,
+                                max_prefetch_command_size,
+                                packed_write_max_unicast_sub_cmds,
+                                true,
+                                core_type == CoreType::WORKER ? DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE
+                                                              : DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
+                            sub_cmds.clear();
+                        },
+                        common_sub_cmds);
+                    common_rt_data_and_sizes.clear();
+                    common_rt_args_data.clear();
                 }
 
-                // Fill out the command for this kernel group and then reset the vectors for the next group
-                // NOTE: Common rtas are always expected to fit in one prefetch cmd
-                // TODO: use a linear write instead of a packed-write
-                std::visit(
-                    [&](auto&& sub_cmds) {
-                        generate_runtime_args_cmds(
-                            program_command_sequence.runtime_args_command_sequences,
-                            crta_offset,
-                            sub_cmds,
-                            common_rt_data_and_sizes,
-                            common_size / sizeof(uint32_t),
-                            common_rt_args_data,
-                            max_prefetch_command_size,
-                            packed_write_max_unicast_sub_cmds,
-                            true,
-                            core_type == CoreType::WORKER ? DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE
-                                                          : DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE);
-                        sub_cmds.clear();
-                    },
-                    common_sub_cmds);
-                common_rt_data_and_sizes.clear();
-                common_rt_args_data.clear();
-            }
-
-            for (auto& data_per_kernel : common_rt_data_and_sizes) {
-                for (auto& data_and_sizes : data_per_kernel) {
-                    RecordDispatchData(program, DISPATCH_DATA_RTARGS, std::get<1>(data_and_sizes));
+                for (auto& data_per_kernel : common_rt_data_and_sizes) {
+                    for (auto& data_and_sizes : data_per_kernel) {
+                        RecordDispatchData(program, DISPATCH_DATA_RTARGS, std::get<1>(data_and_sizes));
+                    }
                 }
             }
         }
@@ -800,10 +906,12 @@ void assemble_runtime_args_commands(
         runtime_args_fetch_size_bytes += cmds.size_bytes();
     }
     program_command_sequence.runtime_args_fetch_size_bytes = runtime_args_fetch_size_bytes;
+    return transfers;
 }
 
 void assemble_device_commands(
     ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id) {
+    BatchedTransfers batched_transfers = assemble_runtime_args_commands(program_command_sequence, program, device);
     DeviceCommandCalculator calculator;
     auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     auto dispatch_core_type = dispatch_core_config.get_core_type();
@@ -813,26 +921,6 @@ void assemble_device_commands(
     const auto& program_transfer_info = program.get_program_transfer_info();
     // Multicast Semaphore Cmd
     uint32_t num_multicast_semaphores = program_transfer_info.multicast_semaphores.size();
-    struct Transfer {
-        uint32_t start;
-        tt::stl::Span<const uint8_t> data;
-        // Keep track of what CBs contributed to this transfer, so we can update the data in
-        // update_program_dispatch_commands.
-        std::vector<std::shared_ptr<CircularBuffer>> cbs;
-        size_t end() const { return start + data.size(); }
-    };
-    struct PairHash {
-        std::size_t operator()(const std::pair<uint32_t, uint32_t> pair) const {
-            return std::hash<uint32_t>()(pair.first) ^ std::hash<uint32_t>()(pair.second);
-        }
-    };
-    // Map each corerange to the set of transfer-vectors that need to be sent to it. Each transfer-vector will be sent
-    // as a single CQDispatchWritePackedLargeSubCmd.
-    std::unordered_map<
-        std::pair</*noc_xy_addr*/ uint32_t, /*num_mcast_dests*/ uint32_t>,
-        std::map</*start_addr*/ uint32_t, std::vector<Transfer>>,
-        PairHash>
-        batched_transfers;
 
     if (num_multicast_semaphores > 0) {
         uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
@@ -998,11 +1086,8 @@ void assemble_device_commands(
                         : 0;
                 uint32_t start_offset = transfer_vector.front().start - new_start;
                 for (Transfer& sub_transfer : transfer_vector) {
-                    batched_cmd_data.back().push_back(Transfer{
-                        .start = sub_transfer.start - start_offset,
-                        .data = sub_transfer.data,
-                        .cbs = std::move(sub_transfer.cbs),
-                    });
+                    batched_cmd_data.back().push_back(std::move(sub_transfer));
+                    batched_cmd_data.back().back().start -= start_offset;
                 }
             }
         }
@@ -1312,6 +1397,17 @@ void assemble_device_commands(
                 program_command_sequence.circular_buffers_on_core_ranges.push_back(std::move(transfer.cbs));
                 program_command_sequence.cb_configs_payloads.push_back(
                     reinterpret_cast<uint32_t*>(data_collection_location[j]));
+            }
+            if (transfer.rta_data) {
+                if (reinterpret_cast<uint8_t*>(transfer.rta_data->rt_args_data) == transfer.data.data()) {
+                    // rt_args_data points to the original vector. Update it so later modifications directly modify the
+                    // command stream.
+                    transfer.rta_data->rt_args_data = reinterpret_cast<uint32_t*>(data_collection_location[j]);
+                } else {
+                    // rt_args_data points into the command stream. Setup a copy from that other location.
+                    program_command_sequence.rta_updates.push_back(ProgramCommandSequence::RtaUpdate{
+                        transfer.rta_data->rt_args_data, data_collection_location[j], transfer.data.size()});
+                }
             }
             j++;
             last_end = transfer.end();
@@ -1626,6 +1722,11 @@ void update_program_dispatch_commands(
         }
         i++;
     }
+    // Update RTAs.
+    for (auto& rta_update : cached_program_command_sequence.rta_updates) {
+        memcpy(rta_update.dst, rta_update.src, rta_update.size);
+    }
+
     // Update launch messages
     for (auto& go_signal : cached_program_command_sequence.go_signals) {
         for (uint32_t i = 0; i < dispatch_md.kernel_config_addrs.size(); i++) {

@@ -9,7 +9,14 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
+    with:
+      version: 20.04
+      build-wheel: true
   t3000-nightly-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/t3000-nightly-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

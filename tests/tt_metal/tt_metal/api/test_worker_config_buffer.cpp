@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include "gtest/gtest.h"
 #include <tt-metalium/worker_config_buffer.hpp>
+#include <tt-metalium/logger.hpp>
 #include "env_lib.hpp"
 
 #include <cstddef>

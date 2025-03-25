@@ -11,7 +11,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/rtoptions.hpp>
+#include "rtoptions.hpp"
 #include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
 #include "common.h"
@@ -19,7 +19,7 @@
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 
-#include <tt-metalium/hal.hpp>
+#include "hal.hpp"
 #include "llrt.hpp"
 
 #include "test_common.hpp"
