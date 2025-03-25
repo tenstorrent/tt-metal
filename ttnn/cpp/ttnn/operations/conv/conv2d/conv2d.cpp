@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <optional>
+#include <string>
 #include <utility>
 
 #include <tt-metalium/buffer_constants.hpp>
@@ -54,10 +55,8 @@ Result conv2d(
     const std::optional<const MemoryConfig>& memory_config) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups, conv_config);
-    const uint32_t output_height =
-        ((input_height - kernel_size[0] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
-    const uint32_t output_width =
-        ((input_width - kernel_size[1] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[1]) / stride[1]) + 1;
+    auto [output_height, output_width] =
+        calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding, dilation);
 
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
 
@@ -242,6 +241,8 @@ Result conv2d(
         // run conv as matmul
         std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
         std::optional<MemoryConfig> mm_output_memory_config = std::nullopt;
+        std::optional<std::string> activation = std::nullopt;
+
         if (input_tensor_post_tm.is_sharded()) {
             uint32_t num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
             program_config = determine_matmul_op_config_from_conv_op_config(
@@ -252,6 +253,10 @@ Result conv2d(
                 parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
                 num_cores_c);
             mm_output_memory_config = conv_out_memory_config;
+        } else {
+            if (!conv_config.activation.empty()) {
+                activation = conv_config.activation;
+            }
         }
         Tensor matmul_output = ttnn::linear(
             input_tensor_post_tm,
@@ -261,7 +266,8 @@ Result conv2d(
             false,
             mm_output_memory_config,
             std::nullopt,
-            program_config);
+            program_config,
+            activation);
 
         if (memory_config.has_value() && memory_config.value() != matmul_output.memory_config()) {
             matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);

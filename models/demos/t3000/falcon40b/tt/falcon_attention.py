@@ -4,14 +4,12 @@
 
 import torch
 import math
-from torch import nn
 from typing import Optional, Tuple
 
 import ttnn
 from ttnn import ShardTensorToMesh, ReplicateTensorToMesh
 
 from models.utility_functions import nearest_32
-from models.demos.t3000.falcon40b.tt.model_utils import convert_to_layout
 
 from models.demos.t3000.falcon40b.tt.model_utils import falcon_prefill_matmul, determine_tensor_deallocation
 

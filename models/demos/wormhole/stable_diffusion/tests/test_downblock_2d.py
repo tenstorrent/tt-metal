@@ -4,7 +4,6 @@
 
 import torch
 from diffusers import StableDiffusionPipeline
-import os
 import ttnn
 import pytest
 

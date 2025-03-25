@@ -3,11 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from torch.nn import functional as F
 
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_model as bloom_model
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple
 
 
 class TtBloomForCausalLM:

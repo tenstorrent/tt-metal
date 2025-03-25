@@ -1484,12 +1484,52 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  * | be        | Byte-enable                                            | uint8_t  | 0x1-0xF                                                       | False    |
  */
 // clang-format on
-FORCE_INLINE
-void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_INLINE, addr, 32, NOC_UNICAST_WRITE_VC);
-
+template <bool write_to_stream_reg = false>
+FORCE_INLINE void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t noc = noc_index) {
     WAYPOINT("NWIW");
     DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
+#ifdef ARCH_BLACKHOLE
+    // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
+    // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
+    // mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on
+    // Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
+    ASSERT((addr & 0x3) == 0);
+    if constexpr (write_to_stream_reg) {
+        noc_fast_write_dw_inline<noc_mode>(
+            noc,
+            write_at_cmd_buf,
+            val,
+            addr,
+            be,  // byte-enable
+            NOC_UNICAST_WRITE_VC,
+            false,  // mcast
+            false   // posted
+        );
+        WAYPOINT("NWID");
+        return;
+    }
+
+    ASSERT(be == 0xF);
+    uint32_t src_addr = noc_get_interim_inline_value_addr(noc, addr);
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, addr, src_addr, 4);
+    noc_async_writes_flushed(noc);
+    volatile tt_l1_ptr uint32_t* interim_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr);
+    *interim_addr_ptr = val;
+    ncrisc_noc_fast_write_any_len<noc_mode>(
+        noc,
+        write_cmd_buf,
+        src_addr,
+        addr,
+        4,
+        NOC_UNICAST_WRITE_VC,
+        false,  // mcast
+        false,  // linked
+        1,      // num_dests
+        true,   // multicast_path_reserve
+        false   // posted
+    );
+    noc_async_writes_flushed(noc);
+#else
     noc_fast_write_dw_inline<noc_mode>(
         noc,
         write_at_cmd_buf,
@@ -1500,6 +1540,61 @@ void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t 
         false,  // mcast
         false   // posted
     );
+#endif
+    WAYPOINT("NWID");
+}
+
+// on BH this api can only write to stream register, writing to L1 will cause hangs!
+template <bool posted = false>
+FORCE_INLINE void noc_inline_dw_write_set_state(
+    uint64_t addr, uint8_t be = 0xF, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
+    WAYPOINT("NWIW");
+    DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
+
+    uint32_t noc_cmd_field = NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) | NOC_CMD_CPY | NOC_CMD_WR |
+                             NOC_CMD_WR_INLINE | 0x0 | (posted ? 0x0 : NOC_CMD_RESP_MARKED);
+
+    uint32_t be32 = be;
+    uint32_t be_shift = (addr & (NOC_WORD_BYTES - 1));
+    // If we're given a misaligned address, don't write to the bytes in the word below the address
+    be32 = (be32 << be_shift);
+
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, addr & 0xFFFFFFFF);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(addr >> NOC_ADDR_COORD_SHIFT));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, be32);
+    WAYPOINT("NWID");
+}
+
+// on BH this api can only write to stream register, writing to L1 will cause hangs!
+template <bool update_addr_lo = false, bool update_counter = true, bool posted = false>
+FORCE_INLINE void noc_inline_dw_write_with_state(
+    uint32_t val, uint32_t addr = 0, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
+    WAYPOINT("NWIW");
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    if constexpr (update_addr_lo) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, addr);
+    }
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    if constexpr (update_counter) {
+        if constexpr (posted) {
+            if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+                inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+            } else {
+                noc_posted_writes_num_issued[noc] += 1;
+            }
+        } else {
+            if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
+            } else {
+                noc_nonposted_writes_num_issued[noc] += 1;
+                noc_nonposted_writes_acked[noc] += 1;
+            }
+        }
+    }
     WAYPOINT("NWID");
 }
 
@@ -1641,9 +1736,9 @@ void noc_async_read_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NBTD");
 }
 
+template <bool posted = false>
 FORCE_INLINE void noc_async_write_one_packet_with_trid_set_state(
     std::uint64_t dst_noc_addr, uint8_t cmd_buf = write_cmd_buf, uint8_t noc = noc_index) {
-#ifndef ARCH_GRAYSKULL
     WAYPOINT("NAWW");
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_SET_STATE, dst_noc_addr, 0, NOC_UNICAST_WRITE_VC);
     while (!noc_cmd_buf_ready(noc, cmd_buf));
@@ -1651,7 +1746,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_set_state(
     uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) |
                              0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
                              0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
-                             NOC_CMD_RESP_MARKED;
+                             (posted ? 0 : NOC_CMD_RESP_MARKED);
 
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
 #ifdef ARCH_BLACKHOLE
@@ -1660,9 +1755,9 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_set_state(
 #endif
     NOC_CMD_BUF_WRITE_REG(
         noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dst_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-#endif
 }
 
+template <bool update_counter = true, bool posted = false>
 FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
     std::uint32_t src_local_l1_addr,
     std::uint32_t dst_noc_addr,
@@ -1670,7 +1765,6 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
     std::uint32_t trid,
     uint8_t cmd_buf = write_cmd_buf,
     uint8_t noc = noc_index) {
-#ifndef ARCH_GRAYSKULL
     WAYPOINT("NWPW");
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_WITH_STATE, 0ull, size, -1);
     while (!noc_cmd_buf_ready(noc, cmd_buf));
@@ -1683,34 +1777,73 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_noc_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, size);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-#endif
+    if constexpr (update_counter) {
+        if constexpr (posted) {
+            if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+                inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+            } else {
+                noc_posted_writes_num_issued[noc] += 1;
+            }
+        } else {
+            if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
+            } else {
+                noc_nonposted_writes_num_issued[noc] += 1;
+                noc_nonposted_writes_acked[noc] += 1;
+            }
+        }
+    }
 }
 
+template <bool update_counter = true, bool posted = false>
 FORCE_INLINE void noc_async_write_one_packet_with_trid(
     std::uint32_t src_local_l1_addr,
     std::uint64_t dst_noc_addr,
     std::uint32_t size,
     std::uint32_t trid,
+    uint8_t cmd_buf = write_cmd_buf,
     uint8_t noc = noc_index) {
     WAYPOINT("NAWW");
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, dst_noc_addr, size, -1);
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
-#ifndef ARCH_GRAYSKULL
-    ncrisc_noc_fast_write_any_len<noc_mode, true, true>(
-        noc,
-        write_cmd_buf,
-        src_local_l1_addr,
-        dst_noc_addr,
-        size,
-        NOC_UNICAST_WRITE_VC,
-        false /*mcast*/,
-        false /*linked*/,
-        1 /*num_dests*/,
-        false /*multicast_path_reserve*/,
-        false /*posted*/,
-        trid /*trid*/);
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    WAYPOINT("NWPD");
+
+    uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) |
+                             0x0 |  // (linked ? NOC_CMD_VC_LINKED : 0x0)
+                             0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
+                             (posted ? 0 : NOC_CMD_RESP_MARKED);
+
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+#ifdef ARCH_BLACKHOLE
+    // Handles writing to PCIe
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_noc_addr >> 32) & 0x1000000F);
 #endif
-    WAYPOINT("NAWD");
+    NOC_CMD_BUF_WRITE_REG(
+        noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dst_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_noc_addr);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, size);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    if constexpr (update_counter) {
+        if constexpr (posted) {
+            if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+                inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
+            } else {
+                noc_posted_writes_num_issued[noc] += 1;
+            }
+        } else {
+            if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+                inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
+            } else {
+                noc_nonposted_writes_num_issued[noc] += 1;
+                noc_nonposted_writes_acked[noc] += 1;
+            }
+        }
+    }
 }
 
 FORCE_INLINE

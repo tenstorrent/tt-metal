@@ -4,9 +4,6 @@
 
 from tqdm import tqdm
 
-from models.utility_functions import (
-    nearest_32,
-)
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.multimodal.llama_image_block import TtLlamaImageTransformerBlock
 

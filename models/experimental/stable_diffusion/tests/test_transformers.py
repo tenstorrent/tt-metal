@@ -19,7 +19,6 @@ from models.experimental.stable_diffusion.tt.transformer_2d import (
     TtTransformer2DModel,
 )
 
-import pytest
 
 """
 torch.Size([2, 4096, 320]) torch.Size([2, 77, 768]) None

@@ -133,6 +133,12 @@ int main() {
             // Run the ERISC kernel, no kernel config buffer on active eth
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
                 WAYPOINT("R");
+#ifdef ARCH_BLACKHOLE
+                // #18384: This register was left dirty by eth training.
+                // It is not used in dataflow api, so it can be set to 0
+                // one time here instead of setting it everytime in dataflow_api.
+                NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
+#endif
                 // TODO: This currently runs on second risc on active eth cores but with newer drop of syseng FW
                 //  this will run on risc0
                 int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);

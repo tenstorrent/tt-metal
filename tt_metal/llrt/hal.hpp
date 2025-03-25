@@ -14,8 +14,9 @@
 #include <variant>
 #include <vector>
 #include <memory>
-#include "assert.hpp"
-#include "utils.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/utils.hpp>
 
 enum class CoreType;
 
@@ -24,46 +25,6 @@ namespace tt {
 enum class ARCH;
 
 namespace tt_metal {
-
-enum class HalProgrammableCoreType { TENSIX = 0, ACTIVE_ETH = 1, IDLE_ETH = 2, COUNT = 3 };
-
-static constexpr uint32_t NumHalProgrammableCoreTypes = static_cast<uint32_t>(HalProgrammableCoreType::COUNT);
-
-enum class HalProcessorClassType : uint8_t {
-    DM = 0,
-    // Setting this to 2 because we currently treat brisc and ncrisc as two unique processor classes on Tensix
-    // TODO: Uplift view of Tensix processor classes to be 1 DM class with 2 processor types
-    COMPUTE = 2
-};
-
-enum class HalL1MemAddrType : uint8_t {
-    BASE,
-    BARRIER,
-    MAILBOX,
-    LAUNCH,
-    WATCHER,
-    DPRINT,
-    PROFILER,
-    KERNEL_CONFIG,
-    UNRESERVED,
-    CORE_INFO,
-    GO_MSG,
-    LAUNCH_MSG_BUFFER_RD_PTR,
-    LOCAL,
-    BANK_TO_NOC_SCRATCH,
-    APP_SYNC_INFO,
-    TILE_HEADER_BUFFER,
-    APP_ROUTING_INFO,
-    RETRAIN_COUNT,
-    FABRIC_ROUTER_CONFIG,
-    COUNT  // Keep this last so it always indicates number of enum options
-};
-
-enum class HalDramMemAddrType : uint8_t { DRAM_BARRIER = 0, COUNT = 1 };
-
-enum class HalMemType : uint8_t { L1 = 0, DRAM = 1, HOST = 2, COUNT = 3 };
-
-using DeviceAddr = std::uint64_t;
 
 // Note: nsidwell will be removing need for fw_base_addr and local_init_addr
 // fw_launch_addr is programmed with fw_launch_addr_value on the master risc
@@ -105,7 +66,7 @@ public:
     uint32_t get_dev_size(HalL1MemAddrType addr_type) const;
     uint32_t get_processor_classes_count() const;
     uint32_t get_processor_types_count(uint32_t processor_class_idx) const;
-    const HalJitBuildConfig &get_jit_build_config(uint32_t processor_class_idx, uint32_t processor_type_idx) const;
+    const HalJitBuildConfig& get_jit_build_config(uint32_t processor_class_idx, uint32_t processor_type_idx) const;
 };
 
 template <typename T>
@@ -128,7 +89,8 @@ inline uint32_t HalCoreInfoType::get_processor_types_count(uint32_t processor_cl
     return this->processor_classes_[processor_class_idx].size();
 }
 
-inline const HalJitBuildConfig &HalCoreInfoType::get_jit_build_config(uint32_t processor_class_idx, uint32_t processor_type_idx) const {
+inline const HalJitBuildConfig& HalCoreInfoType::get_jit_build_config(
+    uint32_t processor_class_idx, uint32_t processor_type_idx) const {
     TT_ASSERT(processor_class_idx < this->processor_classes_.size());
     TT_ASSERT(processor_type_idx < this->processor_classes_[processor_class_idx].size());
     return this->processor_classes_[processor_class_idx][processor_type_idx];
@@ -266,7 +228,7 @@ public:
 
     uint32_t get_num_risc_processors() const;
 
-    const HalJitBuildConfig &get_jit_build_config(
+    const HalJitBuildConfig& get_jit_build_config(
         uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
 
     uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0) {
@@ -370,7 +332,7 @@ inline bool Hal::get_supports_cbs(uint32_t programmable_core_type_index) const {
     return this->core_info_[programmable_core_type_index].supports_cbs_;
 }
 
-inline const HalJitBuildConfig &Hal::get_jit_build_config(
+inline const HalJitBuildConfig& Hal::get_jit_build_config(
     uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const {
     TT_ASSERT(programmable_core_type_index < this->core_info_.size());
     return this->core_info_[programmable_core_type_index].get_jit_build_config(processor_class_idx, processor_type_idx);
@@ -395,7 +357,7 @@ public:
 
 inline auto& hal = HalSingleton::getInstance();  // inline variable requires C++17
 
-uint32_t generate_risc_startup_addr(uint32_t firmware_base); // used by Tensix initializers to build HalJitBuildConfig
+uint32_t generate_risc_startup_addr(uint32_t firmware_base);  // used by Tensix initializers to build HalJitBuildConfig
 
 }  // namespace tt_metal
 }  // namespace tt

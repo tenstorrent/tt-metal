@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "hal.hpp"
 #include "core_coord.hpp"
 #include "umd/device/tt_soc_descriptor.h"
 

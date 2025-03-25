@@ -17,6 +17,6 @@ jobs:
     uses: ./.github/workflows/tg-nightly-tests-impl.yaml
     secrets: inherit
     with:
-      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

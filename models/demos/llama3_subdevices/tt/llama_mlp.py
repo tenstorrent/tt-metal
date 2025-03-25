@@ -5,7 +5,6 @@
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.llama3_subdevices.tt.llama_ccl import tt_all_reduce
 import torch.nn.functional as F
 
 
@@ -145,6 +144,13 @@ class TtLlamaMLP(LightweightModule):
             sub_device_id=self.worker_sub_device_id if mode == "decode" else None,
         )
 
+        w1_out_reduced = self.tt_ccl.line_all_reduce(
+            w1_out,
+            cluster_axis=1,
+            num_links=3,
+            memory_config=self.model_config["MUL_IN_MEMCFG"],
+        )
+
         w3_out = ttnn.linear(
             x,
             self.w3,
@@ -161,17 +167,11 @@ class TtLlamaMLP(LightweightModule):
         ttnn.deallocate(x)
         # print("linear", w3_out)
         try:
-            w1_out_reduced = self.tt_ccl.line_all_reduce(
-                w1_out,
-                cluster_axis=1,
-                num_links=3,
-                memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
-            )
             w3_out_reduced = self.tt_ccl.line_all_reduce(
                 w3_out,
                 cluster_axis=1,
                 num_links=3,
-                memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
+                memory_config=self.model_config["MUL_IN_MEMCFG"],
             )
 
             # print("reduced", w1_out_reduced)
@@ -184,8 +184,10 @@ class TtLlamaMLP(LightweightModule):
             w3_out_reduced,
             input_tensor_a_activation=ttnn.UnaryOpType.SILU,
             dtype=ttnn.bfloat16,
-            memory_config=w1_out_reduced.memory_config(),
+            memory_config=self.model_config["MUL_IN_MEMCFG"],
         )
+
+        w2_in = ttnn.to_memory_config(w2_in, self.model_config["FF2_IN_RING_MEMCFG"])
 
         # print("eltwise mul", w2_in)
 

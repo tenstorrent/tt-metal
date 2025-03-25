@@ -5,7 +5,6 @@
 import pytest
 from loguru import logger
 import ttnn
-import torch
 from models.experimental.bert_tiny.tt.bert_for_question_answering import TtBertforqa
 
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline

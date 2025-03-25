@@ -7,9 +7,8 @@ import json
 import pytest
 from loguru import logger
 
-from transformers import AutoTokenizer, T5Tokenizer, T5Model
+from transformers import AutoTokenizer, T5Model
 from models.utility_functions import (
-    torch2tt_tensor,
     tt2torch_tensor,
     comp_pcc,
     is_wormhole_b0,

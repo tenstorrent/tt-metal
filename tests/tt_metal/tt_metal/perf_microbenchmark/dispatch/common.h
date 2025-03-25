@@ -15,7 +15,7 @@
 #include "noc/noc_parameters.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 
-#include <tt-metalium/hal.hpp>
+#include "hal.hpp"
 #include "llrt.hpp"
 #include <tt-metalium/tt_align.hpp>
 

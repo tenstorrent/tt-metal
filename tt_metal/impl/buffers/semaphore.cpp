@@ -4,6 +4,8 @@
 
 #include <semaphore.hpp>
 
+#include "hal.hpp"
+
 namespace tt {
 
 namespace tt_metal {

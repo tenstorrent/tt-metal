@@ -81,15 +81,8 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(
         this->num_q_heads,
         this->num_kv_heads);
 
-    uint32_t num_cores;
-    if (this->input_on_subcoregrids) {
-        auto input_core_grid = input_tensor.shard_spec().value().grid;
-        num_cores = input_core_grid.num_cores();
+    uint32_t num_cores = this->output_mem_config.shard_spec.value().grid.num_cores();
 
-    } else {
-        auto core_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-        num_cores = core_grid_size.x * core_grid_size.y;
-    }
     // 1 User Per Core Max and 32 users for now
     if (this->overlap_qk_coregrid) {
         TT_FATAL(num_cores >= num_users, "Grid Size is {}. Need at least 32 cores for decode", num_cores);
@@ -126,35 +119,26 @@ std::vector<ttnn::TensorSpec> NLPCreateHeadsDecodeDeviceOperation::compute_outpu
     MemoryConfig q_mem_config = this->output_mem_config;
     MemoryConfig k_mem_config = this->output_mem_config;
     MemoryConfig v_mem_config = this->output_mem_config;
+    CoreRangeSet output_core_grid = this->output_mem_config.shard_spec.value().grid;
     CoreRangeSet q_shard_grid, k_shard_grid, v_shard_grid;
-    if (!this->input_on_subcoregrids) {
-        auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
-        q_shard_grid = tt::tt_metal::num_cores_to_corerangeset(batch, core_grid, true);
-        if (this->overlap_qk_coregrid) {
-            k_shard_grid = q_shard_grid;
-        } else {
-            k_shard_grid = tt::tt_metal::num_cores_to_corerangeset(
-                CoreCoord{batch % core_grid.x, batch / core_grid.x}, batch, core_grid, true);
-        }
-        v_shard_grid = q_shard_grid;
+    auto start_core_coord = output_core_grid.ranges().front().start_coord;
+
+    q_shard_grid =
+        tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core_coord, batch, output_core_grid, true);
+    if (this->overlap_qk_coregrid) {
+        k_shard_grid = q_shard_grid;
     } else {
-        auto input_core_grid = input_tensor.shard_spec().value().grid;
-        auto start_core_coord = input_core_grid.bounding_box().start_coord;
-        q_shard_grid =
-            tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core_coord, batch, input_core_grid, true);
-        if (this->overlap_qk_coregrid) {
-            k_shard_grid = q_shard_grid;
-        } else {
-            CoreRangeSet q_plus_one_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
-                start_core_coord, batch + 1, input_core_grid, true);
-            if (!q_plus_one_grid.ranges().empty()) {
-                start_core_coord = q_plus_one_grid.ranges().back().end_coord;
-            }
-            k_shard_grid =
-                tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core_coord, batch, input_core_grid, true);
+        CoreRangeSet q_plus_one_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
+            start_core_coord, batch + 1, output_core_grid, true);
+        CoreCoord k_start_core_coord;
+        if (!q_plus_one_grid.ranges().empty()) {
+            k_start_core_coord = q_plus_one_grid.ranges().back().end_coord;
         }
-        v_shard_grid = q_shard_grid;
+        k_shard_grid =
+            tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(k_start_core_coord, batch, output_core_grid, true);
     }
+    v_shard_grid = q_shard_grid;
+
     tt::tt_metal::ShardSpec q_shard_spec{q_shard_grid, {num_q_heads_padded, this->head_dim}};
     q_mem_config.shard_spec = q_shard_spec;
     tt::tt_metal::ShardSpec k_shard_spec{k_shard_grid, {num_kv_heads_padded, this->head_dim}};

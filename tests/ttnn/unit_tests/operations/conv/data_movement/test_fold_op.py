@@ -7,20 +7,14 @@ import torch
 
 import ttnn
 
-from loguru import logger
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
-
 from models.utility_functions import (
     pad_and_fold_conv_activation_for_unity_stride,
-    pad_and_fold_conv_filters_for_unity_stride,
     _nearest_y,
     is_wormhole_b0,
     torch2tt_tensor,
     tt2torch_tensor,
-    is_blackhole,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_grayskull
 
 
 def fold_torch(input_tensor, stride_h, stride_w):
@@ -248,9 +242,6 @@ def pad_and_fold_with_permute_and_reshape_on_device_sharded(device, tt_input_ten
     return tt_output_tensor
 
 
-@skip_for_grayskull(
-    "Grayskull packer untilize will corrupt the packer states in the following avg_pool2d/reduce unit test"
-)
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [3])
 @pytest.mark.parametrize("h", [224])
@@ -297,7 +288,6 @@ def test_fold_with_permute_reshape_on_device_sharded(
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 1)
 
 
-@skip_for_grayskull("Grayskull has pcc issue when transpose used untilize")
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [3])
 @pytest.mark.parametrize("h", [224])
@@ -338,7 +328,6 @@ def test_fold_with_permute_reshape_on_device(device, n, c, h, w, pad_h, pad_w, s
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 1)
 
 
-# @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize(
     "act_shape,stride_h,stride_w",
     [
@@ -373,7 +362,7 @@ def test_fold(act_shape, stride_h, stride_w, device):
     torch.testing.assert_allclose(actual, expected)
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
+@pytest.mark.skipif(is_wormhole_b0(), reason="Not enough cores for wormhole_b0")
 def test_fold_sharded(device):
     torch.manual_seed(0)
 

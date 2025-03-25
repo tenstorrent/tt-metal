@@ -197,7 +197,7 @@ FORCE_INLINE
 void profiler_noc_async_flush_posted_write(uint8_t noc = noc_index) {
     WAYPOINT("NPPW");
     while (!ncrisc_noc_posted_writes_sent(noc));
-    WAYPOINT("NPPD")
+    WAYPOINT("NPPD");
 }
 
 #endif

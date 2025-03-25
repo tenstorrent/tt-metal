@@ -4,8 +4,6 @@
 
 import torch
 from diffusers import StableDiffusionPipeline
-from loguru import logger
-import os
 import ttnn
 import pytest
 

@@ -17,7 +17,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/hal.hpp>
+#include "hal.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/kernel.hpp>
@@ -1540,6 +1540,13 @@ TEST_F(CommandQueueSingleCardProgramFixture, TestLogicalCoordinatesDataMovement)
     }
 }
 
+// Ensure the compute core can access their own logical coordinate. Same binary enqueued to multiple cores.
+TEST_F(CommandQueueSingleCardProgramFixture, TestLogicalCoordinatesCompute) {
+    for (IDevice* device : devices_) {
+        local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE);
+    }
+}
+
 // Ensure the eth core can access their own logical coordinate. Same binary enqueued to multiple cores.
 TEST_F(CommandQueueSingleCardProgramFixture, TestLogicalCoordinatesEth) {
     for (IDevice* device : devices_) {
@@ -1558,6 +1565,14 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesDataMo
         local_test_functions::test_my_coordinates(device, tt::RISCV::BRISC, 1);
         local_test_functions::test_my_coordinates(device, tt::RISCV::NCRISC);
         local_test_functions::test_my_coordinates(device, tt::RISCV::NCRISC, 1);
+    }
+}
+
+// Ensure the compute core can access their own logical coordinate. Same binary enqueued to multiple cores.
+TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TestLogicalCoordinatesCompute) {
+    for (IDevice* device : devices_) {
+        local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE);
+        local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE, 1);
     }
 }
 

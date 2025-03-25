@@ -29,6 +29,7 @@ struct ExecuteAllGatherAsync {
         const MeshDevice& mesh_device,
         const ttnn::ccl::Topology topology,
         const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+        const std::optional<ttnn::Tensor>& persistent_output_tensor = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<size_t> num_preferred_links = std::nullopt,
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,

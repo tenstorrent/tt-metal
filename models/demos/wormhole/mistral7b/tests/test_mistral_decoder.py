@@ -2,9 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
-import pytest
 from loguru import logger
-import os
 import ttnn
 from models.demos.wormhole.mistral7b.tt.mistral_common import (
     precompute_freqs,

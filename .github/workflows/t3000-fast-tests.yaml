@@ -2,8 +2,6 @@ name: "(T3K) T3000 fast tests"
 
 on:
   workflow_dispatch:
-  push:
-    branches: ["main"]
 
 jobs:
   build-artifact:
@@ -17,6 +15,6 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/t3000-fast-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

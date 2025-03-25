@@ -14,7 +14,6 @@ from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.common import (
     get_prefill_rot_mat,
-    get_rot_transformation_mat,
     get_single_rot_mat,
 )
 from models.utility_functions import (

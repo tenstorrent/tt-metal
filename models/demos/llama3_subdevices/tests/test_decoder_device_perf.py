@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
-import time
 import pytest
 from loguru import logger
 import os
@@ -17,12 +16,8 @@ from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
 from models.demos.llama3_subdevices.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3_subdevices.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
 from models.utility_functions import skip_for_grayskull
-from tests.ttnn.unit_tests.operations.prefetcher_common import TtLlamaPrefetcherSetup
+from models.demos.llama3_subdevices.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 from models.perf.device_perf_utils import run_device_perf
 from tt_metal.tools.profiler.process_model_log import (
@@ -101,7 +96,7 @@ def test_llama_decoder_inference(
         [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
     )
 
-    tt_ccl = TT_CCL(mesh_device, model_args.sub_core_grids, prefetcher_setup.worker_sub_device_id)
+    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id)
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = model_args.get_state_dict_prefix("TtTransformerBlock", 0)
     partial_state_dict = {

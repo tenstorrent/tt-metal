@@ -39,7 +39,7 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch}}
       runner-label: ${{ matrix.test-group.runner-label}}
-      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 

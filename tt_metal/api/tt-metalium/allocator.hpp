@@ -12,7 +12,7 @@
 #include "allocator_types.hpp"
 #include "assert.hpp"
 #include "core_coord.hpp"
-#include "hal.hpp"
+#include "hal_types.hpp"
 
 namespace tt {
 

@@ -20,7 +20,7 @@ from ttnn.model_preprocessing import (
 from models.perf.perf_utils import prep_perf_report
 from transformers import DistilBertForQuestionAnswering, AutoTokenizer
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
-from models.utility_functions import is_grayskull, is_wormhole_b0, skip_for_grayskull
+from models.utility_functions import skip_for_grayskull
 
 
 @skip_for_grayskull()

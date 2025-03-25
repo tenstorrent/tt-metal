@@ -16,9 +16,9 @@ on:
         type: string
         default: "amd64"
     outputs:
-      ci-build-tag:
-        description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
-        value: ${{ jobs.check-docker-images.outputs.ci-build-tag }}
+      dev-tag:
+        description: "Docker tag for the dev Docker image for developing TT-Metalium et al"
+        value: ${{ jobs.check-docker-images.outputs.dev-tag }}
       #ci-test-tag:
       #  description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
       #  value: ${{ jobs.check-docker-images.outputs.ci-test-tag }}
@@ -52,10 +52,12 @@ jobs:
   check-docker-images:
     runs-on: ubuntu-latest
     outputs:
-      ci-build-exists: ${{ steps.images.outputs.ci-build-exists }}
-      ci-build-tag: ${{ steps.tags.outputs.ci-build-tag }}
+      # ci-build-exists: ${{ steps.images.outputs.ci-build-exists }}
+      # ci-build-tag: ${{ steps.tags.outputs.ci-build-tag }}
       # ci-test-exists: ${{ steps.images.outputs.ci-test-exists }}
       # ci-test-tag: ${{ steps.tags.outputs.ci-test-tag }}
+      dev-exists: ${{ steps.images.outputs.dev-exists }}
+      dev-tag: ${{ steps.tags.outputs.dev-tag }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -65,14 +67,14 @@ jobs:
       - name: Compute tags
         id: tags
         run: |
-          BUILD_TAG=$(cat \
+          DEV_TAG=$(cat \
             install_dependencies.sh \
             dockerfile/Dockerfile \
             tt_metal/python_env/requirements-dev.txt \
             docs/requirements-docs.txt \
             tests/sweep_framework/requirements-sweeps.txt \
             | sha1sum | cut -d' ' -f1)
-          echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.IMAGE_NAME }}:${BUILD_TAG}" >> $GITHUB_OUTPUT
+          echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.IMAGE_NAME }}:${DEV_TAG}" >> $GITHUB_OUTPUT
 
           # TODO: When we have multiple Docker images, do something like this:
           # TEST_TAG=$(cat tt_metal/python_env/requirements-dev.txt pyproject.toml | sha1sum | cut -d' ' -f1)
@@ -81,19 +83,19 @@ jobs:
       - name: Query images exist
         id: images
         run: |
-          if docker manifest inspect ${{ steps.tags.outputs.ci-build-tag }} > /dev/null 2>&1; then
-            echo "${{ steps.tags.outputs.ci-build-tag }} exists"
-            echo "ci-build-exists=true" >> $GITHUB_OUTPUT
+          if docker manifest inspect ${{ steps.tags.outputs.dev-tag }} > /dev/null 2>&1; then
+            echo "${{ steps.tags.outputs.dev-tag }} exists"
+            echo "dev-exists=true" >> $GITHUB_OUTPUT
           else
-            echo "${{ steps.tags.outputs.ci-build-tag }} does not exist"
-            echo "ci-build-exists=false" >> $GITHUB_OUTPUT
+            echo "${{ steps.tags.outputs.dev-tag }} does not exist"
+            echo "dev-exists=false" >> $GITHUB_OUTPUT
           fi
 
 
   build-docker-image:
     name: "🐳️ Build image"
     needs: check-docker-images
-    if: needs.check-docker-images.outputs.ci-build-exists != 'true'
+    if: needs.check-docker-images.outputs.dev-exists != 'true'
     timeout-minutes: 30
     runs-on:
       - build-docker
@@ -113,7 +115,7 @@ jobs:
           file: dockerfile/Dockerfile
           target: dev
           push: true
-          tags: ${{ needs.check-docker-images.outputs.ci-build-tag }}
+          tags: ${{ needs.check-docker-images.outputs.dev-tag }}
           build-args: UBUNTU_VERSION=${{ inputs.version }}
           cache-to: type=inline
           pull: true
@@ -125,7 +127,7 @@ jobs:
   tag-latest:
     name: "🔄 Update latest tag"
     needs: check-docker-images
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check-docker-images.outputs.ci-build-exists == 'true'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.check-docker-images.outputs.dev-exists == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Login to GitHub Container Registry
@@ -139,8 +141,8 @@ jobs:
         run: |
           IMAGE_REPO="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.IMAGE_NAME }}"
           LATEST_TAG="${IMAGE_REPO}:latest"
-          BUILD_TAG="${{ needs.check-docker-images.outputs.ci-build-tag }}"
-          echo "Tagging ${BUILD_TAG} as ${LATEST_TAG}"
-          docker pull ${BUILD_TAG}
-          docker tag ${BUILD_TAG} ${LATEST_TAG}
+          DEV_TAG="${{ needs.check-docker-images.outputs.dev-tag }}"
+          echo "Tagging ${DEV_TAG} as ${LATEST_TAG}"
+          docker pull ${DEV_TAG}
+          docker tag ${DEV_TAG} ${LATEST_TAG}
           docker push ${LATEST_TAG}

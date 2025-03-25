@@ -6,7 +6,6 @@ import torch.nn as nn
 import ttnn
 from typing import Optional
 
-from tt_lib.fallback_ops import fallback_ops
 
 import ttnn
 from models.experimental.stable_diffusion.sd_utils import make_linear

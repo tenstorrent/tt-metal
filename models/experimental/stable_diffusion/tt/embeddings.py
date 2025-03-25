@@ -2,10 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import numpy as np
 import torch.nn as nn
-import torch.nn.functional as F
-import torch
 import ttnn
 
 

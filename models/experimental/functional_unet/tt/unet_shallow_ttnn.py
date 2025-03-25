@@ -8,7 +8,6 @@ import torch
 
 from typing import List
 
-from models.utility_functions import nearest_32
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, ParameterDict
 
 

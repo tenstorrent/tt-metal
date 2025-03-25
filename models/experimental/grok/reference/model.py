@@ -18,7 +18,6 @@ except ImportError:
 
 from .configuration_grok1 import Grok1Config
 from .modeling_grok1_outputs import MoeCausalLMOutputWithPast, MoeModelOutputWithPast
-from models.experimental.grok.scripts.tlog import tlog
 
 logger = logging.get_logger(__name__)
 

@@ -8,7 +8,7 @@
 #include <cstdint>
 
 #include "core_coord.hpp"
-#include "hal.hpp"
+#include "hal_types.hpp"
 #include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {

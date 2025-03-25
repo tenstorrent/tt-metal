@@ -25,7 +25,8 @@ struct ChipSpec {
 
 enum class FabricType {
     MESH = 0,
-    TORUS = 1,
+    TORUS_1D = 1,
+    TORUS_2D = 2,
 };
 
 enum class RoutingDirection {
