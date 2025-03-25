@@ -23,8 +23,6 @@ from models.utility_functions import (
     comp_allclose,
     disable_persistent_kernel_cache,
     profiler,
-    is_e75,
-    skip_for_wormhole_b0,
 )
 
 

@@ -2,11 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import ttnn
 from models.demos.yolov4.ttnn.common import Conv
-from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
-from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
 
 
 def sharded_concat(input_tensors, num_cores=64, dim=3):  # expected input tensors to be in fp16, RM, same (h*w)

@@ -8,7 +8,6 @@ import ttnn
 import torch
 import numpy as np
 from loguru import logger
-import os
 import math
 import struct
 import pytest

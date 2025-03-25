@@ -9,7 +9,6 @@ from models.utility_functions import (
     is_grayskull,
     is_wormhole_b0,
     pad_and_fold_conv_activation_for_unity_stride,
-    nearest_y,
 )
 from typing import List
 

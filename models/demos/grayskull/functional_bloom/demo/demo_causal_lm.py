@@ -16,7 +16,6 @@ from models.utility_functions import (
 from models import generation_utils
 from ttnn.model_preprocessing import preprocess_model_parameters
 from transformers import BloomTokenizerFast, BloomForCausalLM, BloomConfig
-from models.demos.grayskull.functional_bloom.tt.ttnn_optimized_functional_bloom import *
 from models.demos.grayskull.functional_bloom.tt import ttnn_functional_bloom, ttnn_optimized_functional_bloom
 from models.demos.grayskull.functional_bloom.dataset_utils import get_data
 

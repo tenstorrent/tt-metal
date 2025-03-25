@@ -6,7 +6,6 @@ import pytest
 
 import torch
 import transformers
-from datasets import load_dataset
 from transformers import AutoImageProcessor
 from loguru import logger
 import time
@@ -20,11 +19,7 @@ from models.experimental.vit.vit_helper_funcs import get_data_loader, get_batch
 
 from models.utility_functions import (
     is_wormhole_b0,
-    enable_persistent_kernel_cache,
-    disable_persistent_kernel_cache,
-    torch_random,
 )
-from models.perf.perf_utils import prep_perf_report
 
 
 def get_expected_times(functional_vit):

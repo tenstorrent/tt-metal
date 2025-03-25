@@ -5,9 +5,6 @@
 import torch
 import pytest
 from loguru import logger
-import math
-from torch import nn
-from typing import List
 
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (

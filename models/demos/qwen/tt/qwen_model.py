@@ -2,15 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import math
 import ttnn
-import torch
-import torch.nn as nn
 from models.demos.qwen.tt.qwen_decoder import TtTransformerBlock
 from models.common.rmsnorm import RMSNorm
 import ttnn
-from typing import Optional
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen.tt.distributed_norm import DistributedNorm
 from models.demos.qwen.tt.lm_head import LMHead

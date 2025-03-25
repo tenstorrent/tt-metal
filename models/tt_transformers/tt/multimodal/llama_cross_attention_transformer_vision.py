@@ -2,14 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Optional
-import collections
 import torch
 
 import ttnn
-from models.utility_functions import (
-    nearest_32,
-)
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.multimodal.llama_vision_encoder import TtLlamaVisionEncoder
 

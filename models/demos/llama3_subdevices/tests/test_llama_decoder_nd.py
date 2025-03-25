@@ -2,15 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
-import time
 import pytest
 from loguru import logger
 import os
 import ttnn
-from models.demos.llama3_subdevices.tt.llama_common import (
-    precompute_freqs,
-    PagedAttentionConfig,
-)
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
 from models.demos.llama3_subdevices.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3_subdevices.tt.llama_rope import TtLlamaRotarySetup

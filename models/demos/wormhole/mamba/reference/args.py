@@ -19,7 +19,6 @@
 import math
 
 from dataclasses import dataclass
-from typing import Union
 from enum import IntEnum
 
 

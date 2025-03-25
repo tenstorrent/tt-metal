@@ -6,12 +6,8 @@ import torch
 
 from loguru import logger
 
-from models.experimental.yolov3.reference.utils.dataloaders import LoadImages
-from models.experimental.yolov3.reference.utils.general import check_img_size
-from models.experimental.yolov3.reference.models.yolo import Bottleneck
 from models.experimental.yolov3.tt.yolov3_bottleneck import TtBottleneck
 from models.experimental.yolov3.reference.models.common import (
-    autopad,
     DetectMultiBackend,
 )
 from models.utility_functions import (

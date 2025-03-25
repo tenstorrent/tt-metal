@@ -9,7 +9,6 @@ from loguru import logger
 
 import ttnn
 from models.utility_functions import (
-    torch_to_tt_tensor,
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
     is_wormhole_b0,

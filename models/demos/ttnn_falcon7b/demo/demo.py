@@ -5,7 +5,6 @@
 import json
 from functools import partial
 import torch
-import os
 from loguru import logger
 import time
 from transformers import AutoTokenizer, FalconConfig, FalconForCausalLM

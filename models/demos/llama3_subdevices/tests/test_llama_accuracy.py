@@ -2,20 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
-import bz2
 import pytest
 from loguru import logger
 import os
 import ttnn
 from models.demos.llama3_subdevices.tt.llama_common import (
-    get_prefill_rot_mat,
     HostEmbedding,
     PagedAttentionConfig,
 )
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
-from models.demos.llama3_subdevices.demo.demo import preprocess_inputs_prefill
 from pathlib import Path
 
 

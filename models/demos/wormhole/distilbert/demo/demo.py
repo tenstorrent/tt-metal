@@ -17,7 +17,7 @@ from models.demos.wormhole.distilbert.distilbert_utils import (
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
 )
-from models.utility_functions import is_wormhole_b0, skip_for_grayskull
+from models.utility_functions import skip_for_grayskull
 from transformers import DistilBertForQuestionAnswering, AutoTokenizer, pipeline
 import evaluate
 

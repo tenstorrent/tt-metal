@@ -2,22 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-import torch
 import ttnn
-from models.utility_functions import (
-    is_wormhole_b0,
-    profiler,
-)
 from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra
-from models.demos.ttnn_resnet.tests.demo_utils import get_data, get_data_loader, get_batch
-
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
 
 
 def buffer_address(tensor):

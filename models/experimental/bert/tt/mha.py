@@ -8,14 +8,12 @@ import math
 
 import torch
 from transformers import BertForQuestionAnswering
-import numpy as np
 
 import ttnn
-from tt_lib.utils import pad_activation, pad_weight, print_diff_argmax
+from tt_lib.utils import pad_activation, pad_weight
 from models.experimental.bert.fused_ops.linear import Linear as TtLinear
 from tt_lib.fused_ops.softmax import softmax
 from models.utility_functions import (
-    enable_persistent_kernel_cache,
     comp_pcc,
     comp_allclose,
 )

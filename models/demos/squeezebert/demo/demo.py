@@ -9,10 +9,8 @@ import pytest
 import evaluate
 
 from loguru import logger
-from ttnn.model_preprocessing import *
 from models.utility_functions import (
     profiler,
-    skip_for_wormhole_b0,
     disable_persistent_kernel_cache,
 )
 from ttnn.model_preprocessing import preprocess_model_parameters

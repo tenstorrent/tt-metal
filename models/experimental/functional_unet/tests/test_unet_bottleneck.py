@@ -7,7 +7,6 @@ import ttnn
 
 from loguru import logger
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 from models.experimental.functional_unet.tt.model_preprocessing import (
     create_unet_input_tensors,

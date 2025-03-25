@@ -2,11 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple, Union
 
 import torch.nn as nn
 
-from models.experimental.stable_diffusion.sd_utils import make_linear
 from models.experimental.stable_diffusion.tt.embeddings import (
     TtTimestepEmbedding as TimestepEmbedding,
 )

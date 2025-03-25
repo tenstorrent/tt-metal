@@ -2,18 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Optional
 import torch
 
 import ttnn
-from models.utility_functions import (
-    nearest_32,
-)
 from models.common.lightweightmodule import LightweightModule
 
 
 def fall_back_rope(xq, xk, rot_mats, mesh_device):
-    from models.demos.qwen.reference.model import apply_rotary_emb, _reshape_for_broadcast
+    from models.demos.qwen.reference.model import apply_rotary_emb
 
     xq = ttnn.to_torch(xq)
     xk = ttnn.to_torch(xk)

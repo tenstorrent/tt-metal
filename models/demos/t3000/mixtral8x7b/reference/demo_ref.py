@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import torch
 from loguru import logger
-import json
 
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import load_inputs
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs

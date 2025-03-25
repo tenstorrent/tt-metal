@@ -3,15 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
-from http import HTTPStatus
 import streamlit as st
-import sys
 import requests
 from PIL import Image
 import io
 import time
-import os
-import json
 
 
 # parse args

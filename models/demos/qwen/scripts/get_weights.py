@@ -4,7 +4,6 @@
 import os
 import argparse
 from huggingface_hub import snapshot_download
-from transformers import AutoTokenizer
 
 
 def download_weights(model_name, downloaded_weights_path):

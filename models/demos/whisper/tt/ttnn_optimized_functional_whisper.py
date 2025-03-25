@@ -7,7 +7,6 @@ import torch
 from typing import Optional
 from loguru import logger
 
-from torch.nn import functional as F
 from ttnn.model_preprocessing import preprocess_linear_weight, preprocess_linear_bias
 import ttnn
 

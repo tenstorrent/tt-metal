@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import copy
 import torch
 import ttnn
 from contextlib import AbstractContextManager
@@ -11,7 +10,6 @@ from functools import wraps
 from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import (
     run_conv_on_device_wrapper,
-    is_conv_supported_on_device,
 )
 
 

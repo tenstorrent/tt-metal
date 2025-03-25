@@ -4,7 +4,6 @@
 
 import ttnn
 import math
-from loguru import logger
 from pathlib import Path
 from transformers import FalconConfig
 from models.utility_functions import is_grayskull, is_wormhole_b0

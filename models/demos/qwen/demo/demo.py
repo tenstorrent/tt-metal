@@ -17,17 +17,13 @@ import hashlib
 
 from models.demos.qwen.tt.qwen_common import (
     get_single_rot_mat,
-    get_prefill_rot_mat,
     get_rot_transformation_mat,
-    precompute_freqs,
     HostEmbedding,
 )
 from models.demos.qwen.tt.qwen_model import TtTransformer
 from models.demos.qwen.tt.qwen_embedding import TtQwenEmbedding
-from models.demos.qwen.reference.tokenizer import Tokenizer
 
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from transformers import AutoTokenizer
 
 

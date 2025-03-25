@@ -5,10 +5,6 @@
 import torch
 import ttnn
 
-from models.utility_functions import (
-    torch2tt_tensor,
-    tt2torch_tensor,
-)
 from models.experimental.t5.tt.t5_attention import TtT5Attention
 from models.experimental.t5.tt.t5_layer_norm import TtT5LayerNorm
 

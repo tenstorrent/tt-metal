@@ -7,7 +7,6 @@ import ttnn
 import torch
 from loguru import logger
 import torchvision
-from datasets import load_dataset
 
 from models.utility_functions import (
     torch2tt_tensor,

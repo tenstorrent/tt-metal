@@ -3,13 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-)
 import os
 import torch
-from typing import Optional, Dict
+from typing import Optional
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     permute_conv_parameters,
     weight_to_bfp8,

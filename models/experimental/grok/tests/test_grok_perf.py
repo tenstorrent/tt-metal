@@ -22,10 +22,9 @@ from models.experimental.grok.tt.grok_common import (
     prepare_rotation_mat_ttnn,
 )
 from models.experimental.grok.tt.grok_model import TtTransformer
-from models.experimental.grok.reference.tokenizer import Tokenizer
 from models.experimental.grok.tt.model_config import TtModelArgs
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import profiler, enable_persistent_kernel_cache
+from models.utility_functions import profiler
 from transformers import AutoTokenizer
 
 

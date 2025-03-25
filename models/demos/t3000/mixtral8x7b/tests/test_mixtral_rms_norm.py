@@ -1,9 +1,7 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
 import torch
-import pytest
 from loguru import logger
 
 import ttnn
@@ -15,7 +13,6 @@ from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
-    is_wormhole_b0,
 )
 
 

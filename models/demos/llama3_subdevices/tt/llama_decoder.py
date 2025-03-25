@@ -7,7 +7,6 @@ from models.demos.llama3_subdevices.tt.llama_mlp import TtLlamaMLP
 from models.common.rmsnorm import RMSNorm
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3_subdevices.tt.distributed_norm import DistributedNorm
-import torch.nn.functional as F
 
 
 class TtTransformerBlock(LightweightModule):

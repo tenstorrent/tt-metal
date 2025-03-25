@@ -6,7 +6,6 @@ import torch
 import ttnn
 from ttnn.model_preprocessing import infer_ttnn_module_args
 from models.demos.yolov4.reference import yolov4
-import torch.nn as nn
 from ttnn.model_preprocessing import preprocess_model_parameters, fold_batch_norm2d_into_conv2d
 from models.demos.yolov4.reference.resblock import ResBlock
 

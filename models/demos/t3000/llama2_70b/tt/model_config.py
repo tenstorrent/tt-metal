@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from loguru import logger
-import os
 
 
 MAX_SEQ_LEN = 4096

@@ -8,7 +8,6 @@ import ttnn
 import time
 from pathlib import Path
 
-from torchvision import models
 from loguru import logger
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters

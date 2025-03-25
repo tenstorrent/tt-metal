@@ -5,7 +5,6 @@
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.llama3_subdevices.tt.llama_ccl import tt_all_reduce
 import torch.nn.functional as F
 
 

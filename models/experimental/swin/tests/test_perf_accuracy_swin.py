@@ -7,16 +7,11 @@ import pytest
 import evaluate
 
 import ttnn
-import os
-import random
-from pathlib import Path
 from loguru import logger
 from transformers import AutoFeatureExtractor
-from PIL import Image
 import torchvision.transforms as transforms
 from transformers import AutoImageProcessor
 
-from models.sample_data.huggingface_imagenet_classes import IMAGENET2012_CLASSES as labels_dict
 from models.experimental.swin.tt.swin_for_image_classification import (
     TtSwinForImageClassification,
 )

@@ -7,9 +7,6 @@ import torch
 from diffusers import StableDiffusionPipeline
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import (
-    skip_for_grayskull,
-)
 
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters

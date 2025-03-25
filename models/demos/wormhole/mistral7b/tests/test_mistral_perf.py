@@ -4,7 +4,6 @@
 import os
 import torch
 import pytest
-from loguru import logger
 import os
 import ttnn
 from models.demos.wormhole.mistral7b.tt.mistral_common import (
@@ -16,11 +15,9 @@ from models.demos.wormhole.mistral7b.tt.mistral_common import (
 from models.demos.wormhole.mistral7b.tt.mistral_model import TtTransformer
 from models.demos.wormhole.mistral7b.tt.mistral_embedding import TtMistralEmbedding
 from models.demos.wormhole.mistral7b.tt.model_config import TtModelArgs
-from models.demos.wormhole.mistral7b.reference.model import Transformer
 from models.demos.wormhole.mistral7b.reference.tokenizer import Tokenizer
 
 from models.perf.perf_utils import prep_perf_report
-from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 from models.utility_functions import profiler, skip_for_grayskull
 
 if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only

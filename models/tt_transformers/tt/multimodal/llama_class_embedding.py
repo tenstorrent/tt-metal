@@ -2,13 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import torch.nn as nn
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-
-from ttnn import ReplicateTensorToMesh
 
 
 class TtLlamaClassEmbedding(LightweightModule):

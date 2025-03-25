@@ -4,12 +4,10 @@
 
 from queue import Queue
 from dataclasses import dataclass
-import os
 import json
 import torch
 import torch.nn.functional as F
 
-from time import time
 import pytest
 from loguru import logger
 
@@ -21,7 +19,6 @@ from models.demos.t3000.llama2_70b.reference.llama.llama.tokenizer3 import ChatF
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
     check_mesh_device,
-    string_similarity_score,
 )
 
 

@@ -6,10 +6,6 @@ import transformers
 import torch
 
 import ttnn
-from ttnn.model_preprocessing import (
-    preprocess_linear_weight,
-    preprocess_linear_bias,
-)
 
 
 # https://github.com/huggingface/transformers/blob/v4.37.2/src/transformers/models/vit/modeling_vit.py

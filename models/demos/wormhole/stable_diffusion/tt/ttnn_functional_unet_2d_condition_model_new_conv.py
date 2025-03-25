@@ -3,16 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import math
 import ttnn
 import os
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple, Union
 import torch
 import os
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-)
 from loguru import logger
 from models.utility_functions import is_grayskull
 
@@ -35,7 +30,6 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_downblock_2d_new_
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upblock_2d_new_conv import upblock_2d
 
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    pad_group_norm_weight,
     pre_process_input,
     conv_cache,
     get_default_compute_config,

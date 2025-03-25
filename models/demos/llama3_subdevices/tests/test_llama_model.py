@@ -4,11 +4,9 @@
 import torch
 import pytest
 from loguru import logger
-import os
 import ttnn
 from models.demos.llama3_subdevices.tt.llama_common import (
     sample_host,
-    encode_prompt_llama_instruct,
     HostEmbedding,
     PagedAttentionConfig,
 )

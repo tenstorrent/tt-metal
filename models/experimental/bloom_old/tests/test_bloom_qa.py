@@ -6,7 +6,6 @@ import torch
 
 from transformers import (
     BloomForQuestionAnswering,
-    AutoTokenizer,
     BloomTokenizerFast,
     pipeline,
 )

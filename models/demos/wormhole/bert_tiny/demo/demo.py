@@ -18,7 +18,6 @@ from ttnn.model_preprocessing import (
     preprocess_model_parameters,
 )
 
-from ttnn.model_preprocessing import *
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
 from models.demos.wormhole.bert_tiny.tt.bert_tiny import bert_for_question_answering, preprocess_inputs
 import evaluate

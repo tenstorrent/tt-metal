@@ -13,9 +13,7 @@ import os
 
 from models.demos.yolov4.reference.yolov4 import Yolov4
 from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
-from models.demos.yolov4.ttnn.weight_parameter_update import update_weight_parameters
 from models.demos.yolov4.ttnn.model_preprocessing import create_yolov4_model_parameters
-from collections import OrderedDict
 import ttnn
 from models.utility_functions import skip_for_grayskull
 

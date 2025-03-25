@@ -3,8 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from typing import List, Optional, Tuple, Union
-from loguru import logger
+from typing import List, Optional, Tuple
 import ttnn
 from models.experimental.llama.llama_utils import _make_causal_mask, _expand_mask, linear
 

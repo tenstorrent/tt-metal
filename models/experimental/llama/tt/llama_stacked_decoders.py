@@ -2,13 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
 import torch
-import numpy as np
-from torch import nn
 import ttnn
 from models.utility_functions import (
-    tt2torch_tensor,
     torch_to_tt_tensor_rm,
 )
 from models.experimental.llama.tt.llama_layer_norm import TtLlamaRMSNorm

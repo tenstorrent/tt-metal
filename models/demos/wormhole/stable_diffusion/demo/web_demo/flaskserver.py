@@ -9,9 +9,7 @@ from loguru import logger
 from models.demos.wormhole.stable_diffusion.demo.web_demo.task_queue import TaskQueue
 from models.demos.wormhole.stable_diffusion.demo.web_demo.model import warmup_model
 import os
-import pytest
 from threading import Thread
-import time
 
 
 app = Flask(__name__)

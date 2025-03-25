@@ -2,12 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
 from dataclasses import dataclass
-import torch
 
 import ttnn
-import torch.nn as nn
 
 
 @dataclass

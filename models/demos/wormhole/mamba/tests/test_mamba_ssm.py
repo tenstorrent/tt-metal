@@ -5,7 +5,6 @@
 import torch
 import pytest
 from loguru import logger
-from typing import Optional
 import ttnn
 from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba, MambaPretrainedModelName
 from models.demos.wormhole.mamba.reference.args import ModelMode

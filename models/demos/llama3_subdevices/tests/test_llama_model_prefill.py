@@ -9,7 +9,6 @@ import os
 import ttnn
 from models.demos.llama3_subdevices.tt.llama_common import (
     get_prefill_rot_mat,
-    get_rot_transformation_mat,
     HostEmbedding,
     encode_prompt_llama_instruct,
     PagedAttentionConfig,

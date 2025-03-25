@@ -5,11 +5,8 @@
 from typing import Optional
 
 import torch.nn as nn
-import torch.nn.functional as F
-import torch
 
 import ttnn
-from tt_lib.fallback_ops import fallback_ops
 
 from models.experimental.stable_diffusion.tt.residual_block import TtResnetBlock2D
 from models.experimental.stable_diffusion.tt.downsample_2d import TtDownsample2D
