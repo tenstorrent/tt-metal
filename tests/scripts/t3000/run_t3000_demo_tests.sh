@@ -115,10 +115,10 @@ run_t3000_llama3_90b_vision_tests() {
 
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   # Llama3.2-90B
-  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct
+  llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct
   mesh_device=T3K
 
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-notrace" --timeout 900; fail+=$?
+  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama90b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-notrace" --timeout 900; fail+=$?
   echo "LOG_METAL: Llama3.2-90B vision tests for $mesh_device completed"
 
   # Record the end time
@@ -176,6 +176,9 @@ run_t3000_tests() {
 
   # Run llama3 vision tests
   run_t3000_llama3_vision_tests
+
+  # Run llama3_90b vision tests
+  run_t3000_llama3_90b_vision_tests
 
   # Run llama3_70b tests
   run_t3000_llama3_70b_tests
