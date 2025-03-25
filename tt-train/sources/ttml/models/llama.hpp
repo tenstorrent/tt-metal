@@ -17,13 +17,13 @@ using RunnerType = common::transformer::RunnerType;
 using WeightTyingType = common::transformer::WeightTyingType;
 
 struct LlamaConfig {
-    uint32_t num_heads = 8;
-    uint32_t num_groups = 2;
-    uint32_t embedding_dim = 384;  // embedding dimension, must be divisible by num_heads
+    uint32_t num_heads = 8U;
+    uint32_t num_groups = 2U;
+    uint32_t embedding_dim = 384U;  // embedding dimension, must be divisible by num_heads
     float dropout_prob = 0.0F;
-    uint32_t num_blocks = 6;
-    uint32_t vocab_size = 256;
-    uint32_t max_sequence_length = 256;
+    uint32_t num_blocks = 6U;
+    uint32_t vocab_size = 256U;
+    uint32_t max_sequence_length = 256U;
     RunnerType runner_type = RunnerType::Default;
     WeightTyingType weight_tying = WeightTyingType::Disabled;
 };
@@ -32,8 +32,8 @@ class Llama : public ttml::autograd::ModuleBase {
 private:
     RunnerType runner_type = RunnerType::Default;
     std::shared_ptr<ttml::autograd::ModuleBase> tok_emb;
-    std::vector<std::shared_ptr<ttml::modules::LlamaBlock>> blocks;
-    std::shared_ptr<ttml::modules::RMSNormLayer> ln_fc;
+    std::vector<std::shared_ptr<ModuleBase>> blocks;
+    std::shared_ptr<ModuleBase> ln_fc;
     std::shared_ptr<ttml::autograd::ModuleBase> fc;
     ops::RotaryEmbeddingParams m_rope_params;
 

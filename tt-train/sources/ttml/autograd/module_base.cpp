@@ -18,7 +18,11 @@ void ModuleBase::register_tensor(const TensorPtr& tensor_ptr, const std::string&
 }
 
 void ModuleBase::register_module(const ModuleBasePtr& module_ptr, const std::string& name) {
+    if (module_ptr == nullptr) {
+        throw std::runtime_error(fmt::format("Module {} is uninitialized.", name));
+    }
     auto [_, is_inserted] = m_named_modules.emplace(name, module_ptr);
+
     if (!is_inserted) {
         throw std::logic_error(fmt::format("Names of two modules coincide: {}", name));
     }
@@ -78,9 +82,6 @@ serialization::NamedParameters ModuleBase::parameters() const {
 
         for (const auto& [module_name, next_module_ptr] : module_ptr->m_named_modules) {
             const auto module_name_with_prefix = name_prefix + module_name;
-            if (next_module_ptr == nullptr) {
-                throw std::runtime_error(fmt::format("Module {} is uninitialized.", module_name_with_prefix));
-            }
             if (!modules_in_queue.contains(module_name_with_prefix)) {
                 modules_to_process.emplace(next_module_ptr.get(), name_prefix + module_name + "/");
                 modules_in_queue.insert(module_name_with_prefix);
