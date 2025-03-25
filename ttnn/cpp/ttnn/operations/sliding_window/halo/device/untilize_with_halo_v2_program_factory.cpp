@@ -53,13 +53,13 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const uint32_t ncores_nhw,
     const uint32_t ncores_c,
     const uint32_t max_out_nsticks_per_core,
+    const uint32_t max_ref_size,
     const Tensor& padding_config1,
     const Tensor& padding_config2,
     const Tensor& local_config1,
     const Tensor& local_config2,
     const Tensor& remote_config1,
     const Tensor& remote_config2,
-    std::optional<std::reference_wrapper<const Tensor>> remote_temp,
     const bool remote_read,
     const bool transpose_mcast,
     Tensor& output_tensor,
@@ -259,13 +259,11 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         TT_ASSERT(!remote_read, "remote_read is not supported for in place operation");
 
         // create the remote temp CB
-        if (remote_temp.has_value()) {
+        if (max_ref_size > 0) {
             remote_temp_cb_id = cb_indices.get_next_cb_id();
-            auto remote_temp_buffer = remote_temp.value().get().device_buffer();
             auto remote_temp_cb_config =
-                CircularBufferConfig(remote_temp_buffer->size() / num_cores, {{remote_temp_cb_id, kernel_config_df}})
-                    .set_page_size(remote_temp_cb_id, remote_temp_buffer->page_size())
-                    .set_globally_allocated_address(*remote_temp_buffer);
+                CircularBufferConfig(max_ref_size * output_shard_shape[1], {{remote_temp_cb_id, kernel_config_df}})
+                    .set_page_size(remote_temp_cb_id, output_shard_shape[1] * out_nbytes);
             CBHandle remote_temp_cb = CreateCircularBuffer(program, all_cores, remote_temp_cb_config);
         }
 

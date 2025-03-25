@@ -151,20 +151,6 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     int num_cores = this->parallel_config_.grid.num_cores();
     int num_cores_c = conv::get_num_cores_channels_from_parallel_config(this->parallel_config_);
     int stick_size = input_tensor.get_padded_shape()[3] / num_cores_c;
-    std::optional<Tensor> remote_temp_device_tensor;
-    if (max_ref_size > 0 && this->in_place_) {
-        // create the remote temp tensor
-        int remote_temp_size = max_ref_size * stick_size * num_cores;
-        auto remote_temp_buffer = owned_buffer::create<bfloat16>(std::vector<bfloat16>(remote_temp_size));
-        ttnn::Shape remote_temp_shape = ttnn::Shape({num_cores, max_ref_size, stick_size});
-        Tensor remote_temp_tensor(OwnedStorage{remote_temp_buffer}, remote_temp_shape, type, Layout::ROW_MAJOR);
-
-        // move tensors to device
-        auto shard_shape = std::array<uint32_t, 2>({max_ref_size, stick_size});
-        ShardSpec shard_spec(parallel_config_.grid, shard_shape, ShardOrientation::ROW_MAJOR);
-        MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec};
-        remote_temp_device_tensor = remote_temp_tensor.to_device(device, memory_config);
-    }
 
     Program program = CreateProgram();
 
@@ -175,14 +161,13 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         config_.num_cores_nhw,
         config_.num_cores_c,
         max_out_nsticks_per_core_,
+        max_ref_size,
         pad_config_device_tensor1,
         pad_config_device_tensor2,
         local_config_device_tensor1,
         local_config_device_tensor2,
         remote_config_device_tensor1,
         remote_config_device_tensor2,
-        remote_temp_device_tensor ? std::optional<std::reference_wrapper<const Tensor>>(*remote_temp_device_tensor)
-                                  : std::nullopt,
         remote_read_,
         transpose_mcast_,
         output_tensor,
