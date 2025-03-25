@@ -55,7 +55,9 @@ tt_metal::Program generate_eltwise_unary_program(IDevice* device) {
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
         core,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = {0}});
 
     auto unary_reader_kernel = tt_metal::CreateKernel(
         program,
