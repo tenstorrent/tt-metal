@@ -16,6 +16,7 @@ namespace detail {}  // namespace detail
 ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
+    ttnn::Tensor& intermediate_packet_buffer,
     const int32_t dim,
     const global_semaphore::MultiDeviceGlobalSemaphore& cross_device_semaphore,
     const SubDeviceId& subdevice_id,
@@ -41,6 +42,7 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto input_tensor = input_tensors.at(0);
+            auto intermediate_packet_buffer = input_tensors.at(1);
             uint32_t ring_index = 0;  // Initialize device index
             std::optional<IDevice*> forward_device = std::nullopt;
             std::optional<IDevice*> backward_device = std::nullopt;
@@ -62,6 +64,7 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
             }
             return {ttnn::prim::llama_reduce_scatter(
                 input_tensor,
+                intermediate_packet_buffer,
                 dim,
                 semaphore.value(),
                 subdevice_id,
@@ -73,7 +76,7 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
                 num_links,
                 memory_config)};
         },
-        {input_tensor},
+        {input_tensor, intermediate_packet_buffer},
         output_tensors);
     auto output = output_tensors.at(0);
     // auto output = ttnn::prim::llama_reduce_scatter(input_tensor, dim, cross_device_semaphore, subdevice_id,

@@ -31,6 +31,7 @@ struct LlamaReduceScatterDeviceOperation {
     };
     struct tensor_args_t {
         const Tensor input_tensor;
+        Tensor intermediate_packet_buffer;
     };
 
     using spec_return_value_t = ttnn::TensorSpec;
@@ -90,6 +91,7 @@ struct LlamaReduceScatterDeviceOperation {
     // `tensor_return_value_t output = ttnn::prim::example(queue_id, input_tensor)`
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const ttnn::Tensor& input_tensor,
+        ttnn::Tensor& intermediate_packet_buffer,
         const int32_t dim,
         const GlobalSemaphore semaphore,
         const SubDeviceId subdevice_id,

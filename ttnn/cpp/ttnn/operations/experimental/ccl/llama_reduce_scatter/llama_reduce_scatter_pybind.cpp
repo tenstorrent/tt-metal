@@ -38,6 +38,7 @@ void py_bind_llama_reduce_scatter(py::module& module) {
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
+               ttnn::Tensor& intermediate_packet_buffer,
                uint32_t dim,
                const global_semaphore::MultiDeviceGlobalSemaphore& cross_device_semaphore,
                const tt::tt_metal::SubDeviceId& subdevice_id,
@@ -49,6 +50,7 @@ void py_bind_llama_reduce_scatter(py::module& module) {
                 return self(
                     queue_id,
                     input_tensor,
+                    intermediate_packet_buffer,
                     dim,
                     cross_device_semaphore,
                     subdevice_id,
@@ -58,6 +60,7 @@ void py_bind_llama_reduce_scatter(py::module& module) {
                     memory_config);
             },
             py::arg("input_tensor").noconvert(),
+            py::arg("intermediate_packet_buffer").noconvert(),
             py::arg("dim"),
             py::arg("cross_device_semaphore"),
             py::arg("subdevice_id"),

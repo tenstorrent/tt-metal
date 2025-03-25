@@ -74,6 +74,7 @@ LlamaReduceScatterDeviceOperation::tensor_return_value_t LlamaReduceScatterDevic
 std::tuple<LlamaReduceScatterDeviceOperation::operation_attributes_t, LlamaReduceScatterDeviceOperation::tensor_args_t>
 LlamaReduceScatterDeviceOperation::invoke(
     const ttnn::Tensor& input_tensor,
+    ttnn::Tensor& intermediate_packet_buffer,
     const int32_t dim,
     const GlobalSemaphore semaphore,
     const SubDeviceId subdevice_id,
@@ -98,7 +99,7 @@ LlamaReduceScatterDeviceOperation::invoke(
             .forward_device = forward_device,
             .backward_device = backward_device,
         },
-        tensor_args_t{.input_tensor = input_tensor}};
+        tensor_args_t{.input_tensor = input_tensor, .intermediate_packet_buffer = intermediate_packet_buffer}};
 }
 
 }  // namespace ttnn::operations::experimental::ccl
