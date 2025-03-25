@@ -14,7 +14,7 @@ namespace ttnn::operations::experimental::ccl {
 
 LlamaReduceScatterDeviceOperation::program_factory_t LlamaReduceScatterDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return LlamaReduceScatterAdd{};  // When both the tiled dimensions are moved
+    return LlamaReduceScatterAdd{};
 }
 
 void LlamaReduceScatterDeviceOperation::validate_on_program_cache_miss(
@@ -137,7 +137,6 @@ LlamaReduceScatterDeviceOperation::invoke(
     const uint32_t ring_devices,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
-    // std::cout << "Primitive operation called" << std::endl;
     return {
         operation_attributes_t{
             .dim = (dim < 0 ? uint32_t(input_tensor.get_logical_shape().rank() + dim) : (uint32_t)dim),
