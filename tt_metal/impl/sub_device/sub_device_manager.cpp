@@ -7,7 +7,7 @@
 #include "sub_device_manager.hpp"
 
 #include <assert.hpp>
-#include <host_api.hpp>
+#include <tt_metal.hpp>
 #include <allocator.hpp>
 #include <device.hpp>
 #include <command_queue_interface.hpp>

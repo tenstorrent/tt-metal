@@ -9,7 +9,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/fold/fold.hpp"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 using namespace tt;
 using namespace constants;

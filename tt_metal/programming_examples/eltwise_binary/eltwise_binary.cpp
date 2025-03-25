@@ -6,7 +6,7 @@
 #include <functional>
 #include <random>
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device.hpp>
 
 #include <tt-metalium/bfloat16.hpp>

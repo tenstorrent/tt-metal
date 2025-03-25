@@ -8,7 +8,7 @@
 #include <mesh_device_view.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_metal_detail.hpp>
-#include <host_api.hpp>
+#include <tt_metal.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {

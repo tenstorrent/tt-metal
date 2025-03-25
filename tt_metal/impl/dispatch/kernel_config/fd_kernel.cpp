@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fd_kernel.hpp"
-#include <host_api.hpp>
+#include <tt_metal.hpp>
 #include <tt_metal_detail.hpp>
 #include "dispatch/kernel_config/fabric_router_vc.hpp"
 #include "dispatch_core_common.hpp"

@@ -8,7 +8,7 @@
 #include <cstdlib>
 #include <filesystem>
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tt_memory.h>
 #include "tt_metal/detail/kernel_cache.hpp"

@@ -10,7 +10,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tt_metal_detail.hpp>
 #include "test_common.hpp"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;

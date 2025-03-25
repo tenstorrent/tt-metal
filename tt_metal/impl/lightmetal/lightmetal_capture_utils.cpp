@@ -5,7 +5,7 @@
 #include <lightmetal_capture_utils.hpp>
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 namespace tt::tt_metal {
 

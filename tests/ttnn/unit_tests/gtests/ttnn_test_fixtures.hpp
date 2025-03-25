@@ -11,7 +11,7 @@
 
 #include "gtest/gtest.h"
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
 #include "tests/tt_metal/test_utils/env_vars.hpp"

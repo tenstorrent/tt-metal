@@ -275,7 +275,8 @@ void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, co
  * | total_size | New size of the circular buffer in bytes                                                 | uint32_t                     |             | Yes      |
  */
 // clang-format on
-void UpdateDynamicCircularBufferAddressAndTotalSize(Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size);
+void UpdateDynamicCircularBufferAddressAndTotalSize(
+    Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size);
 
 // clang-format off
 /**

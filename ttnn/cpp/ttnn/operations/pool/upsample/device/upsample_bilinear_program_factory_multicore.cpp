@@ -10,7 +10,7 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/math.hpp>

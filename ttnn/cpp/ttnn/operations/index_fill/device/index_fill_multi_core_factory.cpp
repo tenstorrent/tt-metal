@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/circular_buffer_types.hpp>
 #include "index_fill_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>

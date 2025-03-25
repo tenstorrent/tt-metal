@@ -6,7 +6,7 @@
 #include <cmath>
 
 #include <hal.hpp>
-#include <host_api.hpp>
+#include <tt_metal.hpp>
 #include <dispatch_core_common.hpp>
 #include <core_descriptor.hpp>
 

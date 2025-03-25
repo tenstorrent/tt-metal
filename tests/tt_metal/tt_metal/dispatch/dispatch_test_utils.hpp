@@ -5,7 +5,7 @@
 #pragma once
 #include <gtest/gtest.h>
 #include <cstdint>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/kernel.hpp>
 #include "llrt.hpp"
 

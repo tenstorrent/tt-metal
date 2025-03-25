@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <iostream>
 #include <filesystem>
-#include <host_api.hpp>
+#include <tt_metal.hpp>
 #include "impl/debug/watcher_server.hpp"
 #include "impl/debug/noc_logging.hpp"
 #include "impl/dispatch/debug_tools.hpp"

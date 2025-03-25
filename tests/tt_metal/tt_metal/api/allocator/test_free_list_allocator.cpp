@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_metal_detail.hpp>
 #include "tt_metal/impl/allocator/algorithms/free_list.hpp"
 

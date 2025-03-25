@@ -13,7 +13,7 @@
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "host_api.hpp"
+#include "tt_metal.hpp"
 #include "mesh_device.hpp"
 #include "mesh_buffer.hpp"
 

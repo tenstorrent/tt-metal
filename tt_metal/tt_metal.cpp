@@ -14,7 +14,7 @@
 #include <command_queue.hpp>
 #include <profiler.hpp>
 
-#include <host_api.hpp>
+#include <tt_metal.hpp>
 #include <circular_buffer_constants.h>
 #include <trace.hpp>
 #include <device_impl.hpp>

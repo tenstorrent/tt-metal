@@ -14,7 +14,7 @@
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/tt_metal_detail.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/hal_exp.hpp>
 #include <tt-metalium/trace.hpp>
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"

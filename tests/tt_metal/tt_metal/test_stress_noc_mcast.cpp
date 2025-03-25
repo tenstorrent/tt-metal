@@ -16,7 +16,7 @@
 
 #include "core_coord.hpp"
 #include "logger.hpp"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_metal_detail.hpp>
 #include "test_common.hpp"
 #include "rtoptions.hpp"

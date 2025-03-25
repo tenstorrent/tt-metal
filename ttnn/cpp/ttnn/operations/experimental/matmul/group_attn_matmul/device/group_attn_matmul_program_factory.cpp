@@ -4,7 +4,7 @@
 
 #include "group_attn_matmul_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"

@@ -7,7 +7,7 @@
 // addition the program will use 4 cores to perform the vector addition
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/work_split.hpp>
 

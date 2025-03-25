@@ -9,7 +9,7 @@
 
 namespace tt::tt_metal {
 
-// Note: LightMetalCompare functions could have been inside host_api.hpp / command_queue.cpp but seems better
+// Note: LightMetalCompare functions could have been inside tt_metal.hpp / command_queue.cpp but seems better
 // to not make as visible, since these are APIs used at light-metal capture time for verification purposes.
 
 // clang-format off

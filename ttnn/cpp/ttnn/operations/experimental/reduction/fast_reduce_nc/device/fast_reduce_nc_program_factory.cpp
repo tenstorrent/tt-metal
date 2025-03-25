@@ -7,7 +7,7 @@
 #include "ttnn/run_operation.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 namespace ttnn::operations::experimental::reduction::detail {
 

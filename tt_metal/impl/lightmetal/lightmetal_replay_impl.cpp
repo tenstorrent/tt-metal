@@ -10,7 +10,7 @@
 #include <trace_buffer.hpp>
 #include <tt-metalium/logger.hpp>
 
-#include <host_api.hpp>
+#include <tt_metal.hpp>
 #include "env_lib.hpp"
 #include <tt-metalium/tt_metal_detail.hpp>
 #include <tt-metalium/trace_buffer.hpp>

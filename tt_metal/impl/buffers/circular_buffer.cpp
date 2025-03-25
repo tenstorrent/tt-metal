@@ -4,7 +4,7 @@
 
 #include <circular_buffer.hpp>
 
-#include <host_api.hpp>
+#include <tt_metal.hpp>
 #include "llrt.hpp"
 #include <buffer.hpp>
 #include <global_circular_buffer_impl.hpp>

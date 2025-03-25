@@ -15,7 +15,7 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "ttnn/operations/functions.hpp"
 
 /*

@@ -6,7 +6,7 @@
 
 #include "galaxy_fixture.hpp"
 #include "tt_cluster.hpp"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 namespace tt::tt_metal {
 

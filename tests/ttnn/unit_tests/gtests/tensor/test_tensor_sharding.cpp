@@ -5,7 +5,7 @@
 #include "gtest/gtest.h"
 #include "gmock/gmock.h"
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/work_split.hpp>

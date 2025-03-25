@@ -7,7 +7,7 @@
 #include <iomanip>
 #include <filesystem>
 
-#include <host_api.hpp>
+#include <tt_metal.hpp>
 #include <tt_metal_detail.hpp>
 #include "profiler.hpp"
 #include "profiler_state.hpp"

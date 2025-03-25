@@ -13,7 +13,7 @@
 #include <memory_reporter.hpp>
 #include <tt_metal_detail.hpp>
 #include <graph_tracking.hpp>
-#include <host_api.hpp>
+#include <tt_metal.hpp>
 #include <allocator.hpp>
 #include <circular_buffer.hpp>
 #include <semaphore.hpp>

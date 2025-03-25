@@ -8,7 +8,7 @@
 #include <boost/algorithm/string.hpp>
 
 #include <tt-metalium/device_pool.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "llrt.hpp"
 #include <tt-metalium/mesh_device.hpp>
 

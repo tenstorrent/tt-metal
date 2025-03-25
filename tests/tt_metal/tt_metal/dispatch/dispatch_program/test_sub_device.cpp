@@ -15,7 +15,7 @@
 #include <tt-metalium/sub_device.hpp>
 #include "hal.hpp"
 #include "hal_exp.hpp"
-#include "host_api.hpp"
+#include "tt_metal.hpp"
 #include "kernel_types.hpp"
 #include "sub_device_types.hpp"
 #include "tt_backend_api_types.hpp"

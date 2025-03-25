@@ -8,7 +8,7 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
 
 using namespace tt::tt_metal;

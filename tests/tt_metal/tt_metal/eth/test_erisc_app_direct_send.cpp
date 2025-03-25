@@ -14,7 +14,7 @@
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/tt_metal_detail.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <thread>
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"

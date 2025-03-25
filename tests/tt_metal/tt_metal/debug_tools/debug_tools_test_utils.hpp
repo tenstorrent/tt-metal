@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "llrt.hpp"
 
 // Helper function to open a file as an fstream, and check that it was opened properly.

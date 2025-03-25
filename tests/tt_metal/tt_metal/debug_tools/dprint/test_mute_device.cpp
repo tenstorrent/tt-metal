@@ -6,7 +6,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include "debug_tools_test_utils.hpp"
 #include <tt-metalium/tt_metal_detail.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A simple test for checking that disabling dprints on a device won't cause a hang.

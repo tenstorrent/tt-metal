@@ -6,7 +6,7 @@
 #include "ttnn/operations/math.hpp"
 #include "cpp/ttnn/global_semaphore.hpp"
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 #include "ttnn/tensor/tensor_utils.hpp"
 

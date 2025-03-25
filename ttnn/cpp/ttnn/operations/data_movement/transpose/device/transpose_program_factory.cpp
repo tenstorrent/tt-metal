@@ -4,7 +4,7 @@
 
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/hal_exp.hpp>
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/constants.hpp>

@@ -8,7 +8,7 @@
 #include <thread>
 
 #include "assert.hpp"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal_detail.hpp>
 #include "rtoptions.hpp"

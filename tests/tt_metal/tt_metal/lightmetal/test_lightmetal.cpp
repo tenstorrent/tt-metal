@@ -15,7 +15,7 @@
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "lightmetal_capture_utils.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 

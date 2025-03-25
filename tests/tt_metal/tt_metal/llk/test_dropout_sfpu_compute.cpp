@@ -5,7 +5,7 @@
 #include <gtest/gtest.h>
 
 #include "device_fixture.hpp"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
 namespace tt::tt_metal {

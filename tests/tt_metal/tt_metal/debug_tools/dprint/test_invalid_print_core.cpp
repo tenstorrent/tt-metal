@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "gtest/gtest.h"
 #include "debug_tools_fixture.hpp"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "rtoptions.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////

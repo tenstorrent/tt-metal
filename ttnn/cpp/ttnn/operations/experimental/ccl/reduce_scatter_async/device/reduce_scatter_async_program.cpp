@@ -16,7 +16,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "ttnn/operation.hpp"
 
 #include "cpp/ttnn/operations/ccl/common/uops/command_lowering.hpp"

@@ -9,7 +9,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/normalization/layernorm/layernorm.hpp"

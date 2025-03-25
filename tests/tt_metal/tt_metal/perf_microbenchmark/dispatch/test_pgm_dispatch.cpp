@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "umd/device/types/cluster_descriptor_types.h"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/hal_exp.hpp>
 #include <tt-metalium/tt_metal_detail.hpp>
 #include "test_common.hpp"

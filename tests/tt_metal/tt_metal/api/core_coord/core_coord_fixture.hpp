@@ -5,7 +5,7 @@
 #pragma once
 
 #include "gtest/gtest.h"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 class CoreCoordFixture : public ::testing::Test {
 protected:

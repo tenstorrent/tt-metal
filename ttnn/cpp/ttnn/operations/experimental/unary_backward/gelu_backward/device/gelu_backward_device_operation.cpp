@@ -7,7 +7,7 @@
 
 #include <magic_enum/magic_enum.hpp>
 #include <tt-metalium/constants.hpp>
-#include "tt-metalium/host_api.hpp"
+#include "tt-metalium/tt_metal.hpp"
 
 using namespace tt::tt_metal;
 

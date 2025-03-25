@@ -7,7 +7,7 @@
 #include "multi_command_queue_fixture.hpp"
 #include <tt-metalium/logger.hpp>
 #include "gtest/gtest.h"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "dispatch_test_utils.hpp"
 #include <tt-metalium/event.hpp>
 #include <tt-metalium/device.hpp>

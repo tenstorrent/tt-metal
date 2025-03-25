@@ -4,7 +4,7 @@
 
 #include "nlp_create_qkv_heads_decode_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 

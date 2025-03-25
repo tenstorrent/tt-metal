@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <host_api.hpp>
+#include <tt_metal.hpp>
 #include <device.hpp>
 #include "command_queue_interface.hpp"
 

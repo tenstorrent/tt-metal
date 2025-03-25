@@ -11,7 +11,7 @@
 #include <assert.hpp>
 #include <core_coord.hpp>
 #include <tt_metal_detail.hpp>
-#include <host_api.hpp>
+#include <tt_metal.hpp>
 #include <buffer.hpp>
 #include <buffer_constants.hpp>
 #include <device.hpp>

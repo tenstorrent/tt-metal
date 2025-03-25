@@ -24,7 +24,7 @@
 #include <assert.hpp>
 #include <logger.hpp>
 #include <tt_metal_detail.hpp>
-#include <host_api.hpp>
+#include <tt_metal.hpp>
 #include <circular_buffer_constants.h>
 #include <circular_buffer.hpp>
 #include "dprint_server.hpp"

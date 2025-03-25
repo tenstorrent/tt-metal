@@ -11,7 +11,7 @@
 #include <source_location>
 
 #include <logger.hpp>
-#include <host_api.hpp>
+#include <tt_metal.hpp>
 #include <tt_metal_detail.hpp>
 #include <system_mesh.hpp>
 #include <mesh_device_view.hpp>

@@ -12,7 +12,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
 

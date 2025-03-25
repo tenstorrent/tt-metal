@@ -8,7 +8,7 @@
 
 #include <logger.hpp>
 #include <tt_metal_detail.hpp>
-#include <host_api.hpp>
+#include <tt_metal.hpp>
 #include <device.hpp>
 #include <command_queue.hpp>
 #include <trace.hpp>

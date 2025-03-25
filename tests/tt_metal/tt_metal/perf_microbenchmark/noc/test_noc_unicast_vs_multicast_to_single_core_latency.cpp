@@ -5,7 +5,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal_detail.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device.hpp>
 #include "dprint_server.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"

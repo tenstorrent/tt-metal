@@ -10,6 +10,6 @@
 #include <cpp/ttnn/tensor/tensor_utils.hpp>
 #include <magic_enum/magic_enum.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/work_split.hpp>

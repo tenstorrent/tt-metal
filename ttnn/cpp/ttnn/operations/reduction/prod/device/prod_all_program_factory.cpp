@@ -5,7 +5,7 @@
 #include "ttnn/operations/reduction/prod/device/prod_op_all.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 namespace tt {
 using namespace constants;

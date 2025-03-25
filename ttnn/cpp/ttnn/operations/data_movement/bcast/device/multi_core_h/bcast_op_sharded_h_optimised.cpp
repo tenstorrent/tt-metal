@@ -5,7 +5,7 @@
 #include "cpp/ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>

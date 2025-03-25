@@ -9,7 +9,7 @@
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/reshape/view.hpp"
 

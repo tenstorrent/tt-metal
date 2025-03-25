@@ -8,7 +8,7 @@
 #include "env_lib.hpp"
 #include <tt-metalium/device_impl.hpp>
 #include "hal.hpp"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_metal_detail.hpp>
 #include <circular_buffer_constants.h>
 #include <tt-metalium/kernel.hpp>

@@ -9,7 +9,7 @@
 #include <vector>
 
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "hostdevcommon/dprint_common.h"
 #include "hal.hpp"
 #include "llrt.hpp"

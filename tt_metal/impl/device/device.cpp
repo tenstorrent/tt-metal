@@ -11,7 +11,7 @@
 #include <tt-metalium/program_cache.hpp>
 
 #include "common/core_assignment.hpp"
-#include <host_api.hpp>
+#include <tt_metal.hpp>
 #include <trace.hpp>
 #include <core_descriptor.hpp>
 #include <tt_metal_detail.hpp>

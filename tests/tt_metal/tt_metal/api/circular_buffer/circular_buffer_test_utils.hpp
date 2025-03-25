@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
 
 using namespace tt::tt_metal;

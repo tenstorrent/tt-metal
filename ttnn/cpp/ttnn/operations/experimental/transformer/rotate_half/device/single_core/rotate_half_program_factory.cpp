@@ -4,7 +4,7 @@
 
 #include "rotate_half_program_factory.hpp"
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 

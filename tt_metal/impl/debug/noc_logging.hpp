@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <host_api.hpp>
+#include <tt_metal.hpp>
 
 namespace tt {
 void ClearNocData(chip_id_t device_id);

@@ -5,7 +5,7 @@
 #include "ttnn/operations/data_movement/fill_rm/device/fill_rm_op.hpp"
 #include <tt-metalium/tilize_utils.hpp>
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
 
 using namespace tt::tt_metal;

@@ -10,7 +10,7 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/types.hpp"
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 namespace ttnn::events {
 

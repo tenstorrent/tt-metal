@@ -7,7 +7,7 @@
 #include <cstddef>
 #include <array>
 
-#include "host_api.hpp"
+#include "tt_metal.hpp"
 #include <tt_stl/indestructible.hpp>
 #include "mesh_config.hpp"
 #include "mesh_device.hpp"

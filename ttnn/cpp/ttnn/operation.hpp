@@ -7,7 +7,7 @@
 #include <experimental/type_traits>
 #include <ttnn/tensor/tensor.hpp>
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/program_impl.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt_stl/reflection.hpp>

@@ -7,7 +7,7 @@
 #include "ttnn/operations/math.hpp"
 #include "cpp/ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/allocator.hpp>

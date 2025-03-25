@@ -5,7 +5,7 @@
 #pragma once
 
 #include "gtest/gtest.h"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_metal_detail.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/program_impl.hpp>

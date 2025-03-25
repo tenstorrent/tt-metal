@@ -17,7 +17,7 @@
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/logger.hpp>
 #include "tt_metal/common/scoped_timer.hpp"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 namespace tt::tt_metal {
 

@@ -6,7 +6,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include "dispatch_fixture.hpp"
 #include <tt-metalium/tt_metal_detail.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/core_descriptor.hpp>
 #include "compile_program_with_kernel_path_env_var_fixture.hpp"
 

@@ -9,7 +9,7 @@
 #include <device_pool.hpp>
 #include <memory>
 #include <tt_metal_detail.hpp>
-#include <host_api.hpp>
+#include <tt_metal.hpp>
 #include <unordered_map>
 #include "kernel_config/fd_kernel.hpp"
 #include "kernel_config/demux.hpp"
