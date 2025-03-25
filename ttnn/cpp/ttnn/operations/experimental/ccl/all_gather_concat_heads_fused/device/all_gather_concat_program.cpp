@@ -107,6 +107,34 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     const size_t num_targets_backward =
         line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
 
+    uint32_t batch_size = 1;
+    uint32_t batch_start_1 = 8;
+    uint32_t batch_end_1 = 32;
+    uint32_t batch_start_2 = 0;
+    uint32_t batch_end_2 = 0;
+    uint32_t start_local = 0;
+
+    if (num_targets_forward == 2 && num_targets_backward == 1) {
+        batch_size = 2;
+        batch_start_1 = 0;
+        batch_end_1 = 8;
+        batch_start_2 = 16;
+        batch_end_2 = 32;
+        start_local = 8;
+    } else if (num_targets_forward == 1 && num_targets_backward == 2) {
+        batch_size = 2;
+        batch_start_1 = 0;
+        batch_end_1 = 16;
+        batch_start_2 = 24;
+        batch_end_2 = 32;
+        start_local = 16;
+    } else if (num_targets_forward == 0 && num_targets_backward == 3) {
+        batch_size = 1;
+        batch_start_1 = 0;
+        batch_end_1 = 24;
+        start_local = 24;
+    }
+
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
 
@@ -232,7 +260,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         in_num_cores,
         face_h,
         face_hw,
-        tmp_cb_index};
+        tmp_cb_index,
+        batch_size,
+        batch_start_1,
+        batch_end_1,
+        batch_start_2,
+        batch_end_2,
+        start_local};
 
     auto concat_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -272,7 +306,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         in_num_cores,
         face_h,
         face_hw,
-        tmp_cb_index};
+        tmp_cb_index,
+        batch_size,
+        batch_start_1,
+        batch_end_1,
+        batch_start_2,
+        batch_end_2,
+        start_local};
 
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -304,7 +344,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         in_num_cores,
         face_h,
         face_hw,
-        tmp_cb_index};
+        tmp_cb_index,
+        batch_size,
+        batch_start_1,
+        batch_end_1,
+        batch_start_2,
+        batch_end_2,
+        start_local};
 
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -334,6 +380,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         output_cores_vec.begin() + start_core_index_for_device, output_cores_vec.begin() + end_core_index_for_device);
 
     log_trace(tt::LogOp, "output_cores_this_device: {}", output_cores_this_device);
+
+    std::vector<uint32_t> nlp_local_core_x;
+    std::vector<uint32_t> nlp_local_core_y;
+    for (uint32_t k = 0; k < 8; k++) {
+        auto this_core = device->worker_core_from_logical_core(input_cores_vec[k]);
+        nlp_local_core_x.push_back(this_core.x);
+        nlp_local_core_y.push_back(this_core.y);
+    }
 
     for (uint32_t link = 0; link < num_links; link++) {
         CoreCoord core = sender_worker_cores[link];
@@ -426,6 +480,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         reader_rt_args.push_back(drain_sync_core.y);
         reader_rt_args.push_back(link == 0);
         reader_rt_args.push_back(concat_semaphore_id);
+        reader_rt_args.insert(reader_rt_args.end(), nlp_local_core_x.begin(), nlp_local_core_x.end());
+        reader_rt_args.insert(reader_rt_args.end(), nlp_local_core_y.begin(), nlp_local_core_y.end());
 
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
 
@@ -506,12 +562,19 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         uint32_t in_tile_offset_by_batch = i < face_h ? i * sub_tile_line_bytes : (i + face_h) * sub_tile_line_bytes;
 
         const auto& core = cores[i];
+        std::vector<uint32_t> input_cores_x;
+        std::vector<uint32_t> input_cores_y;
+        for (uint32_t k = 0; k < 8; k++) {
+            auto this_core = device->worker_core_from_logical_core(input_cores_vec[k]);
+            input_cores_x.push_back(this_core.x);
+            input_cores_y.push_back(this_core.y);
+        }
         bool is_worker_core = core.x == 1 && core.y == 0;
         is_worker_core = is_worker_core || (core.x == 2 && core.y == 0);
         is_worker_core = is_worker_core || (core.x == 3 && core.y == 0);
         if (is_worker_core == 0) {
             std::vector<uint32_t> reader_runtime_args;
-            reader_runtime_args.reserve(3 + 2 * in_num_cores);
+            reader_runtime_args.reserve(3 + 2 * in_num_cores + 21);
             reader_runtime_args = {in_tile_offset_by_batch, q_start_addr, concat_semaphore_id};
             reader_runtime_args.insert(reader_runtime_args.end(), noc_x_coords.begin(), noc_x_coords.end());
             reader_runtime_args.insert(reader_runtime_args.end(), noc_y_coords.begin(), noc_y_coords.end());
@@ -519,6 +582,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
             reader_runtime_args.push_back(ring_size * num_links);  // sem target value
             reader_runtime_args.push_back(drain_sync_core.x);
             reader_runtime_args.push_back(drain_sync_core.y);
+            reader_runtime_args.insert(reader_runtime_args.end(), input_cores_x.begin(), input_cores_x.end());
+            reader_runtime_args.insert(reader_runtime_args.end(), input_cores_y.begin(), input_cores_y.end());
+            reader_runtime_args.push_back(input_tensor.buffer()->address());
+
             tt::tt_metal::SetRuntimeArgs(program, concat_reader_kernel_id, core, reader_runtime_args);
             tt::tt_metal::SetRuntimeArgs(program, concat_reader_2_kernel_id, core, reader_runtime_args);
         }
@@ -590,12 +657,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
                     auto& concat_reader_runtime_args = GetRuntimeArgs(program, concat_reader_kernel_id, core);
                     concat_reader_runtime_args[0] = in_tile_offset_by_batch;
                     concat_reader_runtime_args[1] = q_start_addr;
-                    concat_reader_runtime_args[concat_reader_runtime_args.size() - 4] = semaphore.address();
+                    concat_reader_runtime_args[concat_reader_runtime_args.size() - 20] = semaphore.address();
 
                     auto& concat_reader_2_runtime_args = GetRuntimeArgs(program, concat_reader_2_kernel_id, core);
                     concat_reader_2_runtime_args[0] = in_tile_offset_by_batch;
                     concat_reader_2_runtime_args[1] = q_start_addr;
-                    concat_reader_2_runtime_args[concat_reader_2_runtime_args.size() - 4] = semaphore.address();
+                    concat_reader_2_runtime_args[concat_reader_2_runtime_args.size() - 20] = semaphore.address();
                 }
             }
         };
