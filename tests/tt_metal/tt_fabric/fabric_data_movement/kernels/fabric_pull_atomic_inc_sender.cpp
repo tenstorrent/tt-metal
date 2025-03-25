@@ -6,11 +6,13 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
+#include "../test_common.hpp"
 
 using namespace tt::tt_fabric;
 
 void kernel_main() {
     constexpr uint32_t client_interface_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t test_mode = get_compile_time_arg_val(1);
     uint32_t rt_args_idx = 0;
     uint32_t src_addr = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t dst_noc_offset = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
@@ -25,19 +27,40 @@ void kernel_main() {
     uint32_t packet_size_bytes = PACKET_HEADER_SIZE_BYTES;
 
     uint32_t client_interface_addr = get_write_ptr(client_interface_cb);
-    volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface =
-        reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
-    fabric_endpoint_init(client_interface, 0 /* unused */);
 
-    fabric_atomic_inc(
-        client_interface,
-        router_noc_xy,
-        src_addr,  // source address in sender’s memory
-        dst_mesh_id,
-        dst_device_id,
-        dst_noc_addr,  // destination write address
-        atomic_inc,
-        wrap_boundary);
+    if constexpr (test_mode == fabric_mode::PULL) {
+        volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface =
+            reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
+        fabric_endpoint_init(client_interface, 0 /* unused */);
 
-    fabric_wait_for_pull_request_flushed(client_interface);
+        fabric_atomic_inc(
+            client_interface,
+            router_noc_xy,
+            src_addr,  // source address in sender’s memory
+            dst_mesh_id,
+            dst_device_id,
+            dst_noc_addr,  // destination write address
+            atomic_inc,
+            wrap_boundary);
+
+        fabric_wait_for_pull_request_flushed(client_interface);
+    } else {
+        volatile tt_l1_ptr fabric_push_client_interface_t* client_interface =
+            reinterpret_cast<volatile tt_l1_ptr fabric_push_client_interface_t*>(client_interface_addr);
+        fabric_endpoint_init<decltype(client_interface), RoutingType::ROUTING_TABLE>(client_interface, 0 /* unused */);
+        fabric_client_router_reserve(client_interface, 0, dst_mesh_id, dst_device_id);
+
+        fabric_atomic_inc<
+            decltype(client_interface),
+            ClientDataMode::PACKETIZED_DATA,
+            (AsyncWriteMode)(AsyncWriteMode::PUSH | AsyncWriteMode::ADD_HEADER)>(
+            client_interface,
+            router_noc_xy,
+            src_addr,  // source address in sender’s memory
+            dst_mesh_id,
+            dst_device_id,
+            dst_noc_addr,  // destination write address
+            atomic_inc,
+            wrap_boundary);
+    }
 }
