@@ -142,32 +142,6 @@ static_assert(offsetof(packet_header_t, routing) % 4 == 0);
 
 constexpr uint32_t packet_header_routing_offset_dwords = offsetof(packet_header_t, routing) / 4;
 
-void tt_fabric_add_header_checksum(packet_header_t* p_header) {
-    uint16_t* ptr = (uint16_t*)p_header;
-    uint32_t sum = 0;
-    for (uint32_t i = 2; i < sizeof(packet_header_t) / 2; i++) {
-        sum += ptr[i];
-    }
-    sum = ~sum;
-    sum += sum;
-    p_header->packet_parameters.misc_parameters.words[0] = sum;
-}
-
-bool tt_fabric_is_header_valid(packet_header_t* p_header) {
-#ifdef TT_FABRIC_DEBUG
-    uint16_t* ptr = (uint16_t*)p_header;
-    uint32_t sum = 0;
-    for (uint32_t i = 2; i < sizeof(packet_header_t) / 2; i++) {
-        sum += ptr[i];
-    }
-    sum = ~sum;
-    sum += sum;
-    return (p_header->packet_parameters.misc_parameters.words[0] == sum);
-#else
-    return true;
-#endif
-}
-
 // This is a pull request entry for a fabric router.
 // Pull request issuer populates these entries to identify
 // the data that fabric router needs to pull from requestor.
