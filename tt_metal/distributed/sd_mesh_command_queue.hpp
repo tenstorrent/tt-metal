@@ -1,0 +1,50 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "mesh_command_queue.hpp"
+
+namespace tt::tt_metal::distributed {
+
+class SDMeshCommandQueue : public MeshCommandQueue {
+protected:
+    void write_shard_to_device(
+        Buffer* shard_view,
+        const void* src,
+        const BufferRegion& region,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
+    void read_shard_from_device(
+        Buffer* shard_view,
+        void* dst,
+        const BufferRegion& region,
+        std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
+    void submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking) override;
+
+public:
+    SDMeshCommandQueue(MeshDevice* mesh_device, uint32_t id);
+    ~SDMeshCommandQueue() override;
+
+    WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;
+    void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) override;
+
+    MeshEvent enqueue_record_event(
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        const std::optional<MeshCoordinateRange>& device_range = std::nullopt) override;
+    MeshEvent enqueue_record_event_to_host(
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        const std::optional<MeshCoordinateRange>& device_range = std::nullopt) override;
+    void enqueue_wait_for_event(const MeshEvent& sync_event) override;
+    void finish(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
+    void reset_worker_state(
+        bool reset_launch_msg_state,
+        uint32_t num_sub_devices,
+        const vector_memcpy_aligned<uint32_t>& go_signal_noc_data) override;
+    void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) override;
+    void record_end() override;
+    void enqueue_trace(const MeshTraceId& trace_id, bool blocking) override;
+};
+
+}  // namespace tt::tt_metal::distributed
