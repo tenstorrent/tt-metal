@@ -409,19 +409,6 @@ def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(device, N, C, H, 
 
 def generate_sdxl_test_inputs():
     inputs = []
-    # 512x512 resoultion
-    # inputs.append((1, 1280, 16, 16))
-    # inputs.append((1, 1280, 32, 32))
-    # inputs.append((1, 1920, 16, 16))
-    # inputs.append((1, 1920, 32, 32))
-    # inputs.append((1, 2560, 16, 16))
-    # inputs.append((1, 320, 32, 32))
-    # inputs.append((1, 320, 64, 64))
-    # inputs.append((1, 640, 16, 16))
-    # inputs.append((1, 640, 32, 32))
-    # inputs.append((1, 640, 64, 64))
-    # inputs.append((1, 960, 32, 32))
-    # inputs.append((1, 960, 64, 64))
 
     # 1024x1024 resoultion
     inputs.append((1, 1280, 64, 64))
@@ -436,6 +423,7 @@ def generate_sdxl_test_inputs():
     inputs.append((1, 640, 64, 64))
     # inputs.append((1, 960, 128, 128)) #  OOM
     inputs.append((1, 960, 64, 64))
+
     return inputs
 
 
