@@ -72,10 +72,12 @@ jobs:
     env:
       ARCH_NAME: ${{ inputs.arch }}
       LOGURU_LEVEL: INFO
-    runs-on:
-      - ${{ inputs.runner-label }}
-      - cloud-virtual-machine
-      - in-service
+    runs-on: >-
+      ${{
+        startsWith(inputs.runner-label, 'tt-beta-ubuntu')
+        && fromJSON(format('["{0}"]', inputs.runner-label))
+        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+      }}
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: ./.github/actions/prepare-metal-run
@@ -85,7 +87,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
         with:
-          docker_os_arch: tt-metalium/${{ inputs.os }}-amd64
+          docker_os_arch: tt-metalium/${{ inputs.os }}-dev-amd64
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e TT_METAL_HOME=${{ github.workspace }}

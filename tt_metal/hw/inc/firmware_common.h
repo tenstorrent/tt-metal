@@ -98,6 +98,8 @@ FORCE_INLINE uint64_t calculate_dispatch_addr(volatile go_msg_t* go_message_in) 
 }
 
 FORCE_INLINE void notify_dispatch_core_done(uint64_t dispatch_addr, uint8_t noc_index) {
+    // Workaround for BH inline writes does not apply here because this writes to a stream register.
+    // See comment in `noc_get_interim_inline_value_addr` for more details.
     noc_fast_write_dw_inline<DM_DEDICATED_NOC>(
         noc_index,
         NCRISC_AT_CMD_BUF,
@@ -109,4 +111,22 @@ FORCE_INLINE void notify_dispatch_core_done(uint64_t dispatch_addr, uint8_t noc_
         true    // posted
     );
 }
+#endif
+
+#if defined(DEBUG_EARLY_RETURN_KERNELS) && !defined(DISPATCH_KERNEL)
+// Used to early-return when NULLing out kernels. Will always return true while a kernel is running, but can't be
+// optimized away.
+FORCE_INLINE
+bool is_message_go() {
+    tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
+
+    return mailboxes->go_message.signal == RUN_MSG_GO;
+}
+
+#define EARLY_RETURN_FOR_DEBUG \
+    if (is_message_go()) {     \
+        return;                \
+    }
+#else
+#define EARLY_RETURN_FOR_DEBUG
 #endif

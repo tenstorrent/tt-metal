@@ -149,7 +149,7 @@ class TtTransformer(LightweightModule):
         self.mesh_device.set_sub_device_stall_group(
             [self.prefetcher_setup.prefetcher_sub_device_id, self.prefetcher_setup.worker_sub_device_id]
         )
-        self.tt_ccl = TT_CCL(self.mesh_device, self.args.sub_core_grids, self.prefetcher_setup.worker_sub_device_id)
+        self.tt_ccl = TT_CCL(self.mesh_device, self.args, self.prefetcher_setup.worker_sub_device_id)
 
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
         """

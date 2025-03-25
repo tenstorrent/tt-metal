@@ -17,6 +17,7 @@
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include <utils.hpp>
 #include <core_coord.hpp>
+#include <device.hpp>
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "hw/inc/wormhole/eth_l1_address_map.h"
@@ -191,7 +192,8 @@ std::vector<ll_api::memory const*> const& Kernel::binaries(uint32_t build_key) c
 }
 
 std::string DataMovementKernel::config_hash() const {
-    return fmt::format("{}", magic_enum::enum_name(this->config_.noc));
+    return fmt::format(
+        "{}_{}", magic_enum::enum_name(this->config_.noc), magic_enum::enum_name(this->config_.noc_mode));
 }
 
 // Add "eth_" to the hash to differentiate between erisc and brisc.

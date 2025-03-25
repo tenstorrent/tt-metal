@@ -85,7 +85,7 @@ Program CreateEltwiseAddProgram(
 // The example showcases TT-Metalium's ability to abstract away the complexity
 // of distributed memory management and compute.
 int main(int argc, char** argv) {
-    auto mesh_device = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape(2, 4)});
+    auto mesh_device = MeshDevice::create(MeshDeviceConfig(MeshShape(2, 4)));
 
     // Define the global buffer shape and shard shape for distributed buffers
     auto shard_shape = Shape2D{32, 32};
