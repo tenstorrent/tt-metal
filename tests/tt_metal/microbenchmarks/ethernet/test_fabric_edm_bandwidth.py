@@ -35,7 +35,9 @@ def get_device_freq():
     return freq
 
 
-def summarize_to_csv(test_name, packet_size, line_size, num_links, bandwidth, packets_per_second):
+def summarize_to_csv(
+    test_name, packet_size, line_size, num_links, disable_sends_for_interior_workers, bandwidth, packets_per_second
+):
     """Write test results to a CSV file organized by packet size"""
     csv_path = os.path.join(os.environ["TT_METAL_HOME"], "generated/profiler/.logs/bandwidth_summary.csv")
 
@@ -43,15 +45,35 @@ def summarize_to_csv(test_name, packet_size, line_size, num_links, bandwidth, pa
     if not os.path.exists(csv_path):
         with open(csv_path, "w") as f:
             writer = csv.writer(f)
-            writer.writerow(["Test Name", "Packet Size", "Line Size", "Num Links", "Bandwidth (B/c)", "Packets/Second"])
+            writer.writerow(
+                [
+                    "Test Name",
+                    "Packet Size",
+                    "Line Size",
+                    "Num Links",
+                    "Disable Interior Workers",
+                    "Bandwidth (B/c)",
+                    "Packets/Second",
+                ]
+            )
 
     # Append results
     with open(csv_path, "a") as f:
         writer = csv.writer(f)
-        writer.writerow([test_name, packet_size, line_size, num_links, bandwidth, packets_per_second])
+        writer.writerow(
+            [
+                test_name,
+                packet_size,
+                line_size,
+                num_links,
+                disable_sends_for_interior_workers,
+                bandwidth,
+                packets_per_second,
+            ]
+        )
 
 
-def read_golden_results(test_name, packet_size, line_size, num_links):
+def read_golden_results(test_name, packet_size, line_size, num_links, disable_sends_for_interior_workers):
     """Print a summary table of all test results by packet size"""
     csv_path = os.path.join(
         os.environ["TT_METAL_HOME"], "tests/tt_metal/microbenchmarks/ethernet/fabric_edm_bandwidth_golden.csv"
@@ -68,6 +90,7 @@ def read_golden_results(test_name, packet_size, line_size, num_links):
         & (df["Packet Size"] == packet_size)
         & (df["Line Size"] == line_size)
         & (df["Num Links"] == num_links)
+        & (df["Disable Interior Workers"] == disable_sends_for_interior_workers)
     ]
 
     return results["Bandwidth (B/c)"].values[0], results["Packets/Second"].values[0]
@@ -164,8 +187,12 @@ def run_fabric_edm(
 
     # Add summary to CSV
     test_name = f"{'unicast' if is_unicast else 'mcast'}_{fabric_mode.name}"
-    summarize_to_csv(test_name, packet_size, line_size, num_links, bandwidth, packets_per_second)
-    expected_bw, expected_pps = read_golden_results(test_name, packet_size, line_size, num_links)
+    summarize_to_csv(
+        test_name, packet_size, line_size, num_links, disable_sends_for_interior_workers, bandwidth, packets_per_second
+    )
+    expected_bw, expected_pps = read_golden_results(
+        test_name, packet_size, line_size, num_links, disable_sends_for_interior_workers
+    )
     expected_Mpps = expected_pps / 1000000 if expected_pps is not None else None
     bw_threshold = 0.07
     if packet_size <= 2048 and fabric_mode != FabricTestMode.Linear:
@@ -485,12 +512,20 @@ def print_bandwidth_summary():
     df = pd.read_csv(csv_path)
 
     # Sort by test name and packet size
-    df = df.sort_values(["Test Name", "Packet Size", "Line Size", "Num Links"])
+    df = df.sort_values(["Test Name", "Packet Size", "Line Size", "Num Links", "Disable Interior Workers"])
 
     # Format table with raw values
     table = tabulate(
         df,
-        headers=["Test Name", "Packet Size", "Line Size", "Num Links", "Bandwidth (B/c)", "Packets/Second"],
+        headers=[
+            "Test Name",
+            "Packet Size",
+            "Line Size",
+            "Num Links",
+            "Disable Interior Workers",
+            "Bandwidth (B/c)",
+            "Packets/Second",
+        ],
         tablefmt="grid",
         floatfmt=".2f",
     )

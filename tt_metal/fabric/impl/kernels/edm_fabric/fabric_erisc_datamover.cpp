@@ -677,9 +677,9 @@ FORCE_INLINE void receiver_forward_packet(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
                 break;
             case tt::tt_fabric::LowLatencyRoutingFields::WRITE_AND_FORWARD:
-                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id);
                 forward_payload_to_downstream_edm<SENDER_NUM_BUFFERS, enable_ring_support>(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
+                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id);
                 break;
             default: ASSERT(false);
         }

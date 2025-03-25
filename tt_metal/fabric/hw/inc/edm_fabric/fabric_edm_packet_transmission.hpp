@@ -154,7 +154,8 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 FORCE_INLINE void update_packet_header_for_next_hop(
     volatile tt_l1_ptr tt::tt_fabric::LowLatencyPacketHeader* packet_header,
     tt::tt_fabric::LowLatencyRoutingFields cached_routing_fields) {
-    packet_header->routing_fields.value >>= tt::tt_fabric::LowLatencyRoutingFields::FIELD_WIDTH;
+    packet_header->routing_fields.value =
+        cached_routing_fields.value >> tt::tt_fabric::LowLatencyRoutingFields::FIELD_WIDTH;
 }
 
 // This function forwards a packet to the downstream EDM channel for eventual sending
