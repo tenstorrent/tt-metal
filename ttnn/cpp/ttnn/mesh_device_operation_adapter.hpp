@@ -8,10 +8,21 @@
 #include <optional>
 #include <functional>
 #include <concepts>
+#include <variant>
 #include <tt-metalium/program_cache.hpp>
 #include "ttnn/mesh_device_operation_utils.hpp"
+#include "tools/profiler/op_profiler.hpp"
 
 namespace ttnn {
+
+namespace {
+template <typename... Ts>
+[[nodiscard]] std::variant<Ts...> map_index_to_variant(std::size_t i, std::variant<Ts...>) {
+    assert(i < sizeof...(Ts));
+    static constexpr std::variant<Ts...> table[] = {Ts{}...};
+    return table[i];
+}
+}  // namespace
 
 /**
  * A generic adapter that adds mesh device capabilities to any existing device operation.
@@ -73,29 +84,38 @@ struct MeshDeviceOperationAdapter {
         }
     }
 
-    static auto create_mesh_workload(
+    template <
+        typename DeviceOperationT,
+        typename ConcreteProgramFactory,
+        typename AttributesT,
+        typename TensorArgsT,
+        typename ReturnValueT>
+    static tt::tt_metal::program_cache::detail::CachedMeshWorkload<typename ConcreteProgramFactory::shared_variables_t>
+    create_mesh_workload(
         tt::tt_metal::distributed::MeshDevice* mesh_device,
-        const operation_attributes_t& attrs,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value) {
+        const AttributesT& attrs,
+        const TensorArgsT& tensor_args,
+        ReturnValueT& tensor_return_value) {
         return std::visit(
-            [&]<typename ConcreteProgramFactory>(const ConcreteProgramFactory&) {
-                return mesh_device_operation_utils::create_mesh_workload<DeviceOperation, ConcreteProgramFactory>(
-                    mesh_device, attrs, tensor_args, tensor_return_value);
+            [&]<typename ProgramFactoryT>(const ProgramFactoryT&) {
+                return ttnn::mesh_device_operation_utils::
+                    template create_mesh_workload<DeviceOperation, ProgramFactoryT>(
+                        mesh_device, attrs, tensor_args, tensor_return_value);
             },
             select_program_factory(attrs, tensor_args));
     }
 
-    template <typename ConcreteWorkload>
+    template <typename ProgramFactoryT, typename AttributesT, typename TensorArgsT, typename ReturnValueT>
     static void override_mesh_runtime_arguments(
-        ConcreteWorkload& cached_workload,
+        tt::tt_metal::program_cache::detail::CachedMeshWorkload<typename ProgramFactoryT::shared_variables_t>&
+            cached_workload,
         tt::tt_metal::distributed::MeshDevice* mesh_device,
-        const operation_attributes_t& attrs,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value) {
+        const AttributesT& attrs,
+        const TensorArgsT& tensor_args,
+        ReturnValueT& tensor_return_value) {
         std::visit(
             [&]<typename ConcreteProgramFactory>(const ConcreteProgramFactory&) {
-                mesh_device_operation_utils::override_mesh_runtime_arguments<ConcreteProgramFactory>(
+                mesh_device_operation_utils::override_mesh_runtime_arguments<ProgramFactoryT>(
                     cached_workload, mesh_device, attrs, tensor_args, tensor_return_value);
             },
             select_program_factory(attrs, tensor_args));
@@ -123,9 +143,8 @@ concept MeshDeviceOperationAdapterType = requires {
         typename T::operation_attributes_t attrs,
         typename T::tensor_args_t tensor_args,
         typename T::tensor_return_value_t tensor_return_value,
-        tt::tt_metal::distributed::MeshDevice* mesh_device) {
-        T::create_mesh_workload(mesh_device, attrs, tensor_args, tensor_return_value);
-        T::compute_mesh_workload_hash(mesh_device, attrs, tensor_args);
+        ttnn::MeshDevice* mesh_device) {
+        { T::compute_mesh_workload_hash(mesh_device, attrs, tensor_args) } -> std::same_as<size_t>;
     };
 };
 
