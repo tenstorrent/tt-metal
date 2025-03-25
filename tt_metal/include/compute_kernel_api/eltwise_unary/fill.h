@@ -25,11 +25,11 @@ namespace ckernel {
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     | 
- * | param0          | The value the output is if the input is greater than 0                     | uint32_t |                                                       | True     |
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | param0          | The value the output is if the input is greater than 0                     | float    |                                                       | True     |
  */
- // clang-format on
-ALWI void fill_tile(uint32_t idst, uint32_t param0) { MATH((llk_math_eltwise_unary_sfpu_fill<APPROX>(idst, param0))); }
+// clang-format on
+ALWI void fill_tile(uint32_t idst, float param0) { MATH((llk_math_eltwise_unary_sfpu_fill<APPROX>(idst, param0))); }
 
 /**
  * Please refer to documentation for any_init.
