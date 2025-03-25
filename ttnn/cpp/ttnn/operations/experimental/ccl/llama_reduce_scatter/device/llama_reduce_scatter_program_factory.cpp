@@ -264,6 +264,14 @@ std::string schedule_to_string(std::vector<std::vector<ReadRequest>> schedule) {
     return result;
 }
 
+uint32_t max_packets_per_worker(std::vector<std::vector<ReadRequest>> schedule) {
+    uint32_t max_packets_per_worker = 0;
+    for (const auto& worker_schedule : schedule) {
+        max_packets_per_worker = std::max(max_packets_per_worker, (uint32_t)worker_schedule.size());
+    }
+    return max_packets_per_worker;
+}
+
 CoreRangeSet get_worker_cores(const CoreRangeSet& available_cores, const uint32_t num_workers, bool row_wise) {
     CoreRangeSet worker_cores;
     for (const auto& cr : available_cores.ranges()) {
@@ -483,9 +491,13 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     //               << " page size: " << packet_header_size_bytes << std::endl;
     // }
 
+    uint32_t max_packets_per_worker = detail::max_packets_per_worker(schedule);
+    uint32_t num_packets_total = max_packets_per_worker * (num_devices - 1);
+    uint32_t num_packet_pages_total = num_packets_total * num_pages_per_packet;
+
     tt::tt_metal::CircularBufferConfig fabric_sender_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            buffering_factor * (40) * input_page_size, {{fabric_sender_cb_index, cb_data_format}})
+            num_packet_pages_total * input_page_size, {{fabric_sender_cb_index, cb_data_format}})
             .set_page_size(fabric_sender_cb_index, input_page_size);
 
     // if (operation_attributes.ring_index == 0) {
