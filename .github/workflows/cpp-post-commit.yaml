@@ -16,31 +16,6 @@ on:
         required: false
         type: number
         default: 35
-  workflow_dispatch:
-    inputs:
-      arch:
-        required: true
-        type: choice
-        options:
-          - wormhole_b0
-          - blackhole
-      runner-label:
-        required: true
-        type: choice
-        options:
-          - E150
-          - N150
-          - N300
-          - BH
-      docker-image:
-        required: true
-        type: choice
-        options:
-          - "ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest"
-      timeout:
-        required: false
-        type: number
-        default: 35
 
 jobs:
   cpp-unit-tests:
