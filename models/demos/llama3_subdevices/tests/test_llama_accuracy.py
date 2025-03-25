@@ -96,7 +96,7 @@ def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: Ll
     "use_reference_file",
     [
         # pytest.param(True, id="reference_file"),
-        pytest.param(False, id="reference_text"),
+        pytest.param(True, id="reference_text"),
     ],
 )
 @pytest.mark.parametrize(
@@ -149,7 +149,8 @@ def test_tt_model_acc(
 
     if use_reference_file:
         # Existing reference file loading logic
-        reference_data_file = f"models/demos/llama3/tests/reference_outputs/{model_size}.refpt"
+        # reference_data_file = f"models/tt_transformers/tests/reference_outputs/{model_args.model_name}-Instruct.refpt"
+        reference_data_file = "models/tt_transformers/tests/reference_outputs/Llama3.1-70B-Instruct.refpt"
         logger.info(f"Loading reference data from {reference_data_file}")
         assert os.path.exists(reference_data_file)
         reference_data = torch.load(reference_data_file)
@@ -253,7 +254,6 @@ def test_tt_model_acc(
                 page_table=page_table_tt,
             )
 
-            ttnn.synchronize_device(mesh_device)
             tt_out_gathered = tt_model.tt_ccl.line_all_gather(
                 tt_out[0],
                 dim=3,
@@ -263,7 +263,6 @@ def test_tt_model_acc(
                 buffer_key="SAMPLING",
             )
             tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
-            ttnn.deallocate(tt_out_gathered)
             tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
                 tt_out_rm, dim=3, use_multicore=True, sub_core_grids=sub_core_grids
             )
@@ -331,7 +330,6 @@ def test_tt_model_acc(
             tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="SAMPLING"
         )
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
-        ttnn.deallocate(tt_out_gathered)
         tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
             tt_out_rm, dim=3, use_multicore=True, sub_core_grids=sub_core_grids
         )
