@@ -29,13 +29,15 @@ public:
     }
     inline bool has_forward_connection() const { return connection_flags & FORWARD_CONNECTION_FLAG_MASK; }
     inline bool has_backward_connection() const { return connection_flags & BACKWARD_CONNECTION_FLAG_MASK; }
-    inline void close() {
+    inline void close_start() {
         if (has_forward_connection()) {
             forward_fabric_sender.close_start();
         }
         if (has_backward_connection()) {
             backward_fabric_sender.close_start();
         }
+    }
+    inline void close_finish() {
         if (has_forward_connection()) {
             forward_fabric_sender.close_finish();
         }
@@ -43,9 +45,18 @@ public:
             backward_fabric_sender.close_finish();
         }
     }
+    inline void close() {
+        close_start();
+        close_finish();
+    }
 
-    template <bool connect = false, bool wait_for_connection_open_finish = false>
+    enum BuildFromArgsMode : uint8_t { BUILD_ONLY, BUILD_AND_OPEN_CONNECTION, BUILD_AND_OPEN_CONNECTION_START_ONLY };
+
+    template <BuildFromArgsMode build_mode = BuildFromArgsMode::BUILD_ONLY>
     static FabricConnectionManager build_from_args(std::size_t& arg_idx) {
+        constexpr bool connect = build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION ||
+                                 build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY;
+        constexpr bool wait_for_connection_open_finish = build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION;
         FabricConnectionManager connection_manager;
         connection_manager.connection_flags = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++) != 0)
                                               << FORWARD_CONNECTION_FLAG_OFFSET;

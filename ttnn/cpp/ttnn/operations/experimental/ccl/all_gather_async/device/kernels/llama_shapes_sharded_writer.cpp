@@ -53,7 +53,9 @@ void kernel_main() {
     arg_idx += num_cores;
     size_t arg_for_fab = arg_idx;
     constexpr bool connect_to_fabric_when_creating = true;
-    auto fabric_connection = FabricConnectionManager::build_from_args<connect_to_fabric_when_creating, false>(arg_idx);
+    auto fabric_connection =
+        FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
+            arg_idx);
 
     DPRINT << "ct args: \n";
     DPRINT << "my_chip_id: " << (uint32_t)my_chip_id << "\n";
