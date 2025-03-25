@@ -25,8 +25,10 @@ class TT_CCL:
         teardown_persistent_fabric=True,
         mode="decode",
     ):
+        all_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
+
         self.mesh_device = mesh_device
-        self.sub_device_crs = model_args.sub_core_grids
+        self.sub_device_crs = all_crs if mode == "prefill" else model_args.sub_core_grids
         self.worker_sub_device_id = worker_sub_device_id
         self.enable_persistent_fabric = enable_persistent_fabric
         self.create_persistent_fabric = create_persistent_fabric
@@ -264,7 +266,7 @@ class TT_CCL:
                     subdevice_id=self.worker_sub_device_id,
                     math_op=ttnn.ReduceType.Sum,
                 )
-            # ttnn.synchronize_device(self.mesh_device)
+                ttnn.synchronize_device(self.mesh_device)
             else:
                 num_links = 1  # if cluster_axis==1 else 4
                 ttnn_tensor_gathered = ttnn.all_gather(
@@ -323,7 +325,7 @@ class TT_CCL:
                 memory_config=memory_config,
             )
             return ttnn_tensor_out
-        persistent_buffer = self.all_gather_buffers.get(buffer_key, None)
+        persistent_buffer = None if self.mode == "prefill" else self.all_gather_buffers.get(buffer_key, None)
 
         ttnn_tensor_out = ttnn.experimental.all_gather_async(
             input_tensor_mesh,
@@ -339,7 +341,7 @@ class TT_CCL:
             enable_persistent_fabric_mode=self.enable_persistent_fabric,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
-        # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
+        ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
         return ttnn_tensor_out
 
     def line_all_reduce_host(self, input_tensor_mesh, cluster_axis, num_links, memory_config):

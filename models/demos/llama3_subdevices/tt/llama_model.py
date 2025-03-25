@@ -123,22 +123,21 @@ class TtTransformer(LightweightModule):
             self.tt_tensors = self.prefetcher_setup.get_input_tensors()
 
     def setup_prefill(self):
-        # self.prefetcher_setup = TtLlamaPrefetcherSetup(
-        #     self.mesh_device, n_tensors=0, n_layers=self.n_layers, mode="prefill"
-        # )
-        # self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
-        crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
-        # self.tt_ccl = TT_CCL(self.mesh_device, crs, self.prefetcher_setup.worker_sub_device_id, mode="prefill")
-        self.prefetcher_setup = None
-        self.tt_ccl = TT_CCL(
-            self.mesh_device,
-            crs,
-            None,
-            mode="prefill",
-            enable_persistent_fabric=False,
-            create_persistent_fabric=False,
-            teardown_persistent_fabric=False,
+        self.prefetcher_setup = TtLlamaPrefetcherSetup(
+            self.mesh_device, n_tensors=0, n_layers=self.n_layers, mode="prefill"
         )
+        self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
+        self.tt_ccl = TT_CCL(self.mesh_device, self.args, self.prefetcher_setup.worker_sub_device_id, mode="prefill")
+        # self.prefetcher_setup = None
+        # self.tt_ccl = TT_CCL(
+        #     self.mesh_device,
+        #     self.args,
+        #     None,
+        #     mode="prefill",
+        #     enable_persistent_fabric=False,
+        #     create_persistent_fabric=False,
+        #     teardown_persistent_fabric=False,
+        # )
 
     def setup_decode(self):
         self.prefetcher_setup = TtLlamaPrefetcherSetup(
