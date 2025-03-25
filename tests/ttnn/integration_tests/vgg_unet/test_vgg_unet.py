@@ -17,7 +17,7 @@ from models.experimental.functional_vgg_unet.ttnn.ttnn_vgg_unet import Tt_vgg_un
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_vgg_unet(device, reset_seeds, model_location_generator):
     torch.manual_seed(0)
 
@@ -47,6 +47,7 @@ def test_vgg_unet(device, reset_seeds, model_location_generator):
     ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16)
 
     result_ttnn = ttnn_model(ttnn_input)
+    print(result_ttnn.shape, ref.shape)
 
     result = ttnn.to_torch(result_ttnn)
     result = result.permute(0, 3, 1, 2)

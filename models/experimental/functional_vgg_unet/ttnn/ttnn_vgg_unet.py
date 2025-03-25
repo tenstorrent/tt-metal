@@ -49,7 +49,7 @@ class Conv:
             math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
-            math_approx_mode=False,
+            math_approx_mode=True,
         )
         self.conv_config = ttnn.Conv2dConfig(
             dtype=conv_param.dtype,
@@ -155,19 +155,16 @@ class Conv_transpose:
             math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
-            math_approx_mode=False,
+            math_approx_mode=True,
         )
         self.conv_config = ttnn.Conv2dConfig(
             dtype=conv_param.dtype,
             weights_dtype=ttnn.bfloat8_b,
             shard_layout=conv_param.shard_layout,
-            input_channels_alignment=16 if conv_param.in_channels < 16 else 32,
+            input_channels_alignment=8 if conv_param.in_channels < 16 else 32,
             reshard_if_not_optimal=conv_param.reshard_if_not_optimal,
             deallocate_activation=conv_param.deallocate_activation,
-            enable_act_double_buffer=conv_param.enable_act_double_buffer,
-            enable_split_reader=conv_param.enable_split_reader,
             output_layout=ttnn.ROW_MAJOR_LAYOUT,
-            transpose_shards=conv_param.transpose_shards,
         )
         config_override = None
         if conv_param.act_block_h is not None:
@@ -208,25 +205,6 @@ class Conv_transpose:
             "output_padding": conv_param.output_padding,
         }
 
-        # if not ttnn.is_tensor_storage_on_device(self.weight):
-        #     self.weight = ttnn.prepare_conv_weights(
-        #         weight_tensor=self.weight,
-        #         weights_format="OIHW",
-        #         input_memory_config=self.input_memory_config,
-        #         input_layout=ttnn.TILE_LAYOUT,
-        #         has_bias=True,
-        #         **self.conv_kwargs,
-        #     )
-
-        #     self.bias = ttnn.prepare_conv_bias(
-        #         bias_tensor=self.bias,
-        #         input_memory_config=self.input_memory_config,
-        #         input_layout=ttnn.TILE_LAYOUT,
-        #         **self.conv_kwargs,
-        #     )
-        #     self.weight = ttnn.to_device(self.weight, device)
-        #     self.bias = ttnn.to_device(self.bias, device)
-
     def __str__(self) -> str:
         return f"Conv: {self.weights.shape} {self.bias.shape} {self.kernel_size}"
 
@@ -252,8 +230,10 @@ class Tt_decoder_block:
 
     def __call__(self, x, cat_in):
         x = self.up(x)
-        x = sharded_concat((x, cat_in))
+        x = sharded_concat([x, cat_in])
+        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
         x = self.conv1(x)
+        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
         x = self.conv2(x)
         return x
 
@@ -358,4 +338,14 @@ class Tt_vgg_unet:
         x = self.b1_30(x)
         x = self.b1_32(x)
         x = self.b1_34(x)
+
+        x = self.d1(x, s4)
+        x = self.d2(x, s3)
+        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+        x = self.d3(x, s2)
+        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+        x = self.d4(x, s1)
+        x = self.out(x)
+        x = ttnn.sigmoid(x)
+
         return x
