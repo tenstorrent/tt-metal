@@ -3,22 +3,22 @@
 ## How to run yolov4
 
 ### Model performant running with Trace+2CQ
-- Use the following command to run the yolov4 performant implementation (end-2-end perf is 120 FPS), <br>
 
-For 320x320:
+#### For 320x320:
+- end-2-end perf is 120 FPS
   ```bash
   pytest models/demos/wormhole/yolov4/test_yolov4_performant_webdemo.py::test_run_yolov4_trace_2cqs_inference[resolution0-True-1-act_dtype0-weight_dtype0-device_params0]
   ```
-For 640x640:
+#### For 640x640:
+- end-2-end perf is 50 FPS
   ```bash
   pytest models/demos/wormhole/yolov4/test_yolov4_performant_webdemo.py::test_run_yolov4_trace_2cqs_inference[resolution1-True-1-act_dtype0-weight_dtype0-device_params0]
   ```
-- The end-2-end 120 FPS corresponds to device-only runtime of 185 FPS
 
 
 ### Single Image Demo
 
-- Use the following command to run the yolov4 with a giraffe image: <br>
+- Use the following command to run the yolov4 with a giraffe image:
 
 For 320x320:
   ```bash
