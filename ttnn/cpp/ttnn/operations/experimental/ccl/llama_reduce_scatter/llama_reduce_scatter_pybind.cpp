@@ -12,7 +12,7 @@ void py_bind_llama_reduce_scatter(py::module& module) {
     auto doc =
         R"doc(llama_reduce_scatter(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt, queue_id: int = 0) -> ttnn.Tensor
 
-            Reduces and scatters.
+            Reduce_scatter after FF1/3 for Llama70B.
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
@@ -33,8 +33,16 @@ void py_bind_llama_reduce_scatter(py::module& module) {
 
             Example:
 
-                >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16)), device)
-                >>> output = ttnn.llama_reduce_scatter(tensor, ))doc";
+                >>> tensor = ttnn.experimental.llama_reduce_scatter(
+                                tt_input_tensors_list[i],
+                                tt_intermediate_tensors_list[i],
+                                dim,
+                                ccl_semaphore_handles[i],
+                                worker_sub_device_id,
+                                cluster_axis=1,
+                                mesh_device=mesh_device,
+                                num_links=num_links,
+                                memory_config=output_mem_config))doc";
 
     using OperationType = decltype(ttnn::experimental::llama_reduce_scatter);
     ttnn::bind_registered_operation(
