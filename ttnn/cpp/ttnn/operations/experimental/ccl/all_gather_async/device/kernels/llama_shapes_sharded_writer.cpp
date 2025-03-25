@@ -112,9 +112,7 @@ void kernel_main() {
     pkt_hdr_backward->to_chip_multicast(
         tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
 
-    if (fabric_connection.is_logically_connected()) {
-        fabric_connection.open();
-    }
+    fabric_connection.open();
 
     // 1. mcast via fabric to remote tensor addresses
     uint32_t tiles_read = 0;
@@ -181,6 +179,7 @@ void kernel_main() {
         fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
+    fabric_connection.close();
     // increment locally
     uint64_t out_ready_sem_noc_addr =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
@@ -198,10 +197,6 @@ void kernel_main() {
         const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem_bank_addr);
         noc_inline_dw_write(dest_noc_addr, 0);
         DPRINT << "reset done\n";
-    }
-
-    if (fabric_connection.is_logically_connected()) {
-        fabric_connection.close();
     }
 
     noc_async_write_barrier();
