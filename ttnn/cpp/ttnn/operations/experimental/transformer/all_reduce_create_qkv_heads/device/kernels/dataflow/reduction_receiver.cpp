@@ -91,6 +91,7 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
         // Always pick 1st value in tensor as batch offset
         device_batch_offset = index_ptr[0];
+        DPRINT << "device_batch_offset = " << device_batch_offset << ENDL();
     }
     // device_batch_offset += index_in_cores;
     // uint32_t in_tile_offset_by_batch = device_batch_offset < 16
@@ -99,7 +100,10 @@ void kernel_main() {
 
     // 3.2 start to process the reading side of data(half of the data processed in NCRISC kernel and half on BRISC
     // kernel)
+    DPRINT << "waiting for reduction out" << ENDL();
     cb_wait_front(cb_id_reduction_out, block_num_tiles);
+    DPRINT << "reduction out done" << ENDL();
+
     constexpr uint32_t tile_size = head_size / head_size_num_tiles;
     constexpr uint32_t HALF_TILE_ELEMENTS = FACE_HEIGHT * TILE_WIDTH;
     constexpr uint32_t SUBTILE_ROWS = FACE_HEIGHT;
@@ -113,7 +117,7 @@ void kernel_main() {
                 ? device_batch_offset_per_output_core * SUBTILE_LINE_BYTES
                 : (device_batch_offset_per_output_core - 16) * SUBTILE_LINE_BYTES + 512 * ELEMENT_SIZE;
 
-        uint32_t read_addr = get_write_ptr(cb_id_reduction_out) + in_tile_offset_by_batch;
+        uint32_t read_addr = get_read_ptr(cb_id_reduction_out) + in_tile_offset_by_batch;
         uint64_t write_addr = 0;
         uint32_t head_index = 0, tile_index = 0, wptr_offset = 0;
         // i_output_core < SUBTILE_ROWS ? i_output_core * SUBTILE_LINE_BYTES
@@ -147,11 +151,15 @@ void kernel_main() {
         }
 
         if constexpr (PHASES_TO_READ == 1) {  // reader kernel (NCRISC)
-            noc_async_read(read_addr, write_addr, SUBTILE_LINE_BYTES);
+            DPRINT << "NCRISC WRITE" << ENDL();
+            noc_async_write(read_addr, write_addr, SUBTILE_LINE_BYTES);
         }
         if constexpr (PHASES_TO_READ == 2) {  // writer kernel(BRISC)
-            noc_async_read(read_addr + FACE_HW * ELEMENT_SIZE, write_addr + FACE_HW * ELEMENT_SIZE, SUBTILE_LINE_BYTES);
+            DPRINT << "BRISC WRITE" << ENDL();
+            noc_async_write(
+                read_addr + FACE_HW * ELEMENT_SIZE, write_addr + FACE_HW * ELEMENT_SIZE, SUBTILE_LINE_BYTES);
         }
+        noc_async_read_barrier();
     }
     noc_async_read_barrier();
 }
