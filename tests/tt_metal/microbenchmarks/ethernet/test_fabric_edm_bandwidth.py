@@ -97,7 +97,13 @@ def read_golden_results(test_name, packet_size, line_size, num_links, disable_se
 
 
 def profile_results(
-    zone_name, packets_per_src_chip, line_size, packet_size, fabric_mode, disable_sends_for_interior_workers
+    zone_name,
+    packets_per_src_chip,
+    line_size,
+    packet_size,
+    fabric_mode,
+    disable_sends_for_interior_workers,
+    unidirectional=False,
 ):
     freq_hz = get_device_freq() * 1000.0 * 1000.0
     setup = device_post_proc_config.default_setup()
@@ -127,6 +133,8 @@ def profile_results(
         traffic_streams_through_boundary = line_size / 2
         if disable_sends_for_interior_workers:
             traffic_streams_through_boundary = 1
+        if unidirectional:
+            traffic_streams_through_boundary = 1
     total_packets_sent = packets_per_src_chip * traffic_streams_through_boundary
     total_byte_sent = total_packets_sent * packet_size
     bandwidth = total_byte_sent / max(main_loop_cycles)
@@ -146,6 +154,7 @@ def run_fabric_edm(
     packet_size,
     fabric_mode,
     disable_sends_for_interior_workers,
+    unidirectional=False,
 ):
     logger.warning("removing file profile_log_device.csv")
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
@@ -160,7 +169,8 @@ def run_fabric_edm(
                 {line_size} \
                 {packet_size} \
                 {fabric_mode.value} \
-                {int(disable_sends_for_interior_workers)}"
+                {int(disable_sends_for_interior_workers)} \
+                {int(unidirectional)}"
     rc = os.system(cmd)
     if rc != 0:
         if os.WEXITSTATUS(rc) == 1:
@@ -174,10 +184,22 @@ def run_fabric_edm(
 
     num_messages = num_mcasts + num_unicasts
     bandwidth_inner_loop, packets_per_second_inner_loop = profile_results(
-        zone_name_inner, num_messages, line_size, packet_size, fabric_mode, disable_sends_for_interior_workers
+        zone_name_inner,
+        num_messages,
+        line_size,
+        packet_size,
+        fabric_mode,
+        disable_sends_for_interior_workers,
+        unidirectional=unidirectional,
     )
     bandwidth, packets_per_second = profile_results(
-        zone_name_main, num_messages, line_size, packet_size, fabric_mode, disable_sends_for_interior_workers
+        zone_name_main,
+        num_messages,
+        line_size,
+        packet_size,
+        fabric_mode,
+        disable_sends_for_interior_workers,
+        unidirectional=unidirectional,
     )
     logger.info("bandwidth_inner_loop: {} B/c", bandwidth_inner_loop)
     logger.info("bandwidth: {} B/c", bandwidth)
@@ -349,6 +371,76 @@ def test_fabric_4chip_one_link_mcast_bw(
         packet_size,
         FabricTestMode.Linear,
         False,
+    )
+
+
+@pytest.mark.parametrize("num_mcasts", [200000])
+@pytest.mark.parametrize("num_unicasts", [0])
+@pytest.mark.parametrize("num_op_invocations", [1])
+@pytest.mark.parametrize("line_sync", [True])
+@pytest.mark.parametrize("line_size", [4])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+def test_fabric_4chip_one_link_bidirectional_single_producer_mcast_bw(
+    num_mcasts,
+    num_unicasts,
+    num_links,
+    num_op_invocations,
+    line_sync,
+    line_size,
+    packet_size,
+    expected_bw,
+    expected_Mpps,
+):
+    run_fabric_edm(
+        False,
+        num_mcasts,
+        num_unicasts,
+        num_links,
+        num_op_invocations,
+        line_sync,
+        line_size,
+        packet_size,
+        FabricTestMode.Linear,
+        expected_bw,
+        expected_Mpps,
+        disable_sends_for_interior_workers=True,
+        unidirectional=False,
+    )
+
+
+@pytest.mark.parametrize("num_mcasts", [200000])
+@pytest.mark.parametrize("num_unicasts", [0])
+@pytest.mark.parametrize("num_op_invocations", [1])
+@pytest.mark.parametrize("line_sync", [True])
+@pytest.mark.parametrize("line_size", [4])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+def test_fabric_4chip_one_link_unidirectional_single_producer_mcast_bw(
+    num_mcasts,
+    num_unicasts,
+    num_links,
+    num_op_invocations,
+    line_sync,
+    line_size,
+    packet_size,
+    expected_bw,
+    expected_Mpps,
+):
+    run_fabric_edm(
+        False,
+        num_mcasts,
+        num_unicasts,
+        num_links,
+        num_op_invocations,
+        line_sync,
+        line_size,
+        packet_size,
+        FabricTestMode.Linear,
+        expected_bw,
+        expected_Mpps,
+        disable_sends_for_interior_workers=True,
+        unidirectional=True,
     )
 
 
