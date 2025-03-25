@@ -65,7 +65,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const std::pair<GlobalSemaphore, GlobalSemaphore>& semaphore,
+    const BarrierSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
@@ -165,7 +165,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         reader_kernel_config);
 
     // Writer
-    bool two_phase_release = semaphore.first.address() != semaphore.second.address();
+    bool two_phase_release = semaphore.wait.address() != semaphore.release.address();
     bool last_dim = dim == input_tensor_shape.rank() - 1;
     uint32_t tile_rows = input_tensor_shape[dim - 1] / input_tensor.get_tensor_spec().tile().get_height();
     uint32_t tile_cols_for_chip = input_tensor_shape[dim] / input_tensor.get_tensor_spec().tile().get_width();
@@ -228,8 +228,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         }
         std::vector<uint32_t> writer_rt_args = {
             output_tensor.buffer()->address(),  // tensor_address0
-            semaphore.first.address(),          // out_ready_sem_bank_addr (absolute address)
-            semaphore.second.address(),         // out_ready_sem_bank_addr (absolute address)
+            semaphore.wait.address(),           // wait_semaphore_addr
+            semaphore.release.address(),        // release_semaphore_addr
             output_tile_id_start,               // tile_id_start
             output_tile_id_end,                 // tile_id_end
             wait_output_semaphore,              // wait_output_semaphore
@@ -283,10 +283,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
                     log_trace(
                         tt::LogOp,
                         "DEBUG: semaphore.first: {}, semaphore.second: {}",
-                        semaphore->first.address(),
-                        semaphore->second.address());
-                    worker_writer_sender_runtime_args[1] = semaphore->first.address();
-                    worker_writer_sender_runtime_args[2] = semaphore->second.address();
+                        semaphore->wait.address(),
+                        semaphore->wait.address());
+                    worker_writer_sender_runtime_args[1] = semaphore->wait.address();
+                    worker_writer_sender_runtime_args[2] = semaphore->release.address();
                 }
             }
         };
@@ -305,7 +305,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const std::pair<GlobalSemaphore, GlobalSemaphore>& semaphore,
+    const BarrierSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
@@ -412,7 +412,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         reader_kernel_config);
 
     // Writer
-    bool two_phase_release = semaphore.first.address() != semaphore.second.address();
+    bool two_phase_release = semaphore.wait.address() != semaphore.release.address();
     auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     writer_kernel_config.compile_args = {
         ring_index,                       // my_chip_id
@@ -522,8 +522,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
         std::vector<uint32_t> writer_rt_args = {
             output_tensor.buffer()->address(),    // tensor_address0
-            semaphore.first.address(),            // out_ready_sem_bank_addr (absolute address)
-            semaphore.second.address(),           // out_ready_sem_bank_addr (absolute address)
+            semaphore.wait.address(),             // wait_semaphore_addr
+            semaphore.release.address(),          // release_semaphore_addr
             output_tensor_shard_num_pages,        // num_tiles_per_core
             worker_num_tiles_to_read,             // num_tiles_to_read
             output_first_core_tile_start_offset,  // first_core_tile_start_offset
@@ -580,10 +580,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
                     log_trace(
                         tt::LogOp,
                         "DEBUG: semaphore.first: {}, semaphore.second: {}",
-                        semaphore->first.address(),
-                        semaphore->second.address());
-                    worker_writer_sender_runtime_args[1] = semaphore->first.address();
-                    worker_writer_sender_runtime_args[2] = semaphore->second.address();
+                        semaphore->wait.address(),
+                        semaphore->release.address());
+                    worker_writer_sender_runtime_args[1] = semaphore->wait.address();
+                    worker_writer_sender_runtime_args[2] = semaphore->release.address();
                 }
             }
         };

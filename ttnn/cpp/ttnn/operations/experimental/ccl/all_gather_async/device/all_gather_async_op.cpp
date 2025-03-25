@@ -250,11 +250,11 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
         TT_FATAL(
             this->cores.has_value(),
             "Must specify cores on which global semaphore must be allocated when a global semaphore is not provided.");
-        this->semaphore = std::make_pair(
+        this->semaphore = BarrierSemaphore{
             ttnn::global_semaphore::create_global_semaphore(
                 mesh_device, this->cores.value(), 0, tt::tt_metal::BufferType::L1),
             ttnn::global_semaphore::create_global_semaphore(
-                mesh_device, this->cores.value(), 0, tt::tt_metal::BufferType::L1));
+                mesh_device, this->cores.value(), 0, tt::tt_metal::BufferType::L1)};
     }
 
     switch (version) {
@@ -308,7 +308,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
                 this->ring_size,
                 device_index,
                 this->topology,
-                this->semaphore.value().first,
+                this->semaphore.value().wait,
                 this->sub_device_id,
                 this->enable_persistent_fabric_mode);
     }
@@ -325,8 +325,8 @@ const tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(
     auto input_memory_config = input_tensors[0].memory_config();
     if (version == AllGatherAsyncVersion::GENERIC) {
         // Generic version should hash semaphore address as well
-        uint32_t semaphore_address_first = this->semaphore.value().first.address();
-        uint32_t semaphore_address_second = this->semaphore.value().second.address();
+        uint32_t wait_address = this->semaphore.value().wait.address();
+        uint32_t release_address = this->semaphore.value().release.address();
         return tt::tt_metal::operation::hash_operation<AllGatherAsync>(
             this->dim,
             this->num_links,
@@ -337,8 +337,8 @@ const tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(
             input_memory_layout,
             input_dtype,
             input_memory_config,
-            semaphore_address_first,
-            semaphore_address_second);
+            wait_address,
+            release_address);
     }
     return tt::tt_metal::operation::hash_operation<AllGatherAsync>(
         this->dim,
@@ -381,8 +381,7 @@ Tensor all_gather_async(
     tt::log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", num_devices, num_links);
     tt::log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
-    std::pair<GlobalSemaphore, GlobalSemaphore> semaphores(
-        multi_device_global_semaphore, multi_device_global_semaphore);
+    BarrierSemaphore semaphore{multi_device_global_semaphore, multi_device_global_semaphore};
     return tt::tt_metal::operation::run(
                ttnn::AllGatherAsync(
                    dim,
@@ -390,7 +389,7 @@ Tensor all_gather_async(
                    num_devices,
                    memory_config.value_or(input_tensor.memory_config()),
                    ccl_topology,
-                   semaphores,
+                   semaphore,
                    sub_device_id,
                    /*cores=*/std::nullopt,
                    enable_persistent_fabric_mode,
@@ -432,8 +431,7 @@ Tensor all_gather_async(
 
     std::vector<Tensor> output_tensors = {Tensor(input_tensor.mesh_device())};
     std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_tensor};
-    std::pair<GlobalSemaphore, GlobalSemaphore> semaphores(
-        multi_device_global_semaphore, multi_device_global_semaphore);
+    BarrierSemaphore semaphore{multi_device_global_semaphore, multi_device_global_semaphore};
 
     return tt::tt_metal::operation::run(
                ttnn::AllGatherAsync{
@@ -442,7 +440,7 @@ Tensor all_gather_async(
                    num_devices,
                    memory_config.value_or(input_tensor.memory_config()),
                    topology,
-                   semaphores,
+                   semaphore,
                    sub_device_id,
                    /*cores=*/std::nullopt,
                    enable_persistent_fabric_mode,
@@ -478,7 +476,7 @@ Tensor all_gather_async(
 
     // Explicitly initilaize the semaphores passed into the AllGatherAsync Op as null
     // These will be populated internally the first time create_program_at is called.
-    std::optional<std::pair<GlobalSemaphore, GlobalSemaphore>> semaphores = std::nullopt;
+    std::optional<BarrierSemaphore> semaphore = std::nullopt;
     return tt::tt_metal::operation::run(
                ttnn::AllGatherAsync{
                    dim,
@@ -486,7 +484,7 @@ Tensor all_gather_async(
                    num_devices,
                    memory_config.value_or(input_tensor.memory_config()),
                    ccl_topology,
-                   semaphores,
+                   semaphore,
                    /*sub_device_id=*/std::nullopt,
                    cores,
                    true,

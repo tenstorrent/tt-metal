@@ -31,13 +31,17 @@ enum class AllGatherAsyncVersion {
     LLAMA_MINIMAL_SHARDED = 2,
 };
 
+struct BarrierSemaphore {
+    GlobalSemaphore wait;
+    GlobalSemaphore release;
+};
 struct AllGatherAsync {
     const uint32_t dim;
     const uint32_t num_links;
     const uint32_t ring_size;
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
-    mutable std::optional<std::pair<GlobalSemaphore, GlobalSemaphore>> semaphore;
+    mutable std::optional<BarrierSemaphore> semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     std::optional<CoreRangeSet> cores;
     bool enable_persistent_fabric_mode;
@@ -49,7 +53,7 @@ struct AllGatherAsync {
         uint32_t ring_size,
         MemoryConfig output_mem_config,
         ccl::Topology topology,
-        std::optional<std::pair<GlobalSemaphore, GlobalSemaphore>> semaphore,
+        std::optional<BarrierSemaphore> semaphore,
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         const std::optional<CoreRangeSet>& cores,
         bool enable_persistent_fabric_mode,
@@ -75,8 +79,8 @@ struct AllGatherAsync {
         attrs.emplace_back("ring_size", ring_size);
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);
-        attrs.emplace_back("semaphore_first", semaphore->first);
-        attrs.emplace_back("semaphore_second", semaphore->second);
+        attrs.emplace_back("semaphore_first", semaphore->wait);
+        attrs.emplace_back("semaphore_second", semaphore->release);
 
         return attrs;
     }
@@ -124,7 +128,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const std::pair<GlobalSemaphore, GlobalSemaphore>& semaphores,
+    const BarrierSemaphore& semaphores,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode);
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
@@ -138,7 +142,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const std::pair<GlobalSemaphore, GlobalSemaphore>& semaphores,
+    const BarrierSemaphore& semaphores,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode);
 
