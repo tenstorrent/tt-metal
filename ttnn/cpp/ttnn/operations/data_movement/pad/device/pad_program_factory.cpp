@@ -10,7 +10,6 @@
 #include <tt-metalium/hal_exp.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_log.h>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/tt_align.hpp>

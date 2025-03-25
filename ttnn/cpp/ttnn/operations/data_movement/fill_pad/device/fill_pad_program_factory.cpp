@@ -8,7 +8,6 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/tt_log.h>
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
 #include "fill_pad_program_factory.hpp"
