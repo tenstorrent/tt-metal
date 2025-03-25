@@ -87,7 +87,7 @@ jobs:
         uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
-          name: ${{ inputs.wheel-artifact-name }}
+          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Run regression in loop in docker
         uses: ./.github/actions/docker-run
         with:
