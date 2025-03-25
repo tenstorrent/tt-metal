@@ -3,7 +3,6 @@
 
 # pack.py
 
-import torch
 import struct
 
 

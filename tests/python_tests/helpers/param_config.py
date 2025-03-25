@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-from dataclasses import dataclass
+
 from typing import List, Optional
 from .format_arg_mapping import *
 from .format_config import FormatConfig, DataFormat

@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import sys
 from .format_arg_mapping import (
     TileCount,
     unpack_A_dst_dict,
@@ -16,7 +15,6 @@ from .format_arg_mapping import (
     ApproximationMode,
     MathOperation,
     ReduceDimension,
-    ReducePool,
 )
 
 
