@@ -5,7 +5,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/tt_log.h>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operation.hpp"

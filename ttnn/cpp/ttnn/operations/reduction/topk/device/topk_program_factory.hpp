@@ -5,8 +5,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/tt_log.h>
 
 using namespace tt::tt_metal;
 namespace ttnn::operations::reduction::detail {

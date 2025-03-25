@@ -60,7 +60,8 @@ tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra
 tt_metal/api/tt-metalium/ @tenstorrent/metalium-developers-infra @ayerofieiev-tt @tt-dma
 
 # fabric
-tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho
+tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT
+tests/tt_metal/microbenchmarks/ethernet/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT
 
 # metal - dispatch
 tt_metal/impl/dispatch/kernels/packet_* @ubcheema @aliuTT
