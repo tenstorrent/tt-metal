@@ -370,6 +370,8 @@ operation::OpPerformanceModel OptimizedConvNew::create_op_performance_model(
     uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw.second;
     uint32_t pad_h = (uint32_t)sliding_window_config.pad_hw.first;
     uint32_t pad_w = (uint32_t)sliding_window_config.pad_hw.second;
+    uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
+    uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
 
     const auto& t = output_tensors.at(0);
     if (t.storage_type() != StorageType::DEVICE) {
@@ -383,8 +385,12 @@ operation::OpPerformanceModel OptimizedConvNew::create_op_performance_model(
     const int tensix_mul_adds_per_cycle_lofi = (arch == tt::ARCH::WORMHOLE_B0) ? 4096 : 2048;
 
     // Calculate output dimensions: relevant for window/stride based OPs (conv, maxpool, downsample)
-    int output_height = std::floor((conv_activation_h - filter_h + 2 * pad_h) / stride_h + 1);
-    int output_width = std::floor((conv_activation_w - filter_w + 2 * pad_w) / stride_w + 1);
+    auto [output_height, output_width] = calculate_output_image_size(
+        {conv_activation_h, conv_activation_w},
+        {filter_h, filter_w},
+        {stride_h, stride_w},
+        {pad_h, pad_w},
+        {dilation_h, dilation_w});
 
     // Calculate number of mul/add operations
     // TODO: add bias modeling
