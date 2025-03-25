@@ -295,9 +295,21 @@ class Tt_vgg_unet:
             padding=[self.conv_args.s3["9"].padding, self.conv_args.s3["9"].padding],
             dilation=[self.conv_args.s3["9"].dilation, self.conv_args.s3["9"].dilation],
         )
-        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+
         x = self.s3_10(x)
-        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+
+        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+        sharded_memory_config = ttnn.create_sharded_memory_config(
+            [
+                512,
+                32,
+            ],
+            core_grid=shard_grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            use_height_and_width_as_shard_shape=True,
+        )
+        x = ttnn.to_memory_config(x, sharded_memory_config)
+
         x = self.s3_12(x)
         x = self.s3_14(x)
         x = self.s3_16(x)
@@ -333,7 +345,7 @@ class Tt_vgg_unet:
             padding=[self.conv_args.b1["27"].padding, self.conv_args.b1["27"].padding],
             dilation=[self.conv_args.b1["27"].dilation, self.conv_args.b1["27"].dilation],
         )
-        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+
         x = self.b1_28(x)
         x = self.b1_30(x)
         x = self.b1_32(x)

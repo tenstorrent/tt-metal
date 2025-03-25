@@ -144,7 +144,7 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.s3["10"]["enable_act_double_buffer"] = False
     parameters.conv_args.s3["10"]["deallocate_activation"] = True
     parameters.conv_args.s3["10"]["reshard_if_not_optimal"] = False
-    parameters.conv_args.s3["10"]["shard_layout"] = None
+    parameters.conv_args.s3["10"]["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     parameters.conv_args.s3["10"]["transpose_shards"] = False
     parameters.conv_args.s3["10"]["activation"] = "relu"
 
@@ -216,7 +216,7 @@ def create_vgg_unet_model_parameters(model: UNetVGG19, input_tensor: torch.Tenso
     parameters.conv_args.b1["28"]["enable_act_double_buffer"] = False
     parameters.conv_args.b1["28"]["deallocate_activation"] = True
     parameters.conv_args.b1["28"]["reshard_if_not_optimal"] = False
-    parameters.conv_args.b1["28"]["shard_layout"] = None
+    parameters.conv_args.b1["28"]["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
     parameters.conv_args.b1["28"]["transpose_shards"] = False
     parameters.conv_args.b1["28"]["activation"] = "relu"
 
