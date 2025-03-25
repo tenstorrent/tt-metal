@@ -338,7 +338,8 @@ struct core_info_msg_t {
     volatile uint8_t worker_grid_size_y;
     volatile uint8_t absolute_logical_x;  // Logical X coordinate of this core
     volatile uint8_t absolute_logical_y;  // Logical Y coordinate of this core
-    volatile uint8_t pad[23];
+    volatile uint32_t l1_unreserved_start;
+    volatile uint8_t pad[19];
 };
 
 constexpr uint32_t launch_msg_buffer_num_entries = 8;

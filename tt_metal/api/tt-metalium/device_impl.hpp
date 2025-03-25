@@ -37,7 +37,8 @@ public:
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false,
         uint32_t worker_thread_core = 0,
-        uint32_t completion_queue_reader_core = 0);
+        uint32_t completion_queue_reader_core = 0,
+        std::size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
     ~Device() override;
 
@@ -140,6 +141,7 @@ public:
         const uint8_t num_hw_cqs,
         size_t l1_small_size,
         size_t trace_region_size,
+        size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
     void reset_cores() override;
@@ -201,11 +203,18 @@ private:
 
     void initialize_cluster();
     std::unique_ptr<Allocator> initialize_allocator(
-        size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
+        size_t l1_small_size,
+        size_t trace_region_size,
+        size_t worker_l1_unreserved_start,
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
     void initialize_device_bank_to_noc_tables(const HalProgrammableCoreType &core_type, CoreCoord virtual_core);
     void initialize_firmware(const HalProgrammableCoreType &core_type, CoreCoord virtual_core, launch_msg_t *launch_msg, go_msg_t* go_msg);
 
-    void initialize_default_sub_device_state(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap);
+    void initialize_default_sub_device_state(
+        size_t l1_small_size,
+        size_t trace_region_size,
+        size_t worker_l1_unreserved_start,
+        tt::stl::Span<const std::uint32_t> l1_bank_remap);
 
     void compile_command_queue_programs();
     void configure_command_queue_programs();
