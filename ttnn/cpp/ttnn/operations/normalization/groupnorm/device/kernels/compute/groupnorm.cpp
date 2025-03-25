@@ -133,6 +133,7 @@ void MAIN {
     uint32_t group_reset_index = 0;
     uint32_t index_block_w = 0;
     uint32_t output_tile_index = 0;
+    bool apply_gamma_beta[block_w];
 
 #ifdef UNTILIZE_OUT
     constexpr int cb_outgamma = cb_in;
@@ -616,6 +617,10 @@ void MAIN {
                         copy_or_add = true;
                         index_block_w += 1;
                     }
+
+                    bool is_past_end_of_group =
+                        (((w + index_g_offset) + 1) * TILE_WIDTH) > ((g + 1) * (per_core_N * TILE_WIDTH / group));
+                    apply_gamma_beta[w] = !is_past_end_of_group;
                 }
                 cb_pop_front(cb_xmm, out_block_hw_normal);
                 cb_pop_front(cb_reread_out, out_block_hw_normal);
@@ -628,8 +633,7 @@ void MAIN {
                     cb_wait_front(cb_reread_write_out, out_block_hw_normal);
                     for (uint32_t i = 0; i < out_block_h_actual; ++i) {
                         for (uint32_t j = 0; j < block_w_curr; ++j) {
-                            if (((start_group_reset_index < num_groups_per_reset - 1) && (j < block_w_curr - 1)) ||
-                                (start_group_reset_index == num_groups_per_reset - 1)) {
+                            if (apply_gamma_beta[j]) {
                                 mul_bcast_rows_init_short(cb_reread_write_out, cb_gamma);
                             } else {
                                 copy_tile_init(cb_reread_write_out);
@@ -637,8 +641,7 @@ void MAIN {
                             tile_regs_acquire();
                             uint32_t index = j + index_h_offset;
                             uint32_t index_gamma = j + index_g_offset;
-                            if (((start_group_reset_index < num_groups_per_reset - 1) && (j < block_w_curr - 1)) ||
-                                (start_group_reset_index == num_groups_per_reset - 1)) {
+                            if (apply_gamma_beta[j]) {
                                 mul_tiles_bcast_rows(cb_reread_write_out, cb_gamma, index, index_gamma, dst0);
                             } else {
                                 copy_tile(cb_reread_write_out, index, dst0);
@@ -661,8 +664,7 @@ void MAIN {
                     cb_wait_front(cb_beta, per_core_N);  // TODO FIX THIS, ONLY LOAD ONCE ADD POP
                     for (uint32_t i = 0; i < out_block_h_actual; ++i) {
                         for (uint32_t j = 0; j < block_w_curr; ++j) {
-                            if (((start_group_reset_index < num_groups_per_reset - 1) && (j < block_w_curr - 1)) ||
-                                (start_group_reset_index == num_groups_per_reset - 1)) {
+                            if (apply_gamma_beta[j]) {
                                 add_bcast_rows_init_short(cb_inbeta, cb_beta);
                             } else {
                                 copy_tile_init(cb_inbeta);
@@ -670,8 +672,7 @@ void MAIN {
                             tile_regs_acquire();
                             uint32_t index = j + index_h_offset;
                             uint32_t index_beta = j + index_g_offset;
-                            if (((start_group_reset_index < num_groups_per_reset - 1) && (j < block_w_curr - 1)) ||
-                                (start_group_reset_index == num_groups_per_reset - 1)) {
+                            if (apply_gamma_beta[j]) {
                                 add_tiles_bcast_rows(cb_inbeta, cb_beta, index, index_beta, dst0);
                             } else {
                                 copy_tile(cb_inbeta, index, dst0);
