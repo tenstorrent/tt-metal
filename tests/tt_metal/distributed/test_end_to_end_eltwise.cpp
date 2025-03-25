@@ -115,9 +115,8 @@ using TensorDistributionTest = N300MeshDeviceFixture;
 
 
 
-TEST_F(TensorDistributionTest, ProgramDispatchTest) {
-   auto mesh_device = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape(1, 2)});
-
+TEST_F(DistributedEndToEndTests, ProgramDispatchTest) {
+    auto mesh_device = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape(1, 2)});
 
    EXPECT_NE(mesh_device->get_devices().size(), 2);
    EXPECT_EQ(mesh_device->shape(), MeshShape(1, 2));
@@ -132,10 +131,9 @@ TEST_F(TensorDistributionTest, ProgramDispatchTest) {
    auto example_program = CreateProgram();
 
 
-   auto target_tensix_cores = CoreRange{
-       CoreCoord{0, 0} /* start_coord */, CoreCoord{0, 1} /* end_coord */
-   };
-
+    auto target_tensix_cores = CoreRange{
+        CoreCoord{0, 0} /* start_coord */, CoreCoord{0, 1} /* end_coord */
+    };
 
    auto compute_kernel_id = CreateKernel(
        example_program,
@@ -158,9 +156,13 @@ TEST_F(TensorDistributionTest, ProgramDispatchTest) {
    auto mesh_workload = CreateMeshWorkload();
    auto target_devices = MeshCoordinateRange(mesh_device->shape());
 
+    auto trace_id = BeginTraceCapture(mesh_device.get(), workload_cq_id);
 
-   AddProgramToMeshWorkload(mesh_workload, std::move(example_program), target_devices);
-   EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
+    AddProgramToMeshWorkload(mesh_workload, std::move(example_program), target_devices);
+    EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
+    EndTraceCapture(mesh_device.get(), cq, trace_id);
+
+    ReplayTrace(mesh_device.get(), cq, trace_id, false);
 
 
    auto& program = mesh_workload.get_programs().at(target_devices);
@@ -177,7 +179,7 @@ TEST_F(TensorDistributionTest, ProgramDispatchTest) {
 TEST_F(TensorDistributionTest, BufferRoundtripTest) {
    using tt::tt_metal::distributed::ShardedBufferConfig;
 
-    auto mesh_device = DistributedEndToEndTests::mesh_device_;
+    auto mesh_device = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape(1, 2)});
 
    EXPECT_NE(mesh_device->get_devices().size(), 2);
    EXPECT_EQ(mesh_device->shape(), MeshShape(1, 2));
@@ -229,12 +231,10 @@ TEST_F(TensorDistributionTest, BufferRoundtripTest) {
    EXPECT_EQ(src_data, read_back_data);
 }
 
+TEST_F(DistributedEndToEndTests, EltwiseAddTests) {
+    constexpr uint32_t ADD_OP_ID = 0;
 
-TEST_F(TensorDistributionTest, EltwiseProgramTest) {
-
-
-   auto mesh_device = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape(1, 2)});
-
+    auto mesh_device = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape(1, 2)});
 
    // Define the global buffer shape and shard shape for distributed buffers
    auto shard_shape = Shape2D{32, 32};
