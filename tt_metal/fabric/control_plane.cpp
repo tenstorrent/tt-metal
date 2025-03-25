@@ -179,6 +179,12 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
 
                     paths.at(connected_chip_id)[paths.at(connected_chip_id).size() - 1].push_back(connected_chip_id);
                 }
+            } else {
+                log_debug(
+                    tt::LogFabric,
+                    "Number of eth ports {} does not match num ports specified in Mesh graph descriptor {}",
+                    eth_ports.size(),
+                    num_ports_per_side);
             }
         }
     }
