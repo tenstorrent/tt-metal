@@ -155,14 +155,12 @@ TEST_F(MeshWorkloadTestSuite, TestMeshWorkloadOnActiveEth) {
     log_info("Create {} workloads", num_workloads);
     for (int i = 0; i < num_workloads; i++) {
         std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
-        for (std::size_t logical_x = 0; logical_x < mesh_device_->num_cols(); logical_x++) {
-            for (std::size_t logical_y = 0; logical_y < mesh_device_->num_rows(); logical_y++) {
-                IDevice* device = mesh_device_->get_device(logical_y, logical_x);
-                auto programs = utils::create_random_programs(
-                    1, mesh_device_->compute_with_storage_grid_size(), seed, device->get_active_ethernet_cores(true));
-                MeshCoordinateRange devices(MeshCoordinate{logical_y, logical_x}, MeshCoordinate{logical_y, logical_x});
-                AddProgramToMeshWorkload(*workload, std::move(*programs[0]), devices);
-            }
+        for (const auto& device_coord : MeshCoordinateRange(mesh_device_->shape())) {
+            IDevice* device = mesh_device_->get_device(device_coord);
+            auto programs = utils::create_random_programs(
+                1, mesh_device_->compute_with_storage_grid_size(), seed, device->get_active_ethernet_cores(true));
+            AddProgramToMeshWorkload(
+                *workload, std::move(*programs[0]), MeshCoordinateRange(device_coord, device_coord));
         }
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
         workloads.push_back(workload);

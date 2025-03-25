@@ -243,11 +243,7 @@ Tensor all_gather(
     const ttnn::ccl::Topology topology) {
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "all_gather op is only supported for Fast Dispatch");
-    auto mesh_device = input_tensor.mesh_device();
-    std::vector<IDevice*> devices = {};
-    for (const auto& spec : input_tensor.device_storage().specs) {
-        devices.push_back(mesh_device->get_device(spec.first));
-    }
+    std::vector<IDevice*> devices = input_tensor.active_physical_devices();
     uint32_t num_devices = devices.size();
     TT_FATAL(num_devices > 1, "all_gather op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology;

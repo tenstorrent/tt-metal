@@ -697,6 +697,7 @@ def test_line_all_gather_after_reshape(mesh_device):
     if mesh_device.get_num_devices() < 8:
         pytest.skip()
     mesh_device.reshape(ttnn.MeshShape(2, 4))
+
     torch_input_tensor = torch.rand((1, 1, 64, 128), dtype=torch.bfloat16)
 
     mesh_tensor = ttnn.from_torch(
