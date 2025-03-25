@@ -7,6 +7,15 @@
 
 // #include "debug/dprint.h"
 
+template <size_t N>
+constexpr bool should_read_from_dram(const std::array<uint32_t, N>&) {
+    if constexpr (N > 0) {
+        return get_compile_time_arg_val(0);
+    } else {
+        return true;
+    }
+}
+
 void generate_bcast_scaler() {
     constexpr uint32_t cb_in_2 = 2;
     uint32_t scaler = get_arg_val<uint32_t>(8);
@@ -41,7 +50,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
-    constexpr bool read_from_dram = (kernel_compile_time_args.size() > 0) ? get_compile_time_arg_val(0) : true;
+    constexpr bool read_from_dram = should_read_from_dram(kernel_compile_time_args);
 
     const InterleavedPow2AddrGen<read_from_dram> src_a = {src_addr, 11};
 
