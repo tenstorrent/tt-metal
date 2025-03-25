@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "tt-metalium/assert.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -46,10 +47,16 @@ void validate(
     TT_FATAL(input.get_layout() == Layout::TILE, "bcast_to: Input tensor layout must be TILE");
     TT_FATAL(tensor_args.input.storage_type() == StorageType::DEVICE, "bcast_to: Input tensor need to be on device");
     TT_FATAL(tensor_args.input.buffer() != nullptr, "bcast_to: Input tensor need to be allocated in buffers on device");
+    TT_FATAL(tensor_args.input.memory_config().is_sharded() == false, "bcast_to: Input tensor sharding not supported");
+    TT_FATAL(
+        operation_attributes.memory_config.is_sharded() == false,
+        "bcast_to: Output memory config sharding not supported");
     if (output.has_value()) {
         TT_FATAL(
             output->get_logical_shape() == operation_attributes.output_shape,
-            "bcast_to: Output shape must match operation attributes");
+            "bcast_to: Output shape {} must match operation attributes {}",
+            output->get_logical_shape(),
+            operation_attributes.output_shape);
         TT_FATAL(input.get_layout() == output->get_layout(), "bcast_to: Input and output must have same layout");
         TT_FATAL(input.get_dtype() == output->get_dtype(), "bcast_to: Input and output must have same dtype");
         TT_FATAL(input.device() == output->device(), "bcast_to: Input and output must be on the same device");
@@ -91,9 +98,9 @@ BcastToOperation::tensor_return_value_t BcastToOperation::create_output_tensors(
 
 std::tuple<BcastToOperation::operation_attributes_t, BcastToOperation::tensor_args_t> BcastToOperation::invoke(
     const Tensor& input,
-    const SmallVector<uint32_t>& output_shape,
-    const std::optional<Tensor>& output,
-    const std::optional<MemoryConfig>& memory_config) {
+    const Shape& output_shape,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output) {
     auto subtile_broadcast_type = get_subtile_broadcast_type(
         input.get_logical_shape()[-2],
         input.get_logical_shape()[-1],

@@ -10,6 +10,7 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn::operations::experimental::broadcast_to {
 enum class SubtileBroadcastType {
@@ -21,7 +22,7 @@ enum class SubtileBroadcastType {
 SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint32_t b_h, uint32_t b_w);
 struct BcastToOperation {
     struct operation_attributes_t {
-        const SmallVector<uint32_t> output_shape = {0};
+        const Shape output_shape;
         const MemoryConfig memory_config;
         SubtileBroadcastType subtile_broadcast_type = SubtileBroadcastType::NONE;
     };
@@ -66,10 +67,9 @@ struct BcastToOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,
-        const SmallVector<uint32_t>& output_shape,
-
-        const std::optional<Tensor>& output,
-        const std::optional<MemoryConfig>& memory_config);
+        const ttnn::Shape& output_shape,
+        const std::optional<MemoryConfig>& memory_config,
+        const std::optional<Tensor>& output);
 };
 }  // namespace ttnn::operations::experimental::broadcast_to
 

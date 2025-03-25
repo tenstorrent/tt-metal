@@ -2,71 +2,64 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <optional>
+
 #include "bcast_to.hpp"
+#include "tt-metalium/small_vector.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/experimental/bcast_to/device/bcast_to_device_operation.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include <optional>
 namespace ttnn::operations::experimental {
 
-auto infer_size(const Tensor& input, const std::vector<int32_t>& sizes) {
+auto check_shape(const Tensor& input, const ttnn::Shape& output_shape) {
     auto input_shape = input.get_logical_shape();
-    auto output_shape = SmallVector<uint32_t>(sizes.size());
     TT_FATAL(
-        input_shape.size() <= sizes.size(),
-        "Input tensor shape {}({}) must be at least as large as the expansion size {}({}), which it is not",
+        input_shape.size() <= output_shape.size(),
+        "Input tensor shape {}({}) must be at least as large as the broadcast shape {}({}), which it is not",
         input_shape,
         input_shape.size(),
-        sizes,
-        sizes.size());
+        output_shape,
+        output_shape.size());
 
-    int in_idx = static_cast<int>(input_shape.size()) - 1;
-    for (int i = static_cast<int>(output_shape.size()) - 1; i >= 0; --i) {
-        if (in_idx >= 0) {
-            TT_FATAL(
-                input_shape[in_idx] == sizes[i] || input_shape[in_idx] == 1 || sizes[i] == -1,
-                "The size of tensor a ({}) must match the size of tensor b ({}) at non-singleton dimension {}",
-                input_shape[in_idx],
-                sizes[i],
-                in_idx);
+    TT_FATAL(
+        input_shape.size() <= 4 and output_shape.size() <= 4,
+        "Tensor shape and broadcast size {}({}) {}({}) must be at most 4D",
+        input_shape,
+        input_shape.size(),
+        output_shape,
+        output_shape.size());
 
-            if (input_shape[in_idx] == sizes[i] || sizes[i] == -1) {
-                output_shape[i] = input_shape[in_idx];
-            } else if (input_shape[in_idx] == 1) {
-                output_shape[i] = sizes[i];
-            }
+    // Validate broadcasting rules (checking from right to left)
+    size_t input_ndim = input_shape.size();
+    size_t output_ndim = output_shape.size();
 
-            --in_idx;
-        } else {
-            TT_FATAL(sizes[i] != -1, "The broadcasted size of the tensor (-1) is not allowed in a leading dimension");
-            output_shape[i] = sizes[i];
-        }
+    for (int i = -1; i >= -input_ndim; --i) {
+        // Check dimensions from the right side
+        uint32_t input_dim = input_shape[i];
+        uint32_t output_dim = output_shape[i];
+
+        // For broadcasting, either dimensions must match or input must be 1
+        TT_FATAL(
+            (input_dim == output_dim) || (input_dim == 1),
+            "Input dimension {} (size {}) cannot be broadcast to output dimension {} (size {})",
+            i,
+            input_dim,
+            i,
+            output_dim);
     }
-
-#ifdef DEBUG
-    tt::log_debug("inferred output shape: ");
-    for (int i = 0; i < output_shape.size(); ++i) {
-        tt::log_debug(tt::LogOp, "{} ", output_shape[i]);
-    }
-    tt::log_debug("\n");
-#endif
-
-    return output_shape;
 }
 
 Tensor BcastTo::invoke(
     QueueId queue_id,
     const Tensor& input,
-    const std::vector<int32_t>& sizes,
+    const Shape& output_shape,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output) {
+    check_shape(input, output_shape);
 
-    const std::optional<Tensor>& output,
-    const std::optional<MemoryConfig>& memory_config) {
-    auto output_shape = infer_size(input, sizes);
-
-    // TT_FATAL(input.get_layout() == Layout::TILE, "BcastTo: Input tensor layout must be TILE");
-    return ttnn::prim::bcast_to(queue_id, input, output_shape, output, memory_config);
+    return ttnn::prim::bcast_to(queue_id, input, output_shape, memory_config, output);
 }
 }  // namespace ttnn::operations::experimental

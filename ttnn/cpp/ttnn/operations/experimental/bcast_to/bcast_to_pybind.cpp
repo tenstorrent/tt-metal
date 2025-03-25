@@ -20,9 +20,9 @@ void py_bind_broadcast_to(py::module& module) {
 
         Args:
             * :attr:`input`: The tensor to be broadcasted.
-            * :attr:`sizes`: The desired broadcasted size.
-            * :attr:`output`: An optional tensor to store the broadcasted result.
+            * :attr:`output_shape`: The desired broadcasted shape.
             * :attr:`memory_config`: The memory configuration for the broadcasted tensor.
+            * :attr:`output`: An optional tensor to store the broadcasted result.
         )doc";
     using operationType = decltype(ttnn::experimental::broadcast_to);
     bind_registered_operation(
@@ -32,15 +32,17 @@ void py_bind_broadcast_to(py::module& module) {
         ttnn::pybind_overload_t{
             [](const operationType& self,
                const ttnn::Tensor& input,
-               const std::vector<int32_t>& sizes,
-               const std::optional<ttnn::Tensor>& output_tensor,
+               const ttnn::Shape& output_shape,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               QueueId queue_id) -> ttnn::Tensor { return self(queue_id, input, sizes, output_tensor, memory_config); },
+               const std::optional<ttnn::Tensor>& output_tensor,
+               QueueId queue_id) -> ttnn::Tensor {
+                return self(queue_id, input, output_shape, memory_config, output_tensor);
+            },
             py::arg("input"),
-            py::arg("sizes"),
+            py::arg("output_shape"),
             py::kw_only(),
-            py::arg("output") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
+            py::arg("output") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
 }
 }  // namespace ttnn::operations::experimental::broadcast_to::detail
