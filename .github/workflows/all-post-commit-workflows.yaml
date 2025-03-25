@@ -167,7 +167,7 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      os: ubuntu-22.04
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
   tt-train-cpp-unit-tests:
     needs: build-artifact
     secrets: inherit

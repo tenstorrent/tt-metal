@@ -9,38 +9,13 @@ on:
       runner-label:
         required: true
         type: string
+      docker-image:
+        required: true
+        type: string
       timeout:
         required: false
         type: number
         default: 35
-      os:
-        required: false
-        type: string
-        default: "ubuntu-20.04"
-  workflow_dispatch:
-    inputs:
-      arch:
-        required: true
-        type: choice
-        options:
-          - wormhole_b0
-          - blackhole
-      runner-label:
-        required: true
-        type: choice
-        options:
-          - E150
-          - N150
-          - N300
-          - BH
-      timeout:
-        required: false
-        type: number
-        default: 35
-      os:
-        required: false
-        type: string
-        default: "ubuntu-20.04"
 
 jobs:
   cpp-unit-tests:
@@ -87,7 +62,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
         with:
-          docker_os_arch: tt-metalium/${{ inputs.os }}-dev-amd64
+          docker_image: ${{ inputs.docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e TT_METAL_HOME=${{ github.workspace }}
