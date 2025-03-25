@@ -463,8 +463,6 @@ def test_sdxl_base_group_norm(device, input_shape, use_program_cache):
         tt_input_tensor,
         dtype=ttnn.DataType.BFLOAT16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     # Generate input mask
@@ -485,7 +483,7 @@ def test_sdxl_base_group_norm(device, input_shape, use_program_cache):
     sharded_mem_config = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
     )
-    tt_input_tensor = ttnn.interleaved_to_sharded(tt_input_tensor, sharded_mem_config)
+    tt_input_tensor = ttnn.to_device(tt_input_tensor, device, memory_config=sharded_mem_config)
 
     # Execute ttnn group_norm
     tt_output_tensor = ttnn.group_norm(
@@ -496,7 +494,6 @@ def test_sdxl_base_group_norm(device, input_shape, use_program_cache):
         core_grid=grid_size,
     )
 
-    tt_output_tensor = ttnn.sharded_to_interleaved(tt_output_tensor, ttnn.L1_MEMORY_CONFIG, is_l1_aligned=True)
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
