@@ -67,7 +67,6 @@ jobs:
     # needs: setup
     needs: build-artifact
     timeout-minutes: 1440
-    env:
     runs-on: ${{ fromJSON(inputs.runner-label) }}
     steps:
       - name: ⬇️ Checkout
