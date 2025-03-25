@@ -26,6 +26,13 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     check_mesh_tensor_alloc,
 )
 
+PACKET_WORKER_CRS = ttnn.CoreRangeSet(
+    [
+        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
+        ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
+    ]
+)
+
 
 def gen_tensor(dim, shard_height, shard_width, num_devices_scatter, num_devices_fracture, num_cores, scheme="random"):
     factor = 0
@@ -60,7 +67,7 @@ def run_reduce_scatter_test(
     num_cores,
     num_iters,
     trace_mode,
-    num_links=1,
+    num_links=3,
     scheme="random",
 ):
     mesh_device.enable_async(True)
@@ -87,13 +94,7 @@ def run_reduce_scatter_test(
         ),
     )
 
-    # {[(x=1,y=0) - (x=3,y=1)], [(x=1,y=2) - (x=2,y=2)]}
-    PACKET_WORKER_CRS = ttnn.CoreRangeSet(
-        [
-            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
-            ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
-        ]
-    )
+    # have to allocate a tensor for buffers that are written to across devices as there's no way to synchronize lifetime of buffers across devices
     packet_workers_persistent_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -255,7 +256,7 @@ def run_reduce_scatter_test(
             break
 
     for i in range(num_devices_scatter * num_devices_fracture):
-        # print("Program cache entries: ", mesh_device.get_devices()[i].num_program_cache_entries())
+        logger.info(f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries")
         assert (
             mesh_device.get_devices()[i].num_program_cache_entries() == 1
             or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters
@@ -268,6 +269,7 @@ def run_reduce_scatter_test(
 @pytest.mark.parametrize(
     "device_params", [{"trace_region_size": 40960, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True
 )
+@pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -275,7 +277,7 @@ def run_reduce_scatter_test(
     ],
     indirect=True,
 )
-def test_fabric_reduce_scatter_tg_trace(mesh_device):
+def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
     torch.manual_seed(2005)
     dim = 3
     shard_height = 32
@@ -284,7 +286,7 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device):
     num_devices_fracture = 8
     num_cores = 24
     num_iters = 5
-    trace_mode = True
+    trace_mode = trace_mode
 
     run_reduce_scatter_test(
         mesh_device,
@@ -301,11 +303,8 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device):
     )
 
 
-@pytest.mark.parametrize(
-    "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
-    indirect=True,
-)
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize("trace_mode", [False])
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -313,7 +312,7 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device):
     ],
     indirect=True,
 )
-def test_fabric_reduce_scatter_tg_no_trace(mesh_device):
+def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
     torch.manual_seed(2005)
     dim = 3
     shard_height = 32
@@ -322,7 +321,7 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device):
     num_devices_fracture = 8
     num_cores = 24
     num_iters = 5
-    trace_mode = False
+    trace_mode = trace_mode
 
     run_reduce_scatter_test(
         mesh_device,
