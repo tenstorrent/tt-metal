@@ -4,32 +4,9 @@
 
 #pragma once
 
-#include <optional>
-#include <queue>
-
-#include "buffer.hpp"
-#include "command_queue.hpp"
-#include "command_queue_interface.hpp"
-#include "multi_producer_single_consumer_queue.hpp"
-
-#include "mesh_buffer.hpp"
-#include "mesh_device.hpp"
-#include "mesh_workload.hpp"
-#include "mesh_trace.hpp"
-#include "mesh_trace_id.hpp"
 #include "mesh_command_queue.hpp"
 
-namespace tt::tt_metal {
-
-class ThreadPool;
-
-namespace distributed {
-
-class MeshEvent;
-struct MeshReadEventDescriptor;
-struct MeshBufferReadDescriptor;
-
-using MeshCompletionReaderVariant = std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor>;
+namespace tt::tt_metal::distributed {
 
 class FDMeshCommandQueue : public MeshCommandQueue {
 private:
@@ -191,6 +168,4 @@ public:
     void copy_buffer_data_to_user_space(MeshBufferReadDescriptor& read_buffer_descriptor);
 };
 
-}  // namespace distributed
-
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::distributed
