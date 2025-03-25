@@ -23,7 +23,7 @@ operation::ProgramWithCallbacks sort_single_core_interleaved(
     Tensor& value_tensor,
     Tensor& index_tensor) {
     tt::tt_metal::Program program{};
-
+    // TODO: Implementation in next PR
     return {std::move(program), {}};
 }
 
@@ -35,7 +35,7 @@ operation::ProgramWithCallbacks sort_multi_core_interleaved(
     Tensor& value_tensor,
     Tensor& index_tensor) {
     tt::tt_metal::Program program{};
-
+    // TODO: Implementation in next PR
     return {std::move(program), {}};
 }
 

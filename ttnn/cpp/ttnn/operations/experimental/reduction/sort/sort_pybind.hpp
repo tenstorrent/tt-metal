@@ -15,25 +15,24 @@ namespace py = pybind11;
 void bind_reduction_sort_operation(py::module& module) {
     auto doc =
         R"doc(
+            Sorts the elements of the input tensor along the specified dimension in ascending order by default.
+            If no dimension is specified, the last dimension of the input tensor is used.
 
-            Sorts the elements of the ``input_tensor`` along a given dimension in ascending order by value.
-            If no ``dim`` is provided, last dimension of the ``input`` is chosen.
-
-            Equivalent pytorch code:
+            This operation is functionally equivalent to the following PyTorch code:
 
             .. code-block:: python
 
                 return torch.sort(input_tensor, dim=-1)
 
-            Args:
-                * :attr:`input_tensor`: Input Tensor for sort.
+            Parameters:
+                * `input_tensor` (Tensor): The input tensor to be sorted.
 
-            Keyword Args:
-                * :attr:`dim`: the dimension to sort along (default to -1),
-                * :attr:`descending`: sorting order - ascending or descending (default to False),
-                * :attr:`stable`: whether to keep the original order of elements with equal values (default to False),
-                * :attr:`memory_config`: Memory Config of the output tensor (default to False),
-                * :attr:`output_tensor`: Preallocated output tensors (default to None).
+            Keyword Arguments:
+                * `dim` (int, optional): The dimension along which to sort. Defaults to -1 (last dimension).
+                * `descending` (bool, optional): If `True`, sorts in descending order. Defaults to `False`.
+                * `stable` (bool, optional): If `True`, ensures the original order of equal elements is preserved. Defaults to `False`.
+                * `memory_config` (MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
+                * `out` (tuple of Tensors, optional): Preallocated output tensors for the sorted values and indices. Defaults to `None`.
         )doc";
 
     using OperationType = decltype(ttnn::experimental::sort);

@@ -26,7 +26,11 @@ def test_sort_output_shape(shape, dim, descending, device):
     input = torch.randn(shape, dtype=torch_dtype)
 
     ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    torch_sort_values, torch_sort_indeces = torch.sort(input, dim=dim, descending=descending)
     ttnn_sort_values, ttnn_sort_indices = ttnn.experimental.sort(ttnn_input, dim=dim, descending=descending)
+
+    assert torch_sort_values.shape == ttnn_sort_values.shape
+    assert torch_sort_indeces.shape == ttnn_sort_indices.shape
 
     assert list(ttnn_sort_values.shape) == shape
     assert list(ttnn_sort_indices.shape) == shape
