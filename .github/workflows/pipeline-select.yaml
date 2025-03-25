@@ -46,6 +46,8 @@ jobs:
     with:
       build-type: ${{ inputs.build-type }}
       tracy: ${{ inputs.build-with-tracy }}
+      build-wheel: true
+      version: "22.04"
     secrets: inherit
   single-card-demo-tests:
     needs: build-artifact
@@ -87,4 +89,4 @@ jobs:
     with:
       arch: wormhole_b0
       runner-label: tt-beta-ubuntu-2204-n300-large-stable
-      os: ubuntu-22.04
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
