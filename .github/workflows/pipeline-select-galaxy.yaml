@@ -47,6 +47,7 @@ jobs:
       build-type: ${{ inputs.build-type }}
       tracy: ${{ inputs.build-with-tracy }}
       build-wheel: true
+      version: 22.04
     secrets: inherit
   tg-quick:
     if: ${{ inputs.tg-quick }}
