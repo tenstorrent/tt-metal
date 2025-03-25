@@ -142,30 +142,6 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto all_device_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
-#ifdef DEBUG
-    tt::log_debug(tt::LogOp, "Data size = {}\n", data_size);
-
-    // tt::log_debug("Input Page size = %lu\n", input.buffer()->page_size());
-    // tt::log_debug("Output Page size = %lu\n", output.buffer()->page_size());
-
-    std::stringstream debug_stream;
-
-    debug_stream << "Input Shape = ";
-    for (auto i = 0; i < input_shape.size(); i++) {
-        debug_stream << input_shape[i] << " ";
-    }
-    debug_stream << std::endl;
-
-    debug_stream << "Output Shape = ";
-    for (auto i = 0; i < output_shape.size(); i++) {
-        debug_stream << output_shape[i] << " ";
-    }
-    debug_stream << std::endl;
-
-    tt::log_debug(tt::LogOp, "{}", debug_stream.str().c_str());
-
-#endif
-
     // How many tiles to store per input CB (double buffer)
     constexpr uint32_t num_tiles_per_cb = 2;
     auto [input_cb, input_cb_handle] = create_cb(
