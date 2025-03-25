@@ -24,7 +24,7 @@ void bind_quantize_operation(
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            scale (Number): the quantization scale.
+            scale (ttnn.Tensor or Number): the quantization scale.
             zero_point (Number): the quantization zero point.
 
         Keyword Args:
@@ -64,10 +64,35 @@ void bind_quantize_operation(
         module,
         operation,
         doc,
+
+        // Scalar scale, scalar zero-point
         ttnn::pybind_overload_t{
             [](const T& self,
                const ttnn::Tensor& input_tensor,
                const float scale,
+               const int32_t zero_point,
+               const std::optional<int32_t> axis,
+               const std::optional<const DataType>& dtype,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor,
+               QueueId queue_id) -> ttnn::Tensor {
+                return self(queue_id, input_tensor, scale, zero_point, axis, dtype, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::arg("scale"),
+            py::arg("zero_point"),
+            py::kw_only(),
+            py::arg("axis") = std::nullopt,
+            py::arg("dtype") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId},
+
+        // Tensor scale, scalar zero-point
+        ttnn::pybind_overload_t{
+            [](const T& self,
+               const ttnn::Tensor& input_tensor,
+               const ttnn::Tensor& scale,
                const int32_t zero_point,
                const std::optional<int32_t> axis,
                const std::optional<const DataType>& dtype,
@@ -99,9 +124,9 @@ void bind_requantize_operation(
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            in_scale (Number): the input quantization scale.
+            in_scale (ttnn.Tensor or Number): the input quantization scale.
             in_zero_point (Number): the input quantization zero point.
-            out_scale (Number): the output quantization scale.
+            out_scale (ttnn.Tensor or Number): the output quantization scale.
             out_zero_point (Number): the output quantization zero point.
 
         Keyword Args:
@@ -143,12 +168,125 @@ void bind_requantize_operation(
         module,
         operation,
         doc,
+
+        // Scalar for both scales and both zero-points
         ttnn::pybind_overload_t{
             [](const T& self,
                const ttnn::Tensor& input_tensor,
                const float in_scale,
                const int32_t in_zero_point,
                const float out_scale,
+               const int32_t out_zero_point,
+               const std::optional<int32_t> axis,
+               const std::optional<const DataType>& dtype,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor,
+               QueueId queue_id) -> ttnn::Tensor {
+                return self(
+                    queue_id,
+                    input_tensor,
+                    in_scale,
+                    in_zero_point,
+                    out_scale,
+                    out_zero_point,
+                    axis,
+                    dtype,
+                    memory_config,
+                    output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::arg("in_scale"),
+            py::arg("in_zero_point"),
+            py::arg("out_scale"),
+            py::arg("out_zero_point"),
+            py::kw_only(),
+            py::arg("axis") = std::nullopt,
+            py::arg("dtype") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId},
+
+        // Tensor in_scale, scalar out_scale and both zero-points
+        ttnn::pybind_overload_t{
+            [](const T& self,
+               const ttnn::Tensor& input_tensor,
+               const ttnn::Tensor& in_scale,
+               const int32_t in_zero_point,
+               const float out_scale,
+               const int32_t out_zero_point,
+               const std::optional<int32_t> axis,
+               const std::optional<const DataType>& dtype,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor,
+               QueueId queue_id) -> ttnn::Tensor {
+                return self(
+                    queue_id,
+                    input_tensor,
+                    in_scale,
+                    in_zero_point,
+                    out_scale,
+                    out_zero_point,
+                    axis,
+                    dtype,
+                    memory_config,
+                    output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::arg("in_scale"),
+            py::arg("in_zero_point"),
+            py::arg("out_scale"),
+            py::arg("out_zero_point"),
+            py::kw_only(),
+            py::arg("axis") = std::nullopt,
+            py::arg("dtype") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId},
+
+        // Tensor out_scale, scalar in_scale and both zero-points
+        ttnn::pybind_overload_t{
+            [](const T& self,
+               const ttnn::Tensor& input_tensor,
+               const float in_scale,
+               const int32_t in_zero_point,
+               const ttnn::Tensor& out_scale,
+               const int32_t out_zero_point,
+               const std::optional<int32_t> axis,
+               const std::optional<const DataType>& dtype,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor,
+               QueueId queue_id) -> ttnn::Tensor {
+                return self(
+                    queue_id,
+                    input_tensor,
+                    in_scale,
+                    in_zero_point,
+                    out_scale,
+                    out_zero_point,
+                    axis,
+                    dtype,
+                    memory_config,
+                    output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::arg("in_scale"),
+            py::arg("in_zero_point"),
+            py::arg("out_scale"),
+            py::arg("out_zero_point"),
+            py::kw_only(),
+            py::arg("axis") = std::nullopt,
+            py::arg("dtype") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId},
+
+        // Tensor for both scales, scalar for both zero-points
+        ttnn::pybind_overload_t{
+            [](const T& self,
+               const ttnn::Tensor& input_tensor,
+               const ttnn::Tensor& in_scale,
+               const int32_t in_zero_point,
+               const ttnn::Tensor& out_scale,
                const int32_t out_zero_point,
                const std::optional<int32_t> axis,
                const std::optional<const DataType>& dtype,
@@ -192,7 +330,7 @@ void bind_dequantize_operation(
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            scale (Number): the quantization scale.
+            scale (ttnn.Tensor or Number): the quantization scale.
             zero_point (Number): the quantization zero point.
 
         Keyword Args:
@@ -232,10 +370,35 @@ void bind_dequantize_operation(
         module,
         operation,
         doc,
+
+        // Scalar scale and scalar zero-point
         ttnn::pybind_overload_t{
             [](const T& self,
                const ttnn::Tensor& input_tensor,
                const float scale,
+               const int32_t zero_point,
+               const std::optional<int32_t> axis,
+               const std::optional<const DataType>& dtype,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor,
+               QueueId queue_id) -> ttnn::Tensor {
+                return self(queue_id, input_tensor, scale, zero_point, axis, dtype, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::arg("scale"),
+            py::arg("zero_point"),
+            py::kw_only(),
+            py::arg("axis") = std::nullopt,
+            py::arg("dtype") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId},
+
+        // Tensor scale and scalar zero-point
+        ttnn::pybind_overload_t{
+            [](const T& self,
+               const ttnn::Tensor& input_tensor,
+               const ttnn::Tensor& scale,
                const int32_t zero_point,
                const std::optional<int32_t> axis,
                const std::optional<const DataType>& dtype,
