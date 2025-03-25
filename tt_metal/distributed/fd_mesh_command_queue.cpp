@@ -36,7 +36,7 @@ FDMeshCommandQueue::FDMeshCommandQueue(
     std::shared_ptr<ThreadPool>& dispatch_thread_pool,
     std::shared_ptr<ThreadPool>& reader_thread_pool,
     std::shared_ptr<DispatchArray<LaunchMessageRingBufferState>>& worker_launch_message_buffer_state) :
-    MeshCommandQueue(mesh_device, id, dispatch_thread_pool),
+    MeshCommandQueueBase(mesh_device, id, dispatch_thread_pool),
     reader_thread_pool_(reader_thread_pool),
     worker_launch_message_buffer_state_(worker_launch_message_buffer_state)  //
 {

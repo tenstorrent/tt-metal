@@ -4,11 +4,19 @@
 
 #pragma once
 
-#include "mesh_command_queue.hpp"
+#include "mesh_command_queue_base.hpp"
+
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/multi_producer_single_consumer_queue.hpp>
 
 namespace tt::tt_metal::distributed {
 
-class FDMeshCommandQueue : public MeshCommandQueue {
+struct MeshReadEventDescriptor;
+struct MeshBufferReadDescriptor;
+
+using MeshCompletionReaderVariant = std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor>;
+
+class FDMeshCommandQueue final : public MeshCommandQueueBase {
 private:
     void populate_read_descriptor_queue();
     void populate_virtual_program_dispatch_core();

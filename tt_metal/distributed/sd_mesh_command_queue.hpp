@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include "mesh_command_queue.hpp"
+#include "mesh_command_queue_base.hpp"
 
 namespace tt::tt_metal::distributed {
 
-class SDMeshCommandQueue : public MeshCommandQueue {
+class SDMeshCommandQueue final : public MeshCommandQueueBase {
 protected:
     void write_shard_to_device(
         Buffer* shard_view,

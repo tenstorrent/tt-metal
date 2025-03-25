@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <mesh_command_queue.hpp>
+#include "mesh_command_queue_base.hpp"
+
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <optional>
@@ -20,7 +21,7 @@
 
 namespace tt::tt_metal::distributed {
 
-void MeshCommandQueue::write_sharded_buffer(const MeshBuffer& buffer, const void* src) {
+void MeshCommandQueueBase::write_sharded_buffer(const MeshBuffer& buffer, const void* src) {
     auto global_buffer_shape = buffer.global_shard_spec().global_buffer_shape;
     auto global_buffer_size = buffer.global_shard_spec().global_size;
 
@@ -103,7 +104,7 @@ void MeshCommandQueue::write_sharded_buffer(const MeshBuffer& buffer, const void
     }
 }
 
-void MeshCommandQueue::read_sharded_buffer(MeshBuffer& buffer, void* dst) {
+void MeshCommandQueueBase::read_sharded_buffer(MeshBuffer& buffer, void* dst) {
     const auto& [height_replicated, width_replicated] = buffer.replicated_dims();
     TT_FATAL(
         not(height_replicated or width_replicated), "Cannot read a MeshBuffer that is replicated along any dimension.");
@@ -156,7 +157,7 @@ void MeshCommandQueue::read_sharded_buffer(MeshBuffer& buffer, void* dst) {
     }
 }
 
-void MeshCommandQueue::enqueue_write_shard_to_sub_grid(
+void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
     const MeshBuffer& buffer,
     const void* host_data,
     const MeshCoordinateRange& device_range,
@@ -185,13 +186,13 @@ void MeshCommandQueue::enqueue_write_shard_to_sub_grid(
     }
 }
 
-void MeshCommandQueue::enqueue_write_mesh_buffer(
+void MeshCommandQueueBase::enqueue_write_mesh_buffer(
     const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) {
     MeshCoordinateRange mesh_device_extent(buffer->device()->shape());
     this->enqueue_write_shard_to_sub_grid(*buffer, host_data, mesh_device_extent, blocking);
 }
 
-void MeshCommandQueue::enqueue_read_mesh_buffer(
+void MeshCommandQueueBase::enqueue_read_mesh_buffer(
     void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) {
     TT_FATAL(
         buffer->global_layout() == MeshBufferLayout::SHARDED, "Can only read a Sharded MeshBuffer from a MeshDevice.");
@@ -200,7 +201,7 @@ void MeshCommandQueue::enqueue_read_mesh_buffer(
     this->read_sharded_buffer(*buffer, host_data);
 }
 
-void MeshCommandQueue::enqueue_write_shards(
+void MeshCommandQueueBase::enqueue_write_shards(
     const std::shared_ptr<MeshBuffer>& buffer,
     const std::vector<ShardDataTransfer>& shard_data_transfers,
     bool blocking) {
@@ -227,7 +228,7 @@ void MeshCommandQueue::enqueue_write_shards(
     }
 }
 
-void MeshCommandQueue::enqueue_read_shards(
+void MeshCommandQueueBase::enqueue_read_shards(
     const std::vector<ShardDataTransfer>& shard_data_transfers,
     const std::shared_ptr<MeshBuffer>& buffer,
     bool blocking) {

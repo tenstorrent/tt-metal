@@ -11,7 +11,7 @@
 namespace tt::tt_metal::distributed {
 
 SDMeshCommandQueue::SDMeshCommandQueue(MeshDevice* mesh_device, uint32_t id) :
-    MeshCommandQueue(mesh_device, id, create_passthrough_thread_pool()) {}
+    MeshCommandQueueBase(mesh_device, id, create_passthrough_thread_pool()) {}
 
 SDMeshCommandQueue::~SDMeshCommandQueue() {}
 
