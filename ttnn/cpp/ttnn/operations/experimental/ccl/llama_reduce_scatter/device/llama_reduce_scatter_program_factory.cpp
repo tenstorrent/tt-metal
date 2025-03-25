@@ -704,63 +704,42 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     uint32_t local_page = 0;
     uint32_t reader_receiver_for_device_id = 0;
 
-    uint32_t start_device_idx = 0;
-
     std::vector<uint32_t> reader_runtime_args = {
-        cross_device_semaphore->address(), local_semaphore, false, false, 0, false, 0, 0, 0, 0};
+        cross_device_semaphore->address(), local_semaphore, false, false, 0, false, 0, 0};
     uint32_t is_reader_sender_core_idx = 2;
     uint32_t is_reader_worker_core_idx = 3;
     uint32_t is_linear_input_packet_start_idx = 4;
     uint32_t is_reader_receiver_core_idx = 5;
-    uint32_t reader_device_start_idx = 6;
-    uint32_t reader_device_end_idx = 7;
-    uint32_t reader_sender_packet_start_idx = 8;
-    uint32_t reader_sender_packet_end_idx = 9;
+    uint32_t reader_sender_packet_start_idx = 6;
+    uint32_t reader_sender_packet_end_idx = 7;
 
     uint32_t is_writer_sender_core_idx = 3;
     uint32_t is_writer_worker_core_idx = 4;
     uint32_t is_linear_output_page_start_idx = 5;
-    uint32_t writer_device_start_idx = 6;
-    uint32_t writer_device_end_idx = 7;
-    uint32_t is_atomic_inc_core_idx = 8;
-    uint32_t writer_sender_packet_start_idx = 9;
-    uint32_t writer_sender_packet_end_idx = 10;
+    uint32_t is_atomic_inc_core_idx = 6;
+    uint32_t writer_sender_packet_start_idx = 7;
+    uint32_t writer_sender_packet_end_idx = 8;
 
     TT_FATAL(
         (num_devices - 1) % sender_core_grid.num_cores() == 0,
         "num_devices must be divisible by sender_core_grid.num_cores()");
-    uint32_t work_per_sender = (num_devices - 1) / sender_core_grid.num_cores();
 
     uint32_t sender_packet_start = 0;
     uint32_t sender_core_idx = 0;
 
     for (auto core : all_cores) {
         std::vector<uint32_t> writer_runtime_args = {
-            cross_device_semaphore->address(),
-            local_semaphore,
-            sender_ready_semaphore,
-            false,
-            false,
-            0,
-            0,
-            0,
-            false,
-            0,
-            0};
+            cross_device_semaphore->address(), local_semaphore, sender_ready_semaphore, false, false, 0, false, 0, 0};
 
         if (sender_core_grid.contains(core)) {
             reader_runtime_args[is_reader_sender_core_idx] = true;
             reader_runtime_args[is_reader_worker_core_idx] = false;
             reader_runtime_args[is_reader_receiver_core_idx] = false;
-            reader_runtime_args[reader_device_start_idx] = start_device_idx;
-            reader_runtime_args[reader_device_end_idx] = start_device_idx + work_per_sender;
             reader_runtime_args[reader_sender_packet_start_idx] = sender_packet_start;
             reader_runtime_args[reader_sender_packet_end_idx] = sender_packet_start + schedule[sender_core_idx].size();
 
             writer_runtime_args[is_writer_sender_core_idx] = true;
             writer_runtime_args[is_writer_worker_core_idx] = false;
-            writer_runtime_args[writer_device_start_idx] = start_device_idx;
-            writer_runtime_args[writer_device_end_idx] = start_device_idx + work_per_sender;
             writer_runtime_args[writer_sender_packet_start_idx] = sender_packet_start;
             writer_runtime_args[writer_sender_packet_end_idx] = sender_packet_start + schedule[sender_core_idx].size();
 
@@ -780,7 +759,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             //     std::cout << "core: " << core.str() << " start_device_idx: " << start_device_idx << " end_device_idx:
             //     " << start_device_idx + work_per_sender << std::endl;
             // }
-            start_device_idx += work_per_sender;
             // if (operation_attributes.ring_index == 0) {
             //     std::cout << "core: " << core.str() << " sender_packet_start: " << sender_packet_start
             //               << " sender_core_end: " << writer_runtime_args[writer_sender_packet_end_idx] << std::endl;

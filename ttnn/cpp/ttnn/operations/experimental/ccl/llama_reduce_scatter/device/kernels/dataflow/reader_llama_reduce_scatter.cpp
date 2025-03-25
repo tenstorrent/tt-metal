@@ -91,8 +91,6 @@ void kernel_main() {
     bool worker_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t linear_input_packet_start_idx = get_arg_val<uint32_t>(rt_arg_idx++);
     bool receiver_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
-    uint32_t start_device_idx = get_arg_val<uint32_t>(rt_arg_idx++);
-    uint32_t end_device_idx = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_packet_start = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_packet_end = get_arg_val<uint32_t>(rt_arg_idx++);
 
