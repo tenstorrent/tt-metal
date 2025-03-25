@@ -187,9 +187,10 @@ inline void fabric_send_non_contig(
     FabricConnectionManager& fabric_connection) {
     uint32_t total_local = 0;
     while (total_local < num_tiles) {
-        cb_wait_front(cb0_id, packet_size_in_pages);
+        uint32_t tiles_in_packet = std::min(num_tiles - total_local, packet_size_in_pages);
+        cb_wait_front(cb0_id, tiles_in_packet);
         size_t l1_read_addr = get_read_ptr(cb0_id);
-        for (uint32_t i = 0; i < packet_size_in_pages; i++) {
+        for (uint32_t i = 0; i < tiles_in_packet; i++) {
             DPRINT << "\t[W][" << (uint32_t)my_chip_id << "] write non contig tiles: tile_id: " << tile_id << "\n";
             uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, addrgen, 0 /*offset*/, 0 /*noc_id*/);
             write_and_advance_local_read_address_for_fabric_write(
@@ -202,8 +203,8 @@ inline void fabric_send_non_contig(
             tile_id++;
         }
         noc_async_writes_flushed();
-        cb_pop_front(cb0_id, packet_size_in_pages);
-        total_local += packet_size_in_pages;
+        cb_pop_front(cb0_id, tiles_in_packet);
+        total_local += tiles_in_packet;
     }
 }
 
