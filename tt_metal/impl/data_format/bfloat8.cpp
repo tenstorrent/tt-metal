@@ -13,8 +13,10 @@
 #include "assert.hpp"
 #include "blockfloat_common.hpp"
 #include "tt_backend_api_types.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
 #include "tracy/Tracy.hpp"
+
+#include "hal.hpp"
 
 std::vector<uint32_t> pack_fp32_vec_as_bfp8_tiles(
     tt::stl::Span<const float> fp32_vec,

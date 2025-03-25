@@ -9,6 +9,7 @@
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/allocator.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;

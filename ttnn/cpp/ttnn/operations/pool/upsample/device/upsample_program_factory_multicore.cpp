@@ -7,6 +7,7 @@
 #include <math.h>
 
 #include "upsample_op.hpp"
+#include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 
 #include <tt-metalium/host_api.hpp>
@@ -14,7 +15,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/math.hpp>
 
-#include <tt-metalium/reflection.hpp>
+#include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 
 using namespace tt::constants;
@@ -184,28 +185,21 @@ operation::ProgramWithCallbacks upsample_multi_core(
     // CBs
 
     uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs since its sharded
-
+    uint32_t next_cb_index = CBIndex::c_0;
     // input data is in a sharded CB
-    uint32_t in_cb_id = CBIndex::c_0;
     uint32_t aligned_input_stick_nbytes = round_up_to_mul32(input_stick_nbytes);
     uint32_t in_cb_pagesize = aligned_input_stick_nbytes;
     uint32_t in_cb_npages = input_nsticks_per_core * buffering_factor;
-    CircularBufferConfig cb_src0_config =
-        CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{in_cb_id, input_cb_data_format}})
-            .set_page_size(in_cb_id, in_cb_pagesize)
-            .set_globally_allocated_address(*input.buffer());
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+
+    auto [in_cb_id, cb_src0] = tt::tt_metal::create_cb(
+        next_cb_index++, program, all_cores, in_cb_pagesize, in_cb_npages, input_cb_data_format, input.buffer());
 
     // output sharded CB with upsampled data
-    uint32_t out_cb_id = CBIndex::c_16;
-    uint32_t aligned_output_stick_nbytes = round_up_to_mul32(output_stick_nbytes);
-    uint32_t out_cb_pagesize = aligned_output_stick_nbytes;
+    uint32_t out_cb_pagesize = round_up_to_mul32(output_stick_nbytes);  // aligned output stick n bytes
     uint32_t out_cb_npages = output_nsticks_per_core * buffering_factor;
-    CircularBufferConfig out_cb_config =
-        CircularBufferConfig(out_cb_pagesize * out_cb_npages, {{out_cb_id, output_cb_data_format}})
-            .set_page_size(out_cb_id, out_cb_pagesize)
-            .set_globally_allocated_address(*output.buffer());
-    auto out_cb = tt_metal::CreateCircularBuffer(program, all_cores, out_cb_config);
+
+    auto [out_cb_id, out_cb] = tt::tt_metal::create_cb(
+        next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, output_cb_data_format, output.buffer());
 
     log_debug(LogOp, "input_cb: {}, npages: {}, pagesize: {}", in_cb_id, in_cb_npages, in_cb_pagesize);
     log_debug(LogOp, "output_cb: {}, npages: {}, pagesize: {}", out_cb_id, out_cb_npages, out_cb_pagesize);
@@ -246,11 +240,9 @@ operation::ProgramWithCallbacks upsample_multi_core(
     tt::DataFormat config_df = tt::DataFormat::RawUInt16;
     auto config_buffer = config_tensor_device.device_buffer();
     auto config_buffer_page_size = config_buffer->page_size();
-    uint32_t config_cb_id = CBIndex::c_6;
-    auto config_cb_config = CircularBufferConfig(config_buffer_page_size, {{config_cb_id, config_df}})
-                                .set_page_size(config_cb_id, config_buffer->page_size())
-                                .set_globally_allocated_address(*config_buffer);
-    CBHandle config_cb = CreateCircularBuffer(program, all_cores, config_cb_config);
+
+    auto [config_cb_id, config_cb] = tt::tt_metal::create_cb(
+        next_cb_index++, program, all_cores, config_buffer_page_size, 1, config_df, &*config_buffer);
 
     // Kernels
 

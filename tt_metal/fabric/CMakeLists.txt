@@ -7,6 +7,8 @@ target_sources(
         control_plane.cpp
         routing_table_generator.cpp
         mesh_graph.cpp
+        erisc_datamover_builder.cpp
+        fabric_host_utils.cpp
 )
 
 target_sources(
@@ -15,7 +17,19 @@ target_sources(
         FILE_SET jit_api
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES hw/inc/tt_fabric_api.h hw/inc/tt_fabric.h hw/inc/tt_fabric_interface.h hw/inc/eth_chan_noc_mapping.h
+        FILES
+            hw/inc/tt_fabric_api.h
+            hw/inc/tt_fabric.h
+            hw/inc/tt_fabric_interface.h
+            hw/inc/eth_chan_noc_mapping.h
+            hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp
+            hw/inc/edm_fabric/edm_fabric_utils.hpp
+            hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp
+            hw/inc/edm_fabric/edm_handshake.hpp
+            hw/inc/edm_fabric/fabric_connection_manager.hpp
+            hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp
+            hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp
+            hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp
 )
 
 target_include_directories(fabric PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

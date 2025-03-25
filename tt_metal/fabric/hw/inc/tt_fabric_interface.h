@@ -352,8 +352,9 @@ typedef struct _fabric_pull_client_interface {
     uint64_t pull_req_buf_addr;
     uint32_t num_routing_planes;
     uint32_t routing_tables_l1_offset;
-    uint32_t return_status[3];
+    uint32_t return_status[4];
     local_pull_request_t local_pull_request;
+    packet_header_t header_buffer[CLIENT_HEADER_BUFFER_ENTRIES];
 } fabric_pull_client_interface_t;
 
 static_assert(sizeof(fabric_client_interface_t) % 16 == 0);
@@ -373,6 +374,7 @@ typedef struct _fabric_push_client_interface {
     uint32_t router_space;
     uint32_t update_router_space;
     uint32_t reserved[3];
+    packet_header_t header_buffer[CLIENT_HEADER_BUFFER_ENTRIES];
 } fabric_push_client_interface_t;
 
 static_assert(sizeof(fabric_push_client_interface_t) % 16 == 0);
@@ -398,5 +400,14 @@ constexpr uint32_t FABRIC_ROUTER_REQ_QUEUE_SIZE = sizeof(chan_req_buf);
 constexpr uint32_t FABRIC_ROUTER_DATA_BUF_START = FABRIC_ROUTER_REQ_QUEUE_START + FABRIC_ROUTER_REQ_QUEUE_SIZE;
 constexpr uint32_t FABRIC_ROUTER_OUTBOUND_BUF_SIZE = 0x4000;
 constexpr uint32_t FABRIC_ROUTER_INBOUND_BUF_SIZE = 0x8000;
+constexpr uint32_t FABRIC_ROUTER_BUF_SLOT_SIZE = 0x1000;
+constexpr uint32_t FABRIC_ROUTER_OUTBOUND_BUF_SLOTS = FABRIC_ROUTER_OUTBOUND_BUF_SIZE / FABRIC_ROUTER_BUF_SLOT_SIZE;
+constexpr uint32_t FABRIC_ROUTER_INBOUND_BUF_SLOTS = FABRIC_ROUTER_INBOUND_BUF_SIZE / FABRIC_ROUTER_BUF_SLOT_SIZE;
+
+// Select the correct client interface for push vs pull router
+template <uint32_t router_mode>
+struct ClientInterfaceSelector {
+    using type = std::conditional_t<router_mode == 0, fabric_pull_client_interface_t*, fabric_push_client_interface_t*>;
+};
 
 }  // namespace tt::tt_fabric

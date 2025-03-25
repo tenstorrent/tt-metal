@@ -21,7 +21,6 @@
 #include <dev_msgs.h>
 #include <hal.hpp>
 #include "tt_metal/impl/program/program_command_sequence.hpp"
-#include "tt_metal/command_queue.hpp"
 #include <assert.hpp>
 #include <logger.hpp>
 #include <tt_metal.hpp>
@@ -32,7 +31,7 @@
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
-#include <dispatch_core_manager.hpp>
+#include "dispatch_core_manager.hpp"
 #include <event.hpp>
 #include <kernel.hpp>
 #include "tt_metal/impl/program/dispatch.hpp"
@@ -44,6 +43,10 @@
 
 #include <hal.hpp>
 #include "lightmetal/host_api_capture_helpers.hpp"
+
+#include "tracy/Tracy.hpp"
+
+#include "rtoptions.hpp"
 
 using namespace tt::tt_metal;
 
@@ -115,12 +118,8 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     unicast_cores_launch_message_wptr(unicast_cores_launch_message_wptr),
     sub_device_id(sub_device_id) {
     this->device = device;
-    this->dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+    this->dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
     this->packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(this->device);
-    this->dispatch_message_addr =
-        DispatchMemMap::get(this->dispatch_core_type)
-            .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE) +
-        DispatchMemMap::get(this->dispatch_core_type).get_dispatch_message_offset(*this->sub_device_id);
 }
 
 void EnqueueProgramCommand::process() {
@@ -205,8 +204,6 @@ void EnqueueTerminateCommand::process() {
     this->manager.fetch_queue_reserve_back(this->command_queue_id);
     this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
 }
-
-inline namespace v0 {
 
 void EnqueueWriteBuffer(
     CommandQueue& cq,
@@ -366,34 +363,6 @@ void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
     TT_FATAL(cq.device()->get_trace(trace_id) != nullptr, "Trace instance {} must exist on device", trace_id);
     cq.enqueue_trace(trace_id, blocking);
 }
-
-}  // namespace v0
-
-v1::CommandQueueHandle v1::GetCommandQueue(IDevice* device, std::uint8_t cq_id) {
-    return v1::CommandQueueHandle{device, cq_id};
-}
-
-v1::CommandQueueHandle v1::GetDefaultCommandQueue(IDevice* device) { return GetCommandQueue(device, 0); }
-
-void v1::EnqueueReadBuffer(CommandQueueHandle cq, const BufferHandle& buffer, std::byte* dst, bool blocking) {
-    v0::EnqueueReadBuffer(GetDevice(cq)->command_queue(GetId(cq)), *buffer, dst, blocking);
-}
-
-void v1::EnqueueWriteBuffer(CommandQueueHandle cq, const BufferHandle& buffer, const std::byte* src, bool blocking) {
-    v0::EnqueueWriteBuffer(GetDevice(cq)->command_queue(GetId(cq)), *buffer, src, blocking);
-}
-
-void v1::EnqueueProgram(CommandQueueHandle cq, ProgramHandle& program, bool blocking) {
-    v0::EnqueueProgram(GetDevice(cq)->command_queue(GetId(cq)), program, blocking);
-}
-
-void v1::Finish(CommandQueueHandle cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    v0::Finish(GetDevice(cq)->command_queue(GetId(cq)));
-}
-
-IDevice* v1::GetDevice(CommandQueueHandle cq) { return cq.device; }
-
-std::uint8_t v1::GetId(CommandQueueHandle cq) { return cq.id; }
 
 }  // namespace tt::tt_metal
 

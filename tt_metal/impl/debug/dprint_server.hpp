@@ -8,13 +8,7 @@
 
 #pragma once
 
-namespace tt {
-
-namespace tt_metal {
-inline namespace v0 {
-class IDevice;
-}  // namespace v0
-}  // namespace tt_metal
+namespace tt::tt_metal {
 
 /*
 @brief Attaches a device to be monitored by the print server. If no devices were present on the
@@ -25,7 +19,7 @@ class IDevice;
 
 This call is not thread safe, and there is only one instance of print server supported at a time.
 */
-void DprintServerAttach(tt::tt_metal::IDevice* device);
+void DprintServerAttach(chip_id_t device_id);
 
 /*
 @brief Detach a device so it is no longer monitored by the print server. If no devices are present
@@ -36,7 +30,7 @@ void DprintServerAttach(tt::tt_metal::IDevice* device);
 
 Note that this api call is not thread safe at the moment.
 */
-void DprintServerDetach(tt::tt_metal::IDevice* device);
+void DprintServerDetach(chip_id_t device_id);
 
 /**
 @brief Set device side profiler state.
@@ -92,6 +86,6 @@ void DPrintServerClearSignals();
 /**
 @brief Returns true if the DPRINT server reads any dispatch cores on a given device.
 */
-bool DPrintServerReadsDispatchCores(tt::tt_metal::IDevice* device);
+bool DPrintServerReadsDispatchCores(chip_id_t device_id);
 
-}  // namespace tt
+}  // namespace tt::tt_metal

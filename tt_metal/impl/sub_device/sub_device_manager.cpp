@@ -4,7 +4,7 @@
 
 #include <vector>
 
-#include <sub_device_manager.hpp>
+#include "sub_device_manager.hpp"
 
 #include <assert.hpp>
 #include <host_api.hpp>
@@ -16,9 +16,11 @@
 #include <sub_device_types.hpp>
 #include <trace.hpp>
 #include <trace_buffer.hpp>
-#include <span.hpp>
+#include <tt_stl/span.hpp>
 #include <tt_align.hpp>
+
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 
 #include "tt_cluster.hpp"
 

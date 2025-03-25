@@ -8,8 +8,11 @@
 #include <tt-metalium/constants.hpp>
 #include "conv3d_program_factory.hpp"
 
+#include <tt-metalium/hal_exp.hpp>
+
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::experimental::conv3d {
 
@@ -133,7 +136,7 @@ void Conv3dOp::validate(
         device_grid.y);
 
     uint32_t C_in = input_tensor_a.get_logical_shape()[4];
-    const uint32_t l1_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1);
+    const uint32_t l1_alignment = hal::get_l1_alignment();
     if (config.C_in_block > 0) {
         TT_FATAL(
             C_in % config.C_in_block == 0,

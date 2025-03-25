@@ -12,17 +12,13 @@
 #include "allocator_types.hpp"
 #include "assert.hpp"
 #include "core_coord.hpp"
-#include "hal.hpp"
+#include "hal_types.hpp"
 
 namespace tt {
 
 namespace tt_metal {
 
-inline namespace v0 {
-
 class Buffer;
-
-}  // namespace v0
 
 // Fwd declares
 enum class BufferType;

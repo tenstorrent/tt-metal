@@ -5,7 +5,7 @@
 #pragma once
 
 #include <vector>
-#include <tt-metalium/reflection.hpp>
+#include <tt_stl/reflection.hpp>
 
 namespace ttnn::operations::unary {
 
@@ -91,7 +91,8 @@ enum class UnaryOpType {
     DROPOUT,
     FILL,
     PRELU_SFPU,
-    ZERO_POINT
+    ZERO_POINT,
+    MISH,
 };
 
 struct UnaryWithParam {

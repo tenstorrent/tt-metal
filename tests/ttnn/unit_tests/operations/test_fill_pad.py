@@ -49,6 +49,7 @@ import torch
 import ttnn
 
 ttnn_dtype_to_torch_dtype = {
+    ttnn.uint16: torch.int16,
     ttnn.uint32: torch.int32,
     ttnn.bfloat16: torch.float32,
     ttnn.bfloat8_b: torch.bfloat16,
@@ -161,8 +162,8 @@ def test_fill_pad_bfloat8_b(
         (1, 2, 3, 2, 1, 2, 97, 97),
     ],
 )
-@pytest.mark.parametrize("fill_value", [1])
-@pytest.mark.parametrize("dtype", [ttnn.uint32])
+@pytest.mark.parametrize("fill_value", [1, 0])
+@pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.uint16])
 @pytest.mark.parametrize("input_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("output_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
 def test_fill_pad_int(

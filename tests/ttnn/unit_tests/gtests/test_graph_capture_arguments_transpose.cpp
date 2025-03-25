@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gtest/gtest.h"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn_test_fixtures.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/graph/graph_processor.hpp"
@@ -13,11 +14,16 @@
 #include <string>
 
 namespace ttnn::graph::arguments::test {
+namespace {
 
-class TestGraphCaptureArgumentsTranspose : public TTNNFixtureWithTensor {};
+using TestGraphCaptureArgumentsTranspose = TTNNFixtureWithDevice;
 
-TEST_P(TestGraphCaptureArgumentsTranspose, Transpose) {
-    auto tt_input = CreateTensor();
+TEST_F(TestGraphCaptureArgumentsTranspose, Transpose) {
+    TensorSpec tensor_spec(
+        ttnn::Shape({1, 1, 2048, 512}),
+        TensorLayout(tt::tt_metal::DataType::BFLOAT16, PageConfig(tt::tt_metal::Layout::ROW_MAJOR), L1_MEMORY_CONFIG));
+    auto tt_input = create_device_tensor(tensor_spec, device_);
+
     tt_input.reshape(ttnn::Shape{1, 2048, 4, 128});
     ttnn::graph::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NORMAL);
     ttnn::transpose(tt_input, 1, 2);
@@ -56,7 +62,7 @@ TEST_P(TestGraphCaptureArgumentsTranspose, Transpose) {
         operation1.arguments[2],
         "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::"
         "nullopt)");
-    EXPECT_EQ(operation1.arguments[3], "[ unsupported type , std::__1::reference_wrapper<std::__1::nullopt_t const>]");
+    EXPECT_EQ(operation1.arguments[3], "[ unsupported type , std::reference_wrapper<std::nullopt_t const>]");
     EXPECT_EQ(operation1.arguments[4], "0");
 
     auto operation2 = operations[2];
@@ -65,12 +71,12 @@ TEST_P(TestGraphCaptureArgumentsTranspose, Transpose) {
     EXPECT_EQ(
         operation2.arguments[0],
         "[ unsupported type , "
-        "std::__1::reference_wrapper<ttnn::operations::data_movement::PermuteDeviceOperation::operation_attributes_t "
+        "std::reference_wrapper<ttnn::operations::data_movement::PermuteDeviceOperation::operation_attributes_t "
         "const>]");
     EXPECT_EQ(
         operation2.arguments[1],
         "[ unsupported type , "
-        "std::__1::reference_wrapper<ttnn::operations::data_movement::PermuteDeviceOperation::tensor_args_t const>]");
+        "std::reference_wrapper<ttnn::operations::data_movement::PermuteDeviceOperation::tensor_args_t const>]");
 
     auto operation3 = operations[3];
     EXPECT_EQ(operation3.operation_name, "tt::tt_metal::create_device_tensor");
@@ -78,19 +84,12 @@ TEST_P(TestGraphCaptureArgumentsTranspose, Transpose) {
     EXPECT_EQ(operation3.arguments[0], "Shape([1, 2048, 1, 512])");
     EXPECT_EQ(operation3.arguments[1], "DataType::BFLOAT16");
     EXPECT_EQ(operation3.arguments[2], "Row Major");
-    EXPECT_EQ(operation3.arguments[3], "[ unsupported type , std::__1::reference_wrapper<tt::tt_metal::v0::IDevice*>]");
+    EXPECT_EQ(operation3.arguments[3], "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]");
     EXPECT_EQ(
         operation3.arguments[4],
         "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::"
         "nullopt)");
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    TestGraphCaptureArgumentsTranspose_Transpose,
-    TestGraphCaptureArgumentsTranspose,
-    ::testing::Values(CreateTensorParameters{
-        .input_shape = ttnn::Shape({1, 1, 2048, 512}),
-        .dtype = DataType::BFLOAT16,
-        .layout = ROW_MAJOR_LAYOUT,
-        .mem_cfg = L1_MEMORY_CONFIG}));
+}  // namespace
 }  // namespace ttnn::graph::arguments::test

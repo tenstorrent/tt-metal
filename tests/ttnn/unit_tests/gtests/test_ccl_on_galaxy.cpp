@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "gtest/gtest.h"
+
 #include <tt-metalium/bfloat16.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
@@ -11,7 +13,6 @@
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn_multi_command_queue_fixture.hpp"
 
 #include "tt_cluster.hpp"
 
@@ -111,6 +112,7 @@ TEST(GalaxyTests, TestAllGatherDeadlock) {
     if (not tt::Cluster::instance().is_galaxy_cluster()) {
         GTEST_SKIP() << "Skipping Galaxy test, since this is not a Galaxy System";
     }
+    tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::DISABLED);
     validate_num_tunnels_and_tunnel_depth();
 
     ttnn::MeshShape mesh_shape = get_mesh_shape();
@@ -201,6 +203,7 @@ TEST(GalaxyTests, TestReduceScatterDeadlock) {
     if (not tt::Cluster::instance().is_galaxy_cluster()) {
         GTEST_SKIP() << "Skipping Galaxy test, since this is not a Galaxy System";
     }
+    tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::DISABLED);
     validate_num_tunnels_and_tunnel_depth();
 
     ttnn::MeshShape mesh_shape = get_mesh_shape();

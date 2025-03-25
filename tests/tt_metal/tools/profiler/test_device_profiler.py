@@ -230,8 +230,8 @@ def test_dispatch_cores():
 @skip_for_grayskull()
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {
-        "Ethernet CQ Dispatch": [17, 12, 3899],
-        "Ethernet CQ Prefetch": [18, 1951],
+        "Ethernet CQ Dispatch": [17, 12, 3896],
+        "Ethernet CQ Prefetch": [18, 1948],
     }
     os.environ["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "1"
     devicesData = run_device_profiler_test(
@@ -349,6 +349,24 @@ def test_timestamped_events():
             devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"]["all_events"]
         )
         assert eventCount in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong event count"
+
+
+def test_noc_event_profiler():
+    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
+    assert ENV_VAR_ARCH_NAME in ["grayskull", "wormhole_b0", "blackhole"]
+
+    testCommand = f"build/{PROG_EXMP_DIR}/test_noc_event_profiler"
+    clear_profiler_runtime_artifacts()
+    nocEventProfilerEnv = "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1"
+    profilerRun = os.system(f"cd {TT_METAL_HOME} && {nocEventProfilerEnv} {testCommand}")
+    assert profilerRun == 0
+
+    expected_trace_file = f"{PROFILER_LOGS_DIR}/noc_trace_dev0_ID0.json"
+    assert os.path.isfile(expected_trace_file)
+
+    with open(expected_trace_file, "r") as nocTraceJson:
+        noc_trace_data = json.load(nocTraceJson)
+        assert len(noc_trace_data) == 8
 
 
 def test_sub_device_profiler():

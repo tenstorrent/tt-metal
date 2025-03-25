@@ -20,6 +20,7 @@ class LMHead(LightweightModule):
         weight_cache_path,
         max_columns_per_device=128256 // 4,  # larger values per device lead to OOM or hangs
         tt_ccl=None,
+        prefetcher_setup=None,
     ):
         super().__init__()
         self.args = args
@@ -29,6 +30,7 @@ class LMHead(LightweightModule):
         self.padded_vocab_size = args.padded_vocab_size
         self.num_devices = args.num_devices
         self.tt_ccl = tt_ccl
+        self.worker_sub_device_id = prefetcher_setup.worker_sub_device_id
 
         size_per_device = self.vocab_size // self.num_devices
 
@@ -178,6 +180,12 @@ class LMHead(LightweightModule):
 
         # ttnn.device.dump_device_memory_state(self.mesh_device.get_device(self.mesh_device.get_device_ids()[0]), prefix="")
         x = ttnn.to_memory_config(x, self.args.model_config["SHARDED_LM_HEAD_INPUT_32_RING_MEMCFG"])
+
+        # Pre-allocated output of AllReduce to avoid memory cloberring
+        self.tt_ccl.tt_lm_head_buffer_l1 = ttnn.to_memory_config(
+            self.tt_ccl.tt_lm_head_buffer, self.tt_ccl.lm_head_buffer_mem_cfg
+        )
+
         outputs = []
         for weight, pc in zip(self.output_weights, self.program_configs):
             weight_l1 = weight  # ttnn.to_memory_config(weight, self.args.model_config["LM_HEAD_RING_MEMCFG"])
@@ -189,6 +197,7 @@ class LMHead(LightweightModule):
                 program_config=pc,
                 memory_config=self.output_memory_config,
                 dtype=ttnn.bfloat8_b,
+                sub_device_id=self.worker_sub_device_id,
             )
 
             # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.tt_ccl.worker_sub_device_id])

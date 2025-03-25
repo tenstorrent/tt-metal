@@ -40,17 +40,16 @@ enum CQDispatchCmdId : uint8_t {
     CQ_DISPATCH_CMD_WRITE_PACKED = 5,         // write to multiple noc addresses with packed data
     CQ_DISPATCH_CMD_WRITE_PACKED_LARGE = 6,   // write to multiple noc/dst addresses and varying lengnths w/ packed data
     CQ_DISPATCH_CMD_WAIT = 7,                 // wait until workers are done
-    CQ_DISPATCH_CMD_GO = 8,                   // send go message
-    CQ_DISPATCH_CMD_SINK = 9,                 // act as a data sink (for testing)
-    CQ_DISPATCH_CMD_DEBUG = 10,               // log waypoint data to watcher, checksum
-    CQ_DISPATCH_CMD_DELAY = 11,               // insert delay (for testing)
-    CQ_DISPATCH_CMD_EXEC_BUF_END = 12,        // dispatch_d notify prefetch_h that exec_buf has completed
-    CQ_DISPATCH_CMD_SET_WRITE_OFFSET = 13,  // set the offset to add to all non-host destination addresses (relocation)
-    CQ_DISPATCH_CMD_TERMINATE = 14,         // quit
-    CQ_DISPATCH_CMD_SEND_GO_SIGNAL = 15,
-    CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL = 16,
-    CQ_DISPATCH_SET_NUM_WORKER_SEMS = 17,
-    CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA = 18,
+    CQ_DISPATCH_CMD_SINK = 8,                 // act as a data sink (for testing)
+    CQ_DISPATCH_CMD_DEBUG = 9,                // log waypoint data to watcher, checksum
+    CQ_DISPATCH_CMD_DELAY = 10,               // insert delay (for testing)
+    CQ_DISPATCH_CMD_EXEC_BUF_END = 11,        // dispatch_d notify prefetch_h that exec_buf has completed
+    CQ_DISPATCH_CMD_SET_WRITE_OFFSET = 12,  // set the offset to add to all non-host destination addresses (relocation)
+    CQ_DISPATCH_CMD_TERMINATE = 13,         // quit
+    CQ_DISPATCH_CMD_SEND_GO_SIGNAL = 14,
+    CQ_DISPATCH_NOTIFY_SLAVE_GO_SIGNAL = 15,
+    CQ_DISPATCH_SET_NUM_WORKER_SEMS = 16,
+    CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA = 17,
     CQ_DISPATCH_CMD_MAX_COUNT,  // for checking legal IDs
 };
 
@@ -235,13 +234,21 @@ struct CQDispatchWritePackedLargeCmd {
     uint16_t write_offset_index;
 } __attribute__((packed));
 
+constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_NONE = 0x00;
+// Issue a write barrier
+constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER = 0x01;
+// Increment prefetch semaphore
+constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_NOTIFY_PREFETCH = 0x02;
+// Wait for a count value on memory.
+constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY = 0x04;
+// Wait for a count value on a stream
+constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM = 0x08;
+// Clear a count value on a stream.
+constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM = 0x10;
+
 struct CQDispatchWaitCmd {
-    uint8_t barrier;          // if true, issue write barrier
-    uint8_t notify_prefetch;  // if true, inc prefetch sem
-    uint8_t clear_count;      // if true, reset count to 0
-    uint8_t wait;             // if true, wait on count value below
-    uint8_t pad1;
-    uint16_t pad2;
+    uint8_t flags;    // see above
+    uint16_t stream;  // stream to read/write
     uint32_t addr;   // address to read
     uint32_t count;  // wait while address is < count
 } __attribute__((packed));
@@ -272,7 +279,7 @@ struct CQDispatchGoSignalMcastCmd {
     uint8_t num_unicast_txns;
     uint8_t noc_data_start_index;
     uint32_t wait_count;
-    uint32_t wait_addr;
+    uint32_t wait_stream;  // Index of the stream to wait on
 } __attribute__((packed));
 
 struct CQDispatchNotifySlaveGoSignalCmd {

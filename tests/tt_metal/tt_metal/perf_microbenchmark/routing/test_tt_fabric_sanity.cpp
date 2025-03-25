@@ -6,7 +6,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/rtoptions.hpp>
+#include "rtoptions.hpp"
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/control_plane.hpp>
 //#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
@@ -147,10 +147,10 @@ typedef struct test_board {
         }
         device_handle_map = tt::tt_metal::detail::CreateDevices(available_chip_ids);
         if (metal_fabric_init_level == 0) {
-            _init_control_plane(mesh_graph_descriptor);
-            control_plane->configure_routing_tables();
+            control_plane = tt::Cluster::instance().get_control_plane();
+            control_plane->write_routing_tables_to_all_chips();
         } else {
-            control_plane = tt::DevicePool::instance().get_control_plane();
+            control_plane = tt::Cluster::instance().get_control_plane();
         }
 
         if (num_chips_to_use != available_chip_ids.size()) {
@@ -1393,6 +1393,7 @@ int main(int argc, char **argv) {
         test_args::get_command_option_uint32(input_args, "--target_address", default_target_address);
     uint32_t atomic_increment =
         test_args::get_command_option_uint32(input_args, "--atomic_increment", default_atomic_increment);
+    uint32_t data_mode = test_args::has_command_option(input_args, "--raw_data");
 
     // Note here that currently mcast_depth considers the mcast origin as a hop, and not the distance from the origin
     // This has side effects that specifying a depth of 0 or 1 will result in the same behavior
@@ -1630,17 +1631,17 @@ int main(int argc, char **argv) {
             client_interface_addr + sizeof(fabric_pull_client_interface_t) + sizeof(fabric_router_l1_config_t) * 4;
 
         std::vector<uint32_t> tx_compile_args = {
-            0,                           //(device->id() << 8) + src_endpoint_start_id + i,  // 0: src_endpoint_id
-            num_dest_endpoints,          // 1: num_dest_endpoints
-            dest_endpoint_start_id,      // 2:
-            tx_queue_start_addr,         // 3: queue_start_addr_words
-            (tx_queue_size_bytes >> 4),  // 4: queue_size_words
-            routing_table_start_addr,    // 5: routeing table
-            test_results_addr,           // 6: test_results_addr
-            test_results_size,           // 7: test_results_size
-            prng_seed,                   // 8: prng_seed
-            data_kb_per_tx,              // 9: total_data_kb
-            max_packet_size_words,       // 10: max_packet_size_words
+            data_mode,                          // 0: Data mode. 0 - Packetized Data. 1 Raw Data.
+            num_dest_endpoints,                 // 1: num_dest_endpoints
+            dest_endpoint_start_id,             // 2:
+            tx_queue_start_addr,                // 3: queue_start_addr_words
+            (tx_queue_size_bytes >> 4),         // 4: queue_size_words
+            routing_table_start_addr,           // 5: routeing table
+            test_results_addr,                  // 6: test_results_addr
+            test_results_size,                  // 7: test_results_size
+            prng_seed,                          // 8: prng_seed
+            data_kb_per_tx,                     // 9: total_data_kb
+            max_packet_size_words,              // 10: max_packet_size_words
             timeout_mcycles * 1000 * 1000 * 4,  // 11: timeout_cycles
             tx_skip_pkt_content_gen,            // 12: skip_pkt_content_gen
             tx_pkt_dest_size_choice,            // 13: pkt_dest_size_choice
@@ -1658,6 +1659,7 @@ int main(int argc, char **argv) {
             mcast_depth[RoutingDirection::W],   // 25: mcast_w
             mcast_depth[RoutingDirection::N],   // 26: mcast_n
             mcast_depth[RoutingDirection::S],   // 27: mcast_s
+            push_mode                           // 28: Router mode. 0 - Pull, 1 - Push
         };
 
         std::vector<uint32_t> rx_compile_args = {

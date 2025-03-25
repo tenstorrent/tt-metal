@@ -21,19 +21,6 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
 from loguru import logger
 
 
-def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
-    input = ttnn.from_torch(input, ttnn.bfloat16)
-    input = ttnn.to_layout(input, layout)
-    input = ttnn.to_device(input, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    return input
-
-
-def ttnn_to_torch(input):
-    input = ttnn.from_device(input)
-    input = ttnn.to_torch(input)
-    return input
-
-
 config_override = {
     (320, 320, 64, 64): {"act_block_h": 64},
     (640, 640, 32, 32): {"act_block_h": 64},
@@ -80,6 +67,8 @@ class resnetBlock2D:
         self.conv1s = []
         self.conv1s_weights = []
         self.conv1s_bias = []
+        # TODO: instead of hardcoding grid size in many components, configure it in a single place
+        self.grid_size = (8, 8)
 
         self.fallback_on_groupnorm = os.environ.get("FALLBACK_ON_GROUPNORM", "0") == "1"
         parameters.conv1.weight, parameters.conv1.bias = permute_conv_parameters(
@@ -126,10 +115,9 @@ class resnetBlock2D:
                 output_height=self.conv1_output_height,
                 output_width=self.conv1_output_width,
                 output_channels=self.conv1_out_channels,
-                compute_grid_size=self.device.compute_with_storage_grid_size(),
+                compute_grid_size=self.grid_size,
                 block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 enable_channels_padding=False,
-                is_out_tiled=True,
             ),
             tile_size=32,
         )
@@ -204,10 +192,9 @@ class resnetBlock2D:
                 output_height=self.conv2_input_height,
                 output_width=self.conv2_input_width,
                 output_channels=self.conv2_out_channels,
-                compute_grid_size=self.device.compute_with_storage_grid_size(),
+                compute_grid_size=self.grid_size,
                 block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 enable_channels_padding=False,
-                is_out_tiled=True,
             ),
             tile_size=32,
         )

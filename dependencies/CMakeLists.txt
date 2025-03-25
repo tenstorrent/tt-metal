@@ -31,6 +31,7 @@ CPMAddPackage(
     FIND_PACKAGE_ARGUMENTS "CONFIG REQUIRED"
 )
 
+ensureboosttarget(algorithm)
 ensureboosttarget(asio)
 ensureboosttarget(lockfree)
 ensureboosttarget(core)

@@ -8,7 +8,7 @@ inputs:
   docker_os_arch:
     description: 'Docker image architecture'
     required: false
-    default: tt-metalium/ubuntu-20.04-amd64
+    default: tt-metalium/ubuntu-22.04-dev-amd64
   docker_image:
     description: 'Specify Docker image to use.'
     required: false
@@ -46,7 +46,7 @@ runs:
       if: ${{ ! inputs.docker_image }}
       uses: ./.github/actions/generate-docker-tag
       with:
-        image: ${{ inputs.docker_os_arch }}
+        image: ${{ inputs.docker_os_arch || 'docker-image-unresolved!'}}
     - name: Set
       shell: bash
       run: |
@@ -68,7 +68,7 @@ runs:
         username: ${{ inputs.docker_username }}
         password: ${{ inputs.docker_password }}
         registry: ghcr.io
-        image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
+        image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG || 'docker-image-unresolved!'}}
         # The most important option below is `--rm`. Otherwise, the machines will fill up with undeleted containers.
         # The mounting of /etc/passwd, /etc/shadow, and /etc/bashrc is required in order for the correct file permissions
         # for newly created files.
@@ -89,9 +89,17 @@ runs:
           --log-driver local
           --log-opt max-size=50m
           ${{ inputs.docker_opts }}
-          -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL }}
+          -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL || 'INFO' }}
           -e PYTHONPATH=${{ github.workspace }}
           -e HOME=${{ github.workspace }}
+          -e GITHUB_ACTIONS=true
+          -e CI=true
+          -e GITHUB_REPOSITORY=${{ github.repository }}
+          -e GITHUB_SHA=${{ github.sha }}
+          -e GITHUB_REF_NAME=${{ github.ref_name }}
+          -e GITHUB_RUN_ID=${{ github.run_id }}
+          -e GITHUB_TRIGGERING_ACTOR=${{ github.github_triggering_actor }}
+          -e RUNNER_NAME=${{ runner.name }}
           ${{ inputs.device }}
           -w ${{ github.workspace }}
         run: |

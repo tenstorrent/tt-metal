@@ -7,6 +7,7 @@
 
 #include "mesh_device.hpp"
 #include "system_mesh.hpp"
+#include <tt-metalium/allocator.hpp>
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
@@ -20,7 +21,7 @@ using ::tt::tt_metal::distributed::MeshContainer;
 TEST(MeshDeviceInitTest, Init1x1Mesh) {
     auto& sys = SystemMesh::instance();
 
-    auto config = tt::tt_metal::distributed::MeshDeviceConfig{.mesh_shape = MeshShape(1, 1)};
+    MeshDeviceConfig config(MeshShape(1, 1));
 
     EXPECT_NO_THROW({
         auto mesh = tt::tt_metal::distributed::MeshDevice::create(

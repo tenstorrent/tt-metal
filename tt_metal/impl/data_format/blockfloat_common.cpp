@@ -14,7 +14,9 @@
 #include "tt_backend_api_types.hpp"
 #include "tracy/Tracy.hpp"
 #include "tile.hpp"
-#include "span.hpp"
+#include <tt_stl/span.hpp>
+
+#include "hal.hpp"
 
 uint8_t get_max_exp(const std::vector<uint32_t>& vec, bool is_exp_a) {
     TT_ASSERT(vec.size() == 16);

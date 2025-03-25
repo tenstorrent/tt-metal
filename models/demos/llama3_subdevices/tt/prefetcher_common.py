@@ -40,18 +40,23 @@ class TtLlamaPrefetcherSetup(LightweightModule):
         num_global_cb_receivers = 2
 
         (
+            self.active_sender_cores,
             self.dram_cores,
-            self.sender_cores,
-            self.receiver_cores_list,
-            self.receiver_cores,
+            self.all_sender_cores,
+            self.active_receiver_cores_list,
+            self.all_receiver_cores,
             self.worker_cores_range_set,
             self.mm_optimised_ring_cores,
             self.hop_grid,
         ) = get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_test=False)
 
         max_tile_size = 1088
-        self.global_cb_size = 750 * max_tile_size
-        self.sender_receiver_mapping = list(zip(self.sender_cores, self.receiver_cores))
+        # Global CB must be large enough to atleast double buffer weights
+        # This ensures that back to back matmuls (for eg. in MLP) can run
+        # without stalling on the weight prefetch
+        # calculated by fitting two largest tensor with extra room, ff2 has 391680B per global CB bank, ff1 has 207360B, plus 16320B gap (one block)
+        self.global_cb_size = 620000
+        self.sender_receiver_mapping = list(zip(self.all_sender_cores, self.all_receiver_cores))
         self.global_circular_buffer = ttnn.create_global_circular_buffer(
             self.mesh_device, self.sender_receiver_mapping, self.global_cb_size
         )
@@ -62,7 +67,7 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             [ttnn.CoreRange(core_coord, core_coord) for core_coord in self.dram_cores]
         )
         self.sender_core_range_set = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(core_coord, core_coord) for core_coord in self.sender_cores]
+            [ttnn.CoreRange(core_coord, core_coord) for core_coord in self.active_sender_cores]
         )
 
         ##### Setup up sub devices #####
