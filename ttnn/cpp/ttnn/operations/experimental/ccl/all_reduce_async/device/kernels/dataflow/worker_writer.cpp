@@ -80,8 +80,8 @@ void kernel_main() {
     auto packet_header_buffer_addr_backward = get_write_ptr(reserved_packet_header_cb_id);
     cb_push_back(reserved_packet_header_cb_id, 1);
     cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
+    // auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
+    // cb_push_back(reserved_packet_header_cb_id, 1);
 
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
@@ -122,49 +122,56 @@ void kernel_main() {
             fabric_connection,
             l1_read_addr,
             num_tiles_to_read_this_core * tensor0_page_size);
-        noc_async_writes_flushed();
 
-        cb_pop_front(cb0_id, num_tiles_to_read_this_core);
         tiles_read += num_tiles_to_read_this_core;
         shard_tile_id += num_tiles_to_read_this_core;
         if (shard_tile_id >= num_tiles_per_core) {
             shard_tile_id = 0;
             core_id++;
         }
+        noc_async_writes_flushed();
+        cb_pop_front(cb0_id, num_tiles_to_read_this_core);
     }
 
     // 2. mcast output ready semaphore
-    auto* pkt_hdr = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
-    pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-        out_ready_sem_noc_addr_in_pkt,
-        static_cast<uint16_t>(1),  // increment 1
-        32});
     // Write the mcast packet (forward)
     if (fabric_connection.has_forward_connection()) {
+        // reuse the forward direction data packets for the semaphore inc
+        auto* pkt_hdr_fwd = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_addr_forward);
+        pkt_hdr_fwd->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+            out_ready_sem_noc_addr_in_pkt,
+            static_cast<uint16_t>(1),  // increment 1
+            32});
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-        pkt_hdr->to_chip_multicast(
+        pkt_hdr_fwd->to_chip_multicast(
             tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
-        fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+        fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
+            reinterpret_cast<uint32_t>(pkt_hdr_fwd), sizeof(PACKET_HEADER_TYPE));
     }
     // Write the mcast packet (backward)
     if (fabric_connection.has_backward_connection()) {
-        pkt_hdr->to_chip_multicast(
+        // reuse the backward direction data packets for the semaphore inc
+        auto* pkt_hdr_bwd = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_addr_backward);
+        pkt_hdr_bwd->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+            out_ready_sem_noc_addr_in_pkt,
+            static_cast<uint16_t>(1),  // increment 1
+            32});
+        pkt_hdr_bwd->to_chip_multicast(
             tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
         fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
-            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
-    }
-    if (fabric_connection.is_logically_connected()) {
-        fabric_connection.close_start();
+            reinterpret_cast<uint32_t>(pkt_hdr_bwd), sizeof(PACKET_HEADER_TYPE));
     }
 
     // increment locally
     uint64_t out_ready_sem_noc_addr =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
     noc_semaphore_inc(out_ready_sem_noc_addr, 1);
+    if (fabric_connection.is_logically_connected()) {
+        fabric_connection.close_start();
+    }
 
     // 3. wait for mcast output ready semaphore
     while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) != out_ready_sem_wait_value);
