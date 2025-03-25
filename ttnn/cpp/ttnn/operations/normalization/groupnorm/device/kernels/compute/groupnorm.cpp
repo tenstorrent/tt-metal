@@ -190,6 +190,11 @@ void MAIN {
         out_block_h_last = block_h % num_out_blocks;
         out_block_hw_last = out_block_h_last * block_w;
     }
+    uint32_t cb_ex_external_tiles_required =
+        num_out_blocks_padded * num_cores_per_mcast_group * 16 / single_tile_size_bytes;
+    if ((num_out_blocks_padded * num_cores_per_mcast_group * 16) % single_tile_size_bytes) {
+        cb_ex_external_tiles_required++;
+    }
 
     for (uint32_t b = 0; b < batch; ++b) {
         index_g_offset = 0;
@@ -284,9 +289,11 @@ void MAIN {
                 }
                 tile_regs_acquire();
                 cb_wait_front(cb_scaler_global, 1);
-                cb_wait_front(cb_ex_external, 1);
-                reduce_tile(cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
-                cb_pop_front(cb_ex_external, 1);
+                cb_wait_front(cb_ex_external, cb_ex_external_tiles_required);
+                for (uint32_t external_i = 0; external_i < cb_ex_external_tiles_required; external_i++) {
+                    reduce_tile(cb_ex_external, cb_scaler_global, external_i, scaler0, dst0);
+                }
+                cb_pop_front(cb_ex_external, cb_ex_external_tiles_required);
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(dst0, cb_ex_global);
@@ -424,9 +431,11 @@ void MAIN {
                 }
                 tile_regs_acquire();
                 cb_wait_front(cb_scaler_global, 1);
-                cb_wait_front(cb_ex_external, 1);  // TODO DELETE THIS AND ADD POP
-                reduce_tile(cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
-                cb_pop_front(cb_ex_external, 1);
+                cb_wait_front(cb_ex_external, cb_ex_external_tiles_required);  // TODO DELETE THIS AND ADD POP
+                for (uint32_t external_i = 0; external_i < cb_ex_external_tiles_required; external_i++) {
+                    reduce_tile(cb_ex_external, cb_scaler_global, external_i, scaler0, dst0);
+                }
+                cb_pop_front(cb_ex_external, cb_ex_external_tiles_required);
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(dst0, cb_ex2_global);
