@@ -4,10 +4,11 @@ import torch.nn as nn
 import ttnn
 import pytest
 from loguru import logger
+import os
 from models.experimental.mochi.tt.common import compute_metrics
 from genmo.mochi_preview.vae.models import GroupNormSpatial
 
-# from models.experimental.mochi.vae.modules import GroupNormSpatial as NewGroupNormSpatial
+from models.experimental.mochi.tt.vae.groupnorm import GroupNorm as TTGroupNorm
 
 
 @pytest.mark.parametrize(
@@ -162,3 +163,93 @@ def test_groupnorm_spatial_tt(device, num_groups, B, C, T, H, W, affine):
 
     # Assertions to verify correctness
     assert pcc > 0.99, f"PCC = {pcc}, MSE = {mse}, MAE = {mae}"
+
+
+@pytest.mark.parametrize(
+    "num_groups,B,C,T,H,W,affine",
+    [
+        # From blocks.0 and blocks.1 (first section)
+        (32, 1, 768, 28, 60, 106, True),
+        # From blocks.2 (second section)
+        (32, 1, 512, 82, 120, 212, True),
+        # From blocks.3 (third section)
+        (32, 1, 256, 163, 240, 424, True),
+        # From blocks.4 (fourth section)
+        (32, 1, 128, 163, 480, 848, True),
+    ],
+    ids=["variant1", "variant2", "variant3", "variant4"],
+)
+# @pytest.mark.parametrize(
+#     "mesh_device",
+#     [
+#         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+#             os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
+#         )
+#     ],
+#     indirect=True,
+# )
+def test_tt_groupnorm_module(device, num_groups, B, C, T, H, W, affine):
+    # Set a manual seed for reproducibility
+    torch.manual_seed(42)
+
+    input_shape = (B, C, T, H, W)
+    # Create random input tensor
+    input_tensor = torch.randn(*input_shape, dtype=torch.float32)
+
+    # Create PyTorch GroupNorm implementation for reference
+    groupnorm_spatial = GroupNormSpatial(num_groups=num_groups, num_channels=input_shape[1], affine=affine)
+    weight = torch.randn(C, dtype=torch.float32)
+    bias = torch.randn(C, dtype=torch.float32)
+    groupnorm_spatial.weight = nn.Parameter(weight)
+    groupnorm_spatial.bias = nn.Parameter(bias)
+
+    # Create state dict for TTGroupNorm
+    state_dict = {
+        "weight": weight,
+        "bias": bias,
+    }
+
+    # Create our TTGroupNorm implementation
+    tt_groupnorm = TTGroupNorm(
+        mesh_device=device,
+        state_dict=state_dict,
+        state_dict_prefix="",
+        num_groups=num_groups,
+        channels=C,
+        affine=affine,
+    )
+
+    # Calculate the reference output
+    output_reference = groupnorm_spatial(input_tensor)
+
+    # Convert input to NTHWC format for TTGroupNorm
+    input_nthwc = input_tensor.permute(0, 2, 3, 4, 1)  # B, T, H, W, C
+    input_nthwc = input_nthwc.reshape(B * T, 1, H * W, C)
+    input_nthwc = ttnn.from_torch(
+        input_nthwc,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+    )
+
+    # Run TTGroupNorm
+    output_tt_nthwc = tt_groupnorm(input_nthwc)
+    output_tt = ttnn.to_torch(output_tt_nthwc)  # , mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
+    output_tt = output_tt.reshape(B, T, H, W, C)  # .permute(0, 4, 1, 2, 3)
+
+    # Convert TTGroupNorm output back to BCTHW format
+    output_tt = output_tt.permute(0, 4, 1, 2, 3)  # B, C, T, H, W
+
+    # Compare outputs
+    pcc, mse, mae = compute_metrics(output_reference, output_tt)
+    logger.info(f"PCC = {pcc}, MSE = {mse}, MAE = {mae}")
+
+    # Assertions to verify correctness
+    assert pcc > 0.99, f"PCC = {pcc}, MSE = {mse}, MAE = {mae}"
+
+    # Test that the shapes match
+    assert (
+        output_tt.shape == input_tensor.shape
+    ), f"Output shape {output_tt.shape} doesn't match input shape {input_tensor.shape}"

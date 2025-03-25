@@ -21,29 +21,92 @@ class GroupNorm(LightweightModule):
     ):
         self.mesh_device = mesh_device
         self.channels = channels
+        self.num_groups = num_groups
         self.affine = affine
+        self.eps = eps
 
-        # NOTE: fallback to host until ttnn.group_norm is functional
-        self.norm = torch.nn.GroupNorm(num_groups, channels, eps=eps, affine=affine)
-        partial_state_dict = {
-            k[len(state_dict_prefix) :]: v for k, v in state_dict.items() if k.startswith(state_dict_prefix)
-        }
-        self.norm.load_state_dict(partial_state_dict, strict=True)
+        # Get grid size from mesh device
+        self.grid_size = mesh_device.compute_with_storage_grid_size()
 
-    def forward(self, x_NTHWC):
-        logger.warning("GroupNorm is not functional in TTNN, fallback to host")
-        torch_x_NTHWC = ttnn.to_torch(x_NTHWC, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=1))
-        N, T, H, W, C = torch_x_NTHWC.shape
-        torch_x_NT_CHW = torch_x_NTHWC.permute(0, 1, 4, 2, 3).reshape(N * T, C, H, W)
-        torch_x_NT_CHW = self.norm(torch_x_NT_CHW)
-        torch_x_NTCHW = torch_x_NT_CHW.reshape(N, T, C, H, W)
-        torch_x_NTHWC = torch_x_NTCHW.permute(0, 1, 3, 4, 2)
-        x_NTHWC = ttnn.from_torch(
-            torch_x_NTHWC,
+        # Initialize weights and bias
+        self.weight = state_dict[f"{state_dict_prefix}weight"]
+        self.bias = state_dict[f"{state_dict_prefix}bias"]
+
+        # Create input mask
+        self.input_mask = ttnn.create_group_norm_input_mask(channels, num_groups, self.grid_size.y)
+        self.input_mask = ttnn.from_torch(
+            self.input_mask,
+            dtype=ttnn.DataType.BFLOAT8_B,
+            layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        # Prepare gamma and beta
+        self.gamma = ttnn.create_group_norm_weight_bias_rm(self.weight, channels, self.grid_size.y)
+        self.beta = ttnn.create_group_norm_weight_bias_rm(self.bias, channels, self.grid_size.y)
+
+        self.gamma_t = ttnn.from_torch(
+            self.gamma,
             dtype=ttnn.DataType.BFLOAT16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
+            # mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        return x_NTHWC
+
+        self.beta_t = ttnn.from_torch(
+            self.beta,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+    def forward(self, x_tilized):
+        # N, T, H, W, C = x_NTHWC.shape
+        HW = x_tilized.shape[2]
+
+        # Reshape to format expected by group_norm [N, 1, H*W, C]
+        # print(f"x_NTHWC: {x_NTHWC.shape}")
+        # x_reshaped = ttnn.reshape(x_NTHWC, [N * T, 1, H * W, C])
+        # print(f"x_reshaped: {x_reshaped.shape}")
+
+        # # Tilize the input tensor
+        # x_tilized = ttnn.tilize_with_zero_padding(x_reshaped, use_multicore=True)
+        # print(f"x_tilized: {x_tilized.shape}")
+        # Determine proper num_out_blocks based on input dimensions
+        # This is a simplified heuristic - adjust based on your model's specific needs
+        num_out_blocks = {
+            60 * 106: 8,
+            120 * 212: 10,
+            240 * 424: 40,
+            480 * 848: 135,
+        }[HW]
+
+        # Apply group_norm
+        core_grid = ttnn.CoreGrid(y=self.grid_size.y, x=self.grid_size.x)
+        output = ttnn.group_norm(
+            x_tilized,
+            num_groups=self.num_groups,
+            epsilon=self.eps,
+            input_mask=self.input_mask,
+            weight=self.gamma_t,
+            bias=self.beta_t,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_layout=ttnn.TILE_LAYOUT,
+            core_grid=core_grid,
+            inplace=False,
+            num_out_blocks=num_out_blocks,
+        )
+        return output
+        # print(f"output: {output.shape}")
+
+        # output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
+        # print(f"output: {output.shape}")
+        # # Reshape back to original format [N, T, H, W, C]
+        # output = ttnn.reshape(output, [N, T, H, W, C])
+        # print(f"output: {output.shape}")
+        # return output
