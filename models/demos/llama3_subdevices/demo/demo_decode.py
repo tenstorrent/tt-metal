@@ -423,7 +423,7 @@ def run_llama3_demo(
             ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
         else:
             all_outputs.append(tt_output_torch.tolist()[0])  # Update generated token to list of TT outputs
-            if all_outputs[-1] in [128001, 128009]:  # EoT tokens
+            if all_outputs[-1] in [128001, 128009] and not stress_test:  # EoT tokens
                 users_decoding = False
 
         # Ignore the first iteration for average speed calculation
