@@ -36,8 +36,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
     ],
 )
 def test_unary_bw_clip_ttnn(input_shapes, min_val, max_val, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, -1, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, -1, device, seed=1)
     if min_val == "tensor":
         min, min_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     elif min_val is None:

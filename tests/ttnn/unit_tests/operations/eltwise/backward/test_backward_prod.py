@@ -47,8 +47,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
 )
 @pytest.mark.parametrize("all_dimensions", [True, False])
 def test_bw_prod(input_shapes, all_dimensions, dim, device):
-    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
-    grad_data, grad_tensor = data_gen_pt_tt_prod(input_shapes, device, all_dimensions, dim)
+    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_pt_tt_prod(input_shapes, device, all_dimensions, dim, seed=1)
     if all_dimensions == False:
         pyt_y = torch.prod(in_data, dim=dim, keepdim=True)
     else:
@@ -73,8 +73,8 @@ def test_bw_prod(input_shapes, all_dimensions, dim, device):
     ),
 )
 def test_bw_prod_default_both(input_shapes, device):
-    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
-    grad_data, grad_tensor = data_gen_pt_tt_prod(input_shapes, device)
+    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_pt_tt_prod(input_shapes, device, seed=1)
     pyt_y = torch.prod(in_data).view(1, 1, 1, 1)
     tt_output_tensor_on_device = ttnn.prod_bw(grad_tensor, input_tensor)
     in_data.retain_grad()
@@ -97,8 +97,8 @@ def test_bw_prod_default_both(input_shapes, device):
 )
 @pytest.mark.parametrize("all_dimensions", [True, False])
 def test_bw_prod_default_dim(input_shapes, all_dimensions, device):
-    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
-    grad_data, grad_tensor = data_gen_pt_tt_prod(input_shapes, device, all_dimensions)
+    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_pt_tt_prod(input_shapes, device, all_dimensions, seed=1)
     if all_dimensions == False:
         pyt_y = torch.prod(in_data, dim=0, keepdim=True)
     else:

@@ -24,9 +24,9 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import comp
     ),
 )
 def test_bw_binary_bias_gelu(input_shapes, approximate, device):
-    in_data_a, input_tensor_a = data_gen_with_range(input_shapes, -100, 100, device, True)
-    in_data_b, input_tensor_b = data_gen_with_range(input_shapes, -10, 10, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device)
+    in_data_a, input_tensor_a = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    in_data_b, input_tensor_b = data_gen_with_range(input_shapes, -10, 10, device, True, seed=1)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device, seed=2)
     tt_output_tensor_on_device = ttnn.bias_gelu_bw(grad_tensor, input_tensor_a, input_tensor_b, approximate=approximate)
     golden_function = ttnn.get_golden_function(ttnn.bias_gelu_bw)
     golden_tensor = golden_function(grad_data, in_data_a, in_data_b, approximate)
@@ -57,8 +57,8 @@ def test_bw_binary_bias_gelu(input_shapes, approximate, device):
     ),
 )
 def test_bw_bias_gelu_unary(input_shapes, approximate, bias, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device, True, seed=1)
 
     tt_output_tensor_on_device = ttnn.bias_gelu_bw(grad_tensor, input_tensor, bias, approximate=approximate)
 
@@ -84,8 +84,8 @@ def test_bw_bias_gelu_unary(input_shapes, approximate, bias, device):
     ),
 )
 def test_bw_bias_gelu_unary_default(input_shapes, bias, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device, True, seed=1)
 
     tt_output_tensor_on_device = ttnn.bias_gelu_bw(grad_tensor, input_tensor, bias)
 

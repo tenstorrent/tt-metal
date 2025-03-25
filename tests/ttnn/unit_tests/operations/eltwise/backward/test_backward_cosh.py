@@ -24,8 +24,8 @@ from models.utility_functions import (
     ),
 )
 def test_bw_cosh(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -9, 9, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -20, 20, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -9, 9, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -20, 20, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.cosh_bw(grad_tensor, input_tensor)
 
@@ -45,8 +45,8 @@ def test_bw_cosh(input_shapes, device):
     ),
 )
 def test_bw_cosh_inf(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, 90, 95, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -7, 7, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, 90, 95, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -7, 7, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.cosh_bw(grad_tensor, input_tensor)
 
@@ -66,8 +66,8 @@ def test_bw_cosh_inf(input_shapes, device):
     ),
 )
 def test_bw_cosh_neg_inf(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -95, -89, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -7, 7, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -95, -89, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -7, 7, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.cosh_bw(grad_tensor, input_tensor)
 
@@ -84,8 +84,8 @@ def test_bw_cosh_neg_inf(input_shapes, device):
 )
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_bw_cosh_nan_test1(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, 86, 89, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, 35, 50, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, 86, 89, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, 35, 50, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.cosh_bw(grad_tensor, input_tensor)
 
@@ -102,8 +102,8 @@ def test_bw_cosh_nan_test1(input_shapes, device):
 )
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 def test_bw_cosh_nan_test2(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, 86, 89, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -50, -35, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, 86, 89, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -50, -35, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.cosh_bw(grad_tensor, input_tensor)
 

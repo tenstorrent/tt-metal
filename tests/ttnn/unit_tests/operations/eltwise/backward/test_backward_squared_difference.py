@@ -17,9 +17,9 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import comp
     ),
 )
 def test_bw_squared_difference(input_shapes, device):
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device)
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    other_data, other_tensor = data_gen_with_range(input_shapes, -10, 10, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device, seed=0)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=1)
+    other_data, other_tensor = data_gen_with_range(input_shapes, -10, 10, device, True, seed=2)
 
     tt_output_tensor_on_device = ttnn.squared_difference_bw(grad_tensor, input_tensor, other_tensor)
 

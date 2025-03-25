@@ -21,8 +21,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     ),
 )
 def test_bw_logit(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -2, 2, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -2, 2, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device, seed=1)
     tt_output_tensor_on_device = ttnn.logit_bw(grad_tensor, input_tensor)
 
     golden_function = ttnn.get_golden_function(ttnn.logit_bw)

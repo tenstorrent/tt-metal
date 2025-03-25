@@ -18,8 +18,8 @@ from math import pi
     ),
 )
 def test_bw_cos(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, 0, (2 * pi), device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, 10, device, False)
+    in_data, input_tensor = data_gen_with_range(input_shapes, 0, (2 * pi), device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, 10, device, False, seed=1)
 
     tt_output_tensor_on_device = ttnn.cos_bw(grad_tensor, input_tensor)
 

@@ -27,13 +27,13 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
     ),
 )
 def test_bw_concat(input_shapes, input_shapes_2, dimension, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, True, seed=0)
 
-    other_data, other_tensor = data_gen_with_range(input_shapes_2, -100, 100, device, True, True)
+    other_data, other_tensor = data_gen_with_range(input_shapes_2, -100, 100, device, True, True, seed=1)
 
     pyt_y = torch.concat((in_data, other_data), dim=dimension)
 
-    grad_data, grad_tensor = data_gen_with_range(pyt_y.shape, -100, 100, device, True, True)
+    grad_data, grad_tensor = data_gen_with_range(pyt_y.shape, -100, 100, device, True, True, seed=2)
 
     tt_output_tensor_on_device = ttnn.concat_bw(grad_tensor, input_tensor, other_tensor, dimension)
 
@@ -52,13 +52,13 @@ def test_bw_concat(input_shapes, input_shapes_2, dimension, device):
     ),
 )
 def test_bw_concat_Default(input_shapes, input_shapes_2, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, True, seed=0)
 
-    other_data, other_tensor = data_gen_with_range(input_shapes_2, -100, 100, device, True, True)
+    other_data, other_tensor = data_gen_with_range(input_shapes_2, -100, 100, device, True, True, seed=1)
 
     pyt_y = torch.concat((in_data, other_data))
 
-    grad_data, grad_tensor = data_gen_with_range(pyt_y.shape, -100, 100, device, True, True)
+    grad_data, grad_tensor = data_gen_with_range(pyt_y.shape, -100, 100, device, True, True, seed=2)
 
     tt_output_tensor_on_device = ttnn.concat_bw(grad_tensor, input_tensor, other_tensor)
 
@@ -96,13 +96,13 @@ def test_bw_concat_default_example(device):
 )
 @pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True]])
 def test_bw_concat_Default_with_output(input_shapes, input_shapes_2, device, are_required_outputs):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, True, seed=0)
 
-    other_data, other_tensor = data_gen_with_range(input_shapes_2, -100, 100, device, True, True)
+    other_data, other_tensor = data_gen_with_range(input_shapes_2, -100, 100, device, True, True, seed=1)
 
     pyt_y = torch.concat((in_data, other_data))
 
-    grad_data, grad_tensor = data_gen_with_range(pyt_y.shape, -100, 100, device, True, True)
+    grad_data, grad_tensor = data_gen_with_range(pyt_y.shape, -100, 100, device, True, True, seed=2)
 
     input_grad = None
     other_grad = None
@@ -164,13 +164,13 @@ def test_bw_concat_Default_with_output(input_shapes, input_shapes_2, device, are
 )
 @pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True]])
 def test_bw_concat_with_output(input_shapes, input_shapes_2, dimension, device, are_required_outputs):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, True, seed=0)
 
-    other_data, other_tensor = data_gen_with_range(input_shapes_2, -100, 100, device, True, True)
+    other_data, other_tensor = data_gen_with_range(input_shapes_2, -100, 100, device, True, True, seed=1)
 
     pyt_y = torch.concat((in_data, other_data), dim=dimension)
 
-    grad_data, grad_tensor = data_gen_with_range(pyt_y.shape, -100, 100, device, True, True)
+    grad_data, grad_tensor = data_gen_with_range(pyt_y.shape, -100, 100, device, True, True, seed=2)
 
     input_grad = None
     other_grad = None

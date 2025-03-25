@@ -17,10 +17,10 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
     ),
 )
 def test_bw_rsub(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    other_data, other_tensor = data_gen_with_range(input_shapes, -5, 5, device, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    other_data, other_tensor = data_gen_with_range(input_shapes, -5, 5, device, True, seed=1)
 
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, 5, device)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, 5, device, seed=2)
 
     tt_output_tensor_on_device = ttnn.rsub_bw(grad_tensor, input_tensor, other_tensor)
 
@@ -41,19 +41,19 @@ def test_bw_rsub(input_shapes, device):
 )
 @pytest.mark.parametrize("are_required_outputs", [[True, True], [True, False], [False, True]])
 def test_bw_rsub_opt(input_shapes, device, are_required_outputs):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    other_data, other_tensor = data_gen_with_range(input_shapes, -5, 5, device, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    other_data, other_tensor = data_gen_with_range(input_shapes, -5, 5, device, True, seed=1)
 
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, 5, device)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, 5, device, seed=2)
 
     input_grad = None
     other_grad = None
     tt_output_tensor_on_device = None
 
     if are_required_outputs[0]:
-        _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
+        _, input_grad = data_gen_with_range(input_shapes, -1, 1, device, seed=3)
     if are_required_outputs[1]:
-        _, other_grad = data_gen_with_range(input_shapes, -1, 1, device)
+        _, other_grad = data_gen_with_range(input_shapes, -1, 1, device, seed=4)
 
     cq_id = 0
 

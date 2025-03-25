@@ -22,8 +22,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
 )
 @pytest.mark.parametrize("lambd", [0.5, 1.0, 2.5, 5.5, 9.9])
 def test_bw_softshrink(input_shapes, lambd, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -20, 20, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -20, 20, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.softshrink_bw(grad_tensor, input_tensor, lambd=lambd)
 
@@ -44,8 +44,12 @@ def test_bw_softshrink(input_shapes, lambd, device):
 )
 @pytest.mark.parametrize("lambd", [0.5, 1.0, 2.5, 5.5, 9.9])
 def test_bw_softshrink_bf8b(input_shapes, lambd, device):
-    in_data, input_tensor = data_gen_with_range_dtype(input_shapes, -100, 100, device, True, False, ttnn.bfloat8_b)
-    grad_data, grad_tensor = data_gen_with_range_dtype(input_shapes, -20, 20, device, False, False, ttnn.bfloat8_b)
+    in_data, input_tensor = data_gen_with_range_dtype(
+        input_shapes, -100, 100, device, True, False, ttnn.bfloat8_b, seed=0
+    )
+    grad_data, grad_tensor = data_gen_with_range_dtype(
+        input_shapes, -20, 20, device, False, False, ttnn.bfloat8_b, seed=1
+    )
 
     tt_output_tensor_on_device = ttnn.softshrink_bw(grad_tensor, input_tensor, lambd=lambd)
 
@@ -65,8 +69,8 @@ def test_bw_softshrink_bf8b(input_shapes, lambd, device):
     ],
 )
 def test_bw_softshrink_default(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -20, 20, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -20, 20, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.softshrink_bw(grad_tensor, input_tensor)
 

@@ -17,9 +17,9 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
 )
 @pytest.mark.parametrize("sizes", [[12, 1, 1, 1], [6, 1, 1, 1], [1, 24, 1, 1], [1, 3, 1, 1]])
 def test_bw_repeat(input_shapes, sizes, device):
-    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True)
+    in_data, input_tensor = data_gen_pt_tt(input_shapes, device, True, seed=0)
     pyt_y = in_data.repeat(sizes)
-    grad_data, grad_tensor = data_gen_pt_tt(pyt_y.shape, device, True)
+    grad_data, grad_tensor = data_gen_pt_tt(pyt_y.shape, device, True, seed=1)
 
     tt_output_tensor_on_device = ttnn.repeat_bw(grad_tensor, input_tensor, sizes)
 

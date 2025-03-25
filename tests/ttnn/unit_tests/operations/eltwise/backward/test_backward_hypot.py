@@ -17,9 +17,9 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
     ),
 )
 def test_bw_hypot(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -101, 100, device, True)
-    other_data, other_tensor = data_gen_with_range(input_shapes, -52, 51, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -30, 30, device, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -101, 100, device, True, seed=0)
+    other_data, other_tensor = data_gen_with_range(input_shapes, -52, 51, device, True, seed=1)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -30, 30, device, True, seed=2)
 
     tt_output_tensor_on_device = ttnn.hypot_bw(grad_tensor, input_tensor, other_tensor)
 

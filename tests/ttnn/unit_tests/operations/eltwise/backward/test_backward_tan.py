@@ -21,8 +21,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
 )
 def test_bw_tan(input_shapes, device):
     # tt tan supports input range [-1.45, 1.45]
-    in_data, input_tensor = data_gen_with_range(input_shapes, -1.45, 1.45, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -1e4, 1e4, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -1.45, 1.45, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -1e4, 1e4, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.tan_bw(grad_tensor, input_tensor)
 
