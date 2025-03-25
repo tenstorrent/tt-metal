@@ -48,7 +48,7 @@ jobs:
     with:
       version: "22.04"
       toolchain: cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
-      build-type: ${{ inputs.build-type || 'Debug' }}
+      build-type: ${{ inputs.build-type || 'ASan' }}
       publish-artifact: false
 
   find-changed-files:
