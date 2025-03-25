@@ -19,7 +19,6 @@ inline void calculate_fill(const float value) {
     // SFPU microcode
     vFloat fill_val = value;
 
-#pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         dst_reg[0] = fill_val;
         dst_reg++;
