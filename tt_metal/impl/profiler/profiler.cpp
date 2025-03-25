@@ -383,9 +383,9 @@ void DeviceProfiler::logPacketData(
 
     if (packet_type == kernel_profiler::TS_DATA) {
         if (this->current_zone_it != device_events.end()) {
-            // Check if we are in BRISC Dispatch zone. If so, we could have gotten dispatch meta data packets
+            // Check if we are in a Tensix Dispatch zone. If so, we could have gotten dispatch meta data packets
             // These packets can amend parent zone's info
-            if (tracy::riscName[risc_num] == "BRISC" &&
+            if ((tracy::riscName[risc_num] == "BRISC" || tracy::riscName[risc_num] == "NCRISC") &&
                 this->current_zone_it->zone_phase == tracy::TTDeviceEventPhase::begin &&
                 this->current_zone_it->zone_name.find("DISPATCH") != std::string::npos) {
                 if (zone_name.find("process_cmd") != std::string::npos) {
@@ -407,9 +407,21 @@ void DeviceProfiler::logPacketData(
                         fmt::format("{}", magic_enum::enum_name(static_cast<CQDispatchCmdPackedWriteLargeType>(data)));
                     metaData["dispatch_command_subtype"] = this->current_dispatch_meta_data.cmd_subtype;
                 }
-                std::string cmd_name = this->current_dispatch_meta_data.cmd_subtype != ""
-                                           ? this->current_dispatch_meta_data.cmd_subtype
-                                           : this->current_dispatch_meta_data.cmd_type;
+
+                std::string newZoneName = this->current_dispatch_meta_data.cmd_type;
+                if (tracy::riscName[risc_num] == "BRISC") {
+                    if (this->current_dispatch_meta_data.cmd_subtype != "") {
+                        newZoneName = fmt::format(
+                            "{}:{}",
+                            this->current_dispatch_meta_data.worker_runtime_id,
+                            this->current_dispatch_meta_data.cmd_subtype);
+                    } else {
+                        newZoneName = fmt::format(
+                            "{}:{}",
+                            this->current_dispatch_meta_data.worker_runtime_id,
+                            this->current_dispatch_meta_data.cmd_type);
+                    }
+                }
                 tracy::TTDeviceEvent event = tracy::TTDeviceEvent(
                     this->current_dispatch_meta_data.worker_runtime_id,
                     this->current_zone_it->chip_id,
@@ -420,7 +432,7 @@ void DeviceProfiler::logPacketData(
                     this->current_zone_it->timestamp,
                     this->current_zone_it->line,
                     this->current_zone_it->file,
-                    fmt::format("{}:{}", this->current_dispatch_meta_data.worker_runtime_id, cmd_name),
+                    newZoneName,
                     this->current_zone_it->zone_phase);
                 device_events.erase(this->current_zone_it);
                 auto ret = device_events.insert(event);
