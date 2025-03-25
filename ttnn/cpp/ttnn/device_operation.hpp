@@ -585,7 +585,7 @@ void launch_on_mesh_device(
 
     const auto enqueue_mesh_workload = [=](tt::tt_metal::distributed::MeshWorkload& mesh_workload) {
         ZoneScopedN("EnqueueProgram");
-        tt::tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
+        tt::tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(*cq_id), mesh_workload, false);
     };
 
     if (is_program_cache_enabled) {
@@ -655,6 +655,7 @@ void launch_on_mesh_device(
 
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void handle_mesh_adapter_cache_hit(
+    QueueId cq_id,
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
@@ -698,7 +699,7 @@ void handle_mesh_adapter_cache_hit(
         }
 
         tt::tt_metal::distributed::EnqueueMeshWorkload(
-            mesh_device->mesh_command_queue(), adapter.get_cached_mesh_workload().workload, false);
+            mesh_device->mesh_command_queue(*cq_id), adapter.get_cached_mesh_workload().workload, false);
 
         TracyOpMeshWorkload(mesh_device, adapter.get_cached_mesh_workload().workload, mesh_device_operation_t{}, operation_attributes, tensor_args, tensor_return_value);
     }, program_factory);
@@ -707,6 +708,7 @@ void handle_mesh_adapter_cache_hit(
 // Helper for creating and caching a mesh workload
 template <DeviceOperationConcept mesh_device_operation_t>
 void create_and_cache_mesh_workload(
+    QueueId cq_id,
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
@@ -755,14 +757,14 @@ void create_and_cache_mesh_workload(
 
             // Enqueue the workload
             tt::tt_metal::distributed::EnqueueMeshWorkload(
-                mesh_device->mesh_command_queue(), cached_adapter.get_cached_mesh_workload().workload, false);
+                mesh_device->mesh_command_queue(*cq_id), cached_adapter.get_cached_mesh_workload().workload, false);
 
             TracyOpMeshWorkload(mesh_device, cached_adapter.get_cached_mesh_workload().workload, mesh_device_operation_t{}, operation_attributes, tensor_args, tensor_return_value);
         }, program_factory);
     } else {
         // Enqueue the workload directly (no caching)
         tt::tt_metal::distributed::EnqueueMeshWorkload(
-            mesh_device->mesh_command_queue(), cached_workload.workload, false);
+            mesh_device->mesh_command_queue(*cq_id), cached_workload.workload, false);
         TracyOpMeshWorkload(mesh_device, cached_workload.workload, mesh_device_operation_t{}, operation_attributes, tensor_args, tensor_return_value);
     }
 }
@@ -801,11 +803,11 @@ void launch_operation_with_adapter(
 
     if (program_cache_hit) {
         handle_mesh_adapter_cache_hit<mesh_device_operation_t>(
-            operation_attributes, tensor_args, tensor_return_value,
+            cq_id, operation_attributes, tensor_args, tensor_return_value,
             mesh_device, program_cache, program_hash);
     } else {
         create_and_cache_mesh_workload<mesh_device_operation_t>(
-            operation_attributes, tensor_args, tensor_return_value,
+            cq_id, operation_attributes, tensor_args, tensor_return_value,
             mesh_device, program_cache, program_hash);
     }
 }
