@@ -40,6 +40,13 @@ from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
         ttnn.BufferType.L1,
     ],
 )
+@pytest.mark.parametrize(
+    "use_persistent_output",
+    [
+        True,
+        False,
+    ],
+)
 @pytest.mark.parametrize("replication_factor", [8])  # 1, 8])
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
@@ -59,6 +66,7 @@ def test_line_reduce_scatter_on_TG_rows_post_commit(
     function_level_defaults,
     enable_async,
     replication_factor,
+    use_persistent_output,
     num_iters=16,
 ):
     if len(mesh_device.get_devices()) != 32:
@@ -84,6 +92,7 @@ def test_line_reduce_scatter_on_TG_rows_post_commit(
         enable_persistent_fabric=True,
         create_persistent_fabric=True,
         teardown_persistent_fabric=True,
+        use_persistent_output=use_persistent_output,
     )
 
 
@@ -107,6 +116,13 @@ def test_line_reduce_scatter_on_TG_rows_post_commit(
         ttnn.BufferType.DRAM,
     ],
 )
+@pytest.mark.parametrize(
+    "use_persistent_output",
+    [
+        True,
+        False,
+    ],
+)
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("replication_factor", [4])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
@@ -125,6 +141,7 @@ def test_line_reduce_scatter_on_TG_cols_post_commit(
     function_level_defaults,
     enable_async,
     replication_factor,
+    use_persistent_output,
     num_iters=16,
 ):
     if len(mesh_device.get_devices()) != 32:
@@ -151,4 +168,5 @@ def test_line_reduce_scatter_on_TG_cols_post_commit(
         enable_persistent_fabric=True,
         create_persistent_fabric=True,
         teardown_persistent_fabric=True,
+        use_persistent_output=use_persistent_output,
     )

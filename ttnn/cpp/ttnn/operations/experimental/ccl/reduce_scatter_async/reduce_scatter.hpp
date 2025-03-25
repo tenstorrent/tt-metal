@@ -36,6 +36,7 @@ struct ExecuteReduceScatter {
         const MeshDevice& mesh_device,
         const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
         const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
+        const std::optional<std::vector<ttnn::Tensor>>& persistent_output_tensors,
         ttnn::operations::reduction::ReduceType math_op,
         const std::optional<ttnn::MemoryConfig>& memory_config,
         ttnn::ccl::Topology topology,

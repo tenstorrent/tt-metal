@@ -79,7 +79,11 @@ ReduceScatterAsync create_reduce_scatter_struct(
 }  // namespace reduce_scatter_detail
 }  // namespace ccl
 
-void ReduceScatterAsync::validate(const std::vector<Tensor>& input_tensors) const {
+void ReduceScatterAsync::validate_with_output_tensors(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    const auto& input_tensor = input_tensors[0];
+    const auto& layout = input_tensors[0].get_layout();
+    const auto& dtype = input_tensors[0].get_dtype();
     for (auto const& t : input_tensors) {
         TT_FATAL(
             t.get_padded_shape()[this->scatter_dim] / this->ring_size > 0,
@@ -89,6 +93,66 @@ void ReduceScatterAsync::validate(const std::vector<Tensor>& input_tensors) cons
             t.get_padded_shape()[this->scatter_dim] % this->ring_size == 0,
             "Reduce scatter input tensor shape on dim {} must be divisible by ring size",
             this->scatter_dim);
+    }
+    if (output_tensors.size() > 0 && output_tensors[0].has_value()) {
+        TT_FATAL(
+            output_tensors.size() == 5,
+            "Error, Number of output tensors should be 5 but has {}",
+            output_tensors.size());
+        for (size_t t = 0; t < output_tensors.size(); ++t) {
+            const auto& output_tensor = output_tensors[t];
+            TT_FATAL(
+                output_tensor.value().storage_type() == StorageType::DEVICE,
+                "Operands to all_gather need to be on device!");
+            TT_FATAL(
+                output_tensor.value().get_layout() == layout,
+                "Error, Output tensor layout should be same as input tensor layout but has {}",
+                output_tensor.value().get_layout());
+            TT_FATAL(
+                output_tensor.value().get_dtype() == dtype,
+                "Error, Output tensor dtype should be same as input tensor dtype but has {}",
+                output_tensor.value().get_dtype());
+            TT_FATAL(
+                output_tensor.value().get_tensor_spec().page_config() == input_tensor.get_tensor_spec().page_config(),
+                "Error, Output tensor page config should be same as input tensor page config but has {}",
+                output_tensor.value().get_tensor_spec().page_config());
+            TT_FATAL(
+                output_tensor.value().memory_config() == this->output_mem_config,
+                "Error, Output tensor memory config should be same as output_mem_config but has {}",
+                output_tensor.value().memory_config());
+
+            // check memory layout
+            TT_FATAL(
+                output_tensor.value().memory_config().memory_layout == input_tensor.memory_config().memory_layout,
+                "Error, Output tensor memory layout should be same as input tensor memory layout but has {}",
+                output_tensor.value().memory_config().memory_layout);
+
+            // check the output tensor size
+            auto output_shape = output_tensor.value().get_padded_shape();
+            auto input_shape = input_tensor.get_padded_shape();
+
+            TT_FATAL(
+                output_shape.size() == input_shape.size(),
+                "Error, Output tensor shape should have same number of dimensions as input tensor but has {}",
+                output_shape.size());
+            for (size_t i = 0; i < input_shape.size(); ++i) {
+                if (i == this->scatter_dim && (t == 0 || t == 3 || t == 4)) {
+                    TT_FATAL(
+                        output_shape[i] == input_shape[i] / this->ring_size,
+                        "Error, Output tensor shape at dimension {} should be {} but has {}",
+                        i,
+                        input_shape[i] / this->ring_size,
+                        output_shape[i]);
+                } else {
+                    TT_FATAL(
+                        output_shape[i] == input_shape[i],
+                        "Error, Output tensor shape at dimension {} should be {} but has {}",
+                        i,
+                        input_shape[i],
+                        output_shape[i]);
+                }
+            }
+        }
     }
 }
 
@@ -275,7 +339,9 @@ Tensor reduce_scatter(
                     to_remote_inputs_semaphores,
                     worker_subdevice_id_opt,
                     fabric_handle),
-                {input_tensor});
+                {input_tensor},
+                optional_input_tensors,
+                optional_output_tensors);
         },
         {input_tensor},
         output_tensors);
@@ -289,6 +355,7 @@ Tensor reduce_scatter(
     const MeshDevice& mesh_device,
     const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
     const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
+    const std::optional<std::vector<ttnn::Tensor>>& persistent_output_tensors,
     ttnn::operations::reduction::ReduceType reduce_op,
     const MemoryConfig& output_mem_config,
     ttnn::ccl::Topology topology,
@@ -315,6 +382,10 @@ Tensor reduce_scatter(
         Tensor(operation::get_workers_for_op_output({input_tensor})),
         Tensor(operation::get_workers_for_op_output({input_tensor})),
         Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    std::vector<std::optional<Tensor>> optional_output_tensors =
+        persistent_output_tensors
+            ? std::vector<std::optional<Tensor>>(persistent_output_tensors->begin(), persistent_output_tensors->end())
+            : std::vector<std::optional<Tensor>>{};
     TT_FATAL(
         output_tensors.size() == 5,
         "Reduce scatter requires 5 output tensors. 1 is real and the others are temporaries");
@@ -361,10 +432,14 @@ Tensor reduce_scatter(
                     to_remote_inputs_semaphores,
                     worker_subdevice_id_opt,
                     fabric_handle),
-                {input_tensor});
+                {input_tensor},
+                optional_input_tensors,
+                optional_output_tensors);
         },
         {input_tensor},
-        output_tensors);
+        output_tensors,
+        {},
+        optional_output_tensors);
     return output_tensors.at(0);
 }
 
