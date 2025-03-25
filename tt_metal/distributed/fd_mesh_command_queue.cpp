@@ -166,13 +166,21 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     uint32_t num_workers = 0;
     bool unicast_go_signals = mesh_workload.runs_on_noc_unicast_only_cores();
     bool mcast_go_signals = mesh_workload.runs_on_noc_multicast_only_cores();
-    TT_FATAL(!unicast_go_signals, "Running a MeshWorkload on Ethernet Cores is not supported!");
-    TT_ASSERT(
-        mesh_device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id) == 0,
-        "MeshDevice should not report Ethernet Cores.");
+
+    uint32_t num_virtual_eth_cores = 0;
 
     if (mcast_go_signals) {
         num_workers += mesh_device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+    }
+    if (unicast_go_signals) {
+        // Issue #19729: Running MeshWorkloads on Active Eth cores is supported through multiple workarounds
+        // in the dispatch infra. This support should eventually be deprecated.
+        // This function currently assumes a uniform number of ethernet cores across all physical devices in the mesh
+        // through the num_virtual_eth_cores() function.
+        // The physical device itself may have less etherent cores than what is queried here and will dispatch
+        // accordingly.
+        num_virtual_eth_cores = mesh_device_->num_virtual_eth_cores(sub_device_id);
+        num_workers += num_virtual_eth_cores;
     }
 
     program_dispatch::ProgramDispatchMetadata dispatch_metadata;
@@ -206,10 +214,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             sub_device_id,
             dispatch_metadata,
             mesh_workload.get_program_binary_status(mesh_device_id),
-            std::pair<bool, int>(
-                unicast_go_signals,
-                mesh_device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id)));
-
+            std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores));
         if (sysmem_manager.get_bypass_mode()) {
             this->capture_program_trace_on_subgrid(
                 device_range, program_cmd_seq, dispatch_metadata.stall_first, dispatch_metadata.stall_before_program);
@@ -254,6 +259,9 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             // to accurately update the launch msg ring buffer state post trace execution on all
             // mcast cores.
             trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_multicast++;
+        }
+        if (unicast_go_signals) {
+            trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_unicast++;
         }
         // Update the expected number of workers dispatch must wait on
         trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores += num_workers;
@@ -558,8 +566,7 @@ void FDMeshCommandQueue::write_go_signal_to_unused_sub_grids(
                 expected_num_workers_completed,
                 this->virtual_program_dispatch_core(),
                 mcast_go_signals,
-                unicast_go_signals,
-                mesh_device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id));
+                unicast_go_signals);
         }
     }
 }
@@ -604,8 +611,7 @@ void FDMeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
             expected_num_workers_completed,
             this->virtual_program_dispatch_core(),
             mcast_go_signals,
-            unicast_go_signals,
-            mesh_device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id));
+            unicast_go_signals);
         auto mesh_trace_md = MeshTraceStagingMetadata{
             unused_grid,
             unused_grid.start_coord(),

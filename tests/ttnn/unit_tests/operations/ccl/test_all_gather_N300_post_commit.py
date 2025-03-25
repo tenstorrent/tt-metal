@@ -136,7 +136,6 @@ def test_all_gather_sharded_n300_post_commit(
     function_level_defaults,
     enable_async,
 ):
-    pytest.skip("TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::experimental::all_gather)")
     run_all_gather_sharded_n300(
         n300_mesh_device,
         num_devices,

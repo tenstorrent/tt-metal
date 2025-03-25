@@ -98,11 +98,10 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmul::create_program_at
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
+    auto mesh_device = input_tensors[0].mesh_device();
     auto [device_index, sender_device_id, receiver_device_id] = ::ttnn::ccl::get_device_index_and_sender_receiver_ids(
-        input_tensors[0].mesh_device()->get_device(mesh_coord),
-        input_tensors[0].mesh_device()->get_devices(),
-        this->all_gather_struct.topology);
-
+        mesh_device->get_device(mesh_coord), this->devices, this->all_gather_struct.topology);
+    chip_id_t target_device_id = mesh_device->get_device(mesh_coord)->id();
     // Return the AllGatherMatmul program with callbacks
     return all_gather_matmul_multi_core_with_workers(
         input_tensors[0],   // input_tensor
@@ -118,6 +117,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmul::create_program_at
         device_index,
         this->all_gather_struct.user_defined_num_workers,
         this->all_gather_struct.user_defined_num_buffers_per_channel,
+        target_device_id,
         receiver_device_id,
         sender_device_id,
         this->all_gather_struct.topology,
@@ -157,91 +157,64 @@ std::vector<ttnn::Tensor> all_gather_matmul(
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "AllGatherMatmul is only supported for Fast Dispatch");
 
-    auto devices = input_tensor.mesh_device()->get_devices();
-    std::vector<Tensor> output_tensors = {
-        ttnn::Tensor(input_tensor.mesh_device()),
-        ttnn::Tensor(input_tensor.mesh_device()),
-        ttnn::Tensor(input_tensor.mesh_device())};
     std::vector<std::optional<const ttnn::Tensor>> optional_input_tensors = {std::nullopt};
+    auto mesh_device = input_tensor.mesh_device();
+    std::vector<IDevice*> devices = {};
+    for (const auto& spec : input_tensor.device_storage().specs) {
+        devices.push_back(mesh_device->get_device(spec.first));
+    }
 
-    tt::tt_metal::operation::launch_op(
-        [dim,
-         all_gather_core_grid_offset,
-         num_links,
-         memory_config_ag,
-         user_defined_num_workers,
-         user_defined_num_buffers_per_channel,
-         memory_config_mm,
-         transpose_a,
-         transpose_b,
-         dtype,
-         program_config,
-         activation,
-         compute_kernel_config,
-         core_grid,
-         devices](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            const auto& input_tensor = input_tensors[0];
-            const auto& weight_tensor = input_tensors[1];
+    /* AllGather setup */
+    ttnn::AllGather all_gather_struct{
+        dim,
+        num_links,
+        devices.size(),
+        user_defined_num_workers,
+        user_defined_num_buffers_per_channel,
+        memory_config_ag.value_or(input_tensor.memory_config()),
+        ttnn::ccl::Topology::Ring,
+        /*cluster_axis=*/std::nullopt};
 
-            /* AllGather setup */
-            ttnn::AllGather all_gather_struct{
-                dim,
-                num_links,
-                devices.size(),
-                user_defined_num_workers,
-                user_defined_num_buffers_per_channel,
-                memory_config_ag.value_or(input_tensor.memory_config()),
-                ttnn::ccl::Topology::Ring,
-                /*cluster_axis=*/std::nullopt};
+    // Create the all gather output tensor used as input (activation) to the matmul
+    ttnn::Tensor all_gather_out_tensor = all_gather_struct.create_output_tensors({input_tensor})[0];
+    ttnn::Tensor datacopy_out_tensor = all_gather_struct.create_output_tensors({input_tensor})[0];
 
-            // Create the all gather output tensor used as input (activation) to the matmul
-            ttnn::Tensor all_gather_out_tensor = all_gather_struct.create_output_tensors({input_tensor})[0];
-            ttnn::Tensor datacopy_out_tensor = all_gather_struct.create_output_tensors({input_tensor})[0];
+    /* Matmul setup */
+    bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.get_logical_shape());
+    std::optional<CoreCoord> user_core_coord;
+    if (core_grid.has_value()) {
+        user_core_coord = CoreCoord(core_grid->x, core_grid->y);
+    }
 
-            /* Matmul setup */
-            bool user_run_batched =
-                ttnn::operations::matmul::detail::is_input_batched(weight_tensor.get_logical_shape());
-            std::optional<CoreCoord> user_core_coord;
-            if (core_grid.has_value()) {
-                user_core_coord = CoreCoord(core_grid->x, core_grid->y);
-            }
+    operations::matmul::Matmul matmul_struct = operations::matmul::create_matmul_struct(
+        all_gather_out_tensor,
+        weight_tensor,
+        /*parameters=*/
+        operations::matmul::Matmul{
+            program_config,
+            /*bcast_batch=*/std::nullopt,
+            memory_config_mm.value_or(input_tensor.memory_config()),
+            dtype.value_or(input_tensor.get_dtype()),
+            compute_kernel_config,
+            /*untilize_out=*/false,
+            user_core_coord,
+            ttnn::operations::matmul::get_fused_activation(activation),
+            user_run_batched,
+            transpose_a,
+            transpose_b,
+            /*output_tile=*/std::nullopt,
+            /*global_cb=*/std::nullopt});
 
-            operations::matmul::Matmul matmul_struct = operations::matmul::create_matmul_struct(
-                all_gather_out_tensor,
-                weight_tensor,
-                /*parameters=*/
-                operations::matmul::Matmul{
-                    program_config,
-                    /*bcast_batch=*/std::nullopt,
-                    memory_config_mm.value_or(input_tensor.memory_config()),
-                    dtype.value_or(input_tensor.get_dtype()),
-                    compute_kernel_config,
-                    /*untilize_out=*/false,
-                    user_core_coord,
-                    ttnn::operations::matmul::get_fused_activation(activation),
-                    user_run_batched,
-                    transpose_a,
-                    transpose_b,
-                    /*output_tile=*/std::nullopt,
-                    /*global_cb=*/std::nullopt});
-
-            return tt::tt_metal::operation::run(
-                ttnn::experimental::AllGatherMatmul{/* All Gather Params */
-                                                    all_gather_struct,
-                                                    /* Matmul params */
-                                                    matmul_struct,
-                                                    /* Fusion params */
-                                                    all_gather_core_grid_offset},
-                {input_tensor, all_gather_out_tensor, weight_tensor, datacopy_out_tensor},
-                optional_input_tensors);
-        },
-        {input_tensor, weight_tensor},
-        output_tensors,
+    return tt::tt_metal::operation::run(
+        ttnn::experimental::AllGatherMatmul{/* All Gather Params */
+                                            all_gather_struct,
+                                            /* Matmul params */
+                                            matmul_struct,
+                                            /* Fusion params */
+                                            all_gather_core_grid_offset,
+                                            std::move(devices)},
+        {input_tensor, all_gather_out_tensor, weight_tensor, datacopy_out_tensor},
         optional_input_tensors);
-    return {output_tensors[0], output_tensors[1], output_tensors[2]};
 }
 
 }  // namespace ccl

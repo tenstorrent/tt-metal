@@ -62,7 +62,6 @@ def test_all_gather_on_n300(
     function_level_defaults,
     enable_async,
 ):
-    pytest.skip("TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)")
     run_all_gather_on_n300_impl(
         n300_mesh_device,
         num_devices,
@@ -257,7 +256,6 @@ def test_reduce_scatter_on_n300(
     enable_async,
     num_iters,
 ):
-    pytest.skip("TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::reduce_scatter)")
     run_reduce_scatter_test(
         n300_mesh_device,
         num_devices,

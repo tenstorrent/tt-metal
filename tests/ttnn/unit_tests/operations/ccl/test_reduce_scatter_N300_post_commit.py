@@ -61,7 +61,6 @@ def test_ring_reduce_scatter_n300_post_commit(
     enable_async,
     num_iters=5,
 ):
-    pytest.skip("TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)")
     run_reduce_scatter_test(
         n300_mesh_device,
         num_devices,
@@ -139,7 +138,6 @@ def test_width_sharded_reduce_scatter_N300_post_commit(
     enable_async,
     num_iters=5,
 ):
-    pytest.skip("TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)")
     run_reduce_scatter_sharded_test(
         t3k_mesh_device,
         num_devices,

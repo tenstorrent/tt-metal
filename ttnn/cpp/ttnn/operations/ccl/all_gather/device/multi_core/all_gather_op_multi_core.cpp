@@ -247,6 +247,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
+    chip_id_t target_device_id,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     ccl::Topology topology,
@@ -262,6 +263,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
         num_links,
         ring_size,
         ring_index,
+        target_device_id,
         receiver_device_id,
         sender_device_id,
         topology,
@@ -278,6 +280,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
+    chip_id_t target_device_id,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     ccl::Topology topology,
@@ -301,7 +304,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
         num_edm_buffers_per_channel = user_defined_num_buffers_per_channel.value();
     }
 
-    const auto& device = input_tensor.device();
+    const auto& device = input_tensor.mesh_device()->get_device(target_device_id);
 
     /* All gather fusion */
     bool fuse_op = fused_op_signaler.has_value();

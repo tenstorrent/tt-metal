@@ -41,6 +41,7 @@ class TtFalconMLP:
 
 
 def test_tensor_parallel_falcon_mlp():
+    # Issue with line all gather
     pytest.skip("TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)")
     if ttnn.get_num_devices() < 8:
         pytest.skip()

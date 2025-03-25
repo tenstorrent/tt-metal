@@ -40,6 +40,10 @@ constexpr uint32_t max_num_worker_sems = get_compile_time_arg_val(10);  // maxim
 constexpr uint32_t max_num_go_signal_noc_data_entries =
     get_compile_time_arg_val(11);  // maximum number of go signal data words
 
+constexpr uint32_t virtualize_unicast_cores = get_compile_time_arg_val(12);
+constexpr uint32_t num_virtual_unicast_cores = get_compile_time_arg_val(13);
+constexpr uint32_t num_physical_unicast_cores = get_compile_time_arg_val(14);
+
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
 constexpr uint32_t dispatch_d_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
@@ -237,10 +241,31 @@ void process_go_signal_mcast_cmd() {
         wait_for_workers(cmd);
     }
 
-    for (uint32_t i = 0, num_unicasts = cmd->mcast.num_unicast_txns; i < num_unicasts; ++i) {
+    uint32_t num_unicasts = cmd->mcast.num_unicast_txns;
+    if constexpr (virtualize_unicast_cores) {
+        // Issue #19729: Workaround to allow TT-Mesh Workload dispatch to target active ethernet cores.
+        // This chip is virtualizing cores the go signal is uncasted to
+        // In this case, the number of unicasts specified in the command can exceed
+        // the number of actual cores on this chip.
+        if (cmd->mcast.num_unicast_txns > num_physical_unicast_cores) {
+            // If this is the case, cap the number of unicasts to avoid invalid NOC txns
+            num_unicasts = num_physical_unicast_cores;
+            // Fake updates from non-existent workers here. The dispatcher expects an ack from
+            // the number of cores specified inside cmd->mcast.num_unicast_txns. If this is
+            // greater than the number of cores actually on the chip, we must account for acks
+            // from non-existent cores here.
+            NOC_STREAM_WRITE_REG(
+                first_stream_used,
+                STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX,
+                (num_virtual_unicast_cores - num_physical_unicast_cores) << REMOTE_DEST_BUF_WORDS_FREE_INC);
+        }
+    }
+
+    for (uint32_t i = 0; i < num_unicasts; ++i) {
         uint64_t dst = get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], unicast_go_signal_addr);
         noc_async_write_one_packet((uint32_t)(aligned_go_signal_storage), dst, sizeof(uint32_t));
     }
+
     update_worker_completion_count_on_dispatch_d();
     cmd_ptr += sizeof(CQDispatchCmd);
 }

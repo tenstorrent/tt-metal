@@ -111,7 +111,8 @@ MeshDevice::ScopedDevices::ScopedDevices(
         trace_region_size,
         dispatch_core_config,
         {},
-        /*init_profiler*/ false);
+        /*init_profiler*/ false,
+        /*use_max_eth_core_count_on_all_devices*/ true);
 
     for (auto device_id : device_ids) {
         devices_.push_back(opened_devices_.at(device_id));
@@ -577,6 +578,19 @@ bool MeshDevice::is_active_ethernet_core(CoreCoord logical_core, bool skip_reser
 
 std::vector<CoreCoord> MeshDevice::get_ethernet_sockets(chip_id_t connected_chip_id) const {
     TT_THROW("get_ethernet_sockets() is not supported on MeshDevice - use individual devices instead");
+}
+
+uint32_t MeshDevice::num_virtual_eth_cores(SubDeviceId sub_device_id) {
+    // Issue #19729: Return the maximum number of active ethernet cores across physical devices in the Mesh.
+    TT_FATAL(
+        *sub_device_id == 0,
+        "Virtualizing Ethernet Cores across a MeshDevice is not supported when a SubDeviceManager is loaded.");
+    if (not max_num_eth_cores_) {
+        for (auto device : this->get_devices()) {
+            max_num_eth_cores_ = std::max(device->num_virtual_eth_cores(SubDeviceId{0}), max_num_eth_cores_);
+        }
+    }
+    return max_num_eth_cores_;
 }
 
 // Core and worker management methods (These are OK)
