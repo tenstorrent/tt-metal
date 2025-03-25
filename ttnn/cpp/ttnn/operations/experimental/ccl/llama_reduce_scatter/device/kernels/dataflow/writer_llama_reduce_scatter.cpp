@@ -13,6 +13,10 @@
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 
 void kernel_main() {
+    // Constants for indexing
+    constexpr uint8_t x_index = 0;
+    constexpr uint8_t y_index = 1;
+
     size_t ct_arg_idx = 0, rt_arg_idx = 0;
 
     // Define all compile-time arguments at the beginning
@@ -49,18 +53,17 @@ void kernel_main() {
             ? num_pages_per_packet
             : input_shard_cores_per_device * tiles_per_core_width % num_pages_per_packet;
     constexpr size_t packet_header_size = sizeof(PACKET_HEADER_TYPE);
+    constexpr uint32_t num_dests = (noc_end_x - noc_start_x + 1) * (noc_end_y - noc_start_y + 1);
 
-    // Constants for indexing
-    constexpr uint8_t x_index = 0;
-    constexpr uint8_t y_index = 1;
+    // Precomputed constants for better optimization
+    constexpr uint32_t chip_id_offset = chip_id * num_pages_per_packet * page_size_bytes;
 
-    constexpr uint8_t device_order[num_devices - 1] =
+    constexpr uint32_t other_devices = num_devices - 1;
+    constexpr uint8_t device_order[other_devices] =
         DEVICE_ORDER;  // this is code gen'd in the program factory using the defines
     constexpr uint8_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
     constexpr uint8_t packet_worker_cores[num_packets_total_per_device][2] = PACKET_WORKER_CORES;
     constexpr uint8_t schedule[num_packets_total_per_device][3] = SCHEDULE;
-
-    constexpr uint32_t num_dests = (noc_end_x - noc_start_x + 1) * (noc_end_y - noc_start_y + 1);
 
     // Runtime arguments
     uint32_t receiver_semaphore_address = get_arg_val<uint32_t>(rt_arg_idx++);
@@ -75,7 +78,7 @@ void kernel_main() {
 
     if (sender_core) {
         // Set up packet headers once
-        auto packet_header_buffer_addr = get_read_ptr(packet_header_cb_id);
+        const auto packet_header_buffer_addr = get_read_ptr(packet_header_cb_id);
         auto* unicast_packet_header = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
         auto* sem_inc_packet_header =
             reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_addr + packet_header_size);
@@ -83,32 +86,30 @@ void kernel_main() {
         if (fabric_connection.is_logically_connected()) {
             fabric_connection.open();
         }
+        const uint32_t base_receiver_l1_addr = get_read_ptr(fabric_receiver_cb_id);
+
+        // Precompute the packet offset once
+        const uint32_t packet_offset = base_receiver_l1_addr + chip_id_offset;
 
         for (uint32_t target_device_id : device_order) {
             // Calculate device-specific constants once per device
-            uint32_t num_hops = std::abs(int(target_device_id) - int(chip_id));
+            const uint32_t num_hops = std::abs(int(target_device_id) - int(chip_id));
             unicast_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
             auto& fabric_conn = target_device_id > chip_id ? fabric_connection.get_forward_connection()
                                                            : fabric_connection.get_backward_connection();
 
-            uint32_t base_receiver_l1_addr = get_read_ptr(fabric_receiver_cb_id);
-
-            // for LLaMa - 6 cores * 5 tiles per core = 30 tiles to each other device
-            // 30/4 = 8 packets, with the last packet having 2 pages
-            uint32_t packet_offset = base_receiver_l1_addr + chip_id * num_pages_per_packet * page_size_bytes;
             for (uint32_t packet = sender_packet_start; packet < sender_packet_end; packet++) {
                 // Determine packet size based on whether it's the last packet
-                uint32_t curr_packet_num_pages =
+                const uint32_t curr_packet_num_pages =
                     packet == num_packets_total_per_device - 1 ? last_packet_num_pages : num_pages_per_packet;
-                uint32_t curr_packet_size_bytes = curr_packet_num_pages * page_size_bytes;
+                const uint32_t curr_packet_size_bytes = curr_packet_num_pages * page_size_bytes;
 
-                uint32_t receiver_core_x = packet_worker_cores[packet][x_index];
-                uint32_t receiver_core_y = packet_worker_cores[packet][y_index];
+                const uint32_t receiver_core_x = packet_worker_cores[packet][x_index];
+                const uint32_t receiver_core_y = packet_worker_cores[packet][y_index];
+                const uint64_t noc0_dest_noc_addr = get_noc_addr(receiver_core_x, receiver_core_y, packet_offset);
 
                 cb_wait_front(fabric_sender_cb_id, curr_packet_num_pages);
-                auto sender_l1_addr = get_read_ptr(fabric_sender_cb_id);
-
-                uint64_t noc0_dest_noc_addr = get_noc_addr(receiver_core_x, receiver_core_y, packet_offset);
+                const auto sender_l1_addr = get_read_ptr(fabric_sender_cb_id);
 
                 unicast_packet_header->to_noc_unicast_write(
                     tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, curr_packet_size_bytes);
@@ -126,7 +127,7 @@ void kernel_main() {
             }
             if (is_atomic_inc_core) {
                 noc_semaphore_wait((uint32_t*)sender_ready_semaphore_address, num_sender_cores - 1);
-                uint64_t sem_noc_addr =
+                const uint64_t sem_noc_addr =
                     get_noc_addr(packet_receiver_core_x, packet_receiver_core_y, receiver_semaphore_address);
                 sem_inc_packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                     sem_noc_addr,
@@ -141,7 +142,7 @@ void kernel_main() {
                     (uint32_t)sem_inc_packet_header, packet_header_size);
                 *((uint32_t*)sender_ready_semaphore_address) = 0;
             } else {
-                uint64_t sender_noc_addr =
+                const uint64_t sender_noc_addr =
                     get_noc_addr(sender_atomic_inc_core_x, sender_atomic_inc_core_y, sender_ready_semaphore_address);
                 noc_semaphore_inc(sender_noc_addr, 1);
             }
@@ -154,8 +155,6 @@ void kernel_main() {
             fabric_connection.close();
         }
     } else if (worker_core) {
-        uint32_t linear_output_core_idcs = 0;
-        uint32_t linear_output_tile_offsets = 0;
         uint64_t noc_addresses[num_pages_per_packet];
         uint32_t accumulator_l1_addresses[num_pages_per_packet];
         uint32_t output_tensor_base_addr = get_read_ptr(output_tensor_cb_id);
@@ -164,12 +163,12 @@ void kernel_main() {
         uint32_t num_packets = num_pages_per_packet;
         for (uint32_t i = 0; i < num_pages_per_packet; i++) {
             uint32_t rem = linear_output_page_start_idx + i;
-            linear_output_core_idcs = rem / tiles_per_core_width_output;
+            uint32_t linear_output_core_idcs = rem / tiles_per_core_width_output;
             if (linear_output_core_idcs >= output_cores_per_device) {
                 num_packets = i;
                 break;
             }
-            linear_output_tile_offsets = rem % tiles_per_core_width_output;
+            uint32_t linear_output_tile_offsets = rem % tiles_per_core_width_output;
             noc_addresses[i] = get_noc_addr(
                 output_core_xy[linear_output_core_idcs][x_index],
                 output_core_xy[linear_output_core_idcs][y_index],

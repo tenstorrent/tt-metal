@@ -22,6 +22,10 @@ FORCE_INLINE std::uint64_t static_noc_multicast_addr(
 }
 
 void kernel_main() {
+    // Constants for indexing
+    constexpr uint8_t x_index = 0;
+    constexpr uint8_t y_index = 1;
+
     size_t ct_arg_idx = 0, rt_arg_idx = 0;
 
     // Define all compile-time arguments at the beginning
@@ -49,13 +53,18 @@ void kernel_main() {
     constexpr uint32_t num_packets_total_per_device =
         (input_shard_cores_per_device * tiles_per_core_width + num_pages_per_packet - 1) / num_pages_per_packet;
 
-    constexpr uint8_t device_order[num_devices - 1] =
+    // Precompute constants for optimization
+    constexpr uint32_t bytes_per_tile_group = tiles_per_core_width * page_size_bytes;
+    constexpr uint32_t num_dests = (noc_end_x - noc_start_x + 1) * (noc_end_y - noc_start_y + 1);
+    constexpr uint32_t chip_id_offset = chip_id * num_pages_per_packet * page_size_bytes;
+
+    constexpr uint32_t other_devices = num_devices - 1;
+    constexpr uint8_t device_order[other_devices] =
         DEVICE_ORDER;  // this is code gen'd in the program factory using the defines
     constexpr uint8_t input_core_xy[input_tensor_cores][2] = INPUT_CORE_XY;
     constexpr uint8_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
     constexpr uint8_t schedule[num_packets_total_per_device][3] = SCHEDULE;
 
-    constexpr uint32_t num_dests = (noc_end_x - noc_start_x + 1) * (noc_end_y - noc_start_y + 1);
     // Runtime arguments
     uint32_t receiver_semaphore_address = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t local_semaphore_address = get_semaphore(get_arg_val<uint32_t>(rt_arg_idx++));
@@ -66,58 +75,58 @@ void kernel_main() {
     uint32_t sender_packet_start = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_packet_end = get_arg_val<uint32_t>(rt_arg_idx++);
 
-    // Constants for indexing
-    constexpr uint8_t x_index = 0;
-    constexpr uint8_t y_index = 1;
-
-    // Constants for memory operations
-    uint32_t bank_base_address = get_write_ptr(input_tensor_cb_id);
+    // Bank base addresses (compute once)
+    const uint32_t bank_base_address = get_write_ptr(input_tensor_cb_id);
 
     if (sender_core) {
-        // Precompute the number of bytes to transfer per tile group
-        constexpr uint32_t bytes_per_tile_group = tiles_per_core_width * page_size_bytes;
         for (uint32_t target_device_id : device_order) {
-            uint32_t base_core = target_device_id * input_shard_cores_per_device;
+            const uint32_t base_core = target_device_id * input_shard_cores_per_device;
+
             for (uint32_t packet_idx = sender_packet_start; packet_idx < sender_packet_end; packet_idx++) {
-                uint32_t curr_core = base_core + schedule[packet_idx][0];
-                uint32_t read_offset = schedule[packet_idx][1];
-                uint32_t read_size = schedule[packet_idx][2];
-                uint32_t x = input_core_xy[curr_core][x_index];
-                uint32_t y = input_core_xy[curr_core][y_index];
-                uint64_t shard_noc_addr = get_noc_addr(x, y, bank_base_address + (read_offset * page_size_bytes));
+                const uint8_t curr_core = base_core + schedule[packet_idx][0];
+                const uint32_t read_offset = schedule[packet_idx][1];
+                const uint32_t read_size = schedule[packet_idx][2];
+
+                const uint32_t x = input_core_xy[curr_core][x_index];
+                const uint32_t y = input_core_xy[curr_core][y_index];
+                const uint32_t offset_address = bank_base_address + (read_offset * page_size_bytes);
+                const uint64_t shard_noc_addr = get_noc_addr(x, y, offset_address);
+
                 cb_reserve_back(fabric_sender_cb_id, read_size);
-                uint32_t sender_read_addr = get_write_ptr(fabric_sender_cb_id);
-                noc_async_read(shard_noc_addr, sender_read_addr, (read_size * page_size_bytes));
+                const uint32_t sender_read_addr = get_write_ptr(fabric_sender_cb_id);
+                const uint32_t transfer_size = read_size * page_size_bytes;
+
+                noc_async_read(shard_noc_addr, sender_read_addr, transfer_size);
                 noc_async_read_barrier();
                 cb_push_back(fabric_sender_cb_id, read_size);
             }
         }
     } else if (worker_core) {
-        // Calculate core index and tile offset once
-        uint32_t linear_input_core_idcs = 0;
-        uint32_t linear_input_tile_offsets = 0;
-        uint32_t base_input_tensor_addr = get_read_ptr(input_tensor_cb_id);
-        uint32_t base_receiver_l1_addresses =
-            get_read_ptr(fabric_receiver_cb_id) + chip_id * num_pages_per_packet * page_size_bytes;
+        // Calculate base addresses once
+        const uint32_t base_input_tensor_addr = get_read_ptr(input_tensor_cb_id);
+        const uint32_t base_receiver_l1_addresses = get_read_ptr(fabric_receiver_cb_id) + chip_id_offset;
 
         for (uint32_t i = 0; i < num_pages_per_packet; i++) {
-            uint32_t rem = linear_input_packet_start_idx + i;
-            linear_input_core_idcs = rem / tiles_per_core_width;
-            linear_input_tile_offsets = rem % tiles_per_core_width;
-            uint64_t output_noc_address = get_noc_addr(
-                input_core_xy[linear_input_core_idcs][x_index],
-                input_core_xy[linear_input_core_idcs][y_index],
-                base_input_tensor_addr + (linear_input_tile_offsets * page_size_bytes));
-            uint32_t receiver_l1_address = base_receiver_l1_addresses + i * page_size_bytes;
+            const uint32_t rem = linear_input_packet_start_idx + i;
+            const uint32_t linear_input_core_idcs = rem / tiles_per_core_width;
+            const uint32_t linear_input_tile_offsets = rem % tiles_per_core_width;
+
+            const uint32_t core_x = input_core_xy[linear_input_core_idcs][x_index];
+            const uint32_t core_y = input_core_xy[linear_input_core_idcs][y_index];
+            const uint32_t tile_offset = linear_input_tile_offsets * page_size_bytes;
+
+            const uint64_t output_noc_address = get_noc_addr(core_x, core_y, base_input_tensor_addr + tile_offset);
+            const uint32_t receiver_l1_address = base_receiver_l1_addresses + i * page_size_bytes;
+
             noc_async_read(output_noc_address, receiver_l1_address, page_size_bytes);
         }
 
         if (receiver_core) {
-            // Now we have the block in the CB address, we can mcast to dests!
-            uint64_t multicast_semaphore_addr =
+            // Precompute multicast semaphore address once
+            const uint64_t multicast_semaphore_addr =
                 static_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, local_semaphore_address);
 
-            noc_semaphore_wait((uint32_t*)receiver_semaphore_address, num_devices - 1);
+            noc_semaphore_wait((uint32_t*)receiver_semaphore_address, other_devices);
 
             noc_semaphore_set_multicast(
                 receiver_semaphore_address,
@@ -126,8 +135,9 @@ void kernel_main() {
 
             noc_async_atomic_barrier();
         } else {
-            noc_semaphore_wait((uint32_t*)local_semaphore_address, (num_devices - 1));
+            noc_semaphore_wait((uint32_t*)local_semaphore_address, other_devices);
         }
+
         noc_async_read_barrier();
         cb_push_back(fabric_receiver_cb_id, num_pages_per_packet * num_devices);
         *(uint32_t*)local_semaphore_address = 0;
