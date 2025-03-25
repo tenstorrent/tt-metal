@@ -52,7 +52,8 @@ void kernel_main() {
     tt_l1_ptr uint32_t* core_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;
     size_t arg_for_fab = arg_idx;
-    auto fabric_connection = FabricConnectionManager::build_from_args(arg_idx);
+    constexpr bool connect_to_fabric_when_creating = true;
+    auto fabric_connection = FabricConnectionManager::build_from_args<connect_to_fabric_when_creating, false>(arg_idx);
 
     DPRINT << "ct args: \n";
     DPRINT << "my_chip_id: " << (uint32_t)my_chip_id << "\n";
@@ -112,7 +113,8 @@ void kernel_main() {
     pkt_hdr_backward->to_chip_multicast(
         tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
 
-    fabric_connection.open();
+    // fabric_connection.open();
+    fabric_connection.open_finish();
 
     // 1. mcast via fabric to remote tensor addresses
     uint32_t tiles_read = 0;
