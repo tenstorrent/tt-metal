@@ -3,7 +3,6 @@ include Makefile
 include module.mk
 
 # Sources and build files for BUDA-M
-include tt_metal/host_api.hpp
 include tt_metal/tt_metal.cpp
 recursive-include tt_metal/build_kernels_for_riscv *.h *.cpp *.cc module.mk *.py
 recursive-include tt_metal/common *.h *.cpp *.cc module.mk *.py common.mk

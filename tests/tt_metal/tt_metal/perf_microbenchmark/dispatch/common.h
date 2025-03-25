@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include "core_coord.hpp"
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/allocator.hpp>
 
