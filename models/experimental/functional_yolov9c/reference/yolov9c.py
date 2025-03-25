@@ -5,7 +5,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as f
-import math
 
 
 def make_anchors(feats, strides, grid_cell_offset=0.5):

@@ -4,8 +4,6 @@
 
 import math
 import ttnn
-import torch
-from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
 def determine_num_cores(nhw: int, width: int, max_cores=64) -> int:
@@ -40,6 +38,7 @@ def get_core_grid_from_num_cores(num_cores: int, grid_rows: int = 8, grid_cols: 
             )
         )
     return ttnn.CoreRangeSet({*ranges})
+
 
 def sharded_concat(input_tensors, num_cores=56, dim=3):
     shard_grid = get_core_grid_from_num_cores(num_cores=num_cores)

@@ -4,17 +4,12 @@
 
 import os
 import cv2
-import math
-import time
 import torch
 import requests
-import torchvision
 import numpy as np
 import torch.nn as nn
 from pathlib import Path
 from loguru import logger
-from datetime import datetime
-from functools import partial
 
 
 def imread(filename: str, flags: int = cv2.IMREAD_COLOR):

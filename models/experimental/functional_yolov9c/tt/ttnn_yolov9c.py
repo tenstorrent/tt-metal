@@ -5,7 +5,6 @@
 import math
 import ttnn
 import torch
-from tt_lib.utils import _nearest_y
 from models.experimental.yolo_common.yolo_utils import concat, determine_num_cores, get_core_grid_from_num_cores
 
 
