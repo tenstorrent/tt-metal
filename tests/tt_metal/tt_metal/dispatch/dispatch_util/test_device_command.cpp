@@ -259,7 +259,7 @@ TYPED_TEST(WritePackedCommandTest, RandomAddDispatchWritePacked) {
         }
 
         HostMemDeviceCommand command(calculator.write_offset_bytes());
-        command.add_data(nullptr, 0, random_start);
+        command.add_data(data, 0, random_start);
         uint32_t curr_sub_cmd_idx = 0;
         for (const auto& [sub_cmd_ct, payload_size] : packed_cmd_payloads) {
             std::vector<TypeParam> sub_cmds(sub_cmd_ct);
