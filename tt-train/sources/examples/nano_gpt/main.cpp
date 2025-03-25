@@ -494,6 +494,16 @@ int main(int argc, char **argv) {
             {"model", "transformer"},
             {"num_heads",
              static_cast<int>(std::visit([](auto &&arg) { return arg.num_heads; }, config.transformer_config))},
+            {"num_groups",
+             static_cast<int>(std::visit(
+                 [](auto &&arg) {
+                     if constexpr (requires { arg.num_groups; }) {
+                         return arg.num_groups;
+                     } else {
+                         return arg.num_heads;
+                     }
+                 },
+                 config.transformer_config))},
             {"embedding_dim",
              static_cast<int>(std::visit([](auto &&arg) { return arg.embedding_dim; }, config.transformer_config))},
             {"num_blocks",

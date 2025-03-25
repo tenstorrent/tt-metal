@@ -102,14 +102,10 @@ std::string generate_run_name(const std::string &run_name, const TrainingConfig 
         auto is_nano_gpt_config = [&transformer_config]() -> bool {
             return std::visit(
                 [](auto &&arg) -> bool {
-                    if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::gpt2::TransformerConfig>) {
-                        return arg.num_heads == 6 && arg.embedding_dim == 384 && arg.num_blocks == 6;
-                    } else if constexpr (std::
-                                             is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
-                        return false;
-                    } else {
-                        return false;
-                    }
+                    constexpr bool is_gpt2_config_type =
+                        std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::gpt2::TransformerConfig>;
+                    return is_gpt2_config_type && arg.num_heads == 6U && arg.embedding_dim == 384U &&
+                           arg.num_blocks == 6U;
                 },
                 transformer_config);
         };
@@ -117,14 +113,10 @@ std::string generate_run_name(const std::string &run_name, const TrainingConfig 
         auto is_gpt2s_config = [&transformer_config]() -> bool {
             return std::visit(
                 [](auto &&arg) -> bool {
-                    if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::gpt2::TransformerConfig>) {
-                        return arg.num_heads == 12 && arg.embedding_dim == 768 && arg.num_blocks == 12;
-                    } else if constexpr (std::
-                                             is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
-                        return false;
-                    } else {
-                        return false;
-                    }
+                    constexpr bool is_gpt2_config_type =
+                        std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::gpt2::TransformerConfig>;
+                    return is_gpt2_config_type && arg.num_heads == 12U && arg.embedding_dim == 768U &&
+                           arg.num_blocks == 12U;
                 },
                 transformer_config);
         };
@@ -132,11 +124,7 @@ std::string generate_run_name(const std::string &run_name, const TrainingConfig 
         auto is_llama_config = [&transformer_config]() -> bool {
             return std::visit(
                 [](auto &&arg) -> bool {
-                    if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
-                        return true;
-                    } else {
-                        return false;
-                    }
+                    return std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>;
                 },
                 transformer_config);
         };

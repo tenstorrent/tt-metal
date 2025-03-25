@@ -96,7 +96,7 @@ ttml::autograd::TensorPtr Llama::operator()(const ttml::autograd::TensorPtr& x, 
 LlamaConfig read_config(const YAML::Node& config) {
     LlamaConfig llama_config;
     llama_config.num_heads = config["num_heads"].as<uint32_t>();
-    // FIXME: add num_groups to config
+    llama_config.num_groups = config["num_groups"].as<uint32_t>();
     llama_config.embedding_dim = config["embedding_dim"].as<uint32_t>();
     llama_config.dropout_prob = config["dropout_prob"].as<float>();
     llama_config.num_blocks = config["num_blocks"].as<uint32_t>();
@@ -111,6 +111,7 @@ LlamaConfig read_config(const YAML::Node& config) {
 YAML::Node write_config(const LlamaConfig& llama_config) {
     YAML::Node config;
     config["num_heads"] = llama_config.num_heads;
+    config["num_groups"] = llama_config.num_groups;
     config["embedding_dim"] = llama_config.embedding_dim;
     config["dropout_prob"] = llama_config.dropout_prob;
     config["num_blocks"] = llama_config.num_blocks;
