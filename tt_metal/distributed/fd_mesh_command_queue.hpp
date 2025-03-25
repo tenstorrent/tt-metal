@@ -32,10 +32,6 @@ struct MeshBufferReadDescriptor;
 using MeshCompletionReaderVariant = std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor>;
 
 class FDMeshCommandQueue : public MeshCommandQueue {
-    // Main interface to dispatch data and workloads to a MeshDevice
-    // Currently only supports dispatching workloads and relies on the
-    // tt::tt_metal::CommandQueue.
-    // Additional support for Reads and Writes to be added
 private:
     void populate_read_descriptor_queue();
     void populate_virtual_program_dispatch_core();
