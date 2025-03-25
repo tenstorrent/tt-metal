@@ -65,6 +65,7 @@ def run_reduce_scatter_test(
 ):
     mesh_device.enable_async(True)
     mesh_device.enable_program_cache()
+    num_pages_per_packet = 4
 
     sharded_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -86,15 +87,42 @@ def run_reduce_scatter_test(
         ),
     )
 
-    # print(sharded_mem_config)
-    # print("--------------------------------")
-    # print(output_mem_config)
+    # {[(x=1,y=0) - (x=3,y=1)], [(x=1,y=2) - (x=2,y=2)]}
+    PACKET_WORKER_CRS = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
+            ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
+        ]
+    )
+    packet_workers_persistent_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            PACKET_WORKER_CRS,
+            [shard_height, 2 * num_devices_scatter * num_pages_per_packet * 32],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
 
     output_tensor_goldens_list = []
     tt_input_tensors_list = []
+    tt_intermediate_tensors_list = []
     for _ in range(num_iters):
         input = gen_tensor(
             dim, shard_height, shard_width, num_devices_scatter, num_devices_fracture, num_cores, scheme=scheme
+        )
+
+        intermediate_tensor = torch.zeros(
+            [
+                num_devices_fracture,
+                num_devices_scatter,
+                shard_height,
+                2
+                * num_devices_scatter
+                * num_pages_per_packet
+                * 32
+                * packet_workers_persistent_mem_config.shard_spec.num_cores(),
+            ]
         )
 
         intermediate_outputs = torch.chunk(input, chunks=num_devices_scatter, dim=1)
@@ -118,8 +146,20 @@ def run_reduce_scatter_test(
                 mesh_device, dims=(0, 1), mesh_shape=[num_devices_fracture, num_devices_scatter]
             ),
         )
+        tt_intermediate = ttnn.from_torch(
+            intermediate_tensor,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=packet_workers_persistent_mem_config,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, dims=(0, 1), mesh_shape=[num_devices_fracture, num_devices_scatter]
+            ),
+        )
         check_mesh_tensor_alloc(tt_input)
+        check_mesh_tensor_alloc(tt_intermediate)
         tt_input_tensors_list.append(tt_input)
+        tt_intermediate_tensors_list.append(tt_intermediate)
 
     enable_persistent_fabric = True
     ccl_sub_device_crs = SUB_DEVICE_CRS
@@ -148,6 +188,7 @@ def run_reduce_scatter_test(
     if trace_mode:
         tt_out_tensor = ttnn.experimental.llama_reduce_scatter(
             tt_input_tensors_list[0],
+            tt_intermediate_tensors_list[0],
             dim,
             ccl_semaphore_handles[0],
             worker_sub_device_id,
@@ -162,6 +203,7 @@ def run_reduce_scatter_test(
         for _ in range(num_iters):
             tt_out_tensor = ttnn.experimental.llama_reduce_scatter(
                 tt_input_tensors_list[0],
+                tt_intermediate_tensors_list[0],
                 dim,
                 ccl_semaphore_handles[0],
                 worker_sub_device_id,
@@ -183,6 +225,7 @@ def run_reduce_scatter_test(
         for i in range(num_iters):
             tt_out_tensor = ttnn.experimental.llama_reduce_scatter(
                 tt_input_tensors_list[i],
+                tt_intermediate_tensors_list[i],
                 dim,
                 ccl_semaphore_handles[i],
                 worker_sub_device_id,
@@ -212,6 +255,7 @@ def run_reduce_scatter_test(
             break
 
     for i in range(num_devices_scatter * num_devices_fracture):
+        # print("Program cache entries: ", mesh_device.get_devices()[i].num_program_cache_entries())
         assert (
             mesh_device.get_devices()[i].num_program_cache_entries() == 1
             or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters

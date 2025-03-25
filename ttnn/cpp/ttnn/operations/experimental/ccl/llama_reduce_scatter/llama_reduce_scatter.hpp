@@ -15,6 +15,7 @@ struct ExecuteLlamaReduceScatter {
     static ttnn::Tensor invoke(
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
+        ttnn::Tensor& intermediate_packet_buffer,
         const int32_t dim,
         const global_semaphore::MultiDeviceGlobalSemaphore& cross_device_semaphore,
         const tt::tt_metal::SubDeviceId& subdevice_id,
