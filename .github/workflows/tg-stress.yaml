@@ -14,7 +14,7 @@ on:
         type: string
 
 jobs:
-  tg-quick:
+  tg-stress:
     runs-on:
       - in-service
       - config-tg
