@@ -115,7 +115,8 @@ public:
 
     void update_cmd_sequence(uint32_t cmd_offsetB, const void* new_data, uint32_t data_sizeB);
 
-    void add_data(const void* data, uint32_t data_size_to_copyB, uint32_t cmd_write_offset_incrementB);
+    void add_data(const void* data, uint32_t data_size_to_copyB, uint32_t cmd_write_offset_incrementB)
+        __attribute((nonnull(2)));
 
     template <typename PackedSubCmd>
     void add_dispatch_write_packed(
@@ -198,7 +199,7 @@ private:
 
     void deepcopy(const DeviceCommand& other);
 
-    void memcpy(void* __restrict dst, const void* __restrict src, size_t n);
+    void memcpy(void* __restrict dst, const void* __restrict src, size_t n) __attribute__((nonnull(2, 3)));
 
     template <typename Command>
     void zero(Command* cmd) {

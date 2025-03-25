@@ -47,7 +47,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     with:
       version: "22.04"
-      build-type: ${{ inputs.build-type || 'Debug' }}
+      toolchain: cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
+      build-type: ${{ inputs.build-type || 'ASan' }}
       publish-artifact: false
 
   find-changed-files:
