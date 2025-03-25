@@ -20,23 +20,13 @@ from models.experimental.functional_yolov9c.tt import ttnn_yolov9c
 from models.experimental.functional_yolov9c.reference import yolov9c
 from models.experimental.functional_yolov9c.demo.demo_utils import attempt_load
 
-try:
-    sys.modules["ultralytics"] = yolov9c
-    sys.modules["ultralytics.nn.tasks"] = yolov9c
-    sys.modules["ultralytics.nn.modules.conv"] = yolov9c
-    sys.modules["ultralytics.nn.modules.block"] = yolov9c
-    sys.modules["ultralytics.nn.modules.head"] = yolov9c
-
-except KeyError:
-    logger.error("models.experimental.functional_yolov9c.reference.yolov9c not found.")
-
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "use_pretrained_weight",
     [
-        # False,
-        True
+        False,
+        # True
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
