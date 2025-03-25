@@ -23,8 +23,8 @@ namespace {
 ReduceOpMath get_reduce_op(Pool2DType pool_type) {
     ReduceOpMath reduce_op_math;
     switch (pool_type) {
-        case Pool2DType::MAX_POOL2D: reduce_op_math = tt::tt_metal::ReduceOpMath::MAX;
-        case Pool2DType::AVG_POOL2D: reduce_op_math = tt::tt_metal::ReduceOpMath::SUM;
+        case Pool2DType::MAX_POOL2D: reduce_op_math = tt::tt_metal::ReduceOpMath::MAX; break;
+        case Pool2DType::AVG_POOL2D: reduce_op_math = tt::tt_metal::ReduceOpMath::SUM; break;
     }
     return reduce_op_math;
 }
