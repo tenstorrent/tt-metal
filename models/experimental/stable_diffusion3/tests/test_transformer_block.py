@@ -93,7 +93,10 @@ def test_transformer_block(
         spatial_padded_4D = torch.nn.functional.pad(
             spatial_padded_4D, pad=(0, embedding_dim_padding), mode="constant", value=0
         )
-    tt_spatial = from_torch(spatial_padded_4D, dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT)
+    # tt_spatial = from_torch(spatial_padded_4D, dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT, shard_dim=None)
+    tt_spatial = from_torch(
+        spatial_padded_4D, dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT, shard_dim=-1
+    )
 
     ##
     prompt_extra = prompt_sequence_length % TILE_SIZE
@@ -108,7 +111,10 @@ def test_transformer_block(
         prompt_padded_4D = torch.nn.functional.pad(
             prompt_padded_4D, pad=(0, embedding_dim_padding), mode="constant", value=0
         )
-    tt_prompt = from_torch(prompt_padded_4D, dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT)
+    # tt_prompt = from_torch(prompt_padded_4D, dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT, shard_dim=None)
+    tt_prompt = from_torch(
+        prompt_padded_4D, dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT, shard_dim=-1
+    )
 
     ##
     if pad_40_heads:
@@ -133,13 +139,20 @@ def test_transformer_block(
     tt_spatial_output_padded, tt_prompt_output_padded = tt_model(
         spatial=tt_spatial, prompt=tt_prompt, time_embed=tt_time
     )
-    tt_spatial_output = tt_spatial_output_padded[:, :, 0:spatial_sequence_length, :embedding_dim]
-    tt_prompt_output = tt_prompt_output_padded[:, :, 0:prompt_sequence_length, :embedding_dim]
+    # tt_spatial_output_padded = ttnn.to_torch(tt_spatial_output_padded, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+    tt_spatial_output_padded = tt_spatial_output_padded[:, :, 0:spatial_sequence_length, :embedding_dim]
+    # tt_spatial_output_padded = tt_spatial_output_padded[:, :, 0:spatial_sequence_length, :embedding_dim]
 
-    assert (prompt_output is None) == (tt_prompt_output is None)
-    assert_quality(spatial_output, tt_spatial_output, pcc=0.995, shard_dim=0, num_devices=mesh_device.get_num_devices())
+    # tt_prompt_output_padded = ttnn.to_torch(tt_prompt_output_padded, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+    tt_prompt_output_padded = tt_prompt_output_padded[:, :, 0:prompt_sequence_length, :embedding_dim]
 
-    if prompt_output is not None and tt_prompt_output is not None:
+    assert (prompt_output is None) == (tt_prompt_output_padded is None)
+    assert_quality(
+        spatial_output, tt_spatial_output_padded, pcc=0.995, shard_dim=0, num_devices=mesh_device.get_num_devices()
+    )
+    # assert_quality(spatial_output, tt_spatial_output_padded, pcc=0.995, shard_dim=0, num_devices=mesh_device.get_num_devices())
+
+    if prompt_output is not None and tt_prompt_output_padded is not None:
         assert_quality(
-            prompt_output, tt_prompt_output, pcc=0.995, shard_dim=0, num_devices=mesh_device.get_num_devices()
+            prompt_output, tt_prompt_output_padded, pcc=0.995, shard_dim=0, num_devices=mesh_device.get_num_devices()
         )

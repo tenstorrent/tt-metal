@@ -51,7 +51,7 @@ class TtAttentionParameters:
                 norm_q=TtRmsNormParameters.from_torch(substate(state, "norm_q"), dtype=dtype, device=device),
                 norm_k=TtRmsNormParameters.from_torch(substate(state, "norm_k"), dtype=dtype, device=device),
                 out_proj=TtLinearParameters.from_torch(
-                    substate(state, "to_out.0"), dtype=dtype, device=device, shard_dim=None
+                    substate(state, "to_out.0"), dtype=dtype, device=device, shard_dim=-1
                 ),
             ),
             prompt=TtAttentionPartParameters(
@@ -61,7 +61,7 @@ class TtAttentionParameters:
                 norm_q=TtRmsNormParameters.from_torch(substate(state, "norm_added_q"), dtype=dtype, device=device),
                 norm_k=TtRmsNormParameters.from_torch(substate(state, "norm_added_k"), dtype=dtype, device=device),
                 out_proj=TtLinearParameters.from_torch(
-                    substate(state, "to_add_out"), dtype=dtype, device=device, shard_dim=None
+                    substate(state, "to_add_out"), dtype=dtype, device=device, shard_dim=-1
                 )
                 if has_substate(state, "to_add_out")
                 else None,
@@ -84,7 +84,7 @@ class TtAttentionPart:
         self._norm_k = TtRmsNorm(parameters.norm_k, eps=eps)
 
     def qkv(self, x: ttnn.Tensor, *, num_heads: int, deallocate: bool) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-        tracy.signpost("enter TtAttentionPart")
+        # tracy.signpost("enter TtAttentionPart")
 
         _, _batch_size, sequence_length, _embedding_dim = x.shape
 
@@ -137,7 +137,7 @@ class TtAttentionPart:
         # k = to_memory_config(k, ttnn.DRAM_MEMORY_CONFIG, deallocate=True)
         # v = to_memory_config(v, ttnn.DRAM_MEMORY_CONFIG, deallocate=True)
 
-        tracy.signpost("exit TtAttentionPart")
+        # tracy.signpost("exit TtAttentionPart")
 
         return q, k, v
 
@@ -214,14 +214,14 @@ class TtAttention:
             compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
             q_chunk_size=256,
             k_chunk_size=512,
-            exp_approx_mode=True,
+            exp_approx_mode=True,  # TODO: False would give better correctness. Test if it's necessary.
         )
 
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             # MathFidelity.LoFi results in bad image quality.
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=True,  # TODO: Test with this False, is it necessary for correctness?
         )
 
         if prompt is None:
