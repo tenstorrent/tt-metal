@@ -478,13 +478,6 @@ def test_sdxl_base_group_norm(device, input_shape, use_program_cache):
     )
 
     # Generate shard config
-    # grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
-    # shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-    # shard_shape = N * H * W // grid_size.x, C // grid_size.y
-    # shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
-    # sharded_mem_config = ttnn.MemoryConfig(
-    #     ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
-    # )
     grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
     shard_shape = N * H * W // grid_size.x, C // grid_size.y
