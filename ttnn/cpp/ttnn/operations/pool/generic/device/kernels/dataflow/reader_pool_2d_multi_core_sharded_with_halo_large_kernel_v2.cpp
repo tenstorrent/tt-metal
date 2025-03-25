@@ -74,8 +74,6 @@ void kernel_main() {
     constexpr uint32_t interm_reduction_cb_id = get_compile_time_arg_val(23);
     constexpr uint32_t in_one_cb_id = get_compile_time_arg_val(24);
 
-    // minus infinity for bfp16
-    uint16_t minus_inf = 63487;
     // Reduce scalar = 1
     if (reader_id == 0) {
         cb_reserve_back(in_scalar_cb_id, 1);
