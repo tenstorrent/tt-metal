@@ -104,8 +104,8 @@ struct WorkerToFabricEdmSenderImpl {
         volatile uint32_t* const from_remote_buffer_slot_rdptr_ptr,
         volatile uint32_t* const worker_teardown_addr,
         uint32_t local_buffer_index_addr,
-        uint8_t data_noc_cmd_buf,
-        uint8_t sync_noc_cmd_buf) :
+        uint8_t data_noc_cmd_buf = write_reg_cmd_buf,
+        uint8_t sync_noc_cmd_buf = write_at_cmd_buf) :
         edm_buffer_addr(edm_buffer_base_addr),
         edm_buffer_slot_wrptr_addr(
             connected_to_persistent_fabric ? edm_l1_sem_id
