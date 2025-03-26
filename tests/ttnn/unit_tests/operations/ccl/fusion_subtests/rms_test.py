@@ -151,15 +151,7 @@ def run_rms_trace(
             layer_norm_config,
             is_pre=True,
         )
-        tt_stats_gathered = ttnn.experimental.all_gather_async(
-            tt_stats,
-            3,
-            ccl_semaphore_handles,
-            num_links=num_links,
-            topology=ttnn.Topology.Linear,
-            enable_persistent_fabric_mode=True,
-            memory_config=ag_memory_config,
-        )
+        print(tt_stats)
 
         tt_out = ttnn.fused_rms_1_1_32_8192(
             input_tensor,
@@ -169,7 +161,7 @@ def run_rms_trace(
             memory_config=output_memory_config,
             epsilon=epsilon,
             weight=gamma_tensor,
-            stats=tt_stats_gathered,
+            stats=tt_stats,
             is_pre=False,
         )
 
@@ -473,15 +465,7 @@ def run_rms_fuse_impl(
             layer_norm_config,
             is_pre=True,
         )
-        tt_stats_gathered = ttnn.experimental.all_gather_async(
-            tt_stats,
-            3,
-            ccl_semaphore_handles[i],
-            num_links=1,
-            topology=ttnn.Topology.Linear,
-            enable_persistent_fabric_mode=True,
-            memory_config=ag_memory_config,
-        )
+        print(tt_stats)
 
         tt_out = ttnn.fused_rms_1_1_32_8192(
             input_tensor[i],

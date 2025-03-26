@@ -16,6 +16,82 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::fused::normalization {
 
+RMSAllGather create_rms_struct(
+    const Tensor& input_tensor,
+    const uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::vector<IDevice*>& devices,
+    const ttnn::ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphores,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    float epsilon,
+    const ttnn::operations::normalization::LayerNormProgramConfig program_config,
+    const DeviceComputeKernelConfig compute_kernel_config,
+    std::optional<DataType> dtype,
+    const bool is_pre) {
+    uint32_t num_devices = devices.size();
+    std::optional<IDevice*> forward_device = std::nullopt;
+    std::optional<IDevice*> backward_device = std::nullopt;
+    std::optional<GlobalSemaphore> semaphore = std::nullopt;
+    uint32_t device_index = 0;  // Initialize device index
+    for (uint32_t i = 0; i < num_devices; ++i) {
+        if (devices.at(i) == input_tensor.device()) {
+            device_index = i;
+            semaphore = semaphores.at(i);  // Get raw pointer
+            if (i != 0) {
+                backward_device = devices.at(i - 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                backward_device = devices.at(num_devices - 1);
+            }
+            if (i != num_devices - 1) {
+                forward_device = devices.at(i + 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                forward_device = devices.at(0);
+            }
+        }
+    }
+    return RMSAllGather(
+        epsilon,
+        memory_config.value_or(input_tensor.memory_config()),
+        program_config,
+        compute_kernel_config,
+        dtype,
+        topology,
+        is_pre,
+        num_links,
+        num_devices,
+        device_index,
+        semaphore.value(),
+        sub_device_id,
+        forward_device,
+        backward_device);
+}
+
+const tt::tt_metal::operation::Hash RMSAllGather::compute_program_hash(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+    log_trace(tt::LogOp, "compute_program_hash is called");
+    auto input_shape = input_tensors[0].get_padded_shape();
+    auto input_memory_layout = input_tensors[0].get_layout();
+    auto input_dtype = input_tensors[0].get_dtype();
+    auto input_memory_config = input_tensors[0].memory_config();
+    return tt::tt_metal::operation::hash_operation<RMSAllGather>(
+        this->eps,
+        // this->program_config,
+        // this->compute_kernel_config,
+        this->dtype,
+        this->is_pre,
+        this->num_links,
+        this->ring_size,
+        this->ring_index,
+        this->output_mem_config,
+        this->topology,
+        input_shape,
+        input_memory_layout,
+        input_dtype,
+        input_memory_config);
+}
+
 void RMSAllGather::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
@@ -175,6 +251,23 @@ void RMSAllGather::validate(
         },
         this->program_config);
 }
+
+static void validate_output_tensor_allocation(const std::vector<Tensor>& output_tensors) {
+    for (const auto& output_tensor : output_tensors) {
+        const auto& buffers = output_tensor.buffers();
+        const auto first_address = buffers.front()->address();
+        TT_FATAL(
+            std::all_of(
+                buffers.begin(),
+                buffers.end(),
+                [&first_address](const auto& buffer) {
+                    return buffer != nullptr && buffer->address() == first_address;
+                }),
+            "Output buffers for all_gather async must be lock-step allocated but some of the tensors were allocated at "
+            "different addresses across devices.");
+    }
+}
+
 std::vector<TensorSpec> RMSAllGather::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto output_shape = input_tensor.get_logical_shape();
@@ -182,7 +275,7 @@ std::vector<TensorSpec> RMSAllGather::compute_output_specs(const std::vector<Ten
 
     // WARNING!!!!! This line is ONLY true when only doing pre-allgather only
     if (this->is_pre) {
-        output_shape[3] = input_tensor.get_tensor_spec().tile().get_tile_shape()[1];
+        output_shape[3] = input_tensor.get_tensor_spec().tile().get_tile_shape()[1] * this->ring_size;
     }
 
     return std::visit(
@@ -249,7 +342,7 @@ std::vector<Tensor> RMSAllGather::create_output_tensors(const std::vector<Tensor
         },
         this->program_config);
 }
-operation::ProgramWithCallbacks RMSAllGather::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks RMSAllGather::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
@@ -268,7 +361,6 @@ operation::ProgramWithCallbacks RMSAllGather::create_program(
                 uint32_t num_cores_x = program_config.compute_with_storage_grid_size.x;
                 uint32_t num_cores_y = program_config.compute_with_storage_grid_size.y;
                 CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
-
                 if (this->is_pre) {
                     return frmsnorm_pre_multi_core_sharded(
                         a,
@@ -286,7 +378,7 @@ operation::ProgramWithCallbacks RMSAllGather::create_program(
                         this->ring_size,
                         this->ring_index,
                         this->topology,
-                        this->semaphore.value(),
+                        this->semaphore,
                         this->sub_device_id);
                 } else {
                     return frmsnorm_post_multi_core_sharded(
@@ -323,7 +415,7 @@ operation::ProgramWithCallbacks RMSAllGather::create_program(
                     this->ring_size,
                     this->ring_index,
                     this->topology,
-                    this->semaphore.value(),
+                    this->semaphore,
                     this->sub_device_id);
             }
         },

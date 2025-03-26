@@ -17,9 +17,14 @@ namespace operations::fused::normalization {
 struct ExecuteFusedRMSNorm {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
         const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
+        const uint32_t cluster_axis,
+        const MeshDevice& mesh_device,
+        const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+        const std::optional<ttnn::Tensor>& persistent_output_tensor = std::nullopt,
+        const std::optional<size_t> num_preferred_links = std::nullopt,
         const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
+        std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
         const std::optional<const DataType> dtype = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -27,15 +32,12 @@ struct ExecuteFusedRMSNorm {
         float epsilon = 1e-12,
         const std::optional<const ttnn::Tensor>& weight = std::nullopt,
         const std::optional<const ttnn::Tensor>& stats = std::nullopt,
-        bool is_pre = true,
-        std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
-        const uint32_t num_links = 1);
+        bool is_pre = true);
 };
 
 }  // namespace operations::fused::normalization
 
-constexpr auto fused_rms_1_1_32_8192 = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::fused_rms_1_1_32_8192",
-    ttnn::operations::fused::normalization::ExecuteFusedRMSNorm>();
+constexpr auto fused_rms_1_1_32_8192 = ttnn::
+    register_operation<"ttnn::fused_rms_1_1_32_8192", ttnn::operations::fused::normalization::ExecuteFusedRMSNorm>();
 
 }  // namespace ttnn

@@ -10,9 +10,14 @@ namespace operations::fused::normalization {
 
 ttnn::Tensor ExecuteFusedRMSNorm::invoke(
     const ttnn::Tensor& input_tensor,
-    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<ttnn::Tensor>& persistent_output_tensor,
+    const std::optional<size_t> num_preferred_links,
     const ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const std::optional<const DataType> dtype,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<MemoryConfig>& memory_config,
@@ -20,56 +25,74 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
     float epsilon,
     const std::optional<const ttnn::Tensor>& weight,
     const std::optional<const ttnn::Tensor>& stats,
-    bool is_pre,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    const uint32_t num_links) {
+    bool is_pre) {
     auto arch = input_tensor.storage_type() == StorageType::DEVICE
                     ? input_tensor.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-    std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
-    std::optional<GlobalSemaphore> semaphore = std::nullopt;
-    uint32_t device_index = 0;  // Initialize device index
+    const auto mesh_view = mesh_device.get_view();
     auto devices = input_tensor.get_workers();
-    uint32_t num_devices = devices.size();
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
-    for (uint32_t i = 0; i < num_devices; ++i) {
-        if (devices.at(i) == input_tensor.device()) {
-            device_index = i;
-            semaphore = semaphores.at(i);  // Get raw pointer
-            if (i != 0) {
-                backward_device = devices.at(i - 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices.at(num_devices - 1);
-            }
-            if (i != num_devices - 1) {
-                forward_device = devices.at(i + 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices.at(0);
-            }
-        }
-    }
-    return operation::run(
-               RMSAllGather{
-                   .eps = epsilon,
-                   .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
-                   .program_config = program_config,
-                   .compute_kernel_config = kernel_config_val,
-                   .dtype = dtype,
-                   .topology = topology,
-                   .is_pre = is_pre,
-                   .forward_device = forward_device,
-                   .backward_device = backward_device,
-                   .num_links = num_links,
-                   .ring_size = num_devices,
-                   .ring_index = device_index,
-                   .semaphore = semaphore,
-                   .sub_device_id = subdevice_id},
-               {input_tensor},
-               {residual_input_tensor, weight, stats})
-        .at(0);
+    std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+
+    int32_t rank = input_tensor.get_logical_shape().rank();
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
+    std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_tensor};
+    const std::vector<std::optional<const Tensor>> optional_input_tensors = {residual_input_tensor, weight, stats};
+
+    int32_t gather_dim = 3;
+    CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
+    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
+
+    tt::tt_metal::operation::launch_op(
+        [num_preferred_links,
+         memory_config,
+         mesh_view,
+         cluster_axis,
+         num_devices,
+         topology,
+         semaphores,
+         subdevice_id,
+         epsilon,
+         program_config,
+         kernel_config_val,
+         dtype,
+         is_pre](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            const auto& input_device_tensor = input_tensors.at(0);
+            TT_FATAL(
+                mesh_view.is_mesh_2d(),
+                "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
+            const auto coordinate = mesh_view.find_device(input_device_tensor.device()->id());
+            std::vector<IDevice*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(coordinate[1])
+                                                                : mesh_view.get_devices_on_row(coordinate[0]);
+            const auto& input_tensor = input_tensors.at(0);
+            return tt::tt_metal::operation::run(
+                ttnn::operations::fused::normalization::create_rms_struct(
+                    input_device_tensor,
+                    num_preferred_links.has_value() ? num_preferred_links.value() : 1,
+                    memory_config,
+                    devices,
+                    topology,
+                    semaphores,
+                    subdevice_id,
+                    epsilon,
+                    program_config,
+                    kernel_config_val,
+                    dtype,
+                    is_pre),
+                {input_tensor},
+                optional_input_tensors,
+                optional_output_tensors);
+        },
+        {input_tensor},
+        output_tensors,
+        optional_input_tensors,  // optional_input_tensors
+        optional_output_tensors);
+    return output_tensors.at(0);
 }
 
 }  // namespace operations::fused::normalization

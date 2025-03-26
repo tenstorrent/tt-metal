@@ -28,14 +28,14 @@ void MAIN {
 
     constexpr uint32_t cb_scaler = get_compile_time_arg_val(8);
     constexpr uint32_t cb_scaler_global = get_compile_time_arg_val(9);
-    constexpr uint32_t cb_ex_partial2 = get_compile_time_arg_val(10);  // E[x^2] partial reduce
-    constexpr uint32_t cb_ex2 = get_compile_time_arg_val(11);          // E[(x-E[x])^2] global reduce
+    constexpr uint32_t cb_ex_partial2 = get_compile_time_arg_val(10);
+    constexpr uint32_t cb_ex2 = get_compile_time_arg_val(11);
     constexpr uint32_t fuse_preadd_cb_in = get_compile_time_arg_val(12);
-    constexpr uint32_t cb_ex_external2 = get_compile_time_arg_val(13);  // E[x^2] partials recieved from other cores
-    constexpr uint32_t cb_out = get_compile_time_arg_val(14);
-    constexpr uint32_t cb_x = get_compile_time_arg_val(15);  // x minus mean
+    constexpr uint32_t cb_ex_external2 = get_compile_time_arg_val(13);
+    constexpr uint32_t cb_out = get_compile_time_arg_val(14);  // output
+    constexpr uint32_t cb_x = get_compile_time_arg_val(15);
     constexpr uint32_t cb_in1 = get_compile_time_arg_val(16);
-    constexpr uint32_t cb_in0 = get_compile_time_arg_val(17);
+    constexpr uint32_t cb_in0 = get_compile_time_arg_val(17);  // Input
 
     constexpr uint32_t num_blocks_second_stage_reduction = num_blocks_first_stage + num_blocks_second_stage - 1;
 
