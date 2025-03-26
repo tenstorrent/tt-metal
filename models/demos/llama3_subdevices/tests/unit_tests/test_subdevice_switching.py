@@ -6,6 +6,7 @@ import pytest
 import ttnn
 from models.demos.llama3_subdevices.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
+from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
 
 
 @pytest.mark.parametrize(
@@ -19,8 +20,9 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 def test_switching(mesh_device):
     prefetcher_setup = TtLlamaPrefetcherSetup(mesh_device, n_tensors=0, n_layers=1, mode="prefill")
     mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
-    crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
-    tt_ccl = TT_CCL(mesh_device, crs, prefetcher_setup.worker_sub_device_id, mode="prefill")
+    model_args = TtModelArgs(mesh_device, max_batch_size=1, max_seq_len=1024, dummy_weights=True)
+
+    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, mode="prefill")
     tt_ccl.close()
     del prefetcher_setup
 
@@ -30,13 +32,8 @@ def test_switching(mesh_device):
     mesh_device.set_sub_device_stall_group(
         [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
     )
-    sub_core_grids = ttnn.CoreRangeSet(
-        [
-            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-        ]
-    )
-    tt_ccl = TT_CCL(mesh_device, sub_core_grids, prefetcher_setup.worker_sub_device_id)
+
+    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id)
     tt_ccl.close()
     del prefetcher_setup
 
@@ -44,7 +41,6 @@ def test_switching(mesh_device):
 
     prefetcher_setup = TtLlamaPrefetcherSetup(mesh_device, n_tensors=0, n_layers=1, mode="prefill")
     mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
-    crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
-    tt_ccl = TT_CCL(mesh_device, crs, prefetcher_setup.worker_sub_device_id, mode="prefill")
+    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, mode="prefill")
     tt_ccl.close()
     del prefetcher_setup
