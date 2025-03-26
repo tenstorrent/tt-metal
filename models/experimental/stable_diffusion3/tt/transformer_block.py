@@ -156,8 +156,8 @@ class TtTransformerBlock:
         # )
         # spatial = ttnn.to_memory_config(spatial, spatial_memory_config)
 
-        spatial = ttnn.all_gather(spatial, dim=-1)
-        prompt = ttnn.all_gather(prompt, dim=-1)
+        # spatial = ttnn.all_gather(spatial, dim=-1)
+        # prompt = ttnn.all_gather(prompt, dim=-1)
         spatial_scaled = spatial * (1 + spatial_scale) + spatial_shift
         # ttnn.deallocate(spatial)
         # spatial_scaled = ttnn.to_memory_config(spatial_scaled, ttnn.DRAM_MEMORY_CONFIG)
@@ -165,9 +165,11 @@ class TtTransformerBlock:
 
         prompt_scaled = prompt * (1 + prompt_scale) + prompt_shift
 
+        spatial_scaled = ttnn.all_gather(spatial_scaled, dim=-1)
+        prompt_scaled = ttnn.all_gather(prompt_scaled, dim=-1)
         spatial_attn, prompt_attn = self._dual_attn(spatial=spatial_scaled, prompt=prompt_scaled, deallocate=True)
-        spatial_attn = ttnn.all_gather(spatial_attn, dim=-1)
-        prompt_attn = ttnn.all_gather(prompt_attn, dim=-1)
+        # spatial_attn = ttnn.all_gather(spatial_attn, dim=-1)
+        # prompt_attn = ttnn.all_gather(prompt_attn, dim=-1)
 
         spatial_attn_scaled = spatial_gate * spatial_attn
         prompt_attn_scaled = prompt_gate * prompt_attn if prompt_gate is not None else None
@@ -183,8 +185,8 @@ class TtTransformerBlock:
         self, inp: ttnn.Tensor, *, gate: ttnn.Tensor, scale: ttnn.Tensor, shift: ttnn.Tensor
     ) -> ttnn.Tensor:
         scaled = inp * (1 + scale) + shift
-        # scaled = ttnn.all_gather(scaled, dim=-1)
-        result = gate * ttnn.all_gather(self._spatial_ff(scaled), dim=-1)
+        scaled = ttnn.all_gather(scaled, dim=-1)
+        result = gate * self._spatial_ff(scaled)
         # result = ttnn.all_gather(result, dim=-1)
         ttnn.deallocate(scaled)
         return result
@@ -195,8 +197,8 @@ class TtTransformerBlock:
         assert self._prompt_ff is not None
 
         scaled = inp * (1 + scale) + shift
-        # scaled = ttnn.all_gather(scaled, dim=-1)
-        result = gate * ttnn.all_gather(self._prompt_ff(scaled), dim=-1)
+        scaled = ttnn.all_gather(scaled, dim=-1)
+        result = gate * self._prompt_ff(scaled)
         # result = ttnn.all_gather(result, dim=-1)
         ttnn.deallocate(scaled)
         return result
@@ -267,37 +269,12 @@ class TtTransformerBlock:
                 prompt_gate_ff,
             ] = chunk_time(prompt_time, 6)
 
-        def _allgather_unsqueeze_squeeze(x):
-            if x is None:
-                return None
-            orig_shape = tuple(x.shape)
-            gathered = ttnn.all_gather(ttnn.reshape(x, (1,) + orig_shape), dim=3)
-            gathered_shape = tuple(gathered.shape)
-            return ttnn.reshape(gathered, gathered_shape[1:])
-
-        # DEBUG: see if the embed chunking logic is correct by independently gathering them
-        spatial_shift_dual_attn = _allgather_unsqueeze_squeeze(spatial_shift_dual_attn)
-        spatial_scale_dual_attn = _allgather_unsqueeze_squeeze(spatial_scale_dual_attn)
-        spatial_gate_dual_attn = _allgather_unsqueeze_squeeze(spatial_gate_dual_attn)
-        spatial_shift_ff = _allgather_unsqueeze_squeeze(spatial_shift_ff)
-        spatial_scale_ff = _allgather_unsqueeze_squeeze(spatial_scale_ff)
-        spatial_gate_ff = _allgather_unsqueeze_squeeze(spatial_gate_ff)
-        spatial_shift_attn = _allgather_unsqueeze_squeeze(spatial_shift_attn)
-        spatial_scale_attn = _allgather_unsqueeze_squeeze(spatial_scale_attn)
-        spatial_gate_attn = _allgather_unsqueeze_squeeze(spatial_gate_attn)
-        prompt_scale_attn = _allgather_unsqueeze_squeeze(prompt_scale_attn)
-        prompt_shift_attn = _allgather_unsqueeze_squeeze(prompt_shift_attn)
-        prompt_gate_attn = _allgather_unsqueeze_squeeze(prompt_gate_attn)
-        prompt_shift_ff = _allgather_unsqueeze_squeeze(prompt_shift_ff)
-        prompt_scale_ff = _allgather_unsqueeze_squeeze(prompt_scale_ff)
-        prompt_gate_ff = _allgather_unsqueeze_squeeze(prompt_gate_ff)
-
         spatial_normed = self._spatial_norm_1(spatial)
         # spatial_normed = ttnn.all_gather(spatial_normed, dim=-1)
-        spatial = ttnn.all_gather(spatial, dim=-1)
+        # spatial = ttnn.all_gather(spatial, dim=-1)
         prompt_normed = self._prompt_norm_1(prompt)
         # prompt_normed = ttnn.all_gather(prompt_normed, dim=-1)
-        prompt = ttnn.all_gather(prompt, dim=-1)
+        # prompt = ttnn.all_gather(prompt, dim=-1)
         spatial_attn, prompt_attn = self._dual_attn_block(
             spatial=spatial_normed,
             prompt=prompt_normed,
