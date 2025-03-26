@@ -137,7 +137,7 @@ def test_transformer_block(
     # ttnn.copy_host_to_device_tensor(tt_time_host, tt_time)
 
     tt_spatial_output_padded, tt_prompt_output_padded = tt_model(
-        spatial=tt_spatial, prompt=tt_prompt, time_embed=tt_time
+        spatial=tt_spatial, prompt=tt_prompt, time_embed=tt_time, N=spatial_sequence_length, L=prompt_sequence_length
     )
     tt_spatial_output_padded = ttnn.to_torch(
         tt_spatial_output_padded, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)

@@ -147,6 +147,8 @@ class TtTransformerBlock:
         prompt_shift: ttnn.Tensor,
         spatial_scale: ttnn.Tensor,
         spatial_shift: ttnn.Tensor,
+        N: int,
+        L: int,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         # spatial_memory_config = ttnn.create_sharded_memory_config(
         #     spatial.shape,
@@ -167,7 +169,9 @@ class TtTransformerBlock:
 
         spatial_scaled = ttnn.all_gather(spatial_scaled, dim=-1)
         prompt_scaled = ttnn.all_gather(prompt_scaled, dim=-1)
-        spatial_attn, prompt_attn = self._dual_attn(spatial=spatial_scaled, prompt=prompt_scaled, deallocate=True)
+        spatial_attn, prompt_attn = self._dual_attn(
+            spatial=spatial_scaled, prompt=prompt_scaled, deallocate=True, N=N, L=L
+        )
         # spatial_attn = ttnn.all_gather(spatial_attn, dim=-1)
         # prompt_attn = ttnn.all_gather(prompt_attn, dim=-1)
 
@@ -204,7 +208,7 @@ class TtTransformerBlock:
         return result
 
     def __call__(  # noqa: PLR0915
-        self, *, spatial: ttnn.Tensor, prompt: ttnn.Tensor, time_embed: ttnn.Tensor
+        self, *, spatial: ttnn.Tensor, prompt: ttnn.Tensor, time_embed: ttnn.Tensor, N: int, L: int
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         t = ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         spatial_time = self._spatial_time_embed(t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -284,6 +288,8 @@ class TtTransformerBlock:
             prompt_shift=prompt_shift_attn,
             spatial_scale=spatial_scale_dual_attn,
             spatial_shift=spatial_shift_dual_attn,
+            N=N,
+            L=L,
         )
         ttnn.deallocate(prompt_normed)
         ttnn.deallocate(spatial_gate_dual_attn)
