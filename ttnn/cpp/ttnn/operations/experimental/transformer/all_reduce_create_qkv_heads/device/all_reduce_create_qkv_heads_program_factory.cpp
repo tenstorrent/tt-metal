@@ -83,7 +83,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     const auto k_cores = k_shard_spec.grid;
     const auto k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / TILE_HW;
     const auto v_shard_spec = v_output_tensor.shard_spec().value();
-    const auto v_cores = q_shard_spec.grid;
+    const auto v_cores = v_shard_spec.grid;
     const auto v_num_tiles = v_shard_spec.shape[0] * v_shard_spec.shape[1] / TILE_HW;
     const auto in_shard_spec = output_tensor.shard_spec().value();
     const auto in_cores = in_shard_spec.grid;
@@ -157,20 +157,23 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     const uint32_t k_num_cores = k_cores.num_cores();  // number of cores of the output
     const auto& k_cores_vector = corerange_to_cores(k_cores, k_num_cores, true);
 
+    // cores for v
+    const uint32_t v_num_cores = v_cores.num_cores();  // number of cores of the output
+    const auto& v_cores_vector = corerange_to_cores(v_cores, v_num_cores, true);
+
     // cores for input
     const uint32_t in_num_cores = in_cores.num_cores();  // number of cores of the input
     auto in_cores_vec = corerange_to_cores(in_cores, in_num_cores, true);
 
-    std::vector<uint32_t> noc_x_coords, noc_y_coords;
-    noc_x_coords.reserve(in_num_cores);
-    noc_y_coords.reserve(in_num_cores);
-
     std::vector<uint32_t> qcores_noc_x_coords, qcores_noc_y_coords;
     std::vector<uint32_t> kcores_noc_x_coords, kcores_noc_y_coords;
+    std::vector<uint32_t> vcores_noc_x_coords, vcores_noc_y_coords;
     qcores_noc_x_coords.reserve(q_cores_vector.size());
     qcores_noc_y_coords.reserve(q_cores_vector.size());
     kcores_noc_x_coords.reserve(k_cores_vector.size());
     kcores_noc_y_coords.reserve(k_cores_vector.size());
+    vcores_noc_x_coords.reserve(v_cores_vector.size());
+    vcores_noc_y_coords.reserve(v_cores_vector.size());
     for (uint32_t i = 0; i < q_cores_vector.size(); i++) {
         auto worker_core = device->worker_core_from_logical_core(q_cores_vector[i]);
         qcores_noc_x_coords.push_back(worker_core.x);
@@ -181,12 +184,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         kcores_noc_x_coords.push_back(worker_core.x);
         kcores_noc_y_coords.push_back(worker_core.y);
     }
-
-    for (uint32_t i = 0; i < in_num_cores; ++i) {
-        auto worker_core = device->worker_core_from_logical_core(in_cores_vec[i]);
-        noc_x_coords.push_back(worker_core.x);
-        noc_y_coords.push_back(worker_core.y);
+    for (uint32_t i = 0; i < v_cores_vector.size(); i++) {
+        auto worker_core = device->worker_core_from_logical_core(v_cores_vector[i]);
+        vcores_noc_x_coords.push_back(worker_core.x);
+        vcores_noc_y_coords.push_back(worker_core.y);
     }
+
     uint32_t process_qv = 1, process_k = 0;
 
     // End of qkv heads fuse
@@ -475,7 +478,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     // Now prepare rt args for the reader and writer kernels
 
     std::vector<uint32_t> reader_writer_runtime_args_template;
-    reader_writer_runtime_args_template.reserve(8 + 2 * q_num_cores + 2 * k_num_cores);
+    reader_writer_runtime_args_template.reserve(8 + 2 * q_num_cores + 2 * k_num_cores + 2 * v_num_cores);
     reader_writer_runtime_args_template = {
         q_base_addr,
         k_base_addr,
@@ -488,11 +491,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         reader_writer_runtime_args_template.end(), qcores_noc_x_coords.begin(), qcores_noc_x_coords.end());
     reader_writer_runtime_args_template.insert(
         reader_writer_runtime_args_template.end(), qcores_noc_y_coords.begin(), qcores_noc_y_coords.end());
+
     reader_writer_runtime_args_template.insert(
         reader_writer_runtime_args_template.end(), kcores_noc_x_coords.begin(), kcores_noc_x_coords.end());
     reader_writer_runtime_args_template.insert(
         reader_writer_runtime_args_template.end(), kcores_noc_y_coords.begin(), kcores_noc_y_coords.end());
 
+    reader_writer_runtime_args_template.insert(
+        reader_writer_runtime_args_template.end(), vcores_noc_x_coords.begin(), vcores_noc_x_coords.end());
+    reader_writer_runtime_args_template.insert(
+        reader_writer_runtime_args_template.end(), vcores_noc_y_coords.begin(), vcores_noc_y_coords.end());
     // KERNEL CREATION
     tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_1;
     tt::tt_metal::NOC writer_noc = tt::tt_metal::NOC::NOC_0;

@@ -98,6 +98,11 @@ void kernel_main() {
     tt_l1_ptr uint32_t* k_in0_mcast_noc_y =
         (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx + 2 * q_num_cores + k_num_cores));
 
+    tt_l1_ptr uint32_t* v_in0_mcast_noc_x =
+        (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx + 2 * q_num_cores + 2 * k_num_cores));
+    tt_l1_ptr uint32_t* v_in0_mcast_noc_y =
+        (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx + 2 * q_num_cores + 2 * k_num_cores + q_num_cores));
+
     // Print NOC addresses
     DPRINT << "q_in0_mcast_noc_x = " << (uint32_t)q_in0_mcast_noc_x << ENDL();
     DPRINT << "q_in0_mcast_noc_y = " << (uint32_t)q_in0_mcast_noc_y << ENDL();
@@ -106,7 +111,7 @@ void kernel_main() {
 
     // rt args for reduction receiver kernel
     const uint32_t signal_semaphore_addr =
-        get_semaphore(get_arg_val<uint32_t>(arg_idx + 2 * q_num_cores + 2 * k_num_cores));
+        get_semaphore(get_arg_val<uint32_t>(arg_idx + 2 * q_num_cores + 2 * k_num_cores + 2 * q_num_cores));
 
     DPRINT << "signal_semaphore_addr = " << signal_semaphore_addr << ENDL();
 
@@ -197,7 +202,7 @@ void kernel_main() {
             wptr_offset = head_index * SUBTILE_LINE_BYTES + tile_index * tile_size;
             uint32_t tile_index_in_output_core = index_in_cores - (num_q_heads + num_kv_heads) * head_size_num_tiles;
             write_addr =
-                get_noc_addr(q_in0_mcast_noc_x[i_output_core], q_in0_mcast_noc_y[i_output_core], v_start_addr) +
+                get_noc_addr(v_in0_mcast_noc_x[i_output_core], v_in0_mcast_noc_y[i_output_core], v_start_addr) +
                 wptr_offset;
         }
 

@@ -252,19 +252,24 @@ std::vector<ttnn::TensorSpec> AllReduceCreateQkvHeads::compute_output_specs(
     auto sub_core_grid = tt::tt_metal::CoreRangeSet(
         tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(7, 5)));
     auto start_core_coord = sub_core_grid.bounding_box().start_coord;
+    auto next_core_coord = start_core_coord;
 
     q_shard_grid =
         tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core_coord, batch, sub_core_grid, true);
 
-    CoreRangeSet q_plus_one_grid =
-        tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core_coord, batch + 1, sub_core_grid, true);
-    if (!q_plus_one_grid.ranges().empty()) {
-        start_core_coord = q_plus_one_grid.ranges().back().end_coord;
+    CoreRangeSet q_two_batch_grid =
+        tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core_coord, 2 * batch + 1, sub_core_grid, true);
+    if (!q_two_batch_grid.ranges().empty()) {
+        next_core_coord = q_two_batch_grid.ranges().back().end_coord;
     }
-    k_shard_grid =
-        tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core_coord, batch, sub_core_grid, true);
+    k_shard_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(next_core_coord, batch, sub_core_grid, true);
 
-    v_shard_grid = q_shard_grid;
+    CoreRangeSet q_four_batch_grid =
+        tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core_coord, 4 * batch + 1, sub_core_grid, true);
+    if (!q_four_batch_grid.ranges().empty()) {
+        next_core_coord = q_four_batch_grid.ranges().back().end_coord;
+    }
+    v_shard_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(next_core_coord, batch, sub_core_grid, true);
 
     tt::tt_metal::ShardSpec q_shard_spec{q_shard_grid, {num_q_heads_padded, this->head_dim}};
     q_mem_config.shard_spec = q_shard_spec;
