@@ -13,9 +13,6 @@
 #include "compute_kernel_api/add_int32_sfpu.h"
 #include "compute_kernel_api/common.h"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
-
 namespace NAMESPACE {
 void MAIN {
     const auto num_tiles_to_cumsum = get_arg_val<uint32_t>(0);
@@ -78,9 +75,12 @@ void MAIN {
             cb_push_back(cb_out0, 1);
             tile_regs_release();
         }
-        ACQ();  // has to be called for both threads, neither one can pop from intermed while someone else works with it
+        tile_regs_acquire();  // has to be called for both threads, neither one can pop from intermed while someone else
+                              // works with it
+        tile_regs_wait();
         cb_pop_front(cb_intermed, 1);  // this solves blocking in cases where outer loop has multiple iterations
-        REL();
+        tile_regs_commit();
+        tile_regs_release();
     }
     cb_pop_front(cb_in1, 1);
 }
