@@ -60,7 +60,7 @@ def test_sort_output_shape_prealocated_output(shape, dim, descending, device):
 
     ttnn_sort_values = ttnn.zeros_like(ttnn_input)
     ttnn_sort_indices = ttnn.zeros_like(ttnn_input)
-    ttnn.experimental.sort(ttnn_input, dim=-1, descending=True, out=(ttnn_sort_values, ttnn_sort_indices))
+    ttnn.experimental.sort(ttnn_input, dim=dim, descending=descending, out=(ttnn_sort_values, ttnn_sort_indices))
 
     assert torch_sort_values.shape == ttnn_sort_values.shape
     assert torch_sort_indeces.shape == ttnn_sort_indices.shape
