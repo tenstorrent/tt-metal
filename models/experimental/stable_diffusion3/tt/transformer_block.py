@@ -63,19 +63,19 @@ class TtTransformerBlockParameters:
             prompt_norm_1=TtLayerNormParameters.from_torch(
                 substate(state, "norm1_context.norm"), dtype=dtype, device=device, shard_dim=-1
             ),
-            spatial_time_embed=TtLinearParameters.from_torch(
+            spatial_time_embed=TtLinearParameters.from_torch_time_embed(
                 substate(state, "norm1.linear"),
                 dtype=dtype,
                 device=device,
-                shard_dim=-1,
-                # num_chunks=spatial_time_embed_chunks
+                # shard_dim=-1,
+                num_chunks=spatial_time_embed_chunks,
             ),
-            prompt_time_embed=TtLinearParameters.from_torch(
+            prompt_time_embed=TtLinearParameters.from_torch_time_embed(
                 substate(state, "norm1_context.linear"),
                 dtype=dtype,
                 device=device,
-                shard_dim=-1,
-                # num_chunks=prompt_time_embed_chunks
+                # shard_dim=-1,
+                num_chunks=prompt_time_embed_chunks,
             ),
             spatial_ff=TtFeedForwardParameters.from_torch(substate(state, "ff"), dtype=dtype, device=device),
             prompt_ff=TtFeedForwardParameters.from_torch(substate(state, "ff_context"), dtype=dtype, device=device)
@@ -197,14 +197,17 @@ class TtTransformerBlock:
         t = ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         spatial_time = self._spatial_time_embed(t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         prompt_time = self._prompt_time_embed(t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        spatial_time = ttnn.reshape(
-            spatial_time, (1, spatial_time.shape[0], spatial_time.shape[1], spatial_time.shape[2])
-        )
-        prompt_time = ttnn.reshape(prompt_time, (1, prompt_time.shape[0], prompt_time.shape[1], prompt_time.shape[2]))
-        spatial_time = ttnn.all_gather(spatial_time, dim=len(spatial_time.shape) - 1)
-        prompt_time = ttnn.all_gather(prompt_time, dim=len(prompt_time.shape) - 1)
-        spatial_time = ttnn.reshape(spatial_time, (spatial_time.shape[1], spatial_time.shape[2], spatial_time.shape[3]))
-        prompt_time = ttnn.reshape(prompt_time, (prompt_time.shape[1], prompt_time.shape[2], prompt_time.shape[3]))
+
+        print(f"spatial_time.shape: {spatial_time.shape}")
+        print(f"prompt_time.shape: {prompt_time.shape}")
+        # spatial_time = ttnn.reshape(
+        #     spatial_time, (1, spatial_time.shape[0], spatial_time.shape[1], spatial_time.shape[2])
+        # )
+        # prompt_time = ttnn.reshape(prompt_time, (1, prompt_time.shape[0], prompt_time.shape[1], prompt_time.shape[2]))
+        # spatial_time = ttnn.all_gather(spatial_time, dim=len(spatial_time.shape) - 1)
+        # prompt_time = ttnn.all_gather(prompt_time, dim=len(prompt_time.shape) - 1)
+        # spatial_time = ttnn.reshape(spatial_time, (spatial_time.shape[1], spatial_time.shape[2], spatial_time.shape[3]))
+        # prompt_time = ttnn.reshape(prompt_time, (prompt_time.shape[1], prompt_time.shape[2], prompt_time.shape[3]))
         ttnn.deallocate(t)
         if self._spatial_attn is not None:
             [
@@ -251,7 +254,92 @@ class TtTransformerBlock:
                 prompt_scale_ff,
                 prompt_gate_ff,
             ] = chunk_time(prompt_time, 6)
+        breakpoint()
+        if spatial_shift_dual_attn is not None:
+            print(f"spatial_shift_dual_attn.shape: {spatial_shift_dual_attn.shape}")
+            spatial_shift_dual_attn = ttnn.reshape(
+                ttnn.all_gather(
+                    ttnn.reshape(spatial_shift_dual_attn, (1,) + tuple(spatial_shift_dual_attn.shape)), dim=-1
+                ),
+                tuple(spatial_shift_dual_attn.shape),
+            )
+            print(f"spatial_shift_dual_attn.shape: {spatial_shift_dual_attn.shape}")
+        if spatial_scale_dual_attn is not None:
+            spatial_scale_dual_attn = ttnn.reshape(
+                ttnn.all_gather(
+                    ttnn.reshape(spatial_scale_dual_attn, (1,) + tuple(spatial_scale_dual_attn.shape)), dim=-1
+                ),
+                tuple(spatial_scale_dual_attn.shape),
+            )
+        if spatial_gate_dual_attn is not None:
+            spatial_gate_dual_attn = ttnn.reshape(
+                ttnn.all_gather(
+                    ttnn.reshape(spatial_gate_dual_attn, (1,) + tuple(spatial_gate_dual_attn.shape)), dim=-1
+                ),
+                tuple(spatial_gate_dual_attn.shape),
+            )
+        if spatial_shift_ff is not None:
+            spatial_shift_ff = ttnn.reshape(
+                ttnn.all_gather(ttnn.reshape(spatial_shift_ff, (1,) + tuple(spatial_shift_ff.shape)), dim=-1),
+                tuple(spatial_shift_ff.shape),
+            )
+        if spatial_scale_ff is not None:
+            spatial_scale_ff = ttnn.reshape(
+                ttnn.all_gather(ttnn.reshape(spatial_scale_ff, (1,) + tuple(spatial_scale_ff.shape)), dim=-1),
+                tuple(spatial_scale_ff.shape),
+            )
+        if spatial_gate_ff is not None:
+            spatial_gate_ff = ttnn.reshape(
+                ttnn.all_gather(ttnn.reshape(spatial_gate_ff, (1,) + tuple(spatial_gate_ff.shape)), dim=-1),
+                tuple(spatial_gate_ff.shape),
+            )
+        if spatial_shift_attn is not None:
+            spatial_shift_attn = ttnn.reshape(
+                ttnn.all_gather(ttnn.reshape(spatial_shift_attn, (1,) + tuple(spatial_shift_attn.shape)), dim=-1),
+                tuple(spatial_shift_attn.shape),
+            )
+        if spatial_scale_attn is not None:
+            spatial_scale_attn = ttnn.reshape(
+                ttnn.all_gather(ttnn.reshape(spatial_scale_attn, (1,) + tuple(spatial_scale_attn.shape)), dim=-1),
+                tuple(spatial_scale_attn.shape),
+            )
+        if spatial_gate_attn is not None:
+            spatial_gate_attn = ttnn.reshape(
+                ttnn.all_gather(ttnn.reshape(spatial_gate_attn, (1,) + tuple(spatial_gate_attn.shape)), dim=-1),
+                tuple(spatial_gate_attn.shape),
+            )
+        if prompt_scale_attn is not None:
+            prompt_scale_attn = ttnn.reshape(
+                ttnn.all_gather(ttnn.reshape(prompt_scale_attn, (1,) + tuple(prompt_scale_attn.shape)), dim=-1),
+                tuple(prompt_scale_attn.shape),
+            )
+        if prompt_shift_attn is not None:
+            prompt_shift_attn = ttnn.reshape(
+                ttnn.all_gather(ttnn.reshape(prompt_shift_attn, (1,) + tuple(prompt_shift_attn.shape)), dim=-1),
+                tuple(prompt_shift_attn.shape),
+            )
+        if prompt_gate_attn is not None:
+            prompt_gate_attn = ttnn.reshape(
+                ttnn.all_gather(ttnn.reshape(prompt_gate_attn, (1,) + tuple(prompt_gate_attn.shape)), dim=-1),
+                tuple(prompt_gate_attn.shape),
+            )
+        if prompt_shift_ff is not None:
+            prompt_shift_ff = ttnn.reshape(
+                ttnn.all_gather(ttnn.reshape(prompt_shift_ff, (1,) + tuple(prompt_shift_ff.shape)), dim=-1),
+                tuple(prompt_shift_ff.shape),
+            )
+        if prompt_scale_ff is not None:
+            prompt_scale_ff = ttnn.reshape(
+                ttnn.all_gather(ttnn.reshape(prompt_scale_ff, (1,) + tuple(prompt_scale_ff.shape)), dim=-1),
+                tuple(prompt_scale_ff.shape),
+            )
+        if prompt_gate_ff is not None:
+            prompt_gate_ff = ttnn.reshape(
+                ttnn.all_gather(ttnn.reshape(prompt_gate_ff, (1,) + tuple(prompt_gate_ff.shape)), dim=-1),
+                tuple(prompt_gate_ff.shape),
+            )
 
+        breakpoint()
         spatial_normed = self._spatial_norm_1(spatial)
         # spatial_normed = ttnn.all_gather(spatial_normed, dim=-1)
         spatial = ttnn.all_gather(spatial, dim=-1)
