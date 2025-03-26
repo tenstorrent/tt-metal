@@ -158,8 +158,6 @@ class TtTransformerBlock:
         # )
         # spatial = ttnn.to_memory_config(spatial, spatial_memory_config)
 
-        # spatial = ttnn.all_gather(spatial, dim=-1)
-        # prompt = ttnn.all_gather(prompt, dim=-1)
         spatial_scaled = spatial * (1 + spatial_scale) + spatial_shift
         # ttnn.deallocate(spatial)
         # spatial_scaled = ttnn.to_memory_config(spatial_scaled, ttnn.DRAM_MEMORY_CONFIG)
@@ -172,14 +170,9 @@ class TtTransformerBlock:
         spatial_attn, prompt_attn = self._dual_attn(
             spatial=spatial_scaled, prompt=prompt_scaled, deallocate=True, N=N, L=L
         )
-        # spatial_attn = ttnn.all_gather(spatial_attn, dim=-1)
-        # prompt_attn = ttnn.all_gather(prompt_attn, dim=-1)
 
         spatial_attn_scaled = spatial_gate * spatial_attn
         prompt_attn_scaled = prompt_gate * prompt_attn if prompt_gate is not None else None
-
-        # spatial_attn_scaled = ttnn.all_gather(spatial_attn_scaled, dim=-1)
-        # prompt_attn_scaled = ttnn.all_gather(prompt_attn_scaled, dim=-1)
 
         ttnn.deallocate(spatial_attn)
         ttnn.deallocate(prompt_attn)
@@ -191,7 +184,6 @@ class TtTransformerBlock:
         scaled = inp * (1 + scale) + shift
         scaled = ttnn.all_gather(scaled, dim=-1)
         result = gate * self._spatial_ff(scaled)
-        # result = ttnn.all_gather(result, dim=-1)
         ttnn.deallocate(scaled)
         return result
 
@@ -203,7 +195,6 @@ class TtTransformerBlock:
         scaled = inp * (1 + scale) + shift
         scaled = ttnn.all_gather(scaled, dim=-1)
         result = gate * self._prompt_ff(scaled)
-        # result = ttnn.all_gather(result, dim=-1)
         ttnn.deallocate(scaled)
         return result
 
@@ -214,17 +205,7 @@ class TtTransformerBlock:
         spatial_time = self._spatial_time_embed(t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         prompt_time = self._prompt_time_embed(t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        print(f"spatial_time.shape: {spatial_time.shape}")
-        print(f"prompt_time.shape: {prompt_time.shape}")
-        # spatial_time = ttnn.reshape(
-        #     spatial_time, (1, spatial_time.shape[0], spatial_time.shape[1], spatial_time.shape[2])
-        # )
-        # prompt_time = ttnn.reshape(prompt_time, (1, prompt_time.shape[0], prompt_time.shape[1], prompt_time.shape[2]))
-        # spatial_time = ttnn.all_gather(spatial_time, dim=len(spatial_time.shape) - 1)
-        # prompt_time = ttnn.all_gather(prompt_time, dim=len(prompt_time.shape) - 1)
-        # spatial_time = ttnn.reshape(spatial_time, (spatial_time.shape[1], spatial_time.shape[2], spatial_time.shape[3]))
-        # prompt_time = ttnn.reshape(prompt_time, (prompt_time.shape[1], prompt_time.shape[2], prompt_time.shape[3]))
-        # ttnn.deallocate(t)
+        ttnn.deallocate(t)
         if self._spatial_attn is not None:
             [
                 spatial_shift_dual_attn,
@@ -274,11 +255,8 @@ class TtTransformerBlock:
             ] = chunk_time(prompt_time, 6)
 
         spatial_normed = self._spatial_norm_1(spatial)
-        # spatial_normed = ttnn.all_gather(spatial_normed, dim=-1)
-        # spatial = ttnn.all_gather(spatial, dim=-1)
         prompt_normed = self._prompt_norm_1(prompt)
-        # prompt_normed = ttnn.all_gather(prompt_normed, dim=-1)
-        # prompt = ttnn.all_gather(prompt, dim=-1)
+
         spatial_attn, prompt_attn = self._dual_attn_block(
             spatial=spatial_normed,
             prompt=prompt_normed,
