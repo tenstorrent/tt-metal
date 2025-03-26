@@ -185,7 +185,7 @@ run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests() {
   fi
 }
 
-run_t3000_mistral7b_frequent_tests() {
+run_t3000_mistral_tests() {
   # Record the start time
   fail=0
   start_time=$(date +%s)
@@ -339,8 +339,8 @@ run_t3000_tests() {
   # Run Llama3.2-11B Vision tests on spoofed N300
   run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests
 
-  # Run mistral7b tests
-  run_t3000_mistral7b_frequent_tests
+  # Run mistral tests
+  run_t3000_mistral_tests
 
   # Run mixtral tests
   run_t3000_mixtral_tests
