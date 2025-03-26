@@ -114,7 +114,10 @@ public:
     // The data in the buffer is copied into a tensor with an owned storage.
     template <typename T>
     static Tensor from_span(
-        tt::stl::Span<const T> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
+        tt::stl::Span<const T> buffer,
+        const TensorSpec& spec,
+        std::optional<ttnn::AnyDevice> device = std::nullopt,
+        ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
     // Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
     //
@@ -139,7 +142,10 @@ public:
     // Same as `from_span`, but operates on a vector instead.
     template <typename T>
     static Tensor from_vector(
-        const std::vector<T>& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt) {
+        const std::vector<T>& buffer,
+        const TensorSpec& spec,
+        std::optional<ttnn::AnyDevice> device = std::nullopt,
+        ttnn::QueueId cq_id = ttnn::DefaultQueueId) {
         return from_span(tt::stl::Span<const T>(buffer), spec, device);
     }
 
@@ -147,7 +153,10 @@ public:
     // physical shape matches logical shape, and no type conversion is needed.
     template <typename T>
     static Tensor from_vector(
-        std::vector<T>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
+        std::vector<T>&& buffer,
+        const TensorSpec& spec,
+        std::optional<ttnn::AnyDevice> device = std::nullopt,
+        ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
     // Converts a `Tensor` to a `std::vector<T>`.
     // Elements in the vector will be stored in row-major order. The type of the requested vector has to match that of
@@ -155,7 +164,7 @@ public:
     //
     // If the tensor resides on a device, it will be brough back to host.
     template <typename T>
-    std::vector<T> to_vector() const;
+    std::vector<T> to_vector(ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
     Tensor to_device(
         IDevice* target_device,

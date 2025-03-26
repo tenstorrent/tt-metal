@@ -6,7 +6,7 @@ import math
 import ttnn
 import torch
 import os
-from ttnn import squeeze, unsqueeze_to_4D
+from ttnn import unsqueeze_to_4D
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     is_tile_dim_alligned,
     round_up_to_tile_dim,
@@ -520,14 +520,13 @@ class cross_attention:
                 is_causal_mask=False,
             )
         else:
-            # This needs to be updated when optional output tensors are available
-            attention_scores_temp = attention_scores
-            attention_scores = ttnn.multiply(
-                attention_scores_temp,
+            attention_scores = ttnn.bcast(
+                attention_scores,
                 self.scale,
+                math_op=ttnn.BcastOpMath.MUL,
+                dim=ttnn.BcastOpDim.HW,
                 memory_config=attention_scores.memory_config(),
             )
-            attention_scores_temp.deallocate()
             attention_scores = ttnn.softmax_in_place(
                 attention_scores,
                 program_config=softmax_program_config,

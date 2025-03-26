@@ -97,13 +97,27 @@ def run_all_reduce_impl(
     ##### Set up fabric stuff
     ##################################
 
+    linear = True
+    if linear:
+        all_reduce_topology = ttnn.Topology.Linear
+        wrap_mesh = False
+    else:
+        all_reduce_topology = ttnn.Topology.Ring
+        wrap_mesh = True
+
     worker_sub_device = ttnn.SubDevice([SUB_DEVICE_CRS])
 
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
     if create_persistent_fabric:
         mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-            mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
+            mesh_device,
+            [worker_sub_device],
+            0,
+            0,
+            enable_persistent_fabric,
+            wrap_fabric_around_mesh=wrap_mesh,
+            topology=all_reduce_topology,
         )
         mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
@@ -210,7 +224,7 @@ def run_all_reduce_impl(
                     mesh_device=mesh_device,
                     multi_device_global_semaphore=ccl_semaphore_handles[i % num_buffers],
                     memory_config=output_mem_config,
-                    topology=ttnn.Topology.Linear,
+                    topology=all_reduce_topology,
                     num_links=num_links,
                     subdevice_id=worker_sub_device_id,
                 )
@@ -317,7 +331,7 @@ def run_all_reduce_impl(
         if enable_persistent_fabric and teardown_persistent_fabric:
             mesh_device.reset_sub_device_stall_group()
             t1 = time()
-            teardown_fabric_interface(mesh_device)
+            teardown_fabric_interface(mesh_device, wrap_fabric_around_mesh=wrap_mesh, topology=all_reduce_topology)
             t2 = time()
             logger.info(f"Teardown time: {t2 - t1}")
 
