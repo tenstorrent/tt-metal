@@ -133,6 +133,7 @@ uint32_t stream_wrap_gt(uint32_t a, uint32_t b) {
 
 FORCE_INLINE
 void wait_for_workers(volatile CQDispatchCmd tt_l1_ptr* cmd) {
+    DeviceZoneScopedN("WAIT-FOR-WORKERS");
     volatile uint32_t* worker_sem =
         (volatile uint32_t*)STREAM_REG_ADDR(cmd->mcast.wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
     while (stream_wrap_gt(cmd->mcast.wait_count, *worker_sem)) {
@@ -313,9 +314,11 @@ void kernel_main() {
     bool done = false;
     uint32_t total_pages_acquired = 0;
     while (!done) {
+        DeviceZoneScopedN("CQ-DISPATCH-SLAVE");
         cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
 
         volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
+        DeviceTimestampedData("process_cmd_d_dispatch_slave", (uint32_t)cmd->base.cmd_id);
         switch (cmd->base.cmd_id) {
             case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: process_go_signal_mcast_cmd(); break;
             case CQ_DISPATCH_SET_NUM_WORKER_SEMS: set_num_worker_sems(); break;
