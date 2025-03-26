@@ -28,6 +28,8 @@ on:
       - "Package and release"
     types:
       - completed
+    branches:
+      - main
 
 jobs:
   auto-retry:
