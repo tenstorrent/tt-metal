@@ -23,7 +23,7 @@ def run_tt_smi(arch: str):
             raise Exception(f"SWEEPS: TT-SMI Reset Failed with Exit Code: {smi_process.returncode}")
         return
 
-    if arch not in ["grayskull", "wormhole_b0"]:
+    if arch not in ["grayskull", "wormhole_b0", "blackhole"]:
         raise Exception(f"SWEEPS: Unsupported Architecture for TT-SMI Reset: {arch}")
 
     smi_options = [
@@ -46,7 +46,7 @@ def run_tt_smi(arch: str):
         executable = shutil.which(smi_option)
         if executable is not None:
             # Corner case for newer version of tt-smi, -tr and -wr are removed on this version (tt-smi-metal). Default device 0, if needed use TT_SMI_RESET_COMMAND override.
-            if smi_option == "tt-smi-metal":
+            if smi_option == "tt-smi-metal" or arch == "blackhole":
                 args = ["-r", "0"]
             smi_process = subprocess.run([executable, *args])
             if smi_process.returncode == 0:
