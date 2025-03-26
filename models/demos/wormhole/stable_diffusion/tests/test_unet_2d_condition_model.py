@@ -4,24 +4,21 @@
 
 import os
 import torch
-from diffusers import StableDiffusionPipeline
 import pytest
-from tqdm.auto import tqdm
 import time
+from tqdm.auto import tqdm
+from diffusers import LMSDiscreteScheduler, StableDiffusionPipeline
 
-from models.utility_functions import (
-    skip_for_grayskull,
-    comp_pcc,
-)
-from diffusers import LMSDiscreteScheduler
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
-
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
 )
-from ttnn import unsqueeze_to_4D
+from models.utility_functions import (
+    skip_for_grayskull,
+)
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 scheduler = LMSDiscreteScheduler(
     beta_start=0.00085,
@@ -55,7 +52,7 @@ def unsqueeze_all_params_to_4d(params):
         for i in range(len(params)):
             params[i] = unsqueeze_all_params_to_4d(params[i])
     elif isinstance(params, ttnn.Tensor):
-        params = unsqueeze_to_4D(params)
+        params = ttnn.unsqueeze_to_4D(params)
 
     return params
 
@@ -172,35 +169,6 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     )
     second_iter = time.time() - second_iter
     print(f"Second iteration took {second_iter} seconds")
+
     ttnn_output = ttnn_to_torch(ttnn_output)
-
-    # times = []
-    # for i in range(50):
-    #     start = time.time()
-    #     ttnn_output = model(
-    #         input,
-    #         timestep=ttnn_timestep,
-    #         encoder_hidden_states=encoder_hidden_states,
-    #         class_labels=class_labels,
-    #         attention_mask=attention_mask,
-    #         cross_attention_kwargs=cross_attention_kwargs,
-    #         return_dict=return_dict,
-    #         config=config,
-    #     )
-    #     ttnn_output = ttnn_to_torch(ttnn_output)
-    #     passing, output = comp_pcc(torch_output, ttnn_output, pcc=0.99)
-    #     print(output)
-    #     end = time.time()
-    #     times.append(end - start)
-    #     print(f"Current iteration took {end - start} seconds")
-    # total_time = 0
-    # for iter in times:
-    #     total_time += iter
-    #     print(iter)
-    # print(f"Time taken for 50 iterations: {total_time}")
-    # print(f"Samples per second: {50 / total_time}")
-    passing, output = comp_pcc(torch_output, ttnn_output, pcc=0.981)
-    print(output)
-    assert passing
-
-    print("EXIT UNET-2D TEST")
+    assert_with_pcc(torch_output, ttnn_output, 0.99)
