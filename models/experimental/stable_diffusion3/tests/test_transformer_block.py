@@ -139,11 +139,15 @@ def test_transformer_block(
     tt_spatial_output_padded, tt_prompt_output_padded = tt_model(
         spatial=tt_spatial, prompt=tt_prompt, time_embed=tt_time
     )
-    # tt_spatial_output_padded = ttnn.to_torch(tt_spatial_output_padded, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+    tt_spatial_output_padded = ttnn.to_torch(
+        tt_spatial_output_padded, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)
+    )
     tt_spatial_output_padded = tt_spatial_output_padded[:, :, 0:spatial_sequence_length, :embedding_dim]
     # tt_spatial_output_padded = tt_spatial_output_padded[:, :, 0:spatial_sequence_length, :embedding_dim]
 
-    # tt_prompt_output_padded = ttnn.to_torch(tt_prompt_output_padded, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+    tt_prompt_output_padded = ttnn.to_torch(
+        tt_prompt_output_padded, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)
+    )
     tt_prompt_output_padded = tt_prompt_output_padded[:, :, 0:prompt_sequence_length, :embedding_dim]
 
     assert (prompt_output is None) == (tt_prompt_output_padded is None)
