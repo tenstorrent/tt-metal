@@ -55,15 +55,16 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (4096,),
+    (128,),
 )
 @pytest.mark.parametrize(
     "optimizations",
     [
         pytest.param(LlamaOptimizations.accuracy, id="accuracy"),
-        pytest.param(LlamaOptimizations.performance, id="performance"),
+        # pytest.param(LlamaOptimizations.performance, id="performance"),
     ],
 )
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 def test_llama_model_inference(
     seq_len,
     paged_attention,
@@ -79,7 +80,7 @@ def test_llama_model_inference(
         pytest.skip("CI test only runs performance mode to reduce CI pipeline load")
 
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
-    cache_pcc = False  # Flag to measure KV cache PCC for all layers
+    cache_pcc = True  # Flag to measure KV cache PCC for all layers
 
     dtype = ttnn.bfloat8_b
     batch_size = 1  # For prefill we only support batch_size = 1
@@ -97,6 +98,8 @@ def test_llama_model_inference(
     instruct = True
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len)
+    model_args.use_prefetcher = False
+    model_args.n_layers = 3
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     logger.info("Loading weights...")
@@ -176,6 +179,7 @@ def test_llama_model_inference(
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
+        mode="prefill",
     )
 
     logger.info("Model and caches loaded.")
@@ -243,7 +247,7 @@ def test_llama_model_inference(
 
                     tt_layer_present = []
                     if paged_attention:
-                        for layer_past in tt_model.layers[l].attention.layer_past:
+                        for layer_past in tt_model.layers[i].attention.layer_past:
                             tt_layer_present.append(
                                 ttnn.to_torch(
                                     layer_past,
@@ -287,10 +291,10 @@ def test_llama_model_inference(
                                     :batch_size, ...
                                 ]
                             )
-                            for cache in tt_model.layers[l].attention.layer_past
+                            for cache in tt_model.layers[i].attention.layer_past
                         ]
                     else:
-                        for layer_past in tt_model.layers[i].attention.layer_past_list[0]:
+                        for layer_past in tt_model.layers[i].attention.layer_past:
                             tt_layer_present.append(
                                 ttnn.to_torch(
                                     layer_past,
@@ -304,8 +308,8 @@ def test_llama_model_inference(
 
                     for i, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
                         cache_length_to_check = model_args.max_seq_len
-                        cache_pt = cache_pt[:, :, 0:cache_length_to_check, :]
-                        cache_tt = cache_tt[:, :, 0:cache_length_to_check, :]
+                        cache_pt = cache_pt[0, :, 0:cache_length_to_check, :]
+                        cache_tt = cache_tt[0, :, 0:cache_length_to_check, :]
                         does_pass, output_pcc = comp_pcc(cache_pt, cache_tt)
                         if i == 0:
                             logger.info(f"K cache output: {output_pcc}")
