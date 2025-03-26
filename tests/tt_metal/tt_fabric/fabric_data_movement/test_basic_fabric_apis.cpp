@@ -13,7 +13,7 @@
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
 
-TEST_F(Fabric2DFixture, TestAsyncWritePull) {
+TEST_F(Fabric2DPullFixture, TestAsyncWrite) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -174,7 +174,7 @@ TEST_F(Fabric2DFixture, TestAsyncWritePull) {
     EXPECT_EQ(receiver_buffer_data, received_buffer_data);
 }
 
-TEST_F(Fabric2DFixture, TestAsyncWritePush) {
+TEST_F(Fabric2DPushFixture, TestAsyncWrite) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -281,7 +281,6 @@ TEST_F(Fabric2DFixture, TestAsyncWritePush) {
 
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 0, (uint32_t)fabric_mode::PUSH};
     std::map<string, string> defines = {};
-    // defines["FVC_MODE_PULL"] = "";
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
         "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_sender.cpp",
@@ -335,7 +334,7 @@ TEST_F(Fabric2DFixture, TestAsyncWritePush) {
     EXPECT_EQ(receiver_buffer_data, received_buffer_data);
 }
 
-TEST_F(Fabric2DFixture, TestAsyncRawWritePull) {
+TEST_F(Fabric2DPullFixture, TestAsyncRawWrite) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -487,7 +486,7 @@ TEST_F(Fabric2DFixture, TestAsyncRawWritePull) {
     EXPECT_EQ(sender_buffer_data, received_buffer_data);
 }
 
-TEST_F(Fabric2DFixture, TestAsyncRawWritePush) {
+TEST_F(Fabric2DPushFixture, TestAsyncRawWrite) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -585,7 +584,6 @@ TEST_F(Fabric2DFixture, TestAsyncRawWritePush) {
 
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 1, (uint32_t)fabric_mode::PUSH};
     std::map<string, string> defines = {};
-    defines["FVC_MODE_PULL"] = "";
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
         "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_sender.cpp",
@@ -639,7 +637,7 @@ TEST_F(Fabric2DFixture, TestAsyncRawWritePush) {
     EXPECT_EQ(sender_buffer_data, received_buffer_data);
 }
 
-TEST_F(Fabric2DFixture, TestAtomicIncPull) {
+TEST_F(Fabric2DPullFixture, TestAtomicInc) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -798,7 +796,7 @@ TEST_F(Fabric2DFixture, TestAtomicIncPull) {
     EXPECT_EQ(receiver_buffer_data, received_buffer_data);
 }
 
-TEST_F(Fabric2DFixture, TestAtomicIncPush) {
+TEST_F(Fabric2DPushFixture, TestAtomicInc) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -902,7 +900,6 @@ TEST_F(Fabric2DFixture, TestAtomicIncPush) {
         tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
 
     std::map<string, string> defines = {};
-    defines["FVC_MODE_PULL"] = "";
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, fabric_mode::PUSH};
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -957,7 +954,7 @@ TEST_F(Fabric2DFixture, TestAtomicIncPush) {
     EXPECT_EQ(receiver_buffer_data, received_buffer_data);
 }
 
-TEST_F(Fabric2DFixture, TestAsyncWriteAtomicIncPull) {
+TEST_F(Fabric2DPullFixture, TestAsyncWriteAtomicInc) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -1136,7 +1133,7 @@ TEST_F(Fabric2DFixture, TestAsyncWriteAtomicIncPull) {
     EXPECT_EQ(atomic_inc, received_buffer_data[0]);
 }
 
-TEST_F(Fabric2DFixture, TestAsyncWriteAtomicIncPush) {
+TEST_F(Fabric2DPushFixture, TestAsyncWriteAtomicInc) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -1255,7 +1252,6 @@ TEST_F(Fabric2DFixture, TestAsyncWriteAtomicIncPush) {
         tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
 
     std::map<string, string> defines = {};
-    defines["FVC_MODE_PULL"] = "";
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 0, fabric_mode::PUSH};
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -1315,7 +1311,7 @@ TEST_F(Fabric2DFixture, TestAsyncWriteAtomicIncPush) {
     EXPECT_EQ(atomic_inc, received_buffer_data[0]);
 }
 
-TEST_F(Fabric2DFixture, TestAsyncRawWriteAtomicIncPull) {
+TEST_F(Fabric2DPullFixture, TestAsyncRawWriteAtomicInc) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -1425,7 +1421,6 @@ TEST_F(Fabric2DFixture, TestAsyncRawWriteAtomicIncPull) {
         tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
 
     std::map<string, string> defines = {};
-    defines["FVC_MODE_PULL"] = "";
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 1, fabric_mode::PULL};
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -1485,7 +1480,7 @@ TEST_F(Fabric2DFixture, TestAsyncRawWriteAtomicIncPull) {
     EXPECT_EQ(atomic_inc, received_buffer_data[0]);
 }
 
-TEST_F(Fabric2DFixture, TestAsyncRawWriteAtomicIncPush) {
+TEST_F(Fabric2DPushFixture, TestAsyncRawWriteAtomicInc) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -1595,7 +1590,6 @@ TEST_F(Fabric2DFixture, TestAsyncRawWriteAtomicIncPush) {
         tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
 
     std::map<string, string> defines = {};
-    defines["FVC_MODE_PULL"] = "";
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 1, fabric_mode::PUSH};
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -1655,7 +1649,7 @@ TEST_F(Fabric2DFixture, TestAsyncRawWriteAtomicIncPush) {
     EXPECT_EQ(atomic_inc, received_buffer_data[0]);
 }
 
-TEST_F(Fabric2DFixture, TestAsyncWriteMulticastPull) {
+TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticast) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -1876,7 +1870,7 @@ TEST_F(Fabric2DFixture, TestAsyncWriteMulticastPull) {
     }
 }
 
-TEST_F(Fabric2DFixture, TestAsyncWriteMulticastPush) {
+TEST_F(Fabric2DPushFixture, TestAsyncWriteMulticast) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -1953,7 +1947,6 @@ TEST_F(Fabric2DFixture, TestAsyncWriteMulticastPush) {
     std::vector<uint32_t> receiver_buffer_data(data_size / sizeof(uint32_t), 0);
 
     std::map<string, string> defines = {};
-    defines["FVC_MODE_PULL"] = "";
     std::vector<tt_metal::Program> receiver_programs;
     std::vector<std::shared_ptr<tt_metal::Buffer>> receiver_buffers;
     for (auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
@@ -2097,7 +2090,7 @@ TEST_F(Fabric2DFixture, TestAsyncWriteMulticastPush) {
     }
 }
 
-TEST_F(Fabric2DFixture, TestAsyncRawWriteMulticastPull) {
+TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticast) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -2312,7 +2305,7 @@ TEST_F(Fabric2DFixture, TestAsyncRawWriteMulticastPull) {
     }
 }
 
-TEST_F(Fabric2DFixture, TestAsyncRawWriteMulticastPush) {
+TEST_F(Fabric2DPushFixture, TestAsyncRawWriteMulticast) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -2392,7 +2385,6 @@ TEST_F(Fabric2DFixture, TestAsyncRawWriteMulticastPush) {
     std::vector<uint32_t> receiver_buffer_data(data_size / sizeof(uint32_t), 0);
 
     std::map<string, string> defines = {};
-    defines["FVC_MODE_PULL"] = "";
     std::vector<tt_metal::Program> receiver_programs;
     std::vector<std::shared_ptr<tt_metal::Buffer>> receiver_buffers;
     for (auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
@@ -2527,7 +2519,7 @@ TEST_F(Fabric2DFixture, TestAsyncRawWriteMulticastPush) {
     }
 }
 
-TEST_F(Fabric2DFixture, TestAsyncWriteMulticastMultidirectionalPull) {
+TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticastMultidirectional) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -2759,7 +2751,7 @@ TEST_F(Fabric2DFixture, TestAsyncWriteMulticastMultidirectionalPull) {
     }
 }
 
-TEST_F(Fabric2DFixture, TestAsyncWriteMulticastMultidirectionalPush) {
+TEST_F(Fabric2DPushFixture, TestAsyncWriteMulticastMultidirectional) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -2842,7 +2834,6 @@ TEST_F(Fabric2DFixture, TestAsyncWriteMulticastMultidirectionalPush) {
     std::vector<uint32_t> receiver_buffer_data(data_size / sizeof(uint32_t), 0);
 
     std::map<string, string> defines = {};
-    defines["FVC_MODE_PULL"] = "";
     std::vector<tt_metal::Program> receiver_programs;
     std::vector<std::shared_ptr<tt_metal::Buffer>> receiver_buffers;
     for (auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
@@ -2991,7 +2982,7 @@ TEST_F(Fabric2DFixture, TestAsyncWriteMulticastMultidirectionalPush) {
     }
 }
 
-TEST_F(Fabric2DFixture, TestAsyncRawWriteMulticastMultidirectionalPull) {
+TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticastMultidirectional) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -3214,7 +3205,7 @@ TEST_F(Fabric2DFixture, TestAsyncRawWriteMulticastMultidirectionalPull) {
     }
 }
 
-TEST_F(Fabric2DFixture, TestAsyncRawWriteMulticastMultidirectionalPush) {
+TEST_F(Fabric2DPushFixture, TestAsyncRawWriteMulticastMultidirectional) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
     using tt::tt_metal::ShardSpecBuffer;
@@ -3297,7 +3288,6 @@ TEST_F(Fabric2DFixture, TestAsyncRawWriteMulticastMultidirectionalPush) {
     std::vector<uint32_t> receiver_buffer_data(data_size / sizeof(uint32_t), 0);
 
     std::map<string, string> defines = {};
-    defines["FVC_MODE_PULL"] = "";
     std::vector<tt_metal::Program> receiver_programs;
     std::vector<std::shared_ptr<tt_metal::Buffer>> receiver_buffers;
     for (auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {

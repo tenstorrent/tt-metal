@@ -56,6 +56,7 @@ void kernel_main() {
         volatile tt_l1_ptr fabric_push_client_interface_t* client_interface =
             reinterpret_cast<volatile tt_l1_ptr fabric_push_client_interface_t*>(client_interface_addr);
         fabric_endpoint_init(client_interface, 0 /* unused */);
+        fabric_client_router_reserve(client_interface, 0, dst_mesh_id, dst_device_id);
 
         fabric_async_write_atomic_inc<
             decltype(client_interface),

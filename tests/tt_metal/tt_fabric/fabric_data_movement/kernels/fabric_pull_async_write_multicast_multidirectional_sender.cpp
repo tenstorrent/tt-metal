@@ -116,6 +116,8 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr fabric_push_client_interface_t*>(client_interface_addr);
         for (uint32_t i = 0; i < num_dirs; i++) {
             fabric_endpoint_init(client_interface + i, 0 /* unused */);
+            fabric_client_router_reserve(client_interface + i, 0, w_dst_mesh_id, w_dst_device_id);
+            fabric_client_router_reserve(client_interface + i, 0, e_dst_mesh_id, e_dst_device_id);
         }
 
         fabric_async_write_multicast<
