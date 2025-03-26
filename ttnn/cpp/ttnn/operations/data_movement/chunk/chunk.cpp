@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "chunk.hpp"
@@ -36,8 +36,6 @@ std::vector<ttnn::Tensor> ChunkOperation::invoke(const ttnn::Tensor& input_tenso
         slice_start[dim] = start;
         slice_end[dim] = end;
         ttnn::SmallVector<int> slice_step(num_dims, 1);
-        // std::cout << "Chunk " << chunks.size() << ": start[" << dim << "]=" << start << ", end[" << dim << "]=" <<
-        // end << std::endl;
 
         ttnn::Tensor chunk_tensor = ttnn::Tensor(ttnn::slice(input_tensor, slice_start, slice_end, slice_step));
 
