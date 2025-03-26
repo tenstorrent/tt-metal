@@ -3,7 +3,7 @@
 ## Overview
 vLLM is an [open-source LLM serving library](https://github.com/vllm-project/vllm). We use vLLM to serve our models in production because of the features it enables. On the serving side, vLLM supports continuous batching (see [LLMs Tech Report - Continuous Batching](./llms.md#34-continuous-batching) for more info) and [paged attention](https://arxiv.org/pdf/2309.06180). In addition, vLLM provides an OpenAI-compatible server which is useful for deployment.
 
-Tenstorrent maintains a [fork of vLLM](https://github.com/tenstorrent/vllm/tree/dev) for serving models on Tenstorrent hardware. The [README](https://github.com/tenstorrent/vllm/tree/dev/tt_metal/README.md) has instructions for setting up the environment and running the inference example.
+Tenstorrent maintains a [fork of vLLM](https://github.com/tenstorrent/vllm/tree/dev) for serving models on Tenstorrent hardware. The [vLLM README](https://github.com/tenstorrent/vllm/tree/dev/tt_metal/README.md) has instructions for setting up the environment and running the inference example.
 
 **Quick Links for vLLM's public docs**:
 - vLLM Docs Homepage: https://docs.vllm.ai/en/latest
@@ -20,22 +20,38 @@ In order to add vLLM support to a new Tenstorrent model, the following requireme
       ```python
       initialize_vllm_model(cls, hf_config : transformers.PretrainedConfig, mesh_device : ttnn.MeshDevice, max_batch_size : int)
       ```
-    - `allocate_kv_cache`: returns the paged kv cache which will be passed to the model during inference. The `kv_cache_shape` argument has shape `(num_blocks, num_kv_heads, block_size, head_size)`. In vLLM, this function is used by `TTCacheEngine::_allocate_kv_cache` in [tt_worker.py](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_worker.py).
+    - `allocate_kv_cache`: returns the paged kv cache which will be passed to the model during inference. The `kv_cache_shape` argument has shape `(max_num_blocks, num_kv_heads, block_size, head_size)`. In vLLM, this function is used by `TTCacheEngine::_allocate_kv_cache` in [tt_worker.py](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_worker.py).
       ```python
       allocate_kv_cache(kv_cache_shape : tuple, dtype : torch.dtype, num_layers : int, mesh_device : ttnn.MeshDevice)
       ```
-    - `prefill_forward`: returns the prefill output logits on host. The `tokens` argument has shape `(batch_size, max_prompt_len)` and has been zero-padded along the last dim to the length of the longest prompt in the batch. `page_table` has shape `(batch_size, num_blocks)` and has been zero-padded along the last dim to the max number of blocks in the batch. `prompt_lens` has shape `(batch_size)`. In vLLM, this function is used by `TTModelRunner::_execute_model_single_step` in [tt_model_runner.py](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_model_runner.py). In the same file, the preparation of the inputs takes place in `TTModelRunner::prepare_model_input`.
+    - `prefill_forward` (**text-only models**): returns the prefill output logits on host. The `tokens` argument has shape `(batch_size, max_prompt_len)` and has been zero-padded along the last dim to the length of the longest prompt in the batch. `page_table` has shape `(batch_size, num_blocks)` and has been zero-padded along the last dim to the max number of blocks in the batch. `prompt_lens` has shape `(batch_size)`. In vLLM, this function is used by `TTModelRunner::_execute_model_single_step` in [tt_model_runner.py](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_model_runner.py). In the same file, the preparation of the inputs takes place in `TTModelRunner::prepare_model_input`.
       ```python
-      prefill_forward_text(tokens : torch.Tensor, page_table : torch.Tensor, kv_cache : list, prompt_lens : torch.Tensor)
+      prefill_forward(tokens : torch.Tensor, page_table : torch.Tensor, kv_cache : list, prompt_lens : torch.Tensor)
       ```
-    - `decode_forward`: returns the decode output logits on device.
-    - `read_decode_output`: 
+    - `decode_forward` (**text-only models**): returns the decode output logits on device if `read_from_device=False` (default behaviour in vLLM) otherwise on host. The `tokens` argument has shape `(max_batch_size, 1)` and has been zero-padded along the batch dim to the max batch size (along with `start_pos` with shape `(max_batch_size)` and `page_table` with shape `(max_batch_size, max_num_blocks)`). The decode inputs are intentionally padded to `max_batch_size` and `max_num_blocks` since the default behaviour in vLLM is to use `enable_trace=True` and TT-NN tracing requires constant input shapes. In vLLM, this function is used by `TTModelRunner::_execute_model_single_step` in [tt_model_runner.py](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_model_runner.py).
+      ```python
+      decode_forward(tokens : torch.Tensor, start_pos : torch.Tensor, page_table : torch.Tensor, kv_cache : list, enable_trace : bool, read_from_device : bool)
+      ```
+    - `read_decode_output`: returns the decode output logits on host. The `tt_logits` argument is the output of `decode_forward`. This function is intentionally separate from `decode_forward` to implement the asynchronous output processing + multi-step scheduling optimization (for more info see [vLLM v0.6.0 Blog Post](https://blog.vllm.ai/2024/09/05/perf-update.html)) where the execution of `decode_forward` (with `read_from_device=False`) is nonblocking on CPU, allowing for overlap of vLLM output processing (of previous decode iterations) with the current decode execution. In vLLM, this function is used by `TTModelRunner::_execute_model_single_step` in [tt_model_runner.py](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_model_runner.py).
+      ```python
+      read_decode_output(tt_logits : ttnn.Tensor, unpadded_batch : int)
+      ```
+3. **(Multi-modal and encoder-decoder models only)** Currently, the only multi-modal models we support in our Tenstorrent vLLM fork are image+text encoder-decoder models such as Llama3.2-11B-Vision. An example generation class is `MllamaForConditionalGeneration` in [models/tt_transformers/tt/generator_vllm.py](https://github.com/tenstorrent/tt-metal/blob/main/models/tt_transformers/tt/generator_vllm.py). These models have the same interface requirements as the text-only models, as well as the following:
+   - `max_cross_attn_tokens`: class property which returns the max number of tokens in cross attention. In vLLM, this property is used in [tt_model_runner.py](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_model_runner.py) for padding cross page tables to `max_cross_blocks`.
+   - `prefill_forward` (**image+text models**): returns `logits, cross_attention_masks, full_text_row_masked_out_mask`. The input arguments are the same as the text-only models with the addition of `images` and `cross_page_table` (the page table for paged cross attention which accesses the same `kv_cache` as self attention). `cross_page_table` has shape `(batch_size, num_vision_blocks)`.
+     ```python
+      prefill_forward(tokens : torch.Tensor, images : List[PIL.Image.Image], page_table : torch.Tensor, kv_cache : list, prompt_lens : torch.Tensor, cross_page_table: torch.Tensor)
+      ```
+   - `decode_forward` (**image+text models**): same as the text-only models with the additional input arguments `cross_attention_masks` (output from prefill), `full_text_row_mask_out_mask` (output from prefill), and `cross_page_table`. `cross_page_table` has shape `(max_batch_size, max_cross_blocks`.
+     ```python
+      decode_forward(tokens : torch.Tensor, start_pos : torch.Tensor, cross_attention_masks : list, full_text_row_masked_out_mask : list, page_table : torch.Tensor, kv_cache : list, cross_page_table : torch.Tensor, enable_trace : bool, read_from_device : bool)
+      ```
+   - A custom vLLM input processor for appropriately handling encoder/decoder tokens (for an example, see `input_processor_for_mllama` in [models/tt_transformers/tt/generator_vllm.py](https://github.com/tenstorrent/tt-metal/blob/main/models/tt_transformers/tt/generator_vllm.py)).
 
-4. 
-
+## Testing the Model in vLLM
+Once the model meets all of the requirements specified in [Implementation Requirements for Model Integration](#implementation-requirements-for-model-integration), it can be registered using `ModelRegistry.register_model` in [examples/offline_inference_tt.py](https://github.com/tenstorrent/vllm/blob/dev/examples/offline_inference_tt.py) and tested by following the instructions in the [vLLM README](https://github.com/tenstorrent/vllm/tree/dev/tt_metal/README.md).
 
 ## vLLM modifications
 On the vLLM side there may be additional changes needed to support the new model.
-
 - Modify [`tt_loader.py`](https://github.com/tenstorrent/vllm/blob/dev/vllm/model_executor/model_loader/tt_loader.py) if the model requires a different initialization.
 - Modify [`tt_model_runner.py`](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_model_runner.py) if it is missing functionality for the new model.
