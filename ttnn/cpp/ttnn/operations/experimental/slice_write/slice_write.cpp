@@ -116,7 +116,7 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
         }
         tt::log_debug("Invoking SliceWriteDeviceOperation");
 
-        tt::tt_metal::operation::run(
+        (void)tt::tt_metal::operation::run(
             SliceWriteDeviceOperation{ttnn::Shape(begins), ttnn::Shape(padded_ends), ttnn::Shape(step)},
             {input},
             {},
