@@ -574,5 +574,4 @@ def tt_sharded_distributed_rmsnorm(
         stats=tt_stats,
         is_pre=False,
     )
-    # print("rmsnorm post all gather", tt_out.shape)
     return tt_out, inp
