@@ -12,6 +12,9 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      arch:
+        required: true
+        type: string
 
 jobs:
   single-card-demo-tests:
@@ -21,26 +24,23 @@ jobs:
         test-group: [
           {
             name: "N150",
-            arch: wormhole_b0,
             runs-on: ["cloud-virtual-machine", "N150", "in-service"],
             cmd: run_n150_tests
           }, # group of owners; working on splitting up
           {
             name: "N300_functionality",
-            arch: wormhole_b0,
             runs-on: ["cloud-virtual-machine", "N300", "in-service"],
             cmd: run_n300_func_tests
           }, # group of owners; working on splitting up
           {
             name: "N300_performance",
-            arch: wormhole_b0,
             runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"],
             cmd: run_n300_perf_tests
           } # group of owners; working on splitting up
         ]
     name: ${{ matrix.test-group.name }}
     env:
-      ARCH_NAME: ${{ matrix.test-group.arch }}
+      ARCH_NAME: ${{ inputs.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: ${{ matrix.test-group.runs-on }}
@@ -75,7 +75,7 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=${{ matrix.test-group.arch }}
+            -e ARCH_NAME=${{ inputs.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -v /mnt/MLPerf:/mnt/MLPerf:ro
           install_wheel: true
@@ -92,7 +92,7 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=${{ matrix.test-group.arch }}
+            -e ARCH_NAME=${{ inputs.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -v /mnt/MLPerf:/mnt/MLPerf:ro
           install_wheel: true
