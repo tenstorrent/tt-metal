@@ -117,6 +117,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     ////////////////////////////////////////////////////////////////////////////
     //                            Device Setup
     ////////////////////////////////////////////////////////////////////////////
+    printf("Reached the program factory\n");
     IDevice* device = a.device();
     tt::tt_metal::Program program{};
     bool is_first_chip = ring_index == 0;
@@ -921,6 +922,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             bool wait_output_semaphore = (i == 0);
             bool reset_global_semaphore = (i == 0);
             uint32_t out_ready_sem_wait_value = ring_size * num_links;
+            printf("Waiting on output semaphore reaching %d\n", out_ready_sem_wait_value);
             std::vector<uint32_t> base_rt_args = {
                 output.buffer()->address(),           // tensor_address0
                 semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)

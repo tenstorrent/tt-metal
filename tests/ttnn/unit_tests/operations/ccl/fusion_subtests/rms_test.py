@@ -459,10 +459,13 @@ def run_rms_fuse_impl(
         )
 
     for i in range(num_iters):
+        print("Entering pre function")
         tt_stats = ttnn.fused_rms_1_1_32_8192(
             input_tensor[i],
-            ccl_semaphore_handles[i],
             layer_norm_config,
+            1,
+            mesh_device,
+            ccl_semaphore_handles[i],
             is_pre=True,
         )
         print(tt_stats)
@@ -475,7 +478,7 @@ def run_rms_fuse_impl(
             memory_config=output_memory_config,
             epsilon=epsilon,
             weight=gamma_tensor[i],
-            stats=tt_stats_gathered,
+            stats=tt_stats,
             is_pre=False,
         )
         tt_out_array.append(tt_out)

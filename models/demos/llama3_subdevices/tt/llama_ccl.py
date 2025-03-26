@@ -550,6 +550,7 @@ def tt_sharded_distributed_rmsnorm(
         strategy=ttnn.ShardStrategy.WIDTH,
         use_height_and_width_as_shard_shape=True,
     )
+    persistent_output_tensor = tt_ccl.all_gather_buffers.get("LAYERNORM", None)
     tt_stats = ttnn.fused_rms_1_1_32_8192(
         inp,
         ln_sharded_progcfg,
@@ -557,7 +558,7 @@ def tt_sharded_distributed_rmsnorm(
         tt_ccl.mesh_device,
         semaphore,
         residual_input_tensor=res,
-        persistent_output_tensor=tt_ccl.all_gather_buffers.get("LAYERNORM", None),
+        persistent_output_tensor=persistent_output_tensor,
         num_links=1,
         memory_config=tt_stats_sharded_config,
         is_pre=True,

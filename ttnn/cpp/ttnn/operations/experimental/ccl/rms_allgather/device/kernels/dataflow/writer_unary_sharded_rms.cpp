@@ -8,7 +8,7 @@
 #include <tt-metalium/buffer_constants.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
-#include "minimal_ccl_common.hpp"
+#include "cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_ccl_common.hpp"
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include <cstdint>
 #include <utility>
@@ -18,12 +18,12 @@ void kernel_main() {
     constexpr uint32_t cb_in_4 = get_compile_time_arg_val(2);
     constexpr uint32_t cb_to_allgather_writer = get_compile_time_arg_val(3);
     // Todo add these CBs
-    constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(5);
-    constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(8);
-    constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(9);
-    constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(10);
-    constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(11);
-    constexpr uint32_t num_links = get_compile_time_arg_val(12);
+    constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(4);
+    constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(5);
+    constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(6);
+    constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(7);
+    constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(8);
+    constexpr uint32_t num_links = get_compile_time_arg_val(9);
     const uint32_t scalar_w = get_arg_val<uint32_t>(1);
     generate_reduce_scaler(cb_in_2, scalar_w);
 
@@ -34,9 +34,9 @@ void kernel_main() {
     // Start the all gather part
     if (get_arg_val<uint32_t>(2) < num_links) {
         // Do this only on one of the cores
-        size_t arg_idx = 3
-            // To do add these to Program Factory on i=0 case
-            address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
+        size_t arg_idx = 3;
+        // To do add these to Program Factory on i=0 case
+        ttnn::ccl::address_t tensor_address0 = get_arg_val<ttnn::ccl::address_t>(arg_idx++);
         const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
         uint32_t num_tiles_per_core = get_arg_val<uint32_t>(arg_idx++);
         uint32_t num_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
@@ -138,7 +138,7 @@ void kernel_main() {
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
         noc_semaphore_inc(out_ready_sem_noc_addr, 1);
         // 3. wait for mcast output ready semaphore
-        if (wait_output_semaphore) {
+        if (wait_output_semaphore && false) {
             while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) < out_ready_sem_wait_value);
         }
         // 4. global semaphore reset

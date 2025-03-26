@@ -26,7 +26,7 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
     const std::optional<const ttnn::Tensor>& weight,
     const std::optional<const ttnn::Tensor>& stats,
     bool is_pre) {
-    auto arch = input_tensor.storage_type() == StorageType::DEVICE
+    auto arch = is_tensor_on_device_or_multidevice(input_tensor)
                     ? input_tensor.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val =
@@ -34,17 +34,13 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
     const auto mesh_view = mesh_device.get_view();
     auto devices = input_tensor.get_workers();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-
     int32_t rank = input_tensor.get_logical_shape().rank();
     std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
     std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_tensor};
     const std::vector<std::optional<const Tensor>> optional_input_tensors = {residual_input_tensor, weight, stats};
-
-    int32_t gather_dim = 3;
     CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
-
     tt::tt_metal::operation::launch_op(
         [num_preferred_links,
          memory_config,
