@@ -212,10 +212,6 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
         device_ids.size());
     std::map<int, std::shared_ptr<MeshDevice>> result;
     for (size_t i = 0; i < device_ids.size(); i++) {
-        submeshes[i]->initialize(num_command_queues, l1_small_size, trace_region_size, l1_bank_remap);
-        for (auto device : submeshes[i]->get_devices()) {
-            dynamic_cast<Device*>(device)->mesh_device = submeshes[i];
-        }
         result[device_ids[i]] = submeshes[i];
     }
     DevicePool::instance().init_profiler();
@@ -277,6 +273,15 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
 
     auto submesh = std::make_shared<MeshDevice>(
         scoped_devices_, std::make_unique<MeshDeviceView>(submesh_devices_container), shared_from_this());
+    const auto& allocator_config = reference_device()->allocator()->get_config();
+    submesh->initialize(
+        num_hw_cqs(),
+        allocator_config.l1_small_size,
+        allocator_config.trace_region_size,
+        allocator_config.l1_bank_remap);
+    for (auto device : submesh->get_devices()) {
+        dynamic_cast<Device*>(device)->mesh_device = submesh;
+    }
 
     submeshes_.push_back(submesh);
     log_trace(LogMetal, "Instantiating submesh {}: {} with offset: {}", submesh->id(), submesh_shape, offset);
