@@ -50,13 +50,16 @@ class TT_CCL:
 
         self.gather_idx = [0, 0]
         self.buffer_idx = [0, 0]
+        self.rs_buffer_idx = [0, 0]
 
         self.persistent_buffers = self.get_persistent_buffers()
         self.all_gather_buffers = self.get_all_gather_buffers()
+        self.persistent_buffers_rs = self.get_persistent_buffers_rs()
 
     def reset_gather_and_buffer_idx(self):
         self.gather_idx = [0, 0]
         self.buffer_idx = [0, 0]
+        self.rs_buffer_idx = [0, 0]
 
     def get_all_gather_buffers(self):
         """
@@ -66,6 +69,7 @@ class TT_CCL:
         - SDPA: (1, 32, 32, 128)
         - LAYERNORM: (1, 1, 32, 128)
         - SAMPLING: (1, 1, 32, 128 * 1024)
+        - BINARY_MUL: (1, 1, 32, 3840)
 
         """
 
@@ -118,6 +122,18 @@ class TT_CCL:
         )
         check_mesh_tensor_alloc(tt_buffer)
         persistent_buffers["SAMPLING"] = tt_buffer
+
+        # Binary Mult + Silu
+        tt_buffer = ttnn.from_torch(
+            torch.zeros((1, 1, 32, 3584)),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        check_mesh_tensor_alloc(tt_buffer)
+        persistent_buffers["BINARY_MUL"] = tt_buffer
 
         return persistent_buffers
 
@@ -205,6 +221,36 @@ class TT_CCL:
 
         return persistent_buffers
 
+    def get_persistent_buffers_rs(self):
+        """
+        Currently, this is hardcoded with llama specific shapes.
+
+        Creates double buffered persistent CCL buffers for each cluster axis.
+
+        """
+
+        persistent_buffers = [[], []]
+
+        cluster_shape = (8, 4)
+
+        # Create persistent buffers for cluster axis 0
+
+        # Create persistent buffers for cluster axis 1
+        cluster_axis = 1
+        buffer_mem_cfg = self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"]
+        for _ in range(self.num_cbs):
+            tt_buffer = ttnn.from_torch(
+                torch.zeros((*cluster_shape, 32, 8192)),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=buffer_mem_cfg,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+            )
+            persistent_buffers[cluster_axis].append(tt_buffer)
+
+        return persistent_buffers
+
     def line_all_reduce(self, input_tensor_mesh, cluster_axis, num_links, memory_config, lm_head=False):
         if lm_head:
             persistent_buffer = self.tt_lm_head_buffer_l1
@@ -230,6 +276,23 @@ class TT_CCL:
 
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         self.buffer_idx[cluster_axis] = (self.buffer_idx[cluster_axis] + 1) % self.num_cbs
+        return output_tensor_mesh
+
+    def llama_reduce_scatter(self, input_tensor_mesh, memory_config, cluster_axis, dim=3, num_links=1):
+        persistent_interim_buffer = self.persistent_buffers_rs[cluster_axis][self.rs_buffer_idx[cluster_axis]]
+        output_tensor_mesh = ttnn.experimental.llama_reduce_scatter(
+            input_tensor_mesh,
+            persistent_interim_buffer,
+            dim,
+            self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+            self.worker_sub_device_id,
+            cluster_axis=1,
+            mesh_device=self.mesh_device,
+            num_links=num_links,
+            memory_config=memory_config,
+        )
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        self.rs_buffer_idx[cluster_axis] = (self.rs_buffer_idx[cluster_axis] + 1) % self.num_cbs
         return output_tensor_mesh
 
     def line_reduce_scatter(

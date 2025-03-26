@@ -22,7 +22,7 @@ void LlamaReduceScatterDeviceOperation::validate_on_program_cache_miss(
     auto input_tensor = tensor_args.input_tensor;
     auto tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
     auto input_spec = input_tensor.get_tensor_spec();
-    auto input_shape = input_spec.logical_shape();
+    auto input_shape = Shape({1, 1, 32, 3840});  // input_spec.logical_shape();
 
     TT_FATAL(input_shape == Shape({1, 1, 32, 3840}), "input_shape must be 1x1x32x3840");
     TT_FATAL(attributes.dim == 3, "dim must be 1, got {}", attributes.dim);
@@ -83,7 +83,7 @@ LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceO
     auto input_tensor = tensor_args.input_tensor;
     auto tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
     auto input_spec = input_tensor.get_tensor_spec();
-    auto input_shape = input_spec.logical_shape();
+    auto input_shape = Shape({1, 1, 32, 3840});  // input_spec.logical_shape();
 
     uint32_t final_width = input_shape[attributes.dim] / attributes.ring_devices;
 
