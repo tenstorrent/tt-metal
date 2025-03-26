@@ -12,6 +12,7 @@
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include <cstdint>
 #include <utility>
+#include "debug/dprint.h"
 void kernel_main() {
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t cb_in_2 = get_compile_time_arg_val(1);
@@ -34,6 +35,8 @@ void kernel_main() {
     // Start the all gather part
     if (get_arg_val<uint32_t>(2) < num_links) {
         // Do this only on one of the cores
+        DPRINT << "Doing AG part on core " << get_arg_val<uint32_t>(2) << " with " << num_targets_forward_direction
+               << " forward and " << num_targets_backward_direction << "targets backwards" << ENDL();
         size_t arg_idx = 3;
         // To do add these to Program Factory on i=0 case
         ttnn::ccl::address_t tensor_address0 = get_arg_val<ttnn::ccl::address_t>(arg_idx++);
@@ -52,29 +55,34 @@ void kernel_main() {
         tt_l1_ptr uint32_t* core_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
         arg_idx += num_cores;
         size_t arg_for_fab = arg_idx;
+        DPRINT << "building fabric from args " << ENDL();
         auto fabric_connection = FabricConnectionManager::build_from_args(arg_idx);
 
         // packet header cb
+        DPRINT << "filling packet header cb at cb index" << reserved_packet_header_cb_id << ENDL();
         cb_reserve_back(reserved_packet_header_cb_id, 1);
         auto packet_header_buffer_addr_forward = get_write_ptr(reserved_packet_header_cb_id);
         cb_push_back(reserved_packet_header_cb_id, 1);
+        DPRINT << "filed forward \n" << ENDL();
         cb_reserve_back(reserved_packet_header_cb_id, 1);
         auto packet_header_buffer_addr_backward = get_write_ptr(reserved_packet_header_cb_id);
         cb_push_back(reserved_packet_header_cb_id, 1);
+        DPRINT << "filed backward \n" << ENDL();
         cb_reserve_back(reserved_packet_header_cb_id, 1);
         auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
         cb_push_back(reserved_packet_header_cb_id, 1);
-
+        DPRINT << "Pre-populating headers " << ENDL();
         // pre-populate packet headers
         volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
             reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_forward);
         volatile PACKET_HEADER_TYPE* pkt_hdr_backward =
             reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_backward);
+        DPRINT << "Setting the headers" << ENDL();
         pkt_hdr_forward->to_chip_multicast(
             tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
         pkt_hdr_backward->to_chip_multicast(
             tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
-
+        DPRINT << "Opening the connection" << ENDL();
         if (fabric_connection.is_logically_connected()) {
             fabric_connection.open();
         }
@@ -82,16 +90,18 @@ void kernel_main() {
         uint32_t tiles_read = 0;
         uint32_t shard_tile_id = first_core_tile_start_offset;
         uint32_t core_id = 0;
+        DPRINT << "Will now broadcast " << num_tiles_to_read << "tiles" << ENDL();
         while (tiles_read < num_tiles_to_read) {
             uint32_t num_tiles_to_read_this_core = std::min(num_tiles_per_core - shard_tile_id, packet_size_in_pages);
             num_tiles_to_read_this_core = std::min(num_tiles_to_read - tiles_read, num_tiles_to_read_this_core);
+            DPRINT << "Waiting on CB to read " << num_tiles_to_read_this_core << " tiles " << ENDL();
             cb_wait_front(cb_to_allgather_writer, num_tiles_to_read_this_core);
             size_t l1_read_addr = get_read_ptr(cb_to_allgather_writer);
 
             uint64_t noc0_dest_noc_addr =
                 get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0, 0 /*noc_id*/);
             noc0_dest_noc_addr += shard_tile_id * tensor0_page_size;
-
+            DPRINT << "Got noc address " << ENDL();
             write_and_advance_local_read_address_for_fabric_write(
                 noc0_dest_noc_addr,
                 pkt_hdr_forward,
@@ -100,7 +110,6 @@ void kernel_main() {
                 l1_read_addr,
                 num_tiles_to_read_this_core * tensor0_page_size);
             noc_async_writes_flushed();
-
             cb_pop_front(cb_to_allgather_writer, num_tiles_to_read_this_core);
             tiles_read += num_tiles_to_read_this_core;
             shard_tile_id += num_tiles_to_read_this_core;
@@ -108,7 +117,9 @@ void kernel_main() {
                 shard_tile_id = 0;
                 core_id++;
             }
+            DPRINT << "Advancing " << ENDL();
         }
+        DPRINT << " Done the loop " << ENDL();
         // 2. mcast output ready semaphore
         auto* pkt_hdr = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
         uint64_t out_ready_sem_noc_addr_in_pkt =
@@ -117,6 +128,7 @@ void kernel_main() {
             out_ready_sem_noc_addr_in_pkt,
             static_cast<uint16_t>(1),  // increment 1
             32});
+        DPRINT << "Sending the semaphore to addresses " << out_ready_sem_noc_addr_in_pkt << ENDL();
         // Write the mcast packet (forward)
         if (fabric_connection.has_forward_connection()) {
             fabric_connection.get_forward_connection().wait_for_empty_write_slot();
@@ -138,17 +150,21 @@ void kernel_main() {
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
         noc_semaphore_inc(out_ready_sem_noc_addr, 1);
         // 3. wait for mcast output ready semaphore
-        if (wait_output_semaphore && false) {
+        if (wait_output_semaphore) {
+            DPRINT << "Waiting for semaphore to reach " << out_ready_sem_wait_value << ENDL();
             while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) < out_ready_sem_wait_value);
         }
         // 4. global semaphore reset
+        DPRINT << "Resetting the semaphore " << ENDL();
         if (reset_global_semaphore) {
             const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem_bank_addr);
             noc_inline_dw_write(dest_noc_addr, 0);
         }
+        DPRINT << "Closing the connection " << ENDL();
         if (fabric_connection.is_logically_connected()) {
             fabric_connection.close();
         }
         noc_async_write_barrier();
+        DPRINT << "Done all gather " << ENDL();
     }
 }

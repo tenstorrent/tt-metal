@@ -563,40 +563,6 @@ def tt_sharded_distributed_rmsnorm(
         memory_config=tt_stats_sharded_config,
         is_pre=True,
     )
-    # print("tt_stats")
-    # All gather stats
-    # tt_stats = ttnn.all_gather(
-    #     tt_stats,
-    #     3,
-    #     num_links=1,
-    #     cluster_axis=1,
-    #     mesh_device=mesh_device,
-    #     memory_config=ln_sharded_stats_memcfg,
-    #     topology=ttnn.Topology.Linear,
-    # )
-    # tt_stats_dram = ttnn.to_memory_config(tt_stats, ttnn.DRAM_MEMORY_CONFIG)
-    # ttnn.deallocate(tt_stats)
-    # print("mem cfg")
-
-    # Note: Persistent output buffer used, do not deallocate output!
-    # tt_global_stats_sharded = tt_ccl.line_all_gather(
-    #    tt_stats,
-    #    semaphore,
-    #    dim=3,
-    #    cluster_axis=cluster_axis,
-    #    num_links=1,
-    #    memory_config=tt_stats_sharded_config,
-    #    buffer_key="LAYERNORM",
-    # )
-    # ttnn.synchronize_device(tt_ccl.mesh_device, sub_device_ids=[tt_ccl.worker_sub_device_id])
-    # ttnn.deallocate(tt_stats_dram)
-    # print("all gather stats", tt_global_stats.shape)
-
-    # tt_global_stats_sharded = ttnn.to_memory_config(tt_global_stats, memory_config=tt_stats_sharded_config)
-    ttnn.deallocate(tt_stats)
-    # print("sharded stats")
-
-    # Run distributed rmsnorm part 2
     tt_out = ttnn.fused_rms_1_1_32_8192(
         inp,
         ln_sharded_progcfg,
@@ -605,7 +571,7 @@ def tt_sharded_distributed_rmsnorm(
         semaphore,
         epsilon=epsilon,
         weight=gamma,
-        stats=tt_global_stats_sharded,
+        stats=tt_stats,
         is_pre=False,
     )
     # print("rmsnorm post all gather", tt_out.shape)

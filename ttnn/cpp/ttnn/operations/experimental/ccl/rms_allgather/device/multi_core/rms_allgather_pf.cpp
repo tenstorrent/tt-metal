@@ -117,12 +117,10 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     ////////////////////////////////////////////////////////////////////////////
     //                            Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    printf("Reached the program factory\n");
     IDevice* device = a.device();
     tt::tt_metal::Program program{};
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
-    printf("num_links:%d\n", num_links);
 
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_fabric_handle =
         ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
@@ -133,7 +131,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             true,
             num_links,
             topology);
-    printf("Got fabric Handle\n");
     uint32_t page_size = 0;
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     if (a.get_layout() == Layout::TILE) {
@@ -518,7 +515,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         tt::tt_metal::CircularBufferConfig(
             cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, in_data_format}})
             .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
-    tt::tt_metal::CBHandle cb_src0_workers = CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
+    tt::tt_metal::CBHandle cb_src0_workers = CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CBIndex::c_11;
@@ -529,8 +526,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             num_packet_headers_storable * packet_header_size_bytes * 2,
             {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-    auto reserved_packet_header_CB_handle =
-        CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
+    auto reserved_packet_header_CB_handle = CreateCircularBuffer(program, all_cores, cb_reserved_packet_header_config);
 
     if (b) {
         tt::tt_metal::CircularBufferConfig add_out_cb_config =
@@ -922,7 +918,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             bool wait_output_semaphore = (i == 0);
             bool reset_global_semaphore = (i == 0);
             uint32_t out_ready_sem_wait_value = ring_size * num_links;
-            printf("Waiting on output semaphore reaching %d\n", out_ready_sem_wait_value);
             std::vector<uint32_t> base_rt_args = {
                 output.buffer()->address(),           // tensor_address0
                 semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)
@@ -941,6 +936,10 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             all_gather_rts.insert(all_gather_rts.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
             append_fabric_connection_rt_args(forward_fabric_connection, core, program, all_gather_rts);
             append_fabric_connection_rt_args(backward_fabric_connection, core, program, all_gather_rts);
+        } else {
+            // Rubber band solution to the fact we update RT 3 and 4 with the semaphore and base address
+            all_gather_rts.push_back(0);
+            all_gather_rts.push_back(1);
         }
         // Set writer runtime args
 
