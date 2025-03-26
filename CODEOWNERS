@@ -218,7 +218,7 @@ models/experimental/stable_diffusion @mbahnasTT @uaydonat
 models/demos/segformer @mbahnasTT @uaydonat @tenstorrent/metalium-developers-convolutions
 models/perf/ @yieldthought @uaydonat
 models/perf/perf_report.py @yieldthought @uaydonat
-models/perf/benchmarking_utils.py @skhorasganiTT @uaydonat
+models/perf/benchmarking_utils.py @skhorasganiTT @williamlyTT @uaydonat
 models/demos/utils/llm_demo_utils.py @skhorasganiTT @mtairum @uaydonat
 
 # docs
