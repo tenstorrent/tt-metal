@@ -97,9 +97,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
 
     //  Create CBs for reader/writer for batch_offset
     uint32_t batch_offset_cb_index_reader = tt::CBIndex::c_15;
-    uint32_t batch_offset_cb_index_writer = tt::CBIndex::c_14;
     tt::tt_metal::CBHandle cb_batch_offset_reader = 0;
-    tt::tt_metal::CBHandle cb_batch_offset_writer = 0;
 
     tt::DataFormat cb_batch_offset_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(batch_offset_tensor.get_dtype());
@@ -112,37 +110,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
             .set_page_size(batch_offset_cb_index_reader, 1);
     cb_batch_offset_reader = tt::tt_metal::CreateCircularBuffer(
         program, output_tensor.memory_config().shard_spec->grid, cb_batch_offset_config_reader);
-
-    tt::tt_metal::CircularBufferConfig cb_batch_offset_config_writer =
-        tt::tt_metal::CircularBufferConfig(
-            single_batch_offset_tile_size, {{batch_offset_cb_index_writer, cb_batch_offset_data_format}})
-            .set_page_size(batch_offset_cb_index_writer, 1);
-    cb_batch_offset_writer = tt::tt_metal::CreateCircularBuffer(
-        program, output_tensor.memory_config().shard_spec->grid, cb_batch_offset_config_writer);
-
-    uint32_t q_output_cb_index = tt::CBIndex::c_16;
-    tt::tt_metal::CircularBufferConfig cb_q_output_config =
-        tt::tt_metal::CircularBufferConfig(q_num_tiles * single_tile_size, {{q_output_cb_index, cb_data_format}})
-            .set_page_size(q_output_cb_index, single_tile_size)
-            .set_globally_allocated_address(*q_output_tensor.buffer());
-    auto cb_q_output =
-        tt::tt_metal::CreateCircularBuffer(program, output_tensor.memory_config().shard_spec->grid, cb_q_output_config);
-
-    uint32_t k_output_cb_index = tt::CBIndex::c_17;
-    tt::tt_metal::CircularBufferConfig cb_k_output_config =
-        tt::tt_metal::CircularBufferConfig(k_num_tiles * single_tile_size, {{k_output_cb_index, cb_data_format}})
-            .set_page_size(k_output_cb_index, single_tile_size)
-            .set_globally_allocated_address(*k_output_tensor.buffer());
-    auto cb_k_output =
-        tt::tt_metal::CreateCircularBuffer(program, output_tensor.memory_config().shard_spec->grid, cb_k_output_config);
-
-    uint32_t v_output_cb_index = tt::CBIndex::c_18;
-    tt::tt_metal::CircularBufferConfig cb_v_output_config =
-        tt::tt_metal::CircularBufferConfig(v_num_tiles * single_tile_size, {{v_output_cb_index, cb_data_format}})
-            .set_page_size(v_output_cb_index, single_tile_size)
-            .set_globally_allocated_address(*v_output_tensor.buffer());
-    auto cb_v_output =
-        tt::tt_metal::CreateCircularBuffer(program, output_tensor.memory_config().shard_spec->grid, cb_v_output_config);
 
     uint32_t q_base_addr = q_output_tensor.buffer()->address();
     uint32_t k_base_addr = k_output_tensor.buffer()->address();
@@ -401,9 +368,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         // qkv heads reader compile time args
         (std::uint32_t)element_size,
         (std::uint32_t)sub_tile_line_bytes,
-        q_output_cb_index,
-        k_output_cb_index,
-        v_output_cb_index,
+        // q_output_cb_index,
+        // k_output_cb_index,
+        // v_output_cb_index,
         head_size,
         num_q_heads,
         num_kv_heads,
@@ -423,9 +390,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         reduction_CB_tiles,  // total_num_reduction_tiles
         (std::uint32_t)element_size,
         (std::uint32_t)sub_tile_line_bytes,
-        q_output_cb_index,
-        k_output_cb_index,
-        v_output_cb_index,
+        // q_output_cb_index,
+        // k_output_cb_index,
+        // v_output_cb_index,
         head_size,
         num_q_heads,
         num_kv_heads,
@@ -703,7 +670,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-            /*
+
             const auto& input = input_tensors[0];
             const auto& output = output_tensors[0];
             const auto& buffer_tensor = input_tensors[1];
@@ -723,7 +690,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
             }
             UpdateDynamicCircularBufferAddress(program, cb_out, *output.buffer());
             UpdateDynamicCircularBufferAddress(program, cb_reduction, *buffer_tensor.buffer());
-            */
+
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};

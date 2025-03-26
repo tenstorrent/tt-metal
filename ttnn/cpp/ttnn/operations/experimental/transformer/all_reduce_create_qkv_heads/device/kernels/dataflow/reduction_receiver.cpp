@@ -18,20 +18,17 @@ void kernel_main() {
     // QKV heads CT args
     constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(2);
     constexpr uint32_t SUBTILE_LINE_BYTES = get_compile_time_arg_val(3);
-    constexpr uint32_t cb_id_q_out = get_compile_time_arg_val(4);
-    constexpr uint32_t cb_id_k_out = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_id_v_out = get_compile_time_arg_val(6);
-    constexpr uint32_t head_size = get_compile_time_arg_val(7);
-    constexpr uint32_t num_q_heads = get_compile_time_arg_val(8);
-    constexpr uint32_t num_kv_heads = get_compile_time_arg_val(9);
-    constexpr uint32_t head_size_num_tiles = get_compile_time_arg_val(10);
+    constexpr uint32_t head_size = get_compile_time_arg_val(4);
+    constexpr uint32_t num_q_heads = get_compile_time_arg_val(5);
+    constexpr uint32_t num_kv_heads = get_compile_time_arg_val(6);
+    constexpr uint32_t head_size_num_tiles = get_compile_time_arg_val(7);
     constexpr uint32_t PHASES_TO_READ =
-        get_compile_time_arg_val(11);  // 0 to read all phases, 1 to read only first phase, 2 to read only second phase
-    constexpr uint32_t in_num_cores = get_compile_time_arg_val(12);
-    constexpr uint32_t q_num_cores = get_compile_time_arg_val(13);  // q/k/v num cores = q_num_cores
-    constexpr uint32_t index_stick_size = get_compile_time_arg_val(14);
-    constexpr uint32_t cb_batch_offset_id = get_compile_time_arg_val(15);
-    constexpr uint32_t cb_id_reduction_out = get_compile_time_arg_val(16);
+        get_compile_time_arg_val(8);  // 0 to read all phases, 1 to read only first phase, 2 to read only second phase
+    constexpr uint32_t in_num_cores = get_compile_time_arg_val(9);
+    constexpr uint32_t q_num_cores = get_compile_time_arg_val(10);  // q/k/v num cores = q_num_cores
+    constexpr uint32_t index_stick_size = get_compile_time_arg_val(11);
+    constexpr uint32_t cb_batch_offset_id = get_compile_time_arg_val(12);
+    constexpr uint32_t cb_id_reduction_out = get_compile_time_arg_val(13);
 
     // runtime args
     size_t arg_idx = 0;
