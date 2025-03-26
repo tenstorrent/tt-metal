@@ -201,7 +201,7 @@ def run_reduce_scatter_test(
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
 
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        for _ in range(num_iters):
+        for iter in range(num_iters):
             tt_out_tensor = ttnn.experimental.llama_reduce_scatter(
                 tt_input_tensors_list[0],
                 tt_intermediate_tensors_list[0],
@@ -242,6 +242,8 @@ def run_reduce_scatter_test(
     teardown_fabric_interface(mesh_device)
 
     passed = True
+    first_failed_tensor_index = None
+    failed_indices = []
     for tensor_index in range(len(tt_out_tensor_list)):
         tt_torch_tensor = ttnn.to_torch(
             tt_out_tensor_list[tensor_index],
@@ -253,6 +255,8 @@ def run_reduce_scatter_test(
         logger.info(f"Output tensor {tensor_index} has result {output_results}")
         if not eq:
             passed = False
+            first_failed_tensor_index = tensor_index
+            failed_indices = torch.where(tt_torch_tensor != output_tensor_goldens_list[tensor_index])
             break
 
     for i in range(num_devices_scatter * num_devices_fracture):
@@ -263,7 +267,8 @@ def run_reduce_scatter_test(
         ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
 
     if not passed:
-        assert eq, f"{i} FAILED: {output_results}"
+        logger.info(f"Failed indices: {failed_indices}")
+        assert eq, f"{first_failed_tensor_index} FAILED: {output_results}"
 
 
 @pytest.mark.parametrize(
@@ -278,7 +283,6 @@ def run_reduce_scatter_test(
     indirect=True,
 )
 def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
-    torch.manual_seed(2005)
     dim = 3
     shard_height = 32
     shard_width = 160
@@ -313,14 +317,13 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode):
     indirect=True,
 )
 def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
-    torch.manual_seed(2005)
     dim = 3
     shard_height = 32
     shard_width = 160
     num_devices_scatter = 4
     num_devices_fracture = 8
     num_cores = 24
-    num_iters = 5
+    num_iters = 30
     trace_mode = trace_mode
 
     run_reduce_scatter_test(

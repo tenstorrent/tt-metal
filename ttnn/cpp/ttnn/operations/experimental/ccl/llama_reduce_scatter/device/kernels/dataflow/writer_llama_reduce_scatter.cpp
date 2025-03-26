@@ -217,4 +217,6 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(accumulator_cb_id, num_pages_per_packet);
     }
+    noc_semaphore_set((uint32_t*)sender_next_semaphore, INVALID);
+    noc_semaphore_set((uint32_t*)sender_ready_semaphore_address, INVALID);
 }

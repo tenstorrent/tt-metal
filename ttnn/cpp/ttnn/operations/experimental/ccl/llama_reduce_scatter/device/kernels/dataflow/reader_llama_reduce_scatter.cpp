@@ -145,7 +145,7 @@ void kernel_main() {
 
         noc_async_read_barrier();
         cb_push_back(fabric_receiver_cb_id, num_pages_per_packet * num_devices);
-        noc_semaphore_set((uint32_t*)local_semaphore_address, INVALID);
-        noc_semaphore_set((uint32_t*)receiver_semaphore_address, INVALID);
     }
+    noc_semaphore_set((uint32_t*)local_semaphore_address, INVALID);
+    noc_semaphore_set((uint32_t*)receiver_semaphore_address, INVALID);
 }
