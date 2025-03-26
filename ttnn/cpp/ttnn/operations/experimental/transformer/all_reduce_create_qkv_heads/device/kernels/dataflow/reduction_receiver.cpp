@@ -45,7 +45,6 @@ void kernel_main() {
     constexpr uint32_t index_stick_size = get_compile_time_arg_val(17);
     constexpr uint32_t cb_batch_offset_id = get_compile_time_arg_val(18);
     constexpr uint32_t cb_id_reduction_out = get_compile_time_arg_val(19);
-    constexpr uint32_t cb_id_zero = get_compile_time_arg_val(20);
     // Print all compile-time arguments
     DPRINT << "All compile-time arguments:" << ENDL();
     DPRINT << "cb_id = " << cb_id << ENDL();
@@ -68,7 +67,6 @@ void kernel_main() {
     DPRINT << "index_stick_size = " << index_stick_size << ENDL();
     DPRINT << "cb_batch_offset_id = " << cb_batch_offset_id << ENDL();
     DPRINT << "cb_id_reduction_out = " << cb_id_reduction_out << ENDL();
-    DPRINT << "cb_id_zero = " << cb_id_zero << ENDL();
     // runtime args
     size_t arg_idx = 0;
     // rt args for QV/K read and write kernels
@@ -128,9 +126,6 @@ void kernel_main() {
     }
     // 3. QV/K read and write kernels start here:
     // 3.1 set up the device batch offset for each of the device.
-
-    // fill the zero cb with 0
-    fill_pad_cb_with_val(cb_id_zero, SUBTILE_LINE_BYTES, 0);
 
     uint32_t device_batch_offset = 0;
 
@@ -209,13 +204,11 @@ void kernel_main() {
         if constexpr (PHASES_TO_READ == 1) {  // reader kernel (NCRISC)
             DPRINT << "NCRISC WRITE" << ENDL();
             noc_async_write(read_addr, write_addr, SUBTILE_LINE_BYTES);
-            // noc_async_write(get_read_ptr(cb_id_zero), write_addr, SUBTILE_LINE_BYTES);
         }
         if constexpr (PHASES_TO_READ == 2) {  // writer kernel(BRISC)
             DPRINT << "BRISC WRITE" << ENDL();
             noc_async_write(
                 read_addr + FACE_HW * ELEMENT_SIZE, write_addr + FACE_HW * ELEMENT_SIZE, SUBTILE_LINE_BYTES);
-            // noc_async_write(get_read_ptr(cb_id_zero), write_addr + FACE_HW * ELEMENT_SIZE, SUBTILE_LINE_BYTES);
         }
         noc_async_read_barrier();
     }

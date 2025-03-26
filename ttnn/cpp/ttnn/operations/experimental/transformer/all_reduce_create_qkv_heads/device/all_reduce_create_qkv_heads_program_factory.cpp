@@ -385,12 +385,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     auto cb_out = tt::tt_metal::CreateCircularBuffer(
         program, output_tensor_cores, out_cb_config);  // TODO: This should be the output cores instead
 
-    uint32_t zero_cb_index = tt::CBIndex::c_3;
-    tt::tt_metal::CircularBufferConfig zero_cb_config =
-        tt::tt_metal::CircularBufferConfig(sub_tile_line_bytes, {{zero_cb_index, df}})
-            .set_page_size(zero_cb_index, sub_tile_line_bytes);
-    auto cb_zero = tt::tt_metal::CreateCircularBuffer(program, output_tensor_cores, zero_cb_config);
-
     // Create reduction dataflow kernel
     std::vector<uint32_t> reader_compile_time_args = {
         reduction_cb_index,  // reduction_cb_index
@@ -416,7 +410,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         batch_offset_index_stick_size,
         batch_offset_cb_index_reader,
         out_cb_index,
-        zero_cb_index,
     };
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -442,7 +435,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         batch_offset_index_stick_size,
         batch_offset_cb_index_reader,
         out_cb_index,
-        zero_cb_index,
     };
 
     auto reduction_reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args);
