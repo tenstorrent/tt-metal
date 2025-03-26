@@ -80,6 +80,7 @@ void kernel_main() {
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t offs = 0;
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+#ifndef RMSNORM
         // Data for Calculating E[X]
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
@@ -88,6 +89,7 @@ void kernel_main() {
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             read_row_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
         }
+#endif
 #endif
 
         // Data for Calculating Variance
