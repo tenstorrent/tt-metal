@@ -10,12 +10,9 @@
 #include <tt_stl/aligned_allocator.hpp>
 #include "umd/device/device_api_metal.h"
 
+#include <tt-metalium/vector_aligned.hpp>
+
 namespace tt::tt_metal {
-
-static constexpr uint32_t MEMCPY_ALIGNMENT = sizeof(__m128i);
-
-template <typename T>
-using vector_memcpy_aligned = std::vector<T, tt::stl::aligned_allocator<T, MEMCPY_ALIGNMENT>>;
 
 // Ideally would work by cachelines, but the min size is less than that
 // Benchmarked to be approximately 1.4x - 1.8x faster than std::memcpy
@@ -33,8 +30,8 @@ static inline void memcpy_to_device(void* __restrict dst, const void* __restrict
 
     if (size_t num_lines = n / inner_blk_size) {
         if ((uintptr_t)dst8 % sizeof(__m256i) != 0) {
-            __m128i blk = _mm_loadu_si128((const __m128i *)src8);
-            _mm_stream_si128((__m128i *)dst8, blk);
+            __m128i blk = _mm_loadu_si128((const __m128i*)src8);
+            _mm_stream_si128((__m128i*)dst8, blk);
             src8 += sizeof(__m128i);
             dst8 += sizeof(__m128i);
             n -= sizeof(__m128i);
@@ -54,8 +51,8 @@ static inline void memcpy_to_device(void* __restrict dst, const void* __restrict
     if (n > 0) {
         if (size_t num_lines = n / sizeof(__m256i)) {
             if ((uintptr_t)dst8 % sizeof(__m256i) != 0) {
-                __m128i blk = _mm_loadu_si128((const __m128i *)src8);
-                _mm_stream_si128((__m128i *)dst8, blk);
+                __m128i blk = _mm_loadu_si128((const __m128i*)src8);
+                _mm_stream_si128((__m128i*)dst8, blk);
                 src8 += sizeof(__m128i);
                 dst8 += sizeof(__m128i);
                 n -= sizeof(__m128i);

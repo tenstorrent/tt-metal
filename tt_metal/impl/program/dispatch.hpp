@@ -8,6 +8,7 @@
 #include <device.hpp>
 #include <kernel.hpp>
 #include <program_impl.hpp>
+#include <vector_aligned.hpp>
 #include <worker_config_buffer.hpp>
 
 namespace tt {
@@ -124,10 +125,7 @@ void set_num_worker_sems_on_dispatch(
     IDevice* device, SystemMemoryManager& manager, uint8_t cq_id, uint32_t num_worker_sems);
 
 void set_go_signal_noc_data_on_dispatch(
-    IDevice* device,
-    const vector_memcpy_aligned<uint32_t>& go_signal_noc_data,
-    SystemMemoryManager& manager,
-    uint8_t cq_id);
+    IDevice* device, const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id);
 
 }  // namespace program_dispatch
 

@@ -5,7 +5,7 @@
 #include <tt-metalium/system_memory_manager.hpp>
 #include <tt-metalium/dispatch_mem_map.hpp>
 #include <tt-metalium/command_queue_common.hpp>
-#include <tt-metalium/memcpy.hpp>
+#include "memcpy.hpp"
 
 #include <tt-metalium/launch_message_ring_buffer_state.hpp>
 #include <tt-metalium/tt_align.hpp>
