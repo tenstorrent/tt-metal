@@ -526,8 +526,8 @@ def run_llama3_demo(
     ],
     ids=[
         # "batch-1",  # latency
-        "batch-32",  # throughput
-        "batch-32-long-context",  # stress test with long context
+        "batch-32-demo",  # throughput
+        "batch-32-stress-test",  # stress test with long context
     ],
 )
 @pytest.mark.parametrize(
