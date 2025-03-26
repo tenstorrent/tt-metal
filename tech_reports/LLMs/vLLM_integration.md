@@ -42,16 +42,21 @@ In order to add vLLM support to a new Tenstorrent model, the following requireme
      ```python
       prefill_forward(tokens : torch.Tensor, images : List[PIL.Image.Image], page_table : torch.Tensor, kv_cache : list, prompt_lens : torch.Tensor, cross_page_table: torch.Tensor)
       ```
-   - `decode_forward` (**image+text models**): same as the text-only models with the additional input arguments `cross_attention_masks` (output from prefill), `full_text_row_mask_out_mask` (output from prefill), and `cross_page_table`. `cross_page_table` has shape `(max_batch_size, max_cross_blocks`.
+   - `decode_forward` (**image+text models**): same as the text-only models with the additional input arguments `cross_attention_masks` (output from prefill), `full_text_row_mask_out_mask` (output from prefill), and `cross_page_table`. `cross_page_table` has shape `(max_batch_size, max_cross_blocks)`.
      ```python
       decode_forward(tokens : torch.Tensor, start_pos : torch.Tensor, cross_attention_masks : list, full_text_row_masked_out_mask : list, page_table : torch.Tensor, kv_cache : list, cross_page_table : torch.Tensor, enable_trace : bool, read_from_device : bool)
       ```
-   - A custom vLLM input processor for appropriately handling encoder/decoder tokens (for an example, see `input_processor_for_mllama` in [models/tt_transformers/tt/generator_vllm.py](https://github.com/tenstorrent/tt-metal/blob/main/models/tt_transformers/tt/generator_vllm.py)).
+   - A custom vLLM input processor for preprocessing encoder/decoder tokens may also be required (for an example, see `input_processor_for_mllama` in [models/tt_transformers/tt/generator_vllm.py](https://github.com/tenstorrent/tt-metal/blob/main/models/tt_transformers/tt/generator_vllm.py) and for more info see [vLLM Docs - Multi-Modal Support](https://docs.vllm.ai/en/latest/contributing/model/multimodal.html)).
 
 ## Testing the Model in vLLM
-Once the model meets all of the requirements specified in [Implementation Requirements for Model Integration](#implementation-requirements-for-model-integration), it can be registered using `ModelRegistry.register_model` in [examples/offline_inference_tt.py](https://github.com/tenstorrent/vllm/blob/dev/examples/offline_inference_tt.py) and tested by following the instructions in the [vLLM README](https://github.com/tenstorrent/vllm/tree/dev/tt_metal/README.md).
+Once the model meets all of the requirements specified in [Implementation Requirements for Model Integration](#implementation-requirements-for-model-integration), it can be tested in vLLM by following the instructions in the [vLLM README](https://github.com/tenstorrent/vllm/tree/dev/tt_metal/README.md) and doing the following: 
+1. The model needs to be registered using `ModelRegistry.register_model` and added to the list of supported models in [examples/offline_inference_tt.py](https://github.com/tenstorrent/vllm/blob/dev/examples/offline_inference_tt.py).
+2. Testing offline inference, continuous batching, and performance (see [Running the offline inference example](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md#running-the-offline-inference-example)).
+3. Testing various sequence lengths of increasing size using the `--test_increasing_seq_lens` option of [examples/offline_inference_tt.py](https://github.com/tenstorrent/vllm/blob/dev/examples/offline_inference_tt.py).
+4. Testing model serving of asynchronous requests with the server example (see [Running the server example](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md#running-the-server-example)).
 
-## vLLM modifications
-On the vLLM side there may be additional changes needed to support the new model.
-- Modify [`tt_loader.py`](https://github.com/tenstorrent/vllm/blob/dev/vllm/model_executor/model_loader/tt_loader.py) if the model requires a different initialization.
-- Modify [`tt_model_runner.py`](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_model_runner.py) if it is missing functionality for the new model.
+## vLLM Modifications
+Occasionally, additional changes may be needed on the vLLM side to support a new model (e.g. supporting a new type of model, inputs of a different modality, or customizing the KV cache initialization). If this is the case, please make a pull request to the [dev branch](https://github.com/tenstorrent/vllm/tree/dev) (which acts as our main branch, and is not permitted to be committed to directly). The main files for our TT vLLM backend are the following:
+- [`tt_loader.py`](https://github.com/tenstorrent/vllm/blob/dev/vllm/model_executor/model_loader/tt_loader.py): handles model initialization.
+- [`tt_worker.py`](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_worker.py): handles device initialization and kv cache management.
+- [`tt_model_runner.py`](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_model_runner.py): handles input preparation and model execution.
