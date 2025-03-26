@@ -273,5 +273,28 @@ TEST_F(LaunchOperationT3000Test, LaunchOpFilterTensorShards) {
             ttnn::MeshCoordinate{0, 1}));
 }
 
+TEST_F(LaunchOperationT3000Test, CachingHeterogeneousDispatch) {
+    mesh_device_->enable_program_cache();
+    EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 0);
+
+    const TensorSpec tensor_spec = TensorSpec(
+        ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::TILE, MemoryConfig{}));
+    auto full_tensor = make_tensor_with_num_shards(tensor_spec, 8, mesh_device_.get());
+    auto sum = ttnn::add(full_tensor, full_tensor);
+
+    EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 1);
+
+    auto sum2 = ttnn::add(full_tensor, full_tensor);
+    EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 1);
+
+    auto uneven_tensor = make_tensor_with_num_shards(tensor_spec, 2, mesh_device_.get());
+    auto sum_uneven = ttnn::add(uneven_tensor, uneven_tensor);
+
+    EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 2);
+
+    auto sum3 = ttnn::add(uneven_tensor, uneven_tensor);
+    EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 2);
+}
+
 }  // namespace
 }  // namespace ttnn
