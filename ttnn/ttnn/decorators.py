@@ -20,6 +20,7 @@ from loguru import logger
 
 import ttnn
 import ttnn.database
+import ttnn._ttnn
 
 
 def compare_tensors_using_pcc(

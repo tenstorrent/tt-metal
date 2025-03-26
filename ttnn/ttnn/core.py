@@ -6,6 +6,7 @@ from typing import Tuple, Union, List, Optional
 import math
 
 import ttnn
+import ttnn._ttnn
 
 from ttnn.types import (
     DEVICE_STORAGE_TYPE,

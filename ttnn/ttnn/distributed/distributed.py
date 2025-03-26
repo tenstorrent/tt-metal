@@ -8,6 +8,7 @@ import functools
 from typing import List, Dict, Optional, Callable, Tuple, Optional, Callable, Union, List
 
 import ttnn
+import ttnn._ttnn
 
 
 def get_mesh_device_core_grid(mesh_device):

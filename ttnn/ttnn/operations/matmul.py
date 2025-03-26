@@ -2,10 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
-from typing import Optional, Tuple
-
 import ttnn
+import ttnn._ttnn
 
 
 MatmulProgramConfig = ttnn._ttnn.operations.matmul.MatmulProgramConfig

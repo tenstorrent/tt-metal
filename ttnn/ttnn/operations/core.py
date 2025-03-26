@@ -4,13 +4,14 @@
 
 import math
 import pathlib
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, Optional, Tuple, Union
 
 import torch
 import ttnn.decorators
 from loguru import logger
 
 import ttnn
+import ttnn._ttnn
 
 
 def _golden_function(input_tensor: ttnn.Tensor, slices):

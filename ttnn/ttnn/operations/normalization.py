@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from typing import Optional, Union
+from typing import Optional
 
 import ttnn
+import ttnn._ttnn
 
 from tt_lib.utils import find_closest_largest_divisor
 import math

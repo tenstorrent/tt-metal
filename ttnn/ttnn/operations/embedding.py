@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+import ttnn._ttnn
 
 
 def _golden_function(input_tensor: ttnn.Tensor, weight: ttnn.Tensor, **_):

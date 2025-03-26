@@ -2,17 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
-
-from typing import Tuple, Union, Dict, Optional
-import torch
-import warnings
-import math
+from typing import Tuple, Union
 import ttnn
-from ttnn.device import (
-    is_grayskull,
-    is_wormhole_b0,
-)
+import ttnn._ttnn
 
 Conv2dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 

@@ -10,6 +10,7 @@ from loguru import logger
 import networkx as nx
 
 import ttnn
+import ttnn._ttnn
 
 SQLITE_DB_PATH = "db.sqlite"
 TENSORS_PATH = "tensors"

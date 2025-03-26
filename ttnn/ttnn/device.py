@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
-from typing import Optional, List
+from typing import List
 
 import ttnn
-import os
+import ttnn._ttnn
 
 
 def get_device_core_grid(device):
