@@ -2,16 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
-from typing import Optional
 from loguru import logger
-from time import time
 from datetime import datetime
 import hashlib
 import requests
 import json
-from pkg_resources import resource_filename
-import math
-from termcolor import cprint
 
 import torch
 import pytest
