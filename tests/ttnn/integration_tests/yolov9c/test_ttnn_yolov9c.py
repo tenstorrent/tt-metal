@@ -26,7 +26,6 @@ from models.experimental.functional_yolov9c.demo.demo_utils import attempt_load
     "use_pretrained_weight",
     [
         False,
-        # True
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
