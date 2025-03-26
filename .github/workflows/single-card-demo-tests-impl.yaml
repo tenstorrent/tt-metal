@@ -22,26 +22,35 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          {
-            name: "N150_func_perf",
-            runner-label: "N150",
-            performance: false,
-            cmd: run_n150_tests
-          }, # group of owners; working on splitting up
-          {
-            name: "N300_func",
-            runner-label: "N300",
-            performance: false,
-            cmd: run_n300_func_tests
-          }, # group of owners; working on splitting up
-          {
-            name: "N300_perf",
-            runner-label: "N300",
-            performance: true,
-            cmd: run_n300_perf_tests
-          } # group of owners; working on splitting up
+          { name: "falcon7b", runner-label: "N150", performance: false, cmd: run_falcon7b_func},
+          { name: "mistral7b", runner-label: "N150", performance: false, cmd: run_mistral7b_func},
+          { name: "qwen7b", runner-label: "N150", performance: false, cmd: run_qwen7b_func},
+          { name: "llama3", runner-label: "N150", performance: false, cmd: run_llama3_func},
+          { name: "vgg", runner-label: "N150", performance: false, cmd: run_vgg_func},
+          { name: "bert_tiny", runner-label: "N150", performance: false, cmd: run_bert_tiny_func},
+          { name: "bert", runner-label: "N150", performance: false, cmd: run_bert_func},
+          { name: "resnet", runner-label: "N150", performance: false, cmd: run_resnet_func},
+          { name: "distilbert", runner-label: "N150", performance: false, cmd: run_distilbert_func},
+          { name: "covnet_mnist", runner-label: "N150", performance: false, cmd: run_covnet_mnist_func},
+          { name: "mnist", runner-label: "N150", performance: false, cmd: run_mnist_func},
+          { name: "squeezebert", runner-label: "N150", performance: false, cmd: run_squeezebert_func},
+          { name: "roberta", runner-label: "N150", performance: false, cmd: run_roberta_func},
+          { name: "stable_diffusion", runner-label: "N150", performance: false, cmd: run_stable_diffusion_func},
+          { name: "falcon7b", runner-label: "N300", performance: false, cmd: run_falcon7b_func},
+          { name: "mistral7b", runner-label: "N300", performance: false, cmd: run_mistral7b_func},
+          { name: "qwen7b", runner-label: "N300", performance: false, cmd: run_qwen7b_func},
+          { name: "llama3", runner-label: "N300", performance: false, cmd: run_llama3_func},
+          { name: "vgg", runner-label: "N300", performance: false, cmd: run_vgg_func},
+          { name: "bert_tiny", runner-label: "N300", performance: false, cmd: run_bert_tiny_func},
+          { name: "bert", runner-label: "N300", performance: false, cmd: run_bert_func},
+          { name: "resnet", runner-label: "N300", performance: false, cmd: run_resnet_func},
+          { name: "distilbert", runner-label: "N300", performance: false, cmd: run_distilbert_func},
+          { name: "covnet_mnist", runner-label: "N300", performance: false, cmd: run_covnet_mnist_func},
+          { name: "mnist", runner-label: "N300", performance: false, cmd: run_mnist_func},
+          { name: "squeezebert", runner-label: "N300", performance: false, cmd: run_squeezebert_func},
+          { name: "roberta", runner-label: "N300", performance: false, cmd: run_roberta_func},
         ]
-    name: ${{ matrix.test-group.name }}
+    name: ${{ matrix.test-group.name }}-${{ matrix.test-group.runner-label }}
     env:
       ARCH_NAME: ${{ inputs.arch }}
       LOGURU_LEVEL: INFO
