@@ -16,9 +16,9 @@ jobs:
     strategy:
       matrix:
         config:
-          - version: "20.04"
-            publish-artifact: true
           - version: "22.04"
+            publish-artifact: true
+          - version: "24.04"
             publish-artifact: false
     uses: ./.github/workflows/build-artifact.yaml
     with:
