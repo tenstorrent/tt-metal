@@ -2,9 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Any
 import ttnn
-import torch
 
 ttnn.enable_fast_runtime_mode = False
 ttnn.enable_logging = True

@@ -6,7 +6,6 @@ from typing import List, Union
 import torch
 import PIL
 from llama_models.llama3_subdevices.api.chat_format import create_vision_mask
-from llama_models.llama3_subdevices.api.tokenizer import Tokenizer
 import ttnn
 
 from models.demos.llama3_subdevices.tt.generator import LlamaGenerator

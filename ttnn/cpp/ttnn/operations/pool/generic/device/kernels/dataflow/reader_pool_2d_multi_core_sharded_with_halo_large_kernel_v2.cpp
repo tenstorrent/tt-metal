@@ -91,7 +91,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint16_t* reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(reader_indices_l1_addr);
 
-    uint32_t in_w_padded = in_w + 2 * pad_w + ceil_pad_w;
+    uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
 
     uint32_t counter = reader_id;
     uint32_t total_elems_to_reduce = window_h * window_w;

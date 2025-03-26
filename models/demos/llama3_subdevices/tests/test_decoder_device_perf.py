@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
-import time
 import pytest
 from loguru import logger
 import os
@@ -17,10 +16,6 @@ from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
 from models.demos.llama3_subdevices.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3_subdevices.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
 from models.utility_functions import skip_for_grayskull
 from models.demos.llama3_subdevices.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
