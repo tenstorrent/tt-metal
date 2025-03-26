@@ -14,6 +14,7 @@ void kernel_main() {
 
     uint32_t ublock_size_bytes = get_tile_size(cb_id_in0) * ublock_size_tiles;
 
+#ifndef LLK_TILIZE_PERF
     for (uint32_t i = 0; i<num_tiles; i += ublock_size_tiles) {
         uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(src_dram_bank_id, src_addr);
         if (reader_only == false) {
@@ -29,4 +30,5 @@ void kernel_main() {
         }
         src_addr += ublock_size_bytes;
     }
+#endif
 }

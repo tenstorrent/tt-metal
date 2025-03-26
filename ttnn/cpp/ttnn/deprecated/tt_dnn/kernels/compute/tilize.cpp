@@ -19,17 +19,20 @@ void MAIN {
     tilize_init(tt::CBIndex::c_0, per_core_block_tile_cnt, tt::CBIndex::c_16);
 
     for (uint32_t b = 0; b < per_core_block_cnt; ++b) {
+#ifndef LLK_TILIZE_PERF
         cb_wait_front(tt::CBIndex::c_0, per_core_block_tile_cnt);
         cb_reserve_back(tt::CBIndex::c_16, per_core_block_tile_cnt);
+#endif
 
         {
             DeviceZoneScopedN("TILIZE-BLOCK");
 
             tilize_block(tt::CBIndex::c_0, per_core_block_tile_cnt, tt::CBIndex::c_16);
         }
-
+#ifndef LLK_TILIZE_PERF
         cb_push_back(tt::CBIndex::c_16, per_core_block_tile_cnt);
         cb_pop_front(tt::CBIndex::c_0, per_core_block_tile_cnt);
+#endif
     }
 }
 }  // namespace NAMESPACE

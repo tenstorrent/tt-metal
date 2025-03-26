@@ -16,6 +16,7 @@ void kernel_main() {
     uint32_t ublock_size_bytes = get_tile_size(cb_id_out0);
     uint32_t ublock_size_tiles = 1;
 
+#ifndef LLK_TILIZE_PERF
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
         uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, dst_addr);
 
@@ -28,4 +29,5 @@ void kernel_main() {
         cb_pop_front(cb_id_out0, ublock_size_tiles);
         dst_addr += ublock_size_bytes;
     }
+#endif
 }

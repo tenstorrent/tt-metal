@@ -18,6 +18,9 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& output) {
+    // Used to add llk specific defines for perf measurement
+    std::map<string, string> llk_perf_defines;
+
     tt::tt_metal::Program program{};
 
     CoreRange core({0, 0}, {0, 0});
@@ -61,7 +64,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
             }
         }
     }
-    tt::log_info(tt::LogOp, "TILIZE argumments {} {} {}", num_tiles, num_tiles_per_block, max_tiles);
+
     uint32_t block_width_size = num_tiles_per_block * TILE_WIDTH * a.element_size();
     uint32_t num_full_blocks_in_row = num_tiles_in_row / num_tiles_per_block;
     uint32_t num_leftover_tiles = num_tiles_in_row % num_tiles_per_block;
@@ -103,20 +106,37 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
     uint32_t out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index, out_is_dram};
 
+    // Set llk specific defines for perf measurement
+    const bool enabe_llk_perf = std::getenv("TT_ENABLE_LLK_PERF");
+    if (enabe_llk_perf) {
+        llk_perf_defines["LLK_TILIZE_PERF"] = "1";
+
+        const bool llk_perf_unpack = std::getenv("TT_LLK_PERF_UNPACK");
+        const bool llk_perf_math = std::getenv("TT_LLK_PERF_MATH");
+        const bool llk_perf_pack = std::getenv("TT_LLK_PERF_PACK");
+        if (llk_perf_unpack) {
+            llk_perf_defines["LLK_UNPACK_PERF"] = 1;
+        } else if (llk_perf_math) {
+            llk_perf_defines["LLK_MATH_PERF"] = 1;
+        } else if (llk_perf_pack) {
+            llk_perf_defines["LLK_PACK_PERF"] = 1;
+        }
+    }
+
     // Tilized reader
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/"
         "reader_unary_stick_layout_split_rows_interleaved.cpp",
         core,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, llk_perf_defines));
 
     // Tilized writer
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, llk_perf_defines));
 
     std::vector<uint32_t> compute_args = {
         num_tiles / num_tiles_per_block,  // per_core_block_cnt
@@ -127,7 +147,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
         program,
         "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
         core,
-        tt::tt_metal::ComputeConfig{.compile_args = compute_args});
+        tt::tt_metal::ComputeConfig{.compile_args = compute_args, .defines = llk_perf_defines});
 
     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_kernel_args);
 

@@ -72,9 +72,9 @@ ALWI void tilizeA_B_reduce_init(
  *
  * | Argument       | Description                                              | Data type | Valid range | Required |
  * |----------------|----------------------------------------------------------|-----------|-------------|----------|
- * | icb0           | The identifier of the source A circular buffer (CB)      | uint32_t  | 0 to 31     | Yes      | 
- * | icb1           | The identifier of the source B circular buffer (CB)      | uint32_t  | 0 to 31     | Yes      | 
- * | block          | Size of tile block to work on for source A               | uint32_t  | > 0         | Yes      | 
+ * | icb0           | The identifier of the source A circular buffer (CB)      | uint32_t  | 0 to 31     | Yes      |
+ * | icb1           | The identifier of the source B circular buffer (CB)      | uint32_t  | 0 to 31     | Yes      |
+ * | block          | Size of tile block to work on for source A               | uint32_t  | > 0         | Yes      |
  * | ocb            | The identifier of the output circular buffer (CB)        | uint32_t  | 0 to 31     | Yes      |
  * | num_faces      | The number of faces to in each tile being unpacked       | uint32_t  | 1 to 4      | Yes      |
  * | face_r_dim     | The number of rows in each face                          | uint32_t  | 1 to 16     | Yes      |
@@ -138,21 +138,33 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
  * Perform tilize operation on a block. This simply loops over the provided blocks.
  */
 ALWI void tilize_block(uint32_t icb, uint32_t block, uint32_t ocb) {
+#ifndef LLK_PACK_PERF
     UNPACK((llk_unpack_tilize_block(icb, block)));
+#endif
 
+#ifndef LLK_UNPACK_PERF
     for (uint32_t t = 0; t < block; t++) {
         // Acquire dst
+#if !defined(LLK_PACK_PERF) && !defined(LLK_MATH_PERF)
         MATH((llk_math_wait_for_dest_available()));
         PACK((llk_packer_wait_for_math_done()));
+#endif
 
         // Datacopy
+#ifndef LLK_PACK_PERF
         MATH((llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE>(0 /*dst index*/)));
+#endif
+#ifndef LLK_MATH_PERF
         PACK((llk_pack<false, false>(0 /*tile index*/, ocb)));
+#endif
 
         // Release dest
+#if !defined(LLK_PACK_PERF) && !defined(LLK_MATH_PERF)
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
         PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+#endif
     }
+#endif
 }
 
 ALWI void unpack_tilize_block(uint32_t icb, uint32_t block) { UNPACK((llk_unpack_tilize_block(icb, block))); }
@@ -184,9 +196,9 @@ ALWI void unpack_tilizeA_B_block(
  *
  * | Argument       | Description                                              | Data type | Valid range                          | Required |
  * |----------------|----------------------------------------------------------|-----------|--------------------------------------|----------|
- * | icb0           | The identifier of the source A circular buffer (CB)      | uint32_t  | 0 to 31                              | Yes      | 
- * | icb1.          | The identifier of the source B circular buffer (CB)      | uint32_t  | 0 to 31                              | Yes      | 
- * | block          | Size of tile block to work on for source A               | uint32_t  | > 0                                  | Yes      | 
+ * | icb0           | The identifier of the source A circular buffer (CB)      | uint32_t  | 0 to 31                              | Yes      |
+ * | icb1.          | The identifier of the source B circular buffer (CB)      | uint32_t  | 0 to 31                              | Yes      |
+ * | block          | Size of tile block to work on for source A               | uint32_t  | > 0                                  | Yes      |
  * | tile_idx_b     | The index of the tile to copy from the source B input CB | uint32_t  | Must be less than the size of the CB | Yes      |
  * | num_faces      | The number of faces to in each tile being unpacked       | uint32_t  | 1 to 4                               | Yes      |
  * */

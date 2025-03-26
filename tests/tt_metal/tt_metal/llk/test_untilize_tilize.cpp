@@ -121,6 +121,32 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
             .set_page_size(ouput_cb_index, test_config.output_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
+    // Add defines to be included in kernels code(trics, ncrisc and brisc)
+    std::map<string, string> defines = {};
+
+    if (test_config.short_init) {
+        defines["SHORT_INIT"] = "1";
+    }
+    if (test_config.fp32_dest_acc_en) {
+        defines["DST_ACCUM_MODE"] = "1";
+    }
+    // Set llk specific defines for perf measurement
+    const bool enabe_llk_perf = std::getenv("TT_ENABLE_LLK_PERF");
+    if (enabe_llk_perf) {
+        defines["LLK_TILIZE_PERF"] = "1";
+
+        const bool llk_perf_unpack = std::getenv("TT_LLK_PERF_UNPACK");
+        const bool llk_perf_math = std::getenv("TT_LLK_PERF_MATH");
+        const bool llk_perf_pack = std::getenv("TT_LLK_PERF_PACK");
+        if (llk_perf_unpack) {
+            defines["LLK_UNPACK_PERF"] = 1;
+        } else if (llk_perf_math) {
+            defines["LLK_MATH_PERF"] = 1;
+        } else if (llk_perf_pack) {
+            defines["LLK_PACK_PERF"] = 1;
+        }
+    }
+
     string reader_kernel_path;
     if (test_config.untilize_type.has_value()) {
         reader_kernel_path = "tt_metal/kernels/dataflow/reader_unary.cpp";
@@ -135,14 +161,18 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
         reader_kernel_path,
         core,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .defines = defines});
 
     auto unary_writer_kernel = tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary.cpp",
         core,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
 
     vector<uint32_t> compute_kernel_args = {
         uint(test_config.num_tiles_r),  // per_core_block_cnt
@@ -165,15 +195,6 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
         compute_kernel += (test_config.tilize_type == TilizeType::UNPACK_A) ? "tilize.cpp" : "unpack_tilizeA_B.cpp";
     } else {
         tt::log_fatal("Invalid untilize and tilize type value");
-    }
-
-    std::map<string, string> defines = {};
-
-    if (test_config.short_init) {
-        defines["SHORT_INIT"] = "1";
-    }
-    if (test_config.fp32_dest_acc_en) {
-        defines["DST_ACCUM_MODE"] = "1";
     }
 
     auto eltwise_unary_kernel = tt_metal::CreateKernel(
@@ -239,53 +260,57 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
     };
     bool pass = true;
 
-    // Call golden function with correct number of parameters depending on test
-    std::visit(
-        [&](auto&& func) {
-            using FuncType = std::decay_t<decltype(func)>;
-            if constexpr (std::is_same_v<
-                              FuncType,
-                              std::function<std::vector<uint32_t>(
-                                  const std::vector<uint32_t>&, const GoldenConfig& config)>>) {
-                golden = func(src0_vec, config);
-            } else if constexpr (
-                std::is_same_v<
-                    FuncType,
-                    std::function<std::vector<uint32_t>(
-                        const std::vector<uint32_t>&, const std::vector<uint32_t>&, const GoldenConfig& config)>>) {
-                golden = func(src0_vec, src1_vec, config);
-            } else {
-                log_fatal("Invalid golden function type");
-            }
-        },
-        test_config.golden_function);
+    // Skip calculating and comparing result with golden if LLK perf measurement is enabled
+    if (!enabe_llk_perf) {
+        // Call golden function with correct number of parameters depending on test
+        std::visit(
+            [&](auto&& func) {
+                using FuncType = std::decay_t<decltype(func)>;
+                if constexpr (std::is_same_v<
+                                  FuncType,
+                                  std::function<std::vector<uint32_t>(
+                                      const std::vector<uint32_t>&, const GoldenConfig& config)>>) {
+                    golden = func(src0_vec, config);
+                } else if constexpr (
+                    std::is_same_v<
+                        FuncType,
+                        std::function<std::vector<uint32_t>(
+                            const std::vector<uint32_t>&, const std::vector<uint32_t>&, const GoldenConfig& config)>>) {
+                    golden = func(src0_vec, src1_vec, config);
+                } else {
+                    log_fatal("Invalid golden function type");
+                }
+            },
+            test_config.golden_function);
 
-    if (test_config.fp32_dest_acc_en) {
-        vector<bfloat16> golden_unpacked = unpack_vector<bfloat16, uint32_t>(golden);
-        // Increasing the size since from BFP16 two times, since storing is in FP32
-        golden.resize(golden.size() * 2);
-        for (auto i = 0; i < golden_unpacked.size(); i++) {
-            // Cast float32 to "packed "uint32 golden vector if fp32_dest_acc_en:
-            golden[i] = std::bit_cast<uint32_t>(golden_unpacked[i].to_float());
+        if (test_config.fp32_dest_acc_en) {
+            vector<bfloat16> golden_unpacked = unpack_vector<bfloat16, uint32_t>(golden);
+            // Increasing the size since from BFP16 two times, since storing is in FP32
+            golden.resize(golden.size() * 2);
+            for (auto i = 0; i < golden_unpacked.size(); i++) {
+                // Cast float32 to "packed "uint32 golden vector if fp32_dest_acc_en:
+                golden[i] = std::bit_cast<uint32_t>(golden_unpacked[i].to_float());
+            }
+        }
+
+        if (test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A_B) {
+            pass &= (golden.size() == result_vec.size());
+            pass &= is_close_packed_vectors<bfloat16, uint32_t>(
+                result_vec, golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.01f); });
+
+        } else {
+            pass &= (golden.size() == result_vec.size());
+            pass &= (golden == result_vec);
+        }
+
+        if (not pass) {
+            std::cout << "GOLDEN " << std::endl;
+            print_vector(unpack_vector<bfloat16, uint32_t>(golden));
+            std::cout << "RESULTS " << std::endl;
+            print_vector(unpack_vector<bfloat16, uint32_t>(result_vec));
         }
     }
 
-    if (test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A_B) {
-        pass &= (golden.size() == result_vec.size());
-        pass &= is_close_packed_vectors<bfloat16, uint32_t>(
-            result_vec, golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.01f); });
-
-    } else {
-        pass &= (golden.size() == result_vec.size());
-        pass &= (golden == result_vec);
-    }
-
-    if (not pass) {
-        std::cout << "GOLDEN " << std::endl;
-        print_vector(unpack_vector<bfloat16, uint32_t>(golden));
-        std::cout << "RESULTS " << std::endl;
-        print_vector(unpack_vector<bfloat16, uint32_t>(result_vec));
-    }
     ASSERT_TRUE(pass);
     log_info(
         tt::LogTest,
@@ -304,7 +329,7 @@ Following tests are for Unpack Tilize
 ***************************************/
 
 TEST_F(DeviceFixture, TensixComputeUnpackTilize) {
-    vector<vector<uint32_t>> num_tiles = {{10, 12}};
+    vector<vector<uint32_t>> num_tiles = {{20, 4}};
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {false}) {
             // FP32 dest acc not possible for GS
