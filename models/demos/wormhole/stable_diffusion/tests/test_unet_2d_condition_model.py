@@ -15,9 +15,6 @@ from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_p
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition_model_new_conv import (
     UNet2DConditionModel as UNet2D,
 )
-from models.utility_functions import (
-    skip_for_grayskull,
-)
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 scheduler = LMSDiscreteScheduler(
@@ -28,13 +25,6 @@ scheduler = LMSDiscreteScheduler(
 )
 
 scheduler.set_timesteps(1)
-
-
-def ttnn_to_torch(input):
-    input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)
-    input = ttnn.from_device(input)
-    input = ttnn.to_torch(input)
-    return input
 
 
 def constant_prop_time_embeddings(timesteps, batch_size, time_proj):
@@ -57,7 +47,6 @@ def unsqueeze_all_params_to_4d(params):
     return params
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 32768}], ids=["device_params=l1_small_size_24576"], indirect=True
 )
@@ -170,5 +159,5 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     second_iter = time.time() - second_iter
     print(f"Second iteration took {second_iter} seconds")
 
-    ttnn_output = ttnn_to_torch(ttnn_output)
+    ttnn_output = ttnn.to_torch(ttnn_output)
     assert_with_pcc(torch_output, ttnn_output, 0.996)
