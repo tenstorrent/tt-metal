@@ -200,7 +200,11 @@ class Program {
     friend KernelHandle detail::AddKernel(Program &program, const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType core_type);
     friend std::shared_ptr<Kernel> detail::GetKernel(const Program &program, KernelHandle kernel_id);
 
-    friend uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type);
+    friend uint32_t CreateSemaphore(
+        Program& program,
+        const std::variant<CoreRange, CoreRangeSet, CoreCoord>& core_spec,
+        uint32_t initial_value,
+        CoreType core_type);
 
     CBHandle add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
     CBHandle add_circular_buffer(

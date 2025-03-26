@@ -1040,6 +1040,32 @@ class TtModelArgs:
                     use_height_and_width_as_shard_shape=True,
                 )
             )
+            PACKET_WORKER_CRS = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 2)),
+                ]
+            )
+            self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, 1024),
+                core_grid=PACKET_WORKER_CRS,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            FF1_CRS_RS_OUT = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                ttnn.CoreCoord(1, 0), 30, self.sub_core_grids, row_wise=True
+            )
+            self.model_config["REDUCE_SCATTER_OUT_MEMCFG"] = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    FF1_CRS_RS_OUT,
+                    [32, 32],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
 
             self.model_config["SELF_OUT_REDUCE_SCATTER_MEMCFG"] = (
                 ttnn.create_sharded_memory_config(
