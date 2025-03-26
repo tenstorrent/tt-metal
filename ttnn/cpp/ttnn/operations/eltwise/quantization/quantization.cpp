@@ -11,7 +11,7 @@ namespace ttnn::operations::quantization {
 Tensor QuantOp::invoke(
     QueueId queue_id,
     const Tensor& input_tensor,
-    const float scale,
+    const std::variant<Tensor, float>& scale,
     const int32_t zero_point,
     const std::optional<int32_t> axis,
     const std::optional<const DataType>& output_dtype,
@@ -31,59 +31,46 @@ Tensor QuantOp::invoke(
     const std::array post_activations{
         ttnn::operations::unary::UnaryWithParam{unary::UnaryOpType::ZERO_POINT, static_cast<float>(zero_point)}};
 
-    // LLK quant kernel expects the reciprocal of the actual scale to avoid doing div on the device
-    return ttnn::prim::binary_ng(
-        queue_id,
-        tt::tt_metal::is_block_float(a_dtype) ? ttnn::typecast(input_tensor, DataType::BFLOAT16) : input_tensor,
-        1.0f / scale,
-        binary_ng::BinaryOpType::QUANT,
-        c_dtype,
-        memory_config,
-        optional_output_tensor,
-        lhs_activations,
-        rhs_activations,
-        post_activations);
-}
+    return std::visit(
+        [&](auto&& scale_v) -> Tensor {
+            constexpr bool scale_is_scalar = std::is_same_v<float, std::decay_t<decltype(scale_v)>>;
+            if constexpr (scale_is_scalar) {
+                // LLK quant kernel expects the reciprocal of the actual scale to avoid doing div on the device
+                return ttnn::prim::binary_ng(
+                    queue_id,
+                    tt::tt_metal::is_block_float(a_dtype) ? ttnn::typecast(input_tensor, DataType::BFLOAT16)
+                                                          : input_tensor,
+                    1.0f / scale_v,
+                    binary_ng::BinaryOpType::QUANT,
+                    c_dtype,
+                    memory_config,
+                    optional_output_tensor,
+                    lhs_activations,
+                    rhs_activations,
+                    post_activations);
+            } else {
+                const ttnn::DataType b_dtype = scale_v.get_dtype();
+                TT_FATAL(tt::tt_metal::is_floating_point(b_dtype), "Quantize only takes floating-point number scales");
+                TT_FATAL(!tt::tt_metal::is_block_float(b_dtype), "Unsupported scale tensor format");
+                TT_FATAL(scale_v.get_logical_volume() == 1u, "Per-tensor quantize only takes a single scale value");
 
-Tensor QuantOp::invoke(
-    QueueId queue_id,
-    const Tensor& input_tensor,
-    const Tensor& scale,
-    const int32_t zero_point,
-    const std::optional<int32_t> axis,
-    const std::optional<const DataType>& output_dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
-    const ttnn::DataType a_dtype = input_tensor.get_dtype();
-    const ttnn::DataType b_dtype = scale.get_dtype();
-    constexpr ttnn::DataType c_dtype = ttnn::DataType::INT32;
-
-    TT_FATAL(tt::tt_metal::is_floating_point(a_dtype), "Quantize only takes floating-point number inputs");
-    TT_FATAL(tt::tt_metal::is_floating_point(b_dtype), "Quantize only takes floating-point number scales");
-    TT_FATAL(!tt::tt_metal::is_block_float(b_dtype), "Unsupported scale tensor format");
-    TT_FATAL(scale.get_logical_volume() == 1u, "Per-tensor quantize only takes a single scale value");
-    TT_FATAL(output_dtype.value_or(c_dtype) == c_dtype, "Quantize only supports int32 outputs for now");
-    if (optional_output_tensor.has_value()) {
-        TT_FATAL(optional_output_tensor->dtype() == c_dtype, "Quantize only supports int32 outputs for now");
-    }
-
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations{};
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations{};
-    const std::array post_activations{
-        ttnn::operations::unary::UnaryWithParam{unary::UnaryOpType::ZERO_POINT, static_cast<float>(zero_point)}};
-
-    // TODO: do reciprocal using an activation containing an UnaryWithParam that does rdiv(scale, 1), benchmark it
-    return ttnn::prim::binary_ng(
-        queue_id,
-        tt::tt_metal::is_block_float(a_dtype) ? ttnn::typecast(input_tensor, DataType::BFLOAT16) : input_tensor,
-        ttnn::reciprocal(scale),
-        binary_ng::BinaryOpType::QUANT,
-        c_dtype,
-        memory_config,
-        optional_output_tensor,
-        lhs_activations,
-        rhs_activations,
-        post_activations);
+                // TODO: do reciprocal using an activation containing an UnaryWithParam that does rdiv(scale, 1),
+                // benchmark it
+                return ttnn::prim::binary_ng(
+                    queue_id,
+                    tt::tt_metal::is_block_float(a_dtype) ? ttnn::typecast(input_tensor, DataType::BFLOAT16)
+                                                          : input_tensor,
+                    ttnn::reciprocal(scale_v),
+                    binary_ng::BinaryOpType::QUANT,
+                    c_dtype,
+                    memory_config,
+                    optional_output_tensor,
+                    lhs_activations,
+                    rhs_activations,
+                    post_activations);
+            }
+        },
+        scale);
 }
 
 Tensor RequantOp::invoke(
@@ -247,7 +234,7 @@ Tensor RequantOp::invoke(
 Tensor DequantOp::invoke(
     QueueId queue_id,
     const Tensor& input_tensor,
-    const float scale,
+    const std::variant<Tensor, float>& scale,
     const int32_t zero_point,
     const std::optional<int32_t> axis,
     const std::optional<const DataType>& output_dtype,
@@ -273,63 +260,42 @@ Tensor DequantOp::invoke(
     const std::array post_activations{
         ttnn::operations::unary::UnaryWithParam{unary::UnaryOpType::ZERO_POINT, static_cast<float>(-zero_point)}};
 
-    return ttnn::prim::binary_ng(
-        queue_id,
-        input_tensor,
-        scale,
-        binary_ng::BinaryOpType::DEQUANT,
-        c_dtype,
-        memory_config,
-        optional_output_tensor,
-        lhs_activations,
-        rhs_activations,
-        post_activations);
-}
+    return std::visit(
+        [&](auto&& scale_v) -> Tensor {
+            constexpr bool scale_is_scalar = std::is_same_v<float, std::decay_t<decltype(scale_v)>>;
+            if constexpr (scale_is_scalar) {
+                return ttnn::prim::binary_ng(
+                    queue_id,
+                    input_tensor,
+                    scale_v,
+                    binary_ng::BinaryOpType::DEQUANT,
+                    c_dtype,
+                    memory_config,
+                    optional_output_tensor,
+                    lhs_activations,
+                    rhs_activations,
+                    post_activations);
+            } else {
+                const ttnn::DataType b_dtype = scale_v.get_dtype();
+                TT_FATAL(
+                    tt::tt_metal::is_floating_point(b_dtype), "Dequantize only takes floating-point number scales");
+                TT_FATAL(!tt::tt_metal::is_block_float(b_dtype), "Unsupported scale tensor format");
+                TT_FATAL(scale_v.get_logical_volume() == 1u, "Per-tensor dequantize only takes a single scale value");
 
-Tensor DequantOp::invoke(
-    QueueId queue_id,
-    const Tensor& input_tensor,
-    const Tensor& scale,
-    const int32_t zero_point,
-    const std::optional<int32_t> axis,
-    const std::optional<const DataType>& output_dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
-    const ttnn::DataType a_dtype = input_tensor.get_dtype();
-    const ttnn::DataType b_dtype = scale.get_dtype();
-    ttnn::DataType c_dtype = ttnn::DataType::BFLOAT16;
-    if (output_dtype.has_value() && optional_output_tensor.has_value()) {
-        TT_FATAL(
-            output_dtype.value() == optional_output_tensor->dtype(),
-            "Mismatching output_dtype and output tensor dtype");
-        c_dtype = output_dtype.value();
-    } else if (output_dtype.has_value()) {
-        c_dtype = output_dtype.value();
-    } else if (optional_output_tensor.has_value()) {
-        c_dtype = optional_output_tensor->dtype();
-    }
-    TT_FATAL(a_dtype == ttnn::DataType::INT32, "Dequantize only supports int32 inputs for now");
-    TT_FATAL(tt::tt_metal::is_floating_point(b_dtype), "Quantize only takes floating-point number scales");
-    TT_FATAL(!tt::tt_metal::is_block_float(b_dtype), "Unsupported scale tensor format");
-    TT_FATAL(scale.get_logical_volume() == 1u, "Per-tensor dequantize only takes a single scale value");
-
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations{};
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations{};
-    // LLK dequant kernel does addition, so we need to negate zero_point
-    const std::array post_activations{
-        ttnn::operations::unary::UnaryWithParam{unary::UnaryOpType::ZERO_POINT, static_cast<float>(-zero_point)}};
-
-    return ttnn::prim::binary_ng(
-        queue_id,
-        input_tensor,
-        scale,
-        binary_ng::BinaryOpType::DEQUANT,
-        c_dtype,
-        memory_config,
-        optional_output_tensor,
-        lhs_activations,
-        rhs_activations,
-        post_activations);
+                return ttnn::prim::binary_ng(
+                    queue_id,
+                    input_tensor,
+                    scale_v,
+                    binary_ng::BinaryOpType::DEQUANT,
+                    c_dtype,
+                    memory_config,
+                    optional_output_tensor,
+                    lhs_activations,
+                    rhs_activations,
+                    post_activations);
+            }
+        },
+        scale);
 }
 
 }  // namespace ttnn::operations::quantization
