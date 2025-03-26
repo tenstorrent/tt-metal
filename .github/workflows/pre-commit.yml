@@ -1,4 +1,4 @@
-# Run Pre-commit Hooks
+# Run pre-commit hooks
 name: Run pre-commit hooks
 
 on:
@@ -9,7 +9,7 @@ on:
 
 jobs:
   pre-commit:
-    name: Run pree-commit hooks
+    name: Run pre-commit hooks
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
