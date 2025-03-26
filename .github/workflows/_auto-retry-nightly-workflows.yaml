@@ -1,4 +1,4 @@
-name: "[internal] Auto-retry post-commit"
+name: "[internal] Auto-retry nightly workflows"
 
 on:
   workflow_dispatch:
@@ -76,7 +76,7 @@ jobs:
             echo "::notice title=no-continue-did-not-fail::This workflow did not fail. Not re-trying"
             should_continue=false
           elif [[ "$CURRENT_HOUR" -lt 8 || "$CURRENT_HOUR" -ge 20 ]]; then
-            echo "::notice title=no-continue-outside-hours::This workflow is outside of the hours of 8am-8pm. Not re-trying"
+            echo "::notice title=no-continue-outside-hours::This workflow is outside of the hours of 8am-8pm PT. Not re-trying"
             should_continue=false
           else
             should_continue=true
