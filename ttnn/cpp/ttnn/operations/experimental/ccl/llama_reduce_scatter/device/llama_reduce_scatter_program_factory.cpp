@@ -320,13 +320,14 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     uint32_t output_cores_per_device = output_grid.num_cores();
     uint32_t num_workers_per_link = 1;
 
+    auto intermediate_packet_buffer_grid = tensor_args.intermediate_packet_buffer.shard_spec().value().grid;
     // UNCOMMENT this once we can allocate persistent buffers across all device lifetimes
-    // uint32_t num_packets_total_per_device =
-    //     (input_shard_cores_per_device * tiles_per_core_width + num_pages_per_packet - 1) / num_pages_per_packet;
-    // auto packet_worker_cores_grid = detail::get_worker_cores(
-    //     sub_device_cores, num_packets_total_per_device, shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-
-    auto packet_worker_cores_grid = tensor_args.intermediate_packet_buffer.shard_spec().value().grid;
+    uint32_t num_packets_total_per_device =
+        (input_shard_cores_per_device * tiles_per_core_width + num_pages_per_packet - 1) / num_pages_per_packet;
+    auto packet_worker_cores_grid = detail::get_worker_cores(
+        intermediate_packet_buffer_grid,
+        num_packets_total_per_device,
+        shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
     auto available_cores = sub_device_cores.subtract(packet_worker_cores_grid);
 

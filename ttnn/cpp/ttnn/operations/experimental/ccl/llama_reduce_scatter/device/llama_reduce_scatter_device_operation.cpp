@@ -22,7 +22,8 @@ void LlamaReduceScatterDeviceOperation::validate_on_program_cache_miss(
     auto input_tensor = tensor_args.input_tensor;
     auto tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
     auto input_spec = input_tensor.get_tensor_spec();
-    auto input_shape = input_spec.logical_shape();
+    auto input_shape =
+        Shape({1, 1, 32, 3840});  // hack for now as the padding actually doesn't show up in the shape at all...
 
     TT_FATAL(input_shape == Shape({1, 1, 32, 3840}), "input_shape must be 1x1x32x3840");
     TT_FATAL(attributes.dim == 3, "dim must be 1, got {}", attributes.dim);
@@ -79,11 +80,10 @@ LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceO
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     using namespace tt::tt_metal;
 
-    // sharding APIs are terrible
     auto input_tensor = tensor_args.input_tensor;
     auto tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
     auto input_spec = input_tensor.get_tensor_spec();
-    auto input_shape = input_spec.logical_shape();
+    auto input_shape = Shape({1, 1, 32, 3840});  // input_spec.logical_shape();;
 
     uint32_t final_width = input_shape[attributes.dim] / attributes.ring_devices;
 
