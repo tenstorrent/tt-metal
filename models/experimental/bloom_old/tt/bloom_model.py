@@ -4,13 +4,12 @@
 
 import torch
 import math
-from torch.nn import functional as F
 
 import models.experimental.bloom_old.bloom_utils as bloom_utils
 import models.experimental.bloom_old.tt.bloom_block as bloom_block
 
 from fused_ops.layernorm import Layernorm as TtLayernorm
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple
 
 
 def _make_causal_mask(

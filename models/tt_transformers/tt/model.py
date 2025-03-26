@@ -4,7 +4,6 @@
 
 import ttnn
 import torch
-import torch.nn as nn
 from tqdm import tqdm
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.common.rmsnorm import RMSNorm

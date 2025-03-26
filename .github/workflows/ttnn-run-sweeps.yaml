@@ -476,6 +476,7 @@ on:
           - reduction.traces.mean_traces
           - reduction.traces.sum_traces
           - reduction.traces.topk_traces
+          - reduction.generality.reduction_all_ranks
           - matmul.full.matmul_default_block_sharded
           - matmul.full.matmul_default_height_sharded
           - matmul.full.matmul_default_interleaved
@@ -508,7 +509,6 @@ on:
           - data_movement.expand.expand_pytorch2
           - data_movement.fill.fill_pytorch2
           - data_movement.index_select.index_select_pytorch2
-          - data_movement.split.split_with_sizes_pytorch2
           - data_movement.repeat.repeat
           - data_movement.reshape.reshape
           - data_movement.repeat_interleave.repeat_interleave
