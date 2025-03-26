@@ -26,7 +26,7 @@ void kernel_main() {
     constexpr uint8_t x_index = 0;
     constexpr uint8_t y_index = 1;
 
-    size_t ct_arg_idx = 0, rt_arg_idx = 0;
+    size_t rt_arg_idx = 0;
 
     // Define all compile-time arguments at the beginning
     constexpr uint32_t input_tensor_cb_id = get_compile_time_arg_val(0);
@@ -43,10 +43,10 @@ void kernel_main() {
     constexpr uint32_t num_devices = get_compile_time_arg_val(11);
     constexpr uint32_t page_size_bytes = get_compile_time_arg_val(12);
     constexpr uint32_t output_cores_per_device = get_compile_time_arg_val(13);
-    constexpr uint32_t noc_start_x = get_compile_time_arg_val(14);
-    constexpr uint32_t noc_start_y = get_compile_time_arg_val(15);
-    constexpr uint32_t noc_end_x = get_compile_time_arg_val(16);
-    constexpr uint32_t noc_end_y = get_compile_time_arg_val(17);
+    constexpr uint32_t packet_worker_start_x = get_compile_time_arg_val(14);
+    constexpr uint32_t packet_worker_start_y = get_compile_time_arg_val(15);
+    constexpr uint32_t packet_worker_end_x = get_compile_time_arg_val(16);
+    constexpr uint32_t packet_worker_end_y = get_compile_time_arg_val(17);
 
     // Derived compile-time constants
     constexpr uint32_t input_tensor_cores = input_shard_cores_per_device * num_devices;
@@ -55,7 +55,8 @@ void kernel_main() {
 
     // Precompute constants for optimization
     constexpr uint32_t bytes_per_tile_group = tiles_per_core_width * page_size_bytes;
-    constexpr uint32_t num_dests = (noc_end_x - noc_start_x + 1) * (noc_end_y - noc_start_y + 1);
+    constexpr uint32_t num_dests =
+        (packet_worker_end_x - packet_worker_start_x + 1) * (packet_worker_end_y - packet_worker_start_y + 1);
     constexpr uint32_t chip_id_offset = chip_id * num_pages_per_packet * page_size_bytes;
 
     constexpr uint32_t other_devices = num_devices - 1;
@@ -91,10 +92,10 @@ void kernel_main() {
                 const uint32_t y = input_core_xy[curr_core][y_index];
                 const uint32_t offset_address = bank_base_address + (read_offset * page_size_bytes);
                 const uint64_t shard_noc_addr = get_noc_addr(x, y, offset_address);
+                const uint32_t transfer_size = read_size * page_size_bytes;
 
                 cb_reserve_back(fabric_sender_cb_id, read_size);
                 const uint32_t sender_read_addr = get_write_ptr(fabric_sender_cb_id);
-                const uint32_t transfer_size = read_size * page_size_bytes;
 
                 noc_async_read(shard_noc_addr, sender_read_addr, transfer_size);
                 noc_async_read_barrier();
@@ -123,8 +124,12 @@ void kernel_main() {
 
         if (receiver_core) {
             // Precompute multicast semaphore address once
-            const uint64_t multicast_semaphore_addr =
-                static_noc_multicast_addr(noc_start_x, noc_start_y, noc_end_x, noc_end_y, local_semaphore_address);
+            const uint64_t multicast_semaphore_addr = static_noc_multicast_addr(
+                packet_worker_start_x,
+                packet_worker_start_y,
+                packet_worker_end_x,
+                packet_worker_end_y,
+                local_semaphore_address);
 
             noc_semaphore_wait((uint32_t*)receiver_semaphore_address, other_devices);
 
@@ -140,7 +145,7 @@ void kernel_main() {
 
         noc_async_read_barrier();
         cb_push_back(fabric_receiver_cb_id, num_pages_per_packet * num_devices);
-        *(uint32_t*)local_semaphore_address = 0;
-        *(uint32_t*)receiver_semaphore_address = 0;
+        noc_semaphore_set((uint32_t*)local_semaphore_address, INVALID);
+        noc_semaphore_set((uint32_t*)receiver_semaphore_address, INVALID);
     }
 }

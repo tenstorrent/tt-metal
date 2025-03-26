@@ -12,12 +12,26 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 
+template <uint8_t noc_ind = noc_index>
+FORCE_INLINE std::uint64_t static_noc_multicast_addr(
+    std::uint32_t noc_x_start,
+    std::uint32_t noc_y_start,
+    std::uint32_t noc_x_end,
+    std::uint32_t noc_y_end,
+    std::uint32_t addr) {
+    if constexpr (noc_ind == 0) {
+        return get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, addr);
+    } else {
+        return get_noc_multicast_addr(noc_x_end, noc_y_end, noc_x_start, noc_y_start, addr);
+    }
+}
+
 void kernel_main() {
     // Constants for indexing
     constexpr uint8_t x_index = 0;
     constexpr uint8_t y_index = 1;
 
-    size_t ct_arg_idx = 0, rt_arg_idx = 0;
+    size_t rt_arg_idx = 0;
 
     // Define all compile-time arguments at the beginning
     constexpr uint32_t input_tensor_cb_id = get_compile_time_arg_val(0);
@@ -43,6 +57,10 @@ void kernel_main() {
     constexpr uint32_t sender_atomic_inc_core_x = get_compile_time_arg_val(20);
     constexpr uint32_t sender_atomic_inc_core_y = get_compile_time_arg_val(21);
     constexpr uint32_t num_sender_cores = get_compile_time_arg_val(22);
+    constexpr uint32_t sender_noc_start_x = get_compile_time_arg_val(23);
+    constexpr uint32_t sender_noc_start_y = get_compile_time_arg_val(24);
+    constexpr uint32_t sender_noc_end_x = get_compile_time_arg_val(25);
+    constexpr uint32_t sender_noc_end_y = get_compile_time_arg_val(26);
 
     // Derived compile-time constants
     constexpr uint32_t input_tensor_cores = input_shard_cores_per_device * num_devices;
@@ -53,7 +71,8 @@ void kernel_main() {
             ? num_pages_per_packet
             : input_shard_cores_per_device * tiles_per_core_width % num_pages_per_packet;
     constexpr size_t packet_header_size = sizeof(PACKET_HEADER_TYPE);
-    constexpr uint32_t num_dests = (noc_end_x - noc_start_x + 1) * (noc_end_y - noc_start_y + 1);
+    constexpr uint32_t num_dests =
+        ((sender_noc_end_x - sender_noc_start_x + 1) * (sender_noc_end_y - sender_noc_start_y + 1));
 
     // Precomputed constants for better optimization
     constexpr uint32_t chip_id_offset = chip_id * num_pages_per_packet * page_size_bytes;
@@ -75,8 +94,12 @@ void kernel_main() {
     bool is_atomic_inc_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_packet_start = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_packet_end = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t sender_next_semaphore = get_semaphore(get_arg_val<uint32_t>(rt_arg_idx++));
 
     if (sender_core) {
+        if (is_atomic_inc_core) {
+            noc_semaphore_set((uint32_t*)sender_next_semaphore, VALID);
+        }
         // Set up packet headers once
         const auto packet_header_buffer_addr = get_read_ptr(packet_header_cb_id);
         auto* unicast_packet_header = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
@@ -86,6 +109,9 @@ void kernel_main() {
         if (fabric_connection.is_logically_connected()) {
             fabric_connection.open();
         }
+        uint64_t sender_next_multicast_semaphore_addr = static_noc_multicast_addr(
+            sender_noc_start_x, sender_noc_start_y, sender_noc_end_x, sender_noc_end_y, sender_next_semaphore);
+
         const uint32_t base_receiver_l1_addr = get_read_ptr(fabric_receiver_cb_id);
 
         // Precompute the packet offset once
@@ -127,6 +153,10 @@ void kernel_main() {
             }
             if (is_atomic_inc_core) {
                 noc_semaphore_wait((uint32_t*)sender_ready_semaphore_address, num_sender_cores - 1);
+                noc_semaphore_set((uint32_t*)sender_ready_semaphore_address, INVALID);
+
+                noc_semaphore_set_multicast(sender_next_semaphore, sender_next_multicast_semaphore_addr, num_dests);
+                noc_async_atomic_barrier();
                 const uint64_t sem_noc_addr =
                     get_noc_addr(packet_receiver_core_x, packet_receiver_core_y, receiver_semaphore_address);
                 sem_inc_packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
@@ -140,17 +170,20 @@ void kernel_main() {
 
                 fabric_conn.send_payload_flush_blocking_from_address(
                     (uint32_t)sem_inc_packet_header, packet_header_size);
-                *((uint32_t*)sender_ready_semaphore_address) = 0;
+
             } else {
                 const uint64_t sender_noc_addr =
                     get_noc_addr(sender_atomic_inc_core_x, sender_atomic_inc_core_y, sender_ready_semaphore_address);
                 noc_semaphore_inc(sender_noc_addr, 1);
+                noc_async_atomic_barrier();
+                noc_semaphore_wait((uint32_t*)sender_next_semaphore, VALID);
+                noc_semaphore_set((uint32_t*)sender_next_semaphore, INVALID);
             }
         }
-        if (is_atomic_inc_core) {
-            noc_async_atomic_barrier();
-        }
 
+        if (is_atomic_inc_core) {
+            noc_semaphore_set((uint32_t*)sender_next_semaphore, INVALID);
+        }
         if (fabric_connection.is_logically_connected()) {
             fabric_connection.close();
         }
