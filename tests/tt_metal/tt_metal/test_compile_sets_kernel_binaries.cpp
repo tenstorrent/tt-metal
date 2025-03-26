@@ -14,7 +14,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/kernel.hpp>
 #include <tt-metalium/device_pool.hpp>
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 #include <thread>
 #include "tt_metal/jit_build/build_env_manager.hpp"
 

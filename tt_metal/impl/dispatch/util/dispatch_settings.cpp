@@ -5,7 +5,7 @@
 #include <tt-metalium/dispatch_settings.hpp>
 #include <tt-metalium/dev_msgs.h>
 #include <cstdint>
-#include <hal.hpp>
+#include "llrt/hal.hpp"
 #include <tt_cluster.hpp>
 #include "magic_enum/magic_enum.hpp"
 #include "umd/device/tt_core_coordinates.h"

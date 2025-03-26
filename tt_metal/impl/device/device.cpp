@@ -20,7 +20,7 @@
 #include <device_pool.hpp>
 #include <persistent_kernel_cache.hpp>
 
-#include <hal.hpp>
+#include "llrt/hal.hpp"
 #include <hal_exp.hpp>
 #include <sub_device.hpp>
 #include <sub_device_manager_tracker.hpp>

@@ -6,7 +6,7 @@
 #include <string>
 
 #include <hal_exp.hpp>
-#include <hal.hpp>
+#include "llrt/hal.hpp"
 #include <tt_backend_api_types.hpp>
 #include <umd/device/types/arch.h>
 

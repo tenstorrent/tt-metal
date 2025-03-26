@@ -35,7 +35,7 @@
 
 #include <dev_msgs.h>
 
-#include <hal.hpp>
+#include "llrt/hal.hpp"
 
 #include "tracy/Tracy.hpp"
 #include "umd/device/tt_simulation_device.h"

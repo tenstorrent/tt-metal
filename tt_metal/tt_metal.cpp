@@ -8,7 +8,7 @@
 #include <optional>
 
 #include <dev_msgs.h>
-#include <hal.hpp>
+#include "llrt/hal.hpp"
 #include <allocator.hpp>
 #include "dprint_server.hpp"
 #include <command_queue.hpp>

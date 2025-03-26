@@ -13,7 +13,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/event.hpp>
 #include <tt-metalium/sub_device.hpp>
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 #include "hal_exp.hpp"
 #include "host_api.hpp"
 #include "kernel_types.hpp"

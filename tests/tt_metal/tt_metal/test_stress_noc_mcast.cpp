@@ -25,7 +25,7 @@
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 #include "tt_cluster.hpp"
 
 using namespace tt;

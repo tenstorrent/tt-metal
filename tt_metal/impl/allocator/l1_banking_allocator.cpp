@@ -22,7 +22,7 @@
 #include "umd/device/types/xy_pair.h"
 #include <fmt/base.h>
 
-#include <hal.hpp>
+#include "llrt/hal.hpp"
 
 namespace tt {
 

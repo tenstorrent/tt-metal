@@ -13,7 +13,7 @@
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "memcpy.hpp"
 #include <tt_stl/aligned_allocator.hpp>
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 #include "tt_align.hpp"
 
 namespace tt::tt_metal {

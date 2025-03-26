@@ -15,7 +15,7 @@
 #include <vector>
 
 #include "core_coord.hpp"
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"

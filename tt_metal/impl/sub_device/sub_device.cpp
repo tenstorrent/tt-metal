@@ -9,7 +9,7 @@
 #include <assert.hpp>
 #include <core_coord.hpp>
 #include <sub_device.hpp>
-#include <hal.hpp>
+#include "llrt/hal.hpp"
 #include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {

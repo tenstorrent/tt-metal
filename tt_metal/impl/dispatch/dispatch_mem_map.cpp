@@ -7,7 +7,7 @@
 #include <tt-metalium/fabric_host_interface.h>
 #include "indestructible.hpp"
 #include "rtoptions.hpp"
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 
 namespace tt::tt_metal {
 

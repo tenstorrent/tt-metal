@@ -29,7 +29,7 @@
 #include "watcher_device_reader.hpp"
 #include "debug_helpers.hpp"
 
-#include <hal.hpp>
+#include "llrt/hal.hpp"
 
 using namespace tt::tt_metal;
 using std::string;

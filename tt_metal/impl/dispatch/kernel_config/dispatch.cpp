@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "dispatch.hpp"
 #include "assert.hpp"
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 #include "prefetch.hpp"
 #include "dispatch_s.hpp"
 #include "demux.hpp"

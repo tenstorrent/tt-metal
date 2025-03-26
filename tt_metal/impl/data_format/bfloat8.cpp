@@ -16,7 +16,7 @@
 #include <tt_stl/span.hpp>
 #include "tracy/Tracy.hpp"
 
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 
 std::vector<uint32_t> pack_fp32_vec_as_bfp8_tiles(
     tt::stl::Span<const float> fp32_vec,

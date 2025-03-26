@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include <tt-metalium/logger.hpp>
 #include "gtest/gtest.h"
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 #include <tt-metalium/dispatch_settings.hpp>
 #include "tt_cluster.hpp"
 #include "umd/device/tt_core_coordinates.h"

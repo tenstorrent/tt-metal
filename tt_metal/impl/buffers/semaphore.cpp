@@ -4,7 +4,7 @@
 
 #include <semaphore.hpp>
 
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 
 namespace tt {
 

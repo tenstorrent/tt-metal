@@ -12,7 +12,7 @@
 #include <mutex>
 #include <thread>
 
-#include <hal.hpp>
+#include "llrt/hal.hpp"
 #include <dev_msgs.h>
 #include "llrt.hpp"
 #include <rtoptions.hpp>

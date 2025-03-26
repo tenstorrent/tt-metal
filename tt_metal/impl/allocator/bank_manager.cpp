@@ -7,7 +7,7 @@
 #include <util.hpp>
 #include <math.hpp>
 #include <magic_enum/magic_enum.hpp>
-#include <hal.hpp>
+#include "llrt/hal.hpp"
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 
 namespace tt {

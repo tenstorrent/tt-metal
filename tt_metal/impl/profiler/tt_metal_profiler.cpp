@@ -5,7 +5,7 @@
 #include <thread>
 #include <cmath>
 
-#include <hal.hpp>
+#include "llrt/hal.hpp"
 #include <host_api.hpp>
 #include <dispatch_core_common.hpp>
 #include <core_descriptor.hpp>

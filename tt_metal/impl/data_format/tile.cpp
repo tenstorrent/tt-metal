@@ -4,7 +4,7 @@
 
 #include <tt-metalium/tile.hpp>
 
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 
 namespace tt::tt_metal {
 

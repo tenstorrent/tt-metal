@@ -23,7 +23,7 @@
 
 #include "llrt.hpp"
 #include <rtoptions.hpp>
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 
 #include <jit_build_options.hpp>
 

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 #include "control_plane.hpp"
 #include <queue>
 

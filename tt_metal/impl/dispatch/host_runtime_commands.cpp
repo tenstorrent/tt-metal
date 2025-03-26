@@ -19,7 +19,7 @@
 #include <buffer.hpp>
 #include <math.hpp>
 #include <dev_msgs.h>
-#include <hal.hpp>
+#include "llrt/hal.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 #include <assert.hpp>
 #include <logger.hpp>
@@ -41,7 +41,7 @@
 #include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
 
-#include <hal.hpp>
+#include "llrt/hal.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 
 #include "tracy/Tracy.hpp"
