@@ -25,8 +25,6 @@ void kernel_main() {
     uint32_t q_start_addr = get_arg_val<uint32_t>(1);
     const uint32_t signal_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(2));
 
-    DPRINT << "signal semaphore addr: " << (uint32_t)signal_semaphore_addr << ENDL();
-
     volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr);
 
@@ -70,20 +68,27 @@ void kernel_main() {
     tt_l1_ptr uint32_t* core_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += 8;
     uint32_t tensor_address0 = get_arg_val<uint32_t>(arg_idx);
-    DPRINT << "tensor_address0: " << (uint32_t)(tensor_address0) << ENDL();
-    for (uint32_t i = 0; i < 8; i++) {
-        DPRINT << "core_noc_x[" << i << "]: " << (uint32_t)core_noc_x[i] << "\n";
-        DPRINT << "core_noc_y[" << i << "]: " << (uint32_t)core_noc_y[i] << "\n";
-    }
 
     DPRINT << "this core runs concat\n";
     DPRINT << "temp_cb_id: " << (uint32_t)temp_cb_id << ENDL();
+
+    uint64_t out_ready_sem_noc_addr =
+        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
+
+    DPRINT << "RT ARGS HERE\n";
+    DPRINT << "in_tile_offset_by_head: " << in_tile_offset_by_head << ENDL();
+    DPRINT << "q_start_addr: " << q_start_addr << ENDL();
+    DPRINT << "signal semaphore addr: " << (uint32_t)signal_semaphore_addr << ENDL();
     DPRINT << "out_ready_sem_bank_addr: " << (uint32_t)out_ready_sem_bank_addr << ENDL();
     DPRINT << "out_ready_sem_wait_value: " << (uint32_t)out_ready_sem_wait_value << ENDL();
     DPRINT << "out_ready_sem_noc0_x: " << (uint32_t)out_ready_sem_noc0_x << ENDL();
     DPRINT << "out_ready_sem_noc0_y: " << (uint32_t)out_ready_sem_noc0_y << ENDL();
-    uint64_t out_ready_sem_noc_addr =
-        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
+    for (uint32_t i = 0; i < 8; i++) {
+        DPRINT << "core_noc_x[" << i << "]: " << (uint32_t)core_noc_x[i] << "\n";
+        DPRINT << "core_noc_y[" << i << "]: " << (uint32_t)core_noc_y[i] << "\n";
+    }
+    DPRINT << "tensor_address0: " << (uint32_t)(tensor_address0) << ENDL();
+    DPRINT << "END OF RT ARGS\n";
 
     auto batch_loop = [&](uint32_t head_size_num_tiles,
                           uint32_t q_start_addr,

@@ -657,12 +657,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
                     auto& concat_reader_runtime_args = GetRuntimeArgs(program, concat_reader_kernel_id, core);
                     concat_reader_runtime_args[0] = in_tile_offset_by_batch;
                     concat_reader_runtime_args[1] = q_start_addr;
-                    concat_reader_runtime_args[concat_reader_runtime_args.size() - 20] = semaphore.address();
+                    concat_reader_runtime_args[concat_reader_runtime_args.size() - 21] = semaphore.address();
+                    concat_reader_runtime_args[concat_reader_runtime_args.size() - 1] = input.buffer()->address();
 
                     auto& concat_reader_2_runtime_args = GetRuntimeArgs(program, concat_reader_2_kernel_id, core);
                     concat_reader_2_runtime_args[0] = in_tile_offset_by_batch;
                     concat_reader_2_runtime_args[1] = q_start_addr;
-                    concat_reader_2_runtime_args[concat_reader_2_runtime_args.size() - 20] = semaphore.address();
+                    concat_reader_2_runtime_args[concat_reader_2_runtime_args.size() - 21] = semaphore.address();
+                    concat_reader_2_runtime_args[concat_reader_2_runtime_args.size() - 1] = input.buffer()->address();
                 }
             }
         };

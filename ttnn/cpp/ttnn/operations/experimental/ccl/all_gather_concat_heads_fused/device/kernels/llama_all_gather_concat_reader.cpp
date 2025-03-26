@@ -99,6 +99,29 @@ void kernel_main() {
     uint32_t is_drain_core = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 3);
     const uint32_t signal_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 4));
 
+    DPRINT << "CHECK RT ARGS HERE\n";
+    DPRINT << "tensor_address0: " << (uint32_t)tensor_address0 << ENDL();
+    DPRINT << "out_ready_sem_bank_addr_concat: " << (uint32_t)out_ready_sem_bank_addr_concat << ENDL();
+    DPRINT << "num_tiles_per_core: " << (uint32_t)num_tiles_per_core << ENDL();
+    DPRINT << "num_tiles_to_read: " << (uint32_t)num_tiles_to_read << ENDL();
+    DPRINT << "first_core_tile_start_offset: " << (uint32_t)first_core_tile_start_offset << ENDL();
+    DPRINT << "num_cores: " << (uint32_t)num_cores << ENDL();
+    for (uint32_t i = 0; i < num_cores; i++) {
+        DPRINT << "core_noc_x[" << i << "]: " << (uint32_t)core_noc_x[i] << "\n";
+        DPRINT << "core_noc_y[" << i << "]: " << (uint32_t)core_noc_y[i] << "\n";
+    }
+
+    DPRINT << "concat_arg_start: " << concat_arg_start << ENDL();
+    DPRINT << "in_tile_offset_by_head: " << in_tile_offset_by_head << ENDL();
+    DPRINT << "q_start_addr: " << q_start_addr << ENDL();
+    DPRINT << "out_ready_sem_wait_value_concat: " << out_ready_sem_wait_value_concat << ENDL();
+    DPRINT << "out_ready_sem_noc0_x_concat: " << out_ready_sem_noc0_x_concat << ENDL();
+    DPRINT << "out_ready_sem_noc0_y_concat: " << out_ready_sem_noc0_y_concat << ENDL();
+    DPRINT << "is_drain_core: " << is_drain_core << ENDL();
+    DPRINT << "signal_semaphore_addr: " << signal_semaphore_addr << ENDL();
+
+    DPRINT << "END OF RT ARGS\n";
+
     uint32_t local_arg = concat_arg_start + arg_sem_idx + 5;
     tt_l1_ptr uint32_t* nlp_local_core_x = (tt_l1_ptr uint32_t*)(get_arg_addr(local_arg));
     local_arg += 8;
