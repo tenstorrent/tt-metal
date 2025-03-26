@@ -52,7 +52,7 @@ ttnn::Tensor SqueezeOperation::invoke(
         if (dims.empty() || (dims.size() == 1 && (dims[0] == 0 || dims[0] == -1))) {
             return input_tensor;
         }
-        TT_FATAL(false, "Dimension out of range (expected to be of [0, -1], but got {})", dims[0]);
+        TT_THROW("Dimension out of range (expected to be of [-1, 0], but got {})", dims[0]);
     }
 
     for (size_t i = 0; i < dims.size(); ++i) {
@@ -63,7 +63,8 @@ ttnn::Tensor SqueezeOperation::invoke(
         }
         TT_FATAL(
             (dim >= 0) && (dim < input_tensor_rank),
-            "Dimension out of range (expected to be in range of [0,{}], but got {})",
+            "Dimension out of range (expected to be in range of [{},{}], but got {})",
+            -static_cast<std::ptrdiff_t>(input_tensor_rank),
             input_tensor_rank - 1,
             dim);
 
