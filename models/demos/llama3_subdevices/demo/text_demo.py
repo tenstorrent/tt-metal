@@ -22,7 +22,6 @@ from models.tt_transformers.tt.common import (
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.demos.utils.llm_demo_utils import create_benchmark_data
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -112,7 +111,7 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
-    # tt_model_args.n_layers = 1
+    tt_model_args.n_layers = 1
     state_dict = tt_model_args.load_state_dict()
 
     page_table = None
@@ -307,7 +306,7 @@ def test_demo_text(
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
-    mesh_device.enable_async(True)
+    mesh_device.enable_async(False)
     enable_trace = True  # Use tracing for better perf
     print_to_file = False  # Enable this flag to print the output of all users to a file
 
@@ -373,7 +372,7 @@ def test_demo_text(
         use_paged_kv_cache=paged_attention,
     )
 
-    model_args.tokenizer = Tokenizer(model_args.tokenizer_path)
+    # model_args.tokenizer = Tokenizer(model_args.tokenizer_path)
     tokenizer = model_args.tokenizer
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
@@ -659,8 +658,9 @@ def test_demo_text(
     )
 
     # Benchmark targets
-    supported_models = ["Llama3.1-70B"]
-    model_args.base_model_name = "Llama3.1-70B"
+    supported_models = ["Llama3.1-70B", "Deepseek-R1-Distill-70B"]
+    breakpoint()
+    # model_args.base_model_name = "Llama3.1-70B"
     supported_devices = ["TG"]
 
     tt_device_name = model_args.device_name
@@ -668,11 +668,13 @@ def test_demo_text(
     # Set the target times to first token for every combination of device and model
     target_prefill_tok_s = {
         "TG_Llama3.1-70B": 1050,  # TODO Update target
+        "Deepseek-R1-Distill-70BB": 1050,  # TODO Update target
     }[f"{tt_device_name}_{model_args.base_model_name}"]
 
     # Set the target decode timesfor every combination of device and model
     target_decode_tok_s_u = {
         "TG_Llama3.1-70B": 20,  # TODO Update target
+        "Deepseek-R1-Distill-70B": 20,  # TODO Update target
     }[f"{tt_device_name}_{model_args.base_model_name}"]
 
     target_decode_tok_s = target_decode_tok_s_u * batch_size
