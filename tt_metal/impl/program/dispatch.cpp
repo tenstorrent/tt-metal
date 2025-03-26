@@ -2064,10 +2064,7 @@ void set_num_worker_sems_on_dispatch(
 }
 
 void set_go_signal_noc_data_on_dispatch(
-    IDevice* device,
-    const vector_memcpy_aligned<uint32_t>& go_signal_noc_data,
-    SystemMemoryManager& manager,
-    uint8_t cq_id) {
+    IDevice* device, const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id) {
     uint32_t pci_alignment = hal.get_alignment(HalMemType::HOST);
     uint32_t cmd_sequence_sizeB = align(
         sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + go_signal_noc_data.size() * sizeof(uint32_t), pci_alignment);
