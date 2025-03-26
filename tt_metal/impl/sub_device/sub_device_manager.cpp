@@ -87,9 +87,7 @@ const SubDevice& SubDeviceManager::sub_device(SubDeviceId sub_device_id) const {
     return sub_devices_[sub_device_index];
 }
 
-const vector_memcpy_aligned<uint32_t>& SubDeviceManager::noc_mcast_unicast_data() const {
-    return noc_mcast_unicast_data_;
-}
+const vector_aligned<uint32_t>& SubDeviceManager::noc_mcast_unicast_data() const { return noc_mcast_unicast_data_; }
 
 uint8_t SubDeviceManager::num_noc_mcast_txns(SubDeviceId sub_device_id) const {
     auto sub_device_index = this->get_sub_device_index(sub_device_id);

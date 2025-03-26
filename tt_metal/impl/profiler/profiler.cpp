@@ -720,6 +720,10 @@ void DeviceProfiler::dumpResults(
             }
         }
 
+        if (tt::llrt::RunTimeOptions::get_instance().get_profiler_noc_events_enabled()) {
+            log_warning("Profiler NoC events are enabled; this can add 1-15% cycle overhead to typical operations!");
+        }
+
         // open CSV log file
         std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
         std::ofstream log_file_ofs;

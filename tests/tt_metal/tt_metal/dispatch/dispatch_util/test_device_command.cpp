@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "memcpy.hpp"
 #include <gtest/gtest.h>
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include <tt-metalium/vector_aligned.hpp>
 
 namespace tt::tt_metal {
 
@@ -116,7 +116,7 @@ TEST(DeviceCommandTest, AddDispatchSetGoSignalNocData) {
     calculator.add_dispatch_set_go_signal_noc_data(5);
 
     HostMemDeviceCommand command(calculator.write_offset_bytes());
-    vector_memcpy_aligned<uint32_t> data(5);
+    vector_aligned<uint32_t> data(5);
     command.add_dispatch_set_go_signal_noc_data(data, DispatcherSelect::DISPATCH_MASTER);
     EXPECT_EQ(command.size_bytes(), command.write_offset_bytes());
 }
