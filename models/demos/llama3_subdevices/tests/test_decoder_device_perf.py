@@ -84,6 +84,10 @@ def test_llama_decoder_inference(
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=True)
     model_args.n_layers = 1
+    generation_length = 10
+    seqlen = 1
+    generation_start_pos = 127
+    all_tests_pass = True
 
     state_dict = model_args.load_state_dict()
 
@@ -104,10 +108,6 @@ def test_llama_decoder_inference(
     }
     reference_model = TransformerBlock(layer_id=0, args=model_args)
     reference_model.load_state_dict(partial_state_dict)
-
-    generation_start_pos = 127
-    generation_length = 2
-    all_tests_pass = True
 
     # Setup RoPE transformation matrices
     rope_setup = TtLlamaRotarySetup(
@@ -164,8 +164,6 @@ def test_llama_decoder_inference(
         tt_ccl=tt_ccl,
     )
 
-    seqlen = 1
-
     cos, sin = precompute_freqs(
         model_args.head_dim,
         model_args.max_seq_len * 2,
@@ -187,28 +185,29 @@ def test_llama_decoder_inference(
             mesh_shape=model_args.cluster_shape,
         ),
     )
+    # input = torch.randn(1, 32, 4096)
+    tt_decode_input = (torch.rand(batch_size, seqlen, model_args.dim) * 2) - 1
+
+    decode_input = model_args.prepare_residual_tensor_decode(
+        tt_decode_input,
+        # ttnn.DRAM_MEMORY_CONFIG,
+        model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
+    )
+
+    # Get cos/sin matrices for the current position of each user
+    rot_mats = rope_setup.get_rot_mats(current_pos)
+    tt_pf = prefetcher_setup.get_input_tensors()
+    ttnn.dram_prefetcher(
+        tt_pf,
+        num_layers=1,
+        global_cb=prefetcher_setup.global_circular_buffer,
+    )
+    mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
+
+    res = None
     for i in range(generation_length):
-        # input = torch.randn(1, 32, 4096)
-        tt_decode_input = (torch.rand(batch_size, seqlen, model_args.dim) * 2) - 1
-
-        decode_input = model_args.prepare_residual_tensor_decode(
-            tt_decode_input,
-            # ttnn.DRAM_MEMORY_CONFIG,
-            model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
-        )
-
-        # Get cos/sin matrices for the current position of each user
-        rot_mats = rope_setup.get_rot_mats(current_pos)
-        tt_pf = prefetcher_setup.get_input_tensors()
-        ttnn.dram_prefetcher(
-            tt_pf,
-            num_layers=1,
-            global_cb=prefetcher_setup.global_circular_buffer,
-        )
-        mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
-
         # Run TT model
-        res = None
+
         tt_out, res = tt_model(
             decode_input,
             res,
@@ -217,12 +216,11 @@ def test_llama_decoder_inference(
             mode="decode",
             page_table=page_table_tt,
         )
-        tt_out = ttnn.to_torch(
-            tt_out,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
-        )
-        # for device in mesh_device.get_devices():
-        #     ttnn.DumpDeviceProfiler(device)
+        res = tt_out
+    tt_out = ttnn.to_torch(
+        tt_out,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+    )
     ttnn.synchronize_device(mesh_device)
     tt_ccl.close()
 
@@ -287,16 +285,28 @@ def merge_device_rows(df):
     return pd.DataFrame(merged_blocks)
 
 
+@pytest.mark.parametrize(
+    "abs_tolerance_ns",
+    (1000,),
+)
+@pytest.mark.parametrize(
+    "abs_tolerance_ns_all_reduce",
+    (30000000,),
+)
+@pytest.mark.parametrize(
+    "abs_tolerance_ns_all_gather",
+    (10000,),
+)
 @pytest.mark.models_device_performance_bare_metal
-def test_llama_TG_perf_device(reset_seeds):
+def test_llama_TG_perf_device(reset_seeds, abs_tolerance_ns, abs_tolerance_ns_all_reduce, abs_tolerance_ns_all_gather):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
-    step_name = "llama-80-decoder"
+    step_name = "tg-llama-decoder"
 
     batch_size = 32
-    subdir = "llama-80-decoder"
-    margin = 0.03
+    subdir = "tg-llama-decoder"
     num_iterations = 1
+    generation_length = 10
 
     command = f"pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_decoder_inference"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
@@ -308,55 +318,139 @@ def test_llama_TG_perf_device(reset_seeds):
 
     filename = get_latest_ops_log_filename(subdir)
 
-    # filename = "/localdev/sraizada/tracy-logs/llama-80-decoder/reports/2025_03_03_13_14_57/ops_perf_results_2025_03_03_13_14_57.csv"
     df = pd.read_csv(filename)
     df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
     df = merge_device_rows(df)
-    df = df[int(len(df) / 2) :]
+    # df = df[int(len(df) / generation_length) :] # Excluding first layer
     input_data = df[["OP CODE", "DEVICE KERNEL DURATION [ns]"]].to_dict(orient="records")
     kernel_duration_dict = {}
     for entry in input_data:
         op_code = entry["OP CODE"]
+        if op_code in ["Embeddings", "DramPrefetcher"]:
+            continue
         duration = entry["DEVICE KERNEL DURATION [ns]"]
         if op_code not in kernel_duration_dict:
             kernel_duration_dict[op_code] = []
         kernel_duration_dict[op_code].append(duration)
 
+    # Average over all generations
+    kernel_duration_per_instance_dict = {}
+    for op_code in kernel_duration_dict:
+        num_ops_with_op_code = len(kernel_duration_dict[op_code])
+        num_instances = num_ops_with_op_code // generation_length
+        assert num_ops_with_op_code % generation_length == 0
+        for iteration_id in range(generation_length):
+            for instance_id in range(num_instances):
+                op_code_with_id = f"{op_code}_{instance_id}"
+                if op_code_with_id not in kernel_duration_per_instance_dict:
+                    kernel_duration_per_instance_dict[op_code_with_id] = []
+                kernel_duration_per_instance_dict[op_code_with_id].append(
+                    kernel_duration_dict[op_code][iteration_id * num_instances + instance_id]
+                )
+
+    kernel_duration_per_instance_averaged_dict = {}
+    for op_code_with_id in kernel_duration_per_instance_dict:
+        kernel_duration_per_instance_averaged_dict[op_code_with_id] = sum(
+            kernel_duration_per_instance_dict[op_code_with_id]
+        ) / len(kernel_duration_per_instance_dict[op_code_with_id])
+
+    print(kernel_duration_per_instance_averaged_dict)
+
     expected_times_dict = {
-        "Embeddings": [7230.0, 7241.0],
-        "DramPrefetcher": [20261638.0],
-        "LayerNorm": [6230.0, 6449.0, 7743.0, 7426.0],
-        "AllGatherAsync": [2572.0, 11958.0, 2570.0],
-        "ReshardDeviceOperation": [1456.0, 1939.0, 2776.0],
-        "Matmul": [8022.0, 9004.0, 9727.0, 10140.0, 16769.0],
-        "AllReduceAsync": [219371.0, 11674841.0, 772010.0, 33516.0, 3713658.0],
-        "NLPCreateHeadsDecodeDeviceOperation": [8840.0],
-        "RotaryEmbeddingLlamaFusedQK": [4637.0],
-        "PagedUpdateCacheDeviceOperation": [4579.0],
-        "ScaledDotProductAttentionDecode": [19907.0],
-        "NLPConcatHeadsDecodeDeviceOperation": [7039.0],
-        "BinaryDeviceOperation": [2577.0, 13666.0, 2574.0],
+        "LayerNorm_0": 6443.3,
+        "LayerNorm_1": 6491.0,
+        "LayerNorm_2": 6148.1,
+        "LayerNorm_3": 6390.6,
+        "AllGatherAsync_0": 2710.3,
+        "AllGatherAsync_1": 5837.7,
+        "AllGatherAsync_2": 2486.7,
+        "ReshardDeviceOperation_0": 1803.7,
+        "ReshardDeviceOperation_1": 1851.5,
+        "ReshardDeviceOperation_2": 1520.3,
+        "Matmul_0": 8429.8,
+        "Matmul_1": 8926.8,
+        "Matmul_2": 9583.1,
+        "Matmul_3": 9631.9,
+        "Matmul_4": 17304.9,
+        "AllReduceAsync_0": 515885.6,
+        "AllReduceAsync_1": 350838.1,
+        "AllReduceAsync_2": 3828933.1,
+        "AllReduceAsync_3": 133560.4,
+        "AllReduceAsync_4": 1007790.5,
+        "NLPCreateHeadsDecodeDeviceOperation_0": 8496.5,
+        "RotaryEmbeddingLlamaFusedQK_0": 5177.4,
+        "PagedUpdateCacheDeviceOperation_0": 4613.0,
+        "ScaledDotProductAttentionDecode_0": 19761.8,
+        "NLPConcatHeadsDecodeDeviceOperation_0": 6234.9,
+        "BinaryDeviceOperation_0": 871.3,
+        "BinaryDeviceOperation_1": 13043.2,
+        "BinaryDeviceOperation_2": 1860.9,
     }
+
+    mapping_op_code_to_name = {
+        "LayerNorm_0": "PreAllGatherLN_0",
+        "LayerNorm_1": "PostAllGatherLN_0",
+        "LayerNorm_2": "PreAllGatherLN_1",
+        "LayerNorm_3": "PostAllGatherLN_1",
+        "AllGatherAsync_0": "AllGatherAsync_LN_0",
+        "AllGatherAsync_1": "AllGatherAsync_SDPA_0",
+        "AllGatherAsync_2": "AllGatherAsync_LN_1",
+        "ReshardDeviceOperation_0": "ReshardDeviceOperation_LN_0",
+        "ReshardDeviceOperation_1": "ReshardDeviceOperation_CreateHeads",
+        "ReshardDeviceOperation_2": "ReshardDeviceOperation_LN_1",
+        "Matmul_0": "QKV_MM",
+        "Matmul_1": "DO_MM",
+        "Matmul_2": "FF1_MM",
+        "Matmul_3": "FF3_MM",
+        "Matmul_4": "FF2_MM",
+        "AllReduceAsync_0": "AllReduceAsync_QKV",
+        "AllReduceAsync_1": "AllReduceAsync_DO",
+        "AllReduceAsync_2": "AllReduceAsync_FF1",
+        "AllReduceAsync_3": "AllReduceAsync_FF3",
+        "AllReduceAsync_4": "AllReduceAsync_FF2",
+        "NLPCreateHeadsDecodeDeviceOperation_0": "CreateHeads",
+        "RotaryEmbeddingLlamaFusedQK_0": "RotaryEmbeddingLlamaFusedQK",
+        "PagedUpdateCacheDeviceOperation_0": "PagedUpdateCache",
+        "ScaledDotProductAttentionDecode_0": "SDPA",
+        "NLPConcatHeadsDecodeDeviceOperation_0": "ConcatHeads",
+        "BinaryDeviceOperation_0": "Binary_Residual_0",
+        "BinaryDeviceOperation_1": "Binary_Mult_Silu",
+        "BinaryDeviceOperation_2": "Binary_Residual_1",
+    }
+
+    assert len(kernel_duration_per_instance_averaged_dict) == len(
+        expected_times_dict
+    ), f"Expected {len(expected_times_dict)} operations, got {len(kernel_duration_per_instance_averaged_dict)}. If the number or type of operations changed, expected times must be updated."
+
     passing = True
-    for op_code, durations in kernel_duration_dict.items():
-        if op_code in expected_times_dict:
-            thresholds = expected_times_dict[op_code]
-            # Ensure the lists are of the same length to compare corresponding elements
-            if len(durations) == len(thresholds):
-                for id, (duration, threshold) in enumerate(zip(durations, thresholds)):  # Compare corresponding items
-                    benchmark_data.add_measurement(profiler, 0, step_name, f"{op_code}_{id}", duration)
-                    if duration > threshold:
-                        passing = False
-                        logger.info(f"{op_code}: {duration} ns exceeds the threshold of {threshold} ns")
+    for op_code_with_id, avg_duration in kernel_duration_per_instance_averaged_dict.items():
+        if op_code_with_id in expected_times_dict:
+            expected_time = expected_times_dict[op_code_with_id]
+            op_name = mapping_op_code_to_name[op_code_with_id]
+            benchmark_data.add_measurement(profiler, 0, step_name, op_name, avg_duration)
+            if "AllReduceAsync" in op_code_with_id:
+                tolerance = abs_tolerance_ns_all_reduce
+            elif "AllGatherAsync" in op_code_with_id:
+                tolerance = abs_tolerance_ns_all_gather
             else:
+                tolerance = abs_tolerance_ns
+            if avg_duration > expected_time + tolerance:
                 passing = False
                 logger.info(
-                    f"Warning: Length mismatch for {op_code}. Kernel durations: {len(durations)}, Expected thresholds: {len(thresholds)}"
+                    f"{op_code_with_id}: {avg_duration} ns larger than expected {expected_time} ns by {abs(avg_duration - expected_time)} ns (tolerance {tolerance} ns)"
                 )
+            elif avg_duration < expected_time - tolerance:
+                passing = False
+                logger.info(
+                    f"{op_code_with_id}: {avg_duration} ns smaller than expected {expected_time} ns by {abs(expected_time - avg_duration)} ns (tolerance {tolerance} ns)"
+                )
+        else:
+            passing = False
+            logger.info(f"Warning: {op_code_with_id} not found in expected_times_dict")
 
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"llama-80-decoder",
+        run_type=f"tg-llama-decoder",
         ml_model_name="llama70b-tg-decoder",
     )
 
