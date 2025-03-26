@@ -29,6 +29,11 @@ public:
     }
     inline bool has_forward_connection() const { return connection_flags & FORWARD_CONNECTION_FLAG_MASK; }
     inline bool has_backward_connection() const { return connection_flags & BACKWARD_CONNECTION_FLAG_MASK; }
+
+    // Advanced usage API:
+    // Expose a separate close_start() and close_finish() to allow the user to opt-in to a 2 step close
+    // where the close_start() is sends the close request to the fabric and the close_finish() waits for
+    // the ack from fabric.
     inline void close_start() {
         if (has_forward_connection()) {
             forward_fabric_sender.close_start();
@@ -52,6 +57,18 @@ public:
 
     enum BuildFromArgsMode : uint8_t { BUILD_ONLY, BUILD_AND_OPEN_CONNECTION, BUILD_AND_OPEN_CONNECTION_START_ONLY };
 
+    // Advanced usage API: build_mode
+    // Allow the user to opt-in to a 3 build modes:
+    //
+    // BUILD_ONLY: just build the connection manager but don't open a connection
+    //
+    // BUILD_AND_OPEN_CONNECTION: build the connection manager and open a connection, wait for connection to be fully
+    //         open and established before returning
+    //
+    // BUILD_AND_OPEN_CONNECTION_START_ONLY: build the connection manager and send the connection open request to
+    //         fabric but don't wait for the connection readback to complete before returning.
+    //         !!! IMPORTANT !!!
+    //         User must call open_finish() manually, later, if they use this mode.
     template <BuildFromArgsMode build_mode = BuildFromArgsMode::BUILD_ONLY>
     static FabricConnectionManager build_from_args(std::size_t& arg_idx) {
         constexpr bool connect = build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION ||

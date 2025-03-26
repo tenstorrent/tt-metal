@@ -68,6 +68,9 @@ void kernel_main() {
     arg_idx += num_mcast_ranges;
 
     size_t arg_for_fab = arg_idx;
+    // Open the fabric connection at the same time we build but only start the "open" process and don't
+    // require it to finish before exiting because open_finish requires a barrier which can impact performance
+    // We do open_finish later - deferred as late as possible
     auto fabric_connection =
         FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
             arg_idx);
@@ -80,8 +83,6 @@ void kernel_main() {
     auto packet_header_buffer_addr_backward = get_write_ptr(reserved_packet_header_cb_id);
     cb_push_back(reserved_packet_header_cb_id, 1);
     cb_reserve_back(reserved_packet_header_cb_id, 1);
-    // auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
-    // cb_push_back(reserved_packet_header_cb_id, 1);
 
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward =

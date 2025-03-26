@@ -227,6 +227,11 @@ struct WorkerToFabricEdmSenderImpl {
 
     static constexpr size_t edm_sender_channel_field_stride_bytes = 16;
 
+    // Advanced usage API:
+    // Starts the connection opening process but doesn't wait for the process complete. This avoids waiting
+    // for the read barrier to complete before returning, saving some cycles for advanced users.
+    // !!! IMPORTANT !!!
+    // Must be called alongside (before) open_finish().
     void open_start() {
         const auto dest_noc_addr_coord_only = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
 
@@ -258,6 +263,10 @@ struct WorkerToFabricEdmSenderImpl {
         noc_inline_dw_write(edm_connection_handshake_noc_addr, open_connection_value);
     }
 
+    // Advanced usage API:
+    // Completes the connection opening process. Induces a read barrier
+    // !!! IMPORTANT !!!
+    // Must be called alongside (after) open_start().
     void open_finish() {
         noc_async_read_barrier();
         this->buffer_slot_wrptr = *this->buffer_slot_wrptr_ptr;
@@ -274,6 +283,11 @@ struct WorkerToFabricEdmSenderImpl {
         open_finish();
     }
 
+    // Advanced usage API:
+    // Starts the connection closing process but doesn't wait for the process to complete. This avoids waiting
+    // for the ack from the fabric before returning, saving some cycles for advanced users.
+    // !!! IMPORTANT !!!
+    // Must be called alongside (before) close_finish().
     void close_start() {
         const auto dest_noc_addr_coord_only =
             get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr) &
@@ -287,6 +301,10 @@ struct WorkerToFabricEdmSenderImpl {
         noc_inline_dw_write(remote_buffer_index_addr, this->buffer_slot_wrptr);
     }
 
+    // Advanced usage API:
+    // Completes the connection closing process. Induces a write barrier
+    // !!! IMPORTANT !!!
+    // Must be called alongside (after) close_start().
     void close_finish() {
         // Need to wait for the ack to teardown notice, from edm
         noc_semaphore_wait(this->worker_teardown_addr, 1);
