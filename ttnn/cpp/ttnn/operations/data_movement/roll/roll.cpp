@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "roll.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "cpp/ttnn/operations/data_movement/slice/slice.hpp"
@@ -26,27 +30,6 @@ ttnn::Tensor RollOperation::invoke(
 
     for (int dim : dims) {
         TT_FATAL(dim >= -num_dims && dim < num_dims, "Invalid dimension index.");
-    }
-
-    if (num_dims == 1) {
-        int shift = (adjusted_shifts[0] % size[0] + size[0]) % size[0];
-        if (shift == 0) {
-            return result;
-        }
-
-        ttnn::SmallVector<int> start_left = {size[0] - shift};
-        ttnn::SmallVector<int> end_left = {size[0]};
-        ttnn::SmallVector<int> start_right = {0};
-        ttnn::SmallVector<int> end_right = {size[0] - shift};
-        ttnn::SmallVector<int> small_vector = {1};
-
-        ttnn::Tensor left_part = ttnn::slice(result, start_left, end_left, small_vector);
-        ttnn::Tensor right_part = ttnn::slice(result, start_right, end_right, small_vector);
-
-        std::vector<ttnn::Tensor> tensors_to_concat = {left_part, right_part};
-        result = ttnn::concat(tensors_to_concat, 0);
-
-        return result;
     }
 
     for (size_t i = 0; i < adjusted_shifts.size(); ++i) {

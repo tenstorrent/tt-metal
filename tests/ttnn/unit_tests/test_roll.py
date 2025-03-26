@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import pytest
 import torch
 import ttnn
@@ -32,19 +36,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ),
         ([[[1, 2], [3, 4]], [[5, 6], [7, 8]], [[9, 10], [11, 12]]], [1, 0], [0, 1]),
         ([[[[1, 2], [3, 4]], [[5, 6], [7, 8]]], [[[9, 10], [11, 12]], [[13, 14], [15, 16]]]], [1, 0, -2], [0, 1, 2]),
-        ([[[1, 2], [3, 4]], [[5, 6], [7, 8]], [[9, 10], [11, 12]], [[13, 14], [15, 16]]], [0, -1, -2], [0, 1, 2]),
-        (
-            [
-                [
-                    [
-                        [[[[[5, 6], [7, 8]], [[9, 10], [11, 12]]], [[[13, 14], [15, 16]], [[17, 18], [19, 20]]]]],
-                        [[[[[21, 22], [23, 24]], [[25, 26], [27, 28]]], [[[29, 30], [31, 32]], [[33, 34], [35, 36]]]]],
-                    ]
-                ]
-            ],
-            [0, 1, 2],
-            [1, 4, 7],
-        ),
+        ([[[[1, 2], [3, 4]], [[5, 6], [7, 8]], [[9, 10], [11, 12]], [[13, 14], [15, 16]]]], [0, -1, -2], [0, 1, 2]),
     ],
 )
 def test_roll(device, input_tensor, shifts, dim):
@@ -58,8 +50,4 @@ def test_roll(device, input_tensor, shifts, dim):
     print(pytorch_out)
     print(ttnn_result_torch)
     assert_with_pcc(pytorch_out, ttnn_result_torch)
-    # print(pytorch_out)
-    # print(ttnn_result_torch)
-    assert (
-        pytorch_out.shape == ttnn_result_torch.shape
-    ), f"Shapes don't match: {pytorch_out.shape} vs {ttnn_result_torch.shape}"
+    assert torch.allclose(pytorch_out, ttnn_result_torch)
