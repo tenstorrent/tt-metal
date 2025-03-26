@@ -43,8 +43,8 @@ void LlamaReduceScatterDeviceOperation::validate_on_program_cache_miss(
         "intermediate_packet_buffer must have a shard spec");
     TT_FATAL(
         tensor_args.intermediate_packet_buffer.shard_spec().value().shape[0] == 32 &&
-            tensor_args.intermediate_packet_buffer.shard_spec().value().shape[1] == 1024,
-        "intermediate_packet_buffer.shard_spec().value().shape ({}, {}) must be (32, 1024)",
+            tensor_args.intermediate_packet_buffer.shard_spec().value().shape[1] == 512,
+        "intermediate_packet_buffer.shard_spec().value().shape ({}, {}) must be (32, 512)",
         tensor_args.intermediate_packet_buffer.shard_spec().value().shape[0],
         tensor_args.intermediate_packet_buffer.shard_spec().value().shape[1]);
     TT_FATAL(
@@ -53,8 +53,8 @@ void LlamaReduceScatterDeviceOperation::validate_on_program_cache_miss(
         tile_shape[0],
         tile_shape[1]);
     TT_FATAL(
-        tensor_args.intermediate_packet_buffer.shard_spec().value().num_cores() == 8,
-        "intermediate_packet_buffer must have 8 cores, got {}",
+        tensor_args.intermediate_packet_buffer.shard_spec().value().num_cores() >= 8,
+        "intermediate_packet_buffer must have at least 8 cores, got {}",
         tensor_args.intermediate_packet_buffer.shard_spec().value().num_cores());
 
     if (attributes.output_mem_config.has_value()) {

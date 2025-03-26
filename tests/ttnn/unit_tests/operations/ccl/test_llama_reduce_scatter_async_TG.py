@@ -99,8 +99,8 @@ def run_reduce_scatter_test(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
-            PACKET_WORKER_CRS,
-            [shard_height, 2 * num_devices_scatter * num_pages_per_packet * 32],
+            SUB_DEVICE_CRS,
+            [shard_height, num_devices_scatter * num_pages_per_packet * 32],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
@@ -118,8 +118,7 @@ def run_reduce_scatter_test(
                 num_devices_fracture,
                 num_devices_scatter,
                 shard_height,
-                2
-                * num_devices_scatter
+                num_devices_scatter
                 * num_pages_per_packet
                 * 32
                 * packet_workers_persistent_mem_config.shard_spec.num_cores(),

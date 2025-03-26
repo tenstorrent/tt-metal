@@ -446,8 +446,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     */
     tt::tt_metal::CircularBufferConfig fabric_receiver_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            buffering_factor * num_pages_per_packet * num_devices * input_page_size,
-            {{fabric_receiver_cb_index, cb_data_format}})
+            num_pages_per_packet * num_devices * input_page_size, {{fabric_receiver_cb_index, cb_data_format}})
             .set_page_size(fabric_receiver_cb_index, input_page_size)
             .set_globally_allocated_address(*packet_buffer);
 
