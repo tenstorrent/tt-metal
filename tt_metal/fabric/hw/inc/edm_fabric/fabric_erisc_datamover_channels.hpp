@@ -151,12 +151,7 @@ struct EdmChannelWorkerInterface {
 
     template <bool enable_ring_support>
     FORCE_INLINE void update_worker_copy_of_read_ptr(BufferPtr new_ptr_val) {
-        if constexpr (enable_ring_support) {
-            noc_inline_dw_write_with_state<true, false, false>(
-                new_ptr_val, this->cached_worker_semaphore_address, this->sender_sync_noc_cmd_buf);
-        } else {
-            noc_inline_dw_write_with_state<false, false, false>(new_ptr_val, 0, this->sender_sync_noc_cmd_buf);
-        }
+        noc_inline_dw_write(this->cached_worker_semaphore_address, new_ptr_val);
     }
 
     // Connection management methods
@@ -181,7 +176,6 @@ struct EdmChannelWorkerInterface {
         uint64_t worker_semaphore_address = get_noc_addr(
             (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_semaphore_address);
         this->cached_worker_semaphore_address = worker_semaphore_address;
-        noc_inline_dw_write_set_state(worker_semaphore_address, 0xF, this->sender_sync_noc_cmd_buf);
     }
 
     FORCE_INLINE bool all_eth_packets_acked() const { return this->local_ackptr.is_caught_up_to(this->local_wrptr); }
