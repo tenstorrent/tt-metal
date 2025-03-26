@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
@@ -25,10 +25,6 @@ class VisionBlock(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
-
-        for k in state_dict.keys():
-            print(k)
-
         self.args = args
         self.hidden_size = args.dim
         self.n_heads = args.n_heads

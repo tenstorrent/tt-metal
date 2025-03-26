@@ -1,9 +1,16 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import math
-import re
 from loguru import logger
-import ttnn
 from models.tt_transformers.tt.common import nearest_multiple
 from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.load_checkpoints import (
+    load_hf_state_dict,
+    convert_hf_to_meta,
+    standardize_hf_keys,
+)
 
 
 class VisionModelArgs(ModelArgs):
@@ -33,27 +40,41 @@ class VisionModelArgs(ModelArgs):
 
         assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
 
-    def map_keys_to_hf_format(self, vision_state_dict):
-        # Whole name is start or end of the string or prefixed/suffixed by a dot
-        replace_whole_name = lambda pattern, repl: lambda s: re.sub(rf"(^|\.)({pattern})($|\.)", rf"\1{repl}\3", s)
-        output = {}
-        for k, v in vision_state_dict.items():
-            k = replace_whole_name("qkv", "qkv_proj")(k)
-            k = replace_whole_name("proj", "o_proj")(k)
-            k = replace_whole_name("attn", "self_attn")(k)
-            output[k] = v
-        return output
-
     # Visual model does not use distributed norm for now
     def is_distributed_norm(self, mode):
         return False
 
-    def get_state_dict_prefix(self, module_name, layer_num):
+    def load_state_dict(self):
+        assert False, "FIXME"
+        if self.from_hf_url:
+            # Special case Qwen2.5-VL models until they are fully integrated into a HF release
+            from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
+                Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
+            )
+
+            print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
+            model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+            state_dict = {k: v for k, v in model.state_dict().items() if k.startswith("visual.")}
+        else:
+            state_dict = load_hf_state_dict(self.CKPT_DIR)
+        state_dict = standardize_hf_keys(state_dict)
+        state_dict = convert_hf_to_meta(state_dict, self.head_dim)
+        keys_dict = list(state_dict.keys())[:]
+        remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
+        for k in keys_dict:
+            if any([r in k for r in remv]):
+                state_dict.pop(k)
+
+        return state_dict
+
+    def get_state_dict_prefix(self, module_name, layer_num=None):
         layer_prefix = f"visual.blocks.{layer_num}." if layer_num is not None else ""
         module_map = {
             "MLP": "feed_forward",
             "VisionAttention": "attention",
             "VisionBlock": "",
+            "VisionTransformer": "visual",
+            "PatchMerger": "merger",
             "": "",  # If no module is given, just get layer prefix
         }
         return layer_prefix + module_map[module_name]

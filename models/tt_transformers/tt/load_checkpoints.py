@@ -42,15 +42,24 @@ def load_hf_state_dict(ckpt_dir):
 
 
 def standardize_hf_keys(state_dict):
-    if not "lm_head.weight" in state_dict:
+    if "model.embed_tokens.weight" in state_dict and "lm_head.weight" not in state_dict:
         # Assume tied to the embeddings if not present
         state_dict["lm_head.weight"] = state_dict["model.embed_tokens.weight"]
-    return state_dict
+
+    # Standardize keys used in vision parts of Qwen2.5-VL
+    replace_whole_name = lambda pattern, repl: lambda s: re.sub(rf"(^|\.)({pattern})($|\.)", rf"\1{repl}\3", s)
+    output = {}
+    for k, v in state_dict.items():
+        k = replace_whole_name("qkv", "qkv_proj")(k)
+        k = replace_whole_name("proj", "o_proj")(k)
+        k = replace_whole_name("attn", "self_attn")(k)
+        output[k] = v
+    return output
 
 
 def convert_hf_to_meta(state_dict, head_dim):
     state_dict = split_hf_keys(state_dict)
-    # NOCOMMIT WIP: state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
+    state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
     state_dict = map_hf_to_meta_keys(state_dict)
     return state_dict
 

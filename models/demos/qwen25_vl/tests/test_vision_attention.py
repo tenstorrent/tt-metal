@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
@@ -21,7 +21,7 @@ from models.utility_functions import (
 from models.utility_functions import skip_for_grayskull
 
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLVisionAttention
-from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
+from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, standardize_hf_keys
 
 
 @torch.no_grad()
@@ -78,7 +78,7 @@ def test_vision_attention_inference(
     reference_model = Qwen2_5_VLVisionAttention(
         model_args.hf_config.vision_config.hidden_size, num_heads=model_args.hf_config.vision_config.num_heads
     )
-    state_dict = model_args.map_keys_to_hf_format(reference_model.state_dict())
+    state_dict = standardize_hf_keys(reference_model.state_dict())
     state_dict = convert_hf_to_meta(state_dict, model_args.head_dim)
     state_dict_prefix = model_args.get_state_dict_prefix("VisionAttention", 0)
     state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
@@ -155,7 +155,7 @@ def test_vision_attention_inference(
     tt_model = VisionAttention(
         mesh_device,
         state_dict,
-        weight_cache_path=None,  # NOCOMMIT during debug. model_args.weight_cache_path(dtype),
+        weight_cache_path=model_args.weight_cache_path(dtype),
         layer_num=0,
         dtype=dtype,
         transformation_mats=transformation_mats,

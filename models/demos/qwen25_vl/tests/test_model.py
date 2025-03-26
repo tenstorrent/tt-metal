@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
@@ -6,20 +6,20 @@ import pytest
 from loguru import logger
 import os
 import ttnn
+from models.demos.qwen25_vl.tt.model import VisionTransformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.demos.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
+from models.tt_transformers.tt.common import (
+    get_rot_transformation_mat,
+    PagedAttentionConfig,
+)
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
-from models.tt_transformers.tt.common import (
-    get_rot_transformation_mat,
-    PagedAttentionConfig,
-)
-from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLVisionBlock
+from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VisionTransformerPretrainedModel
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, standardize_hf_keys
-from models.demos.qwen25_vl.tt.vision_block import VisionBlock
 
 
 @torch.no_grad()
@@ -48,13 +48,19 @@ from models.demos.qwen25_vl.tt.vision_block import VisionBlock
     "page_params",
     [{"page_block_size": 32, "page_max_num_blocks": 1024}],
 )
-def test_vision_block_inference(
+@pytest.mark.parametrize(
+    "num_layers",
+    [None, 1, 3],  # None means all layers, specific numbers will run fewer layers
+    ids=["all_layers", "single_layer", "three_layers"],
+)
+def test_vision_model_inference(
     paged_attention,
     page_params,
     mesh_device,
     use_program_cache,
     reset_seeds,
     ensure_gc,
+    num_layers,
 ):
     dtype = ttnn.bfloat8_b
     pcc = 0.99
@@ -68,19 +74,51 @@ def test_vision_block_inference(
     # for this test assume 1 image of size 98 x 146 as used in their repo as an example
     image_grid_thw = torch.tensor([[1, 98, 146]])
     ref_seq_len = image_grid_thw[0, 1] * image_grid_thw[0, 2]
-    # pad seq_len to be divisible by base_model_args.MAX_QKV_MM_SEQ_LEN from the tt_transformers model
-    seq_len = ((ref_seq_len // 128) + 1) * 128  # Using 128 as MAX_QKV_MM_SEQ_LEN
+    # pad seq_len to be divisible by 128 (MAX_QKV_MM_SEQ_LEN from tt_transformers model)
+    seq_len = ((ref_seq_len // 128) + 1) * 128
 
     model_args = VisionModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len)
-    reference_model = Qwen2_5_VLVisionBlock(model_args.hf_config.vision_config, attn_implementation="sdpa")
+    if num_layers:
+        model_args.hf_config.vision_config.depth = num_layers
+    else:
+        num_layers = model_args.hf_config.vision_config.depth
 
+    # Create reference model
+    reference_model = Qwen2_5_VisionTransformerPretrainedModel(model_args.hf_config.vision_config)
+    # FIXME: state_dict = model_args.load_state_dict()
     state_dict = standardize_hf_keys(reference_model.state_dict())
     state_dict = convert_hf_to_meta(state_dict, model_args.head_dim)
-    state_dict_prefix = model_args.get_state_dict_prefix("VisionBlock", 0)
-    state_dict = {f"{state_dict_prefix}{k}": v for k, v in state_dict.items()}
+    state_dict_prefix = model_args.get_state_dict_prefix("VisionTransformer")
+    state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
+
+    # Set up paged attention config
+    page_table_tt = None
+    paged_attention_config = None
+
+    if paged_attention:
+        paged_attention_config = PagedAttentionConfig(
+            block_size=page_params["page_block_size"],
+            max_num_blocks=page_params["page_max_num_blocks"],
+        )
+        # Implied shuffling of blocks
+        permutation = torch.randperm(paged_attention_config.max_num_blocks)
+        # Page table which maps virtual blocks to physical
+        reverse_permutation = torch.argsort(permutation)
+        page_table = reverse_permutation.reshape(
+            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
+        )
+        page_table_tt = ttnn.from_torch(
+            page_table,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
 
     # Example inputs and preprocessing
-    pt_input = torch.randn(1, 1, ref_seq_len, model_args.dim)
+    # pt_input = torch.randn(ref_seq_len, 3, 224, 224)  # Simulated image patches
+
+    # Get the necessary preprocessing for vision model
     cu_seqlens, cu_window_seqlens, position_embeddings, window_index = qwen2_5_vision_transformer_preprocess(
         seq_len=ref_seq_len,
         grid_thw=image_grid_thw,
@@ -90,7 +128,7 @@ def test_vision_block_inference(
         patch_size=model_args.hf_config.vision_config.patch_size,
     )
 
-    # pre-compute the rotational embedding matrix and send to device
+    # Pre-compute the rotational embedding matrix and send to device
     cos, sin = position_embeddings
     cos = torch.nn.functional.pad(cos, (0, 0, 0, seq_len - ref_seq_len)).unsqueeze(0).unsqueeze(0)
     sin = torch.nn.functional.pad(sin, (0, 0, 0, seq_len - ref_seq_len)).unsqueeze(0).unsqueeze(0)
@@ -123,54 +161,32 @@ def test_vision_block_inference(
     )
     transformation_mats = {"prefill": transformation_mats_prefill}
 
-    # Setup page table
-    page_table_tt = None
-    paged_attention_config = None
-
-    if paged_attention:
-        paged_attention_config = PagedAttentionConfig(
-            block_size=page_params["page_block_size"],
-            max_num_blocks=page_params["page_max_num_blocks"],
-        )
-        # Implied shuffling of blocks
-        permutation = torch.randperm(paged_attention_config.max_num_blocks)
-        # Page table which maps virtual blocks to physical
-        reverse_permutation = torch.argsort(permutation)
-        page_table = reverse_permutation.reshape(
-            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
-        )
-        page_table_tt = ttnn.from_torch(
-            page_table,
-            device=mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
+    # Create a simulated output from patch embeddings for the TT model
+    embedded_input = torch.randn(1, ref_seq_len, model_args.dim)
 
     # Initialize TT model
-    tt_model = VisionBlock(
+    tt_model = VisionTransformer(
         mesh_device=mesh_device,
+        args=model_args,
         state_dict=state_dict,
         weight_cache_path=None,  # NOCOMMIT model_args.weight_cache_path(dtype),
-        layer_num=0,
         dtype=dtype,
         transformation_mats=transformation_mats,
-        args=model_args,
         paged_attention_config=paged_attention_config,
     )
 
     # Prepare input tensor for the TT model
-    tt_input = pt_input.clone()
-    tt_input = torch.nn.functional.pad(tt_input, (0, 0, 0, seq_len - ref_seq_len))
+    tt_input = torch.nn.functional.pad(embedded_input, (0, 0, 0, seq_len - ref_seq_len))
     tt_input = model_args.prepare_residual_tensor_prefill(
-        tt_input.squeeze(0),
+        tt_input,
         force_replicated=False if model_args.is_galaxy else True,
     )
 
-    # Run our model
+    # Run TT model (only blocks, not patch embedding/merging)
     tt_out = tt_model(
         tt_input,
         cu_seqlens=cu_seqlens,
+        cu_window_seqlens=cu_window_seqlens,
         rot_mats=rot_mats,
         user_id=0,
         page_table=page_table_tt,
@@ -187,20 +203,30 @@ def test_vision_block_inference(
     tt_output_torch = tt_output_torch[0, :ref_seq_len, :]
 
     # Run reference model
-    reference_output = reference_model(
-        pt_input.squeeze(0).squeeze(0),
-        cu_seqlens=cu_seqlens,
-        rotary_pos_emb=None,
-        position_embeddings=position_embeddings,
-    )
+    # Note: We're running just the blocks, not the full forward pass which would include patch embedding/merging
+    hidden_states = embedded_input.squeeze(0)
+
+    # Simulate running just through the blocks of the reference model
+    for layer_num, blk in zip(range(num_layers), reference_model.blocks):
+        if layer_num in reference_model.fullatt_block_indexes:
+            cu_seqlens_now = cu_seqlens
+        else:
+            cu_seqlens_now = cu_window_seqlens
+        hidden_states = blk(hidden_states, cu_seqlens=cu_seqlens_now, position_embeddings=position_embeddings)
+
+    reference_output = hidden_states
 
     # Compare outputs
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
+
+    # Generate test summary message
+    test_desc = f"Vision Transformer Model ({num_layers} layers)"
+
     if passing:
-        logger.info(f"Vision Block Passed!")
+        logger.info(f"{test_desc} Passed!")
     else:
-        logger.warning(f"Vision Block Failed!")
+        logger.warning(f"{test_desc} Failed!")
     assert passing, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
