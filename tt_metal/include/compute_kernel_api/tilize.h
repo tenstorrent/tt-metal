@@ -138,22 +138,33 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
  * Perform tilize operation on a block. This simply loops over the provided blocks.
  */
 ALWI void tilize_block(uint32_t icb, uint32_t block, uint32_t ocb) {
+#ifndef LLK_PACK_PERF
     UNPACK((llk_unpack_tilize_block(icb, block)));
+#endif
 
+#ifndef LLK_UNPACK_PERF
     for (uint32_t t = 0; t < block; t++) {
         // Acquire dst
+#if !defined(LLK_PACK_PERF) && !defined(LLK_MATH_PERF)
         MATH((llk_math_wait_for_dest_available()));
         PACK((llk_packer_wait_for_math_done()));
+#endif
 
         // Datacopy
-        MATH((llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, DST_ACCUM_MODE, UnpackToDestEn>(
-            0 /*dst index*/)));
+#ifndef LLK_PACK_PERF
+        MATH((llk_math_eltwise_unary_datacopy<A2D, BroadcastType::NONE, DST_ACCUM_MODE, UnpackToDestEn>(0 /*dst index*/)));
+#endif
+#ifndef LLK_MATH_PERF
         PACK((llk_pack<false, false>(0 /*tile index*/, ocb)));
+#endif
 
         // Release dest
+#if !defined(LLK_PACK_PERF) && !defined(LLK_MATH_PERF)
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
         PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+#endif
     }
+#endif
 }
 
 ALWI void unpack_tilize_block(uint32_t icb, uint32_t block) { UNPACK((llk_unpack_tilize_block(icb, block))); }
