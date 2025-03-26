@@ -2,10 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
-import pytest
-import json
-from pathlib import Path
-import os
 
 # import ttnn
 from models.demos.wormhole.mistral7b.tt.mistral_common import (

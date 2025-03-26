@@ -23,6 +23,10 @@ jobs:
       }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      env:
+        ASAN_OPTIONS: "color=always"
+        TSAN_OPTIONS: "color=always"
+        UBSAN_OPTIONS: "color=always:print_stacktrace=1:halt_on_error=1"
       volumes:
         - /work
         - /dev/hugepages-1G:/dev/hugepages-1G

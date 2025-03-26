@@ -14,9 +14,7 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 import cv2
 import torch
-import torchvision
 from loguru import logger
-from datasets import load_dataset
 from models.experimental.efficientnet.tt.efficientnet_model import reference_efficientnet_lite0
 from models.experimental.efficientnet.demo.demo_utils import (
     load_imagenet_labels,

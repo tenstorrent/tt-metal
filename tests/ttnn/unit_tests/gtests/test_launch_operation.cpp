@@ -10,6 +10,7 @@
 #include "ttnn/old_infra_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
@@ -17,7 +18,21 @@ namespace ttnn {
 namespace {
 
 using ::testing::ElementsAre;
+using ::testing::IsEmpty;
 using ::testing::SizeIs;
+
+// Returns device tensor with `num_device_shards` populated.
+Tensor make_tensor_with_num_shards(const TensorSpec& tensor_spec, int num_device_shards, MeshDevice* mesh_device) {
+    TT_FATAL(num_device_shards > 0 && num_device_shards <= mesh_device->num_devices(), "Invalid number of shards");
+
+    auto host_tensor = Tensor::from_vector(std::vector<float>(tensor_spec.logical_shape().volume()), tensor_spec);
+    std::vector<Tensor> host_tensors;
+    for (int i = 0; i < num_device_shards; ++i) {
+        host_tensors.push_back(host_tensor);
+    }
+
+    return distributed::aggregate_as_tensor(host_tensors, tt::tt_metal::AllGatherTensor{}).to_device(mesh_device);
+}
 
 struct SharedVariables {};
 struct OperationAttributes {};
@@ -93,7 +108,7 @@ struct OldInfraDeviceOpWithCreateAt {
     }
 };
 
-TEST(UsesHeterogeneousDispatchTest, OldInfra) {
+TEST(LaunchOperationTest, OldInfraUsesHeterogeneousDispatch) {
     auto old_infra_attributes = tt::tt_metal::operation::DeviceOperation(OldInfraDeviceOpWithCreate{});
     auto old_infra_attributes_with_at = tt::tt_metal::operation::DeviceOperation(OldInfraDeviceOpWithCreateAt{});
 
@@ -114,7 +129,7 @@ TEST(UsesHeterogeneousDispatchTest, OldInfra) {
         old_infra_program_factory));
 }
 
-TEST(UsesHeterogeneousDispatchTest, NewInfra) {
+TEST(LaunchOperationTest, NewInfraUsesHeterogeneousDispatch) {
     EXPECT_FALSE(ttnn::mesh_device_operation_utils::uses_heterogenous_dispatch<NewInfraProgramFactoryWithCreate>(
         OperationAttributes{}));
 
@@ -122,18 +137,17 @@ TEST(UsesHeterogeneousDispatchTest, NewInfra) {
         OperationAttributes{}));
 }
 
-using TensorCoordinatesT3000Test = tt::tt_metal::T3000MeshDeviceFixture;
+using LaunchOperationT3000Test = tt::tt_metal::T3000MeshDeviceFixture;
 
-TEST_F(TensorCoordinatesT3000Test, UniformTensor) {
+TEST_F(LaunchOperationT3000Test, UniformTensor) {
     const TensorSpec tensor_spec = TensorSpec(
         ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
     auto full_tensor = tt::tt_metal::allocate_tensor_on_mesh(tensor_spec, mesh_device_.get());
-    std::vector<Tensor> tensor_args = {full_tensor};
 
-    EXPECT_TRUE(ttnn::mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args));
+    EXPECT_TRUE(ttnn::mesh_device_operation_utils::all_tensors_have_uniform_storage(full_tensor));
 
     EXPECT_THAT(
-        ttnn::mesh_device_operation_utils::extract_tensor_coordinates(tensor_args),
+        ttnn::mesh_device_operation_utils::extract_tensor_coordinates(full_tensor),
         ElementsAre(
             ttnn::MeshCoordinate{0, 0},  //
             ttnn::MeshCoordinate{0, 1},
@@ -145,37 +159,118 @@ TEST_F(TensorCoordinatesT3000Test, UniformTensor) {
             ttnn::MeshCoordinate{1, 3}));
 }
 
-TEST_F(TensorCoordinatesT3000Test, IncompleteShards) {
+TEST_F(LaunchOperationT3000Test, UnevenTensor) {
     const TensorSpec tensor_spec = TensorSpec(
         ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
-    // Make a tensor spanning 2 devices using `aggregate_as_tensor` with 2 host (owned) tensors.
-    auto host_tensor = Tensor::from_vector(std::vector<float>(tensor_spec.logical_shape().volume()), tensor_spec);
-    auto device_tensor = distributed::aggregate_as_tensor({host_tensor, host_tensor}, tt::tt_metal::AllGatherTensor{})
-                             .to_device(mesh_device_.get());
-    std::vector<Tensor> tensor_args = {device_tensor};
+    auto uneven_tensor = make_tensor_with_num_shards(tensor_spec, 2, mesh_device_.get());
 
-    EXPECT_THAT(device_tensor.device_storage().specs, SizeIs(2));
+    EXPECT_THAT(uneven_tensor.device_storage().specs, SizeIs(2));
 
-    EXPECT_FALSE(ttnn::mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args));
+    EXPECT_FALSE(ttnn::mesh_device_operation_utils::all_tensors_have_uniform_storage(uneven_tensor));
     EXPECT_THAT(
-        ttnn::mesh_device_operation_utils::extract_tensor_coordinates(tensor_args),
+        ttnn::mesh_device_operation_utils::extract_tensor_coordinates(uneven_tensor),
         ElementsAre(
             ttnn::MeshCoordinate{0, 0},  //
             ttnn::MeshCoordinate{0, 1}));
 }
 
-TEST_F(TensorCoordinatesT3000Test, MismatchedTensors) {
+TEST_F(LaunchOperationT3000Test, MismatchedTensorsThrow) {
     const TensorSpec tensor_spec = TensorSpec(
         ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
     auto full_tensor = tt::tt_metal::allocate_tensor_on_mesh(tensor_spec, mesh_device_.get());
-    // Make a tensor spanning 2 devices using `aggregate_as_tensor` with 2 host (owned) tensors.
-    auto host_tensor = Tensor::from_vector(std::vector<float>(tensor_spec.logical_shape().volume()), tensor_spec);
-    auto device_tensor = distributed::aggregate_as_tensor({host_tensor, host_tensor}, tt::tt_metal::AllGatherTensor{})
-                             .to_device(mesh_device_.get());
-    std::vector<Tensor> tensor_args = {full_tensor, device_tensor};
+    auto uneven_tensor = make_tensor_with_num_shards(tensor_spec, 2, mesh_device_.get());
+
+    std::vector<Tensor> tensor_args = {full_tensor, uneven_tensor};
 
     EXPECT_ANY_THROW(ttnn::mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args));
     EXPECT_ANY_THROW(ttnn::mesh_device_operation_utils::extract_tensor_coordinates(tensor_args));
+}
+
+TEST_F(LaunchOperationT3000Test, FilterTensorShards) {
+    const TensorSpec tensor_spec = TensorSpec(
+        ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    auto full_tensor = tt::tt_metal::allocate_tensor_on_mesh(tensor_spec, mesh_device_.get());
+
+    EXPECT_TRUE(ttnn::mesh_device_operation_utils::all_tensors_have_uniform_storage(full_tensor));
+    EXPECT_THAT(
+        ttnn::mesh_device_operation_utils::extract_tensor_coordinates(full_tensor),
+        ElementsAre(
+            ttnn::MeshCoordinate{0, 0},  //
+            ttnn::MeshCoordinate{0, 1},
+            ttnn::MeshCoordinate{0, 2},
+            ttnn::MeshCoordinate{0, 3},
+            ttnn::MeshCoordinate{1, 0},
+            ttnn::MeshCoordinate{1, 1},
+            ttnn::MeshCoordinate{1, 2},
+            ttnn::MeshCoordinate{1, 3}));
+
+    // Filter the first 2 shards and the last 3 shards.
+    ttnn::mesh_device_operation_utils::filter_tensor_shards(
+        {ttnn::MeshCoordinate{0, 0},
+         ttnn::MeshCoordinate{0, 1},
+         ttnn::MeshCoordinate{1, 1},
+         ttnn::MeshCoordinate{1, 2},
+         ttnn::MeshCoordinate{1, 3}},
+        full_tensor);
+
+    EXPECT_FALSE(ttnn::mesh_device_operation_utils::all_tensors_have_uniform_storage(full_tensor));
+    EXPECT_THAT(
+        ttnn::mesh_device_operation_utils::extract_tensor_coordinates(full_tensor),
+        ElementsAre(
+            ttnn::MeshCoordinate{0, 0},  //
+            ttnn::MeshCoordinate{0, 1},
+            ttnn::MeshCoordinate{1, 1},
+            ttnn::MeshCoordinate{1, 2},
+            ttnn::MeshCoordinate{1, 3}));
+
+    // Filter the first and the last shards.
+    ttnn::mesh_device_operation_utils::filter_tensor_shards(
+        {ttnn::MeshCoordinate{0, 0},  //
+         ttnn::MeshCoordinate{1, 3}},
+        full_tensor);
+
+    EXPECT_FALSE(ttnn::mesh_device_operation_utils::all_tensors_have_uniform_storage(full_tensor));
+    EXPECT_THAT(
+        ttnn::mesh_device_operation_utils::extract_tensor_coordinates(full_tensor),
+        ElementsAre(
+            ttnn::MeshCoordinate{0, 0},  //
+            ttnn::MeshCoordinate{1, 3}));
+
+    // Filter the rest.
+    ttnn::mesh_device_operation_utils::filter_tensor_shards(/*tensor_coordinates=*/{}, full_tensor);
+
+    EXPECT_FALSE(ttnn::mesh_device_operation_utils::all_tensors_have_uniform_storage(full_tensor));
+    EXPECT_THAT(ttnn::mesh_device_operation_utils::extract_tensor_coordinates(full_tensor), IsEmpty());
+}
+
+TEST_F(LaunchOperationT3000Test, LaunchOpFilterTensorShards) {
+    const TensorSpec tensor_spec = TensorSpec(
+        ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::TILE, MemoryConfig{}));
+    auto full_tensor = make_tensor_with_num_shards(tensor_spec, 8, mesh_device_.get());
+    auto sum = ttnn::add(full_tensor, full_tensor);
+
+    EXPECT_TRUE(ttnn::mesh_device_operation_utils::all_tensors_have_uniform_storage(sum));
+    EXPECT_THAT(
+        ttnn::mesh_device_operation_utils::extract_tensor_coordinates(sum),
+        ElementsAre(
+            ttnn::MeshCoordinate{0, 0},  //
+            ttnn::MeshCoordinate{0, 1},
+            ttnn::MeshCoordinate{0, 2},
+            ttnn::MeshCoordinate{0, 3},
+            ttnn::MeshCoordinate{1, 0},
+            ttnn::MeshCoordinate{1, 1},
+            ttnn::MeshCoordinate{1, 2},
+            ttnn::MeshCoordinate{1, 3}));
+
+    auto uneven_tensor = make_tensor_with_num_shards(tensor_spec, 2, mesh_device_.get());
+    auto sum_uneven = ttnn::add(uneven_tensor, uneven_tensor);
+
+    EXPECT_FALSE(ttnn::mesh_device_operation_utils::all_tensors_have_uniform_storage(sum_uneven));
+    EXPECT_THAT(
+        ttnn::mesh_device_operation_utils::extract_tensor_coordinates(sum_uneven),
+        ElementsAre(
+            ttnn::MeshCoordinate{0, 0},  //
+            ttnn::MeshCoordinate{0, 1}));
 }
 
 }  // namespace

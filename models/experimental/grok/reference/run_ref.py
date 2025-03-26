@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
-from loguru import logger
 from models.experimental.grok.tt.model_config import TtModelArgs
 from models.experimental.grok.reference.model import Transformer
 from models.experimental.grok.reference.tokenizer import Tokenizer

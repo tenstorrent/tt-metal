@@ -37,6 +37,8 @@ run_python_model_tests_wormhole_b0() {
     pytest tests/ttnn/integration_tests/resnet/test_ttnn_functional_resnet50.py -k "pretrained_weight_false"
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/integration_tests/yolov4/test_ttnn_yolov4.py -k "pretrained_weight_false"
 
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/integration_tests/yolov8x/test_yolov8x.py::test_yolov8x_640 -k "pretrained_weight_false"
+
     # Unet Shallow
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
 
@@ -71,7 +73,7 @@ run_python_model_tests_slow_runtime_mode_wormhole_b0() {
 }
 
 run_python_model_tests_blackhole() {
-    SLOW_MATMULS=1 pytest models/demos/blackhole/stable_diffusion/tests
+    pytest models/demos/blackhole/stable_diffusion/tests/test_unet_2d_condition_model.py
 
     # Llama3.1-8B
     llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
@@ -81,5 +83,5 @@ run_python_model_tests_blackhole() {
         echo "LOG_METAL: Llama3 tests for $llama_dir completed"
     done
 
-    pytest tests/ttnn/integration_tests/resnet/test_ttnn_functional_resnet50_batch_16.py
+    pytest tests/ttnn/integration_tests/resnet/test_ttnn_functional_resnet50.py
 }

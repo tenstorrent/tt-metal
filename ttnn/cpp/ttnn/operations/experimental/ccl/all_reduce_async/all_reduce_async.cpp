@@ -89,6 +89,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         mesh_device,
         from_remote_multi_device_global_semaphore,
         to_remote_multi_device_global_semaphore,
+        std::nullopt,  // persistent_output_tensors
         math_op,
         out_memory_config,
         topology,
