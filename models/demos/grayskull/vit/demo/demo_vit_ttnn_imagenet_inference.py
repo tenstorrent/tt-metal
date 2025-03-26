@@ -6,7 +6,6 @@ import pytest
 
 import torch
 import transformers
-from datasets import load_dataset
 from transformers import AutoImageProcessor
 from loguru import logger
 

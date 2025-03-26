@@ -10,7 +10,6 @@ from ttnn import ReplicateTensorToMesh
 
 from models.demos.t3000.falcon40b.tt.falcon_attention import TtFalconAttention
 from models.demos.t3000.falcon40b.tt.falcon_mlp import TtFalconMLP
-from models.utility_functions import torch2tt_tensor
 
 from models.demos.t3000.falcon40b.tt.model_utils import fused_partial_layernorm
 

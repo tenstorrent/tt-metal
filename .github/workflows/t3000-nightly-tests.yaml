@@ -10,7 +10,7 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
-      version: 20.04
+      version: 22.04
       build-wheel: true
   t3000-nightly-tests:
     needs: build-artifact

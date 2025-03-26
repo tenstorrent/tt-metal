@@ -167,7 +167,7 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      os: ubuntu-22.04
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
   tt-train-cpp-unit-tests:
     needs: build-artifact
     secrets: inherit
@@ -200,6 +200,14 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+  t3000-fast-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/t3000-fast-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   build-docs:
     needs: build-artifact
     uses: ./.github/workflows/docs-latest-public.yaml
