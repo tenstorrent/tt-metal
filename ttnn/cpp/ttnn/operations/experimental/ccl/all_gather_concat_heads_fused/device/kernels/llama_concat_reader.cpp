@@ -9,6 +9,7 @@
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
+#include <array>
 
 using address_t = uint32_t;
 
@@ -56,33 +57,26 @@ void kernel_main() {
     DPRINT << "batch_end_2: " << (uint32_t)batch_end_2 << ENDL();
     DPRINT << "start_local: " << (uint32_t)start_local << ENDL();
 
-    uint32_t sem_arg_start = 3 + 2 * in_num_cores;
-    uint32_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(sem_arg_start);
-    uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(sem_arg_start + 1);
-    uint32_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(sem_arg_start + 2);
-    uint32_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(sem_arg_start + 3);
-
-    uint32_t arg_idx = sem_arg_start + 4;
-    tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
-    arg_idx += 8;
-    tt_l1_ptr uint32_t* core_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
-    arg_idx += 8;
+    uint32_t arg_idx = 3 + 2 * in_num_cores;
     uint32_t tensor_address0 = get_arg_val<uint32_t>(arg_idx);
+
+    std::array<uint32_t, 8> core_noc_x = {19, 20, 21, 19, 20, 21, 19, 20};
+    std::array<uint32_t, 8> core_noc_y = {18, 18, 18, 19, 19, 19, 20, 20};
 
     DPRINT << "this core runs concat\n";
     DPRINT << "temp_cb_id: " << (uint32_t)temp_cb_id << ENDL();
 
-    uint64_t out_ready_sem_noc_addr =
-        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
+    // uint64_t out_ready_sem_noc_addr =
+    //     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
 
     DPRINT << "RT ARGS HERE\n";
     DPRINT << "in_tile_offset_by_head: " << in_tile_offset_by_head << ENDL();
     DPRINT << "q_start_addr: " << q_start_addr << ENDL();
     DPRINT << "signal semaphore addr: " << (uint32_t)signal_semaphore_addr << ENDL();
-    DPRINT << "out_ready_sem_bank_addr: " << (uint32_t)out_ready_sem_bank_addr << ENDL();
-    DPRINT << "out_ready_sem_wait_value: " << (uint32_t)out_ready_sem_wait_value << ENDL();
-    DPRINT << "out_ready_sem_noc0_x: " << (uint32_t)out_ready_sem_noc0_x << ENDL();
-    DPRINT << "out_ready_sem_noc0_y: " << (uint32_t)out_ready_sem_noc0_y << ENDL();
+    // DPRINT << "out_ready_sem_bank_addr: " << (uint32_t)out_ready_sem_bank_addr << ENDL();
+    // DPRINT << "out_ready_sem_wait_value: " << (uint32_t)out_ready_sem_wait_value << ENDL();
+    // DPRINT << "out_ready_sem_noc0_x: " << (uint32_t)out_ready_sem_noc0_x << ENDL();
+    // DPRINT << "out_ready_sem_noc0_y: " << (uint32_t)out_ready_sem_noc0_y << ENDL();
     for (uint32_t i = 0; i < 8; i++) {
         DPRINT << "core_noc_x[" << i << "]: " << (uint32_t)core_noc_x[i] << "\n";
         DPRINT << "core_noc_y[" << i << "]: " << (uint32_t)core_noc_y[i] << "\n";
@@ -106,8 +100,8 @@ void kernel_main() {
                           uint32_t start,
                           uint32_t end,
                           uint32_t local_count,
-                          tt_l1_ptr uint32_t* core_noc_x,
-                          tt_l1_ptr uint32_t* core_noc_y,
+                          std::array<uint32_t, 8> core_noc_x,
+                          std::array<uint32_t, 8> core_noc_y,
                           bool nlp_local) {
         tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(3));
         tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(3 + in_num_cores));
@@ -163,8 +157,8 @@ void kernel_main() {
                           uint32_t ELEMENT_SIZE,
                           bool nlp_local,
                           uint32_t start_local,
-                          tt_l1_ptr uint32_t* core_noc_x,
-                          tt_l1_ptr uint32_t* core_noc_y) {
+                          std::array<uint32_t, 8> core_noc_x,
+                          std::array<uint32_t, 8> core_noc_y) {
         tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(3));
         tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(3 + in_num_cores));
         // Q

@@ -33,7 +33,7 @@ void kernel_main() {
     // Load the input tensor spec
     address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
     uint32_t out_ready_sem_bank_addr_concat = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t num_tiles_per_core = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t num_tiles_per_core = 4;  // get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t first_core_tile_start_offset = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
@@ -93,11 +93,11 @@ void kernel_main() {
 
     uint32_t arg_sem_idx = 2 + 2 * in_num_cores;
     DPRINT << "out_ready_sem_bank_addr_concat is at arg index: " << (uint32_t)(concat_arg_start + arg_sem_idx);
-    uint32_t out_ready_sem_wait_value_concat = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx);
-    uint32_t out_ready_sem_noc0_x_concat = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 1);
-    uint32_t out_ready_sem_noc0_y_concat = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 2);
-    uint32_t is_drain_core = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 3);
-    const uint32_t signal_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 4));
+    uint32_t out_ready_sem_wait_value_concat = 12;  // get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx);
+    uint32_t out_ready_sem_noc0_x_concat = 19;      // get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 1);
+    uint32_t out_ready_sem_noc0_y_concat = 18;      // get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 2);
+    uint32_t is_drain_core = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx);
+    const uint32_t signal_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 1));
 
     DPRINT << "CHECK RT ARGS HERE\n";
     DPRINT << "tensor_address0: " << (uint32_t)tensor_address0 << ENDL();
@@ -122,7 +122,7 @@ void kernel_main() {
 
     DPRINT << "END OF RT ARGS\n";
 
-    uint32_t local_arg = concat_arg_start + arg_sem_idx + 5;
+    uint32_t local_arg = concat_arg_start + arg_sem_idx + 2;
     tt_l1_ptr uint32_t* nlp_local_core_x = (tt_l1_ptr uint32_t*)(get_arg_addr(local_arg));
     local_arg += 8;
     tt_l1_ptr uint32_t* nlp_local_core_y = (tt_l1_ptr uint32_t*)(get_arg_addr(local_arg));

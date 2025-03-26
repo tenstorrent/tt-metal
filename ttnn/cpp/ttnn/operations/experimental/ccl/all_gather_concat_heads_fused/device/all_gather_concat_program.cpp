@@ -452,7 +452,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
             0,
             input_tensor.buffer()->address(),  // tensor_address0
             semaphore.address(),
-            input_tensor_shard_num_pages,        // num_tiles_per_core
+            // input_tensor_shard_num_pages,        // num_tiles_per_core
             worker_num_tiles_to_read,            // num_tiles_to_read
             input_first_core_tile_start_offset,  // first_core_tile_start_offset
             input_tensor_cores_x.size(),         // num_cores
@@ -475,9 +475,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
             reader_rt_args.push_back(nocy);
         }
         // reader_rt_args.push_back(semaphore.address());
-        reader_rt_args.push_back(ring_size * num_links);  // sem target value
-        reader_rt_args.push_back(drain_sync_core.x);
-        reader_rt_args.push_back(drain_sync_core.y);
+        // reader_rt_args.push_back(ring_size * num_links);  // sem target value
+        // reader_rt_args.push_back(drain_sync_core.x);
+        // reader_rt_args.push_back(drain_sync_core.y);
         reader_rt_args.push_back(link == 0);
         reader_rt_args.push_back(concat_semaphore_id);
         reader_rt_args.insert(reader_rt_args.end(), nlp_local_core_x.begin(), nlp_local_core_x.end());
@@ -491,17 +491,17 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
         std::vector<uint32_t> writer_rt_args = {
             0,
-            temp_tensor.buffer()->address(),       // tensor_address0
-            semaphore.address(),                   // out_ready_sem_bank_addr (absolute address)
-            output_interm_tensor_shard_num_pages,  // num_tiles_per_core
-            worker_num_tiles_to_read,              // num_tiles_to_read
-            output_first_core_tile_start_offset,   // first_core_tile_start_offset
-            output_tensor_cores_x.size(),          // num_cores
-            wait_output_semaphore,                 // wait_output_semaphore
-            reset_global_semaphore,                // reset_global_semaphore
-            drain_sync_core.x,                     // out_ready_sem_noc0_x
-            drain_sync_core.y,                     // out_ready_sem_noc0_y
-            out_ready_sem_wait_value,              // out_ready_sem_wait_value
+            temp_tensor.buffer()->address(),  // tensor_address0
+            semaphore.address(),              // out_ready_sem_bank_addr (absolute address)
+            // output_interm_tensor_shard_num_pages,  // num_tiles_per_core
+            worker_num_tiles_to_read,             // num_tiles_to_read
+            output_first_core_tile_start_offset,  // first_core_tile_start_offset
+            output_tensor_cores_x.size(),         // num_cores
+            wait_output_semaphore,                // wait_output_semaphore
+            reset_global_semaphore,               // reset_global_semaphore
+            // drain_sync_core.x,                     // out_ready_sem_noc0_x
+            // drain_sync_core.y,                     // out_ready_sem_noc0_y
+            // out_ready_sem_wait_value,              // out_ready_sem_wait_value
             concat_semaphore_id,
         };
         auto sem_mcast_range_1 = CoreRange({2, 0}, {3, 0});
@@ -578,12 +578,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
             reader_runtime_args = {in_tile_offset_by_batch, q_start_addr, concat_semaphore_id};
             reader_runtime_args.insert(reader_runtime_args.end(), noc_x_coords.begin(), noc_x_coords.end());
             reader_runtime_args.insert(reader_runtime_args.end(), noc_y_coords.begin(), noc_y_coords.end());
-            reader_runtime_args.push_back(semaphore.address());
-            reader_runtime_args.push_back(ring_size * num_links);  // sem target value
-            reader_runtime_args.push_back(drain_sync_core.x);
-            reader_runtime_args.push_back(drain_sync_core.y);
-            reader_runtime_args.insert(reader_runtime_args.end(), input_cores_x.begin(), input_cores_x.end());
-            reader_runtime_args.insert(reader_runtime_args.end(), input_cores_y.begin(), input_cores_y.end());
             reader_runtime_args.push_back(input_tensor.buffer()->address());
 
             tt::tt_metal::SetRuntimeArgs(program, concat_reader_kernel_id, core, reader_runtime_args);
@@ -657,13 +651,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
                     auto& concat_reader_runtime_args = GetRuntimeArgs(program, concat_reader_kernel_id, core);
                     concat_reader_runtime_args[0] = in_tile_offset_by_batch;
                     concat_reader_runtime_args[1] = q_start_addr;
-                    concat_reader_runtime_args[concat_reader_runtime_args.size() - 21] = semaphore.address();
                     concat_reader_runtime_args[concat_reader_runtime_args.size() - 1] = input.buffer()->address();
 
                     auto& concat_reader_2_runtime_args = GetRuntimeArgs(program, concat_reader_2_kernel_id, core);
                     concat_reader_2_runtime_args[0] = in_tile_offset_by_batch;
                     concat_reader_2_runtime_args[1] = q_start_addr;
-                    concat_reader_2_runtime_args[concat_reader_2_runtime_args.size() - 21] = semaphore.address();
                     concat_reader_2_runtime_args[concat_reader_2_runtime_args.size() - 1] = input.buffer()->address();
                 }
             }

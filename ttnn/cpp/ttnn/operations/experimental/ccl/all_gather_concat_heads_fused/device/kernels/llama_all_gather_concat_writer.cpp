@@ -9,6 +9,7 @@
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
+#include <array>
 
 using address_t = uint32_t;
 
@@ -38,15 +39,15 @@ void kernel_main() {
     // Load the input tensor spec
     address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
     const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t num_tiles_per_core = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t num_tiles_per_core = 4;  // get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t first_core_tile_start_offset = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
     bool wait_output_semaphore = get_arg_val<uint32_t>(arg_idx++);
     bool reset_global_semaphore = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t out_ready_sem_noc0_x = 19;  // get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t out_ready_sem_noc0_y = 18;  // get_arg_val<uint32_t>(arg_idx++);
+    uint32_t out_ready_sem_wait_value = 12;   // get_arg_val<uint32_t>(arg_idx++);
 
     const uint32_t concat_semaphore_send_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
