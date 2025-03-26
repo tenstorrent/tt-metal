@@ -49,6 +49,12 @@ jobs:
           { name: "mnist", runner-label: "N300", performance: false, cmd: run_mnist_func},
           { name: "squeezebert", runner-label: "N300", performance: false, cmd: run_squeezebert_func},
           { name: "roberta", runner-label: "N300", performance: false, cmd: run_roberta_func},
+          { name: "mistral7b", runner-label: "N150", performance: true, cmd: run_mistral7b_perf},
+          { name: "mistral7b", runner-label: "N300", performance: true, cmd: run_mistral7b_perf},
+          { name: "llama3", runner-label: "N300", performance: true, cmd: run_llama3_perf},
+          { name: "falcon7b", runner-label: "N300", performance: true, cmd: run_falcon7b_perf},
+          { name: "mamba", runner-label: "N300", performance: true, cmd: run_mamba_perf},
+          { name: "whisper", runner-label: "N300", performance: true, cmd: run_whisper_perf},
         ]
     name: ${{ matrix.test-group.name }}-${{ matrix.test-group.runner-label }}
     env:
