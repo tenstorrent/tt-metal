@@ -7,6 +7,7 @@
 #include <tt-metalium/buffer_constants.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <tt-metalium/bfloat16.hpp>
