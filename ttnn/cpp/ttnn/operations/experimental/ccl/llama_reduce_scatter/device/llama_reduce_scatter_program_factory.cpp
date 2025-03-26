@@ -504,6 +504,12 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     auto packet_bounding_box = packet_worker_cores_grid.bounding_box();
     auto packet_start_worker_core = to_worker_cores({packet_bounding_box.start_coord});
     auto packet_end_worker_core = to_worker_cores({packet_bounding_box.end_coord});
+
+    auto non_atomic_cores = sender_core_grid.subtract(sender_atomic_inc_core);
+    auto non_atomic_bounding_box = non_atomic_cores.bounding_box();
+    auto non_atomic_start_core = to_worker_cores({non_atomic_bounding_box.start_coord});
+    auto non_atomic_end_core = to_worker_cores({non_atomic_bounding_box.end_coord});
+
     std::vector<uint32_t> reader_compile_time_args = {
         input_tensor_cb_id,
         fabric_sender_cb_index,
@@ -533,6 +539,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     // create local semaphore
     auto local_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores_grid, INVALID);
     auto sender_ready_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores_grid, INVALID);
+    auto sender_next_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores_grid, INVALID);
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -571,6 +578,10 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         sender_atomic_inc_core_worker_core.x,
         sender_atomic_inc_core_worker_core.y,
         sender_cores.size(),
+        non_atomic_start_core.at(0).x,
+        non_atomic_start_core.at(0).y,
+        non_atomic_end_core.at(0).x,
+        non_atomic_end_core.at(0).y,
     };
 
     auto writer_defines = reader_defines;
@@ -579,7 +590,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         "ttnn/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/device/kernels/dataflow/"
         "writer_llama_reduce_scatter.cpp",
         all_cores_grid,
-        // tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
@@ -623,7 +633,16 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
 
     for (auto core : all_cores) {
         std::vector<uint32_t> writer_runtime_args = {
-            cross_device_semaphore->address(), local_semaphore, sender_ready_semaphore, false, false, 0, false, 0, 0};
+            cross_device_semaphore->address(),
+            local_semaphore,
+            sender_ready_semaphore,
+            false,
+            false,
+            0,
+            false,
+            0,
+            0,
+            sender_next_semaphore};
 
         if (sender_core_grid.contains(core)) {
             reader_runtime_args[is_reader_sender_core_idx] = true;
