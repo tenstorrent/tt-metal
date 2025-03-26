@@ -15,7 +15,7 @@ THRESHOLD = 0.7
     "ag_type, warmup_iters, perf_target_us",
     [
         ("sdpa", 15, 8.95),
-        ("binary_mult", 15, 12.9),
+        ("binary_mult", 15, 10.07),
         ("layernorm", 15, 6.26),
     ],
 )
