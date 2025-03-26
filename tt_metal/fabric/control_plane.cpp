@@ -599,7 +599,7 @@ void ControlPlane::write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chi
                 tt::Cluster::instance().get_virtual_eth_core_from_channel(physical_chip_id, eth_chan);
 
             TT_ASSERT(
-                tt_metal::hal.get_dev_size(
+                tt_metal::hal_ref.get_dev_size(
                     tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::FABRIC_ROUTER_CONFIG) ==
                     sizeof(tt::tt_fabric::fabric_router_l1_config_t),
                 "ControlPlane: Fabric router config size mismatch");
@@ -613,7 +613,7 @@ void ControlPlane::write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chi
                 (void*)&fabric_router_config,
                 sizeof(tt::tt_fabric::fabric_router_l1_config_t),
                 tt_cxy_pair(physical_chip_id, virtual_eth_core),
-                tt_metal::hal.get_dev_addr(
+                tt_metal::hal_ref.get_dev_addr(
                     tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::FABRIC_ROUTER_CONFIG),
                 false);
         }

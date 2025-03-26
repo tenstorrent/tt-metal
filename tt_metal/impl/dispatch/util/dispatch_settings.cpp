@@ -73,7 +73,7 @@ DispatchSettings DispatchSettings::worker_defaults(const tt::Cluster& cluster, c
         .dispatch_size(512_KB)
         .dispatch_s_buffer_size(32_KB)
 
-        .with_alignment(hal.get_alignment(HalMemType::L1))
+        .with_alignment(hal_ref.get_alignment(HalMemType::L1))
 
         .tunneling_buffer_size(256_KB)  // same as prefetch_d_buffer_size
 
@@ -95,7 +95,7 @@ DispatchSettings DispatchSettings::eth_defaults(const tt::Cluster& cluster, cons
 
         .tunneling_buffer_size(128_KB)  // same as prefetch_d_buffer_size
 
-        .with_alignment(hal.get_alignment(HalMemType::L1))
+        .with_alignment(hal_ref.get_alignment(HalMemType::L1))
 
         .build();
 }

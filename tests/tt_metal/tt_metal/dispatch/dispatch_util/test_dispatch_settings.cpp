@@ -20,7 +20,7 @@ void ForEachCoreTypeXHWCQs(const std::function<void(const CoreType& core_type, c
 
     for (const auto& core_type : core_types_to_test) {
         if (core_type == CoreType::ETH &&
-            hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH) == -1) {
+            hal_ref.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH) == -1) {
             // This device does not have the eth core
             tt::log_info(tt::LogTest, "IDLE_ETH core type is not on this device");
             continue;
@@ -111,7 +111,7 @@ TEST(DispatchSettingsTest, TestDispatchSettingsSetTunnelerBuffer) {
 }
 
 TEST(DispatchSettingsTest, TestDispatchSettingsMutations) {
-    if (hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH) == -1) {
+    if (hal_ref.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH) == -1) {
         // This device does not have the eth core
         tt::log_info(tt::LogTest, "Test not supported on this device");
         return;

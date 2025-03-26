@@ -29,7 +29,7 @@ SubDevice::SubDevice(std::array<CoreRangeSet, NumHalProgrammableCoreTypes>&& cor
 }
 
 void SubDevice::validate() const {
-    auto num_core_types = hal.get_programmable_core_type_count();
+    auto num_core_types = hal_ref.get_programmable_core_type_count();
     for (uint32_t i = num_core_types; i < NumHalProgrammableCoreTypes; ++i) {
         TT_FATAL(
             this->cores_[i].empty(),

@@ -124,7 +124,7 @@ ll_api::memory read_mem_from_core(chip_id_t chip, const CoreCoord &core, const l
 
     ll_api::memory read_mem;
     read_mem.fill_from_mem_template(mem, [&](std::vector<uint32_t>::iterator mem_ptr, uint64_t addr, uint32_t len) {
-        uint64_t relo_addr = tt::tt_metal::hal.relocate_dev_addr(addr, local_init_addr);
+        uint64_t relo_addr = tt::tt_metal::hal_ref.relocate_dev_addr(addr, local_init_addr);
         tt::Cluster::instance().read_core(&*mem_ptr, len * sizeof(uint32_t), tt_cxy_pair(chip, core), relo_addr);
     });
     return read_mem;
@@ -139,12 +139,14 @@ bool test_load_write_read_risc_binary(
     uint32_t processor_type_idx) {
     assert(tt::Cluster::instance().is_worker_core(core, chip_id) or tt::Cluster::instance().is_ethernet_core(core, chip_id));
 
-    uint64_t local_init_addr = tt::tt_metal::hal.get_jit_build_config(core_type_idx, processor_class_idx, processor_type_idx).local_init_addr;
-    auto core_type = tt::tt_metal::hal.get_programmable_core_type(core_type_idx);
+    uint64_t local_init_addr =
+        tt::tt_metal::hal_ref.get_jit_build_config(core_type_idx, processor_class_idx, processor_type_idx)
+            .local_init_addr;
+    auto core_type = tt::tt_metal::hal_ref.get_programmable_core_type(core_type_idx);
 
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
-        uint64_t relo_addr = tt::tt_metal::hal.relocate_dev_addr(addr, local_init_addr);
+        uint64_t relo_addr = tt::tt_metal::hal_ref.relocate_dev_addr(addr, local_init_addr);
 
         tt::Cluster::instance().write_core(&*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), relo_addr);
     });
@@ -191,7 +193,7 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
 
     tt_metal::HalProgrammableCoreType dispatch_core_type =  is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH :
         is_inactive_eth_core ? tt_metal::HalProgrammableCoreType::IDLE_ETH : tt_metal::HalProgrammableCoreType::TENSIX;
-    uint64_t go_msg_addr = tt_metal::hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
+    uint64_t go_msg_addr = tt_metal::hal_ref.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
 
     auto get_mailbox_is_done = [&](uint64_t go_msg_addr) {
         constexpr int RUN_MAILBOX_BOGUS = 3;

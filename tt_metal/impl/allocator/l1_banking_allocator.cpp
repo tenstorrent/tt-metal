@@ -183,7 +183,7 @@ void Allocator::init_compute_and_storage_l1_bank_manager() {
         num_banks.total);
 
     // Storage only cores only need to reserve mailbox space to hold barriers
-    uint32_t mem_mailbox_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX);
+    uint32_t mem_mailbox_base = hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX);
     uint32_t storage_core_unreserved_base =
         ((mem_mailbox_base + config_.l1_alignment - 1) / config_.l1_alignment) * config_.l1_alignment;
 

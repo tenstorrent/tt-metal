@@ -179,7 +179,7 @@ EnqueueTerminateCommand::EnqueueTerminateCommand(
 void EnqueueTerminateCommand::process() {
     // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_TERMINATE
     // CQ_PREFETCH_CMD_TERMINATE
-    uint32_t cmd_sequence_sizeB = hal.get_alignment(HalMemType::HOST);
+    uint32_t cmd_sequence_sizeB = hal_ref.get_alignment(HalMemType::HOST);
 
     // dispatch and prefetch terminate commands each needs to be a separate fetch queue entry
     void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
