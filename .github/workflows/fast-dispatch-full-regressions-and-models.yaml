@@ -1,4 +1,4 @@
-name: "(Single-card) Nightly model and ttnn tests"
+name: "(Single-card) Frequent model and ttnn tests"
 
 on:
   workflow_dispatch:
