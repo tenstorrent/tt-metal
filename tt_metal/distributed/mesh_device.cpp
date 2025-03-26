@@ -23,6 +23,8 @@
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/api/tt-metalium/device_pool.hpp"
+#include "tt_metal/distributed/fd_mesh_command_queue.hpp"
+#include "tt_metal/distributed/sd_mesh_command_queue.hpp"
 
 #include <hal.hpp>
 #include <mesh_coord.hpp>
@@ -332,7 +334,6 @@ IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
 IDevice* MeshDevice::get_device(const MeshCoordinate& coord) const { return view_->get_device(coord); }
 
 MeshCommandQueue& MeshDevice::mesh_command_queue(std::size_t cq_id) const {
-    TT_FATAL(this->using_fast_dispatch(), "Can only access the MeshCommandQueue when using Fast Dispatch.");
     TT_FATAL(cq_id < mesh_command_queues_.size(), "cq_id {} is out of range", cq_id);
     return *(mesh_command_queues_[cq_id]);
 }
@@ -722,13 +723,17 @@ bool MeshDevice::initialize(
     mesh_command_queues_.reserve(this->num_hw_cqs());
     if (this->using_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
-            mesh_command_queues_.push_back(std::make_unique<MeshCommandQueue>(
+            mesh_command_queues_.push_back(std::make_unique<FDMeshCommandQueue>(
                 this,
                 cq_id,
                 dispatch_thread_pool_,
                 reader_thread_pool_,
                 worker_launch_message_buffer_state  //
                 ));
+        }
+    } else {
+        for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
+            mesh_command_queues_.push_back(std::make_unique<SDMeshCommandQueue>(this, cq_id));
         }
     }
     return true;
