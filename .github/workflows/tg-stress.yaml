@@ -19,6 +19,7 @@ jobs:
       - in-service
       - config-tg
       - arch-wormhole_b0
+      - pipeline-functional
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
@@ -58,8 +59,8 @@ jobs:
         run: |
           WHEEL_FILENAME=$(ls -1 *.whl)
           pip3 install $WHEEL_FILENAME
-      - name: Run quick tests
-        timeout-minutes: 20
+      - name: Run stress tests
+        timeout-minutes: 360
         run: |
           pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "full and batch-32-stress-test"
       - uses: ./.github/actions/slack-report
