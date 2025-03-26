@@ -17,13 +17,19 @@ void SortDeviceOperation::validate_with_output_tensors(
         if (output_tensors.at(0).has_value() && output_tensors.at(1).has_value()) {
             const auto output_tensor_shape = output_tensors.at(0)->get_padded_shape();
             TT_FATAL(
-                output_tensor_shape != input_tensor_shape,
-                "Output tensor shape must be the same as input tensor shape");
-
+                output_tensor_shape == input_tensor_shape,
+                "Output tensor shape must be the same as input tensor shape. Got output tensor shape: {} and input "
+                "tensor shape: {}",
+                output_tensor_shape,
+                input_tensor_shape);
             const auto output_indices_shape = output_tensors.at(1)->get_padded_shape();
             TT_FATAL(
-                output_indices_shape != input_tensor_shape,
-                "Output tensor indices shape must be the same as input tensor shape");
+                output_indices_shape == input_tensor_shape,
+                "Output tensor indices shape must be the same as input tensor shape. Got output indices tensor shape: "
+                "{} and "
+                "input tensor shape: {}",
+                output_indices_shape,
+                input_tensor_shape);
         }
     }
 }
