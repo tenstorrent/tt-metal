@@ -367,29 +367,22 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
     // Construct CBs
     InplaceCBIndices cb_indices = InplaceCBIndices();
     cb_indices.src_cb_id = cb_indices.get_next_cb_id();
-    auto src_cb_config = CircularBufferConfig(input_npages * in_page_size, {{cb_indices.src_cb_id, in_df}})
-                             .set_page_size(cb_indices.src_cb_id, in_page_size)
-                             .set_globally_allocated_address(*src_buffer);
-    auto src_cb = CreateCircularBuffer(program, all_cores, src_cb_config);
-    log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", cb_indices.src_cb_id, input_npages, in_page_size);
+    auto src_cb =
+        create_circular_buffer(program, all_cores, cb_indices.src_cb_id, in_df, input_npages, in_page_size, src_buffer);
 
     uint32_t input_to_writer_cb_id = cb_indices.src_cb_id;
-    cb_indices.out_cb_id = cb_indices.get_next_cb_id();
+
     uint32_t out_cb_pagesize = out_stick_nbytes;
     uint32_t out_cb_npages = max_out_nsticks_per_core;
-    auto out_cb_config = CircularBufferConfig(out_cb_npages * out_cb_pagesize, {{cb_indices.out_cb_id, out_df}})
-                             .set_page_size(cb_indices.out_cb_id, out_cb_pagesize)
-                             .set_globally_allocated_address(*dst_buffer);
-    auto out_cb = CreateCircularBuffer(program, all_cores, out_cb_config);
-    log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", cb_indices.out_cb_id, out_cb_npages, out_cb_pagesize);
+    cb_indices.out_cb_id = cb_indices.get_next_cb_id();
+    auto out_cb = create_circular_buffer(
+        program, all_cores, cb_indices.out_cb_id, out_df, out_cb_npages, out_cb_pagesize, dst_buffer);
 
     uint32_t pad_cb_pagesize = out_stick_nbytes;
     uint32_t pad_cb_npages = 1;
     cb_indices.pad_cb_id = cb_indices.get_next_cb_id();
-    auto pad_cb_config = CircularBufferConfig(pad_cb_pagesize * pad_cb_npages, {{cb_indices.pad_cb_id, out_df}})
-                             .set_page_size(cb_indices.pad_cb_id, pad_cb_pagesize);
-    auto pad_cb = CreateCircularBuffer(program, all_cores, pad_cb_config);
-    log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", cb_indices.pad_cb_id, pad_cb_npages, pad_cb_pagesize);
+    auto pad_cb =
+        create_circular_buffer(program, all_cores, cb_indices.pad_cb_id, out_df, pad_cb_npages, pad_cb_pagesize);
 
     tt::DataFormat kernel_config_df = tt::DataFormat::RawUInt16;  // NOTE: UInt16 is not supported for CB types
     uint32_t config_nbytes =
@@ -400,33 +393,40 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
     TT_ASSERT(local_config1.get_dtype() == DataType::UINT16);
     TT_ASSERT(remote_config1.get_dtype() == DataType::UINT16);
 
-    auto padding_config_buffer1 = padding_config1.device_buffer();
     const uint32_t num_cores = all_cores.num_cores();
+
+    auto padding_config_buffer1 = padding_config1.device_buffer();
     cb_indices.padding_config_cb_id1 = cb_indices.get_next_cb_id();
-    auto padding_config_cb_config1 =
-        CircularBufferConfig(
-            padding_config_buffer1->size() / num_cores, {{cb_indices.padding_config_cb_id1, kernel_config_df}})
-            .set_page_size(cb_indices.padding_config_cb_id1, padding_config_buffer1->page_size())
-            .set_globally_allocated_address(*padding_config_buffer1);
-    CBHandle padding_config_cb1 = CreateCircularBuffer(program, all_cores, padding_config_cb_config1);
+    auto padding_config_cb1 = create_circular_buffer(
+        program,
+        all_cores,
+        cb_indices.padding_config_cb_id1,
+        kernel_config_df,
+        1,
+        padding_config_buffer1->size() / num_cores,
+        padding_config_buffer1.get());
 
-    cb_indices.local_config_cb_id1 = cb_indices.get_next_cb_id();
     auto local_config_buffer1 = local_config1.device_buffer();
-    auto local_config_cb_config1 =
-        CircularBufferConfig(
-            local_config_buffer1->size() / num_cores, {{cb_indices.local_config_cb_id1, kernel_config_df}})
-            .set_page_size(cb_indices.local_config_cb_id1, local_config_buffer1->page_size())
-            .set_globally_allocated_address(*local_config_buffer1);
-    CBHandle local_config_cb1 = CreateCircularBuffer(program, all_cores, local_config_cb_config1);
+    cb_indices.local_config_cb_id1 = cb_indices.get_next_cb_id();
+    auto local_config_cb1 = create_circular_buffer(
+        program,
+        all_cores,
+        cb_indices.local_config_cb_id1,
+        kernel_config_df,
+        1,
+        local_config_buffer1->size() / num_cores,
+        local_config_buffer1.get());
 
-    cb_indices.remote_config_cb_id1 = cb_indices.get_next_cb_id();
     auto remote_config_buffer1 = remote_config1.device_buffer();
-    auto remote_config_cb_config1 =
-        CircularBufferConfig(
-            remote_config_buffer1->size() / num_cores, {{cb_indices.remote_config_cb_id1, kernel_config_df}})
-            .set_page_size(cb_indices.remote_config_cb_id1, remote_config_buffer1->page_size())
-            .set_globally_allocated_address(*remote_config_buffer1);
-    CBHandle remote_config_cb1 = CreateCircularBuffer(program, all_cores, remote_config_cb_config1);
+    cb_indices.remote_config_cb_id1 = cb_indices.get_next_cb_id();
+    auto remote_config_cb1 = create_circular_buffer(
+        program,
+        all_cores,
+        cb_indices.remote_config_cb_id1,
+        kernel_config_df,
+        1,
+        remote_config_buffer1->size() / num_cores,
+        remote_config_buffer1.get());
 
     const bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
     const bool is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
