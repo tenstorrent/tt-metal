@@ -206,7 +206,7 @@ class TtAttention:
         """
         device = spatial.device()
 
-        tracy.signpost("enter TtAttention")
+        # tracy.signpost("enter TtAttention")
 
         q, k, v = self._spatial_attn.qkv(spatial, num_heads=self._num_heads, deallocate=deallocate)
 
@@ -290,7 +290,7 @@ class TtAttention:
         spatial = self._spatial_attn.out_proj(spatial)
         prompt = self._prompt_attn.out_proj(prompt)
 
-        tracy.signpost("exit TtAttention")
+        # tracy.signpost("exit TtAttention")
 
         return spatial, prompt
 

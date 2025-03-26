@@ -181,7 +181,6 @@ class TtLinearParameters:
             torch_bias = state["bias"].unsqueeze(0)
         else:
             torch_bias = None
-
         weight = state["weight"]
         if os.environ["FAKE_DEVICE"] == "T3K":
             hidden_dim = 2432
