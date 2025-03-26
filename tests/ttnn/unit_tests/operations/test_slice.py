@@ -152,6 +152,10 @@ def num_to_core_range_set(x):
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_slice_write_height_sharded(device, dims, slice_dim, slice_size, cores, layout, orientation):
+    core_grid = device.core_grid
+    if core_grid.x * core_grid.y < cores:
+        pytest.skip("Device does not have enough cores")
+
     strides = [1, 1, 1, 1]
     torch.manual_seed(2005)
     torch_input = torch.randint(-10, 10, dims)
@@ -192,6 +196,10 @@ def test_slice_write_height_sharded(device, dims, slice_dim, slice_size, cores, 
 @pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
 def test_slice_write_block_sharded(device, dims, slice_dim, slice_size, core_x, core_y, layout, orientation):
+    core_grid = device.core_grid
+    if core_grid.x < core_x or core_grid.y < core_y:
+        pytest.skip("Device does not have enough cores")
+
     strides = [1, 1, 1, 1]
     torch.manual_seed(2005)
     torch_input = torch.randint(-10, 10, dims)
