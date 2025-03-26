@@ -19,7 +19,7 @@ Authors: Mark O'Connor, Djordje Ivanovic, Jack (Xun) Cai, Kartik Paigwar, Johann
     - [3.2 Prefill and Decode](#32-prefill-and-decode)
     - [3.3 Multi-Device](#33-multi-device)
     - [3.4 Continuous Batching](#34-continuous-batching)
-    - [3.5 vLLM Integration](#34-vllm-integration)
+    - [3.5 vLLM Integration](#35-vllm-integration)
   - [4. Best Practices and Optimizations](#4-best-practices-and-optimizations)
     - [4.1 Tracing](#41-tracing)
     - [4.2 Async Mode](#42-async-mode)
