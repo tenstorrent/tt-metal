@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cassert>
 #include <cstdint>
 
 namespace tt {
@@ -19,7 +20,10 @@ namespace tt {
  *
  * @note If b is zero, this results in undefined behavior.
  */
-constexpr uint32_t div_up(uint32_t a, uint32_t b) { return static_cast<uint32_t>((a + b - 1) / b); }
+constexpr uint32_t div_up(uint32_t a, uint32_t b) {
+    assert(b != 0 && "Divide by zero error in div_up");
+    return static_cast<uint32_t>((a + b - 1) / b);
+}
 
 /**
  * @brief Rounds up a to the nearest multiple of b.
