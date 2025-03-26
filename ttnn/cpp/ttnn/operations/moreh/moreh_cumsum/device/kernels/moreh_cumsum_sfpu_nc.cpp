@@ -75,12 +75,8 @@ void MAIN {
             cb_push_back(cb_out0, 1);
             tile_regs_release();
         }
-        tile_regs_acquire();  // has to be called for both threads, neither one can pop from intermed while someone else
-                              // works with it
-        tile_regs_wait();
+        cb_wait_front(cb_intermed, 1);
         cb_pop_front(cb_intermed, 1);  // this solves blocking in cases where outer loop has multiple iterations
-        tile_regs_commit();
-        tile_regs_release();
     }
     cb_pop_front(cb_in1, 1);
 }
