@@ -42,12 +42,12 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "paged_attention",
     (
-        # True,
-        False,
+        True,
+        # False,
     ),
     ids=(
-        # "paged_attention",
-        "default_attention",
+        "paged_attention",
+        # "default_attention",
     ),
 )
 @pytest.mark.parametrize(
@@ -100,7 +100,7 @@ def test_llama_model_inference(
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len)
     model_args.use_prefetcher = False
-    model_args.n_layers = 1
+    model_args.n_layers = 3
     tokenizer = Tokenizer(model_args.tokenizer_path)
 
     logger.info("Loading weights...")
@@ -248,7 +248,7 @@ def test_llama_model_inference(
 
                     tt_layer_present = []
                     if paged_attention:
-                        for layer_past in tt_model.layers[l].attention.layer_past:
+                        for layer_past in tt_model.layers[i].attention.layer_past:
                             tt_layer_present.append(
                                 ttnn.to_torch(
                                     layer_past,
@@ -292,7 +292,7 @@ def test_llama_model_inference(
                                     :batch_size, ...
                                 ]
                             )
-                            for cache in tt_model.layers[l].attention.layer_past
+                            for cache in tt_model.layers[i].attention.layer_past
                         ]
                     else:
                         for layer_past in tt_model.layers[i].attention.layer_past:

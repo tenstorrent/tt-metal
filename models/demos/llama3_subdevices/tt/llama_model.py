@@ -468,21 +468,18 @@ class TtTransformer(LightweightModule):
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
             )
-        ttnn.deallocate(h)
+        # ttnn.deallocate(h)
         if mode == "decode":
             ttnn.deallocate(garbage_tensor)
 
         if mode == "prefill" and get_last_token == -1:
             return x
+        # Output norm
+        x, res = self.norm(x, res=None, mode=mode)
 
         # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
         if get_last_token != -1:
             x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
-
-        # Output norm
-        x_norm, res = self.norm(x, res=None, mode=mode)
-
-        x = x_norm
 
         return self.lm_head(x, None if mode == "prefill" else self.prefetcher_setup.worker_sub_device_id, mode=mode)
 

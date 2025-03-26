@@ -7,7 +7,6 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.llama3_subdevices.tt.llama_ccl import tt_all_reduce, tt_all_gather
 
 
 class TtLlamaAttention(LightweightModule):
@@ -463,7 +462,7 @@ class TtLlamaAttention(LightweightModule):
         if seq_len > 2048:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
 
-        ttnn.deallocate(x_11SH)
+        # ttnn.deallocate(x_11SH)
 
         # split qkv into heads
         (
@@ -478,7 +477,7 @@ class TtLlamaAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        ttnn.deallocate(xqkv_fused)
+        # ttnn.deallocate(xqkv_fused)
 
         ###
         # Rotary embeddings

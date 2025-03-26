@@ -5,7 +5,6 @@
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.llama3_subdevices.tt.llama_ccl import tt_all_reduce
 import torch.nn.functional as F
 
 
@@ -223,7 +222,7 @@ class TtLlamaMLP(LightweightModule):
             program_config=pc_3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        ttnn.deallocate(x)
+        # ttnn.deallocate(x)
 
         try:
             w1_out_reduced = self.tt_ccl.line_all_reduce(
@@ -245,8 +244,8 @@ class TtLlamaMLP(LightweightModule):
             memory_config=w1_out.memory_config(),
         )
 
-        ttnn.deallocate(w3_out)
-        ttnn.deallocate(w1_out)
+        # ttnn.deallocate(w3_out)
+        # ttnn.deallocate(w1_out)
         w2_out = ttnn.linear(
             w2_in,
             self.w2,
