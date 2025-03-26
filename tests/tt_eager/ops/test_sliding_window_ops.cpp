@@ -184,8 +184,8 @@ uint32_t validate_generate_functions(
     uint32_t output_n, output_h, output_w;
     std::tie(output_n, output_h, output_w) = std::forward_as_tuple(output_shape[0], output_shape[1], output_shape[2]);
 
-    uint32_t padded_input_h = input_h + 2 * config.pad_hw.first;
-    uint32_t padded_input_w = input_w + 2 * config.pad_hw.second;
+    uint32_t padded_input_h = input_h + config.get_pad_h();
+    uint32_t padded_input_w = input_w + config.get_pad_w();
 
     auto ref_pad_metadata = pad_metadata_from_tensor_metadata(tensor_metadata);
     if (ref_pad_metadata != pad_metadata) {
@@ -404,13 +404,13 @@ int main() {
             .input_hw = {tc.input_h, tc.input_w},
             .window_hw = {tc.filter_h, tc.filter_w},
             .stride_hw = {tc.stride_h, tc.stride_w},
-            .pad_hw = {tc.pad_h, tc.pad_w},
+            .padding = {tc.pad_h, tc.pad_h, tc.pad_w, tc.pad_w},
             .dilation_hw = {1, 1},
             .num_cores_nhw = tc.num_cores_nhw};
         ttnn::Shape input_tensor_shape(
             {config.batch_size,
-             config.input_hw.first + 2 * config.pad_hw.first,
-             config.input_hw.second + 2 * config.pad_hw.second});
+             config.input_hw.first + config.get_pad_h(),
+             config.input_hw.second + config.get_pad_w()});
         auto output_tensor_shape = config.get_output_shape();
         ttnn::Shape filter_tensor_shape({config.window_hw.first, config.window_hw.second});
 

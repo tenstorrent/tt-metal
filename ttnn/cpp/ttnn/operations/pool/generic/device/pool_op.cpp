@@ -133,16 +133,16 @@ tt::tt_metal::operation::OpPerformanceModel Pool2D::create_op_performance_model(
     uint32_t filter_w = sliding_window_config.window_hw.second;
     uint32_t stride_h = sliding_window_config.stride_hw.first;
     uint32_t stride_w = sliding_window_config.stride_hw.second;
-    uint32_t pad_h = sliding_window_config.pad_hw.first;
-    uint32_t pad_w = sliding_window_config.pad_hw.second;
+    uint32_t pad_h = sliding_window_config.get_pad_h();
+    uint32_t pad_w = sliding_window_config.get_pad_w();
 
     // GS specific parameters
     int num_cores = 9 * 12;
     int tensix_mul_adds_per_cycle_lofi = 2048;
 
     // Calculate output dimensions: relevant for window/stride based OPs (conv, pool, downsample)
-    int output_height = std::floor((activation_h - filter_h + 2 * pad_h) / stride_h + 1);
-    int output_width = std::floor((activation_w - filter_w + 2 * pad_w) / stride_w + 1);
+    int output_height = std::floor((activation_h - filter_h + pad_h) / stride_h + 1);
+    int output_width = std::floor((activation_w - filter_w + pad_w) / stride_w + 1);
 
     // Calculate number of mul/add / compare operations
     int64_t num_mul_adds_per_elem = activation_c * filter_h * filter_w;  // 1 multiply and 1 add per element

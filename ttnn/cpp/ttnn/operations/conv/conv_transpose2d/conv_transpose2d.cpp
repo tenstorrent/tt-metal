@@ -130,7 +130,7 @@ Result conv_transpose2d(
         .input_hw = {input_height, input_width},
         .window_hw = {kernel_size[0], kernel_size[1]},
         .stride_hw = {stride[0], stride[1]},
-        .pad_hw = {padding[0], padding[1]},
+        .padding = sliding_window::get_pair_n4_padding(padding),
         .output_pad_hw = {output_padding[0], output_padding[1]},
         .dilation_hw = {dilation[0], dilation[1]},
         .is_transpose = true};

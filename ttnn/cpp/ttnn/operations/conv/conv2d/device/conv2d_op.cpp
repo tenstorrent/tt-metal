@@ -368,8 +368,8 @@ operation::OpPerformanceModel OptimizedConvNew::create_op_performance_model(
     uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
     uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw.first;
     uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw.second;
-    uint32_t pad_h = (uint32_t)sliding_window_config.pad_hw.first;
-    uint32_t pad_w = (uint32_t)sliding_window_config.pad_hw.second;
+    uint32_t pad_h = (uint32_t)sliding_window_config.get_pad_h();
+    uint32_t pad_w = (uint32_t)sliding_window_config.get_pad_w();
     uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
     uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
 
@@ -389,7 +389,7 @@ operation::OpPerformanceModel OptimizedConvNew::create_op_performance_model(
         {conv_activation_h, conv_activation_w},
         {filter_h, filter_w},
         {stride_h, stride_w},
-        {pad_h, pad_w},
+        sliding_window_config.padding,
         {dilation_h, dilation_w});
 
     // Calculate number of mul/add operations
