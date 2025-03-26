@@ -137,6 +137,8 @@ class RunTimeOptions {
 
     bool erisc_iram_enabled = false;
 
+    bool fast_dispatch = true;
+
     RunTimeOptions();
 
 public:
@@ -329,6 +331,7 @@ public:
     inline const std::filesystem::path& get_simulator_path() { return simulator_path; }
 
     inline bool get_erisc_iram_enabled() { return erisc_iram_enabled; }
+    inline bool get_fast_dispatch() { return fast_dispatch; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.

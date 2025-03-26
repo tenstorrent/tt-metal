@@ -393,6 +393,8 @@ std::unordered_set<chip_id_t> Cluster::user_exposed_chip_ids() const {
     }
 }
 
+std::unordered_set<chip_id_t> Cluster::all_chip_ids() const { return this->cluster_desc_->get_all_chips(); }
+
 const metal_SocDescriptor &Cluster::get_soc_desc(chip_id_t chip) const {
     if (this->sdesc_per_chip_.find(chip) == this->sdesc_per_chip_.end()) {
         TT_THROW(

@@ -19,6 +19,7 @@
 #include "host_api.hpp"
 #include "erisc_datamover_builder.hpp"
 #include <tt_metal.hpp>
+#include <tt-metalium/metal_context.hpp>
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
@@ -207,12 +208,14 @@ void DevicePool::initialize(
     tt::stl::Span<const std::uint32_t> l1_bank_remap) noexcept {
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool initialize");
+    tt::tt_metal::MetalContext::initialize(
+        dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()});
     // Initialize the dispatch core manager, responsible for assigning dispatch cores
-    tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_config, num_hw_cqs);
+    // tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_config, num_hw_cqs);
     // Initialize the dispatch query layer, used by runtime command generation
-    tt_metal::DispatchQueryManager::initialize(num_hw_cqs);
+    // tt_metal::DispatchQueryManager::initialize(num_hw_cqs);
     // Initialize DispatchSettings with defaults
-    tt_metal::DispatchSettings::initialize(tt::Cluster::instance());
+    // tt_metal::DispatchSettings::initialize(tt::Cluster::instance());
 
     if (_inst == nullptr) {
         static DevicePool device_pool{};
@@ -272,17 +275,17 @@ void DevicePool::initialize_host(IDevice* dev) const {
         TT_ASSERT(dev->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
     }
 
-    ClearNocData(dev->id());
-    DprintServerAttach(dev->id());
-    watcher_init(dev->id());
+    // ClearNocData(dev->id());
+    // DprintServerAttach(dev->id());
+    // watcher_init(dev->id());
 
     // TODO: as optimization, investigate removing all this call for already initialized devivces
     if (!llrt::RunTimeOptions::get_instance().get_skip_reset_cores_on_init()) {
-        dev->reset_cores();
+        // dev->reset_cores();
     }
-    dev->initialize_and_launch_firmware();
+    // dev->initialize_and_launch_firmware();
 
-    watcher_attach(dev->id());
+    // watcher_attach(dev->id());
 }
 
 void DevicePool::initialize_active_devices() const {
@@ -357,23 +360,27 @@ void DevicePool::activate_device(chip_id_t id) {
             false,
             worker_core_thread_core,
             completion_queue_reader_core);
+        /*
         if (!this->firmware_built_keys.contains(
                 BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)) {
             BuildEnvManager::get_instance().build_firmware(device->build_id());
             this->firmware_built_keys.insert(
                 BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
         }
+        */
         this->devices.emplace_back(std::unique_ptr<IDevice>(device));
     } else {
         log_debug(tt::LogMetal, "DevicePool re-initialize device {}", id);
         if (not device->is_initialized()) {
             device->initialize(num_hw_cqs, this->l1_small_size, this->trace_region_size, this->l1_bank_remap);
+            /*
             if (!this->firmware_built_keys.contains(
                     BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)) {
                 BuildEnvManager::get_instance().build_firmware(device->build_id());
                 this->firmware_built_keys.insert(
                     BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
             }
+            */
         } else {
             TT_THROW("Cannot re-initialize device {}, must first call close()", id);
         }
@@ -436,9 +443,9 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
         }
     }
 
-    this->using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
+    this->using_fast_dispatch = tt::llrt::RunTimeOptions::get_instance().get_fast_dispatch();
     if (this->using_fast_dispatch) {
-        populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
+        // populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
     }
 }
 

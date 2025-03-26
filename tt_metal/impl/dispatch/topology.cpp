@@ -1116,4 +1116,16 @@ void configure_fabric_cores(IDevice* device) {
     }
 }
 
+std::vector<CoreDescriptor> get_logical_dispatch_cores(chip_id_t device_id) {
+    TT_ASSERT(!node_id_to_kernel.empty(), "get_dispatch_cores called without populating dispatch cores.");
+    std::vector<CoreDescriptor> dispatch_cores;
+    for (auto fd_kernel : node_id_to_kernel) {
+        if (fd_kernel->GetDeviceId() == device_id) {
+            CoreDescriptor cd = {.coord = fd_kernel->GetLogicalCore(), .type = fd_kernel->GetCoreType()};
+            dispatch_cores.push_back(cd);
+        }
+    }
+    return dispatch_cores;
+}
+
 }  // namespace tt::tt_metal

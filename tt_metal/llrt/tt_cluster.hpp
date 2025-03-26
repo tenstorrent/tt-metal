@@ -71,6 +71,7 @@ public:
     std::unordered_set<chip_id_t> user_exposed_chip_ids() const;
 
     size_t number_of_devices() const { return this->cluster_desc_->get_number_of_chips(); }
+    std::unordered_set<chip_id_t> all_chip_ids() const;
 
     size_t number_of_pci_devices() const { return this->cluster_desc_->get_chips_with_mmio().size(); }
 
