@@ -6,7 +6,7 @@ import json
 import torch
 from loguru import logger
 
-from transformers import T5Model, AutoModelForSeq2SeqLM
+from transformers import T5Model
 from models.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,

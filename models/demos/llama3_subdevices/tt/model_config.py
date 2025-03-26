@@ -17,8 +17,6 @@ from models.tt_transformers.tt.common import (
     calculate_hidden_dim,
     get_out_subblock_w,
     encode_prompt_instruct,
-    encode_prompt_hf,
-    nearest_multiple,
 )
 from typing import Tuple
 from models.utility_functions import nearest_32
@@ -28,8 +26,6 @@ from dataclasses import dataclass
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
     PREFETCHER_NOC1_GRID,
-    num_cores_to_rectangle_grid,
-    get_physical_to_logical_core_mapping,
 )
 
 from tests.ttnn.unit_tests.operations.prefetcher_common import get_core_ranges

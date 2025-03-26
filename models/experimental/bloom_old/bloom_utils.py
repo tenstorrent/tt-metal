@@ -4,18 +4,7 @@
 
 import torch
 import json
-import numpy as np
 import ttnn
-from models.utility_functions import (
-    pad_activation,
-    pad_weight,
-    tilize_to_list,
-    untilize,
-    nearest_32,
-    print_diff_argmax,
-    tt2torch,
-    tt2torch_rm,
-)
 
 
 def calculate_shape(input_tensor_shape):

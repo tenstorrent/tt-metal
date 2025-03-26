@@ -12,7 +12,6 @@ from models.generation_utils import get_logits_processor
 import ttnn
 
 from transformers import T5ForConditionalGeneration, AutoTokenizer, T5Config
-from models.demos.grayskull.t5.tt import ttnn_functional_t5
 from models.demos.grayskull.t5.tt import ttnn_optimized_functional_t5
 from ttnn.model_preprocessing import preprocess_model_parameters
 

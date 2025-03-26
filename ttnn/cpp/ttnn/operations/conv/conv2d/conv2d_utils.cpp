@@ -188,16 +188,16 @@ std::tuple<uint32_t, uint32_t> calculate_output_image_size(
     std::array<uint32_t, 2> input_image_size,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    std::array<uint32_t, 4> padding,
     std::array<uint32_t, 2> dilation) {
-    const uint32_t output_height =
-        ((input_image_size[0] - kernel_size[0] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[0]) /
-         stride[0]) +
-        1;
-    const uint32_t output_width =
-        ((input_image_size[1] - kernel_size[1] - ((kernel_size[1] - 1) * (dilation[1] - 1)) + 2 * padding[1]) /
-         stride[1]) +
-        1;
+    const uint32_t output_height = ((input_image_size[0] - kernel_size[0] - ((kernel_size[0] - 1) * (dilation[0] - 1)) +
+                                     (padding[0] + padding[1])) /
+                                    stride[0]) +
+                                   1;
+    const uint32_t output_width = ((input_image_size[1] - kernel_size[1] - ((kernel_size[1] - 1) * (dilation[1] - 1)) +
+                                    (padding[2] + padding[3])) /
+                                   stride[1]) +
+                                  1;
     return {output_height, output_width};
 }
 
@@ -300,13 +300,6 @@ static std::pair<uint32_t, uint32_t> determine_largest_subblock_size(
         {1, 5}, {5, 1}, {2, 2}, {1, 4}, {4, 1}, {1, 3}, {3, 1}, {1, 2}, {2, 1}, {1, 1},
     }};
 
-    // # Issue 18812. Temporarily solution for BH CI while hang is not resolved.
-    static bool conv2d_subblock_env_set = (std::getenv("TT_METAL_CONV2D_1_1_SUBBLOCK") != nullptr);
-
-    if (conv2d_subblock_env_set) {
-        return {1, 1};
-    }
-
     uint32_t subblock_h = 0;
     uint32_t subblock_w = 0;
     for (auto [subblock_height, subblock_width] : subblocks) {
@@ -405,14 +398,15 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
 bool use_matmul_for_1x1_conv(
     const std::array<uint32_t, 2>& kernel_size,
     const std::array<uint32_t, 2>& stride,
-    const std::array<uint32_t, 2>& padding,
+    const std::array<uint32_t, 4>& padding,
     const std::array<uint32_t, 2>& dilation,
     uint32_t groups,
     const Conv2dConfig& conv_config) {
     bool is_width_sharded =
         (conv_config.shard_layout.has_value() && conv_config.shard_layout.value() == TensorMemoryLayout::WIDTH_SHARDED);
     return kernel_size[0] == 1 && kernel_size[1] == 1 && stride[0] == stride[1] && stride[0] == 1 && padding[0] == 0 &&
-           padding[1] == 0 && dilation[0] == 1 && dilation[1] == 1 && groups == 1 && (not is_width_sharded);
+           padding[1] == 0 && padding[2] == 0 && padding[3] == 0 && dilation[0] == 1 && dilation[1] == 1 &&
+           groups == 1 && (not is_width_sharded);
 }
 
 bool is_1d_conv(uint32_t kernel_width, uint32_t image_width) { return kernel_width == 1 && image_width == 1; }

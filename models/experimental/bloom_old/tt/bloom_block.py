@@ -3,21 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import math
-from torch.nn import functional as F
-from torch.nn import LayerNorm
 
 import models.experimental.bloom_old.bloom_utils as bloom_utils
 import models.experimental.bloom_old.tt.bloom_attention as bloom_attention
 import models.experimental.bloom_old.tt.bloom_mlp as bloom_mlp
 
-from fused_ops.linear import Linear as TtLinear
 from fused_ops.layernorm import Layernorm as TtLayernorm
 
-from fused_ops.softmax import softmax as TtSoftmax
-from transformers import BloomForCausalLM
 
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple
 
 
 class TtBloomBlock(torch.nn.Module):

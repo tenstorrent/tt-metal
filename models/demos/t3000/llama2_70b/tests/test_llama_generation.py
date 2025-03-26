@@ -3,42 +3,24 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
 from loguru import logger
-import torch
-from torch import nn
-import ttnn
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
 
-
-import scipy
-from sklearn.metrics import top_k_accuracy_score
-import numpy as np
 
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.t3000.llama2_70b.tt.llama_generation import TtLlamaModelForGeneration
 
 
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, skip_for_grayskull, get_devices_for_t3000
+from models.utility_functions import skip_for_grayskull
 from models.demos.t3000.llama2_70b.tt.llama_common import (
     setup_llama_env,
-    check_mesh_device,
-    extract_pcc_from_log,
-    MAX_SEQ_LEN,
-    BASE_URL,
-    UNIT_TEST_START_POS,
-    UNIT_TEST_GENERATION_LENGTH,
     comp_pcc,
-    should_skip_model_load,
-    check_kv_cache,
 )
 
 from models.demos.t3000.llama2_70b.demo.demo import (
-    build_generator,
     load_prompts_file,
     intialize_inputs,
     prepare_next_input,
     get_sampling_func,
     construct_arg,
-    DemoArgs,
 )
 
 
