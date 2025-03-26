@@ -25,14 +25,7 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition
 
 from models.perf.perf_utils import prep_perf_report
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
-from models.utility_functions import profiler, skip_for_grayskull
-
-
-def ttnn_to_torch(input):
-    input = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)
-    input = ttnn.from_device(input)
-    input = ttnn.to_torch(input)
-    return input
+from models.utility_functions import profiler, is_wormhole_b0
 
 
 def constant_prop_time_embeddings(timesteps, sample, time_proj):
@@ -55,7 +48,6 @@ def unsqueeze_all_params_to_4d(params):
     return params
 
 
-@skip_for_grayskull()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
@@ -64,10 +56,9 @@ def unsqueeze_all_params_to_4d(params):
         (2, 4, 3600, 0.14),  # Issue 7816 Inference time
     ],
 )
-def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected_compile_time, expected_inference_time):
-    device.enable_program_cache()
-    # disable_persistent_kernel_cache()
-
+def test_stable_diffusion_perf(
+    device, batch_size, num_inference_steps, expected_compile_time, expected_inference_time, use_program_cache
+):
     assert (
         num_inference_steps >= 4
     ), f"PNDMScheduler only supports num_inference_steps >= 4. Found num_inference_steps={num_inference_steps}"
@@ -160,7 +151,7 @@ def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected
             return_dict=return_dict,
             config=config,
         )
-        ttnn_output = ttnn_to_torch(ttnn_output)
+        ttnn_output = ttnn.to_torch(ttnn_output)
         profiler.end(f"model_run_for_inference_{i}")
 
     # printout the perf
@@ -202,13 +193,14 @@ def test_stable_diffusion_device_perf(expected_kernel_samples_per_second):
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
     expected_perf_cols = {inference_time_key: expected_kernel_samples_per_second}
 
-    # back-up the value of WH_ARCH_YAML if exist
-    wh_arch_yaml_backup = None
-    if "WH_ARCH_YAML" in os.environ:
-        wh_arch_yaml_backup = os.environ["WH_ARCH_YAML"]
+    if is_wormhole_b0():
+        # back-up the value of WH_ARCH_YAML if exist
+        wh_arch_yaml_backup = None
+        if "WH_ARCH_YAML" in os.environ:
+            wh_arch_yaml_backup = os.environ["WH_ARCH_YAML"]
+        os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
+        os.environ["SLOW_MATMULS"] = "1"
 
-    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
-    os.environ["SLOW_MATMULS"] = "1"
     post_processed_results = run_device_perf(command, subdir, iterations, cols, batch, has_signposts=True)
     expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=True)
     prep_device_perf_report(
@@ -219,8 +211,9 @@ def test_stable_diffusion_device_perf(expected_kernel_samples_per_second):
         comments="",
     )
 
-    # set WH_ARCH_YAML back to the original value
-    if wh_arch_yaml_backup is not None:
-        os.environ["WH_ARCH_YAML"] = wh_arch_yaml_backup
-    else:
-        del os.environ["WH_ARCH_YAML"]
+    if is_wormhole_b0():
+        # set WH_ARCH_YAML back to the original value
+        if wh_arch_yaml_backup is not None:
+            os.environ["WH_ARCH_YAML"] = wh_arch_yaml_backup
+        else:
+            del os.environ["WH_ARCH_YAML"]
