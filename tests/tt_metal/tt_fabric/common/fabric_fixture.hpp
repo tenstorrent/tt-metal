@@ -9,6 +9,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "rtoptions.hpp"
+#include "tt_cluster.hpp"
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
