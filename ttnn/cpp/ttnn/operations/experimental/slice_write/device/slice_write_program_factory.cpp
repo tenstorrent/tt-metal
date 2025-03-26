@@ -130,11 +130,11 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
         // issue more reads before calling barrier
         uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
         if (num_sticks_per_core != 0) {
+            auto num_sticks_per_core_pad32 = num_sticks_per_core + (32 - num_sticks_per_core % 32) % 32;
             num_sticks_per_core_read =
-                tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core, input_row_size_bytes_offset, max_read_size);
-            num_read_per_barrier = num_sticks_per_core / num_sticks_per_core_read;
+                tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core_pad32, input_row_size_bytes, max_read_size);
+            num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
         }
-
         id_per_dim[0] = num_sticks_read % num_input_sticks_per_dim[0];
         uint32_t unpadded_written = num_sticks_read / num_input_sticks_per_dim[0];
         uint32_t start_id = id_per_dim[0] + start_offset;
@@ -522,8 +522,11 @@ operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
                                                                                          : num_sticks_per_core_group_2;
     uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
     if (num_input_pages != 0) {
-        num_sticks_per_core_read = tt::tt_metal::merge_num_sticks_to_read(num_input_pages, cb_page_size, max_read_size);
-        num_read_per_barrier = num_input_pages / num_sticks_per_core_read;
+        // Round up num_input_pages so that it takes the max of both core groups.
+        auto num_input_pages_pad32 = tt::round_up(num_input_pages, 32);
+        num_sticks_per_core_read =
+            tt::tt_metal::merge_num_sticks_to_read(num_input_pages_pad32, cb_page_size, max_read_size);
+        num_read_per_barrier = num_input_pages_pad32 / num_sticks_per_core_read;
     }
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_read_per_barrier * 2 * cb_page_size, {{src0_cb_index, cb_data_format}})
