@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cmath>
+#include <math.h>
 
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>

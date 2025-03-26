@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cmath>
+#include <math.h>
 
 #include "clone_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
