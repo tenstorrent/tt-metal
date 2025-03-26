@@ -29,8 +29,6 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/trace.hpp"
 
-int get_device_freq() { return 1000; }
-
 std::string dtype_to_string(DataType dtype) {
     switch (dtype) {
         case DataType::BFLOAT16: return "BFLOAT16";
@@ -161,6 +159,11 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
         "Test requires a warmup iteration to be performed with program cache enabled, else unrealistically high "
         "dispatch overhead and will be observed and is not representative of expected performance");
 
+    tt::tt_metal::IDevice* device = device_;
+
+    if (use_program_cache) {
+        device->enable_program_cache();
+    }
     // Parse shape params
     const Matmul_Shape& matmul_shape = std::get<1>(GetParam());
 
@@ -179,11 +182,6 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
 
     TT_FATAL(grid_size.height() > 0 && grid_size.width() > 0, "Invalid grid size");
 
-    tt::tt_metal::IDevice* device = device_;
-
-    if (use_program_cache) {
-        device->enable_program_cache();
-    }
     const char* TT_METAL_HOME = std::getenv("TT_METAL_HOME");
     std::string ARTIFACTS_DIR = std::string(TT_METAL_HOME) + "/generated";
     std::string FILE_NAME =
@@ -388,7 +386,10 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     const double dim_per_tile = (double)m * (double)k * (double)n / tile_h / tile_w;
     double ideal_cycle_full_grid = dim_per_tile / 32 * cycle_per_tile / num_cores_full_grid;
     double ideal_cycle_user_grid = dim_per_tile / 32 * cycle_per_tile / num_cores_user_grid;
-    double inference_cycle = inference_time_avg_s * get_device_freq() * 1e6;
+
+    const int freq_mhz = tt::Cluster::instance().get_device_aiclk(device->id());
+    double inference_cycle = inference_time_avg_s * freq_mhz * 1e6;
+
     double utilization_full_grid = ideal_cycle_full_grid / inference_cycle;
     double utilization_user_grid = ideal_cycle_user_grid / inference_cycle;
     std::string utilization_full_grid_percentage = std::to_string(utilization_full_grid * 100);
