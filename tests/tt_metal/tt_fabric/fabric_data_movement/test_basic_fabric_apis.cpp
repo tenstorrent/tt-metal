@@ -1421,6 +1421,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteAtomicInc) {
         tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
 
     std::map<string, string> defines = {};
+    defines["FVC_MODE_PULL"] = "";
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 1, fabric_mode::PULL};
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
