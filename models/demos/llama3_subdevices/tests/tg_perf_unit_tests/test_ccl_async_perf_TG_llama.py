@@ -119,6 +119,6 @@ def test_ar_tg_llama_perf(
         ml_model_name="llama70b-tg-ccl",
     )
 
-    assert measured_avg_us < perf_target_us * (
-        1 + (THRESHOLD_PERCENT / 100)
+    assert (
+        measured_avg_us < perf_target_us + THRESHOLD
     ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
