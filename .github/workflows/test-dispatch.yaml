@@ -62,6 +62,7 @@ jobs:
       build-type: ${{ inputs.build-type }}
       tracy: ${{ inputs.tracy }}
       version: ${{ inputs.version }}
+      build-wheel: true
     secrets: inherit
   test-dispatch:
     # needs: setup
