@@ -305,11 +305,8 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
         // Main board
         this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back(
             this->get_mesh_physical_chip_ids(mesh_ns_size, mesh_ew_size, nw_chip_physical_id));
-    } else if (mesh_graph_desc_filename == "t3k_mesh_graph_descriptor.yaml") {
-        // TODO: fix routing code for T3K.
-        std::vector<chip_id_t> physical_chip_id_mapping = {4, 0, 3, 7, 5, 1, 2, 6};
-        logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back(physical_chip_id_mapping);
     } else if (
+        mesh_graph_desc_filename == "t3k_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "n150_mesh_graph_descriptor.yaml" ||
         mesh_graph_desc_filename == "n300_mesh_graph_descriptor.yaml") {
         nw_chip_physical_id = this->get_physical_chip_id_from_eth_coord({0, 0, 0, 0, 0});
