@@ -305,6 +305,7 @@ class TT_CCL:
             "FF3": [(1, 1, 128, 3584)],
             "FF2": [(1, 1, 128, 2048)],
             "LAYERNORM": [(1, 1, 128, 128)],
+            # "SAMPLING": [(1, 1, 32, 128 * 1024)]
         }
         for key, shape in buffers_dict.items():
             tt_buffer = ttnn.from_torch(
@@ -347,6 +348,23 @@ class TT_CCL:
                 persistent_buffer.deallocate(True)
         else:
             if self.enable_persistent_fabric:
+                if lm_head:
+                    ttnn_tensor_gathered = self.line_all_gather(
+                        input_tensor_mesh,
+                        dim=0,
+                        num_links=num_links,
+                        cluster_axis=cluster_axis,
+                        memory_config=memory_config,
+                        buffer_key=buffer_key,
+                    )
+                    ttnn_tensor_out = ttnn.experimental.fast_reduce_nc(
+                        ttnn_tensor_gathered,
+                        dims=[0],
+                        output=None,
+                        compute_kernel_config=None,
+                        memory_config=memory_config,
+                    )
+                    return ttnn_tensor_out
                 # ttnn.synchronize_device(self.mesh_device)
                 output_tensor_scattered = self.line_reduce_scatter(
                     input_tensor_mesh,
