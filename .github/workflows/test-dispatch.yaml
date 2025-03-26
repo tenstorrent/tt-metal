@@ -62,6 +62,7 @@ jobs:
       build-type: ${{ inputs.build-type }}
       tracy: ${{ inputs.tracy }}
       version: ${{ inputs.version }}
+      build-wheel: true
     secrets: inherit
   test-dispatch:
     # needs: setup
@@ -80,18 +81,18 @@ jobs:
         uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
-          name: ${{ inputs.build-artifact-name }}
+          name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       - name: Extract files
         run: tar -xvf ttm_any.tar
       - name: ⬇️ Download Wheel
         uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
-          name: ${{ inputs.wheel-artifact-name }}
+          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Run regression in loop in docker
         uses: ./.github/actions/docker-run
         with:
-          docker_image: ${{ needs.build-artifact.dev-docker-image }}
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           install_wheel: true
           docker_opts: |
