@@ -12,8 +12,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
-@pytest.mark.parametrize("h", [32, 384, 2048])
-@pytest.mark.parametrize("w", [64, 1024, 2048])
+@pytest.mark.parametrize("h", [32, 224, 384, 2048])
+@pytest.mark.parametrize("w", [64, 160, 1024, 2048])
 def test_rms_norm(device, batch_size, h, w):
     torch.manual_seed(0)
 
