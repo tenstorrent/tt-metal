@@ -25,12 +25,11 @@ struct BroadcastParam {
     std::vector<int32_t> broadcast_shape;
 };
 
-class Broadcast_toFixture : public TTNNFixture, public testing::WithParamInterface<BroadcastParam> {};
+class Broadcast_toFixture : public TTNNFixtureWithDevice, public testing::WithParamInterface<BroadcastParam> {};
 
 TEST_P(Broadcast_toFixture, Broadcast_to) {
     auto param = GetParam();
-    const auto device_id = 0;
-    auto& device = ttnn::open_device(device_id);
+    auto& device = *device_;
     std::array<uint32_t, 4> dimensions = {param.n, param.c, param.h, param.w};
     ttnn::Shape input_shape(dimensions);
     std::vector<uint32_t> output_size = {
@@ -42,16 +41,14 @@ TEST_P(Broadcast_toFixture, Broadcast_to) {
     ttnn::Shape output_shape(output_size);
 
     const std::optional<MemoryConfig> memory_config = std::nullopt;
-    std::optional<ttnn::Tensor> output = std::nullopt;
-    {
-        const auto input_tensor = ttnn::ones(input_shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
-        auto output_tensor =
-            ttnn::experimental::broadcast_to(input_tensor, param.broadcast_shape, output, memory_config);
-        const auto expected_tensor =
-            ttnn::operations::creation::full(output_shape, 1, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
-        TT_FATAL(
-            ttnn::allclose<::bfloat16>(ttnn::from_device(expected_tensor), ttnn::from_device(output_tensor)), "Error");
-    }
+    const std::optional<ttnn::Tensor> output = std::nullopt;
+
+    const auto input_tensor = ttnn::ones(input_shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
+    auto output_tensor = ttnn::experimental::broadcast_to(input_tensor, output_shape, memory_config, output);
+    const auto expected_tensor =
+        ttnn::operations::creation::full(output_shape, 1, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
+    TT_FATAL(ttnn::allclose<::bfloat16>(ttnn::from_device(expected_tensor), ttnn::from_device(output_tensor)), "Error");
+
     ttnn::close_device(device);
 }
 
