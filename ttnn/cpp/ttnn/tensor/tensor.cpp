@@ -770,8 +770,36 @@ void memcpy(
     }
 }
 
+void memcpy(
+    distributed::MeshCommandQueue& queue,
+    void* dst,
+    const Tensor& src,
+    const std::optional<BufferRegion>& region,
+    bool blocking) {
+    TT_FATAL(is_device_tensor(src), "memcpy: src tensor must be on device");
+
+    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
+        TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
+    }
+
+    auto device = queue.device();
+    TT_FATAL(device->num_devices() == 1, "memcpy only supports single device mesh");
+    auto single_device_id = device->get_device_ids()[0];
+    std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
+        .shard_coord = device->get_view().find_device(single_device_id),
+        .host_data = dst,
+        .region = region,
+    }};
+    queue.enqueue_read_shards(shard_data_transfers, src.mesh_buffer(), blocking);
+}
+
 void memcpy(void* dst, const Tensor& src, const std::optional<BufferRegion>& region, bool blocking) {
-    memcpy(src.device()->command_queue(), dst, src, region, blocking);
+    if (auto mesh_device = src.mesh_device()) {
+        memcpy(mesh_device->mesh_command_queue(), dst, src, region, blocking);
+    } else {
+        memcpy(src.device()->command_queue(), dst, src, region, blocking);
+    }
 }
 
 void memcpy(CommandQueue& queue, Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
@@ -789,8 +817,32 @@ void memcpy(CommandQueue& queue, Tensor& dst, const void* src, const std::option
     }
 }
 
+void memcpy(
+    distributed::MeshCommandQueue& queue, Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
+    TT_FATAL(is_device_tensor(dst), "memcpy: memcpy to non-device tensor is not supported!");
+
+    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
+        TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
+    }
+
+    auto device = queue.device();
+    TT_FATAL(device->num_devices() == 1, "memcpy only supports single device mesh");
+    auto single_device_id = device->get_device_ids()[0];
+    std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
+        .shard_coord = device->get_view().find_device(single_device_id),
+        .host_data = const_cast<void*>(src),
+        .region = region,
+    }};
+    queue.enqueue_write_shards(dst.mesh_buffer(), shard_data_transfers, false);
+}
+
 void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
-    memcpy(dst.device()->command_queue(), dst, src, region);
+    if (auto mesh_device = dst.mesh_device()) {
+        memcpy(dst.mesh_device()->mesh_command_queue(), dst, src, region);
+    } else {
+        memcpy(dst.device()->command_queue(), dst, src, region);
+    }
 }
 
 void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region) {
@@ -811,11 +863,38 @@ void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src, const std::opti
     }
 }
 
+void memcpy(
+    distributed::MeshCommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region) {
+    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
+        TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
+    }
+
+    TT_ASSERT(dst.get_dtype() == src.get_dtype());
+    TT_ASSERT(dst.get_layout() == src.get_layout());
+
+    if (is_cpu_tensor(dst) && is_device_tensor(src)) {
+        memcpy(queue, get_raw_host_data_ptr(dst), src, region);
+    } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
+        memcpy(queue, dst, get_raw_host_data_ptr(src), region);
+    } else {
+        TT_THROW("Unsupported memcpy");
+    }
+}
+
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region) {
     if (is_cpu_tensor(dst) && is_device_tensor(src)) {
-        memcpy(src.device()->command_queue(), dst, src, region);
+        if (auto mesh_device = src.mesh_device()) {
+            memcpy(mesh_device->mesh_command_queue(), dst, src, region);
+        } else {
+            memcpy(src.device()->command_queue(), dst, src, region);
+        }
     } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
-        memcpy(dst.device()->command_queue(), dst, src, region);
+        if (auto mesh_device = dst.mesh_device()) {
+            memcpy(mesh_device->mesh_command_queue(), dst, src, region);
+        } else {
+            memcpy(dst.device()->command_queue(), dst, src, region);
+        }
     } else {
         TT_THROW("Unsupported memcpy");
     }
@@ -886,7 +965,8 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
                 "Error");
             std::visit(
                 tt::stl::overloaded{
-                    [worker, worker_index, cq_id, &async_safe_tensor](const DeviceStorage& device_storage) {
+                    [worker, worker_index, cq_id, &async_safe_tensor, &device_tensor](
+                        const DeviceStorage& device_storage) {
                         // Copying from host to a single device.
                         void* host_data = std::visit(
                             tt::stl::overloaded{
@@ -908,11 +988,12 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id
                                 [](auto&&) -> void* { TT_THROW("Unreachable"); },
                             },
                             async_safe_tensor.get_storage());
-                        EnqueueWriteBuffer(
-                            worker->command_queue(*cq_id),
-                            *device_storage.get_buffer(),
-                            host_data,
-                            /*blocking=*/false);
+                        if (auto mesh_device = device_tensor.mesh_device()) {
+                            tt::tt_metal::memcpy(mesh_device->mesh_command_queue(*cq_id), device_tensor, host_data);
+                        } else {
+                            tt::tt_metal::memcpy(
+                                device_tensor.device()->command_queue(*cq_id), device_tensor, host_data);
+                        }
                     },
                     [](auto&& s) { TT_THROW("Unreachable"); }},
                 device_tensor.get_storage());

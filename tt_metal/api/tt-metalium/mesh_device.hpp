@@ -200,7 +200,7 @@ public:
     void synchronize() override;
     WorkExecutorMode get_worker_mode() override;
     bool is_worker_queue_empty() const override;
-    void push_work(std::function<void()> work, bool blocking) override;
+    void push_work(std::function<void()> work, bool blocking = false) override;
     void enable_program_cache() override;
     void disable_and_clear_program_cache() override;
     program_cache::detail::ProgramCache& get_program_cache() override;
