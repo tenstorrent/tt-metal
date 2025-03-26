@@ -118,7 +118,7 @@ namespace ttnn::distributed::test {
 using DistributedEndToEndTests = T3000MeshDeviceFixture;
 
 TEST_F(DistributedEndToEndTests, ProgramDispatchTest) {
-    auto mesh_device = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape(1, 2)});
+    auto mesh_device = MeshDevice::create(MeshDeviceConfig(MeshShape(2, 4)));
 
     EXPECT_NE(mesh_device->get_devices().size(), 2);
     EXPECT_EQ(mesh_device->shape(), MeshShape(1, 2));
@@ -130,7 +130,7 @@ TEST_F(DistributedEndToEndTests, ProgramDispatchTest) {
     auto example_program = CreateProgram();
 
     auto target_tensix_cores = CoreRange{
-        CoreCoord{0, 0} /* start_coord */, CoreCoord{0, 1} /* end_coord */
+        CoreCoord{0, 0} /* start_coord */, CoreCoord{1, 1} /* end_coord */
     };
 
     auto compute_kernel_id = CreateKernel(
@@ -152,13 +152,12 @@ TEST_F(DistributedEndToEndTests, ProgramDispatchTest) {
     auto mesh_workload = CreateMeshWorkload();
     auto target_devices = MeshCoordinateRange(mesh_device->shape());
 
-    auto trace_id = BeginTraceCapture(mesh_device.get(), workload_cq_id);
-
+    auto trace_id = BeginTraceCapture(mesh_device.get(), cq.id());
     AddProgramToMeshWorkload(mesh_workload, std::move(example_program), target_devices);
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
-    EndTraceCapture(mesh_device.get(), cq, trace_id);
+    EndTraceCapture(mesh_device.get(), cq.id(), trace_id);
 
-    ReplayTrace(mesh_device.get(), cq, trace_id, false);
+    ReplayTrace(mesh_device.get(), cq.id(), trace_id, false);
 
     ReleaseTrace(mesh_device.get(), trace_id);
 
@@ -173,7 +172,7 @@ TEST_F(DistributedEndToEndTests, ProgramDispatchTest) {
 TEST_F(DistributedEndToEndTests, BufferRoundtripTest) {
     using tt::tt_metal::distributed::ShardedBufferConfig;
 
-    auto mesh_device = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape(1, 2)});
+    auto mesh_device = MeshDevice::create(MeshDeviceConfig(MeshShape(2, 4)));
 
     EXPECT_NE(mesh_device->get_devices().size(), 2);
     EXPECT_EQ(mesh_device->shape(), MeshShape(1, 2));
@@ -220,7 +219,7 @@ TEST_F(DistributedEndToEndTests, BufferRoundtripTest) {
 TEST_F(DistributedEndToEndTests, EltwiseAddTests) {
     constexpr uint32_t ADD_OP_ID = 0;
 
-    auto mesh_device = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape(1, 2)});
+    auto mesh_device = MeshDevice::create(MeshDeviceConfig(MeshShape{2, 4}));
 
     // Define the global buffer shape and shard shape for distributed buffers
     auto shard_shape = Shape2D{32, 32};
