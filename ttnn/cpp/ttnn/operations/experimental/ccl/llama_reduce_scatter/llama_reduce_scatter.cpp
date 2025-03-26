@@ -34,6 +34,22 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
     ttnn::ccl::Topology ccl_topology = ttnn::ccl::Topology::Linear;
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    uint32_t input_tensor_index = 0;
+    for (const auto& tensor : {input_tensor, intermediate_packet_buffer}) {
+        auto buffers = tensor.buffers();
+        auto first_address = buffers.front()->address();
+        TT_FATAL(
+            std::all_of(
+                buffers.begin(),
+                buffers.end(),
+                [&first_address](const auto& buffer) {
+                    return buffer != nullptr && buffer->address() == first_address;
+                }),
+            "Buffers must be lock-step allocated. Tensor on device id {} was allocated at different addresses "
+            "from address {}",
+            tensor.device()->id(),
+            first_address);
+    }
 
     std::vector<GlobalSemaphore> semaphores = cross_device_semaphore.global_semaphores;
     operation::launch_op(
