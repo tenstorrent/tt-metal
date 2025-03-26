@@ -3,7 +3,7 @@ set(TTNN_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_graph_add.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_graph_basic.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_async_runtime.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/matmul_benchmark_test.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_matmul_benchmark.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_multiprod_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_multi_cq_multi_dev.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_graph_capture_arguments_morehdot.cpp
