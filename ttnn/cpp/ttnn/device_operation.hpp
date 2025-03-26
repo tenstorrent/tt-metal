@@ -588,14 +588,9 @@ typename device_operation_t::tensor_return_value_t launch_on_single_device(
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
     if (auto mesh_device = first_tensor.mesh_device(); mesh_device != nullptr) {
-        if constexpr (is_mesh_device_operation_adapter_v<device_operation_t>) {
-            launch_operation_with_adapter<device_operation_t>(
-                cq_id, operation_attributes, tensor_args, tensor_return_value, mesh_device);
-        } else {
-            using MeshCompatibleOp = MeshDeviceOperationAdapter<device_operation_t>;
-            launch_operation_with_adapter<MeshCompatibleOp>(
-                cq_id, operation_attributes, tensor_args, tensor_return_value, mesh_device);
-        }
+        using MeshCompatibleOp = MeshDeviceOperationAdapter<device_operation_t>;
+        launch_operation_with_adapter<MeshCompatibleOp>(
+            cq_id, operation_attributes, tensor_args, tensor_return_value, mesh_device);
     } else {
         auto device = first_tensor.device();
         launch_on_worker_thread<device_operation_t>(

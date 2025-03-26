@@ -12,7 +12,6 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
-#include "ttnn/mesh_execution.hpp"
 
 #include "dropout_device_operation_types.hpp"
 
