@@ -8,15 +8,15 @@ from loguru import logger
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
 
-THRESHOLD = 1.5
+THRESHOLD = 0.7
 
 
 @pytest.mark.parametrize(
     "ag_type, warmup_iters, perf_target_us",
     [
-        ("sdpa", 15, 12.0),
+        ("sdpa", 15, 8.95),
         ("binary_mult", 15, 12.9),
-        ("layernorm", 15, 8.5),
+        ("layernorm", 15, 6.26),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -70,10 +70,10 @@ def test_ag_tg_llama_perf(
 @pytest.mark.parametrize(
     "ar_type, warmup_iters, perf_target_us",
     [
-        ("ff2", 15, 21),
-        ("qkv", 15, 13),
-        ("ff1", 15, 22),
-        ("lm_head", 15, 70),
+        ("ff2", 15, 17.6),
+        ("qkv", 15, 11.54),
+        ("ff1", 15, 18.0),
+        ("lm_head", 15, 58.4),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -119,6 +119,6 @@ def test_ar_tg_llama_perf(
         ml_model_name="llama70b-tg-ccl",
     )
 
-    assert (
-        measured_avg_us < perf_target_us + THRESHOLD
+    assert measured_avg_us < perf_target_us * (
+        1 + (THRESHOLD_PERCENT / 100)
     ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
