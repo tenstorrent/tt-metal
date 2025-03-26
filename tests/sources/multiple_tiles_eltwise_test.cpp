@@ -35,11 +35,10 @@ void run_kernel()
         buffer_A[i] = reinterpret_cast<volatile uint32_t*>(0x1a000 + i * TILE_SIZE_CNT);
         buffer_B[i] = reinterpret_cast<volatile uint32_t*>(0x1a000 + TILE_SIZE_CNT * KERN_CNT + i * TILE_SIZE_CNT);
     }
-
+    _llk_unpack_AB_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(UNPACK_A_IN, UNPACK_B_IN, UNPACK_A_OUT, UNPACK_A_OUT);
+    _llk_unpack_AB_init_<>();
     for (int index = 0; index < KERN_CNT; index++)
     {
-        _llk_unpack_AB_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(UNPACK_A_IN, UNPACK_B_IN, UNPACK_A_OUT, UNPACK_A_OUT);
-        _llk_unpack_AB_init_<>();
         _llk_unpack_AB_<>(L1_ADDRESS(buffer_A[index]), L1_ADDRESS(buffer_B[index]));
     }
 }

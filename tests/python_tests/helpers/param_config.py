@@ -176,7 +176,10 @@ def clean_params(included_params, all_params: List[tuple]) -> List[tuple]:
         ("fill_dest_test", FormatConfig(DataFormat.Float16, DataFormat.Float16, DataFormat.Float16, DataFormat.Float16, DataFormat.Float16), DestAccumulation.No, ApproximationMode.Yes)
     ]
     """
-
+    print(
+        "clean params: ",
+        [tuple(param for param in comb if param is not None) for comb in all_params],
+    )
     return [tuple(param for param in comb if param is not None) for comb in all_params]
 
 
@@ -223,29 +226,31 @@ def generate_param_ids(included_params, all_params: List[tuple]) -> List[str]:
         # Extract the FormatConfig and other parameters
         testname, format_config, *params = comb
 
+        # Start with the FormatConfig information
         result = [
-            f"unpack_A_src={format_config.unpack_A_src.value}",
-            f"unpack_A_dst={format_config.unpack_A_dst.value}",
-            *(
-                f"unpack_B_src={format_config.unpack_B_src.value}"
-                if format_config.unpack_B_src
-                else ""
-            ),
-            *(
-                f"unpack_B_dst={format_config.unpack_B_dst.value}"
-                if format_config.unpack_B_dst
-                else ""
-            ),
+            f"unpack_src={format_config.unpack_A_src.value}, {format_config.unpack_B_dst.value}",
+            f"unpack_dst={format_config.unpack_A_dst.value}, {format_config.unpack_B_dst.value}",
             f"math={format_config.math.value}",
             f"pack_src={format_config.pack_src.value}",
             f"pack_dst={format_config.pack_dst.value}",
-            *(f"dest_acc={params[0].name}" if params[0] else ""),
-            *(f"approx_mode={params[1].value}" if params[1] else ""),
-            *(f"mathop={params[2].name}" if params[2] else ""),
-            *(f"math_fidelity={params[3].name}" if params[3] else ""),
-            *(f"tile_cnt={params[4].value}" if params[4] else ""),
-            *(f"reduce_dim={params[5].name}" if params[5] else ""),
-            *(f"pool_type={params[6].name}" if params[6] else ""),
         ]
+        if params[0]:
+            result.append(f"dest_acc={params[0].name}")
+        if params[1]:
+            result.append(f"approx_mode={params[1].value}")
+        if params[2]:
+            result.append(f"mathop={params[2].name}")
+        if params[3]:
+            result.append(f"math_fidelity={params[3].name}")
+        if params[4]:
+            result.append(f"tile_cnt={params[4].value}")
+        if params[5]:
+            result.append(f"reduce_dim={params[5].name}")
+        if params[6]:
+            result.append(f"pool_type={params[6].name}")
 
-        return " | ".join(filter(None, result))
+        # Join the result list into a single string with appropriate spacing
+        return " | ".join(result)
+
+    # Generate and return formatted strings for all parameter combinations
+    return [format_combination(comb) for comb in all_params if comb[0] is not None]
