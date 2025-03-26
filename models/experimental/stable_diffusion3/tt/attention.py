@@ -175,7 +175,9 @@ class TtAttentionPart:
                              )
         """
 
-        result = self._out_proj(x)
+        grid_size = x.device().compute_with_storage_grid_size()
+        core_grid = ttnn.CoreGrid(x=grid_size.x, y=grid_size.y)
+        result = self._out_proj(x, core_grid=core_grid)
 
         # return to_memory_config(result, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16, deallocate=True)
         return result
@@ -199,6 +201,8 @@ class TtAttention:
         spatial: ttnn.Tensor,
         prompt: ttnn.Tensor | None = None,
         deallocate: bool = False,
+        N: int,
+        L: int,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         """
         spatial: N ⊗ S1 ⊗ (H * E1)
@@ -209,19 +213,36 @@ class TtAttention:
         # tracy.signpost("enter TtAttention")
 
         q, k, v = self._spatial_attn.qkv(spatial, num_heads=self._num_heads, deallocate=deallocate)
+        d0, d1, d2, d3 = q.shape
+        # Reshape to give padding information to SDPA
+        q = ttnn.reshape(
+            q,
+            (d0, d1, N, d3),
+            (d0, d1, d2, d3),
+        )
+        k = ttnn.reshape(
+            k,
+            (d0, d1, N, d3),
+            (d0, d1, d2, d3),
+        )
+        v = ttnn.reshape(
+            v,
+            (d0, d1, N, d3),
+            (d0, d1, d2, d3),
+        )
 
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-            q_chunk_size=256,
-            k_chunk_size=512,
-            exp_approx_mode=True,  # TODO: False would give better correctness. Test if it's necessary.
+            q_chunk_size=128,
+            k_chunk_size=1024,
+            exp_approx_mode=False,  # NOTE: False is more correct
         )
 
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             # MathFidelity.LoFi results in bad image quality.
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,  # TODO: Test with this False, is it necessary for correctness?
+            fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
         )
 
         if prompt is None:
@@ -245,6 +266,13 @@ class TtAttention:
                 # memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
             )
             ttnn.deallocate(attn)
+            d0, d1, _, d3 = concatenated_attn.shape
+            # remove padding
+            concatenated_attn = ttnn.reshape(
+                concatenated_attn,
+                (d0, d1, d2, d3),
+                (d0, d1, d2, d3),
+            )
 
             spatial = self._spatial_attn.out_proj(concatenated_attn)
             return spatial, None
@@ -252,6 +280,23 @@ class TtAttention:
         assert self._prompt_attn is not None
 
         q2, k2, v2 = self._prompt_attn.qkv(prompt, num_heads=self._num_heads, deallocate=deallocate)
+        p0, p1, p2, p3 = q2.shape
+        # Reshape to give padding information to SDPA
+        q2 = ttnn.reshape(
+            q2,
+            (p0, p1, L, p3),
+            (p0, p1, p2, p3),
+        )
+        k2 = ttnn.reshape(
+            k2,
+            (p0, p1, L, p3),
+            (p0, p1, p2, p3),
+        )
+        v2 = ttnn.reshape(
+            v2,
+            (p0, p1, L, p3),
+            (p0, p1, p2, p3),
+        )
 
         spatial, prompt = ttnn.transformer.joint_scaled_dot_product_attention(
             q,
@@ -275,6 +320,21 @@ class TtAttention:
         prompt = ttnn.experimental.nlp_concat_heads(
             prompt,
             # memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+        )
+
+        # remove padding
+        d0, d1, _, d3 = spatial.shape
+        spatial = ttnn.reshape(
+            spatial,
+            (d0, d1, d2, d3),
+            (d0, d1, d2, d3),
+        )
+
+        p0, p1, _, p3 = prompt.shape
+        prompt = ttnn.reshape(
+            prompt,
+            (p0, p1, p2, p3),
+            (p0, p1, p2, p3),
         )
 
         if self.device.get_num_devices() > 1:
