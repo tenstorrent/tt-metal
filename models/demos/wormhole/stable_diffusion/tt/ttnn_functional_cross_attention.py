@@ -520,14 +520,13 @@ class cross_attention:
                 is_causal_mask=False,
             )
         else:
-            # This needs to be updated when optional output tensors are available
-            attention_scores_temp = attention_scores
-            attention_scores = ttnn.multiply(
-                attention_scores_temp,
+            attention_scores = ttnn.bcast(
+                attention_scores,
                 self.scale,
+                math_op=ttnn.BcastOpMath.MUL,
+                dim=ttnn.BcastOpDim.HW,
                 memory_config=attention_scores.memory_config(),
             )
-            attention_scores_temp.deallocate()
             attention_scores = ttnn.softmax_in_place(
                 attention_scores,
                 program_config=softmax_program_config,
