@@ -8,7 +8,7 @@
 
 #include "command_queue_fixture.hpp"
 #include "core_coord.hpp"
-#include "hal_exp.hpp"
+#include "hal.hpp"
 #include "llrt.hpp"
 #include "multi_command_queue_fixture.hpp"
 #include "random_program_fixture.hpp"
@@ -924,8 +924,8 @@ void test_my_coordinates(IDevice* device, tt::RISCV processor_class, size_t cq_i
         cr = CoreRangeSet{std::set<CoreRange>{eth_cores.begin(), eth_cores.end()}};
     }
 
-    uint32_t cb_addr = processor_class == tt::RISCV::ERISC ? experimental::hal::get_erisc_l1_unreserved_base()
-                                                           : experimental::hal::get_tensix_l1_unreserved_base();
+    uint32_t cb_addr = processor_class == tt::RISCV::ERISC ? hal::get_erisc_l1_unreserved_base()
+                                                           : hal::get_tensix_l1_unreserved_base();
     std::vector<uint32_t> compile_args{
         cb_addr,
     };

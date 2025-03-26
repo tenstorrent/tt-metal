@@ -21,7 +21,7 @@
 #include <persistent_kernel_cache.hpp>
 
 #include "llrt/hal.hpp"
-#include <hal_exp.hpp>
+#include <hal.hpp>
 #include <sub_device.hpp>
 #include <sub_device_manager_tracker.hpp>
 #include <sub_device_types.hpp>

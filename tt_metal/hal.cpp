@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <string>
 
-#include <hal_exp.hpp>
+#include <hal.hpp>
 #include "llrt/hal.hpp"
 #include <tt_backend_api_types.hpp>
 #include <umd/device/types/arch.h>
@@ -15,7 +15,7 @@ using tt::tt_metal::HalMemType;
 using tt::tt_metal::HalProgrammableCoreType;
 using tt::tt_metal::HalSingleton;
 
-namespace tt::tt_metal::experimental::hal {
+namespace tt::tt_metal::hal {
 
 tt::ARCH get_arch() { return HalSingleton::getInstance().get_arch(); }
 
@@ -72,4 +72,4 @@ float get_nan() { return HalSingleton::getInstance().get_nan(); }
 
 float get_inf() { return HalSingleton::getInstance().get_inf(); }
 
-}  // namespace tt::tt_metal::experimental::hal
+}  // namespace tt::tt_metal::hal

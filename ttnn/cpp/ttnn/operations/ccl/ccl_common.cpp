@@ -12,12 +12,10 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
-#include "tt-metalium/hal_exp.hpp"
+#include "tt-metalium/hal.hpp"
 
 namespace ttnn {
 namespace ccl {
-
-using namespace tt::tt_metal::experimental;
 
 void SyncModeSpec::add_signal(uint32_t sem_id, uint32_t wait_count) {
     this->sem_ids.push_back(sem_id);

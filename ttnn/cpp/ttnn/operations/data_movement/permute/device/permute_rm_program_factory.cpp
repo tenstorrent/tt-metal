@@ -4,9 +4,7 @@
 
 #include "cpp/ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/hal_exp.hpp>
-
-using namespace tt::tt_metal::experimental;
+#include <tt-metalium/hal.hpp>
 
 namespace ttnn::operations::data_movement {
 

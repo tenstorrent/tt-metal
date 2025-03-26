@@ -8,11 +8,10 @@
 #include "ttnn/types.hpp"
 #include "fold_device_op.hpp"
 #include "ttnn/operations/math.hpp"
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement {
 
