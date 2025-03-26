@@ -50,6 +50,32 @@ bool all_tensors_have_uniform_storage(const TensorArgs& tensor_args) {
     return first_uniform;
 }
 
+// Filters shards from `tensor_return_value` that are in `tensor_coordinates`.
+template <typename TensorReturnValue>
+void filter_tensor_shards(
+    const std::vector<ttnn::MeshCoordinate>& tensor_coordinates, TensorReturnValue& tensor_return_value) {
+    tt::stl::reflection::visit_object_of_type<Tensor>(
+        [&](const Tensor& tensor_to_return) {
+            auto& tensor_storage = std::get<tt::tt_metal::DeviceStorage>(tensor_to_return.tensor_attributes->storage);
+
+            auto coord_it = tensor_coordinates.cbegin();
+            auto storage_it = tensor_storage.specs.begin();
+            auto insert_it = tensor_storage.specs.begin();
+            while (coord_it != tensor_coordinates.end() && storage_it != tensor_storage.specs.end()) {
+                if (storage_it->first == *coord_it) {
+                    std::swap(*insert_it, *storage_it);
+                    ++insert_it;
+                    ++coord_it;
+                    ++storage_it;
+                } else {
+                    ++storage_it;
+                }
+            }
+            tensor_storage.specs.erase(insert_it, tensor_storage.specs.end());
+        },
+        tensor_return_value);
+}
+
 // Verifies all tensors span the same set of coordinates, and returns them in a vector.
 template <typename TensorArgs>
 std::vector<ttnn::MeshCoordinate> extract_tensor_coordinates(const TensorArgs& tensor_args) {
