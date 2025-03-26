@@ -32,7 +32,7 @@
 
 // WARNING: ARCH_NAME specific
 #include "eth_l1_address_map.h"
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;

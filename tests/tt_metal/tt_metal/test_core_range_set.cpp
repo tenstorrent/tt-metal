@@ -15,7 +15,7 @@
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/allocator.hpp>
 
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
