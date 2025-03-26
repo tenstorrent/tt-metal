@@ -11,11 +11,11 @@ FORCE_INLINE constexpr std::array<T, sizeof...(Ts)> make_array(Ts... values) {
     return {T(values)...};
 }
 
-#if defined(KERNEL_COMPILE_TIME_ARGS)
-constexpr auto kernel_compile_time_args = make_array<std::uint32_t>(KERNEL_COMPILE_TIME_ARGS);
-#else
-constexpr auto kernel_compile_time_args = make_array<std::uint32_t>();
+#ifndef KERNEL_COMPILE_TIME_ARGS
+#define KERNEL_COMPILE_TIME_ARGS
 #endif
+
+constexpr auto kernel_compile_time_args = make_array<std::uint32_t>(KERNEL_COMPILE_TIME_ARGS);
 
 template <uint32_t Idx>
 constexpr uint32_t get_ct_arg() {

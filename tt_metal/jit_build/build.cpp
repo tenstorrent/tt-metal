@@ -698,9 +698,9 @@ void JitBuildState::compile_one(
             if (values.empty()) {
                 return;
             }
-            std::stringstream ss;
+            std::ostringstream ss;
             ss << "-DKERNEL_COMPILE_TIME_ARGS=";
-            for (uint32_t i = 0; i < values.size(); i++) {
+            for (uint32_t i = 0; i < values.size(); ++i) {
                 ss << values[i] << ",";
             }
             std::string args = ss.str();

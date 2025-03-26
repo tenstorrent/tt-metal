@@ -37,12 +37,8 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     constexpr bool tile_dtype_is_bfloat16 = get_compile_time_arg_val(0) == 1;
-    DataFormat data_format = DataFormat::Invalid;
-    if constexpr (tile_dtype_is_bfloat16) {
-        data_format = DataFormat::Float16;
-    } else {
-        data_format = DataFormat::Bfp8_b;
-    }
+    constexpr DataFormat data_format = (tile_dtype_is_bfloat16) ? DataFormat::Float16 : DataFormat::Bfp8_b;
+
     const InterleavedAddrGenFast<out_is_dram_bool> s0 = {
         .bank_base_address = out0_tensor_addr, .page_size = single_tile_size_bytes, .data_format = data_format};
     const InterleavedAddrGenFast<out_is_dram_bool> s1 = {
