@@ -166,14 +166,14 @@ jobs:
         uses: qmonnet/git-archive-all-action@791fb850881cf58b1d1fcc9b06c01940080bba0a
         with:
           output-files: tt-metalium.tar.gz
-      - name: Download eager 20.04 Python packages
-        uses: actions/download-artifact@v4
-        with:
-          name: eager-dist-ubuntu-20.04-any
       - name: Download eager 22.04 Python packages
         uses: actions/download-artifact@v4
         with:
           name: eager-dist-ubuntu-22.04-any
+      - name: Download eager 24.04 Python packages
+        uses: actions/download-artifact@v4
+        with:
+          name: eager-dist-ubuntu-24.04-any
       - name: Create VERSION
         run: echo ${{ needs.create-tag.outputs.version }} > VERSION
       - name : Download release notes
