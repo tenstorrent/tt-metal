@@ -18,7 +18,6 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn/mesh_execution.hpp"
 
 namespace tt::tt_metal::operation {
 
