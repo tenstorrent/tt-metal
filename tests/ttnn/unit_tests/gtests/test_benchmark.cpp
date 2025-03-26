@@ -20,6 +20,7 @@
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 
+#include "shape2d.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/cpp/ttnn/operations/functions.hpp"
 #include "ttnn/cpp/ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -38,15 +39,22 @@ std::string dtype_to_string(DataType dtype) {
         default: return "UNKNOWN";
     }
 }
-std::vector<std::pair<int, int>> SUBBLOCK_HW_CHOICES = {{4, 2}, {2, 4}, {8, 1}, {1, 8}, {7, 1}, {1, 7}, {3, 2},
-                                                        {2, 3}, {6, 1}, {1, 6}, {5, 1}, {1, 5}, {2, 2}, {4, 1},
-                                                        {1, 4}, {3, 1}, {1, 3}, {2, 1}, {1, 2}, {1, 1}};
 
-std::pair<int, int> get_subblock_sizes(
+std::string fidelity_to_string(MathFidelity fidelity) {
+    std::ostringstream oss;
+    oss << fidelity;
+    return oss.str();
+}
+
+std::vector<Shape2D> SUBBLOCK_HW_CHOICES = {{4, 2}, {2, 4}, {8, 1}, {1, 8}, {7, 1}, {1, 7}, {3, 2},
+                                            {2, 3}, {6, 1}, {1, 6}, {5, 1}, {1, 5}, {2, 2}, {4, 1},
+                                            {1, 4}, {3, 1}, {1, 3}, {2, 1}, {1, 2}, {1, 1}};
+
+Shape2D get_subblock_sizes(
     int m_tiles_per_core, int n_tiles_per_core, bool out_sharded = false, bool fp32_dest_acc_en = false) {
-    for (const auto& subblock_hw : SUBBLOCK_HW_CHOICES) {
-        int out_subblock_h = subblock_hw.first;
-        int out_subblock_w = subblock_hw.second;
+    for (const Shape2D& subblock_hw : SUBBLOCK_HW_CHOICES) {
+        const int out_subblock_h = subblock_hw.height();
+        const int out_subblock_w = subblock_hw.width();
 
         if (fp32_dest_acc_en) {
             if ((out_subblock_h * out_subblock_w) > 4) {
@@ -68,107 +76,124 @@ std::pair<int, int> get_subblock_sizes(
     return {1, 1};
 }
 
-std::vector<std::tuple<int, int, int, bool, bool, int, int, int>> matmul_shapes_bfloat16 = {
-    {512, 512, 512, true, true, 1, 1, 1},
-    {512, 1024, 1024, true, true, 1, 1, 1},
-    {512, 1024, 2048, true, true, 1, 1, 1},
-    {1024, 1024, 1024, true, true, 1, 1, 1},
-    {1024, 1024, 2048, true, true, 1, 1, 1},
-    {1024, 2048, 2048, true, true, 1, 1, 1},
-    {2048, 2048, 2048, true, true, 1, 1, 1},
-    {2048, 2048, 3072, true, true, 1, 1, 1},
-    {2048, 3072, 3072, true, true, 2, 1, 1},
-    {3072, 3072, 3072, true, true, 4, 1, 1},
-    {3072, 3072, 4096, false, false, 2, 1, 1},
-    {3072, 4096, 4096, false, false, 2, 1, 1},
-    {4096, 4096, 4096, false, false, 1, 2, 2},
-    {8192, 8192, 8192, false, false, 2, 4, 4},
-    {16384, 16384, 16384, false, false, 4, 8, 8},
+struct Matmul_Test_Config {
+    DataType dtype_ = DataType::BFLOAT16;
+    MathFidelity fidelity_ = MathFidelity::HiFi2;
+    bool enable_tracing_ = false;
+    bool use_program_cache_ = true;
+    int num_warmup_iterations_ = 1;
+    int num_measurement_iterations_ = 1;
+    Matmul_Test_Config(
+        DataType dtype,
+        MathFidelity fidelity,
+        bool enable_tracing,
+        bool use_program_cache = true,
+        int num_warmup_iterations = 1,
+        int num_measurement_iterations = 1) :
+        dtype_(dtype),
+        fidelity_(fidelity),
+        enable_tracing_(enable_tracing),
+        use_program_cache_(use_program_cache),
+        num_warmup_iterations_(num_warmup_iterations),
+        num_measurement_iterations_(num_measurement_iterations) {}
 };
 
-std::vector<std::tuple<int, int, int, bool, bool, int, int, int>> matmul_shapes_bfloat8_b = {
-    {512, 512, 512, true, true, 1, 1, 1},
-    {512, 1024, 1024, true, true, 1, 1, 1},
-    {512, 1024, 2048, true, true, 1, 1, 1},
-    {1024, 1024, 1024, true, true, 1, 1, 1},
-    {1024, 1024, 2048, true, true, 1, 1, 1},
-    {1024, 2048, 2048, true, true, 1, 1, 1},
-    {2048, 2048, 2048, true, true, 1, 1, 1},
-    {2048, 2048, 3072, true, true, 1, 1, 1},
-    {2048, 3072, 3072, true, true, 1, 1, 1},
-    {3072, 3072, 3072, true, true, 2, 1, 1},
-    {3072, 3072, 4096, true, true, 2, 1, 1},
-    {3072, 4096, 4096, true, true, 1, 2, 2},
-    {4096, 4096, 4096, false, false, 1, 2, 2},
-    {8192, 8192, 8192, false, false, 2, 4, 4},
-    {16384, 16384, 16384, false, false, 4, 8, 8},
-};
+struct Matmul_Shape {
+    int m_ = 512;
+    int k_ = 512;
+    int n_ = 512;
 
-std::vector<std::tuple<int, int, int, bool, bool, int, int, int>> matmul_shapes_bfloat4_b = {
-    {512, 512, 512, true, true, 1, 1, 1},
-    {512, 1024, 1024, true, true, 1, 1, 1},
-    {512, 1024, 2048, true, true, 1, 1, 1},
-    {1024, 1024, 1024, true, true, 1, 1, 1},
-    {1024, 1024, 2048, true, true, 1, 1, 1},
-    {1024, 2048, 2048, true, true, 1, 1, 1},
-    {2048, 2048, 2048, true, true, 1, 1, 1},
-    {2048, 2048, 3072, true, true, 1, 1, 1},
-    {2048, 3072, 3072, true, true, 1, 1, 1},
-    {3072, 3072, 3072, true, true, 1, 1, 1},
-    {3072, 3072, 4096, true, true, 1, 1, 1},
-    {3072, 4096, 4096, true, true, 2, 1, 1},
-    {4096, 4096, 4096, true, true, 2, 1, 1},
-    {8192, 8192, 8192, false, false, 2, 2, 2},
-    {16384, 16384, 16384, false, false, 4, 4, 4},
-};
+    bool in0_sharded_ = true;
+    bool out_sharded_ = true;
 
-std::vector<std::tuple<DataType, MathFidelity, bool>> matmul_configs = {
-    {DataType::BFLOAT16, MathFidelity::HiFi2, false},
-    {DataType::BFLOAT16, MathFidelity::HiFi4, false},
-    {DataType::BFLOAT8_B, MathFidelity::HiFi2, false},
-    {DataType::BFLOAT8_B, MathFidelity::LoFi, false},
-    {DataType::BFLOAT4_B, MathFidelity::LoFi, false},
-    {DataType::BFLOAT16, MathFidelity::HiFi2, true},
-    {DataType::BFLOAT16, MathFidelity::HiFi4, true},
-    {DataType::BFLOAT8_B, MathFidelity::HiFi2, true},
-    {DataType::BFLOAT8_B, MathFidelity::LoFi, true},
-    {DataType::BFLOAT4_B, MathFidelity::LoFi, true},
+    int in0_block_w_div_ = 1;
+    int num_out_blocks_h_ = 1;
+    int num_out_blocks_w_ = 1;
+
+    Shape2D grid_size_ = {8, 8};
+    Shape2D tile_shape_ = {32, 32};
+
+    Matmul_Shape(
+        int m,
+        int k,
+        int n,
+        bool in0_sharded,
+        bool out_sharded,
+        int in0_block_w_div,
+        int num_out_blocks_h,
+        int num_out_blocks_w,
+        Shape2D grid_size = {8, 8},
+        Shape2D tile_shape = {32, 32}) :
+        m_(m),
+        k_(k),
+        n_(n),
+        in0_sharded_(in0_sharded),
+        out_sharded_(out_sharded),
+        in0_block_w_div_(in0_block_w_div),
+        num_out_blocks_h_(num_out_blocks_h),
+        num_out_blocks_w_(num_out_blocks_w),
+        grid_size_(grid_size),
+        tile_shape_(tile_shape) {}
 };
 
 class Matmul2DHostPerfTestFixture : public ttnn::TTNNFixtureWithDevice,
-                                    public testing::WithParamInterface<std::tuple<
-                                        /* grid_size */ std::tuple<int, int>,
-                                        /* tile_h */ int,
-                                        /* tile_w */ int,
-                                        /* num_warmup_iterations */ int,
-                                        /* num_measurement_iterations */ int,
-                                        /* use_program_cache */ bool>> {
+                                    public testing::WithParamInterface<std::tuple<Matmul_Test_Config, Matmul_Shape>> {
 public:
     Matmul2DHostPerfTestFixture() : ttnn::TTNNFixtureWithDevice(65536, 200000) {}
 };
 
 TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     GTEST_SKIP() << "WH di/dt hang, need to skip CI and run locally only";
-    const std::tuple<int, int>& grid_size = std::get<0>(GetParam());
-    const int& tile_h = std::get<1>(GetParam());
-    const int& tile_w = std::get<2>(GetParam());
-    const int& num_warmup_iterations = std::get<3>(GetParam());
-    const int& num_measurement_iterations = std::get<4>(GetParam());
-    const bool& use_program_cache = std::get<5>(GetParam());
 
-    TT_FATAL(std::get<0>(grid_size) > 0 && std::get<1>(grid_size) > 0, "Invalid grid size");
+    // Parse test config
+    const Matmul_Test_Config& test_config = std::get<0>(GetParam());
+    const int& num_warmup_iterations = test_config.num_warmup_iterations_;
+    const int& num_measurement_iterations = test_config.num_measurement_iterations_;
+    const bool& use_program_cache = test_config.use_program_cache_;
+
+    DataType dtype = test_config.dtype_;
+    MathFidelity math_fidelity = test_config.fidelity_;
+    const bool use_trace = test_config.enable_tracing_;
+
     TT_FATAL(num_measurement_iterations > 0, "Won't have data without at least one measurement iteration");
-    tt::tt_metal::IDevice* device = device_;
     TT_ASSERT(
         num_warmup_iterations > 0 && use_program_cache,
         "Test requires a warmup iteration to be performed with program cache enabled, else unrealistically high "
         "dispatch overhead and will be observed and is not representative of expected performance");
+
+    // Parse shape params
+    const Matmul_Shape& matmul_shape = std::get<1>(GetParam());
+
+    const Shape2D& grid_size = matmul_shape.grid_size_;
+    const int& tile_h = matmul_shape.tile_shape_.height();
+    const int& tile_w = matmul_shape.tile_shape_.width();
+
+    const int m = matmul_shape.m_;
+    const int k = matmul_shape.k_;
+    const int n = matmul_shape.n_;
+    const bool in0_sharded = matmul_shape.in0_sharded_;
+    const bool out_sharded = matmul_shape.out_sharded_;
+    const int in0_block_w_div = matmul_shape.in0_block_w_div_;
+    const int num_out_blocks_h = matmul_shape.num_out_blocks_h_;
+    const int num_out_blocks_w = matmul_shape.num_out_blocks_w_;
+
+    TT_FATAL(grid_size.height() > 0 && grid_size.width() > 0, "Invalid grid size");
+
+    tt::tt_metal::IDevice* device = device_;
+
     if (use_program_cache) {
         device->enable_program_cache();
     }
     const char* TT_METAL_HOME = std::getenv("TT_METAL_HOME");
     std::string ARTIFACTS_DIR = std::string(TT_METAL_HOME) + "/generated";
-    std::string FILE_NAME = ARTIFACTS_DIR + "/matmul_2d_host_perf_report.csv";
+    std::string FILE_NAME =
+        ARTIFACTS_DIR + "/matmul_2d_host_perf_report_" + dtype_to_string(dtype) + fidelity_to_string(math_fidelity);
+
+    if (use_trace) {
+        FILE_NAME += "_traced.csv";
+    } else {
+        FILE_NAME += ".csv";
+    }
 
     int LoFi_cycle = 16;
     int HiFi2_cycle = LoFi_cycle * 2;
@@ -180,233 +205,609 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
             "dtype,math_fidelity,inference_time_avg (ns),TFLOPs (avg),Utilization (vs user grid),Utilization (vs 8x8 "
             "full grid)\n";
 
-    for (const auto& config : matmul_configs) {
-        DataType dtype = std::get<0>(config);
-        MathFidelity math_fidelity = std::get<1>(config);
-        const bool use_trace = std::get<2>(config);
+    if (use_trace) {
+        TT_FATAL(
+            use_program_cache,
+            "Tracing requires program cache to be enabled, as DRAM can't be written to during tracing");
+    }
 
-        if (use_trace) {
-            TT_FATAL(
-                use_program_cache,
-                "Tracing requires program cache to be enabled, as DRAM can't be written to during tracing");
+    tt::log_info("Running test with dtype: {}, math_fidelity: {}, use_trace: {}", dtype, math_fidelity, use_trace);
+    std::vector<std::tuple<int, int, int, bool, bool, int, int, int>> matmul_shapes;
+
+    const int in0_block_w = k / grid_size.height() / 32 / in0_block_w_div;
+    const int per_core_M = m / grid_size.width() / tile_h;
+    const int per_core_N = n / grid_size.height() / tile_w;
+    const int out_block_h = per_core_M / num_out_blocks_h;
+    const int out_block_w = per_core_N / num_out_blocks_w;
+    const Shape2D out_subblock = get_subblock_sizes(out_block_h, out_block_w, out_sharded);
+
+    tt::log_info(
+        "M*K*N = {}*{}*{} out_subblock_h: {}, out_subblock_w: {}",
+        m,
+        k,
+        n,
+        out_subblock.height(),
+        out_subblock.width());
+
+    std::string in0_storage_type = in0_sharded ? "L1" : "DRAM";
+    std::string in1_storage_type = "DRAM";
+    std::string out_storage_type = out_sharded ? "L1" : "DRAM";
+
+    const ttnn::MemoryConfig in0_memory_config =
+        in0_sharded ? ttnn::operations::data_movement::create_sharded_memory_config(
+                          ttnn::Shape{1, 1, m, k},
+                          ttnn::CoreRangeSet(ttnn::CoreRange(
+                              CoreCoord(0, 0), ttnn::CoreCoord(grid_size.height() - 1, grid_size.width() - 1))),
+                          ttnn::operations::data_movement::ShardStrategy::BLOCK,
+                          tt::tt_metal::ShardOrientation::ROW_MAJOR)
+                    : ttnn::DRAM_MEMORY_CONFIG;
+
+    // In0 is all ones
+    const std::vector<float> in0_data(m * k, 1.0f);
+    ttnn::Tensor in0_t = Tensor::from_vector(
+        in0_data,
+        ttnn::TensorSpec(
+            ttnn::Shape({m, k}), tt::tt_metal::TensorLayout(dtype, tt::tt_metal::Layout::TILE, in0_memory_config)),
+        device);
+    // In1 is random data
+    std::vector<float> in1_data(k * n);
+    std::generate(in1_data.begin(), in1_data.end(), []() {
+        float value = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+        return value;
+    });
+
+    ttnn::Tensor in1_t = Tensor::from_vector(
+        in1_data,
+        ttnn::TensorSpec(
+            ttnn::Shape({k, n}),
+            tt::tt_metal::TensorLayout(dtype, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG)),
+        device);
+
+    /*
+    There are three main program configs available for matmul:
+        1. MatmulMultiCoreReuseMultiCast1DProgramConfig ("1D")
+            -Used for width or height sharded tensors, or very narrow interleaved tensors
+        2. MatmulMultiCoreReuseMultiCastProgramConfig ("2D")
+            -Used for block sharded tensors, and general interleaved tensors
+        3. MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig ("DRAM")
+            -A very specialised config for very narrow tensors in DRAM
+    */
+    ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig program_config{
+        /* compute_with_storage_grid_size */ {grid_size.height(), grid_size.width()},
+        in0_block_w,
+        out_subblock.height(),
+        out_subblock.width(),
+        out_block_h,
+        out_block_w,
+        per_core_M,
+        per_core_N,
+        /*transpose_mcast=*/false,
+        /*fused_activation=*/std::nullopt};
+
+    const ttnn::DeviceComputeKernelConfig compute_kernel_config = ttnn::init_device_compute_kernel_config(
+        device->arch(),
+        /*device_kernel_config=*/std::nullopt,
+        math_fidelity,
+        /*default_approx_mode=*/true,
+        /*default_fp32_acc=*/false,
+        /*default_l1_acc=*/true,
+        /*default_dst_full_sync_en=*/false);
+
+    const ttnn::MemoryConfig out_mem_config =
+        out_sharded ? ttnn::MemoryConfig{ttnn::TensorMemoryLayout::BLOCK_SHARDED, ttnn::BufferType::L1}
+                    : ttnn::DRAM_MEMORY_CONFIG;
+
+    const Tile output_tile =
+        (out_sharded && tile_h <= 16) ? tt::tt_metal::Tile({tile_h, 32}) : tt::tt_metal::Tile({tile_h, tile_w});
+
+    const ttnn::operations::matmul::Matmul matmul_params(
+        program_config,
+        /*bcast_batch=*/std::nullopt,
+        out_mem_config,
+        dtype,
+        compute_kernel_config,
+        /*untilize_out=*/false,
+        /*user_core_coord=*/std::nullopt,
+        /*user_fused_activation=*/std::nullopt,
+        /*user_run_batched=*/false,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false,
+        output_tile);
+
+    ttnn::Tensor output_tensor;
+    // Warmup iterations
+    for (int iter = 0; iter < num_warmup_iterations; ++iter) {
+        output_tensor = ttnn::operations::matmul::matmul(
+            in0_t,
+            in1_t,
+            /*bias=*/std::nullopt,
+            /*parameters=*/matmul_params);
+        device->push_work([device]() mutable { Synchronize(device, std::nullopt, std::vector<SubDeviceId>()); });
+        device->synchronize();
+        output_tensor.deallocate();
+    }
+
+    // Note that time is measured with chrono around the ops, so there is some overhead from measuring on the
+    // host side instead of on device.
+    std::chrono::duration<double> total_time = std::chrono::duration<double>::zero();
+
+    // Performance measurement iterations
+    if (use_trace) {
+        auto tid = ttnn::operations::trace::begin_trace_capture(device, ttnn::DefaultQueueId);
+        for (int iter = 0; iter < num_measurement_iterations; ++iter) {
+            output_tensor = ttnn::operations::matmul::matmul(
+                in0_t,
+                in1_t,
+                /*bias=*/std::nullopt,
+                /*parameters=*/matmul_params);
+            output_tensor.deallocate();
+        }
+        ttnn::operations::trace::end_trace_capture(device, tid, ttnn::DefaultQueueId);
+
+        auto start_time = std::chrono::high_resolution_clock::now();
+        {
+            ZoneScopedN("Matmul trace iterations");
+            ttnn::operations::trace::execute_trace(device, tid, ttnn::DefaultQueueId, false);
+            device->push_work([device]() mutable { Synchronize(device, std::nullopt, std::vector<SubDeviceId>()); });
+            device->synchronize();
         }
 
-        tt::log_info("Running test with dtype: {}, math_fidelity: {}, use_trace: {}", dtype, math_fidelity, use_trace);
-        std::vector<std::tuple<int, int, int, bool, bool, int, int, int>> matmul_shapes;
-        if (dtype == DataType::BFLOAT16) {
-            matmul_shapes = matmul_shapes_bfloat16;
-        } else if (dtype == DataType::BFLOAT8_B) {
-            matmul_shapes = matmul_shapes_bfloat8_b;
-        } else if (dtype == DataType::BFLOAT4_B) {
-            matmul_shapes = matmul_shapes_bfloat4_b;
-        }
+        auto end_time = std::chrono::high_resolution_clock::now();
 
-        for (const auto& shape : matmul_shapes) {
-            const int m = std::get<0>(shape);
-            const int k = std::get<1>(shape);
-            const int n = std::get<2>(shape);
-            const bool in0_sharded = std::get<3>(shape);
-            const bool out_sharded = std::get<4>(shape);
-            const int in0_block_w_div = std::get<5>(shape);
-            const int num_out_blocks_h = std::get<6>(shape);
-            const int num_out_blocks_w = std::get<7>(shape);
-            const std::vector<int64_t> in0_shape = {1, 1, m, k};
-            const std::vector<int64_t> in1_shape = {1, 1, k, n};
-
-            const int in0_block_w = k / std::get<0>(grid_size) / 32 / in0_block_w_div;
-            const int per_core_M = m / std::get<1>(grid_size) / tile_h;
-            const int per_core_N = n / std::get<0>(grid_size) / tile_w;
-            const int out_block_h = per_core_M / num_out_blocks_h;
-            const int out_block_w = per_core_N / num_out_blocks_w;
-            const auto [out_subblock_h, out_subblock_w] = get_subblock_sizes(out_block_h, out_block_w, out_sharded);
-
-            tt::log_info(
-                "M*K*N = {}*{}*{} out_subblock_h: {}, out_subblock_w: {}", m, k, n, out_subblock_h, out_subblock_w);
-
-            std::string in0_storage_type = in0_sharded ? "L1" : "DRAM";
-            std::string in1_storage_type = "DRAM";
-            std::string out_storage_type = out_sharded ? "L1" : "DRAM";
-
-            const ttnn::MemoryConfig in0_memory_config =
-                in0_sharded ? ttnn::operations::data_movement::create_sharded_memory_config(
-                                  ttnn::Shape{1, 1, m, k},
-                                  ttnn::CoreRangeSet(ttnn::CoreRange(
-                                      CoreCoord(0, 0),
-                                      ttnn::CoreCoord(std::get<0>(grid_size) - 1, std::get<1>(grid_size) - 1))),
-                                  ttnn::operations::data_movement::ShardStrategy::BLOCK,
-                                  tt::tt_metal::ShardOrientation::ROW_MAJOR)
-                            : ttnn::DRAM_MEMORY_CONFIG;
-
-            // In0 is all ones
-            const std::vector<float> in0_data(m * k, 1.0f);
-            ttnn::Tensor in0_t = Tensor::from_vector(
-                in0_data,
-                ttnn::TensorSpec(
-                    ttnn::Shape({m, k}),
-                    tt::tt_metal::TensorLayout(dtype, tt::tt_metal::Layout::TILE, in0_memory_config)),
-                device);
-            // In1 is random data
-            std::vector<float> in1_data(k * n);
-            std::generate(in1_data.begin(), in1_data.end(), []() {
-                float value = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
-                return std::round(value * 15.0f) / 15.0f;
-            });
-
-            ttnn::Tensor in1_t = Tensor::from_vector(
-                in1_data,
-                ttnn::TensorSpec(
-                    ttnn::Shape({k, n}),
-                    tt::tt_metal::TensorLayout(dtype, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG)),
-                device);
-            ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig program_config{
-                /* compute_with_storage_grid_size */ {std::get<0>(grid_size), std::get<1>(grid_size)},
-                /* in0_block_w */ in0_block_w,
-                /* out_subblock_h */ out_subblock_h,
-                /* out_subblock_w */ out_subblock_w,
-                /* out_block_h */ out_block_h,
-                /* out_block_w */ out_block_w,
-                /* per_core_M */ per_core_M,
-                /* per_core_N */ per_core_N,
-                /* transpose_mcast */ false,
-                /* fused_activation */ std::nullopt};
-
-            const ttnn::WormholeComputeKernelConfig compute_kernel_config =
-                ttnn::WormholeComputeKernelConfig{math_fidelity, true, false, true};
-
-            const ttnn::MemoryConfig out_mem_config =
-                out_sharded ? ttnn::MemoryConfig{ttnn::TensorMemoryLayout::BLOCK_SHARDED, ttnn::BufferType::L1}
-                            : ttnn::DRAM_MEMORY_CONFIG;
-
-            const Tile output_tile =
-                out_sharded ? (tile_h <= 16 ? tt::tt_metal::Tile({tile_h, 32}) : tt::tt_metal::Tile({tile_h, tile_w}))
-                            : tt::tt_metal::Tile({tile_h, tile_w});
-
-            const ttnn::operations::matmul::Matmul matmul_params(
-                program_config,
-                /*bcast_batch*/ std::nullopt,
-                /* output_mem_config */ out_mem_config,
-                /* output_dtype */ dtype,
-                /* compute_kernel_config */ compute_kernel_config,
-                /* untilize_out */ false,
-                /* user_core_coord */ std::nullopt,
-                /* user_fused_activation */ std::nullopt,
-                /* user_run_batched */ false,
-                /* transpose_a */ false,
-                /* transpose_b */ false,
-                /* output_tile */ output_tile);
-
-            ttnn::Tensor output_tensor;
-            // Warmup iterations
-            for (int iter = 0; iter < num_warmup_iterations; ++iter) {
+        total_time += end_time - start_time;
+        ttnn::operations::trace::release_trace(device, tid);
+    } else {
+        {
+            ZoneScopedN("Matmul iterations");
+            for (int iter = 0; iter < num_measurement_iterations; ++iter) {
+                auto start_time = std::chrono::high_resolution_clock::now();
                 output_tensor = ttnn::operations::matmul::matmul(
                     in0_t,
                     in1_t,
-                    /* bias */ std::nullopt,
-                    /* parameters */ matmul_params);
+                    /*bias=*/std::nullopt,
+                    /*parameters=*/matmul_params);
                 device->push_work(
                     [device]() mutable { Synchronize(device, std::nullopt, std::vector<SubDeviceId>()); });
                 device->synchronize();
+                auto end_time = std::chrono::high_resolution_clock::now();
+                total_time += end_time - start_time;
                 output_tensor.deallocate();
             }
-
-            // Note that time is measured with chrono around the ops, so there is some overhead from measuring on the
-            // host side instead of on device.
-            std::chrono::duration<double> total_time = std::chrono::duration<double>::zero();
-
-            // Performance measurement iterations
-            if (use_trace) {
-                auto tid = ttnn::operations::trace::begin_trace_capture(device, ttnn::DefaultQueueId);
-                for (int iter = 0; iter < num_measurement_iterations; ++iter) {
-                    output_tensor = ttnn::operations::matmul::matmul(
-                        in0_t,
-                        in1_t,
-                        /* bias */ std::nullopt,
-                        /* parameters */ matmul_params);
-                    output_tensor.deallocate();
-                }
-                ttnn::operations::trace::end_trace_capture(device, tid, ttnn::DefaultQueueId);
-
-                auto start_time = std::chrono::high_resolution_clock::now();
-                {
-                    ZoneScopedN("Matmul trace iterations");
-                    ttnn::operations::trace::execute_trace(device, tid, ttnn::DefaultQueueId, false);
-                    device->push_work(
-                        [device]() mutable { Synchronize(device, std::nullopt, std::vector<SubDeviceId>()); });
-                    device->synchronize();
-                }
-
-                auto end_time = std::chrono::high_resolution_clock::now();
-
-                total_time = end_time - start_time;
-                ttnn::operations::trace::release_trace(device, tid);
-            } else {
-                auto start_time = std::chrono::high_resolution_clock::now();
-                {
-                    ZoneScopedN("Matmul iterations");
-                    for (int iter = 0; iter < num_measurement_iterations; ++iter) {
-                        output_tensor = ttnn::operations::matmul::matmul(
-                            in0_t,
-                            in1_t,
-                            /* bias */ std::nullopt,
-                            /* parameters */ matmul_params);
-                        device->push_work(
-                            [device]() mutable { Synchronize(device, std::nullopt, std::vector<SubDeviceId>()); });
-                        device->synchronize();
-                        output_tensor.deallocate();
-                    }
-                }
-                auto end_time = std::chrono::high_resolution_clock::now();
-                total_time = end_time - start_time;
-            }
-
-            const double inference_time_avg_s = total_time.count() / num_measurement_iterations;
-            double tflops = 2.0 * m * k * n / 1e12 / inference_time_avg_s;
-            int cycle_per_tile = (math_fidelity == MathFidelity::LoFi)    ? LoFi_cycle
-                                 : (math_fidelity == MathFidelity::HiFi2) ? HiFi2_cycle
-                                 : (math_fidelity == MathFidelity::HiFi3) ? HiFi3_cycle
-                                                                          : HiFi4_cycle;
-            int num_cores_user_grid = std::get<0>(grid_size) * std::get<1>(grid_size);
-            auto compute_grid_size = device->compute_with_storage_grid_size();
-            int num_cores_full_grid = compute_grid_size.x * compute_grid_size.y;
-            const double dim_per_tile = (double)m * (double)k * (double)n / tile_h / tile_w;
-            double ideal_cycle_full_grid = dim_per_tile / 32 * cycle_per_tile / num_cores_full_grid;
-            double ideal_cycle_user_grid = dim_per_tile / 32 * cycle_per_tile / num_cores_user_grid;
-            double inference_cycle = inference_time_avg_s * get_device_freq() * 1e6;
-            double utilization_full_grid = ideal_cycle_full_grid / inference_cycle;
-            double utilization_user_grid = ideal_cycle_user_grid / inference_cycle;
-            std::string utilization_full_grid_percentage = std::to_string(utilization_full_grid * 100);
-            std::string utilization_user_grid_percentage = std::to_string(utilization_user_grid * 100);
-            tt::log_info(
-                "M*K*N = {}*{}*{} == inference time (avg): {}, tflops (avg): {}, utilization (vs user grid): {}%, "
-                "utilization (vs 8x8 grid): {}%",
-                m,
-                k,
-                n,
-                inference_time_avg_s,
-                tflops,
-                utilization_user_grid_percentage,
-                utilization_full_grid_percentage);
-
-            file << m << "," << k << "," << n << "," << (use_trace ? "true" : "false") << "," << std::get<0>(grid_size)
-                 << "x" << std::get<1>(grid_size) << "," << in0_sharded << "," << out_sharded << "," << in0_storage_type
-                 << "," << in1_storage_type << "," << out_storage_type << "," << dtype_to_string(dtype) << ","
-                 << math_fidelity << "," << inference_time_avg_s * 1e9 << "," << tflops << ","
-                 << utilization_user_grid_percentage << "," << utilization_full_grid_percentage << "\n";
-
-            // Deallocate input tensors
-            in0_t.deallocate();
-            in1_t.deallocate();
         }
     }
+
+    const double inference_time_avg_s = total_time.count() / num_measurement_iterations;
+    double tflops = 2.0 * m * k * n / 1e12 / inference_time_avg_s;
+    int cycle_per_tile = (math_fidelity == MathFidelity::LoFi)    ? LoFi_cycle
+                         : (math_fidelity == MathFidelity::HiFi2) ? HiFi2_cycle
+                         : (math_fidelity == MathFidelity::HiFi3) ? HiFi3_cycle
+                                                                  : HiFi4_cycle;
+    int num_cores_user_grid = grid_size.height() * grid_size.width();
+    auto compute_grid_size = device->compute_with_storage_grid_size();
+    int num_cores_full_grid = compute_grid_size.x * compute_grid_size.y;
+    const double dim_per_tile = (double)m * (double)k * (double)n / tile_h / tile_w;
+    double ideal_cycle_full_grid = dim_per_tile / 32 * cycle_per_tile / num_cores_full_grid;
+    double ideal_cycle_user_grid = dim_per_tile / 32 * cycle_per_tile / num_cores_user_grid;
+    double inference_cycle = inference_time_avg_s * get_device_freq() * 1e6;
+    double utilization_full_grid = ideal_cycle_full_grid / inference_cycle;
+    double utilization_user_grid = ideal_cycle_user_grid / inference_cycle;
+    std::string utilization_full_grid_percentage = std::to_string(utilization_full_grid * 100);
+    std::string utilization_user_grid_percentage = std::to_string(utilization_user_grid * 100);
+    tt::log_info(
+        "M*K*N = {}*{}*{} == inference time (avg): {}, tflops (avg): {}, utilization (vs user grid): {}%, "
+        "utilization (vs 8x8 grid): {}%",
+        m,
+        k,
+        n,
+        inference_time_avg_s,
+        tflops,
+        utilization_user_grid_percentage,
+        utilization_full_grid_percentage);
+
+    file << m << "," << k << "," << n << "," << (use_trace ? "true" : "false") << "," << grid_size.height() << "x"
+         << grid_size.width() << "," << in0_sharded << "," << out_sharded << "," << in0_storage_type << ","
+         << in1_storage_type << "," << out_storage_type << "," << dtype_to_string(dtype) << "," << math_fidelity << ","
+         << inference_time_avg_s * 1e9 << "," << tflops << "," << utilization_user_grid_percentage << ","
+         << utilization_full_grid_percentage << "\n";
+
+    // Deallocate input tensors
+    in0_t.deallocate();
+    in1_t.deallocate();
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    /*Prefix for the instantiated tests*/ MatmulTests,
+    /*Prefix for the instantiated tests*/ MatmulTests_BFLOAT16,
     /*Test suite*/ Matmul2DHostPerfTestFixture,
-    ::testing::Values(std::make_tuple(
-        /* grid_size */ std::make_tuple(8, 8),
-        /* tile_h */ 32,
-        /* tile_w */ 32,
-        /* num_warmup_iterations */ 1,
-        /* num_measurement_iterations */ 5,
-        /* use_program_cache */ true)));
+    ::testing::Combine(
+        // Matmul_Test_Configs to use
+        ::testing::ValuesIn(std::vector<Matmul_Test_Config>{
+            {DataType::BFLOAT16, MathFidelity::HiFi2, /*enable_tracing=*/false},
+            {DataType::BFLOAT16, MathFidelity::HiFi2, /*enable_tracing=*/true},
+            {DataType::BFLOAT16, MathFidelity::HiFi4, /*enable_tracing=*/false},
+            {DataType::BFLOAT16, MathFidelity::HiFi4, /*enable_tracing=*/true}}),
+        // Matmul_Shapes to use
+        ::testing::ValuesIn(std::vector<Matmul_Shape>{
+            {/*m=*/512,
+             /*k=*/512,
+             /*n=*/512,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/512,
+             /*k=*/1024,
+             /*n=*/1024,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/512,
+             /*k=*/1024,
+             /*n=*/2048,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/1024,
+             /*k=*/1024,
+             /*n=*/1024,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/1024,
+             /*k=*/1024,
+             /*n=*/2048,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/1024,
+             /*k=*/2048,
+             /*n=*/2048,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/2048,
+             /*k=*/2048,
+             /*n=*/2048,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/2048,
+             /*k=*/2048,
+             /*n=*/3072,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/2048,
+             /*k=*/3072,
+             /*n=*/3072,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/2,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/3072,
+             /*k=*/3072,
+             /*n=*/3072,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/4,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/3072,
+             /*k=*/3072,
+             /*n=*/4096,
+             /*in0_sharded=*/false,
+             /*out_sharded=*/false,
+             /*in0_block_w_div=*/2,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/3072,
+             /*k=*/4096,
+             /*n=*/4096,
+             /*in0_sharded=*/false,
+             /*out_sharded=*/false,
+             /*in0_block_w_div=*/2,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/4096,
+             /*k=*/4096,
+             /*n=*/4096,
+             /*in0_sharded=*/false,
+             /*out_sharded=*/false,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/2,
+             /*num_out_blocks_w=*/2},
+            {/*m=*/8192,
+             /*k=*/8192,
+             /*n=*/8192,
+             /*in0_sharded=*/false,
+             /*out_sharded=*/false,
+             /*in0_block_w_div=*/2,
+             /*num_out_blocks_h=*/4,
+             /*num_out_blocks_w=*/4},
+            {/*m=*/16384,
+             /*k=*/16384,
+             /*n=*/16384,
+             /*in0_sharded=*/false,
+             /*out_sharded=*/false,
+             /*in0_block_w_div=*/4,
+             /*num_out_blocks_h=*/8,
+             /*num_out_blocks_w=*/8}})));
+
+INSTANTIATE_TEST_SUITE_P(
+    /*Prefix for the instantiated tests*/ MatmulTests_BFLOAT8B,
+    /*Test suite*/ Matmul2DHostPerfTestFixture,
+    ::testing::Combine(
+        // Matmul_Test_Configs to use
+        ::testing::ValuesIn(std::vector<Matmul_Test_Config>{
+            {DataType::BFLOAT8_B, MathFidelity::HiFi2, /*enable_tracing=*/false},
+            {DataType::BFLOAT8_B, MathFidelity::HiFi2, /*enable_tracing=*/true},
+            {DataType::BFLOAT8_B, MathFidelity::LoFi, /*enable_tracing=*/false},
+            {DataType::BFLOAT8_B, MathFidelity::LoFi, /*enable_tracing=*/true}}),
+        // Matmul_Shapes to use
+        ::testing::ValuesIn(std::vector<Matmul_Shape>{
+            {/*m=*/512,
+             /*k=*/512,
+             /*n=*/512,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/512,
+             /*k=*/1024,
+             /*n=*/1024,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/512,
+             /*k=*/1024,
+             /*n=*/2048,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/1024,
+             /*k=*/1024,
+             /*n=*/1024,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/1024,
+             /*k=*/1024,
+             /*n=*/2048,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/1024,
+             /*k=*/2048,
+             /*n=*/2048,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/2048,
+             /*k=*/2048,
+             /*n=*/2048,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/2048,
+             /*k=*/2048,
+             /*n=*/3072,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/2048,
+             /*k=*/3072,
+             /*n=*/3072,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/3072,
+             /*k=*/3072,
+             /*n=*/3072,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/2,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/3072,
+             /*k=*/3072,
+             /*n=*/4096,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/2,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/3072,
+             /*k=*/4096,
+             /*n=*/4096,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/2,
+             /*num_out_blocks_w=*/2},
+            {/*m=*/4096,
+             /*k=*/4096,
+             /*n=*/4096,
+             /*in0_sharded=*/false,
+             /*out_sharded=*/false,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/2,
+             /*num_out_blocks_w=*/2},
+            {/*m=*/8192,
+             /*k=*/8192,
+             /*n=*/8192,
+             /*in0_sharded=*/false,
+             /*out_sharded=*/false,
+             /*in0_block_w_div=*/2,
+             /*num_out_blocks_h=*/4,
+             /*num_out_blocks_w=*/4},
+            {/*m=*/16384,
+             /*k=*/16384,
+             /*n=*/16384,
+             /*in0_sharded=*/false,
+             /*out_sharded=*/false,
+             /*in0_block_w_div=*/4,
+             /*num_out_blocks_h=*/8,
+             /*num_out_blocks_w=*/8}})));
+
+INSTANTIATE_TEST_SUITE_P(
+    /*Prefix for the instantiated tests*/ MatmulTests_BFLOAT4B,
+    /*Test suite*/ Matmul2DHostPerfTestFixture,
+    ::testing::Combine(
+        // Matmul_Test_Configs to use
+        ::testing::ValuesIn(std::vector<Matmul_Test_Config>{
+            {DataType::BFLOAT4_B, MathFidelity::LoFi, /*enable_tracing=*/false},
+            {DataType::BFLOAT4_B, MathFidelity::LoFi, /*enable_tracing=*/true}}),
+        // Matmul_Shapes to use
+        ::testing::ValuesIn(std::vector<Matmul_Shape>{
+            {/*m=*/512,
+             /*k=*/512,
+             /*n=*/512,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/512,
+             /*k=*/1024,
+             /*n=*/1024,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/512,
+             /*k=*/1024,
+             /*n=*/2048,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/1024,
+             /*k=*/1024,
+             /*n=*/1024,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/1024,
+             /*k=*/1024,
+             /*n=*/2048,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/1024,
+             /*k=*/2048,
+             /*n=*/2048,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/2048,
+             /*k=*/2048,
+             /*n=*/2048,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/2048,
+             /*k=*/2048,
+             /*n=*/3072,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/2048,
+             /*k=*/3072,
+             /*n=*/3072,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/3072,
+             /*k=*/3072,
+             /*n=*/3072,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/3072,
+             /*k=*/3072,
+             /*n=*/4096,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/1,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/3072,
+             /*k=*/4096,
+             /*n=*/4096,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/2,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/4096,
+             /*k=*/4096,
+             /*n=*/4096,
+             /*in0_sharded=*/true,
+             /*out_sharded=*/true,
+             /*in0_block_w_div=*/2,
+             /*num_out_blocks_h=*/1,
+             /*num_out_blocks_w=*/1},
+            {/*m=*/8192,
+             /*k=*/8192,
+             /*n=*/8192,
+             /*in0_sharded=*/false,
+             /*out_sharded=*/false,
+             /*in0_block_w_div=*/2,
+             /*num_out_blocks_h=*/2,
+             /*num_out_blocks_w=*/2},
+            {/*m=*/16384,
+             /*k=*/16384,
+             /*n=*/16384,
+             /*in0_sharded=*/false,
+             /*out_sharded=*/false,
+             /*in0_block_w_div=*/4,
+             /*num_out_blocks_h=*/4,
+             /*num_out_blocks_w=*/4}})));
