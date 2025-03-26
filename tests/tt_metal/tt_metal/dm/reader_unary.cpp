@@ -6,6 +6,8 @@
 
 #include "dataflow_api.h"
 
+// DRAM to L1 read
+// TODO: Expand this to read from other core(s)
 void kernel_main() {
     uint32_t src_addr = get_compile_time_arg_val(0);
     constexpr uint32_t bank_id = get_compile_time_arg_val(1);
@@ -18,6 +20,7 @@ void kernel_main() {
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     for (uint32_t i = 0; i < total_num_tiles; i += ublock_size_tiles) {
+        // TODO: Change src address to change DRAM/core locations (single/multiple core)
         uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, src_addr);
 
         cb_reserve_back(cb_id_in0, ublock_size_tiles);
