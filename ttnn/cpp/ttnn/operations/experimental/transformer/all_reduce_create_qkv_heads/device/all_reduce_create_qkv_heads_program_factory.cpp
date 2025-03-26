@@ -52,8 +52,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     // QKV heads params
     const uint32_t num_q_heads,
     const uint32_t num_kv_heads,
-    const uint32_t head_dim,
-    std::optional<const uint32_t> slice_size) {
+    const uint32_t head_dim) {
     tt::tt_metal::Program program{};
 
     const Tensor& input_tensor = input_tensors[0];
@@ -160,6 +159,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     // cores for v
     const uint32_t v_num_cores = v_cores.num_cores();  // number of cores of the output
     const auto& v_cores_vector = corerange_to_cores(v_cores, v_num_cores, true);
+
+    TT_FATAL(
+        q_num_cores == k_num_cores && k_num_cores == v_num_cores,
+        "Output q/k/v must have the same number of cores, q_num_cores: {}, k_num_cores: {}, v_num_cores: {}",
+        q_num_cores,
+        k_num_cores,
+        v_num_cores);
 
     // cores for input
     const uint32_t in_num_cores = in_cores.num_cores();  // number of cores of the input
@@ -405,11 +411,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         1,  // read the first phase
         in_num_cores,
         q_num_cores,
-        k_num_cores,
         // process_qv,  qv vs k core will be passed in as rt args// read and write q and v heads
         // process_k,   // read and write k heads
-        1,  // use_batch_offset
-        1,
         batch_offset_index_stick_size,
         batch_offset_cb_index_reader,
         out_cb_index,
@@ -430,11 +433,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         2,  // read the second phase
         in_num_cores,
         q_num_cores,
-        k_num_cores,
         // process_qv,  // read and write q and v heads
         // process_k,   // read and write k heads
-        1,  // use_batch_offset
-        1,
         batch_offset_index_stick_size,
         batch_offset_cb_index_reader,
         out_cb_index,
@@ -478,13 +478,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     // Now prepare rt args for the reader and writer kernels
 
     std::vector<uint32_t> reader_writer_runtime_args_template;
-    reader_writer_runtime_args_template.reserve(8 + 2 * q_num_cores + 2 * k_num_cores + 2 * v_num_cores);
+    reader_writer_runtime_args_template.reserve(7 + 2 * q_num_cores + 2 * k_num_cores + 2 * v_num_cores);
     reader_writer_runtime_args_template = {
         q_base_addr,
         k_base_addr,
         v_base_addr,
         batch_offset_tensor.buffer()->address(),
-        0,
         0,
         output_tensor_shard_num_pages};
     reader_writer_runtime_args_template.insert(

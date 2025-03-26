@@ -332,8 +332,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceCreateQkvHeads::create_pr
         this->enable_persistent_fabric_mode,
         this->num_heads,
         this->num_kv_heads,
-        this->head_dim,
-        this->slice_size);
+        this->head_dim);
 }
 
 const tt::tt_metal::operation::Hash AllReduceCreateQkvHeads::compute_program_hash(
