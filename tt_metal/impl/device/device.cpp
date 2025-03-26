@@ -277,7 +277,7 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
     const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
 
     auto config = L1BankingAllocator::generate_config(
-        this->id(), this->num_hw_cqs(), l1_small_size, trace_region_size, l1_bank_remap);
+        this->id(), this->num_hw_cqs(), l1_small_size, trace_region_size, {l1_bank_remap.begin(), l1_bank_remap.end()});
 
     for (const CoreCoord& core : tt::get_logical_compute_cores(id_, num_hw_cqs_, dispatch_core_config)) {
         this->compute_cores_.insert(core);
@@ -930,7 +930,7 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
     // BuildEnvManager::get_instance().add_build_env(this->id(), this->num_hw_cqs());
     // this->initialize_cluster();
     this->initialize_default_sub_device_state(l1_small_size, trace_region_size, l1_bank_remap);
-    this->generate_device_bank_to_noc_tables();
+    // this->generate_device_bank_to_noc_tables();
 
     // For minimal setup, don't initialize FW, watcher, dprint. They won't work if we're attaching to a hung chip.
     if (minimal)

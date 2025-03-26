@@ -234,7 +234,7 @@ AllocatorConfig L1BankingAllocator::generate_config(
     uint8_t num_hw_cqs,
     size_t l1_small_size,
     size_t trace_region_size,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap) {
+    BankMapping l1_bank_remap) {
     const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(device_id);
     const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
@@ -263,7 +263,7 @@ AllocatorConfig L1BankingAllocator::generate_config(
          .core_type_from_noc_coord_table = {},  // Populated later
          .worker_log_to_virtual_routing_x = tt::Cluster::instance().get_worker_logical_to_virtual_x(device_id),
          .worker_log_to_virtual_routing_y = tt::Cluster::instance().get_worker_logical_to_virtual_y(device_id),
-         .l1_bank_remap = {l1_bank_remap.begin(), l1_bank_remap.end()},
+         .l1_bank_remap = l1_bank_remap,
          .compute_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(compute_size.x - 1, compute_size.y - 1))),
          .l1_alignment = hal.get_alignment(HalMemType::L1),
          .disable_interleaved = false});

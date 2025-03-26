@@ -208,7 +208,8 @@ void DevicePool::initialize(
     tt::stl::Span<const std::uint32_t> l1_bank_remap) noexcept {
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool initialize");
-    tt::tt_metal::MetalContext::initialize(dispatch_core_config, num_hw_cqs);
+    tt::tt_metal::MetalContext::initialize(
+        dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()});
     // Initialize the dispatch core manager, responsible for assigning dispatch cores
     // tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_config, num_hw_cqs);
     // Initialize the dispatch query layer, used by runtime command generation
@@ -282,9 +283,9 @@ void DevicePool::initialize_host(IDevice* dev) const {
     if (!llrt::RunTimeOptions::get_instance().get_skip_reset_cores_on_init()) {
         // dev->reset_cores();
     }
-    dev->initialize_and_launch_firmware();
+    // dev->initialize_and_launch_firmware();
 
-    watcher_attach(dev->id());
+    // watcher_attach(dev->id());
 }
 
 void DevicePool::initialize_active_devices() const {
@@ -442,7 +443,7 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
         }
     }
 
-    this->using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
+    this->using_fast_dispatch = tt::llrt::RunTimeOptions::get_instance().get_fast_dispatch();
     if (this->using_fast_dispatch) {
         // populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
     }
