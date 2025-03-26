@@ -6,7 +6,7 @@ on:
       os:
         required: false
         type: string
-        default: "ubuntu-20.04"
+        default: "ubuntu-22.04"
       docker-image:
         required: true
         type: string
