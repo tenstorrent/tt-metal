@@ -148,7 +148,6 @@ void kernel_main() {
                 fabric_conn.send_payload_flush_blocking_from_address(
                     (uint32_t)unicast_packet_header, packet_header_size);
 
-                noc_async_writes_flushed();  // flushed because cross chip?
                 cb_pop_front(fabric_sender_cb_id, curr_packet_num_pages);
             }
             if (is_atomic_inc_core) {
