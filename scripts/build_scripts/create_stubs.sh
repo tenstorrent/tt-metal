@@ -15,6 +15,5 @@ if [ $sanity -ne 0 ]; then
 fi
 
 echo "Generating stubs"
-stubgen -m tt_lib -m tt_lib.device -m tt_lib.profiler -m tt_lib.tensor -m tt_lib.operations -m tt_lib.operations.primary -m tt_lib.operations.primary.transformers -o tt_eager
-stubgen -p ttnn._ttnn -o ttnn
+stubgen -p ttnn._ttnn -o ttnn --include-docstrings
 sed -i 's/\._C/tt_lib/g' tt_eager/tt_lib/__init__.pyi
