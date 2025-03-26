@@ -127,6 +127,15 @@ struct Conv2dConfig {
     }
 };
 
+struct ConvSliceConfig {
+    // If True, slice along the height dimension of the input & output tensor.
+    // If False, slice along the width dimension of the input & output tensor.
+    bool slice_output_height = false;
+
+    // Size of the output slice along the dimension being sliced.
+    uint32_t output_slice_size = 0;
+};
+
 // TODO: Accept parallelization
 enum class OptimizedConvOpParallelizationStrategy { MULTI_CORE, MULTI_CORE_REUSE, MULTI_CORE_REUSE_MCAST, SINGLE_CORE };
 
