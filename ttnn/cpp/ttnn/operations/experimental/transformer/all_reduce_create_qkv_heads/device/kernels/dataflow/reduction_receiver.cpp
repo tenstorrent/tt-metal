@@ -215,7 +215,6 @@ void kernel_main() {
             noc_async_write(
                 read_addr + FACE_HW * ELEMENT_SIZE, write_addr + FACE_HW * ELEMENT_SIZE, SUBTILE_LINE_BYTES);
         }
-        noc_async_read_barrier();
     }
     noc_async_read_barrier();
 }

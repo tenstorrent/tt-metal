@@ -541,24 +541,24 @@ def run_all_reduce_qkv_heads_fuse_impl(
             batch_offset=batch_offset_tt_tensor,
             slice_size=8,
         )  # [1, 1, 32, 1280]
-        breakpoint()
+        # breakpoint()
         # Batch Slicing
         # 32 BS is split into 8 Mini BS across 4 devices
         ttnn.synchronize_device(mesh_device)
 
-        (
-            q_heads_pre_rot_1BQD,  # Shape([1, 8, 8, 128])
-            k_heads_pre_rot_1BKD,  # Shape([1, 8, 1, 128])
-            v_heads_1BKD,  # Shape([1, 8, 1, 128])
-        ) = ttnn.experimental.nlp_create_qkv_heads_decode(
-            tt_qkv_reduced,
-            num_heads=8,
-            num_kv_heads=1,
-            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-            overlap_qk_coregrid=False,
-            batch_offset=batch_offset_tt_tensor,
-            slice_size=8,
-        )  # [1, 8, 8[32], 128], [1, 8, 1[32], 128], [1, 8, 1[32], 128]
+        # (
+        #     q_heads_pre_rot_1BQD,  # Shape([1, 8, 8, 128])
+        #     k_heads_pre_rot_1BKD,  # Shape([1, 8, 1, 128])
+        #     v_heads_1BKD,  # Shape([1, 8, 1, 128])
+        # ) = ttnn.experimental.nlp_create_qkv_heads_decode(
+        #     tt_qkv_reduced,
+        #     num_heads=8,
+        #     num_kv_heads=1,
+        #     memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        #     overlap_qk_coregrid=False,
+        #     batch_offset=batch_offset_tt_tensor,
+        #     slice_size=8,
+        # )  # [1, 8, 8[32], 128], [1, 8, 1[32], 128], [1, 8, 1[32], 128]
         # q MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=7,y=0)]},shape={32, 128},orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
         # k MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=1) - (x=7,y=1)]},shape={32, 128},orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
         # v MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=7,y=0)]},shape={32, 128},orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
