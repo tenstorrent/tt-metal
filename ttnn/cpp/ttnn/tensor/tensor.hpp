@@ -338,6 +338,7 @@ Tensor create_device_tensor(
 // void *get_host_buffer(const Tensor &tensor);
 void* get_raw_host_data_ptr(const Tensor& tensor);
 
+// The set of memcpy functions below are used to copy data between host buffers/tensors and single-device tensors
 void memcpy(
     CommandQueue& queue,
     void* dst,
