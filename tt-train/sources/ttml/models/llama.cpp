@@ -72,7 +72,7 @@ Llama::Llama(const LlamaConfig& config) {
     register_module(ln_fc, "ln_fc");
     register_module(fc, "fc");
 
-    common::transformer::weights_initialization(*this);
+    common::transformer::initialize_weights_gpt2(*this);
 }
 
 ttml::autograd::TensorPtr Llama::operator()(const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) {

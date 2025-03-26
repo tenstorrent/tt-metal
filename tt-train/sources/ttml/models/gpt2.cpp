@@ -96,7 +96,7 @@ Transformer::Transformer(const TransformerConfig& config) {
     register_module(ln_fc, "ln_fc");
     register_module(fc, "fc");
 
-    common::transformer::weights_initialization(*this);
+    common::transformer::initialize_weights_gpt2(*this);
 }
 
 ttml::autograd::TensorPtr Transformer::operator()(

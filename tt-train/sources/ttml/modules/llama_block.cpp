@@ -11,7 +11,6 @@
 #include "ops/unary_ops.hpp"
 
 namespace ttml::modules {
-
 LlamaMLP::LlamaMLP(uint32_t embedding_size, float dropout_prob) {
     uint32_t multiple_of = 256;
     const uint32_t unrounded_size = static_cast<uint32_t>(static_cast<float>(4 * embedding_size) * (2.0F / 3.0F));
@@ -51,7 +50,7 @@ LlamaBlock::LlamaBlock(
         .num_heads = num_heads,
         .num_groups = num_groups,
         .dropout_prob = dropout_prob,
-        .rope_params = &rope_params,
+        .rope_params = rope_params,
     });
 
     create_name("llama_block");

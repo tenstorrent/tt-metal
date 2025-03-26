@@ -67,7 +67,8 @@ autograd::TensorPtr memory_efficient_runner(
     return out;
 }
 
-void weights_initialization(autograd::ModuleBase& model);
+void initialize_weights_gpt2(autograd::ModuleBase& model);
+void initialize_weights_he_kaiming_normal(autograd::ModuleBase& model);
 
 RunnerType read_runner_type(const YAML::Node& config);
 WeightTyingType read_weight_tying_type(const YAML::Node& config);
