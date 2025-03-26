@@ -205,8 +205,9 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGather::create_program_at(
         bool is_last_chip_in_clockwise_direction = device_index == (this->ring_size - 1);
         bool is_last_chip_in_counter_clockwise_direction = device_index == 0;
         receiver_device_id = is_last_chip_in_clockwise_direction ? std::nullopt : get_chip_id(device_index + 1);
-        sender_device_id =
-            is_last_chip_in_counter_clockwise_direction ? std::nullopt : get_chip_id(device_index + num_links - 1);
+        sender_device_id = is_last_chip_in_counter_clockwise_direction
+                               ? std::nullopt
+                               : get_chip_id(device_index + this->ring_size - 1);
     } else {
         std::tie(device_index, sender_device_id, receiver_device_id) =
             ccl::get_device_index_and_sender_receiver_ids(mesh_device->get_device(mesh_coord), this->devices, topology);
