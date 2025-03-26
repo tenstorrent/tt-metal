@@ -230,7 +230,7 @@ run_t3000_llama3.1-70b_tests() {
 }
 
 
-run_t3000_mistral7b_unit_tests() {
+run_t3000_mistral_tests() {
   # Record the start time
   fail=0
   start_time=$(date +%s)
@@ -409,8 +409,8 @@ run_t3000_tests() {
   # Run llama3.2-11B-vision tests
   run_t3000_llama3.2-11b-vision_unit_tests
 
-  # Run mistral7b unit tests
-  run_t3000_mistral7b_unit_tests
+  # Run mistral tests
+  run_t3000_mistral_tests
 
   # Run llama3.2-11B-vision tests on spoofed N300 mesh
   run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests

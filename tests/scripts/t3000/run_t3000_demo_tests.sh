@@ -125,7 +125,7 @@ run_t3000_falcon7b_tests(){
   fi
 }
 
-run_t3000_mistral7b_demo_tests() {
+run_t3000_mistral_tests() {
   # Record the start time
   fail=0
   start_time=$(date +%s)
@@ -183,8 +183,8 @@ run_t3000_tests() {
   # Run falcon7b tests
   run_t3000_falcon7b_tests
 
-  # Run mistral7b demo tests
-  run_t3000_mistral7b_demo_tests
+  # Run mistral tests
+  run_t3000_mistral_tests
 
   # Run mixtral tests
   run_t3000_mixtral_tests
