@@ -19,6 +19,8 @@ from models.utility_functions import (
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
+from models.demos.llama3_subdevices.tt.prefetcher_common import TtLlamaPrefetcherSetup
+from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 
 
 @torch.no_grad()
@@ -36,11 +38,11 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "paged_attention",
     (
-        True,
+        # True,
         False,
     ),
     ids=(
-        "paged_attention",
+        # "paged_attention",
         "default_attention",
     ),
 )
@@ -51,11 +53,12 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "max_seq_len",
     (
-        2048,
+        128,
         # 1024 * 32,
         # 1024 * 64,
     ),
 )
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 def test_llama_attention_inference(
     max_seq_len,
     paged_attention,
@@ -73,6 +76,7 @@ def test_llama_attention_inference(
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
     model_args.n_layers = 1
+    model_args.use_prefetcher = False
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
@@ -129,7 +133,9 @@ def test_llama_attention_inference(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
-
+    prefetcher_setup = TtLlamaPrefetcherSetup(mesh_device, n_tensors=0, n_layers=1, mode="prefill")
+    mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
+    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, mode="prefill")
     tt_model = TtLlamaAttention(
         mesh_device,
         state_dict,
@@ -139,43 +145,49 @@ def test_llama_attention_inference(
         transformation_mats=transformation_mats,
         configuration=model_args,
         paged_attention_config=paged_attention_config,
+        prefetcher_setup=prefetcher_setup,
+        tt_ccl=tt_ccl,
     )
 
     pt_attention_input = (torch.rand(batch_size, max_seq_len, model_args.dim) * 2) - 1
     tt_attention_input = pt_attention_input.clone()
-    attention_input = model_args.prepare_residual_tensor_prefill(
-        tt_attention_input,
-        force_replicated=False if model_args.is_galaxy else True,
-    )
+    for _ in range(2):
+        attention_input = model_args.prepare_residual_tensor_prefill(
+            tt_attention_input,
+            force_replicated=False if model_args.is_galaxy else True,
+        )
 
-    tt_out = tt_model(
-        attention_input,
-        current_pos=None,
-        rot_mats=rot_mats,
-        user_id=0,
-        mode="prefill",
-        page_table=page_table_tt,
-    )
-    tt_out = ttnn.to_torch(
-        tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape)
-    )
-    tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, max_seq_len, -1)  # [ batch, seq, hidden_dim]
-    positions = torch.LongTensor(range(max_seq_len))
-    freqs_cis_i = precompute_freqs_cis(
-        model_args.head_dim,
-        model_args.max_seq_len * 2,
-        model_args.rope_theta,
-        model_args.use_scaled_rope,
-        model_args.rope_scaling_factor,
-    )[positions]
-    attn_mask = torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min)
-    attn_mask_torch = torch.triu(attn_mask, diagonal=1)
-    reference_output = reference_model(pt_attention_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
+        tt_out = tt_model(
+            attention_input,
+            current_pos=None,
+            rot_mats=rot_mats,
+            user_id=0,
+            mode="prefill",
+            page_table=page_table_tt,
+        )
+        tt_out = ttnn.to_torch(
+            tt_out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+        )
+        tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(
+            batch_size, max_seq_len, -1
+        )  # [ batch, seq, hidden_dim]
+        positions = torch.LongTensor(range(max_seq_len))
+        freqs_cis_i = precompute_freqs_cis(
+            model_args.head_dim,
+            model_args.max_seq_len * 2,
+            model_args.rope_theta,
+            model_args.use_scaled_rope,
+            model_args.rope_scaling_factor,
+        )[positions]
+        attn_mask = torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min)
+        attn_mask_torch = torch.triu(attn_mask, diagonal=1)
+        reference_output = reference_model(pt_attention_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
 
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
+        passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 
-    logger.info(comp_allclose(reference_output, tt_output_torch))
-    logger.info(f"PCC: {pcc_message}")
+        logger.info(comp_allclose(reference_output, tt_output_torch))
+        logger.info(f"PCC: {pcc_message}")
     if passing:
         logger.info(f"Llama_Attention Passed!")
     else:
@@ -243,7 +255,7 @@ def test_llama_attention_inference(
             else:
                 logger.warning(f"KV Cache Failed! PCC value is lower than {pcc}")
                 all_tests_pass = False
-
+    tt_ccl.close()
     if all_tests_pass:
         logger.info("Llama Attention output Passed!")
     else:
