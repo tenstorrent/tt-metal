@@ -1,12 +1,7 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/creation.hpp"
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
-#include "ttnn/operations/core/core.hpp"
 #include "device/cumprod_device_operation.hpp"
 #include "cumprod.hpp"
 

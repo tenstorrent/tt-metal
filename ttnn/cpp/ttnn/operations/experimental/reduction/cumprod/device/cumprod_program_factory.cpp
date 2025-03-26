@@ -13,15 +13,6 @@ CumprodDeviceOperation::SingleCore::cached_program_t CumprodDeviceOperation::Sin
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    // using tt::tt_metal::IDevice;
-    // using tt::tt_metal::BufferType;
-    // using tt::tt_metal::ComputeConfig;
-    // using tt::tt_metal::Program;
-    // using tt::tt_metal::CoreCoord;
-    // using tt::tt_metal::CircularBufferConfig;
-    // using tt::tt_metal::KernelHandle;
-    // using tt::tt_metal::CBIndex;
-    // using tt::tt_metal::DataFormat;
 
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;

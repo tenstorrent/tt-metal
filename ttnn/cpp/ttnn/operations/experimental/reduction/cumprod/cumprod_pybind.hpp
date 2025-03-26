@@ -24,16 +24,11 @@ void bind_cumprod_operation(py::module& module) {
         Returns a tensor witth cumulative product calculated along a given axis (`dim`).
 
         Args:
-            ###
-
-        Keyword Args:
-            ###
+            input_tensor (ttnn.Tensor): the input tensor to calculate cumulative product of.
+            dim (int): direction of product cumulation
 
         Returns:
-            ttnn.Tensor: the output tensor.
-
-        Note:
-            ###
+            ttnn.Tensor: the output tensor (for now, it's same as input_tensor, because only scaffold is implemented).
         )doc";
 
     using OperationType = decltype(ttnn::experimental::cumprod);
