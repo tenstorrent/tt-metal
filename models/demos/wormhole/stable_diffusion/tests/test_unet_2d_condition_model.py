@@ -171,4 +171,4 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     print(f"Second iteration took {second_iter} seconds")
 
     ttnn_output = ttnn_to_torch(ttnn_output)
-    assert_with_pcc(torch_output, ttnn_output, 0.99)
+    assert_with_pcc(torch_output, ttnn_output, 0.996)
