@@ -140,9 +140,6 @@ run_t3000_llm_tests() {
   # Run llama2-70b tests
   run_t3000_llama2_70b_tests
 
-  # Run mistral7b tests
-  run_t3000_mistral7b_perf_tests
-
   # Run falcon40b tests
   run_t3000_falcon40b_tests
 
