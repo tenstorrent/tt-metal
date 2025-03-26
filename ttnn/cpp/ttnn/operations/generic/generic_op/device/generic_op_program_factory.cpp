@@ -38,7 +38,7 @@ GenericOpDeviceOperation::GenericProgram::cached_program_t GenericOpDeviceOperat
             {{buffer_index, circular_buffer_attributes.data_format}})
             .set_page_size(buffer_index, circular_buffer_attributes.page_size);
 
-        // used for sharding to point to the existing buffer
+        // used for sharding to point to the existing buffer: WIP
         // if (circular_buffer_attributes.set_globally_allocated_address.has_value()) {
 
         //     cb_config.set_globally_allocated_address(*tensor_args.io_tensors[circular_buffer_attributes.set_globally_allocated_address.value()].buffer());
