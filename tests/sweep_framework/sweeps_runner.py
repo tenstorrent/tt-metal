@@ -203,7 +203,7 @@ def run(test_module, input_queue, output_queue):
                 output_queue.put([status, message, e2e_perf, None])
             if status:
                 # write_to_file(txt_file, test_vector, status, message)
-                write_to_csv_file(csv_file, test_vector, status, message)
+                write_to_csv_file(csv_file, test_vector, status, "PASSED")
 
             # print("-----------------------")
             # print("current parameter ", test_vector)
@@ -211,7 +211,7 @@ def run(test_module, input_queue, output_queue):
             # print("message", message)
 
             if not status:
-                write_to_csv_file(csv_file, test_vector, status, "failed")
+                write_to_csv_file(csv_file, test_vector, status, message)
 
                 print("********* FAILED *********")
                 print("current parameter ", test_vector)
