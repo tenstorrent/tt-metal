@@ -119,8 +119,6 @@ size_t MeshDeviceView::num_cols() const {
 }
 size_t MeshDeviceView::num_devices() const { return devices_.shape().mesh_size(); }
 
-const MeshCoordinateRange& MeshDeviceView::coord_range() const { return devices_.coord_range(); }
-
 bool MeshDeviceView::contains_device(chip_id_t device_id) const {
     return device_coordinates_.find(device_id) != device_coordinates_.end();
 }
