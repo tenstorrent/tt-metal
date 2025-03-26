@@ -67,7 +67,7 @@ param_ids = generate_param_ids(all_params)
     clean_params(all_params),
     ids=param_ids,
 )
-@pytest.mark.skip(reason="Not fully implemented")
+# @pytest.mark.skip(reason="Not fully implemented")
 def test_tilize_calculate_untilize_L1(
     testname, formats, dest_acc, mathop, math_fidelity, tile_cnt
 ):
@@ -79,7 +79,6 @@ def test_tilize_calculate_untilize_L1(
     golden_tensor = generate_golden(
         mathop, src_A, src_B, formats.pack_dst, math_fidelity
     )
-    print(golden_tensor.view(32, 32))
 
     write_stimuli_to_l1(
         src_A, src_B, formats.unpack_A_src, formats.unpack_B_src, "0,0", tile_cnt
@@ -101,7 +100,6 @@ def test_tilize_calculate_untilize_L1(
     res_from_L1 = collect_results(
         formats, 0x1E000
     )  # Bug patchup in (unpack.py): passing formats struct to check unpack_src with pack_dst and distinguish when input and output formats have different exponent widths then reading from L1 changes
-
     assert len(res_from_L1) == len(golden_tensor)
     assert_tensix_operations_finished()
 
