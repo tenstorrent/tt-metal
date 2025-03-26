@@ -36,7 +36,7 @@ jobs:
             name: "Llama TG Perf Model Tests",
             model-type: "LLM",
             arch: wormhole_b0,
-            cmd: 'pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py',
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type tg_llama_model_perf_tg_device --dispatch-mode ""'
             tracy: true,
             runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-perf"],
             owner_id: U044T8U8DEF # Johanna Rock
