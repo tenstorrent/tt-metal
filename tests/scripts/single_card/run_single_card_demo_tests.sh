@@ -1,6 +1,178 @@
 #!/bin/bash
 set +e
 
+run_falcon7b_func() {
+  fail=0
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo -k "default_mode_1024_stochastic"; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+
+}
+
+run_mistral7b_func() {
+  fail=0
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/mistral7b/demo/demo.py; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+
+}
+
+run_qwen7b_func() {
+  fail=0
+
+  QWEN_DIR=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml FAKE_DEVICE=N150 pytest -n auto models/demos/qwen/demo/demo.py -k instruct --timeout 420; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+
+}
+
+run_llama3_func() {
+  fail=0
+
+  # Llama3 Accuracy tests
+  # Llama3.2-1B
+  llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
+  # Llama3.2-3B
+  llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
+  # Llama3.1-8B (11B weights are the same)
+  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
+
+  # Run Llama3 accuracy tests for 1B, 3B, 8B weights
+  for llama_dir in "$llama1b" "$llama3b" "$llama8b"; do
+    LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py -k perf --timeout 420; fail+=$?
+    echo "LOG_METAL: Llama3 accuracy tests for $llama_dir completed"
+  done
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+
+}
+
+run_vgg_func() {
+  fail=0
+
+  #VGG11/VGG16
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/vgg/demo/demo.py --timeout 600; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+
+}
+
+run_bert_tiny_func() {
+  fail=0
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/bert_tiny/demo/demo.py --timeout 600; fail+=$?
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/bert_tiny/demo/demo.py --timeout 600; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+
+}
+
+run_bert_func() {
+  fail=0
+
+  pytest -n auto --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py -k batch_7; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py -k batch_8; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+
+}
+
+run_resnet_func() {
+  fail=0
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/wormhole/resnet50/demo/demo.py; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+
+}
+
+run_distilbert_func() {
+  fail=0
+
+  pytest --disable-warnings models/demos/distilbert/demo/demo.py --timeout 600; fail+=$?
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/wormhole/distilbert/demo/demo.py --timeout 600; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+
+}
+
+run_covnet_mnist_func() {
+  fail=0
+
+  pytest --disable-warnings models/demos/convnet_mnist/demo/demo.py --timeout 600; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+
+}
+
+run_mnist_func() {
+  fail=0
+
+  pytest --disable-warnings models/demos/mnist/demo/demo.py --timeout 600; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+
+}
+
+run_squeezebert_func() {
+  fail=0
+
+  pytest --disable-warnings models/demos/squeezebert/demo/demo.py --timeout 600; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+
+}
+
+run_roberta_func() {
+  fail=0
+
+  pytest --disable-warnings models/demos/roberta/demo/demo.py --timeout 600; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+
+}
+
+run_stable_diffusion_func() {
+  fail=0
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings --input-path="models/demos/wormhole/stable_diffusion/demo/input_data.json" models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo --timeout 900; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+
+}
+
 run_common_func_tests() {
   # working on both n150 and n300
   fail=0
