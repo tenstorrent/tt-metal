@@ -34,6 +34,7 @@ bool run_dm(IDevice* device, const DmConfig& test_config) {
 
     // DRAM Buffers
     const size_t byte_size = test_config.total_num_tiles * test_config.tile_byte_size;
+    // TODO: Test for sharded dram buffer as well
     InterleavedBufferConfig dram_config{
         .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = BufferType::DRAM};
 
@@ -45,14 +46,13 @@ bool run_dm(IDevice* device, const DmConfig& test_config) {
     // Input
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f, 100.0f, byte_size / bfloat16::SIZEOF, std::chrono::system_clock::now().time_since_epoch().count());
-    // TODO: what range of values do we want
 
     // Golden output
     vector<uint32_t> packed_golden = packed_input;
 
     uint8_t l1_cb_index = CBIndex::c_0;
 
-    // Same compile-time args for every core
+    // Compile-time arguments for kernels
     vector<uint32_t> reader_compile_args = {
         (uint32_t)input_dram_byte_address,
         (uint32_t)0,
@@ -69,58 +69,57 @@ bool run_dm(IDevice* device, const DmConfig& test_config) {
         (uint8_t)l1_cb_index,
     };
 
-    // Loop through cores
-    for (const CoreRange& core_range : test_config.cores.ranges()) {
-        // Circular Buffers
-        CircularBufferConfig l1_cb_config = CircularBufferConfig(byte_size, {{l1_cb_index, test_config.l1_data_format}})
-                                                .set_page_size(l1_cb_index, test_config.tile_byte_size);
+    // Create circular buffers
+    CircularBufferConfig l1_cb_config = CircularBufferConfig(byte_size, {{l1_cb_index, test_config.l1_data_format}})
+                                            .set_page_size(l1_cb_index, test_config.tile_byte_size);
+    auto l1_cb = CreateCircularBuffer(program, test_config.cores, l1_cb_config);
 
-        auto l1_cb = CreateCircularBuffer(program, core_range, l1_cb_config);
+    // Kernels
+    auto reader_kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/dm/reader_unary.cpp",
+        test_config.cores,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = reader_compile_args});
 
-        // Kernels
-        auto reader_kernel = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/dm/reader_unary.cpp",
-            test_config.cores,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_1,
-                .noc = NOC::RISCV_1_default,
-                .compile_args = reader_compile_args});
-
-        auto writer_kernel = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/dm/writer_unary.cpp",
-            test_config.cores,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = NOC::RISCV_0_default,
-                .compile_args = writer_compile_args});
-    }
+    auto writer_kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/dm/writer_unary.cpp",
+        test_config.cores,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = writer_compile_args});
 
     // Launch program and record outputs
-    vector<uint32_t> dest_buffer_data;
+    vector<uint32_t> packed_output;
     detail::WriteToBuffer(input_dram_buffer, packed_input);
     detail::LaunchProgram(device, program);
-    detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
+    detail::ReadFromBuffer(output_dram_buffer, packed_output);
 
     // Print output and golden vectors
-    // log_info("Golden vector");
-    // print_vector<uint32_t>(packed_golden);
-    // log_info("Output vector");
-    // print_vector<uint32_t>(dest_buffer_data);
+    log_info("Golden vector");
+    print_vector<uint32_t>(packed_golden);
+    log_info("Output vector");
+    print_vector<uint32_t>(packed_output);
 
     // Return comparison
     return is_close_packed_vectors<bfloat16, uint32_t>(
-        dest_buffer_data, packed_golden, [&](const bfloat16& a, const bfloat16& b) {
-            return is_close(a, b);
-        });  // TODO: do we want a different rtol and atol
+        packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
 }
 }  // namespace unit_tests::dm
 
-TEST_F(DeviceFixture, TensixDataMovement) {
+/* ========== Test case for varying transaction numbers and sizes ========== */
+TEST_F(DeviceFixture, TensixDataMovementDRAMInterleaved) {
+    // TODO: Change total_num_tiles to test with different total data sizes
+    // TODO: Change num_tiles_per_ublock to test with different packet sizes
+    // TODO: Set tile byte size to minimum packet size (one flit) depending on ARCH
     // Parameters
-    size_t total_num_tiles = 1;
-    size_t num_tiles_per_ublock = 1;
+    size_t num_of_transactions = 1;     // Number of transactions
+    size_t transaction_size_tiles = 1;  // Transaction size
+    size_t tile_byte_size = 16 * 16;    // Tile byte size
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -128,9 +127,9 @@ TEST_F(DeviceFixture, TensixDataMovement) {
 
     // Test config
     unit_tests::dm::DmConfig test_config = {
-        .total_num_tiles = total_num_tiles,
-        .num_tiles_per_ublock = num_tiles_per_ublock,
-        .tile_byte_size = 2 * 32 * 32,
+        .total_num_tiles = num_of_transactions,
+        .num_tiles_per_ublock = transaction_size_tiles,
+        .tile_byte_size = tile_byte_size,
         .l1_data_format = DataFormat::Float16_b,
         .cores = core_range_set};
 
@@ -139,5 +138,13 @@ TEST_F(DeviceFixture, TensixDataMovement) {
         EXPECT_TRUE(run_dm(devices_.at(id), test_config));
     }
 }
+
+// TODO: New test for different core locations
+// TODO: Configure master cores here
+// TODO: Use another core range set to configure slave cores, and add it to config
+
+// TODO: New test for sharded DRAM buffer with
+//      1. different transaction numbers and sizes
+//      2. different core locations
 
 }  // namespace tt::tt_metal
