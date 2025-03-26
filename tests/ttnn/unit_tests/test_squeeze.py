@@ -84,9 +84,6 @@ def test_squeeze_multiple_dims(device, input_shape, dims):
     assert torch.allclose(torch_output_tensor, torch_squeeze_tensor)
 
 
-# TODO: need test for error (out of range, duplication)
-
-
 @pytest.mark.parametrize(
     "input_shape, dims, expected_exception",
     [

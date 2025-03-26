@@ -44,7 +44,7 @@ ttnn::Tensor SqueezeOperation::invoke(
 
     std::vector<int> dims = parse_dim_argument(dim, input_tensor_rank);
 
-    // Sort the dimensions in descending order to avoid any issues with removing multiple dimensions
+    // Sort the dimensions in descending order to avoid issues with modifying new_shape in loop
     std::sort(dims.rbegin(), dims.rend());
 
     // Special ugly case for 0-ranked input
