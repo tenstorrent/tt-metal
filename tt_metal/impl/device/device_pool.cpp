@@ -522,7 +522,7 @@ void DevicePool::wait_for_fabric_router_sync() const {
         }
     } else if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
         auto fabric_router_sync_sem_addr =
-            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+            hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
         std::vector<std::uint32_t> master_router_status{0};
         for (const auto& dev : this->get_all_active_devices()) {
@@ -763,7 +763,7 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     } else if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
         std::vector<uint32_t> master_router_terminate(1, 0);
         auto fabric_router_sync_sem_addr =
-            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+            hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
         for (const auto& dev : this->get_all_active_devices()) {
             auto fabric_ethernet_channels = tt::Cluster::instance().get_fabric_ethernet_channels(dev->id());
             if (fabric_ethernet_channels.empty()) {

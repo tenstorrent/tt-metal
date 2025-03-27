@@ -18,6 +18,9 @@ void ModuleBase::register_tensor(const TensorPtr& tensor_ptr, const std::string&
 }
 
 void ModuleBase::register_module(const ModuleBasePtr& module_ptr, const std::string& name) {
+    if (module_ptr == nullptr) {
+        throw std::runtime_error(fmt::format("Module {} is uninitialized.", name));
+    }
     auto [_, is_inserted] = m_named_modules.emplace(name, module_ptr);
     if (!is_inserted) {
         throw std::logic_error(fmt::format("Names of two modules coincide: {}", name));

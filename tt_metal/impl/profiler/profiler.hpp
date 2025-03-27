@@ -31,6 +31,14 @@ namespace tt {
 
 namespace tt_metal {
 
+struct DisptachMetaData {
+    // Dispatch command queue command type
+    std::string cmd_type = "";
+
+    // Worker's runtime id
+    uint32_t worker_runtime_id = 0;
+};
+
 class DeviceProfiler {
 private:
     // Device architecture
@@ -53,6 +61,12 @@ private:
 
     // Zone sourece locations
     std::unordered_set<std::string> zone_src_locations;
+
+    // Iterator on the current zone being processed
+    std::set<tracy::TTDeviceEvent>::iterator current_zone_it;
+
+    // Holding current data collected for dispatch command queue zones
+    DisptachMetaData current_dispatch_meta_data;
 
     // 32bit FNV-1a hashing
     uint32_t hash32CT(const char* str, size_t n, uint32_t basis = UINT32_C(2166136261));
@@ -104,7 +118,8 @@ private:
         const std::string_view zone_name,
         kernel_profiler::PacketTypes packet_type,
         uint64_t source_line,
-        const std::string_view source_file);
+        const std::string_view source_file,
+        const nlohmann::json& metaData);
 
     // dump noc trace related profile data to json file
     void logNocTracePacketDataToJson(

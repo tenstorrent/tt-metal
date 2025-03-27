@@ -8,7 +8,7 @@
 #include <ostream>
 
 #include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -361,15 +361,15 @@ void py_module(py::module& module) {
             "Number of entries in the program cache for this device")
         .def(
             "sfpu_eps",
-            [](MeshDevice* device) { return tt::tt_metal::experimental::hal::get_eps(); },
+            [](MeshDevice* device) { return tt::tt_metal::hal::get_eps(); },
             R"doc(Returns machine epsilon value for current architecture.)doc")
         .def(
             "sfpu_nan",
-            [](MeshDevice* device) { return tt::tt_metal::experimental::hal::get_nan(); },
+            [](MeshDevice* device) { return tt::tt_metal::hal::get_nan(); },
             R"doc(Returns NaN value for current architecture.)doc")
         .def(
             "sfpu_inf",
-            [](MeshDevice* device) { return tt::tt_metal::experimental::hal::get_inf(); },
+            [](MeshDevice* device) { return tt::tt_metal::hal::get_inf(); },
             R"doc(Returns Infinity value for current architecture.)doc");
 
     module.def(

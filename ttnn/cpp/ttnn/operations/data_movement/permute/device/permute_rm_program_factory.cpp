@@ -4,9 +4,7 @@
 
 #include "cpp/ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/hal_exp.hpp>
-
-using namespace tt::tt_metal::experimental;
+#include <tt-metalium/hal.hpp>
 
 namespace ttnn::operations::data_movement {
 
@@ -18,8 +16,8 @@ uint32_t num_pages(const ttnn::Tensor& input_tensor) {
 
 uint32_t page_size(const ttnn::Tensor& input_tensor) {
     auto BUFFER_ALIGNMENT = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                ? hal::get_dram_alignment()
-                                : hal::get_l1_alignment();
+                                ? tt::tt_metal::hal::get_dram_alignment()
+                                : tt::tt_metal::hal::get_l1_alignment();
     const auto& shape = input_tensor.get_logical_shape();  // in anticipation of RM padding
     return tt::round_up(shape[-1] * input_tensor.element_size(), BUFFER_ALIGNMENT);
 }

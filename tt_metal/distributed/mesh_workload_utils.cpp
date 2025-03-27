@@ -24,9 +24,9 @@ void write_go_signal(
     CoreCoord dispatch_core,
     bool send_mcast,
     bool send_unicasts) {
-    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
+    uint32_t pcie_alignment = hal_ref.get_alignment(HalMemType::HOST);
     uint32_t cmd_sequence_sizeB =
-        align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) + hal.get_alignment(HalMemType::HOST);
+        align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) + hal_ref.get_alignment(HalMemType::HOST);
 
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
 
