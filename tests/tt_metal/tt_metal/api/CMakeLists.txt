@@ -23,6 +23,7 @@ set(UNIT_TESTS_API_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_dram.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_global_circular_buffers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_global_semaphores.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_kernel_compile_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_kernel_creation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_noc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_runtime_args.cpp

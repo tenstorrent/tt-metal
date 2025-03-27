@@ -76,7 +76,7 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
     static std::ofstream f("/tmp/hashlog.txt");
     static std::mutex mutex_;
     {
-        unique_lock<mutex> lock;
+        std::unique_lock<std::mutex> lock(mutex_);
         f << kernel->name() << " :: " << build_key << "::" << std::hash<tt_hlk_desc>{}(build_options.hlk_desc)
           << " :: " << kernel->compute_hash() << " :: " << compile_hash_str << " " << compile_hash << std::endl
           << std::flush;
@@ -1419,24 +1419,22 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
                         kernel,
                         build_options,
                         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
-                    std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
+
+                    const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
                     kernel->set_full_name(kernel_path_suffix);
                     build_options.set_name(kernel_path_suffix);
-                    bool cache_hit = true;
-                    bool path_exists = std::filesystem::exists(build_options.path);
-                    if (enable_persistent_kernel_cache && path_exists) {
+
+                    if (enable_persistent_kernel_cache && kernel->binaries_exist_on_disk(device)) {
                         if (not detail::HashLookup::inst().exists(kernel_hash)) {
                             detail::HashLookup::inst().add(kernel_hash);
                             detail::HashLookup::inst().add_generated_bin(kernel_hash);
                         }
                     } else if (detail::HashLookup::inst().add(kernel_hash)) {
                         GenerateBinaries(device, build_options, kernel);
-                        cache_hit = false;
                         detail::HashLookup::inst().add_generated_bin(kernel_hash);
                     }
                     while (not detail::HashLookup::inst().is_bin_generated(kernel_hash)) {
                     }
-                    kernel->set_binary_path(build_options.path);
                 },
                 events);
         }
