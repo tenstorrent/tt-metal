@@ -35,7 +35,7 @@
 
 #include <dev_msgs.h>
 
-#include <hal.hpp>
+#include "llrt/hal.hpp"
 
 #include "tracy/Tracy.hpp"
 #include "umd/device/tt_simulation_device.h"
@@ -101,7 +101,8 @@ Cluster::Cluster() {
     this->detect_arch_and_target();
 
     if (arch_ != ARCH::GRAYSKULL) {
-        routing_info_addr_ = tt::tt_metal::hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::APP_ROUTING_INFO);
+        routing_info_addr_ = tt::tt_metal::hal_ref.get_dev_addr(
+            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::APP_ROUTING_INFO);
     }
 
     this->initialize_device_drivers();
@@ -132,7 +133,7 @@ bool Cluster::is_galaxy_cluster() const { return this->cluster_type_ == ClusterT
 
 ClusterType Cluster::get_cluster_type() const { return this->cluster_type_; }
 
-FabricConfig Cluster::get_fabric_config() const { return this->fabric_config_; }
+tt_metal::FabricConfig Cluster::get_fabric_config() const { return this->fabric_config_; }
 
 BoardType Cluster::get_board_type(chip_id_t chip_id) const {
   return this->cluster_desc_->get_board_type(chip_id);
@@ -318,11 +319,13 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
     }
 
     barrier_address_params barrier_params;
-    barrier_params.tensix_l1_barrier_base = tt_metal::hal.get_dev_addr(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::BARRIER);
-    barrier_params.dram_barrier_base = tt_metal::hal.get_dev_addr(tt_metal::HalDramMemAddrType::DRAM_BARRIER);
+    barrier_params.tensix_l1_barrier_base =
+        tt_metal::hal_ref.get_dev_addr(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::BARRIER);
+    barrier_params.dram_barrier_base = tt_metal::hal_ref.get_dev_addr(tt_metal::HalDramMemAddrType::DRAM_BARRIER);
 
-    if (tt_metal::hal.get_arch() != tt::ARCH::GRAYSKULL) {
-        barrier_params.eth_l1_barrier_base = tt_metal::hal.get_dev_addr(tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::BARRIER);
+    if (tt_metal::hal_ref.get_arch() != tt::ARCH::GRAYSKULL) {
+        barrier_params.eth_l1_barrier_base = tt_metal::hal_ref.get_dev_addr(
+            tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::BARRIER);
     }
     device_driver->set_barrier_address_params(barrier_params);
 
@@ -994,9 +997,9 @@ tt::tt_fabric::ControlPlane* Cluster::get_control_plane() {
     return control_plane_.get();
 }
 
-void Cluster::initialize_fabric_config(FabricConfig fabric_config) {
+void Cluster::initialize_fabric_config(tt_metal::FabricConfig fabric_config) {
     this->fabric_config_ = fabric_config;
-    if (fabric_config != FabricConfig::DISABLED) {
+    if (fabric_config != tt_metal::FabricConfig::DISABLED) {
         this->reserve_ethernet_cores_for_fabric_routers();
     } else {
         this->release_ethernet_cores_for_fabric_routers();

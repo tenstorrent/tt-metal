@@ -5,15 +5,13 @@
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/operations/math.hpp"
 
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include "cpp/ttnn/operations/data_movement/pad/pad.hpp"
 #include "cpp/ttnn/operations/copy.hpp"
-
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn {
 namespace ccl {
@@ -52,7 +50,7 @@ AllGatherBidirectionalMode AllGatherConfig::choose_bidirectional_mode(Tensor con
         return AllGatherBidirectionalMode::FULL_TENSOR;
     }
 
-    std::size_t eth_l1_capacity = hal::get_erisc_l1_unreserved_size();
+    std::size_t eth_l1_capacity = tt::tt_metal::hal::get_erisc_l1_unreserved_size();
     std::size_t tensor_size_bytes = input_tensor.volume() * input_tensor.element_size();
     // This is currently a guestimate. We need a lot more hard data to identify where this dividing line is.
     bool perf_degradation_from_full_tensor_mode = tensor_size_bytes > (2 * eth_l1_capacity);
@@ -76,7 +74,7 @@ AllGatherConfig::AllGatherConfig(
     semaphore_size(32),
     ring_size(ring_size),
 
-    erisc_handshake_address(tt::round_up(hal::get_erisc_l1_unreserved_base(), 16)),
+    erisc_handshake_address(tt::round_up(tt::tt_metal::hal::get_erisc_l1_unreserved_base(), 16)),
     topology(topology),
     enable_bidirectional(topology == ttnn::ccl::Topology::Ring),
 
@@ -87,8 +85,8 @@ AllGatherConfig::AllGatherConfig(
     enable_merged_payload_and_channel_sync(true),
     num_edm_buffers_per_channel(num_edm_buffers_per_channel) {
     TT_FATAL(num_edm_buffers_per_channel > 0, "num_edm_buffers_per_channel must be > 0");
-    TT_ASSERT(erisc_handshake_address >= hal::get_erisc_l1_unreserved_base());
-    TT_ASSERT(erisc_handshake_address < hal::get_erisc_l1_unreserved_base() + 16);
+    TT_ASSERT(erisc_handshake_address >= tt::tt_metal::hal::get_erisc_l1_unreserved_base());
+    TT_ASSERT(erisc_handshake_address < tt::tt_metal::hal::get_erisc_l1_unreserved_base() + 16);
     TT_ASSERT((erisc_handshake_address & (16 - 1)) == 0);
     if (input_tensor.get_layout() == Layout::TILE && dim != 3) {
         // See issue #6448
@@ -107,7 +105,7 @@ AllGatherConfig::AllGatherConfig(
         (topology == ttnn::ccl::Topology::Ring && bidirectional_mode != AllGatherBidirectionalMode::FULL_TENSOR) ? 1
                                                                                                                  : 2;
 
-    uint32_t total_l1_buffer_space = hal::get_erisc_l1_unreserved_size();
+    uint32_t total_l1_buffer_space = tt::tt_metal::hal::get_erisc_l1_unreserved_size();
 
     this->is_sharded = input_tensor.is_sharded();
     if (user_defined_num_workers.has_value()) {
