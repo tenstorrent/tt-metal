@@ -97,14 +97,16 @@ void kernel_main() {
     uint32_t sender_next_semaphore = get_semaphore(get_arg_val<uint32_t>(rt_arg_idx++));
 
     if (sender_core) {
+        const uint64_t sem_noc_addr =
+            get_noc_addr(packet_receiver_core_x, packet_receiver_core_y, receiver_semaphore_address);
         if (is_atomic_inc_core) {
             noc_semaphore_set((uint32_t*)sender_next_semaphore, VALID);
         }
         // Set up packet headers once
         const auto packet_header_buffer_addr = get_read_ptr(packet_header_cb_id);
-        auto* unicast_packet_header = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
+        auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
         auto* sem_inc_packet_header =
-            reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_addr + packet_header_size);
+            reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr + packet_header_size);
         auto fabric_connection = FabricConnectionManager::build_from_args(rt_arg_idx);
         if (fabric_connection.is_logically_connected()) {
             fabric_connection.open();
@@ -118,6 +120,7 @@ void kernel_main() {
         const uint32_t packet_offset = base_receiver_l1_addr + chip_id_offset;
 
         for (uint32_t target_device_id : device_order) {
+            DPRINT << "Packet header size: " << (uint32_t)packet_header_size << ENDL();
             // Calculate device-specific constants once per device
             const uint32_t num_hops = std::abs(int(target_device_id) - int(chip_id));
             unicast_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
@@ -137,6 +140,10 @@ void kernel_main() {
                 cb_wait_front(fabric_sender_cb_id, curr_packet_num_pages);
                 const auto sender_l1_addr = get_read_ptr(fabric_sender_cb_id);
 
+                if (curr_packet_size_bytes > 0) {
+                    DPRINT << "Sending packet " << packet << " to " << receiver_core_x << ", " << receiver_core_y
+                           << " with size " << curr_packet_size_bytes << " bytes" << ENDL();
+                }
                 unicast_packet_header->to_noc_unicast_write(
                     tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, curr_packet_size_bytes);
 
@@ -156,8 +163,6 @@ void kernel_main() {
 
                 noc_semaphore_set_multicast(sender_next_semaphore, sender_next_multicast_semaphore_addr, num_dests);
                 noc_async_atomic_barrier();
-                const uint64_t sem_noc_addr =
-                    get_noc_addr(packet_receiver_core_x, packet_receiver_core_y, receiver_semaphore_address);
                 sem_inc_packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                     sem_noc_addr,
                     static_cast<uint16_t>(1),  // increment 1

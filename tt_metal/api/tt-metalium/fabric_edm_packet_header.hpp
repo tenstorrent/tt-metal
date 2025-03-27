@@ -12,6 +12,7 @@
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
+#include "tt_metal/hw/inc/debug/assert.h"
 #else
 #include "assert.hpp"
 #endif
@@ -167,6 +168,7 @@ struct PacketHeaderBase {
     inline Derived& to_noc_unicast_write(
         const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        ASSERT(payload_size_bytes > 0);
         this->noc_send_type = NOC_UNICAST_WRITE;
         auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
         auto noc_addr = safe_get_noc_addr(

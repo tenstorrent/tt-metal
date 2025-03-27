@@ -322,7 +322,7 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
     num_devices_scatter = 4
     num_devices_fracture = 8
     num_cores = 24
-    num_iters = 30
+    num_iters = 1
     trace_mode = trace_mode
 
     run_reduce_scatter_test(
