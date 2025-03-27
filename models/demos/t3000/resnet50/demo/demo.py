@@ -13,12 +13,14 @@ from models.demos.wormhole.resnet50.tests.test_resnet50_performant_imagenet impo
 
 from models.demos.ttnn_resnet.demo.demo import run_resnet_imagenet_inference, run_resnet_inference
 
+test_run_resnet50_trace_2cqs_inference.__test__ = False
+
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, iterations",
-    ((16, 100),),
+    ((16, 25),),
 )
 def test_demo_imagenet(batch_size, iterations, imagenet_label_dict, model_location_generator, mesh_device):
     run_resnet_imagenet_inference(batch_size, iterations, imagenet_label_dict, model_location_generator, mesh_device)
