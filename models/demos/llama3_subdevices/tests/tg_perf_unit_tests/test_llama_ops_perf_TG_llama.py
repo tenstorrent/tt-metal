@@ -12,7 +12,7 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 @pytest.mark.parametrize(
     ("op_name", "expected_kernel_duration_us", "perf_margin"),
     [
-        ("LayerNorm", 13, 0.03),
+        ("LayerNorm", 12.5, 0.05),
         ("ScaledDotProductAttentionDecode", 20, 0.03),
         ("NLPCreateHeadsDecodeDeviceOperation", 8.32, 0.05),
         ("NLPConcatHeadsDecodeDeviceOperation", 6.07, 0.05),
