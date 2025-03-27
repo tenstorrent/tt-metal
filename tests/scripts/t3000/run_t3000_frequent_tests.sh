@@ -190,7 +190,7 @@ run_t3000_mistral_tests() {
   fail=0
   start_time=$(date +%s)
 
-  echo "LOG_METAL: Running run_t3000_mistral7b_frequent_tests"
+  echo "LOG_METAL: Running run_t3000_mistral_frequent_tests"
 
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   tt_cache_path="/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
@@ -201,7 +201,7 @@ run_t3000_mistral_tests() {
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_mistral7b_frequent_tests $duration seconds to complete"
+  echo "LOG_METAL: run_t3000_mistral_frequent_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
