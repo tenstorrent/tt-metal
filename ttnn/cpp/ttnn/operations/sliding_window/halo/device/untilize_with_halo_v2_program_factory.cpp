@@ -262,7 +262,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         if (max_ref_size > 0) {
             remote_temp_cb_id = cb_indices.get_next_cb_id();
             auto remote_temp_cb_config =
-                CircularBufferConfig(max_ref_size * output_shard_shape[1], {{remote_temp_cb_id, kernel_config_df}})
+                CircularBufferConfig(
+                    max_ref_size * output_shard_shape[1] * out_nbytes, {{remote_temp_cb_id, kernel_config_df}})
                     .set_page_size(remote_temp_cb_id, output_shard_shape[1] * out_nbytes);
             CBHandle remote_temp_cb = CreateCircularBuffer(program, all_cores, remote_temp_cb_config);
         }
