@@ -21,8 +21,8 @@ from models.utility_functions import (
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 1605632, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
-    "batch_size_per_device, act_dtype, weight_dtype",
-    ((16, ttnn.bfloat8_b, ttnn.bfloat8_b),),
+    "batch_size_per_device, iterations, act_dtype, weight_dtype",
+    ((16, 100, ttnn.bfloat8_b, ttnn.bfloat8_b),),
 )
 @pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
 def test_run_resnet50_trace_2cqs_inference(
