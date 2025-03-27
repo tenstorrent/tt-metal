@@ -8,7 +8,7 @@ from loguru import logger
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
 
-THRESHOLD = 0.4
+THRESHOLD = 0.35
 
 
 @pytest.mark.parametrize(
