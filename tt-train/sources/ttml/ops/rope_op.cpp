@@ -130,8 +130,7 @@ autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbedding
     return out;
 }
 
-std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(
-    uint32_t head_dim, uint32_t sequence_length, float theta = 10000.0F, bool is_distributed = false) {
+std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(uint32_t head_dim, uint32_t sequence_length, float theta = 10000.0F) {
     int d = head_dim;
     // compute freqs: 1.0 / (theta ** (2 * (i-1) / head_dim)) for i in [1, head_dim/2]
     xt::xarray<uint32_t> expt_data = xt::arange(0, d) / 2;
@@ -157,14 +156,7 @@ std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(
     xt::xarray<float> cos_freqs = xt::cos(scaled_freqs);
 
     auto* device = &autograd::ctx().get_device();
-    if (!is_distributed) {
-        return {core::from_xtensor(sin_freqs, device), core::from_xtensor(cos_freqs, device)};
-    }
-
-    core::XTensorToMeshVariant<float> shard_composer = core::ShardXTensorToMesh<float>(device->shape(), 3);
-    return {
-        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(sin_freqs, device, shard_composer),
-        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(cos_freqs, device, shard_composer)};
+    return {core::from_xtensor(sin_freqs, device), core::from_xtensor(cos_freqs, device)};
 }
 
 ttnn::Tensor gen_trans_mat() {
@@ -180,19 +172,8 @@ ttnn::Tensor gen_trans_mat() {
     return core::from_xtensor(trans_mat, device);
 }
 
-RotaryEmbeddingParams build_rope_params(uint32_t sequence_length, uint32_t head_dim, float theta, bool is_distributed) {
-    auto adjusted_head_dim = head_dim;
-    if (is_distributed) {
-        auto num_devices = static_cast<uint32_t>(autograd::ctx().get_device().num_devices());
-        if (head_dim % num_devices != 0) {
-            throw std::invalid_argument(fmt::format(
-                "RoPE head_dim must be divisible by the number of devices, but got {} and {} devices",
-                head_dim,
-                num_devices));
-        }
-        adjusted_head_dim = head_dim / num_devices;
-    }
-    if (adjusted_head_dim % 32U != 0U) {
+RotaryEmbeddingParams build_rope_params(uint32_t sequence_length, uint32_t head_dim, float theta) {
+    if (head_dim % 32U != 0U) {
         throw std::invalid_argument(fmt::format("RoPE head_dim must be divisible by 32, but is {}", head_dim));
     }
     if (head_dim > 256U) {
@@ -202,7 +183,7 @@ RotaryEmbeddingParams build_rope_params(uint32_t sequence_length, uint32_t head_
     if (head_dim == 0U) {
         throw std::invalid_argument("RoPE head_dim must be non-zero.");
     }
-    auto [sin_freqs, cos_freqs] = gen_freqs(head_dim, sequence_length, theta, is_distributed);
+    auto [sin_freqs, cos_freqs] = gen_freqs(head_dim, sequence_length, theta);
     auto trans_mat = gen_trans_mat();
     return {
         .cos_cache = cos_freqs,
@@ -212,7 +193,7 @@ RotaryEmbeddingParams build_rope_params(uint32_t sequence_length, uint32_t head_
         .trans_mat = trans_mat,
 
         .sequence_length = sequence_length,
-        .head_dim = adjusted_head_dim,
+        .head_dim = head_dim,
     };
 }
 

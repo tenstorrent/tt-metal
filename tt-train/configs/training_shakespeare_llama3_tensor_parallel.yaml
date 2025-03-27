@@ -14,7 +14,7 @@ training_config:
   clip_grad_norm_max_norm: 1.0
   transformer_config:
     num_heads: 6
-    num_groups: 3
+    num_groups: 2 # should be divisible by number of devices
     embedding_dim: 384
     dropout_prob: 0.0
     num_blocks: 6

@@ -4,6 +4,7 @@
 
 #include "grouped_query_attention.hpp"
 
+#include "autograd/auto_context.hpp"
 #include "linear.hpp"
 #include "modules/dropout_module.hpp"
 #include "modules/rotary_embedding.hpp"
@@ -14,13 +15,31 @@ namespace ttml::modules::distributed {
 
 DistributedGroupedQueryAttention::DistributedGroupedQueryAttention(const GQAConfig& config) :
     m_embedding_dim(config.embedding_dim), m_num_heads(config.num_heads), m_num_groups(config.num_groups) {
+    auto num_devices = static_cast<uint32_t>(autograd::ctx().get_device().num_devices());
+    if (m_num_heads % num_devices != 0) {
+        throw std::runtime_error(fmt::format(
+            "Number of heads must be divisible by the number of devices. Number of heads = {}, devices = {}",
+            m_num_heads,
+            num_devices));
+    }
+
+    if (m_num_groups % num_devices != 0) {
+        throw std::runtime_error(fmt::format(
+            "Number of groups must be divisible by the number of devices. Number of groups = {}, devices = {}",
+            m_num_groups,
+            num_devices));
+    }
+
+    m_num_local_heads = m_num_heads / num_devices;
+    m_num_local_groups = m_num_groups / num_devices;
+
     // create layers
     m_q_linear = std::make_shared<ColumnParallelLinear>(
         m_embedding_dim, m_embedding_dim, /* has_bias */ true, /* gather_output */ false);
     auto concat_kv_dim = 2U * m_num_groups * (m_embedding_dim / m_num_heads);
     m_kv_linear = std::make_shared<ColumnParallelLinear>(
         m_embedding_dim, concat_kv_dim, /* has_bias */ true, /* gather_output */ false);
-    m_dropout = std::make_shared<ttml::modules::DropoutLayer>(config.dropout_prob);
+    m_dropout = std::make_shared<ttml::modules::DropoutLayer>(config.dropout_prob, /* use_per_device_seed */ false);
     m_out_linear = std::make_shared<RowParallelLinear>(
         m_embedding_dim, m_embedding_dim, /* has_bias */ true, /* input_is_parallel */ true);
     m_embedding = std::make_shared<ttml::modules::RotaryEmbedding>(config.rope_params);
@@ -40,7 +59,7 @@ ttml::autograd::TensorPtr DistributedGroupedQueryAttention::operator()(
     auto kv = (*m_kv_linear)(x);
 
     auto [query_with_heads, key_with_heads, value_with_heads] =
-        ops::grouped_heads_creation(q, kv, m_num_heads, m_num_groups);
+        ops::grouped_heads_creation(q, kv, m_num_local_heads, m_num_local_groups);
     if (m_embedding) {
         query_with_heads = (*m_embedding)(query_with_heads);
         key_with_heads = (*m_embedding)(key_with_heads);

@@ -75,8 +75,7 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
     }
     tok_emb = std::make_shared<ttml::modules::Embedding>(vocab_size_divisible_by_32, embedding_dim);
 
-    m_rope_params = ops::build_rope_params(
-        max_sequence_length, embedding_dim / num_heads, /* theta */ 10000.F, /* is_distributed */ true);
+    m_rope_params = ops::build_rope_params(max_sequence_length, embedding_dim / num_heads);
     blocks.reserve(num_blocks);
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         blocks.push_back(std::make_shared<modules::distributed::DistributedLlamaBlock>(

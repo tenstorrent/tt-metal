@@ -18,12 +18,12 @@ DistributedLlamaMLP::DistributedLlamaMLP(uint32_t embedding_size, float dropout_
     const uint32_t unrounded_size = static_cast<uint32_t>(static_cast<float>(4 * embedding_size) * (2.0F / 3.0F));
     const uint32_t hidden_size = ((unrounded_size + multiple_of - 1) / multiple_of) * multiple_of;
     m_w1 = std::make_shared<ColumnParallelLinear>(
-        embedding_size, hidden_size, /* has_bias */ false, /* gather_output */ false);
+        embedding_size, hidden_size, /* has_bias */ true, /* gather_output */ false);
     m_w3 = std::make_shared<ColumnParallelLinear>(
-        embedding_size, hidden_size, /* has_bias */ false, /* gather_output */ false);
+        embedding_size, hidden_size, /* has_bias */ true, /* gather_output */ false);
     m_w2 = std::make_shared<RowParallelLinear>(
-        hidden_size, embedding_size, /* has_bias */ false, /* input_is_parallel */ true);
-    m_dropout = std::make_shared<DropoutLayer>(dropout_prob);
+        hidden_size, embedding_size, /* has_bias */ true, /* input_is_parallel */ true);
+    m_dropout = std::make_shared<DropoutLayer>(dropout_prob, /* use_per_device_seed */ false);
 
     create_name("llama_mlp");
     register_module(m_w1, "w1");

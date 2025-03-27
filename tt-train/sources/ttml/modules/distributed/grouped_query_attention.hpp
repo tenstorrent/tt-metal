@@ -22,6 +22,8 @@ class DistributedGroupedQueryAttention : public ttml::autograd::ModuleBase {
 private:
     uint32_t m_embedding_dim{};
     uint32_t m_num_heads{};
+    uint32_t m_num_local_heads{};
+    uint32_t m_num_local_groups{};
     uint32_t m_num_groups{};
     std::shared_ptr<autograd::ModuleBase> m_q_linear;
     std::shared_ptr<autograd::ModuleBase> m_kv_linear;
