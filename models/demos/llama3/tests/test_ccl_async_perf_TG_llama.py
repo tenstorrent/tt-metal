@@ -136,14 +136,14 @@ def test_fused_all_gather_concat_perf(
     step_name = f"all_gather_concat_heads_fused"
 
     subdir = "llama_ccl_perf"
-    command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_qkv_all_reduce_minimal.py::test_all_reduce_create_qkv_heads_perf"
+    command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_qkv_all_reduce_minimal.py::test_all_reduce_create_qkv_heads_fuse_perf"
     cols = ["DEVICE KERNEL"]
     op_name = "AllGatherConcat"
     warmup_iters = warmup_iters * 32  # 5 iterations per device
 
     profiler.start("run")
     profiler.start(step_name)
-    results = run_device_perf_detailed(command, subdir, cols, op_name, has_signposts=True, warmup_iters=0)
+    results = run_device_perf_detailed(command, subdir, cols, op_name, has_signposts=True, warmup_iters=warmup_iters)
     profiler.end(step_name)
     profiler.end("run")
 
