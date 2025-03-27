@@ -24,7 +24,7 @@ jobs:
             arch: wormhole_b0,
             runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-functional"],
             cmd: "./build/test/umd/galaxy/unit_tests_glx"
-          },
+          },  # Bojan Roško
         ]
     runs-on: ${{ matrix.test-group.runs-on }}
     container:
