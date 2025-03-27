@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/core.h>
 #include <gtest/gtest.h>
 #include <tokenizers_cpp.h>
 
@@ -60,4 +61,16 @@ TEST(HuggingFaceTokenizer, ExampleUsage) {
     auto blob = load_bytes_from_file(get_test_data_dir() + "/tokenizer.json");
     auto tok = Tokenizer::FromBlobJSON(blob);
     test_tokenizer(std::move(tok), true);
+}
+
+TEST(HuggingFaceTokenizer, TinyLlama) {
+    auto blob = load_bytes_from_file(get_test_data_dir() + "/tinyllama_tokenizer.json");
+    auto tok = Tokenizer::FromBlobJSON(blob);
+    std::string prompt = "What is the capital of Canada?";
+    std::vector<int> ids = tok->Encode(prompt);
+    std::vector<int> expected_ids = {1724, 338, 278, 7483, 310, 7400, 29973};
+    fmt::println("expected_ids: {}", tok->Decode(expected_ids));
+    EXPECT_EQ(ids, expected_ids);
+    EXPECT_EQ(tok->Decode(ids), prompt);
+    EXPECT_EQ(tok->GetVocabSize(), 32000);
 }

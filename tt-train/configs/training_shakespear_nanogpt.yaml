@@ -12,6 +12,7 @@ training_config:
   use_kahan_summation: false
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
+  tokenizer_path: "/home/j/worktrees/llama_import/tt-train/data/gpt2_tokenizer.json"
   transformer_config:
     num_heads: 6
     embedding_dim: 384

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <boost/serialization/access.hpp>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -32,6 +33,11 @@ using ValueType = std::variant<
     std::vector<std::string>>;
 
 class MsgPackFile {
+    friend class boost::serialization::access;
+
+    template <class Archive>
+    void serialize(Archive& ar, const unsigned int version);
+
 public:
     MsgPackFile();
     ~MsgPackFile();
