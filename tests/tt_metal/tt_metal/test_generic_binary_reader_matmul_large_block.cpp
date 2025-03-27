@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <functional>
 #include <random>
+#include <string>
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -92,7 +93,7 @@ std::vector<std::uint32_t> transpose_tiles(
     return result;
 }
 
-void print_vec(const std::vector<bfloat16>& data, int rows, int cols, const string& name) {
+void print_vec(const std::vector<bfloat16>& data, int rows, int cols, const std::string& name) {
     std::cout << name << ": " << std::endl;
     int index = 0;
     for (int i = 0; i < rows; i++) {
@@ -105,7 +106,7 @@ void print_vec(const std::vector<bfloat16>& data, int rows, int cols, const stri
     std::cout << std::endl;
 }
 
-void print_faces(std::vector<bfloat16> data, const string& name) {
+void print_faces(std::vector<bfloat16> data, const std::string& name) {
     std::cout << name << ": " << std::endl;
     int index = 0;
 

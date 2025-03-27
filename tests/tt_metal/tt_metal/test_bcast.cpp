@@ -4,9 +4,10 @@
 
 #include <algorithm>
 #include <functional>
+#include <map>
+#include <string>
 #include <random>
 #include <vector>
-#include <map>
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -280,7 +281,7 @@ int main(int argc, char** argv) {
                 tt_metal::SetRuntimeArgs(
                     program, unary_writer_kernel, core, {dram_buffer_dst_addr, (std::uint32_t)0, num_tensor_tiles});
 
-                std::map<string, string> compute_defines = {
+                std::map<std::string, std::string> compute_defines = {
                     {"BCAST_DIM", bdim_to_llkdim_define[bcast_dim]},
                     {"BCAST_OP", op_id_to_op_define[bcast_op]},
                     {"BCAST_LLKOP", op_id_to_llkop_define[bcast_op]}};

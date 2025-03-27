@@ -13,8 +13,8 @@
 #include "dispatch_core_common.hpp"
 #include "buffer.hpp"
 #include "profiler_types.hpp"
-#include "llrt/tt_cluster.hpp"
 #include "profiler_optional_metadata.hpp"
+#include "fabric_types.hpp"
 
 namespace tt::tt_metal {
 class Program;

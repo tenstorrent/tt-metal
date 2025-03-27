@@ -4,6 +4,7 @@
 
 #include "tt_metal/distributed/coordinate_translation.hpp"
 #include "tt_metal/api/tt-metalium/tt_metal.hpp"
+#include "tt_cluster.hpp"
 
 #include "indestructible.hpp"
 namespace tt::tt_metal::distributed {

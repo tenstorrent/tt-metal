@@ -30,8 +30,9 @@
 
 #include "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_ubenchmark_types.hpp"
 
-// TODO: ARCH_NAME specific, must remove
+// WARNING: ARCH_NAME specific
 #include "eth_l1_address_map.h"
+#include "llrt/hal.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;

@@ -4,8 +4,9 @@
 
 #include <algorithm>
 #include <functional>
+#include <map>
 #include <random>
-
+#include <string>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
@@ -20,10 +21,10 @@ struct BinaryOpType {
     static const vector<Enum> all() { return {ADD, SUB, MUL}; }
 };
 
-std::map<string, string> get_defines(BinaryOpType::Enum op_type) {
+std::map<std::string, std::string> get_defines(BinaryOpType::Enum op_type) {
     // TODO(AP): remove duplication
-    std::map<string, string> defines;
-    string op_name, op_binary_type;
+    std::map<std::string, std::string> defines;
+    std::string op_name, op_binary_type;
     switch (op_type) {
         case BinaryOpType::ADD:
             op_name = "add_tiles";
@@ -84,7 +85,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> se
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     vector<uint32_t> compute_kernel_args = {};
-    std::map<string, string> binary_defines = get_defines(BinaryOpType::ADD);
+    std::map<std::string, std::string> binary_defines = get_defines(BinaryOpType::ADD);
     binary_defines["ELTWISE_OP"] = "add_tiles";
     auto eltwise_binary_kernel = tt_metal::CreateKernel(
         program,

@@ -140,10 +140,10 @@ typedef struct test_board {
         }
 
         if (metal_fabric_init_level == 0) {
-            tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::CUSTOM);
+            tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::CUSTOM);
         } else if (metal_fabric_init_level == 1) {
             tt::tt_metal::detail::InitializeFabricConfig(
-                push_mode ? tt::FabricConfig::FABRIC_2D_PUSH : tt::FabricConfig::FABRIC_2D);
+                push_mode ? tt::tt_metal::FabricConfig::FABRIC_2D_PUSH : tt::tt_metal::FabricConfig::FABRIC_2D);
         }
         device_handle_map = tt::tt_metal::detail::CreateDevices(available_chip_ids);
         if (metal_fabric_init_level == 0) {

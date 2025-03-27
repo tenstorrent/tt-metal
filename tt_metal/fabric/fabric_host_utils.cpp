@@ -8,6 +8,7 @@
 #include <tt-metalium/mesh_graph.hpp>
 
 #include "fabric_host_utils.hpp"
+#include "tt_cluster.hpp"
 
 namespace tt::tt_fabric {
 
