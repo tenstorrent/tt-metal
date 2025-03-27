@@ -23,11 +23,10 @@ def gen_data(input_shapes, low, high, device, required_grad=False, is_row_major=
     assert high > low, "Incorrect range provided"
     torch.manual_seed(seed)
     pt_tensor = torch.rand(input_shapes, requires_grad=required_grad).bfloat16() * (high - low) + low
+    tt_tensor = ttnn.Tensor(pt_tensor, ttnn.bfloat16)
     if is_row_major:
-        tt_tensor = ttnn.Tensor(pt_tensor, ttnn.bfloat16)
         tt_tensor = ttnn.to_layout(tt_tensor, layout=ttnn.ROW_MAJOR_LAYOUT).to(device)
     else:
-        tt_tensor = ttnn.Tensor(pt_tensor, ttnn.bfloat16)
         tt_tensor = ttnn.to_layout(tt_tensor, layout=ttnn.TILE_LAYOUT).to(device)
 
     return pt_tensor, tt_tensor
@@ -45,8 +44,8 @@ def gen_data(input_shapes, low, high, device, required_grad=False, is_row_major=
     ),
 )
 def test_bw_gelu(input_shapes, approximate, device):
-    in_data, input_tensor = gen_data(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = gen_data(input_shapes, -5, 5, device)
+    in_data, input_tensor = gen_data(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = gen_data(input_shapes, -5, 5, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.experimental.gelu_bw(grad_tensor, input_tensor, approximate=approximate)
 
@@ -62,8 +61,8 @@ def test_bw_gelu(input_shapes, approximate, device):
     INPUT_SHAPES,
 )
 def test_bw_gelu_default(input_shapes, device):
-    in_data, input_tensor = gen_data(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = gen_data(input_shapes, -5, 5, device)
+    in_data, input_tensor = gen_data(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = gen_data(input_shapes, -5, 5, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.experimental.gelu_bw(grad_tensor, input_tensor)
 
@@ -86,8 +85,8 @@ def test_bw_gelu_default(input_shapes, device):
     ),
 )
 def test_bw_gelu_opt_output(input_shapes, approximate, device):
-    in_data, input_tensor = gen_data(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = gen_data(input_shapes, -5, 5, device)
+    in_data, input_tensor = gen_data(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = gen_data(input_shapes, -5, 5, device, seed=1)
     input_grad = torch.zeros(input_shapes, dtype=torch.bfloat16)
     input_grad = ttnn.from_torch(
         input_grad, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
@@ -112,8 +111,8 @@ def test_bw_gelu_opt_output(input_shapes, approximate, device):
     INPUT_SHAPES,
 )
 def test_bw_gelu_default_opt_output(input_shapes, device):
-    in_data, input_tensor = gen_data(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = gen_data(input_shapes, -5, 5, device)
+    in_data, input_tensor = gen_data(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = gen_data(input_shapes, -5, 5, device, seed=1)
     input_grad = torch.zeros(input_shapes, dtype=torch.bfloat16)
     input_grad = ttnn.from_torch(
         input_grad, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG

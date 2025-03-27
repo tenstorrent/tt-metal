@@ -17,8 +17,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
     ),
 )
 def test_bw_celu(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, -1, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, -1, device, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, -1, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, -1, device, True, seed=1)
 
     alpha = 1
 
@@ -40,8 +40,8 @@ def test_bw_celu(input_shapes, device):
     ),
 )
 def test_bw_celu_default(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, -1, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, -1, device, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, -1, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, -1, device, True, seed=1)
 
     tt_output_tensor_on_device = ttnn.celu_bw(grad_tensor, input_tensor)
 

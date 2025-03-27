@@ -18,11 +18,11 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
 )
 @pytest.mark.parametrize("value", [0.05, 1.0, 0.5, 5.0])
 def test_bw_addcdiv(input_shapes, value, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    tensor1_data, tensor1_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    tensor2_data, tensor2_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    tensor1_data, tensor1_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=1)
+    tensor2_data, tensor2_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=2)
 
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, False)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, False, seed=4)
 
     tt_output_tensor_on_device = ttnn.addcdiv_bw(grad_tensor, input_tensor, tensor1_tensor, tensor2_tensor, value)
 

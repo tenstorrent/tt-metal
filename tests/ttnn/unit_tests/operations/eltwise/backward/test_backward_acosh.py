@@ -17,8 +17,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
     ),
 )
 def test_bw_acosh(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device, True, seed=1)
 
     tt_output_tensor_on_device = ttnn.acosh_bw(grad_tensor, input_tensor)
 

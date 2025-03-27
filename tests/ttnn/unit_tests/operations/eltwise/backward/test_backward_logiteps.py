@@ -25,8 +25,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     (2, -0.001, 0.4, 0.5, 1.0),
 )
 def test_bw_logiteps(input_shapes, eps, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -2, 2, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -2, 2, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device, seed=1)
     tt_output_tensor_on_device = ttnn.logiteps_bw(grad_tensor, input_tensor, eps=eps)
     golden_function = ttnn.get_golden_function(ttnn.logiteps_bw)
     golden_tensor = golden_function(grad_data, in_data, eps)
@@ -43,8 +43,8 @@ def test_bw_logiteps(input_shapes, eps, device):
     ),
 )
 def test_bw_logiteps_default(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -2, 2, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -2, 2, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device, seed=1)
     tt_output_tensor_on_device = ttnn.logiteps_bw(grad_tensor, input_tensor)
     golden_function = ttnn.get_golden_function(ttnn.logiteps_bw)
     golden_tensor = golden_function(grad_data, in_data)

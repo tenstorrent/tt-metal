@@ -17,8 +17,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import comp
     ),
 )
 def test_bw_neg(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.neg_bw(grad_tensor, input_tensor)
 
@@ -38,8 +38,8 @@ def test_bw_neg(input_shapes, device):
     ),
 )
 def test_bw_neg_opt(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, seed=1)
     _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
     input_grad = ttnn.to_memory_config(input_grad, ttnn.L1_MEMORY_CONFIG)
 
@@ -65,8 +65,8 @@ def test_bw_neg_opt(input_shapes, device):
     ),
 )
 def test_bw_neg_opt_id(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, seed=1)
     _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
     input_grad = ttnn.to_memory_config(input_grad, ttnn.L1_MEMORY_CONFIG)
     cq_id = 0

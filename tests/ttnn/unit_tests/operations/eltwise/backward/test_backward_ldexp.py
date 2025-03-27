@@ -21,10 +21,10 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     ),
 )
 def test_bw_ldexp(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True)
-    other_data, other_tensor = data_gen_with_range(input_shapes, -20, 20, device, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device, True, seed=0)
+    other_data, other_tensor = data_gen_with_range(input_shapes, -20, 20, device, True, seed=1)
 
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, 5, device, seed=2)
 
     tt_output_tensor_on_device = ttnn.ldexp_bw(grad_tensor, input_tensor, other_tensor)
 
@@ -43,10 +43,16 @@ def test_bw_ldexp(input_shapes, device):
     ),
 )
 def test_bw_ldexp_bf8b(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range_dtype(input_shapes, -10, 10, device, True, False, ttnn.bfloat8_b)
-    other_data, other_tensor = data_gen_with_range_dtype(input_shapes, -20, 20, device, True, False, ttnn.bfloat8_b)
+    in_data, input_tensor = data_gen_with_range_dtype(
+        input_shapes, -10, 10, device, True, False, ttnn.bfloat8_b, seed=0
+    )
+    other_data, other_tensor = data_gen_with_range_dtype(
+        input_shapes, -20, 20, device, True, False, ttnn.bfloat8_b, seed=1
+    )
 
-    grad_data, grad_tensor = data_gen_with_range_dtype(input_shapes, -5, 5, device, False, False, ttnn.bfloat8_b)
+    grad_data, grad_tensor = data_gen_with_range_dtype(
+        input_shapes, -5, 5, device, False, False, ttnn.bfloat8_b, seed=2
+    )
 
     tt_output_tensor_on_device = ttnn.ldexp_bw(grad_tensor, input_tensor, other_tensor)
 

@@ -23,8 +23,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     ],
 )
 def test_negative_exponent(input_shapes, exponent, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -20, 20, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -20, 20, device, seed=1)
 
     with pytest.raises(RuntimeError) as _e:
         tt_output_tensor_on_device = ttnn.pow_bw(grad_tensor, input_tensor, exponent)
@@ -42,8 +42,8 @@ def test_negative_exponent(input_shapes, exponent, device):
     ],
 )
 def test_fw_exponent(input_shapes, exponent, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -90, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -20, 20, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -90, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -20, 20, device, seed=1)
 
     golden_tensor = [
         torch.pow(grad_data, exponent),
@@ -77,8 +77,8 @@ def test_fw_exponent(input_shapes, exponent, device):
 )
 def test_bw_unary_pow(input_shapes, exponent_and_pcc, device):
     exponent, pcc = exponent_and_pcc
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, 10, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, 10, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.pow_bw(grad_tensor, input_tensor, exponent)
 
@@ -95,8 +95,8 @@ def test_bw_unary_pow(input_shapes, exponent_and_pcc, device):
 )
 def test_bw_unary_pow_test_inf(input_shapes, device):
     exponent = 2
-    in_data, input_tensor = data_gen_with_range(input_shapes, 1.74e38, 1.8e38, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, 1, 9, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, 1.74e38, 1.8e38, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, 1, 9, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.pow_bw(grad_tensor, input_tensor, exponent)
     golden_function = ttnn.get_golden_function(ttnn.pow_bw)
@@ -112,8 +112,8 @@ def test_bw_unary_pow_test_inf(input_shapes, device):
 )
 def test_bw_unary_pow_test_neg_inf(input_shapes, device):
     exponent = 2
-    in_data, input_tensor = data_gen_with_range(input_shapes, 1.74e38, 1.8e38, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, -1, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, 1.74e38, 1.8e38, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -5, -1, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.pow_bw(grad_tensor, input_tensor, exponent)
 
@@ -146,8 +146,8 @@ def test_bw_unary_pow_test_neg_inf(input_shapes, device):
 )
 def test_bw_unary_pow_output(input_shapes, exponent_and_pcc, device):
     exponent, pcc = exponent_and_pcc
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, 10, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, 10, device, seed=1)
     input_grad = None
 
     _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)

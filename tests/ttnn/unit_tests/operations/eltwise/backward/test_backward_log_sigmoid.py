@@ -21,8 +21,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     ),
 )
 def test_bw_log_sigmoid(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -120, 120, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -30, 20, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -120, 120, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -30, 20, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.log_sigmoid_bw(grad_tensor, input_tensor)
 
@@ -42,8 +42,8 @@ def test_bw_log_sigmoid(input_shapes, device):
     ),
 )
 def test_bw_log_sigmoid_neg_inp(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -120, -1, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, 1, 50, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -120, -1, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, 1, 50, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.log_sigmoid_bw(grad_tensor, input_tensor)
 
@@ -63,8 +63,8 @@ def test_bw_log_sigmoid_neg_inp(input_shapes, device):
     ),
 )
 def test_bw_log_sigmoid_pos_inp(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, 1, 100, device, True)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, 1, 50, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, 1, 100, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, 1, 50, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.log_sigmoid_bw(grad_tensor, input_tensor)
 
@@ -85,7 +85,7 @@ def test_bw_log_sigmoid_pos_inp(input_shapes, device):
 )
 def test_bw_log_sigmoid_zero_inp(input_shapes, device):
     in_data, input_tensor = data_gen_with_val(input_shapes, device, True, 0)
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -50, 50, device)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -50, 50, device, seed=1)
 
     tt_output_tensor_on_device = ttnn.log_sigmoid_bw(grad_tensor, input_tensor)
 
@@ -105,7 +105,7 @@ def test_bw_log_sigmoid_zero_inp(input_shapes, device):
     ),
 )
 def test_bw_log_sigmoid_zero_grad(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -50, 50, device, True)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -50, 50, device, True, seed=0)
     grad_data, grad_tensor = data_gen_with_val(input_shapes, device, True, 0)
 
     tt_output_tensor_on_device = ttnn.log_sigmoid_bw(grad_tensor, input_tensor)

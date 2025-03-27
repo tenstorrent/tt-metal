@@ -22,8 +22,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import comp
 )
 @pytest.mark.parametrize("value", [1.0])
 def test_bw_threshold(input_shapes, threshold, value, device):
-    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data, input_tensor = data_gen_with_range(input_shapes, -1, 1, device, True)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, seed=0)
+    in_data, input_tensor = data_gen_with_range(input_shapes, -1, 1, device, True, seed=1)
 
     tt_output_tensor_on_device = ttnn.threshold_bw(grad_tensor, input_tensor, threshold, value)
 
