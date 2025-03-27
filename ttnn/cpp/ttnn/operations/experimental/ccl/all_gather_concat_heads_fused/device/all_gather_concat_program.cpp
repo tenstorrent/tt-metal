@@ -340,7 +340,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         head_size,
         batch,
         head_tiles,
-        2,  // read the first phase
+        2,  // read the second phase
         in_num_cores,
         face_h,
         face_hw,
@@ -474,7 +474,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         for (auto nocy : noc_y_coords) {
             reader_rt_args.push_back(nocy);
         }
-        // reader_rt_args.push_back(semaphore.address());
         // reader_rt_args.push_back(ring_size * num_links);  // sem target value
         // reader_rt_args.push_back(drain_sync_core.x);
         // reader_rt_args.push_back(drain_sync_core.y);

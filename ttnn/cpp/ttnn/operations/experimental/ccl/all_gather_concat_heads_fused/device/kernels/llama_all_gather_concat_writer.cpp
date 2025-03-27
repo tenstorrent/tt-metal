@@ -51,8 +51,6 @@ void kernel_main() {
 
     const uint32_t concat_semaphore_send_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
-    DPRINT << "concat_semaphore_send_addr: " << (uint32_t)concat_semaphore_send_addr << ENDL();
-
     tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;
     tt_l1_ptr uint32_t* core_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
@@ -161,8 +159,6 @@ void kernel_main() {
 
                 if (num_tiles_read_cur_core == num_tiles_per_core_concat) {
                     cur_core_idx++;
-                    DPRINT << " then reading from core: " << (uint32_t)(in0_mcast_noc_x[cur_core_idx]) << " and "
-                           << (uint32_t)(in0_mcast_noc_y[cur_core_idx]) << ENDL();
                     qkv_read_addr =
                         get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
                         in_tile_offset_by_head;
@@ -187,13 +183,8 @@ void kernel_main() {
         tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(2 + concat_arg_start));
         tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(2 + in_num_cores + concat_arg_start));
 
-        for (uint32_t i = 0; i < 32; i++) {
-            DPRINT << "in0_mcast_noc_x[" << i << "]: " << (uint32_t)in0_mcast_noc_x[i] << "\n";
-            DPRINT << "in0_mcast_noc_y[" << i << "]: " << (uint32_t)in0_mcast_noc_y[i] << "\n";
-        }
         // Q
         uint32_t cur_core_idx = batch_start_1;
-        DPRINT << "CUR_CORE_IDX: " << (uint32_t)(cur_core_idx) << ENDL();
         uint32_t total_input_cores = in_num_cores;
         uint32_t num_tiles_per_core_concat = (head_size_num_tiles * batch) / total_input_cores;
 
@@ -201,8 +192,6 @@ void kernel_main() {
             get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
             in_tile_offset_by_head;
 
-        DPRINT << "reading from core: " << (uint32_t)(in0_mcast_noc_x[cur_core_idx]) << " and "
-               << (uint32_t)(in0_mcast_noc_y[cur_core_idx]) << ENDL();
         uint32_t num_tiles_read_cur_core = 0;
         uint32_t q_write_addr = 0;
         uint32_t tile_size = head_size / head_size_num_tiles;
@@ -234,8 +223,6 @@ void kernel_main() {
             cur_core_idx = batch_start_2;
             qkv_read_addr = get_noc_addr(in0_mcast_noc_x[cur_core_idx], in0_mcast_noc_y[cur_core_idx], q_start_addr) +
                             in_tile_offset_by_head;
-
-            DPRINT << "then CUR_CORE_IDX: " << (uint32_t)(cur_core_idx) << ENDL();
         }
 
         noc_async_read_barrier();
@@ -274,7 +261,6 @@ void kernel_main() {
     uint32_t shard_tile_id = first_core_tile_start_offset;
     uint32_t core_id = 0;
     while (tiles_read < num_tiles_to_read) {
-        DPRINT << "tiles_read: " << tiles_read << "\n";
         uint32_t num_tiles_to_read_this_core = std::min(num_tiles_per_core - shard_tile_id, packet_size_in_pages);
         num_tiles_to_read_this_core = std::min(num_tiles_to_read - tiles_read, num_tiles_to_read_this_core);
         cb_wait_front(cb0_id, num_tiles_to_read_this_core);

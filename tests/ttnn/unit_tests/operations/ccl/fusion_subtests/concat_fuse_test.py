@@ -104,10 +104,6 @@ def run_with_trace(
     time_taken = profiler.get_duration("all-gather-concat-trace") - profiler.get_duration(
         "all-gather-concat-trace-warmup"
     )
-    # effective_iter = num_iter - warmup_iters
-    # logger.info(f"Time taken e2e: {time_taken} s")
-    # logger.info(f"Time per iter e2e: {time_taken / effective_iter} s")
-    # logger.info(f"Time per iter e2e: {time_taken / effective_iter * 1e6} us")
 
     return tt_out_tensor
 
@@ -159,8 +155,6 @@ def run_with_trace_gather_concat(
             tt_out_tensor = ttnn.experimental.nlp_concat_heads_decode(tt_out_tensor, num_heads=8)
         ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
         ttnn.synchronize_device(mesh_device)
-        # trace_id_warmup2 = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        # ttnn.end_trace_capture(mesh_device, trace_id_warmup2, cq_id=0)
 
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for i in range(num_iter):
@@ -177,9 +171,6 @@ def run_with_trace_gather_concat(
         tt_out_tensor = ttnn.experimental.nlp_concat_heads_decode(tt_out_tensor, num_heads=8)
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
-    # trace_id2 = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-
-    # ttnn.end_trace_capture(mesh_device, trace_id2, cq_id=0)
 
     # Run the op
     logger.info("Starting Trace perf test...")
