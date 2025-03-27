@@ -53,6 +53,14 @@ struct ExecuteUnaryWithFloatParameter {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct LogSigmoid {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 struct Sigmoid_accurate {
     static Tensor invoke(
         QueueId queue_id,
@@ -249,11 +257,6 @@ REGISTER_UNARY_OPERATION(tanh, TANH);
 REGISTER_UNARY_OPERATION(tiled_prod, TILED_PROD);
 REGISTER_UNARY_OPERATION(bitwise_not, BITWISE_NOT);
 
-constexpr auto log_sigmoid = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::log_sigmoid",
-    ttnn::operations::unary::
-        ExecuteUnary<ttnn::operations::unary::UnaryOpType::SIGMOID, ttnn::operations::unary::UnaryOpType::LOG>>();
-
 // Unaries with fast_and_approximate_mode
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(exp, EXP);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(erf, ERF);
@@ -294,6 +297,8 @@ constexpr auto prelu_sfpu =
 
 constexpr auto sigmoid_accurate =
     ttnn::register_operation_with_auto_launch_op<"ttnn::sigmoid_accurate", ttnn::operations::unary::Sigmoid_accurate>();
+constexpr auto log_sigmoid =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::log_sigmoid", ttnn::operations::unary::LogSigmoid>();
 constexpr auto unary_chain =
     ttnn::register_operation_with_auto_launch_op<"ttnn::unary_chain", ttnn::operations::unary::Unary_chain>();
 
