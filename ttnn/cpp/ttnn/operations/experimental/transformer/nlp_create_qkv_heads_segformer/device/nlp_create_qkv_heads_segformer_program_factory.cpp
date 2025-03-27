@@ -55,7 +55,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_se
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    TT_ASSERT((output.size() == 1), "Output vector must be size 1 !");
     tt_metal::Tensor& q = output[0];
     tt_metal::Tensor& k = output[1];
     tt_metal::Tensor& v = output[2];
