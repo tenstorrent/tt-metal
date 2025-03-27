@@ -185,7 +185,11 @@ void kernel_main() {
                 n_depth,
                 s_depth);
         } else {
-            fabric_async_write<(ClientDataMode)data_mode, AsyncWriteMode::SEND_PR, RoutingType::ROUTING_TABLE>(
+            fabric_async_write<
+                decltype(client_interface),
+                (ClientDataMode)data_mode,
+                AsyncWriteMode::SEND_PR,
+                RoutingType::ROUTING_TABLE>(
                 client_interface,
                 0,                       // the network plane to use for this transaction
                 data_buffer_start_addr,  // source address in sender’s memory
@@ -216,7 +220,7 @@ void kernel_main() {
     while (true) {
         packet_count++;
         payload[12] = packet_count;
-        fabric_async_write<(ClientDataMode)data_mode, AsyncWriteMode::PUSH>(
+        fabric_async_write<decltype(client_interface), (ClientDataMode)data_mode, AsyncWriteMode::PUSH>(
             (fabric_push_client_interface_t*)client_interface,
             0,                       // the network plane to use for this transaction
             data_buffer_start_addr,  // source address in sender’s memory
