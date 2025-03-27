@@ -232,7 +232,7 @@ struct WorkerToFabricEdmSenderImpl {
     // for the read barrier to complete before returning, saving some cycles for advanced users.
     // !!! IMPORTANT !!!
     // Must be called alongside (before) open_finish().
-    emplate <bool posted = false>
+    template <bool posted = false>
     void open_start() {
         const auto dest_noc_addr_coord_only = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
 
@@ -281,8 +281,9 @@ struct WorkerToFabricEdmSenderImpl {
         ASSERT(this->buffer_slot_wrptr < 20);
     }
 
+    template <bool posted = false>
     void open() {
-        open_start();
+        open_start<posted>();
         open_finish();
     }
 
