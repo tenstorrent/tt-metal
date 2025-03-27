@@ -51,6 +51,7 @@ def test_run_resnet50_trace_2cqs_inference(
         model_version = "microsoft/resnet-50"
         iterations = 100
         image_processor = AutoImageProcessor.from_pretrained(model_version)
+        logger.info("ImageNet-1k validation Dataset")
         input_loc = str(model_location_generator("ImageNet_data"))
         data_loader = get_data_loader(input_loc, batch_size, iterations)
 
@@ -60,7 +61,9 @@ def test_run_resnet50_trace_2cqs_inference(
             inputs, labels = get_batch(data_loader, image_processor)
             input_tensors_all.append(inputs)
             input_labels_all.append(labels)
+        logger.info("Processed ImageNet-1k validation Dataset")
 
+        logger.info("Starting inference")
         correct = 0
         total_inference_time = 0
         for iter in range(iterations):

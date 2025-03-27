@@ -71,9 +71,12 @@ def run_resnet_imagenet_inference(
         inputs, labels = get_batch(data_loader, image_processor)
         input_tensors_all.append(inputs)
         input_labels_all.append(labels)
+    logger.info("Processed ImageNet-1k validation Dataset")
+
     correct = 0
     profiler.start(f"run")
     is_first_run = True
+    logger.info("Starting inference")
     for iter in range(iterations):
         predictions = []
         inputs = input_tensors_all[iter]
