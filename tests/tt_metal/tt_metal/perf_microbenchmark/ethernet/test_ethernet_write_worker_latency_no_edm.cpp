@@ -137,7 +137,7 @@ std::vector<tt_metal::Program> build(
 
     // eth core rt args
     const std::vector<uint32_t>& eth_sender_receiver_rt_args = {
-        tt_metal::hal.get_dev_addr(
+        tt_metal::hal_ref.get_dev_addr(
             tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::UNRESERVED),
         static_cast<uint32_t>(num_samples),
         static_cast<uint32_t>(sample_page_size)};
