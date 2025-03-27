@@ -66,11 +66,6 @@ struct DeviceStorage {
 
     bool is_allocated() const;
 
-    std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer() const {
-        TT_FATAL(mesh_buffer != nullptr, "Mesh buffer is not allocated");
-        return mesh_buffer;
-    }
-
     IDevice* get_device() const;
 
     void update_specs(const TensorSpec& new_spec);

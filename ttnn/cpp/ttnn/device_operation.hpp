@@ -524,45 +524,12 @@ void create_and_cache_mesh_workload(
             tt::tt_metal::distributed::EnqueueMeshWorkload(
                 mesh_device->mesh_command_queue(*cq_id), cached_adapter.get_cached_mesh_workload().workload, false);
 
-<<<<<<< HEAD
-            // Log the first program for profiling
-            const auto& programs = cached_adapter.get_cached_mesh_workload().workload.get_programs();
-            if (!programs.empty()) {
-                const auto& first_program = programs.begin()->second;
-                TracyOpTTNNDevice(
-                    mesh_device_operation_t{},
-                    device_operation_id,
-                    mesh_device->id(),
-                    first_program,
-                    operation_attributes,
-                    tensor_args,
-                    tensor_return_value);
-            }
-        }, program_factory);
-    } else {
-        // Enqueue the workload directly (no caching)
-        tt::tt_metal::distributed::EnqueueMeshWorkload(
-            mesh_device->mesh_command_queue(*cq_id), cached_workload.workload, false);
-
-        // Log the first program for profiling
-        if (!cached_workload.workload.get_programs().empty()) {
-            const auto& first_program = cached_workload.workload.get_programs().begin()->second;
-            TracyOpTTNNDevice(
-                mesh_device_operation_t{},
-                device_operation_id,
-                mesh_device->id(),
-                first_program,
-                operation_attributes,
-                tensor_args,
-                tensor_return_value);
-=======
             TracyOpMeshWorkload(mesh_device, cached_adapter.get_cached_mesh_workload().workload, mesh_device_operation_t{}, operation_attributes, tensor_args, tensor_return_value);
         } else {
             // Enqueue the workload directly (no caching)
             tt::tt_metal::distributed::EnqueueMeshWorkload(
                 mesh_device->mesh_command_queue(*cq_id), cached_workload.workload, false);
             TracyOpMeshWorkload(mesh_device, cached_workload.workload, mesh_device_operation_t{}, operation_attributes, tensor_args, tensor_return_value);
->>>>>>> origin/jchu/ttnn-integration-with-mesh
         }
     }, program_factory);
 }
@@ -601,19 +568,11 @@ void launch_operation_with_adapter(
 
     if (program_cache_hit) {
         handle_mesh_adapter_cache_hit<mesh_device_operation_t>(
-<<<<<<< HEAD
-            cq_id, device_operation_id, operation_attributes, tensor_args, tensor_return_value,
-            mesh_device, program_cache, program_hash);
-    } else {
-        create_and_cache_mesh_workload<mesh_device_operation_t>(
-            cq_id, device_operation_id, operation_attributes, tensor_args, tensor_return_value,
-=======
             cq_id, operation_attributes, tensor_args, tensor_return_value,
             mesh_device, program_cache, program_hash);
     } else {
         create_and_cache_mesh_workload<mesh_device_operation_t>(
             cq_id, operation_attributes, tensor_args, tensor_return_value,
->>>>>>> origin/jchu/ttnn-integration-with-mesh
             mesh_device, program_cache, program_hash);
     }
 }
