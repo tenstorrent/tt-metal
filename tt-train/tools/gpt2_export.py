@@ -1,3 +1,14 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "transformers",
+#     "msgpack",
+#     "msgpack-numpy",
+#     "torch",
+#     "numpy",
+# ]
+# ///
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 #
 # SPDX-License-Identifier: Apache-2.0

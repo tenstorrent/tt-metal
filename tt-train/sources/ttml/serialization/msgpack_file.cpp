@@ -9,6 +9,14 @@
 #include <cstdint>
 #include <fstream>
 #define MSGPACK_NO_BOOST
+#include <boost/archive/binary_iarchive.hpp>
+#include <boost/archive/binary_oarchive.hpp>
+#include <boost/serialization/access.hpp>
+#include <boost/serialization/string.hpp>
+#include <boost/serialization/unique_ptr.hpp>
+#include <boost/serialization/unordered_map.hpp>
+#include <boost/serialization/variant.hpp>
+#include <boost/serialization/vector.hpp>
 #include <fstream>
 #include <msgpack.hpp>
 #include <stdexcept>
@@ -83,6 +91,11 @@ MSGPACK_API_VERSION_NAMESPACE(MSGPACK_DEFAULT_API_NS) {
 namespace ttml::serialization {
 class MsgPackFile::Impl {
 public:
+    template <class Archive>
+    void serialize(Archive& ar, const unsigned int version) {
+        ar & m_data;
+    }
+
     // Methods to store different types
     void put(std::string_view key, bool value) {
         m_data[std::string(key)] = value;
@@ -421,5 +434,20 @@ void MsgPackFile::get(std::string_view key, std::vector<std::string>& value) con
 void MsgPackFile::get(std::string_view key, ValueType& value) const {
     m_impl->get(key, value);
 }
+
+// Define the serialize function for MsgPackFile
+template <class Archive>
+void MsgPackFile::serialize(Archive& ar, const unsigned int version) {
+    // This tells Boost how to handle the unique_ptr itself.
+    // It will then call the serialize method of the Impl object it points to.
+    ar & m_impl;
+}
+
+// Explicitly instantiate the template for the archive types you use.
+// This ensures the definition is generated in this compilation unit.
+template void MsgPackFile::serialize<boost::archive::binary_iarchive>(
+    boost::archive::binary_iarchive&, const unsigned int);
+template void MsgPackFile::serialize<boost::archive::binary_oarchive>(
+    boost::archive::binary_oarchive&, const unsigned int);
 
 }  // namespace ttml::serialization
