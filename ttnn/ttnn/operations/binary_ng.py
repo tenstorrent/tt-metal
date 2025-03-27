@@ -63,3 +63,5 @@ ttnn.attach_golden_function(
 ttnn.attach_golden_function(ttnn.experimental.bitwise_and, golden_function=lambda a, b: torch.bitwise_and(a, b))
 ttnn.attach_golden_function(ttnn.experimental.bitwise_or, golden_function=lambda a, b: torch.bitwise_or(a, b))
 ttnn.attach_golden_function(ttnn.experimental.bitwise_xor, golden_function=lambda a, b: torch.bitwise_xor(a, b))
+ttnn.attach_golden_function(ttnn.experimental.gcd, golden_function=lambda a, b: torch.gcd(a, b))
+ttnn.attach_golden_function(ttnn.experimental.gcd_, golden_function=lambda a, b: torch.gcd(a, b))

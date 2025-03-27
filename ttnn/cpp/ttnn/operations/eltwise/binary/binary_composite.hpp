@@ -205,9 +205,11 @@ struct ExecuteLCM {
 
 struct ExecuteGCD {
     static Tensor invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        QueueId queue_id,
+        const Tensor& input_tensor_a_arg,
+        const Tensor& input_tensor_b_arg,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
 struct ExecuteMaximum {
