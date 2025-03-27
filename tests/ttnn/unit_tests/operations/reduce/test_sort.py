@@ -24,6 +24,7 @@ from models.utility_functions import skip_for_grayskull
         ([87, 87], 0, True),
         ([1], 0, True),
         ([], -1, True),
+        ([1, 0, 32, 32], 2, False),
     ],
 )
 def test_sort_output_shape(shape, dim, descending, device):
@@ -57,6 +58,7 @@ def test_sort_output_shape(shape, dim, descending, device):
         ([87, 87], 0, True),
         ([1], 0, True),
         ([], -1, True),
+        ([1, 0, 32, 32], 2, False),
     ],
 )
 def test_sort_output_shape_prealocated_output(shape, dim, descending, device):

@@ -11,6 +11,7 @@
 
 namespace ttnn::operations::experimental::reduction {
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 template <class Tuple, class T = std::decay_t<std::tuple_element_t<0, std::decay_t<Tuple>>>>
 std::vector<std::optional<T>> tuple_to_vector_optional(Tuple&& tuple) {
@@ -19,6 +20,7 @@ std::vector<std::optional<T>> tuple_to_vector_optional(Tuple&& tuple) {
         std::forward<Tuple>(tuple));
 }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 std::vector<Tensor> ExecuteSort::invoke(
@@ -33,8 +35,9 @@ std::vector<Tensor> ExecuteSort::invoke(
         SortDeviceOperation{dim, descending, stable, memory_config.value_or(input_tensor.memory_config())},
         {input_tensor},
         {},
-        optional_output_tensors.has_value() ? tuple_to_vector_optional(optional_output_tensors.value())
-                                            : std::vector<std::optional<Tensor>>{},
+        optional_output_tensors.has_value()
+            ? CMAKE_UNIQUE_NAMESPACE::tuple_to_vector_optional(optional_output_tensors.value())
+            : std::vector<std::optional<Tensor>>{},
         queue_id);
 
     return output_vectors;
