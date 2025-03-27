@@ -2,18 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "optional"
-#include "tt-metalium/assert.hpp"
-#include "tt-metalium/buffer_constants.hpp"
-#include "tt-metalium/core_coord.hpp"
-#include "tt-metalium/logger.hpp"
-#include "ttnn/operations/math.hpp"
-#include <cstdint>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/hal_exp.hpp>
 
 #include "slice_write_op.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
@@ -501,11 +494,11 @@ operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
     uint32_t max_read_size = 4096;
 
     auto src_buffer_alignment = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? ::experimental::hal::get_dram_alignment()
-                                    : ::experimental::hal::get_l1_alignment();
+                                    ? hal::get_dram_alignment()
+                                    : hal::get_l1_alignment();
     auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? ::experimental::hal::get_dram_alignment()
-                                    : ::experimental::hal::get_l1_alignment();
+                                    ? hal::get_dram_alignment()
+                                    : hal::get_l1_alignment();
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
 
     // if begins is not aligned then we need to pad the cb size, so that we can read from the nearest aligned address
