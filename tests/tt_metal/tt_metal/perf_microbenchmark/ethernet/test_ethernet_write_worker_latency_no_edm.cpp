@@ -26,11 +26,13 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 
 #include <tt-metalium/persistent_kernel_cache.hpp>
+#include <thread>
 
 #include "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_ubenchmark_types.hpp"
 
-// TODO: ARCH_NAME specific, must remove
+// WARNING: ARCH_NAME specific
 #include "eth_l1_address_map.h"
+#include "llrt/hal.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -136,7 +138,7 @@ std::vector<tt_metal::Program> build(
 
     // eth core rt args
     const std::vector<uint32_t>& eth_sender_receiver_rt_args = {
-        tt_metal::hal.get_dev_addr(
+        tt_metal::hal_ref.get_dev_addr(
             tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::UNRESERVED),
         static_cast<uint32_t>(num_samples),
         static_cast<uint32_t>(sample_page_size)};

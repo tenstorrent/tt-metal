@@ -30,7 +30,7 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num1, uint32_t n
 bool use_matmul_for_1x1_conv(
     const std::array<uint32_t, 2>& kernel_size,
     const std::array<uint32_t, 2>& stride,
-    const std::array<uint32_t, 2>& padding,
+    const std::array<uint32_t, 4>& padding,
     const std::array<uint32_t, 2>& dilation,
     uint32_t groups,
     const Conv2dConfig& conv_config);
@@ -58,6 +58,13 @@ sliding_window::ParallelConfig determine_output_parallel_config(
     const CoreCoord& compute_grid_size,
     uint32_t out_channels,
     bool is_mm_conv);
+
+std::tuple<uint32_t, uint32_t> calculate_output_image_size(
+    std::array<uint32_t, 2> input_image_size,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 4> padding,
+    std::array<uint32_t, 2> dilation);
 
 uint32_t get_num_cores_nhw_from_parallel_config(const sliding_window::ParallelConfig& pconfig);
 

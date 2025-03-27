@@ -27,7 +27,7 @@
 #include "assert.hpp"
 #include <nlohmann/json.hpp>
 
-#include "hal.hpp"
+#include "hal_types.hpp"
 
 namespace tt::tt_metal {
 

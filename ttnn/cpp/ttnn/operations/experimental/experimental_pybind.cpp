@@ -11,6 +11,7 @@
 #include "ttnn/operations/experimental/conv3d/conv3d_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/argmax/argmax_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_pybind.hpp"
+#include "ttnn/operations/experimental/slice_write/slice_write_pybind.hpp"
 #include "ttnn/operations/experimental/ssm/hc_sum_reduce/hc_sum_reduce_pybind.hpp"
 #include "ttnn/operations/experimental/ssm/prefix_scan/prefix_scan_pybind.hpp"
 #include "ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/repeat_and_interleave_eltwise_mul_pybind.hpp"
@@ -37,13 +38,15 @@
 #include "ttnn/operations/experimental/ccl/ccl_experimental_pybind.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_pybind.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_pybind.hpp"
-
 #include "ttnn/operations/experimental/reshape/view_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_pybind.hpp"
+#include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_pybind.hpp"
 
 namespace ttnn::operations::experimental {
 
 void py_module(py::module& module) {
+    slice_write::bind_slice_write(module);
+
     transformer::detail::bind_concatenate_heads(module);
     transformer::detail::bind_split_qkv(module);
     transformer::detail::bind_nlp_create_qkv_heads(module);
@@ -85,6 +88,8 @@ void py_module(py::module& module) {
     plusone::detail::bind_experimental_plusone_operation(module);
     dropout::detail::bind_experimental_dropout_operation(module);
     reshape::detail::py_bind_view(module);
+
+    gelu_backward::detail::bind_experimental_gelu_backward_operation(module);
 
     // CCL ops
     auto m_experimental_ccl =

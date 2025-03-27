@@ -10,7 +10,6 @@
 #include "tt_backend_api_types.hpp"
 #include "constants.hpp"
 #include "math.hpp"
-#include "hal.hpp"
 
 namespace tt::tt_metal {
 

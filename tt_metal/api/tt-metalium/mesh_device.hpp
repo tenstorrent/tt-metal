@@ -8,9 +8,11 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "device.hpp"
+#include "dispatch_core_common.hpp"
 
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
@@ -31,6 +33,8 @@ class MeshCommandQueue;
 class MeshDeviceView;
 class MeshSubDeviceManagerId;
 class MeshTraceBuffer;
+
+using DeviceIds = std::vector<int>;
 
 class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevice> {
 private:
@@ -65,7 +69,7 @@ private:
     };
 
     std::shared_ptr<ScopedDevices> scoped_devices_;
-    MeshDeviceID mesh_id_;
+    int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
     // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
     std::shared_ptr<MeshDevice> parent_mesh_;
@@ -104,7 +108,7 @@ public:
 
     // IDevice interface implementation
     tt::ARCH arch() const override;
-    MeshDeviceID id() const override;
+    int id() const override;
     chip_id_t build_id() const override;
     uint8_t num_hw_cqs() const override;
     bool is_initialized() const override;
@@ -116,8 +120,6 @@ public:
     CoreCoord grid_size() const override;
     CoreCoord logical_grid_size() const override;
     CoreCoord dram_grid_size() const override;
-    CoreType core_type_from_virtual_core(const CoreCoord& virtual_coord) const override;
-    CoreCoord virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const override;
     CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const override;
 
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>&logical_cores) const override;

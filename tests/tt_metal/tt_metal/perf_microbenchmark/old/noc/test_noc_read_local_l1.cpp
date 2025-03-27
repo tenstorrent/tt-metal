@@ -6,6 +6,7 @@
 #include <chrono>
 #include <functional>
 #include <random>
+#include <string>
 #include <thread>
 
 #include <tt-metalium/bfloat16.hpp>
@@ -31,7 +32,7 @@ std::vector<T> slice_vec(std::vector<T> const& v, int m, int n) {
     return vec;
 }
 
-void print_vec(const std::vector<bfloat16>& data, int rows, int cols, const string& name) {
+void print_vec(const std::vector<bfloat16>& data, int rows, int cols, const std::string& name) {
     std::cout << name << ": " << std::endl;
     int index = 0;
     for (int i = 0; i < rows; i++) {

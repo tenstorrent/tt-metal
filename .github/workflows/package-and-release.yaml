@@ -4,7 +4,7 @@ on:
   schedule:
     # Create rc every day at EOD of PST Mon-Fri + night of Sunday to kick off
     # releases for beginning of work week
-    - cron: "0 1 * * 1,2,3,4,5,6"
+    - cron: "0 1,14 * * *"
 
 permissions:
   contents: write
@@ -13,24 +13,17 @@ permissions:
 jobs:
   build-artifact:
     needs: create-tag
-    strategy:
-      matrix:
-        config:
-          - version: "20.04"
-            publish-artifact: true
-          - version: "22.04"
-            publish-artifact: false
     uses: ./.github/workflows/build-artifact.yaml
     with:
-      version: ${{ matrix.config.version }}
-      distro: ubuntu
-      publish-artifact: ${{ matrix.config.publish-artifact }}
+      version: 22.04
       build-wheel: true
     secrets: inherit
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
     with:
+      version: 22.04
       tracy: true
+      build-wheel: true
   test-wheels:
     needs: build-artifact
     uses: ./.github/workflows/_test-wheels-impl.yaml
@@ -41,22 +34,36 @@ jobs:
     needs: build-artifact
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
     secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   t3000-demos:
     needs: build-artifact
     uses: ./.github/workflows/t3000-demo-tests-impl.yaml
     secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   t3000-model-perf:
-    needs: build-artifact
+    needs: [build-artifact, build-artifact-profiler]
     uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
     secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      build-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
   tg-demos:
     needs: build-artifact
     uses: ./.github/workflows/tg-demo-tests-impl.yaml
     secrets: inherit
-  tgg-model-perf:
-    needs: build-artifact
-    uses: ./.github/workflows/tgg-model-perf-tests-impl.yaml
-    secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   get-params:
     runs-on: ubuntu-latest
     outputs:
@@ -82,7 +89,6 @@ jobs:
           echo "should-create-release=$shouldCreateRelease" >> "$GITHUB_OUTPUT"
   create-tag:
     needs: get-params
-    if: ${{ fromJSON(needs.get-params.outputs.should-create-release) }}
     uses: ./.github/workflows/release-verify-or-create-tag.yaml
     with:
       fetch_depth: 0
@@ -153,14 +159,10 @@ jobs:
         uses: qmonnet/git-archive-all-action@791fb850881cf58b1d1fcc9b06c01940080bba0a
         with:
           output-files: tt-metalium.tar.gz
-      - name: Download eager 20.04 Python packages
+      - name: Download Wheel
         uses: actions/download-artifact@v4
         with:
-          name: eager-dist-ubuntu-20.04-any
-      - name: Download eager 22.04 Python packages
-        uses: actions/download-artifact@v4
-        with:
-          name: eager-dist-ubuntu-22.04-any
+          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Create VERSION
         run: echo ${{ needs.create-tag.outputs.version }} > VERSION
       - name : Download release notes
@@ -201,7 +203,7 @@ jobs:
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
     with:
-      base-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      base-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       version: ${{ needs.create-tag.outputs.version }}
       is_major_version:  ${{ needs.get-params.outputs.is-release-candidate !='true' && needs.get-params.outputs.should-create-release == 'true' }}
   release-docs:
@@ -215,7 +217,7 @@ jobs:
     uses: ./.github/workflows/docs-latest-public.yaml
     with:
       version: ${{ needs.create-tag.outputs.version }}
-      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     secrets: inherit

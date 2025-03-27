@@ -7,7 +7,7 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program_impl.hpp>
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "fabric_edm_types.hpp"
@@ -35,10 +35,11 @@ struct FabricEriscDatamoverConfig {
 
     // Global
     static constexpr std::size_t eth_channel_sync_size = 16;
-    std::size_t handshake_addr;
-    std::size_t edm_channel_ack_addr;
-    std::size_t termination_signal_address;  // pad extra bytes to match old EDM so handshake logic will still work
-    std::size_t edm_status_address;
+    std::size_t handshake_addr = 0;
+    std::size_t edm_channel_ack_addr = 0;
+    std::size_t termination_signal_address = 0;  // pad extra bytes to match old EDM so handshake logic will still work
+    std::size_t edm_local_sync_address = 0;
+    std::size_t edm_status_address = 0;
 
     // Debug and Counters
     static constexpr std::size_t receiver_channel_counters_size_bytes =
@@ -171,7 +172,8 @@ public:
 
         const FabricEriscDatamoverConfig& config,
         bool enable_persistent_mode,
-        bool build_in_worker_connection_mode = false);
+        bool build_in_worker_connection_mode = false,
+        bool dateline_connection = false);
 
     static FabricEriscDatamoverBuilder build(
         tt::tt_metal::IDevice* device,
@@ -181,7 +183,8 @@ public:
         chip_id_t peer_chip_id,
         const FabricEriscDatamoverConfig& config,
         bool enable_persistent_mode,
-        bool build_in_worker_connection_mode = false);
+        bool build_in_worker_connection_mode = false,
+        bool dateline_connection = false);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc) const;
@@ -225,6 +228,7 @@ public:
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> local_sender_channels_connection_info_addr;
 
     size_t termination_signal_ptr = 0;
+    size_t edm_local_sync_ptr = 0;
     size_t edm_status_ptr = 0;
 
     // Semaphore IDs
@@ -251,6 +255,7 @@ public:
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
     bool enable_first_level_ack = false;
     bool fuse_receiver_flush_and_completion_ptr = true;
+    bool dateline_connection = false;
 };
 
 }  // namespace tt::tt_fabric

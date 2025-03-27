@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <vector>
@@ -73,7 +74,7 @@ public:
     // TODO: RENAME issue_queue_stride ?
     void issue_queue_push_back(uint32_t push_size_B, uint8_t cq_id);
 
-    uint32_t completion_queue_wait_front(uint8_t cq_id, volatile bool& exit_condition) const;
+    uint32_t completion_queue_wait_front(uint8_t cq_id, std::atomic<bool>& exit_condition) const;
 
     void send_completion_queue_read_ptr(uint8_t cq_id) const;
 

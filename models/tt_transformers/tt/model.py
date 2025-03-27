@@ -4,7 +4,6 @@
 
 import ttnn
 import torch
-import torch.nn as nn
 from tqdm import tqdm
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.common.rmsnorm import RMSNorm
@@ -97,6 +96,7 @@ class Transformer(LightweightModule):
             state_dict=state_dict,
             state_dict_prefix=state_dict_prefix,
             weight_cache_path=weight_cache_path,
+            max_columns_per_device=self.args.max_columns_per_device_lm_head,
         )
 
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
@@ -349,7 +349,11 @@ class Transformer(LightweightModule):
     ):
         # No-op if callers already provide the right memory config
         if mode == "decode" and not self.args.is_galaxy:
-            x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"])
+            x = ttnn.to_memory_config(
+                x, self.model_config["DECODE_RESIDUAL_MEMCFG"], self.model_config["ACTIVATION_DTYPE"]
+            )
+        elif self.model_config["ACTIVATION_DTYPE"] is not None and x.dtype != self.model_config["ACTIVATION_DTYPE"]:
+            x = ttnn.typecast(x, self.model_config["ACTIVATION_DTYPE"])
 
         for i, layer in enumerate(self.layers):
             x = layer(
@@ -377,4 +381,9 @@ class Transformer(LightweightModule):
         if mode == "prefill" and self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
             x = ttnn.interleaved_to_sharded(x, self.model_config["LM_HEAD_INPUT_MEMCFG"])
 
-        return self.lm_head(x)
+        x = self.lm_head(x)
+
+        if mode == "prefill":
+            x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+            x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return x

@@ -16,6 +16,8 @@
 #include "tile.hpp"
 #include <tt_stl/span.hpp>
 
+#include "llrt/hal.hpp"
+
 uint8_t get_max_exp(const std::vector<uint32_t>& vec, bool is_exp_a) {
     TT_ASSERT(vec.size() == 16);
     uint32_t max = 0;
@@ -328,7 +330,7 @@ std::vector<uint32_t> pack_fp32_vec_as_bfp_tiles(
     auto subtile_rows = face_H;
     auto subtile_cols = face_W;
 
-    uint32_t l1_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1);
+    uint32_t l1_alignment = tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::L1);
     bool exponent_padding = (subtile_rows * subtiles_in_tile_col * subtiles_in_tile_row) < l1_alignment;
 
     int num_float_in_tile = tile_HW;

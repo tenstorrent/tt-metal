@@ -8,7 +8,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/rtoptions.hpp>
+#include "rtoptions.hpp"
+#include "tt_cluster.hpp"
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
@@ -24,13 +25,10 @@ class ControlPlaneFixture : public ::testing::Test {
                    "Control plane test suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
                GTEST_SKIP();
            }
-           tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::FABRIC_2D);
        }
 
        void TearDown() override {}
 };
-
-}  // namespace fabric_router_tests
 
 class BaseFabricFixture : public ::testing::Test {
 protected:
@@ -39,7 +37,7 @@ protected:
     std::vector<tt::tt_metal::IDevice*> devices_;
     bool slow_dispatch_;
 
-    void SetUpDevices(FabricConfig fabric_config) {
+    void SetUpDevices(tt_metal::FabricConfig fabric_config) {
         slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch_) {
             tt::log_info(tt::LogTest, "Running fabric api tests with slow dispatch");
@@ -58,6 +56,26 @@ protected:
         for (auto& [id, device] : devices_map_) {
             devices_.push_back(device);
         }
+    }
+
+    bool find_device_with_neighbor_in_direction(
+        std::pair<mesh_id_t, chip_id_t>& src_mesh_chip_id,
+        std::pair<mesh_id_t, chip_id_t>& dst_mesh_chip_id,
+        RoutingDirection direction) {
+        auto* control_plane = tt::Cluster::instance().get_control_plane();
+        for (auto* device : devices_) {
+            src_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
+
+            // Get neighbours within a mesh in the given direction
+            auto neighbors =
+                control_plane->get_intra_chip_neighbors(src_mesh_chip_id.first, src_mesh_chip_id.second, direction);
+            if (neighbors.size() > 0) {
+                dst_mesh_chip_id = {src_mesh_chip_id.first, neighbors[0]};
+                return true;
+            }
+        }
+
+        return false;
     }
 
     void RunProgramNonblocking(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
@@ -82,16 +100,17 @@ protected:
 
     void TearDown() override {
         tt::tt_metal::detail::CloseDevices(devices_map_);
-        tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::DISABLED);
+        tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
     }
 };
 
 class Fabric1DFixture : public BaseFabricFixture {
-    void SetUp() override { this->SetUpDevices(tt::FabricConfig::FABRIC_1D); }
+    void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_1D); }
 };
 
 class Fabric2DFixture : public BaseFabricFixture {
-    void SetUp() override { this->SetUpDevices(tt::FabricConfig::FABRIC_2D); }
+    void SetUp() override { this->SetUpDevices(tt::tt_metal::FabricConfig::FABRIC_2D); }
 };
 
+}  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric

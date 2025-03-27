@@ -35,9 +35,13 @@ AllReduceAsync create_all_reduce_async_struct(
             semaphore = semaphores.at(i);  // Get raw pointer
             if (i != 0) {
                 backward_device = devices.at(i - 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                backward_device = devices.at(num_devices - 1);
             }
             if (i != num_devices - 1) {
                 forward_device = devices.at(i + 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                forward_device = devices.at(0);
             }
         }
     }
@@ -192,9 +196,6 @@ Tensor all_reduce_async(
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool enable_persistent_fabric_mode) {
-    TT_FATAL(
-        topology == ttnn::ccl::Topology::Linear,
-        "This all_reduce API with cluster_axis is currently supported only for the Linear topology");
     const auto mesh_view = mesh_device.get_view();
     auto devices = input_tensor.get_workers();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
@@ -249,22 +250,11 @@ Tensor all_reduce_async(
 }  // namespace operations
 
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
-    size_t num_links,
-    size_t num_workers_per_link,
-    bool persistent_fabric_mode,
-    IDevice* device,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const std::optional<CoreRangeSet>& reserved_core_range) {
+    size_t num_links, size_t num_workers_per_link, bool persistent_fabric_mode, const CoreRangeSet& available_cores) {
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
     if (persistent_fabric_mode) {
         const size_t num_workers_preferred = num_workers_per_link * num_links;
-        auto available_cores = device->worker_cores(
-            tt::tt_metal::HalProgrammableCoreType::TENSIX,
-            sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
-        if (reserved_core_range.has_value()) {
-            available_cores = available_cores.subtract(*reserved_core_range);
-        }
         if (available_cores.num_cores() < num_workers_preferred) {
             log_warning(
                 tt::LogOp,

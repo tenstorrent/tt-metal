@@ -8,11 +8,9 @@ import random
 import os
 import numpy as np
 from functools import partial
-from itertools import chain
 from operator import contains, eq, getitem
 from pathlib import Path
 import json
-import copy
 import multiprocess
 import signal
 import time
@@ -83,12 +81,15 @@ def get_tt_cache_path():
         internal_cache_path = Path("/opt/tt-metal-models") / model_folder / model_version
         has_internal_cache = internal_cache_path.exists()
         if has_internal_weka:
+            logger.debug(f"Using internal weka path: {internal_weka_path}")
             return internal_weka_path
         elif has_internal_cache:
+            logger.debug(f"Using internal cache path: {internal_cache_path}")
             return internal_cache_path
         else:
             default_path = Path(default_dir) / model_folder / model_version
             default_path.mkdir(parents=True, exist_ok=True)
+            logger.debug(f"Using default cache path: {default_path}")
             return default_path
 
     return get_tt_cache_path_
@@ -115,8 +116,6 @@ def device(request, device_params):
     yield device
 
     ttnn.DumpDeviceProfiler(device)
-
-    ttnn.synchronize_device(device)
     ttnn.close_device(device)
 
 
@@ -182,7 +181,7 @@ def set_fabric(fabric_config):
 
 
 @pytest.fixture(scope="function")
-def mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
+def mesh_device(request, silicon_arch_name, device_params):
     """
     Pytest fixture to set up a device mesh for tests.
 
@@ -193,7 +192,6 @@ def mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
     Args:
         request: Pytest request object.
         silicon_arch_name: Name of the silicon architecture.
-        silicon_arch_wormhole_b0: Silicon architecture parameter.
         device_params: Additional device configuration parameters.
 
     Yields:
@@ -407,6 +405,7 @@ ALL_ARCHS = set(
     [
         "grayskull",
         "wormhole_b0",
+        "blackhole",
     ]
 )
 
@@ -418,7 +417,7 @@ def pytest_addoption(parser):
         "--tt-arch",
         choices=[*ALL_ARCHS],
         default=ttnn.get_arch_name(),
-        help="Target arch, ex. grayskull, wormhole_b0",
+        help="Target arch, ex. grayskull, wormhole_b0, blackhole",
     )
     parser.addoption(
         "--pipeline-type",
@@ -521,6 +520,11 @@ def pytest_generate_tests(metafunc):
         "silicon_arch_wormhole_b0": set(
             [
                 "wormhole_b0",
+            ]
+        ),
+        "silicon_arch_blackhole": set(
+            [
+                "blackhole",
             ]
         ),
     }

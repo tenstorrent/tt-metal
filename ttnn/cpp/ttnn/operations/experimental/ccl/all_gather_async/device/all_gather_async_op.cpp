@@ -63,7 +63,8 @@ AllGatherAsync create_all_gather_async_struct(
 }  // namespace all_gather_detail
 }  // namespace ccl
 
-void AllGatherAsync::validate(const std::vector<Tensor>& input_tensors) const {
+void AllGatherAsync::validate_with_output_tensors(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& layout = input_tensors[0].get_layout();
@@ -85,6 +86,65 @@ void AllGatherAsync::validate(const std::vector<Tensor>& input_tensors) const {
             input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
         "Unsupported memory layout {}.",
         input_tensor.memory_config().memory_layout);
+
+    if (output_tensors.size() > 0 and output_tensors[0].has_value()) {
+        TT_FATAL(
+            output_tensors.size() == 1,
+            "Error, Number of output tensors should be 1 but has {}",
+            output_tensors.size());
+
+        const auto& output_tensor = output_tensors[0];
+        TT_FATAL(
+            output_tensor.value().storage_type() == StorageType::DEVICE,
+            "Operands to all_gather need to be on device!");
+        TT_FATAL(
+            output_tensor.value().get_layout() == layout,
+            "Error, Output tensor layout should be same as input tensor layout but has {}",
+            output_tensor.value().get_layout());
+        TT_FATAL(
+            output_tensor.value().get_dtype() == dtype,
+            "Error, Output tensor dtype should be same as input tensor dtype but has {}",
+            output_tensor.value().get_dtype());
+        TT_FATAL(
+            output_tensor.value().get_tensor_spec().page_config() == input_tensor.get_tensor_spec().page_config(),
+            "Error, Output tensor page config should be same as input tensor page config but has {}",
+            output_tensor.value().get_tensor_spec().page_config());
+        TT_FATAL(
+            output_tensor.value().memory_config() == this->output_mem_config,
+            "Error, Output tensor memory config should be same as output_mem_config but has {}",
+            output_tensor.value().memory_config());
+
+        // check the output tensor size
+        auto output_shape = output_tensor.value().get_padded_shape();
+        auto input_shape = input_tensor.get_padded_shape();
+        TT_FATAL(
+            output_shape.size() == input_shape.size(),
+            "Error, Output tensor shape should have same number of dimensions as input tensor but has {}",
+            output_shape.size());
+        for (size_t i = 0; i < input_shape.size(); ++i) {
+            if (i == this->dim) {
+                TT_FATAL(
+                    output_shape[i] == input_shape[i] * this->ring_size,
+                    "Error, Output tensor shape at dimension {} should be {} but has {}",
+                    i,
+                    input_shape[i] * this->ring_size,
+                    output_shape[i]);
+            } else {
+                TT_FATAL(
+                    output_shape[i] == input_shape[i],
+                    "Error, Output tensor shape at dimension {} should be {} but has {}",
+                    i,
+                    input_shape[i],
+                    output_shape[i]);
+            }
+        }
+
+        // check memory layout
+        TT_FATAL(
+            output_tensor.value().memory_config().memory_layout == input_tensor.memory_config().memory_layout,
+            "Error, Output tensor memory layout should be same as input tensor memory layout but has {}",
+            output_tensor.value().memory_config().memory_layout);
+    }
 }
 
 static void validate_output_tensor_allocation(const std::vector<Tensor>& output_tensors) {
@@ -364,7 +424,9 @@ Tensor all_gather_async(
                     semaphores,
                     sub_device_id,
                     enable_persistent_fabric_mode),
-                {input_tensor});
+                {input_tensor},
+                optional_input_tensors,
+                optional_output_tensors);
         },
         {input_tensor},
         output_tensors);
@@ -378,13 +440,11 @@ Tensor all_gather_async(
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<ttnn::Tensor>& persistent_output_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     bool enable_persistent_fabric_mode) {
-    TT_FATAL(
-        topology == ttnn::ccl::Topology::Linear,
-        "This all_gather API with cluster_axis is currently supported only for the Linear topology");
     const auto mesh_view = mesh_device.get_view();
     auto devices = input_tensor.get_workers();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
@@ -401,6 +461,8 @@ Tensor all_gather_async(
         dim);
 
     std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
+    std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_tensor};
+
     CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
@@ -441,10 +503,14 @@ Tensor all_gather_async(
                     semaphores,
                     sub_device_id,
                     enable_persistent_fabric_mode),
-                {input_tensor});
+                {input_tensor},
+                optional_input_tensors,
+                optional_output_tensors);
         },
         {input_tensor},
-        output_tensors);
+        output_tensors,
+        {},  // optional_input_tensors
+        optional_output_tensors);
     return output_tensors.at(0);
 }
 

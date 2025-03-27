@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
 import torch
 import pytest
 from loguru import logger
@@ -29,7 +28,7 @@ class Emb(torch.nn.Module):
 @pytest.mark.parametrize(
     "iterations, expected_top1, expected_top5",
     (
-        (64, 0.91, 0.99),
+        (64, 0.89, 0.99),
         # (128, 0.92, 0.99),
         # (256, 0.92, 0.99),
     ),

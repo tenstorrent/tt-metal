@@ -4,6 +4,8 @@
 
 #include <semaphore.hpp>
 
+#include "llrt/hal.hpp"
+
 namespace tt {
 
 namespace tt_metal {
@@ -51,7 +53,7 @@ bool Semaphore::initialized_on_logical_core(const CoreCoord& logical_core) const
 }
 
 uint32_t Semaphore::offset() const {
-    uint32_t offset = hal.get_alignment(HalMemType::L1) * id_;
+    uint32_t offset = hal_ref.get_alignment(HalMemType::L1) * id_;
     return offset;
 }
 

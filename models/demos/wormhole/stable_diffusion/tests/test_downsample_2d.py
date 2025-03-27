@@ -4,7 +4,6 @@
 
 import torch
 from diffusers import StableDiffusionPipeline
-import os
 import ttnn
 import pytest
 
@@ -35,7 +34,9 @@ from models.demos.wormhole.stable_diffusion.tests.parameterizations import CROSS
         CROSS_DOWN_BLOCKS_HIDDEN_STATES_INFO[2] + (2,),
     ),
 )
-def test_downsample_512x512(reset_seeds, device, hidden_states, shard_layout, shard_end_core, shard_shape, block_index):
+def test_downsample_512x512(
+    reset_seeds, device, hidden_states, shard_layout, shard_end_core, shard_shape, block_index, use_program_cache
+):
     # Initialize PyTorch component
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet

@@ -2,14 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
-from pathlib import Path
-import sys
-import numpy as np
 
 import torch
-import torch.nn as nn
-from loguru import logger
 
 import ttnn
 

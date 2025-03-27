@@ -5,7 +5,7 @@
 #include <thread>
 #include <cmath>
 
-#include <hal.hpp>
+#include "llrt/hal.hpp"
 #include <host_api.hpp>
 #include <dispatch_core_common.hpp>
 #include <core_descriptor.hpp>
@@ -15,6 +15,7 @@
 
 #include <tt_metal.hpp>
 
+#include "tracy/Tracy.hpp"
 #include "tracy/TracyTTDevice.hpp"
 #include <device.hpp>
 #include <device_pool.hpp>
@@ -23,6 +24,7 @@
 #include "llrt.hpp"
 
 #include "dprint_server.hpp"
+#include "rtoptions.hpp"
 
 namespace tt {
 
@@ -34,11 +36,11 @@ void DumpDeviceProfileResults(IDevice* device, const Program& program) {
     std::vector<CoreCoord> eth_cores_in_program;
 
     std::vector<std::vector<CoreCoord>> logical_cores = program.logical_cores();
-    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
-        if (hal.get_core_type(index) == CoreType::WORKER) {
+    for (uint32_t index = 0; index < hal_ref.get_programmable_core_type_count(); index++) {
+        if (hal_ref.get_core_type(index) == CoreType::WORKER) {
             worker_cores_in_program = device->worker_cores_from_logical_cores(logical_cores[index]);
         }
-        if (hal.get_core_type(index) == CoreType::ETH) {
+        if (hal_ref.get_core_type(index) == CoreType::ETH) {
             eth_cores_in_program = device->ethernet_cores_from_logical_cores(logical_cores[index]);
         }
     }
@@ -91,7 +93,7 @@ void setControlBuffer(chip_id_t device_id, std::vector<uint32_t>& control_buffer
                 CoreType = tt_metal::HalProgrammableCoreType::IDLE_ETH;
             }
         }
-        profiler_msg_t* profiler_msg = hal.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
+        profiler_msg_t* profiler_msg = hal_ref.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
 
         control_buffer[kernel_profiler::FLAT_ID] = core.second;
         tt::llrt::write_hex_vec_to_core(
@@ -107,6 +109,9 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     }
     auto device_id = device->id();
     auto core = device->worker_core_from_logical_core(logical_core);
+
+    const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(device_id);
+    auto phys_core = soc_desc.translate_coord_to(core, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
 
     deviceHostTimePair.emplace(device_id, (std::vector<std::pair<uint64_t, uint64_t>>){});
     smallestHostime.emplace(device_id, 0);
@@ -144,7 +149,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     const int64_t hostStartTime = TracyGetCpuTime();
     std::vector<int64_t> writeTimes(sampleCount);
 
-    profiler_msg_t* profiler_msg = device->get_dev_addr<profiler_msg_t*>(core, HalL1MemAddrType::PROFILER);
+    auto* profiler_msg = reinterpret_cast<profiler_msg_t*>(device->get_dev_addr(core, HalL1MemAddrType::PROFILER));
     uint64_t control_addr = reinterpret_cast<uint64_t>(&profiler_msg->control_vector[kernel_profiler::FW_RESET_L]);
     for (int i = 0; i < sampleCount; i++) {
         ZoneScopedC(tracy::Color::Tomato2);
@@ -256,8 +261,8 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         log_file << fmt::format(
                         "{:5},{:5},{:5},{:20},{:20},{:20.2f},{:20},{:20},{:20.2f},{:20.15f},{:20.15f},{:20},1.0,0",
                         device_id,
-                        core.x,
-                        core.y,
+                        phys_core.x,
+                        phys_core.y,
                         deviceHostTimePair[device_id][i].first,
                         deviceHostTimePair[device_id][i].second,
                         (double)deviceHostTimePair[device_id][i].second * tracyToSecRatio,
@@ -278,7 +283,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         frequencyFit);
 
     tt_metal_device_profiler_map.at(device_id).device_core_sync_info.emplace(
-        core, std::make_tuple(smallestHostime[device_id], delay, frequencyFit));
+        phys_core, std::make_tuple(smallestHostime[device_id], delay, frequencyFit));
 }
 void setShift(int device_id, int64_t shift, double scale) {
     if (std::isnan(scale)) {
@@ -703,7 +708,7 @@ void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_co
                                                       : tt_metal::HalProgrammableCoreType::IDLE_ETH;
                     }
                     profiler_msg_t* profiler_msg =
-                        hal.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
+                        hal_ref.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
                     for (int i = 0; i < maxLoopCount; i++) {
                         std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
                             device_id,

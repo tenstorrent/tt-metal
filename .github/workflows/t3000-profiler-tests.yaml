@@ -11,8 +11,14 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     with:
       tracy: true
+      build-wheel: true
+      version: 22.04
     secrets: inherit
   t3000-profiler-tests:
     needs: build-artifact-profiler
     secrets: inherit
     uses: ./.github/workflows/t3000-profiler-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}

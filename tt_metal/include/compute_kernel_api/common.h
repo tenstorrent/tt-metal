@@ -80,3 +80,55 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
     static_assert("Error: only 4B args are supported" && sizeof(T) == 4);
     return *((tt_l1_ptr T*)(get_common_arg_addr(arg_idx)));
 }
+
+// clang-format off
+/**
+ * Returns the absolute logical X coordinate value that this kernel is running on. The absolute coordinate
+ * is the one relative to the origin of the physical grid.
+ *
+ * Return value: X coordinate value.
+ */
+// clang-format on
+inline uint8_t get_absolute_logical_x() {
+    extern uint8_t my_logical_x_;  // Set in FW
+    return my_logical_x_;
+}
+
+// clang-format off
+/**
+ * Returns the absolute logical Y coordinate value that this kernel is running on. The absolute coordinate
+ * is the one relative to the origin of the physical grid.
+ *
+ * Return value: Y coordinate value.
+ */
+// clang-format on
+inline uint8_t get_absolute_logical_y() {
+    extern uint8_t my_logical_y_;  // Set in FW
+    return my_logical_y_;
+}
+
+// clang-format off
+/**
+ * Returns the relative logical X coordinate value that this kernel is running on. The relative coordinate
+ * is with respect to the origin of the sub device for this core type.
+ *
+ * Return value: X coordinate value.
+ */
+// clang-format on
+inline uint8_t get_relative_logical_x() {
+    extern uint8_t my_relative_x_;  // Set in FW
+    return my_relative_x_;
+}
+
+// clang-format off
+/**
+ * Returns the relative logical Y coordinate value that this kernel is running on. The relative coordinate
+ * is with respect to the origin of the sub device for this core type.
+ *
+ * Return value: Y coordinate value.
+ */
+// clang-format on
+inline uint8_t get_relative_logical_y() {
+    extern uint8_t my_relative_y_;  // Set in FW
+    return my_relative_y_;
+}

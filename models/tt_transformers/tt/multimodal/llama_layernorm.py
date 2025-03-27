@@ -4,8 +4,6 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
-import torch
-import os
 
 TILE = 32
 SHARD_HEIGHT = TILE  # Current ttnn.rms_norm implementation requires shard height to be a single tile
@@ -91,6 +89,7 @@ class TtLayerNorm(LightweightModule):
                 bias=self.bias,
                 program_config=self.sharded_program_config,
                 memory_config=self.sharded_output_config,
+                compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
             )
             if out_sharded:
                 return x

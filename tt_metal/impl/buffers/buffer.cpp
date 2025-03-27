@@ -15,11 +15,13 @@
 #include <mutex>
 #include <utility>
 #include <buffer_constants.hpp>
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 #include "umd/device/tt_soc_descriptor.h"
 #include "fmt/base.h"
 #include <tt_stl/reflection.hpp>
 #include "lightmetal/host_api_capture_helpers.hpp"
+
+#include "rtoptions.hpp"
 
 #include "tracy/Tracy.hpp"
 

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <functional>
 #include <random>
+#include <string>
 
 #include <tt-metalium/bfloat16.hpp>
 #include "test_gold_impls.hpp"
@@ -120,7 +121,7 @@ int main(int argc, char** argv) {
 
             bool fp32_dest_acc_en = false;
             bool math_approx_mode = false;
-            std::map<string, string> binary_defines = {
+            std::map<std::string, std::string> binary_defines = {
                 {"ELTWISE_OP", op_id_to_op_define[eltwise_op]},
                 {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op]}};
             auto eltwise_binary_kernel = tt_metal::CreateKernel(

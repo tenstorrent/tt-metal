@@ -8,6 +8,7 @@
 #include <device.hpp>
 #include <kernel.hpp>
 #include <program_impl.hpp>
+#include <vector_aligned.hpp>
 #include <worker_config_buffer.hpp>
 
 namespace tt {
@@ -74,9 +75,6 @@ void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_
 
 void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, IDevice* device);
 
-void assemble_runtime_args_commands(
-    ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device);
-
 void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr);
 
 void reserve_space_in_kernel_config_buffer(
@@ -127,10 +125,7 @@ void set_num_worker_sems_on_dispatch(
     IDevice* device, SystemMemoryManager& manager, uint8_t cq_id, uint32_t num_worker_sems);
 
 void set_go_signal_noc_data_on_dispatch(
-    IDevice* device,
-    const vector_memcpy_aligned<uint32_t>& go_signal_noc_data,
-    SystemMemoryManager& manager,
-    uint8_t cq_id);
+    IDevice* device, const vector_aligned<uint32_t>& go_signal_noc_data, SystemMemoryManager& manager, uint8_t cq_id);
 
 }  // namespace program_dispatch
 

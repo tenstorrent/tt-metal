@@ -4,9 +4,7 @@
 
 import torch
 import pytest
-import math
 from loguru import logger
-from torch import nn
 
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -183,6 +181,7 @@ class TtFusedFalconLayernorm:
             bias=None,
             memory_config=self.sharded_memconfig,
             program_config=self.prg_config,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
         )
 
         out1 = ttnn.bcast(

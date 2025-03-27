@@ -2,23 +2,21 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
 from loguru import logger
-import ttnn
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
 
-THRESHOLD = 1.5
+THRESHOLD = 0.4
 
 
 @pytest.mark.parametrize(
     "ag_type, warmup_iters, perf_target_us",
     [
-        ("sdpa", 15, 12.0),
-        ("binary_mult", 15, 12.9),
-        ("layernorm", 15, 8.5),
+        ("sdpa", 15, 9.49),
+        ("binary_mult", 15, 10.54),
+        ("layernorm", 15, 6.47),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -72,10 +70,10 @@ def test_ag_tg_llama_perf(
 @pytest.mark.parametrize(
     "ar_type, warmup_iters, perf_target_us",
     [
-        ("ff2", 15, 29),
-        ("qkv", 15, 26.3),
-        ("ff1", 15, 30),
-        ("lm_head", 15, 78),
+        ("ff2", 15, 18.6),
+        ("qkv", 15, 11.9),
+        ("ff1", 15, 19.2),
+        ("lm_head", 15, 61.8),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

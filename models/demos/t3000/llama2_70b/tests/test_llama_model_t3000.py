@@ -4,7 +4,7 @@
 
 import pytest
 
-from models.utility_functions import skip_for_grayskull, is_wormhole_b0, is_blackhole
+from models.utility_functions import skip_for_grayskull
 from models.demos.t3000.llama2_70b.tt.llama_common import setup_llama_env, check_mesh_device
 from models.demos.t3000.llama2_70b.tests.test_llama_model import run_test_LlamaModel_inference
 

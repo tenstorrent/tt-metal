@@ -20,7 +20,7 @@ from ttnn.model_preprocessing import (
 from models.perf.perf_utils import prep_perf_report
 from transformers import DistilBertForQuestionAnswering, AutoTokenizer
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
-from models.utility_functions import is_grayskull, is_wormhole_b0, skip_for_grayskull
+from models.utility_functions import skip_for_grayskull
 
 
 @skip_for_grayskull()
@@ -179,7 +179,7 @@ def test_distilbert_perf_device(batch_size, test, reset_seeds):
     if ttnn.GetNumAvailableDevices() == 2:
         batch_size = batch_size * 2
 
-    command = f"pytest tests/ttnn/integration_tests/distilbert/test_ttnn_distilbert_wh.py::test_distilbert_for_question_answering[silicon_arch_name=wormhole_b0-silicon_arch_wormhole_b0=True-sequence_size=768-batch_size=8-model_name=distilbert-base-uncased-distilled-squad]"
+    command = f"pytest tests/ttnn/integration_tests/distilbert/test_ttnn_distilbert_wh.py::test_distilbert_for_question_answering"
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"

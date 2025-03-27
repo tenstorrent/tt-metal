@@ -41,6 +41,10 @@ uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
+uint8_t my_logical_x_ __attribute__((used));
+uint8_t my_logical_y_ __attribute__((used));
+uint8_t my_relative_x_ __attribute__((used));
+uint8_t my_relative_y_ __attribute__((used));
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
@@ -71,6 +75,8 @@ int main() {
 
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
     noc_index = 0;
+    my_logical_x_ = mailboxes->core_info.absolute_logical_x;
+    my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
     risc_init();
 
@@ -114,6 +120,8 @@ int main() {
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
 
             noc_index = launch_msg_address->kernel_config.brisc_noc_id;
+            my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
+            my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
 
             flush_erisc_icache();
 
@@ -125,6 +133,12 @@ int main() {
             // Run the ERISC kernel, no kernel config buffer on active eth
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
                 WAYPOINT("R");
+#ifdef ARCH_BLACKHOLE
+                // #18384: This register was left dirty by eth training.
+                // It is not used in dataflow api, so it can be set to 0
+                // one time here instead of setting it everytime in dataflow_api.
+                NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
+#endif
                 // TODO: This currently runs on second risc on active eth cores but with newer drop of syseng FW
                 //  this will run on risc0
                 int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);

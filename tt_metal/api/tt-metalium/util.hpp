@@ -3,11 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include "assert.hpp"
 #include "math.hpp"
 #include "tt_backend_api_types.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "data_types.hpp"
-#include "hal.hpp"
+#include "hal_types.hpp"
 #include "umd/device/tt_soc_descriptor.h"
 
 namespace tt::tt_metal::detail {

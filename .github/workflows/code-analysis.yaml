@@ -1,6 +1,8 @@
 name: "Code analysis"
 
 on:
+  schedule:
+    - cron: "0 */3 * * *" # This cron schedule runs the workflow every 3 hours
   workflow_call:
     inputs:
       distro:
@@ -54,9 +56,9 @@ jobs:
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
-      distro: ${{ inputs.distro }}
-      version: ${{ inputs.version }}
-      architecture: ${{ inputs.architecture }}
+      distro: ${{ inputs.distro || 'ubuntu' }}
+      version: ${{ inputs.version || '22.04' }}
+      architecture: ${{ inputs.architecture || 'amd64' }}
 
   clang-tidy:
     name: 🤖 Clang Tidy
@@ -66,7 +68,7 @@ jobs:
       - build
       - in-service
     container:
-      image: ${{ needs.build-docker-image.outputs.ci-build-tag }}
+      image: ${{ needs.build-docker-image.outputs.dev-tag || 'docker-image-unresolved!'}}
       env:
         CCACHE_TEMPDIR: /tmp/ccache
         CARGO_HOME: /tmp/.cargo
@@ -189,13 +191,5 @@ jobs:
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
-      - name: Cleanup
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
-        run: |
-          # We are forced to checkout the repo into a subdir of the host's workdir; this pollutes the host
-          # with root-owned files.  Be sure to clean up after ourselves in case we're on a non-ephemeral runner.
-          echo "pre rm"
-          ls -al /__w/tt-metal/tt-metal
-          rm -rf /__w/tt-metal/tt-metal/docker-job
-          echo "post rm"
-          ls -al /__w/tt-metal/tt-metal

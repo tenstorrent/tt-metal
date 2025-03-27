@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <math.h>
+
 #include <tt-metalium/work_split.hpp>
 #include "cpp/ttnn/operations/data_movement/move/device/move_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
@@ -12,6 +14,8 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <algorithm>
+
+#include <tt-metalium/hal.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -80,7 +84,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
     uint32_t size_per_l1_bank = tt::tt_metal::detail::SizeBytesPerBank(
-        output.buffer()->size(), output.buffer()->page_size(), num_l1_banks, hal.get_alignment(HalMemType::L1));
+        output.buffer()->size(), output.buffer()->page_size(), num_l1_banks, hal::get_l1_alignment());
 
     // CB is being used as temp L1 buffer to copy src data into before writing to dst
     uint32_t cb_index = 0;
