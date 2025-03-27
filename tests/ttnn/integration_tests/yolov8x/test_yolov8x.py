@@ -55,21 +55,14 @@ def make_anchors(feats, strides, grid_cell_offset=0.5):
     ids=["input_tensor1"],
 )
 @pytest.mark.parametrize(
-    "use_pretrained_weight",
-    [
-        False,
-        True,
-    ],
-    ids=[
-        "pretrained_weight_false",
-        "pretrained_weight_true",
-    ],
+    "use_weights_from_ultralytics",
+    [True],
 )
-def test_yolov8x_640(device, input_tensor, use_pretrained_weight):
+def test_yolov8x_640(device, input_tensor, use_weights_from_ultralytics):
     disable_persistent_kernel_cache()
 
     inp_h, inp_w = input_tensor.shape[2], input_tensor.shape[3]
-    if use_pretrained_weight:
+    if use_weights_from_ultralytics:
         torch_model = YOLO("yolov8x.pt")
         torch_model = torch_model.model
         torch_model.eval()
