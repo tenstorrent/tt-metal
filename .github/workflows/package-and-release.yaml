@@ -13,24 +13,17 @@ permissions:
 jobs:
   build-artifact:
     needs: create-tag
-    strategy:
-      matrix:
-        config:
-          - version: "20.04"
-            publish-artifact: true
-          - version: "22.04"
-            publish-artifact: false
     uses: ./.github/workflows/build-artifact.yaml
     with:
-      version: ${{ matrix.config.version }}
-      distro: ubuntu
-      publish-artifact: ${{ matrix.config.publish-artifact }}
+      version: 22.04
       build-wheel: true
     secrets: inherit
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
     with:
+      version: 22.04
       tracy: true
+      build-wheel: true
   test-wheels:
     needs: build-artifact
     uses: ./.github/workflows/_test-wheels-impl.yaml
@@ -166,14 +159,10 @@ jobs:
         uses: qmonnet/git-archive-all-action@791fb850881cf58b1d1fcc9b06c01940080bba0a
         with:
           output-files: tt-metalium.tar.gz
-      - name: Download eager 20.04 Python packages
+      - name: Download Wheel
         uses: actions/download-artifact@v4
         with:
-          name: eager-dist-ubuntu-20.04-any
-      - name: Download eager 22.04 Python packages
-        uses: actions/download-artifact@v4
-        with:
-          name: eager-dist-ubuntu-22.04-any
+          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Create VERSION
         run: echo ${{ needs.create-tag.outputs.version }} > VERSION
       - name : Download release notes
