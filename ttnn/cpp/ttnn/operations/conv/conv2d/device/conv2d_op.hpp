@@ -83,6 +83,9 @@ struct Conv2dConfig {
 
     bool enable_subblock_padding = false;
 
+    // Re-use input tensor storage when creating output tensor
+    bool in_place = false;
+
     static constexpr auto attribute_names = std::make_tuple(
         "dtype",
         "weights_dtype",
@@ -102,7 +105,8 @@ struct Conv2dConfig {
         "enable_act_double_buffer",
         "enable_weights_double_buffer",
         "enable_split_reader",
-        "enable_subblock_padding");
+        "enable_subblock_padding",
+        "in_place");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->dtype),
@@ -123,7 +127,8 @@ struct Conv2dConfig {
             std::cref(this->enable_act_double_buffer),
             std::cref(this->enable_weights_double_buffer),
             std::cref(this->enable_split_reader),
-            std::cref(this->enable_subblock_padding));
+            std::cref(this->enable_subblock_padding),
+            std::cref(this->in_place));
     }
 };
 
