@@ -14,6 +14,7 @@ fi
 
 if [[ ! -z "$TT_METAL_SLOW_DISPATCH_MODE" ]]; then
     env python3 tests/scripts/run_tt_metal.py --dispatch-mode slow
+    env python3 tests/scripts/run_tt_eager.py --dispatch-mode slow
 else
     # Enable this on BH after #14613
     if [[ "$ARCH_NAME" == "wormhole_b0" ]]; then
