@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,35 +6,8 @@
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::operations::data_movement {
-namespace {
-std::vector<int> parse_dim_argument(
-    const std::optional<std::variant<int, std::vector<int>>>& dim, const size_t input_tensor_rank) {
-    std::vector<int> dims = {};
-    if (dim.has_value()) {
-        if (dim.value().index() == 0) {  // Squeeze one dimension case
-            dims.push_back(std::get<int>(dim.value()));
-        } else {  // Squeeze multiple dimensions case
-            dims = std::get<std::vector<int>>(dim.value());
-        }
-    } else {
-        // Squeeze all dimensions case
-        dims.resize(input_tensor_rank);
-        std::iota(dims.begin(), dims.end(), 0);
-    }
 
-    // Handle negative dimension by converting it to positive
-    for (size_t i = 0; i < dims.size(); ++i) {
-        if (dims[i] < 0) {
-            dims[i] += input_tensor_rank;
-        }
-    }
-
-    return dims;
-}
-}  // namespace
-
-ttnn::Tensor SqueezeOperation::invoke(
-    const ttnn::Tensor& input_tensor, const std::optional<std::variant<int, std::vector<int>>>& dim) {
+ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor, std::vector<int>& dims) {
     const auto original_logical_shape = input_tensor.get_logical_shape();
     const auto padded_shape = input_tensor.get_padded_shape();
     auto input_tensor_rank = original_logical_shape.rank();
@@ -42,9 +15,12 @@ ttnn::Tensor SqueezeOperation::invoke(
     SmallVector<uint32_t> new_logical_shape(original_logical_shape.cbegin(), original_logical_shape.cend());
     SmallVector<uint32_t> new_padded_shape(padded_shape.cbegin(), padded_shape.cend());
 
-    std::vector<int> dims = parse_dim_argument(dim, input_tensor_rank);
-
     // Sort the dimensions in descending order to avoid issues with modifying new_shape in loop
+    for (size_t i = 0; i < dims.size(); ++i) {
+        if (dims[i] < 0) {
+            dims[i] += input_tensor_rank;
+        }
+    }
     std::sort(dims.rbegin(), dims.rend());
 
     // Special ugly case for 0-ranked input
@@ -86,12 +62,16 @@ ttnn::Tensor SqueezeOperation::invoke(
         input_tensor, ttnn::Shape(std::move(new_logical_shape)), ttnn::Shape(std::move(new_padded_shape)));
 }
 
-ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const int dim) {
-    return invoke(input_tensor, std::optional<std::variant<int, std::vector<int>>>(dim));
+ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor, int dim) {
+    std::vector<int> dims{dim};
+    return invoke(input_tensor, dims);
 }
 
-ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const std::vector<int>& dim) {
-    return invoke(input_tensor, std::optional<std::variant<int, std::vector<int>>>(dim));
+ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor) {
+    auto input_tensor_rank = input_tensor.get_logical_shape().rank();
+    std::vector<int> dims(input_tensor_rank);
+    std::iota(dims.begin(), dims.end(), 0);
+    return invoke(input_tensor, dims);
 }
 
 }  // namespace ttnn::operations::data_movement

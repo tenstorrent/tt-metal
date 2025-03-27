@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,6 @@
 
 #include "cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
-#include "ttnn/types.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -24,15 +23,12 @@ void bind_squeeze(pybind11::module& module, const data_movement_operation_t& ope
         ttnn::pybind_overload_t{
             [](const data_movement_operation_t& self, const ttnn::Tensor& input_tensor, pybind11::object dim)
                 -> ttnn::Tensor {
-                if (dim.is_none()) {
-                    // Handle the case where dim is None (default behavior)
+                if (dim.is_none()) {  // None
                     return self(input_tensor);
-                } else if (pybind11::isinstance<pybind11::int_>(dim)) {
-                    // Handle the case where dim is a single integer
+                } else if (pybind11::isinstance<pybind11::int_>(dim)) {  // int
                     return self(input_tensor, dim.cast<int>());
-                } else if (pybind11::isinstance<pybind11::list>(dim)) {
-                    // Handle the case where dim is a list of integers
-                    std::vector<int> dims = dim.cast<std::vector<int>>();
+                } else if (pybind11::isinstance<pybind11::list>(dim)) {  // List[int]
+                    auto dims = dim.cast<std::vector<int>>();
                     return self(input_tensor, dims);
                 } else {
                     throw std::invalid_argument("dim must be an int, a list of ints, or None");

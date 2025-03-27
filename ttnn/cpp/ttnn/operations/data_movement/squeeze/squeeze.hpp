@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,10 +10,10 @@ namespace ttnn {
 namespace operations::data_movement {
 
 struct SqueezeOperation {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor, const std::optional<std::variant<int, std::vector<int>>>& dim = std::nullopt);
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const int dim);
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const std::vector<int>& dim);
+    // Note: dim is passed by non-const reference because it's convenient to modify it for processing
+    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, std::vector<int>& dim);
+    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, int dim);
+    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor);
 };
 
 }  // namespace operations::data_movement
