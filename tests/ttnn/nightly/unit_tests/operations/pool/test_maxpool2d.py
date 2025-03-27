@@ -13,8 +13,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 import ttnn
 
-output_shards = [[] for _ in range(64)]
-
 
 # Cache map used for torch tensor reuse - the tensor will not be generated if a tensor of the same dimensions has already been generated
 @pytest.fixture(scope="module")
@@ -47,7 +45,6 @@ def run_max_pool(
     memory_config=None,
     shard_scheme=None,
     ceil_mode=False,
-    in_place_halo=False,
 ):
     in_n, in_c, in_h, in_w = act_shape
     kernel_h, kernel_w = kernel_size
@@ -149,18 +146,6 @@ def run_max_pool(
         if in_c / cores_x < 16:
             pytest.skip("Block sharding requires large enough channels to shard (at least 16 per core)")
 
-    if in_place_halo == True:
-        if dtype == ttnn.bfloat8_b:
-            pytest.skip("In place halo not supported for BFP8_B")
-        if is_grayskull():
-            pytest.skip("In place halo not supported on Grayskull")
-        if (
-            kernel_size == (13, 13)
-            and in_c >= 640
-            and (shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED or shard_scheme == None)
-        ):
-            pytest.skip("This case runs out of memory with in place")
-
     torch.manual_seed(0)
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
@@ -228,7 +213,6 @@ def run_max_pool(
         memory_config=memory_config,
         applied_shard_scheme=shard_scheme,
         ceil_mode=ceil_mode,
-        in_place_halo=in_place_halo,
     )
 
     output_host = output.cpu()
@@ -327,7 +311,7 @@ def run_max_pool(
             [1, 640, 32, 32],
             [1, 576, 32, 32],
             [1, 384, 32, 32],
-            # C=16 test2
+            # C=16 test
             [1, 16, 10, 10],
         )
     ),
@@ -374,25 +358,8 @@ def run_max_pool(
         True,
     ],
 )
-@pytest.mark.parametrize(
-    "in_place_halo",
-    [
-        False,
-        True,
-    ],
-)
 def test_run_max_pool(
-    act_shape,
-    kernel_size,
-    padding,
-    stride,
-    dilation,
-    device,
-    torch_tensor_map,
-    dtype,
-    use_program_cache,
-    ceil_mode,
-    in_place_halo,
+    act_shape, kernel_size, padding, stride, dilation, device, torch_tensor_map, dtype, use_program_cache, ceil_mode
 ):
     run_max_pool(
         act_shape,
@@ -405,7 +372,6 @@ def test_run_max_pool(
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
-        in_place_halo=in_place_halo,
     )
 
 
@@ -475,13 +441,6 @@ def test_run_max_pool(
         True,
     ],
 )
-@pytest.mark.parametrize(
-    "in_place_halo",
-    [
-        False,
-        True,
-    ],
-)
 def test_run_max_pool_width_shard(
     act_shape,
     kernel_size,
@@ -493,7 +452,6 @@ def test_run_max_pool_width_shard(
     dtype,
     use_program_cache,
     ceil_mode,
-    in_place_halo,
 ):
     run_max_pool(
         act_shape,
@@ -506,7 +464,6 @@ def test_run_max_pool_width_shard(
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ceil_mode=ceil_mode,
-        in_place_halo=in_place_halo,
     )
 
 
@@ -596,13 +553,6 @@ def test_run_max_pool_width_shard(
         True,
     ],
 )
-@pytest.mark.parametrize(
-    "in_place_halo",
-    [
-        False,
-        True,
-    ],
-)
 def test_run_max_pool_block_shard(
     act_shape,
     kernel_size,
@@ -614,7 +564,6 @@ def test_run_max_pool_block_shard(
     dtype,
     use_program_cache,
     ceil_mode,
-    in_place_halo,
 ):
     run_max_pool(
         act_shape,
@@ -627,7 +576,6 @@ def test_run_max_pool_block_shard(
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ceil_mode=ceil_mode,
-        in_place_halo=in_place_halo,
     )
 
 

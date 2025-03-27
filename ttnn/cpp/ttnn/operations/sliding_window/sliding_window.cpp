@@ -379,16 +379,13 @@ uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& sha
     return max_out_nsticks_per_core;
 }
 
-std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_halo_kernel_config_tensors(
+std::vector<std::vector<std::vector<uint16_t>>> generate_halo_kernel_config_tensors(
     const std::vector<PixelMetadata>& tensor_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
     bool is_block_sharded,
     bool transpose_mcast,
     bool remote_read,
-    IDevice* device,
-    uint32_t max_out_nsticks_per_core,
-    uint32_t in_nsticks_per_core,
-    bool in_place) {
+    IDevice* device) {
     auto core_id_to_noc_coords = [is_block_sharded, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
         auto num_cores_x = device->compute_with_storage_grid_size().x;
         auto core_coord = is_block_sharded ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id))
@@ -471,15 +468,15 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_halo_k
     }
 
     // flatten and uniformize the lengths of each config list
-    auto flatten_pad_config = [in_place](auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
+    auto flatten_pad_config = [](auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
         // Find max length for vector which is going to be processed on each core
         size_t max_len = 0;
         for (const auto& data : config) {
-            max_len =
-                in_place ? std::max(max_len, 2 * data.size())
-                         : std::max(max_len, data.size());  // For split reader, each vector size is 2 * data.size() / 2
+            max_len = std::max(
+                max_len,
+                data.size() +
+                    4);  // For split reader, each vector size is ((2 * data.size()) / 2 + 2) and 2 for null plug.
         }
-        max_len += 2;  // account for the null plug
 
         std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
         for (const auto& data : config) {
@@ -487,7 +484,7 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_halo_k
             uint32_t idx1 = 0, idx2 = 0;
             for (size_t i = 0; i < data.size(); ++i) {
                 auto [dst_start, length] = data[i];
-                if (i % 2 == 0 || in_place) {
+                if (i % 2 == 0) {
                     flat_data[0][idx1++] = dst_start;
                     flat_data[0][idx1++] = length;
                 } else {
@@ -502,22 +499,16 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_halo_k
         return flattened_config;
     };
 
-    auto flatten_local_config = [in_place, max_out_nsticks_per_core, in_nsticks_per_core](
-                                    auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
-        // find max length
+    auto flatten_local_config = [](auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
+        // Find max length
         size_t max_len = 0;
         for (const auto& [_, data] : config) {
-            max_len =
-                in_place
-                    ? std::max(max_len, 3 * data.size())
-                    : std::max(
-                          max_len,
-                          3 * (data.size() / 2 + 1));  // For split reader, each vector is (3 * data.size() / 2 + 1).
+            max_len = std::max(max_len, 3 * (data.size() / 2 + 1));  // For split reader, each vector is ( 3 *
+                                                                     // data.size() / 2 + 1).
         }
         max_len += 6;  // account for the key tuple and null plug
 
         std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
-        int32_t in_out_shard_size_delta = max_out_nsticks_per_core - in_nsticks_per_core;
         for (const auto& [key, data] : config) {
             auto [nocx, nocy, len] = key;
             std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
@@ -527,41 +518,18 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_halo_k
             flat_data[1][1] = nocy;
 
             uint32_t idx1 = 3, idx2 = 3;
-            if (!in_place) {
-                for (size_t i = 0; i < data.size(); ++i) {
-                    auto [src_start, dst_start, length] = data[i];
-                    if (i % 2 != 0) {
-                        flat_data[0][idx1++] = src_start;
-                        flat_data[0][idx1++] = dst_start;
-                        flat_data[0][idx1++] = length;
-                        flat_data[0][2] += 3;
-                    } else {
-                        flat_data[1][idx2++] = src_start;
-                        flat_data[1][idx2++] = dst_start;
-                        flat_data[1][idx2++] = length;
-                        flat_data[1][2] += 3;
-                    }
-                }
-            }
-            else {
-                int32_t rev_i_end = data.size();
-                for (uint32_t i = 0; i < data.size(); ++i) {  // normal forward direction local config in region where input / output shards don't overlap (for in place operation)
-                    auto [src_start, dst_start, length] = data[i];
-                    if (dst_start > src_start + in_out_shard_size_delta) {
-                        rev_i_end = i;
-                        break;
-                    }
+            for (size_t i = 0; i < data.size(); ++i) {
+                auto [src_start, dst_start, length] = data[i];
+                if (i % 2 != 0) {
                     flat_data[0][idx1++] = src_start;
                     flat_data[0][idx1++] = dst_start;
                     flat_data[0][idx1++] = length;
                     flat_data[0][2] += 3;
-                }
-                for (int32_t i = data.size() - 1; i >= rev_i_end; --i) { // reverse direction local config in region where input / output shards overlap (for in place operation)
-                    auto [src_start, dst_start, length] = data[i];
-                    flat_data[0][idx1++] = src_start;
-                    flat_data[0][idx1++] = dst_start;
-                    flat_data[0][idx1++] = length;
-                    flat_data[0][2] += 3;
+                } else {
+                    flat_data[1][idx2++] = src_start;
+                    flat_data[1][idx2++] = dst_start;
+                    flat_data[1][idx2++] = length;
+                    flat_data[1][2] += 3;
                 }
             }
 
@@ -571,36 +539,26 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_halo_k
         return flattened_config;
     };
 
-    auto flatten_remote_config = [in_place, core_id_to_noc_coords, &device](
-                                     auto& config) -> std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> {
-        // find max length
+    auto flatten_remote_config = [](auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
+        // Find max length
         size_t max_len = 0;
         for (const auto& core_config : config) {
             size_t curr_len = 0;
             for (const auto& [key, subdata] : core_config) {
-                curr_len +=
-                    in_place
-                        ? 3 + 3 * subdata.size()
-                        : 3 + (3 * (subdata.size() / 2 + 1));  // For split reader, 3 for source[nocx, nocy, length] and
-                                                               // each vector is (3 * data.size() / 2 + 1).
+                curr_len += 3 + (3 * (subdata.size() / 2 + 1));  // For split reader,  3 for source[nocx, nocy, length]
+                                                                 // and each vector is ( 3 * data.size() / 2 + 1).
             }
             max_len = std::max(max_len, curr_len);
         }
-        max_len += 3;  // account for the null plug
+        max_len += 3;  // account for null plug
 
         std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
-        int num_cores_x = device->compute_with_storage_grid_size().x;
-        int num_cores_y = device->compute_with_storage_grid_size().y;
-        int num_cores = num_cores_x * num_cores_y;
-        CoreCoord noc_00 = core_id_to_noc_coords(0);
-        int max_ref_size = 0;  // track the max remote ref size for sizing the remote temp tensor
-        int core = 0;
         for (const auto& core_config : config) {
             std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
             uint32_t idx1 = 0, idx2 = 0;
             uint32_t len_idx1 = 0, len_idx2 = 0;
             uint32_t vector_id = 0;
-            int ref_size = 0;
+
             for (const auto& [key, subdata] : core_config) {
                 auto [nocx, nocy, len] = key;
                 flat_data[0][idx1++] = nocx;
@@ -612,15 +570,14 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_halo_k
                 flat_data[1][idx2++] = nocy;
                 len_idx2 = idx2;
                 flat_data[1][idx2++] = 0;
-                int ref_ind = nocx - noc_00.x + (nocy - noc_00.y) * num_cores_x;
+
                 for (size_t i = 0; i < subdata.size(); ++i) {
                     auto [src_start, dst_start, length] = subdata[i];
-                    if (vector_id || in_place) {
+                    if (vector_id) {
                         flat_data[0][idx1++] = src_start;
                         flat_data[0][idx1++] = dst_start;
                         flat_data[0][idx1++] = length;
                         flat_data[0][len_idx1] += 3;
-                        ref_size += length;
                     } else {
                         flat_data[1][idx2++] = src_start;
                         flat_data[1][idx2++] = dst_start;
@@ -635,16 +592,13 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_halo_k
 
             flattened_config[0].emplace_back(std::move(flat_data[0]));
             flattened_config[1].emplace_back(std::move(flat_data[1]));
-            core++;
-            max_ref_size = std::max(max_ref_size, ref_size);
         }
-
-        return std::make_tuple(flattened_config, max_ref_size);
+        return flattened_config;
     };
 
     auto flattened_pad_config = flatten_pad_config(pad_config);
     auto flattened_local_config = flatten_local_config(local_config);
-    auto [flattened_remote_config, max_ref_size] = flatten_remote_config(remote_config);
+    auto flattened_remote_config = flatten_remote_config(remote_config);
 
     auto align_config = [](auto& config, size_t align_granularity = 1, uint16_t align_value = 0) {
         size_t max_len = 0;
@@ -672,14 +626,13 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_halo_k
     align_config(flattened_remote_config[0], 2);
     align_config(flattened_remote_config[1], 2);
 
-    std::vector<std::vector<std::vector<uint16_t>>> config{
+    return {
         flattened_pad_config[0],
         flattened_pad_config[1],
         flattened_local_config[0],
         flattened_local_config[1],
         flattened_remote_config[0],
         flattened_remote_config[1]};
-    return std::make_tuple(std::move(config), max_ref_size);
 }
 
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
