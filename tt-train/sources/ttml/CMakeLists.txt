@@ -25,7 +25,7 @@ foreach(dir ${SOURCE_DIRS})
     list(APPEND SOURCES ${DIR_SOURCES})
 endforeach()
 
-# Manually select only specific files from metal_ops
+# Manually select only specific files from metal ops
 set(METAL_OPS_FILES
     # General
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/operations.hpp
