@@ -270,10 +270,7 @@ def test_fold_with_permute_reshape_on_device_sharded(
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_sharded_memory_config
     )
-    compute_grid_size = device.compute_with_storage_grid_size()
-    grid_size = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-    )
+    grid_size = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
     tt_output_tensor = ttnn.fold(
         tt_input_tensor,
         stride_h,

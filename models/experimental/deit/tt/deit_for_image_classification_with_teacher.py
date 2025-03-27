@@ -2,10 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 
 from torch import nn
-from typing import Optional, Tuple, Union
+from typing import Optional, Union
 from transformers import DeiTForImageClassificationWithTeacher
 
 import ttnn

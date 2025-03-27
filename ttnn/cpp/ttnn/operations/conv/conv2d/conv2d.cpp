@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <array>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <utility>
@@ -46,7 +48,7 @@ Result conv2d(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
@@ -54,9 +56,11 @@ Result conv2d(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-    const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups, conv_config);
+    std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
+    const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     auto [output_height, output_width] =
-        calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding, dilation);
+        calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
+
 
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
 
@@ -170,7 +174,7 @@ Result conv2d(
             .input_hw = {input_height, input_width},
             .window_hw = {kernel_size[0], kernel_size[1]},
             .stride_hw = {stride[0], stride[1]},
-            .pad_hw = {padding[0], padding[1]},
+            .padding = {{padding_n4[0], padding_n4[1], padding_n4[2], padding_n4[3]}},
             .dilation_hw = {dilation[0], dilation[1]},
             .num_cores_nhw = opt_conv_op_parallel_config.num_cores_nhw,
             .core_range_set = input_tensor_post_tm.memory_config().shard_spec.value().grid,
@@ -179,7 +183,7 @@ Result conv2d(
 
         bool bypass_halo =
             (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED &&
-             sliding_window_config.pad_hw.first == 0 && sliding_window_config.pad_hw.second == 0);
+             sliding_window_config.get_pad_h() == 0 && sliding_window_config.get_pad_w() == 0);
 
         if (bypass_halo) {
             if (input_tensor_post_tm.layout() == Layout::TILE) {
@@ -199,7 +203,8 @@ Result conv2d(
                 parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
                 0,
                 input_tensor_post_tm.memory_config(),
-                true);
+                true,
+                conv_config.in_place);
 
             if (conv_config.deallocate_activation) {
                 input_tensor_post_tm.deallocate(/*force*/ true);
@@ -289,7 +294,7 @@ Result Conv2dOperation::invoke(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,
@@ -328,7 +333,7 @@ Result Conv2dOperation::invoke(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor,

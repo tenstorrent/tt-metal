@@ -12,6 +12,17 @@ name: PR Gate
 
 on:
   workflow_dispatch:
+    inputs:
+      build-type:
+        required: false
+        default: ASan
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
   pull_request:
     types:
       - opened
@@ -27,7 +38,7 @@ concurrency:
   # Use github.ref on other branches, so it's unique per branch
   # Possibly PRs can also just use `github.ref`, but for now just copy/pasting from
   # https://www.meziantou.net/how-to-cancel-github-workflows-when-pushing-new-commits-on-a-branch.htm
-  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id || github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id || github.event.pull_request.number || github.ref }}-${{ inputs.build-type || 'default' }}
   cancel-in-progress: true
 
 jobs:
@@ -36,7 +47,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     with:
       version: "22.04"
-      build-type: Debug
+      toolchain: cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
+      build-type: ${{ inputs.build-type || 'ASan' }}
       publish-artifact: false
 
   find-changed-files:

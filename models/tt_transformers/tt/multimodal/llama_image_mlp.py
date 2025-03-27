@@ -5,7 +5,6 @@
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-import os
 
 
 class TtLlamaImageFeedForward(LightweightModule):

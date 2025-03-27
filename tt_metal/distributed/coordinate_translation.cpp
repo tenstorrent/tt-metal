@@ -4,6 +4,7 @@
 
 #include "tt_metal/distributed/coordinate_translation.hpp"
 #include "tt_metal/api/tt-metalium/tt_metal.hpp"
+#include "tt_cluster.hpp"
 
 #include "indestructible.hpp"
 namespace tt::tt_metal::distributed {
@@ -21,21 +22,25 @@ const MeshContainer<PhysicalMeshCoordinate>& get_system_mesh_coordinate_translat
         }
 
         const auto mesh_id = mesh_ids.front();
-        auto mesh_shape = control_plane->get_physical_mesh_shape(mesh_id);
-        MeshContainer<PhysicalMeshCoordinate> physical_coordinates(
-            mesh_shape, PhysicalMeshCoordinate(/*mesh_id=*/mesh_id, /*chip_id=*/0));
+        const auto mesh_shape = control_plane->get_physical_mesh_shape(mesh_id);
 
+        // Validate that the physical chip ids are unique.
+        std::unordered_set<chip_id_t> unique_chip_ids;
+
+        std::vector<PhysicalMeshCoordinate> physical_coordinates;
+        physical_coordinates.reserve(mesh_shape.mesh_size());
         for (int logical_chip_id = 0; logical_chip_id < mesh_shape.mesh_size(); ++logical_chip_id) {
             // Query the control plane to get the physical chip id from logical chip id
-            auto logical_row_idx = logical_chip_id / mesh_shape[1];
-            auto logical_col_idx = logical_chip_id % mesh_shape[1];
-            auto logical_coordinate = MeshCoordinate(logical_row_idx, logical_col_idx);
-            auto physical_chip_id = control_plane->get_physical_chip_id_from_mesh_chip_id({mesh_id, logical_chip_id});
-
-            auto physical_coordinate = PhysicalMeshCoordinate(/*mesh_id=*/mesh_id, /*chip_id=*/physical_chip_id);
-            physical_coordinates.at(logical_coordinate) = physical_coordinate;
+            const auto physical_chip_id =
+                control_plane->get_physical_chip_id_from_mesh_chip_id({mesh_id, logical_chip_id});
+            TT_FATAL(
+                unique_chip_ids.insert(physical_chip_id).second,
+                "Found duplicate physical chip id: {}, mesh id: {}",
+                physical_chip_id,
+                mesh_id);
+            physical_coordinates.push_back(PhysicalMeshCoordinate(/*mesh_id=*/mesh_id, /*chip_id=*/physical_chip_id));
         }
-        return physical_coordinates;
+        return MeshContainer<PhysicalMeshCoordinate>(mesh_shape, std::move(physical_coordinates));
     }());
     return kTranslationMap.get();
 }
