@@ -2201,7 +2201,32 @@ std::vector<Tensor> Matmul::create_output_tensors(
     return operation::default_create_output_tensors(*this, input_tensors, optional_output_tensors);
 }
 
-operation::ProgramWithCallbacks Matmul::create_program(
+using MatmulCallback = tt::tt_metal::operation::OverrideRuntimeArgumentsCallback<std::vector<Tensor>>;
+
+MeshCoordinateRange get_range_from_mesh_coords(const std::vector<ttnn::MeshCoordinate>& mesh_coords) {
+    tt::tt_metal::distributed::MeshCoordinateRangeSet workload_device_ranges;
+    for (const auto& coord : mesh_coords) {
+        ttnn::MeshCoordinateRange coord_range{coord, coord};
+        workload_device_ranges.merge(coord_range);
+    }
+    TT_FATAL(workload_device_ranges.size() == 1, "Cannot support dispatching TTNN Ops to different device ranges.");
+    return *(workload_device_ranges.ranges().begin());
+}
+
+operation::CacheableMeshWorkload<std::vector<Tensor>> create_homogenous_mesh_workload(
+    tt::tt_metal::operation::ProgramWithCallbacks& matmul_program,
+    const std::vector<ttnn::MeshCoordinate>& mesh_coords) {
+    auto workload_device_range = get_range_from_mesh_coords(mesh_coords);
+    tt::tt_metal::distributed::MeshWorkload matmul_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+    std::unordered_map<MeshCoordinateRange, MatmulCallback> callbacks = {};
+
+    AddProgramToMeshWorkload(matmul_workload, std::move(matmul_program.program), workload_device_range);
+    callbacks[workload_device_range] = std::move(matmul_program.override_runtime_arguments_callback.value());
+    return {.workload = std::move(matmul_workload), .per_program_callbacks = std::move(callbacks)};
+}
+
+operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_workload(
+    const std::vector<ttnn::MeshCoordinate>& mesh_coords,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
@@ -2229,14 +2254,16 @@ operation::ProgramWithCallbacks Matmul::create_program(
     MatmulProgramConfig chosen_program_config =
         get_program_config(input_tensor_a, input_tensor_b, bias_single_tile_size, this);
 
+    auto mesh_device = input_tensor_a.mesh_device();
+
     return std::visit(
-        [&](const auto& program_config) -> tt::tt_metal::operation::ProgramWithCallbacks {
+        [&](const auto& program_config) -> tt::tt_metal::operation::CacheableMeshWorkload<std::vector<Tensor>> {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig>) {
                 TT_FATAL(!bias.has_value(), "Bias is not supported for MatmulMultiCoreReuseProgramConfig!");
                 // TODO: fuse_batch doesn't do anything for this variant! Code is
                 // doing fuse_batch=false
-                return bmm_multi_core_reuse_optimized(
+                auto bmm_program = bmm_multi_core_reuse_optimized(
                     input_tensor_a,
                     input_tensor_b,
                     output_tensor,
@@ -2251,8 +2278,11 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.per_core_N,
                     /*fuse_batch=*/false,
                     this->untilize_out);
+
+                return create_homogenous_mesh_workload(bmm_program, mesh_coords);
+
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>) {
-                return matmul_multi_core_reuse_mcast_2d_optimized(
+                auto mcast_mm_program = matmul_multi_core_reuse_mcast_2d_optimized(
                     input_tensor_a,
                     input_tensor_b,
                     bias,
@@ -2271,8 +2301,11 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.transpose_mcast,
                     program_config.fused_activation,
                     this->untilize_out);
+
+                return create_homogenous_mesh_workload(mcast_mm_program, mesh_coords);
+
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                return matmul_multi_core_reuse_mcast_1d_optimized(
+                auto mcast_mm_program = matmul_multi_core_reuse_mcast_1d_optimized(
                     input_tensor_a,
                     input_tensor_b,
                     bias,
@@ -2296,32 +2329,58 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     this->global_cb,
                     program_config.num_global_cb_receivers,
                     this->sub_device_id);
+
+                return create_homogenous_mesh_workload(mcast_mm_program, mesh_coords);
+
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
-                return matmul_multi_core_reuse_dram_sharded_optimized(
-                    input_tensor_a,
-                    input_tensor_b,
-                    bias,
-                    output_tensor,
-                    this->compute_kernel_config.value(),
-                    program_config.in0_block_w,
-                    program_config.per_core_M,
-                    program_config.per_core_N,
-                    program_config.fused_activation,
-                    this->untilize_out,
-                    false,
-                    false,
-                    false);
+                // DRAM Sharded Matmul generates different programs across devices, since it depends on harvesting.
+                // Account for this by creating a heterogenous MeshWorkload.
+                auto workload_device_range = get_range_from_mesh_coords(mesh_coords);
+                tt::tt_metal::distributed::MeshWorkload dram_sharded_mm_workload =
+                    tt::tt_metal::distributed::CreateMeshWorkload();
+                std::unordered_map<MeshCoordinateRange, MatmulCallback> callbacks = {};
+
+                for (const auto& coord : workload_device_range) {
+                    auto dram_sharded_mm_program = matmul_multi_core_reuse_dram_sharded_optimized(
+                        coord,
+                        input_tensor_a,
+                        input_tensor_b,
+                        bias,
+                        output_tensor,
+                        this->compute_kernel_config.value(),
+                        program_config.in0_block_w,
+                        program_config.per_core_M,
+                        program_config.per_core_N,
+                        program_config.fused_activation,
+                        this->untilize_out,
+                        false,
+                        false,
+                        false);
+                    AddProgramToMeshWorkload(
+                        dram_sharded_mm_workload,
+                        std::move(dram_sharded_mm_program.program),
+                        MeshCoordinateRange(coord, coord));
+                    callbacks[MeshCoordinateRange(coord, coord)] =
+                        std::move(dram_sharded_mm_program.override_runtime_arguments_callback.value());
+                }
+                return {.workload = std::move(dram_sharded_mm_workload), .per_program_callbacks = std::move(callbacks)};
+
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreNonOptimizedReuseProgramConfig>) {
                 TT_FATAL(
                     !bias.has_value(),
                     "Bias is not supported for matmul multi core non-optimized "
                     "reuse");
-                return matmul_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
+                auto multicore_mm_program =
+                    matmul_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
+                return create_homogenous_mesh_workload(multicore_mm_program, mesh_coords);
+
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreProgramConfig>) {
                 TT_FATAL(!bias.has_value(), "Bias is not supported for matmul multi core");
-                return matmul_multi_core(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
+                auto multicore_mm_program =
+                    matmul_multi_core(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
+                return create_homogenous_mesh_workload(multicore_mm_program, mesh_coords);
             } else {
                 TT_THROW("Unrecognized Config");
             }

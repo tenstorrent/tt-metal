@@ -603,7 +603,7 @@ uint32_t MeshDevice::num_worker_cores(HalProgrammableCoreType core_type, SubDevi
 }
 
 // Bank and memory management methods
-int MeshDevice::num_dram_channels() const { return reference_device()->num_dram_channels() * this->num_devices(); }
+int MeshDevice::num_dram_channels() const { return reference_device()->num_dram_channels(); }
 
 CoreCoord MeshDevice::logical_core_from_dram_channel(uint32_t dram_channel) const {
     return validate_and_get_reference_value(scoped_devices_->root_devices(), [dram_channel](const auto& device) {
