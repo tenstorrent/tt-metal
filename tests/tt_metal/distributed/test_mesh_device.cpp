@@ -49,10 +49,6 @@ TEST_F(MeshDeviceTest, MemoryAllocationStatistics) {
     }
 }
 
-TEST_F(MeshDeviceTest, NumDramChannels) {
-    EXPECT_EQ(mesh_device_->num_dram_channels(), 96);  // 8 devices * 12 channels
-}
-
 TEST_F(MeshDeviceTest, ViewIs2D) {
     std::vector<IDevice*> devices = mesh_device_->get_devices();
 

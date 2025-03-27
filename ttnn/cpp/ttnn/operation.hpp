@@ -462,8 +462,9 @@ constexpr bool implements_compute_program_hash_with_optional_input_tensors() {
 template <class T>
 constexpr bool is_device_operation() {
     return implements_create_program<T>() || implements_create_program_at<T>() ||
-           implements_create_program_with_optional_input_tensors<T>() ||
-           implements_create_program_at_with_optional_input_tensors<T>();
+           implements_create_mesh_workload<T>() || implements_create_program_with_optional_input_tensors<T>() ||
+           implements_create_program_at_with_optional_input_tensors<T>() ||
+           implements_create_mesh_workload_with_optional_input_tensors<T>();
 }
 
 template <class T, class... Args>
