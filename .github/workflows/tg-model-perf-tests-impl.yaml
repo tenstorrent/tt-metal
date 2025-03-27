@@ -24,6 +24,14 @@ jobs:
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type cnn_model_perf_tg_device --dispatch-mode ""'
           },
           {
+            name: "TG Llama 70B model perf tests",
+            model-type: "Llama 70B",
+            arch: wormhole_b0,
+            runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-perf"],
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type tg_llama_model_perf_tg_device --dispatch-mode ""',
+            owner_id: U044T8U8DEF # Johanna Rock
+          },
+          {
             name: "Llama TG Perf Unit Tests",
             arch: wormhole_b0,
             cmd: 'pytest models/demos/llama3_subdevices/tests/tg_perf_unit_tests',
@@ -31,7 +39,7 @@ jobs:
             tracy: true,
             runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-perf"],
             owner_id: U071CKL4AFK # Ammar Vora
-          }
+          },
         ]
     name: ${{ matrix.test-group.name }}
     env:
