@@ -9,10 +9,10 @@ inputs:
     required: false
     description: Name of the wheel artifact
     default: ''
-  #path:
-  #  required: false
-  #  description: Where to checkout
-  #  default: docker-job
+  path:
+    required: false
+    description: Where to checkout
+    default: docker-job
 runs:
   using: "composite"
   steps:
@@ -20,7 +20,7 @@ runs:
       uses: actions/checkout@v4
       with:
         submodules: recursive
-        #path: ${{ inputs.path }}
+        path: ${{ inputs.path }}
 
     - name: 🧪 Check Required Tools
       run: |
@@ -34,7 +34,7 @@ runs:
       uses: actions/download-artifact@v4
       with:
         name: ${{ inputs.build-artifact-name }}
-        #path: ${{ inputs.path }}
+        path: ${{ inputs.path }}
 
     - name: 📂 Extract Build Files
       if: ${{ inputs.build-artifact-name != '' }}
@@ -46,11 +46,11 @@ runs:
       uses: actions/download-artifact@v4
       with:
         name: ${{ inputs.wheel-artifact-name }}
-        #path: ${{ inputs.path }}
+        path: ${{ inputs.path }}
 
     - name: 💿 Install Wheel
       if: ${{ inputs.wheel-artifact-name != '' }}
-      #working-directory: ${{ inputs.path }}
+      working-directory: ${{ inputs.path }}
       run: |
         echo "📂 In directory: $(pwd)"
         echo "📄 Files:"
