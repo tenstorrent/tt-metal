@@ -13,21 +13,23 @@ from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SI
 
 
 def run_dm_tests(profile):
-    if profile:
+    log_file_path = f"{PROFILER_LOGS_DIR}/{PROFILER_DEVICE_SIDE_LOG}"
+    if profile or not os.path.exists(log_file_path):
+        logger.info(f"Profiling Kernels...")
         os.system(
             f"TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 {os.environ['TT_METAL_HOME']}/build/test/tt_metal/unit_tests_dm"
         )
 
     setup = device_post_proc_config.default_setup()
-
+    setup.deviceInputLog = log_file_path
     setup.timerAnalysis = {
-        "reader_kernel_latency": {
+        "reader_kernel_analysis": {
             "across": "core",
             "type": "adjacent",
             "start": {"risc": "BRISC", "zone_name": "BRISC-KERNEL"},
             "end": {"risc": "BRISC", "zone_name": "BRISC-KERNEL"},
         },
-        "writer_kernel_latency": {
+        "writer_kernel_analysis": {
             "across": "core",
             "type": "adjacent",
             "start": {"risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
@@ -35,20 +37,26 @@ def run_dm_tests(profile):
         },
     }
 
-    setup.deviceInputLog = f"{PROFILER_LOGS_DIR}/{PROFILER_DEVICE_SIDE_LOG}"
     stats = import_log_run_stats(setup)
+    # TODO: Print/log for each core
     core = [key for key in stats["devices"][0]["cores"].keys() if key != "DEVICE"][0]
-    reader_cycles = stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"]["reader_kernel_latency"]["stats"][
-        "First"
-    ]
-    writer_cycles = stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"]["writer_kernel_latency"]["stats"][
-        "First"
-    ]
+    reader_analysis = stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"]["reader_kernel_analysis"]
+    writer_analysis = stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"]["writer_kernel_analysis"]
 
-    logger.info(f"Data Movement Performance Numbers")
-    logger.info(f"Reader cycles: {reader_cycles}")
-    logger.info(f"Writer cycles: {writer_cycles}")
+    # Stats per runtime id
+    for i in range(len(reader_analysis["series"])):
+        reader = reader_analysis["series"][i]
+        writer = writer_analysis["series"][i]
+        logger.info(f'Run host id: {reader["duration_type"][0]["run_host_id"]}')
+        logger.info(f'Reader duration: {reader["duration_cycles"]}')
+        logger.info(f'Writer duration: {writer["duration_cycles"]}\n')
 
+    # Average stats
+    logger.info(f"Averages")
+    logger.info(f'Reader duration: {reader_analysis["stats"]["Average"]}')
+    logger.info(f'Writer duration: {writer_analysis["stats"]["Average"]}')
+
+    # # # # # # Performance check method # # # # # #
     # unicast_cycles_lower_bound = 300
     # unicast_cycles_upper_bound = 400
     # unicast_cycles_within_bounds = unicast_cycles_lower_bound <= unicast_cycles <= unicast_cycles_upper_bound
