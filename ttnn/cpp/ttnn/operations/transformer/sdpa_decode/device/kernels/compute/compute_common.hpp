@@ -316,7 +316,7 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     cb_pop_front(in_cb, num_tiles);
 }
 
-ALWI void cb_matmul_blocks(
+ALWI void cb_matmul_blocks1(
     const uint32_t& in0_cb,
     const uint32_t& in1_cb,
     const uint32_t& out_cb,
@@ -345,6 +345,73 @@ ALWI void cb_matmul_blocks(
     uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
     uint32_t in0_index_offset = 0;
 
+    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
+        uint32_t in1_index_offset = 0;
+        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
+            tile_regs_acquire();
+
+            uint32_t dst_index = 0;
+            uint32_t in0_index = in0_index_offset;
+            uint32_t in1_index = in1_index_offset;
+
+            for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
+                matmul_block(
+                    in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, in0_block_w);
+                in0_index++;
+                in1_index += N;
+            }
+            tile_regs_commit();
+
+            cb_reserve_back(out_cb, out_subblock_num_tiles);
+            tile_regs_wait();
+            for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                pack_tile(i, out_cb);
+            }
+            tile_regs_release();
+            cb_push_back(out_cb, out_subblock_num_tiles);
+            // in1_index_offset += in1_subblock * subblock_w;
+            // in1_index_offset = (in1_subblock+1) * subblock_w;
+            in1_index_offset += subblock_w;
+        }
+        in0_index_offset += subblock_h * in0_block_w;
+    }
+    cb_pop_front(in1_cb, K * N);
+}
+
+ALWI void cb_matmul_blocks2(
+    const uint32_t& in0_cb,
+    const uint32_t& in1_cb,
+    const uint32_t& out_cb,
+    const uint32_t& M,
+    const uint32_t& N,
+    const uint32_t& K,
+    const uint32_t& num_blocks,
+    const uint32_t& in0_num_subblocks,
+    const uint32_t& in1_num_subblocks,
+    const uint32_t& in0_block_w,
+    const uint32_t& subblock_h,
+    const uint32_t& subblock_w,
+    const bool& transpose) {
+    // precondition: in0_cb has M*K produced
+    // preconditino: in1_cb has K*N produced
+    // postcondition: in0_cb is full, in1_cb is empty
+    // postcondition: out_cb has M*N produced
+
+    mm_block_init_short(
+        in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
+
+    reconfig_data_format(in1_cb, in0_cb);
+    cb_wait_front(in1_cb, K * N);
+
+    uint32_t output_num_tiles = M * N;
+    uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
+    uint32_t in0_index_offset = 0;
+
+    // UNPACK(( DPRINT << in0_num_subblocks << ENDL() ));
+    // UNPACK(( DPRINT << in1_num_subblocks << ENDL() ));
+    // UNPACK(( DPRINT << in0_block_w << ENDL() ));
+    // UNPACK(( DPRINT << subblock_h << ENDL() ));
+    // UNPACK(( DPRINT << subblock_w << ENDL() ));
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
         uint32_t in1_index_offset = 0;
         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
@@ -485,7 +552,7 @@ void flash_attention_loop(
         /* QK = Q_CHUNK @ K_CHUNK */
         reconfig_data_format(cb_q_in, cb_k_in);  // DEBUG
         pack_reconfig_data_format(cb_qk_im);
-        cb_matmul_blocks(
+        cb_matmul_blocks1(
             cb_q_in,
             cb_k_in,
             cb_qk_im,
@@ -553,7 +620,7 @@ void flash_attention_loop(
         /* OUT_IM = QK @ V_CHUNK */
         reconfig_data_format(cb_qk_im, cb_v_in);  // DEBUG
         pack_reconfig_data_format(cb_out_im);
-        cb_matmul_blocks(
+        cb_matmul_blocks2(
             cb_qk_im,
             cb_v_in,
             cb_out_im,
