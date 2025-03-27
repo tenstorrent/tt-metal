@@ -412,7 +412,8 @@ void Kernel::set_binaries(uint32_t build_key, std::vector<ll_api::memory const*>
 }
 
 bool DataMovementKernel::binaries_exist_on_disk(const IDevice* device) const {
-    const uint32_t tensix_core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
+    const uint32_t tensix_core_type =
+        hal_ref.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
     const int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
@@ -449,7 +450,8 @@ void DataMovementKernel::read_binaries(IDevice* device) {
 }
 
 bool EthernetKernel::binaries_exist_on_disk(const IDevice* device) const {
-    const uint32_t erisc_core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
+    const uint32_t erisc_core_type =
+        hal_ref.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t dm_class_idx = magic_enum::enum_integer(HalProcessorClassType::DM);
     const int erisc_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
@@ -493,7 +495,8 @@ void EthernetKernel::read_binaries(IDevice* device) {
 }
 
 bool ComputeKernel::binaries_exist_on_disk(const IDevice* device) const {
-    const uint32_t tensix_core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
+    const uint32_t tensix_core_type =
+        hal_ref.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t compute_class_idx = magic_enum::enum_integer(HalProcessorClassType::COMPUTE);
     const JitBuildStateSubset& build_states = BuildEnvManager::get_instance().get_kernel_build_states(
         device->build_id(), tensix_core_type, compute_class_idx);
