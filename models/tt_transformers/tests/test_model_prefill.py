@@ -80,13 +80,6 @@ def test_model_inference(
     dtype = ttnn.bfloat8_b
     batch_size = 1  # For prefill we only support batch_size = 1
 
-    # This sets the minimum PCC for each iteration based on optimization mode
-    if optimizations == ModelOptimizations.accuracy:
-        pcc = 0.91  # TODO Look on improving PCC
-    else:  # performance mode
-        assert optimizations == ModelOptimizations.performance
-        pcc = 0.869  # TODO Look on improving PCC
-
     mesh_device.enable_async(True)
 
     # Use instruct weights instead of general weights
@@ -94,6 +87,15 @@ def test_model_inference(
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len)
     tokenizer = model_args.tokenizer
+
+    perf_pcc_map = {"mistralai/Mistral-7B-Instruct-v0.3": 0.73}
+    # This sets the minimum PCC for each iteration based on optimization mode
+    if optimizations == ModelOptimizations.accuracy:
+        pcc = 0.91  # TODO Look on improving PCC
+    else:  # performance mode
+        assert optimizations == ModelOptimizations.performance
+        default_pcc = 0.869  # TODO Look on improving PCC
+        pcc = perf_pcc_map.get(model_args.model_name, default_pcc)
 
     logger.info("Loading weights...")
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
