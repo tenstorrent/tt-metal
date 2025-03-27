@@ -116,12 +116,12 @@ run_t3000_llama3_perplexity_tests_single_card() {
   fi
 }
 
-run_t3000_mistral7b_perplexity_tests() {
+run_t3000_mistral_perplexity_tests() {
   # This one runs all the T3K tests
   fail=0
   start_time=$(date +%s)
 
-  echo "LOG_METAL: Running run_t3000_mistral7b_perplexity_tests"
+  echo "LOG_METAL: Running run_t3000_mistral_perplexity_tests"
 
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   tt_cache_path="/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
@@ -131,7 +131,7 @@ run_t3000_mistral7b_perplexity_tests() {
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_mistral7b_perplexity_tests $duration seconds to complete"
+  echo "LOG_METAL: run_t3000_mistral_perplexity_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -180,8 +180,8 @@ run_t3000_tests() {
   # Run Llama-70B perplexity tests
   run_t3000_llama70b_perplexity_tests
 
-  # Run mistral7b perplexity tests
-  run_t3000_mistral7b_perplexity_tests
+  # Run mistral perplexity tests
+  run_t3000_mistral_perplexity_tests
 
   # Run Mixtral8x7B perplexity tests
   run_t3000_mixtral8x7b_perplexity_tests
