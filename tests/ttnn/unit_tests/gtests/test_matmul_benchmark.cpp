@@ -29,6 +29,8 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/trace.hpp"
 
+#include "tt_metal/llrt/tt_cluster.hpp"
+
 std::string dtype_to_string(DataType dtype) {
     switch (dtype) {
         case DataType::BFLOAT16: return "BFLOAT16";
