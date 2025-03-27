@@ -22,7 +22,7 @@ jobs:
   create-docker-release-image:
     strategy:
       matrix:
-        os: [ubuntu-20.04]
+        os: [ubuntu-22.04]
     runs-on:
       - ubuntu-latest
     outputs:
@@ -66,7 +66,7 @@ jobs:
     needs: create-docker-release-image
     strategy:
       matrix:
-        os: [ubuntu-20.04]
+        os: [ubuntu-22.04]
         test_group:
           [
               {
@@ -113,7 +113,7 @@ jobs:
     needs: [smoke-test-docker-image, create-docker-release-image]
     strategy:
       matrix:
-        os: [ubuntu-20.04]
+        os: [ubuntu-22.04]
     runs-on:
       - ubuntu-latest
     steps:
