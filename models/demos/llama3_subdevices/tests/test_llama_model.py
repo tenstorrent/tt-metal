@@ -26,12 +26,13 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "weights, layers",
+    "weights, layers, iterations",
     [
-        ("random", 1),
-        ("instruct", 80),
+        ("random", 1, 6),
+        ("random", 1, 200),
+        ("instruct", 80, 5),
     ],
-    ids=["quick", "full"],
+    ids=["quick", "quick-stress", "full"],
 )
 @pytest.mark.parametrize(
     "paged_attention",
@@ -74,6 +75,7 @@ from models.utility_functions import skip_for_grayskull
 def test_llama_model_inference(
     weights,
     layers,
+    iterations,
     max_seq_len,
     batch_size,
     paged_attention,
@@ -119,8 +121,6 @@ def test_llama_model_inference(
     final_v_cache_pcc = {
         "llama31_70b": 0.9997,
     }[model_name]
-
-    iterations = 6 if layers == 1 else 5
 
     if layers is not None:
         model_args.n_layers = layers
