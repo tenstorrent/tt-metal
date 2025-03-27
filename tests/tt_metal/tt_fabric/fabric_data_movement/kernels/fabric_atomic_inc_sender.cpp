@@ -33,7 +33,7 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
         fabric_endpoint_init(client_interface, 0 /* unused */);
 
-        fabric_atomic_inc(
+        fabric_atomic_inc<decltype(client_interface), ClientDataMode::PACKETIZED_DATA, AsyncWriteMode::ALL>(
             client_interface,
             router_noc_xy,
             src_addr,  // source address in sender’s memory

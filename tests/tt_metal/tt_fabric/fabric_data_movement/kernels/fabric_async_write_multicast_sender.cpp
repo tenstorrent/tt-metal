@@ -29,49 +29,26 @@ void kernel_main() {
 
     uint32_t client_interface_addr = get_write_ptr(client_interface_cb);
 
-    if (test_mode == fabric_mode::PULL) {
-        volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface =
-            reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
-        fabric_endpoint_init(client_interface, 0 /* unused */);
+    volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface =
+        reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
+    fabric_endpoint_init(client_interface, 0 /* unused */);
 
-        fabric_async_write_multicast<
-            decltype(client_interface),
-            (ClientDataMode)data_mode,
-            AsyncWriteMode::ALL,
-            RoutingType::ROUTER_XY>(
-            client_interface,
-            e_router_noc_xy,
-            src_addr,  // source address in sender’s memory
-            e_dst_mesh_id,
-            e_dst_device_id,
-            dst_noc_addr,       // destination write address
-            packet_size_bytes,  // number of bytes to write to remote destination
-            e_depth,
-            0,
-            0,
-            0);
+    fabric_async_write_multicast<
+        decltype(client_interface),
+        (ClientDataMode)data_mode,
+        AsyncWriteMode::ALL,
+        RoutingType::ROUTER_XY>(
+        client_interface,
+        e_router_noc_xy,
+        src_addr,  // source address in sender’s memory
+        e_dst_mesh_id,
+        e_dst_device_id,
+        dst_noc_addr,       // destination write address
+        packet_size_bytes,  // number of bytes to write to remote destination
+        e_depth,
+        0,
+        0,
+        0);
 
-        fabric_wait_for_pull_request_flushed(client_interface);
-    } else {
-        volatile tt_l1_ptr fabric_push_client_interface_t* client_interface =
-            reinterpret_cast<volatile tt_l1_ptr fabric_push_client_interface_t*>(client_interface_addr);
-        fabric_endpoint_init<decltype(client_interface), RoutingType::ROUTING_TABLE>(client_interface, 0 /* unused */);
-        fabric_client_router_reserve(client_interface, 0, e_dst_mesh_id, e_dst_device_id);
-        fabric_async_write_multicast<
-            decltype(client_interface),
-            (ClientDataMode)data_mode,
-            (AsyncWriteMode)(AsyncWriteMode::PUSH | AsyncWriteMode::ADD_HEADER),
-            RoutingType::ROUTER_XY>(
-            client_interface,
-            0,
-            src_addr,  // source address in sender’s memory
-            e_dst_mesh_id,
-            e_dst_device_id,
-            dst_noc_addr,       // destination write address
-            packet_size_bytes,  // number of bytes to write to remote destination
-            e_depth,
-            0,
-            0,
-            0);
-    }
+    fabric_wait_for_pull_request_flushed(client_interface);
 }

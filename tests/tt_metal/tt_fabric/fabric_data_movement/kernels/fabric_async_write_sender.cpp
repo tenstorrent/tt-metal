@@ -67,6 +67,5 @@ void kernel_main() {
             dst_noc_addr,      // destination write address
             packet_size_bytes  // number of bytes to write to remote destination
         );
-        noc_async_writes_flushed();
     }
 }
