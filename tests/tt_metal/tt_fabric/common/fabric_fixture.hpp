@@ -60,6 +60,8 @@ protected:
     bool find_device_with_neighbor_in_direction(
         std::pair<mesh_id_t, chip_id_t>& src_mesh_chip_id,
         std::pair<mesh_id_t, chip_id_t>& dst_mesh_chip_id,
+        chip_id_t& src_physical_device_id,
+        chip_id_t& dst_physical_device_id,
         RoutingDirection direction) {
         auto* control_plane = tt::Cluster::instance().get_control_plane();
         for (auto* device : devices_) {
@@ -69,7 +71,9 @@ protected:
             auto neighbors =
                 control_plane->get_intra_chip_neighbors(src_mesh_chip_id.first, src_mesh_chip_id.second, direction);
             if (neighbors.size() > 0) {
+                src_physical_device_id = device->id();
                 dst_mesh_chip_id = {src_mesh_chip_id.first, neighbors[0]};
+                dst_physical_device_id = control_plane->get_physical_chip_id_from_mesh_chip_id(dst_mesh_chip_id);
                 return true;
             }
         }

@@ -13,11 +13,91 @@
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
 
-TEST_F(Fabric2DPullFixture, TestAsyncWrite) {
-    using tt::tt_metal::ShardedBufferConfig;
-    using tt::tt_metal::ShardOrientation;
-    using tt::tt_metal::ShardSpecBuffer;
+using tt::tt_metal::ShardedBufferConfig;
+using tt::tt_metal::ShardOrientation;
+using tt::tt_metal::ShardSpecBuffer;
 
+void ValidateBuffer(std::vector<uint32_t> expected_data, std::shared_ptr<tt_metal::Buffer> buffer) {
+    std::vector<uint32_t> actual_data;
+    tt::tt_metal::detail::ReadFromBuffer(buffer, actual_data);
+    EXPECT_EQ(expected_data, actual_data);
+}
+
+void ValidateBuffer(uint32_t expected_data, std::shared_ptr<tt_metal::Buffer> buffer) {
+    std::vector<uint32_t> actual_data;
+    tt::tt_metal::detail::ReadFromBuffer(buffer, actual_data);
+    EXPECT_EQ(expected_data, actual_data[0]);
+}
+
+void CreateSenderKernel(
+    tt::tt_metal::Program& sender_program,
+    std::string sender_kernel_name,
+    std::vector<uint32_t>&& sender_compile_time_args,
+    CoreCoord& sender_logical_core,
+    std::map<string, string>& defines,
+    std::vector<uint32_t>&& sender_runtime_args) {
+    // Allocate space for the client interface
+    uint32_t client_interface_cb_index = tt::CBIndex::c_0;
+    tt::tt_metal::CircularBufferConfig client_interface_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            tt::tt_fabric::CLIENT_INTERFACE_SIZE, {{client_interface_cb_index, DataFormat::UInt32}})
+            .set_page_size(client_interface_cb_index, tt::tt_fabric::CLIENT_INTERFACE_SIZE);
+    auto client_interface_cb =
+        tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
+
+    sender_compile_time_args.insert(sender_compile_time_args.begin(), client_interface_cb_index);
+    auto sender_kernel = tt_metal::CreateKernel(
+        sender_program,
+        sender_kernel_name,
+        {sender_logical_core},
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = std::move(sender_compile_time_args),
+            .defines = defines});
+
+    tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, std::move(sender_runtime_args));
+}
+
+void CreateReceiverKernel(
+    tt::tt_metal::Program& receiver_program,
+    CoreCoord& receiver_logical_core,
+    std::map<string, string> defines,
+    uint32_t address,
+    uint32_t data_size) {
+    auto receiver_kernel = tt_metal::CreateKernel(
+        receiver_program,
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver.cpp",
+        {receiver_logical_core},
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
+
+    std::vector<uint32_t> receiver_runtime_args = {
+        address,
+        data_size,
+    };
+    tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
+}
+
+std::shared_ptr<tt_metal::Buffer> PrepareBuffer(
+    tt::tt_metal::IDevice* device, uint32_t size, CoreRangeSet& logical_crs, std::vector<uint32_t> fill_data) {
+    auto shard_parameters = ShardSpecBuffer(logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+    ShardedBufferConfig shard_config = {
+        .device = device,
+        .size = size,
+        .page_size = size,
+        .buffer_type = tt_metal::BufferType::L1,
+        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+        .shard_parameters = std::move(shard_parameters),
+    };
+    auto buffer = CreateBuffer(shard_config);
+    tt::tt_metal::detail::WriteToBuffer(buffer, fill_data);
+    return buffer;
+}
+
+TEST_F(Fabric2DPullFixture, TestAsyncWrite) {
     CoreCoord sender_logical_core = {0, 0};
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
@@ -28,23 +108,12 @@ TEST_F(Fabric2DPullFixture, TestAsyncWrite) {
     chip_id_t physical_end_device_id;
 
     auto control_plane = tt::Cluster::instance().get_control_plane();
-
-    // Find a device with a neighbour in the East direction
-    bool connection_found = false;
-    for (auto* device : devices_) {
-        start_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
-        // Get neighbours within a mesh in the East direction
-        auto neighbors = control_plane->get_intra_chip_neighbors(
-            start_mesh_chip_id.first, start_mesh_chip_id.second, RoutingDirection::E);
-        if (neighbors.size() > 0) {
-            physical_start_device_id = device->id();
-            end_mesh_chip_id = {start_mesh_chip_id.first, neighbors[0]};
-            physical_end_device_id = control_plane->get_physical_chip_id_from_mesh_chip_id(end_mesh_chip_id);
-            connection_found = true;
-            break;
-        }
-    }
-    if (!connection_found) {
+    if (!find_device_with_neighbor_in_direction(
+            start_mesh_chip_id,
+            end_mesh_chip_id,
+            physical_start_device_id,
+            physical_end_device_id,
+            RoutingDirection::E)) {
         GTEST_SKIP() << "No path found between sender and receivers";
     }
 
@@ -59,40 +128,16 @@ TEST_F(Fabric2DPullFixture, TestAsyncWrite) {
     CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
     uint32_t data_size = tt::constants::TILE_HW * sizeof(uint32_t);
-
-    auto receiver_shard_parameters =
-        ShardSpecBuffer(receiver_logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    ShardedBufferConfig receiver_shard_config = {
-        .device = receiver_device,
-        .size = data_size,
-        .page_size = data_size,
-        .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = std::move(receiver_shard_parameters),
-    };
-    auto receiver_buffer = CreateBuffer(receiver_shard_config);
-    // Reset buffer space for test validation
     std::vector<uint32_t> receiver_buffer_data(data_size / sizeof(uint32_t), 0);
-    tt::tt_metal::detail::WriteToBuffer(receiver_buffer, receiver_buffer_data);
+    auto receiver_buffer = PrepareBuffer(receiver_device, data_size, receiver_logical_crs, receiver_buffer_data);
 
     // Packet header needs to be inlined with the data being sent, so this test just allocates buffer space for both
     // together on the sender
     uint32_t sender_packet_header_and_data_size = tt::tt_fabric::PACKET_HEADER_SIZE_BYTES + data_size;
-    auto sender_shard_parameters =
-        ShardSpecBuffer(sender_logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    ShardedBufferConfig sender_shard_config = {
-        .device = sender_device,
-        .size = sender_packet_header_and_data_size,
-        .page_size = sender_packet_header_and_data_size,
-        .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = std::move(sender_shard_parameters),
-    };
-    auto sender_buffer = CreateBuffer(sender_shard_config);
-    // Write the data to send to the buffer
     std::vector<uint32_t> sender_buffer_data(sender_packet_header_and_data_size / sizeof(uint32_t), 0);
     std::iota(sender_buffer_data.begin() + PACKET_HEADER_SIZE_BYTES / sizeof(uint32_t), sender_buffer_data.end(), 0);
-    tt::tt_metal::detail::WriteToBuffer(sender_buffer, sender_buffer_data);
+    auto sender_buffer =
+        PrepareBuffer(sender_device, sender_packet_header_and_data_size, sender_logical_crs, sender_buffer_data);
 
     // Extract the expected data to be read from the receiver
     std::copy(
@@ -107,34 +152,8 @@ TEST_F(Fabric2DPullFixture, TestAsyncWrite) {
     auto receiver_noc_encoding = tt::tt_metal::hal.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
     // Create the sender program
-    auto sender_program = tt_metal::CreateProgram();
-
-    // Allocate space for the client interface
-    uint32_t client_interface_cb_index = tt::CBIndex::c_0;
-    tt::tt_metal::CircularBufferConfig client_interface_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            tt::tt_fabric::CLIENT_INTERFACE_SIZE, {{client_interface_cb_index, DataFormat::UInt32}})
-            .set_page_size(client_interface_cb_index, tt::tt_fabric::CLIENT_INTERFACE_SIZE);
-    auto client_interface_cb =
-        tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
-
-    std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 0, (uint32_t)fabric_mode::PULL};
-    std::map<string, string> defines = {};
-    defines["FVC_MODE_PULL"] = "";
-    auto sender_kernel = tt_metal::CreateKernel(
-        sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_sender.cpp",
-        sender_logical_crs,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = sender_compile_time_args,
-            .defines = defines});
-
-    auto& sender_virtual_router_coord = routers[0].second;
-    auto sender_router_noc_xy =
-        tt_metal::hal.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y);
-
+    std::vector<uint32_t> sender_compile_time_args = {
+        (uint32_t)fabric_mode::PULL, (uint32_t)test_mode::TEST_ASYNC_WRITE, 0};
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -142,25 +161,21 @@ TEST_F(Fabric2DPullFixture, TestAsyncWrite) {
         data_size,
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
-        sender_router_noc_xy};
-    tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
+        tt_metal::hal.noc_xy_encoding(routers[0].second.x, routers[0].second.y)};
+    std::map<string, string> defines = {};
+    defines["FVC_MODE_PULL"] = "";
+    auto sender_program = tt_metal::CreateProgram();
+    CreateSenderKernel(
+        sender_program,
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_sender.cpp",
+        std::move(sender_compile_time_args),
+        sender_logical_core,
+        defines,
+        std::move(sender_runtime_args));
 
     // Create the receiver program for validation
     auto receiver_program = tt_metal::CreateProgram();
-    auto receiver_kernel = tt_metal::CreateKernel(
-        receiver_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver.cpp",
-        {receiver_logical_core},
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .defines = defines});
-
-    std::vector<uint32_t> receiver_runtime_args = {
-        receiver_buffer->address(),
-        data_size,
-    };
-    tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
+    CreateReceiverKernel(receiver_program, receiver_logical_core, defines, receiver_buffer->address(), data_size);
 
     // Launch sender and receiver programs and wait for them to finish
     this->RunProgramNonblocking(receiver_device, receiver_program);
@@ -169,16 +184,10 @@ TEST_F(Fabric2DPullFixture, TestAsyncWrite) {
     this->WaitForSingleProgramDone(receiver_device, receiver_program);
 
     // Validate the data received by the receiver
-    std::vector<uint32_t> received_buffer_data;
-    tt::tt_metal::detail::ReadFromBuffer(receiver_buffer, received_buffer_data);
-    EXPECT_EQ(receiver_buffer_data, received_buffer_data);
+    ValidateBuffer(receiver_buffer_data, receiver_buffer);
 }
 
 TEST_F(Fabric2DPushFixture, TestAsyncWrite) {
-    using tt::tt_metal::ShardedBufferConfig;
-    using tt::tt_metal::ShardOrientation;
-    using tt::tt_metal::ShardSpecBuffer;
-
     CoreCoord sender_logical_core = {0, 0};
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
@@ -191,21 +200,12 @@ TEST_F(Fabric2DPushFixture, TestAsyncWrite) {
     auto control_plane = tt::Cluster::instance().get_control_plane();
 
     // Find a device with a neighbour in the East direction
-    bool connection_found = false;
-    for (auto* device : devices_) {
-        start_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
-        // Get neighbours within a mesh in the East direction
-        auto neighbors = control_plane->get_intra_chip_neighbors(
-            start_mesh_chip_id.first, start_mesh_chip_id.second, RoutingDirection::E);
-        if (neighbors.size() > 0) {
-            physical_start_device_id = device->id();
-            end_mesh_chip_id = {start_mesh_chip_id.first, neighbors[0]};
-            physical_end_device_id = control_plane->get_physical_chip_id_from_mesh_chip_id(end_mesh_chip_id);
-            connection_found = true;
-            break;
-        }
-    }
-    if (!connection_found) {
+    if (!find_device_with_neighbor_in_direction(
+            start_mesh_chip_id,
+            end_mesh_chip_id,
+            physical_start_device_id,
+            physical_end_device_id,
+            RoutingDirection::E)) {
         GTEST_SKIP() << "No path found between sender and receivers";
     }
 
@@ -221,39 +221,14 @@ TEST_F(Fabric2DPushFixture, TestAsyncWrite) {
 
     uint32_t data_size = tt::constants::TILE_HW * sizeof(uint32_t);
 
-    auto receiver_shard_parameters =
-        ShardSpecBuffer(receiver_logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    ShardedBufferConfig receiver_shard_config = {
-        .device = receiver_device,
-        .size = data_size,
-        .page_size = data_size,
-        .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = std::move(receiver_shard_parameters),
-    };
-    auto receiver_buffer = CreateBuffer(receiver_shard_config);
-    // Reset buffer space for test validation
     std::vector<uint32_t> receiver_buffer_data(data_size / sizeof(uint32_t), 0);
-    tt::tt_metal::detail::WriteToBuffer(receiver_buffer, receiver_buffer_data);
+    auto receiver_buffer = PrepareBuffer(receiver_device, data_size, receiver_logical_crs, receiver_buffer_data);
 
-    // Packet header needs to be inlined with the data being sent, so this test just allocates buffer space for both
-    // together on the sender
     uint32_t sender_packet_header_and_data_size = tt::tt_fabric::PACKET_HEADER_SIZE_BYTES + data_size;
-    auto sender_shard_parameters =
-        ShardSpecBuffer(sender_logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    ShardedBufferConfig sender_shard_config = {
-        .device = sender_device,
-        .size = sender_packet_header_and_data_size,
-        .page_size = sender_packet_header_and_data_size,
-        .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = std::move(sender_shard_parameters),
-    };
-    auto sender_buffer = CreateBuffer(sender_shard_config);
-    // Write the data to send to the buffer
     std::vector<uint32_t> sender_buffer_data(sender_packet_header_and_data_size / sizeof(uint32_t), 0);
     std::iota(sender_buffer_data.begin() + PACKET_HEADER_SIZE_BYTES / sizeof(uint32_t), sender_buffer_data.end(), 0);
-    tt::tt_metal::detail::WriteToBuffer(sender_buffer, sender_buffer_data);
+    auto sender_buffer =
+        PrepareBuffer(sender_device, sender_packet_header_and_data_size, sender_logical_crs, sender_buffer_data);
 
     // Extract the expected data to be read from the receiver
     std::copy(
@@ -269,32 +244,8 @@ TEST_F(Fabric2DPushFixture, TestAsyncWrite) {
 
     // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
-
-    // Allocate space for the client interface
-    uint32_t client_interface_cb_index = tt::CBIndex::c_0;
-    tt::tt_metal::CircularBufferConfig client_interface_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            tt::tt_fabric::CLIENT_INTERFACE_SIZE, {{client_interface_cb_index, DataFormat::UInt32}})
-            .set_page_size(client_interface_cb_index, tt::tt_fabric::CLIENT_INTERFACE_SIZE);
-    auto client_interface_cb =
-        tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
-
-    std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 0, (uint32_t)fabric_mode::PUSH};
-    std::map<string, string> defines = {};
-    auto sender_kernel = tt_metal::CreateKernel(
-        sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_sender.cpp",
-        sender_logical_crs,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = sender_compile_time_args,
-            .defines = defines});
-
-    auto& sender_virtual_router_coord = routers[0].second;
-    auto sender_router_noc_xy =
-        tt_metal::hal.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y);
-
+    std::vector<uint32_t> sender_compile_time_args = {
+        (uint32_t)fabric_mode::PUSH, (uint32_t)test_mode::TEST_ASYNC_WRITE, 0};
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -302,25 +253,19 @@ TEST_F(Fabric2DPushFixture, TestAsyncWrite) {
         data_size,
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
-        sender_router_noc_xy};
-    tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
+        tt_metal::hal.noc_xy_encoding(routers[0].second.x, routers[0].second.y)};
+    std::map<string, string> defines = {};
+    CreateSenderKernel(
+        sender_program,
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_sender.cpp",
+        std::move(sender_compile_time_args),
+        sender_logical_core,
+        defines,
+        std::move(sender_runtime_args));
 
     // Create the receiver program for validation
     auto receiver_program = tt_metal::CreateProgram();
-    auto receiver_kernel = tt_metal::CreateKernel(
-        receiver_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver.cpp",
-        {receiver_logical_core},
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .defines = defines});
-
-    std::vector<uint32_t> receiver_runtime_args = {
-        receiver_buffer->address(),
-        data_size,
-    };
-    tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
+    CreateReceiverKernel(receiver_program, receiver_logical_core, defines, receiver_buffer->address(), data_size);
 
     // Launch sender and receiver programs and wait for them to finish
     this->RunProgramNonblocking(receiver_device, receiver_program);
@@ -329,16 +274,10 @@ TEST_F(Fabric2DPushFixture, TestAsyncWrite) {
     this->WaitForSingleProgramDone(receiver_device, receiver_program);
 
     // Validate the data received by the receiver
-    std::vector<uint32_t> received_buffer_data;
-    tt::tt_metal::detail::ReadFromBuffer(receiver_buffer, received_buffer_data);
-    EXPECT_EQ(receiver_buffer_data, received_buffer_data);
+    ValidateBuffer(receiver_buffer_data, receiver_buffer);
 }
 
 TEST_F(Fabric2DPullFixture, TestAsyncRawWrite) {
-    using tt::tt_metal::ShardedBufferConfig;
-    using tt::tt_metal::ShardOrientation;
-    using tt::tt_metal::ShardSpecBuffer;
-
     CoreCoord sender_logical_core = {0, 0};
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
@@ -351,21 +290,12 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWrite) {
     auto control_plane = tt::Cluster::instance().get_control_plane();
 
     // Find a device with a neighbour in the East direction
-    bool connection_found = false;
-    for (auto* device : devices_) {
-        start_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
-        // Get neighbours within a mesh in the East direction
-        auto neighbors = control_plane->get_intra_chip_neighbors(
-            start_mesh_chip_id.first, start_mesh_chip_id.second, RoutingDirection::E);
-        if (neighbors.size() > 0) {
-            physical_start_device_id = device->id();
-            end_mesh_chip_id = {start_mesh_chip_id.first, neighbors[0]};
-            physical_end_device_id = control_plane->get_physical_chip_id_from_mesh_chip_id(end_mesh_chip_id);
-            connection_found = true;
-            break;
-        }
-    }
-    if (!connection_found) {
+    if (!find_device_with_neighbor_in_direction(
+            start_mesh_chip_id,
+            end_mesh_chip_id,
+            physical_start_device_id,
+            physical_end_device_id,
+            RoutingDirection::E)) {
         GTEST_SKIP() << "No path found between sender and receivers";
     }
 
@@ -381,36 +311,12 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWrite) {
 
     uint32_t data_size = tt::constants::TILE_HW * sizeof(uint32_t);
 
-    auto receiver_shard_parameters =
-        ShardSpecBuffer(receiver_logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    ShardedBufferConfig receiver_shard_config = {
-        .device = receiver_device,
-        .size = data_size,
-        .page_size = data_size,
-        .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = std::move(receiver_shard_parameters),
-    };
-    auto receiver_buffer = CreateBuffer(receiver_shard_config);
-    // Reset buffer space for test validation
     std::vector<uint32_t> receiver_buffer_data(data_size / sizeof(uint32_t), 0);
-    tt::tt_metal::detail::WriteToBuffer(receiver_buffer, receiver_buffer_data);
+    auto receiver_buffer = PrepareBuffer(receiver_device, data_size, receiver_logical_crs, receiver_buffer_data);
 
-    auto sender_shard_parameters =
-        ShardSpecBuffer(sender_logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    ShardedBufferConfig sender_shard_config = {
-        .device = sender_device,
-        .size = data_size,
-        .page_size = data_size,
-        .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = std::move(sender_shard_parameters),
-    };
-    auto sender_buffer = CreateBuffer(sender_shard_config);
-    // Write the data to send to the buffer
     std::vector<uint32_t> sender_buffer_data(data_size / sizeof(uint32_t), 0);
     std::iota(sender_buffer_data.begin(), sender_buffer_data.end(), 0);
-    tt::tt_metal::detail::WriteToBuffer(sender_buffer, sender_buffer_data);
+    auto sender_buffer = PrepareBuffer(sender_device, data_size, sender_logical_crs, sender_buffer_data);
 
     // Wait for buffer data to be written to device
     tt::Cluster::instance().l1_barrier(physical_end_device_id);
@@ -420,33 +326,8 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWrite) {
 
     // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
-
-    // Allocate space for the client interface
-    uint32_t client_interface_cb_index = tt::CBIndex::c_0;
-    tt::tt_metal::CircularBufferConfig client_interface_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            tt::tt_fabric::CLIENT_INTERFACE_SIZE, {{client_interface_cb_index, DataFormat::UInt32}})
-            .set_page_size(client_interface_cb_index, tt::tt_fabric::CLIENT_INTERFACE_SIZE);
-    auto client_interface_cb =
-        tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
-
-    std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 1, (uint32_t)fabric_mode::PULL};
-    std::map<string, string> defines = {};
-    defines["FVC_MODE_PULL"] = "";
-    auto sender_kernel = tt_metal::CreateKernel(
-        sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_sender.cpp",
-        sender_logical_crs,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = sender_compile_time_args,
-            .defines = defines});
-
-    auto& sender_virtual_router_coord = routers[0].second;
-    auto sender_router_noc_xy =
-        tt_metal::hal.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y);
-
+    std::vector<uint32_t> sender_compile_time_args = {
+        (uint32_t)fabric_mode::PULL, (uint32_t)test_mode::TEST_ASYNC_WRITE, 1};
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -454,25 +335,20 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWrite) {
         data_size,
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
-        sender_router_noc_xy};
-    tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
+        tt_metal::hal.noc_xy_encoding(routers[0].second.x, routers[0].second.y)};
+    std::map<string, string> defines = {};
+    defines["FVC_MODE_PULL"] = "";
+    CreateSenderKernel(
+        sender_program,
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_sender.cpp",
+        std::move(sender_compile_time_args),
+        sender_logical_core,
+        defines,
+        std::move(sender_runtime_args));
 
     // Create the receiver program for validation
     auto receiver_program = tt_metal::CreateProgram();
-    auto receiver_kernel = tt_metal::CreateKernel(
-        receiver_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver.cpp",
-        {receiver_logical_core},
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .defines = defines});
-
-    std::vector<uint32_t> receiver_runtime_args = {
-        receiver_buffer->address(),
-        data_size,
-    };
-    tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
+    CreateReceiverKernel(receiver_program, receiver_logical_core, defines, receiver_buffer->address(), data_size);
 
     // Launch sender and receiver programs and wait for them to finish
     this->RunProgramNonblocking(receiver_device, receiver_program);
@@ -481,16 +357,10 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWrite) {
     this->WaitForSingleProgramDone(receiver_device, receiver_program);
 
     // Validate the data received by the receiver
-    std::vector<uint32_t> received_buffer_data;
-    tt::tt_metal::detail::ReadFromBuffer(receiver_buffer, received_buffer_data);
-    EXPECT_EQ(sender_buffer_data, received_buffer_data);
+    ValidateBuffer(sender_buffer_data, receiver_buffer);
 }
 
 TEST_F(Fabric2DPushFixture, TestAsyncRawWrite) {
-    using tt::tt_metal::ShardedBufferConfig;
-    using tt::tt_metal::ShardOrientation;
-    using tt::tt_metal::ShardSpecBuffer;
-
     CoreCoord sender_logical_core = {0, 0};
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
@@ -503,21 +373,12 @@ TEST_F(Fabric2DPushFixture, TestAsyncRawWrite) {
     auto control_plane = tt::Cluster::instance().get_control_plane();
 
     // Find a device with a neighbour in the East direction
-    bool connection_found = false;
-    for (auto* device : devices_) {
-        start_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
-        // Get neighbours within a mesh in the East direction
-        auto neighbors = control_plane->get_intra_chip_neighbors(
-            start_mesh_chip_id.first, start_mesh_chip_id.second, RoutingDirection::E);
-        if (neighbors.size() > 0) {
-            physical_start_device_id = device->id();
-            end_mesh_chip_id = {start_mesh_chip_id.first, neighbors[0]};
-            physical_end_device_id = control_plane->get_physical_chip_id_from_mesh_chip_id(end_mesh_chip_id);
-            connection_found = true;
-            break;
-        }
-    }
-    if (!connection_found) {
+    if (!find_device_with_neighbor_in_direction(
+            start_mesh_chip_id,
+            end_mesh_chip_id,
+            physical_start_device_id,
+            physical_end_device_id,
+            RoutingDirection::E)) {
         GTEST_SKIP() << "No path found between sender and receivers";
     }
 
@@ -533,36 +394,11 @@ TEST_F(Fabric2DPushFixture, TestAsyncRawWrite) {
 
     uint32_t data_size = tt::constants::TILE_HW * sizeof(uint32_t);
 
-    auto receiver_shard_parameters =
-        ShardSpecBuffer(receiver_logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    ShardedBufferConfig receiver_shard_config = {
-        .device = receiver_device,
-        .size = data_size,
-        .page_size = data_size,
-        .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = std::move(receiver_shard_parameters),
-    };
-    auto receiver_buffer = CreateBuffer(receiver_shard_config);
-    // Reset buffer space for test validation
     std::vector<uint32_t> receiver_buffer_data(data_size / sizeof(uint32_t), 0);
-    tt::tt_metal::detail::WriteToBuffer(receiver_buffer, receiver_buffer_data);
-
-    auto sender_shard_parameters =
-        ShardSpecBuffer(sender_logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    ShardedBufferConfig sender_shard_config = {
-        .device = sender_device,
-        .size = data_size,
-        .page_size = data_size,
-        .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = std::move(sender_shard_parameters),
-    };
-    auto sender_buffer = CreateBuffer(sender_shard_config);
-    // Write the data to send to the buffer
+    auto receiver_buffer = PrepareBuffer(receiver_device, data_size, receiver_logical_crs, receiver_buffer_data);
     std::vector<uint32_t> sender_buffer_data(data_size / sizeof(uint32_t), 0);
     std::iota(sender_buffer_data.begin(), sender_buffer_data.end(), 0);
-    tt::tt_metal::detail::WriteToBuffer(sender_buffer, sender_buffer_data);
+    auto sender_buffer = PrepareBuffer(sender_device, data_size, sender_logical_crs, sender_buffer_data);
 
     // Wait for buffer data to be written to device
     tt::Cluster::instance().l1_barrier(physical_end_device_id);
@@ -572,32 +408,8 @@ TEST_F(Fabric2DPushFixture, TestAsyncRawWrite) {
 
     // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
-
-    // Allocate space for the client interface
-    uint32_t client_interface_cb_index = tt::CBIndex::c_0;
-    tt::tt_metal::CircularBufferConfig client_interface_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            tt::tt_fabric::CLIENT_INTERFACE_SIZE, {{client_interface_cb_index, DataFormat::UInt32}})
-            .set_page_size(client_interface_cb_index, tt::tt_fabric::CLIENT_INTERFACE_SIZE);
-    auto client_interface_cb =
-        tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
-
-    std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 1, (uint32_t)fabric_mode::PUSH};
-    std::map<string, string> defines = {};
-    auto sender_kernel = tt_metal::CreateKernel(
-        sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_sender.cpp",
-        sender_logical_crs,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = sender_compile_time_args,
-            .defines = defines});
-
-    auto& sender_virtual_router_coord = routers[0].second;
-    auto sender_router_noc_xy =
-        tt_metal::hal.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y);
-
+    std::vector<uint32_t> sender_compile_time_args = {
+        (uint32_t)fabric_mode::PUSH, (uint32_t)test_mode::TEST_ASYNC_WRITE, 1};
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -605,25 +417,19 @@ TEST_F(Fabric2DPushFixture, TestAsyncRawWrite) {
         data_size,
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
-        sender_router_noc_xy};
-    tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
+        tt_metal::hal.noc_xy_encoding(routers[0].second.x, routers[0].second.y)};
+    std::map<string, string> defines = {};
+    CreateSenderKernel(
+        sender_program,
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_sender.cpp",
+        std::move(sender_compile_time_args),
+        sender_logical_core,
+        defines,
+        std::move(sender_runtime_args));
 
     // Create the receiver program for validation
     auto receiver_program = tt_metal::CreateProgram();
-    auto receiver_kernel = tt_metal::CreateKernel(
-        receiver_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver.cpp",
-        {receiver_logical_core},
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .defines = defines});
-
-    std::vector<uint32_t> receiver_runtime_args = {
-        receiver_buffer->address(),
-        data_size,
-    };
-    tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
+    CreateReceiverKernel(receiver_program, receiver_logical_core, defines, receiver_buffer->address(), data_size);
 
     // Launch sender and receiver programs and wait for them to finish
     this->RunProgramNonblocking(receiver_device, receiver_program);
@@ -632,16 +438,10 @@ TEST_F(Fabric2DPushFixture, TestAsyncRawWrite) {
     this->WaitForSingleProgramDone(receiver_device, receiver_program);
 
     // Validate the data received by the receiver
-    std::vector<uint32_t> received_buffer_data;
-    tt::tt_metal::detail::ReadFromBuffer(receiver_buffer, received_buffer_data);
-    EXPECT_EQ(sender_buffer_data, received_buffer_data);
+    ValidateBuffer(sender_buffer_data, receiver_buffer);
 }
 
 TEST_F(Fabric2DPullFixture, TestAtomicInc) {
-    using tt::tt_metal::ShardedBufferConfig;
-    using tt::tt_metal::ShardOrientation;
-    using tt::tt_metal::ShardSpecBuffer;
-
     CoreCoord sender_logical_core = {0, 0};
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
@@ -654,21 +454,12 @@ TEST_F(Fabric2DPullFixture, TestAtomicInc) {
     auto control_plane = tt::Cluster::instance().get_control_plane();
 
     // Find a device with a neighbour in the East direction
-    bool connection_found = false;
-    for (auto* device : devices_) {
-        start_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
-        // Get neighbours within a mesh in the East direction
-        auto neighbors = control_plane->get_intra_chip_neighbors(
-            start_mesh_chip_id.first, start_mesh_chip_id.second, RoutingDirection::E);
-        if (neighbors.size() > 0) {
-            physical_start_device_id = device->id();
-            end_mesh_chip_id = {start_mesh_chip_id.first, neighbors[0]};
-            physical_end_device_id = control_plane->get_physical_chip_id_from_mesh_chip_id(end_mesh_chip_id);
-            connection_found = true;
-            break;
-        }
-    }
-    if (!connection_found) {
+    if (!find_device_with_neighbor_in_direction(
+            start_mesh_chip_id,
+            end_mesh_chip_id,
+            physical_start_device_id,
+            physical_end_device_id,
+            RoutingDirection::E)) {
         GTEST_SKIP() << "No path found between sender and receivers";
     }
 
@@ -683,38 +474,15 @@ TEST_F(Fabric2DPullFixture, TestAtomicInc) {
 
     uint32_t data_size = sizeof(uint32_t);
 
-    auto receiver_shard_parameters =
-        ShardSpecBuffer(receiver_logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    ShardedBufferConfig receiver_shard_config = {
-        .device = receiver_device,
-        .size = data_size,
-        .page_size = data_size,
-        .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = std::move(receiver_shard_parameters),
-    };
-    auto receiver_buffer = CreateBuffer(receiver_shard_config);
-    // Reset buffer space for test validation
     std::vector<uint32_t> receiver_buffer_data(data_size / sizeof(uint32_t), 0);
-    tt::tt_metal::detail::WriteToBuffer(receiver_buffer, receiver_buffer_data);
+    auto receiver_buffer = PrepareBuffer(receiver_device, data_size, receiver_logical_crs, receiver_buffer_data);
 
     // Packet header needs to be inlined with the data being sent, so this test just allocates buffer space for both
     // together on the sender
     uint32_t sender_packet_header_and_data_size = tt::tt_fabric::PACKET_HEADER_SIZE_BYTES;
-    auto sender_shard_parameters =
-        ShardSpecBuffer(sender_logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    ShardedBufferConfig sender_shard_config = {
-        .device = sender_device,
-        .size = sender_packet_header_and_data_size,
-        .page_size = sender_packet_header_and_data_size,
-        .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = std::move(sender_shard_parameters),
-    };
-    auto sender_buffer = CreateBuffer(sender_shard_config);
-    // Write the data to send to the buffer
     std::vector<uint32_t> sender_buffer_data(sender_packet_header_and_data_size / sizeof(uint32_t), 0);
-    tt::tt_metal::detail::WriteToBuffer(sender_buffer, sender_buffer_data);
+    auto sender_buffer =
+        PrepareBuffer(sender_device, sender_packet_header_and_data_size, sender_logical_crs, sender_buffer_data);
 
     uint32_t atomic_inc = 5;
     uint32_t wrap_boundary = 31;
@@ -730,32 +498,9 @@ TEST_F(Fabric2DPullFixture, TestAtomicInc) {
 
     // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
-
-    // Allocate space for the client interface
-    uint32_t client_interface_cb_index = tt::CBIndex::c_0;
-    tt::tt_metal::CircularBufferConfig client_interface_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            tt::tt_fabric::CLIENT_INTERFACE_SIZE, {{client_interface_cb_index, DataFormat::UInt32}})
-            .set_page_size(client_interface_cb_index, tt::tt_fabric::CLIENT_INTERFACE_SIZE);
-    auto client_interface_cb =
-        tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
-
     std::map<string, string> defines = {};
     defines["FVC_MODE_PULL"] = "";
-    std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, fabric_mode::PULL};
-    auto sender_kernel = tt_metal::CreateKernel(
-        sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_atomic_inc_sender.cpp",
-        sender_logical_crs,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = sender_compile_time_args,
-            .defines = defines});
-
-    auto& sender_virtual_router_coord = routers[0].second;
-    auto sender_router_noc_xy =
-        tt_metal::hal.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y);
+    std::vector<uint32_t> sender_compile_time_args = {(uint32_t)fabric_mode::PULL, (uint32_t)TEST_ATOMIC_INC, 0};
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -764,25 +509,19 @@ TEST_F(Fabric2DPullFixture, TestAtomicInc) {
         wrap_boundary,
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
-        sender_router_noc_xy};
-    tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
+        tt_metal::hal.noc_xy_encoding(routers[0].second.x, routers[0].second.y)};
+
+    CreateSenderKernel(
+        sender_program,
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_atomic_inc_sender.cpp",
+        std::move(sender_compile_time_args),
+        sender_logical_core,
+        defines,
+        std::move(sender_runtime_args));
 
     // Create the receiver program for validation
     auto receiver_program = tt_metal::CreateProgram();
-    auto receiver_kernel = tt_metal::CreateKernel(
-        receiver_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver.cpp",
-        {receiver_logical_core},
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .defines = defines});
-
-    std::vector<uint32_t> receiver_runtime_args = {
-        receiver_buffer->address(),
-        data_size,
-    };
-    tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
+    CreateReceiverKernel(receiver_program, receiver_logical_core, defines, receiver_buffer->address(), data_size);
 
     // Launch sender and receiver programs and wait for them to finish
     this->RunProgramNonblocking(receiver_device, receiver_program);
@@ -791,16 +530,10 @@ TEST_F(Fabric2DPullFixture, TestAtomicInc) {
     this->WaitForSingleProgramDone(receiver_device, receiver_program);
 
     // Validate the data received by the receiver
-    std::vector<uint32_t> received_buffer_data;
-    tt::tt_metal::detail::ReadFromBuffer(receiver_buffer, received_buffer_data);
-    EXPECT_EQ(receiver_buffer_data, received_buffer_data);
+    ValidateBuffer(receiver_buffer_data, receiver_buffer);
 }
 
 TEST_F(Fabric2DPushFixture, TestAtomicInc) {
-    using tt::tt_metal::ShardedBufferConfig;
-    using tt::tt_metal::ShardOrientation;
-    using tt::tt_metal::ShardSpecBuffer;
-
     CoreCoord sender_logical_core = {0, 0};
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
@@ -813,21 +546,12 @@ TEST_F(Fabric2DPushFixture, TestAtomicInc) {
     auto control_plane = tt::Cluster::instance().get_control_plane();
 
     // Find a device with a neighbour in the East direction
-    bool connection_found = false;
-    for (auto* device : devices_) {
-        start_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
-        // Get neighbours within a mesh in the East direction
-        auto neighbors = control_plane->get_intra_chip_neighbors(
-            start_mesh_chip_id.first, start_mesh_chip_id.second, RoutingDirection::E);
-        if (neighbors.size() > 0) {
-            physical_start_device_id = device->id();
-            end_mesh_chip_id = {start_mesh_chip_id.first, neighbors[0]};
-            physical_end_device_id = control_plane->get_physical_chip_id_from_mesh_chip_id(end_mesh_chip_id);
-            connection_found = true;
-            break;
-        }
-    }
-    if (!connection_found) {
+    if (!find_device_with_neighbor_in_direction(
+            start_mesh_chip_id,
+            end_mesh_chip_id,
+            physical_start_device_id,
+            physical_end_device_id,
+            RoutingDirection::E)) {
         GTEST_SKIP() << "No path found between sender and receivers";
     }
 
@@ -842,38 +566,15 @@ TEST_F(Fabric2DPushFixture, TestAtomicInc) {
 
     uint32_t data_size = sizeof(uint32_t);
 
-    auto receiver_shard_parameters =
-        ShardSpecBuffer(receiver_logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    ShardedBufferConfig receiver_shard_config = {
-        .device = receiver_device,
-        .size = data_size,
-        .page_size = data_size,
-        .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = std::move(receiver_shard_parameters),
-    };
-    auto receiver_buffer = CreateBuffer(receiver_shard_config);
-    // Reset buffer space for test validation
     std::vector<uint32_t> receiver_buffer_data(data_size / sizeof(uint32_t), 0);
-    tt::tt_metal::detail::WriteToBuffer(receiver_buffer, receiver_buffer_data);
+    auto receiver_buffer = PrepareBuffer(receiver_device, data_size, receiver_logical_crs, receiver_buffer_data);
 
     // Packet header needs to be inlined with the data being sent, so this test just allocates buffer space for both
     // together on the sender
     uint32_t sender_packet_header_and_data_size = tt::tt_fabric::PACKET_HEADER_SIZE_BYTES;
-    auto sender_shard_parameters =
-        ShardSpecBuffer(sender_logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    ShardedBufferConfig sender_shard_config = {
-        .device = sender_device,
-        .size = sender_packet_header_and_data_size,
-        .page_size = sender_packet_header_and_data_size,
-        .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = std::move(sender_shard_parameters),
-    };
-    auto sender_buffer = CreateBuffer(sender_shard_config);
-    // Write the data to send to the buffer
     std::vector<uint32_t> sender_buffer_data(sender_packet_header_and_data_size / sizeof(uint32_t), 0);
-    tt::tt_metal::detail::WriteToBuffer(sender_buffer, sender_buffer_data);
+    auto sender_buffer =
+        PrepareBuffer(sender_device, sender_packet_header_and_data_size, sender_logical_crs, sender_buffer_data);
 
     uint32_t atomic_inc = 5;
     uint32_t wrap_boundary = 31;
@@ -889,31 +590,8 @@ TEST_F(Fabric2DPushFixture, TestAtomicInc) {
 
     // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
-
-    // Allocate space for the client interface
-    uint32_t client_interface_cb_index = tt::CBIndex::c_0;
-    tt::tt_metal::CircularBufferConfig client_interface_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            tt::tt_fabric::CLIENT_INTERFACE_SIZE, {{client_interface_cb_index, DataFormat::UInt32}})
-            .set_page_size(client_interface_cb_index, tt::tt_fabric::CLIENT_INTERFACE_SIZE);
-    auto client_interface_cb =
-        tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
-
     std::map<string, string> defines = {};
-    std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, fabric_mode::PUSH};
-    auto sender_kernel = tt_metal::CreateKernel(
-        sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_atomic_inc_sender.cpp",
-        sender_logical_crs,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = sender_compile_time_args,
-            .defines = defines});
-
-    auto& sender_virtual_router_coord = routers[0].second;
-    auto sender_router_noc_xy =
-        tt_metal::hal.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y);
+    std::vector<uint32_t> sender_compile_time_args = {(uint32_t)fabric_mode::PUSH, (uint32_t)TEST_ATOMIC_INC, 0};
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -922,25 +600,19 @@ TEST_F(Fabric2DPushFixture, TestAtomicInc) {
         wrap_boundary,
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
-        sender_router_noc_xy};
-    tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
+        tt_metal::hal.noc_xy_encoding(routers[0].second.x, routers[0].second.y)};
+
+    CreateSenderKernel(
+        sender_program,
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_atomic_inc_sender.cpp",
+        std::move(sender_compile_time_args),
+        sender_logical_core,
+        defines,
+        std::move(sender_runtime_args));
 
     // Create the receiver program for validation
     auto receiver_program = tt_metal::CreateProgram();
-    auto receiver_kernel = tt_metal::CreateKernel(
-        receiver_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver.cpp",
-        {receiver_logical_core},
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .defines = defines});
-
-    std::vector<uint32_t> receiver_runtime_args = {
-        receiver_buffer->address(),
-        data_size,
-    };
-    tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
+    CreateReceiverKernel(receiver_program, receiver_logical_core, defines, receiver_buffer->address(), data_size);
 
     // Launch sender and receiver programs and wait for them to finish
     this->RunProgramNonblocking(receiver_device, receiver_program);
@@ -949,16 +621,10 @@ TEST_F(Fabric2DPushFixture, TestAtomicInc) {
     this->WaitForSingleProgramDone(receiver_device, receiver_program);
 
     // Validate the data received by the receiver
-    std::vector<uint32_t> received_buffer_data;
-    tt::tt_metal::detail::ReadFromBuffer(receiver_buffer, received_buffer_data);
-    EXPECT_EQ(receiver_buffer_data, received_buffer_data);
+    ValidateBuffer(receiver_buffer_data, receiver_buffer);
 }
 
 TEST_F(Fabric2DPullFixture, TestAsyncWriteAtomicInc) {
-    using tt::tt_metal::ShardedBufferConfig;
-    using tt::tt_metal::ShardOrientation;
-    using tt::tt_metal::ShardSpecBuffer;
-
     CoreCoord sender_logical_core = {0, 0};
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
@@ -971,21 +637,12 @@ TEST_F(Fabric2DPullFixture, TestAsyncWriteAtomicInc) {
     auto control_plane = tt::Cluster::instance().get_control_plane();
 
     // Find a device with a neighbour in the East direction
-    bool connection_found = false;
-    for (auto* device : devices_) {
-        start_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
-        // Get neighbours within a mesh in the East direction
-        auto neighbors = control_plane->get_intra_chip_neighbors(
-            start_mesh_chip_id.first, start_mesh_chip_id.second, RoutingDirection::E);
-        if (neighbors.size() > 0) {
-            physical_start_device_id = device->id();
-            end_mesh_chip_id = {start_mesh_chip_id.first, neighbors[0]};
-            physical_end_device_id = control_plane->get_physical_chip_id_from_mesh_chip_id(end_mesh_chip_id);
-            connection_found = true;
-            break;
-        }
-    }
-    if (!connection_found) {
+    if (!find_device_with_neighbor_in_direction(
+            start_mesh_chip_id,
+            end_mesh_chip_id,
+            physical_start_device_id,
+            physical_end_device_id,
+            RoutingDirection::E)) {
         GTEST_SKIP() << "No path found between sender and receivers";
     }
 
@@ -1001,50 +658,19 @@ TEST_F(Fabric2DPullFixture, TestAsyncWriteAtomicInc) {
     uint32_t data_size = tt::constants::TILE_HW * sizeof(uint32_t);
     uint32_t atomic_inc_size = sizeof(uint32_t);
 
-    auto receiver_shard_parameters =
-        ShardSpecBuffer(receiver_logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    ShardedBufferConfig receiver_shard_config = {
-        .device = receiver_device,
-        .size = data_size,
-        .page_size = data_size,
-        .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = receiver_shard_parameters,
-    };
-    auto receiver_buffer = CreateBuffer(receiver_shard_config);
-    ShardedBufferConfig receiver_atomic_shard_config = {
-        .device = receiver_device,
-        .size = atomic_inc_size,
-        .page_size = atomic_inc_size,
-        .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = receiver_shard_parameters,
-    };
-    auto receiver_atomic_buffer = CreateBuffer(receiver_atomic_shard_config);
-    // Reset buffer space for test validation
     std::vector<uint32_t> receiver_buffer_data(atomic_inc_size / sizeof(uint32_t), 0);
-    tt::tt_metal::detail::WriteToBuffer(receiver_atomic_buffer, receiver_buffer_data);
+    auto receiver_atomic_buffer =
+        PrepareBuffer(receiver_device, atomic_inc_size, receiver_logical_crs, receiver_buffer_data);
     receiver_buffer_data.resize(data_size / sizeof(uint32_t), 0);
-    tt::tt_metal::detail::WriteToBuffer(receiver_buffer, receiver_buffer_data);
+    auto receiver_buffer = PrepareBuffer(receiver_device, data_size, receiver_logical_crs, receiver_buffer_data);
 
     // Packet header needs to be inlined with the data being sent, so this test just allocates buffer space for both
     // together on the sender
     uint32_t sender_packet_header_and_data_size = tt::tt_fabric::PACKET_HEADER_SIZE_BYTES + data_size;
-    auto sender_shard_parameters =
-        ShardSpecBuffer(sender_logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    ShardedBufferConfig sender_shard_config = {
-        .device = sender_device,
-        .size = sender_packet_header_and_data_size,
-        .page_size = sender_packet_header_and_data_size,
-        .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = std::move(sender_shard_parameters),
-    };
-    auto sender_buffer = CreateBuffer(sender_shard_config);
-    // Write the data to send to the buffer
     std::vector<uint32_t> sender_buffer_data(sender_packet_header_and_data_size / sizeof(uint32_t), 0);
     std::iota(sender_buffer_data.begin() + PACKET_HEADER_SIZE_BYTES / sizeof(uint32_t), sender_buffer_data.end(), 0);
-    tt::tt_metal::detail::WriteToBuffer(sender_buffer, sender_buffer_data);
+    auto sender_buffer =
+        PrepareBuffer(sender_device, sender_packet_header_and_data_size, sender_logical_crs, sender_buffer_data);
 
     uint32_t atomic_inc = 5;
 
@@ -1062,33 +688,10 @@ TEST_F(Fabric2DPullFixture, TestAsyncWriteAtomicInc) {
 
     // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
-
-    // Allocate space for the client interface
-    uint32_t client_interface_cb_index = tt::CBIndex::c_0;
-    tt::tt_metal::CircularBufferConfig client_interface_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            tt::tt_fabric::CLIENT_INTERFACE_SIZE, {{client_interface_cb_index, DataFormat::UInt32}})
-            .set_page_size(client_interface_cb_index, tt::tt_fabric::CLIENT_INTERFACE_SIZE);
-    auto client_interface_cb =
-        tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
-
     std::map<string, string> defines = {};
     defines["FVC_MODE_PULL"] = "";
-    std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 0, fabric_mode::PULL};
-    auto sender_kernel = tt_metal::CreateKernel(
-        sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_atomic_inc_sender.cpp",
-        sender_logical_crs,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = sender_compile_time_args,
-            .defines = defines});
-
-    auto& sender_virtual_router_coord = routers[0].second;
-    auto sender_router_noc_xy =
-        tt_metal::hal.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y);
-
+    std::vector<uint32_t> sender_compile_time_args = {
+        (uint32_t)fabric_mode::PULL, (uint32_t)TEST_ASYNC_WRITE_ATOMIC_INC, 0};
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -1098,25 +701,19 @@ TEST_F(Fabric2DPullFixture, TestAsyncWriteAtomicInc) {
         atomic_inc,
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
-        sender_router_noc_xy};
-    tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
+        tt_metal::hal.noc_xy_encoding(routers[0].second.x, routers[0].second.y)};
+
+    CreateSenderKernel(
+        sender_program,
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_atomic_inc_sender.cpp",
+        std::move(sender_compile_time_args),
+        sender_logical_core,
+        defines,
+        std::move(sender_runtime_args));
 
     // Create the receiver program for validation
     auto receiver_program = tt_metal::CreateProgram();
-    auto receiver_kernel = tt_metal::CreateKernel(
-        receiver_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver.cpp",
-        {receiver_logical_core},
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .defines = defines});
-
-    std::vector<uint32_t> receiver_runtime_args = {
-        receiver_buffer->address(),
-        data_size,
-    };
-    tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
+    CreateReceiverKernel(receiver_program, receiver_logical_core, defines, receiver_buffer->address(), data_size);
 
     // Launch sender and receiver programs and wait for them to finish
     this->RunProgramNonblocking(receiver_device, receiver_program);
@@ -1125,19 +722,11 @@ TEST_F(Fabric2DPullFixture, TestAsyncWriteAtomicInc) {
     this->WaitForSingleProgramDone(receiver_device, receiver_program);
 
     // Validate the data received by the receiver
-    std::vector<uint32_t> received_buffer_data;
-    tt::tt_metal::detail::ReadFromBuffer(receiver_buffer, received_buffer_data);
-    EXPECT_EQ(receiver_buffer_data, received_buffer_data);
-    received_buffer_data.clear();
-    tt::tt_metal::detail::ReadFromBuffer(receiver_atomic_buffer, received_buffer_data);
-    EXPECT_EQ(atomic_inc, received_buffer_data[0]);
+    ValidateBuffer(receiver_buffer_data, receiver_buffer);
+    ValidateBuffer(atomic_inc, receiver_atomic_buffer);
 }
 
 TEST_F(Fabric2DPushFixture, TestAsyncWriteAtomicInc) {
-    using tt::tt_metal::ShardedBufferConfig;
-    using tt::tt_metal::ShardOrientation;
-    using tt::tt_metal::ShardSpecBuffer;
-
     CoreCoord sender_logical_core = {0, 0};
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
@@ -1150,21 +739,12 @@ TEST_F(Fabric2DPushFixture, TestAsyncWriteAtomicInc) {
     auto control_plane = tt::Cluster::instance().get_control_plane();
 
     // Find a device with a neighbour in the East direction
-    bool connection_found = false;
-    for (auto* device : devices_) {
-        start_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
-        // Get neighbours within a mesh in the East direction
-        auto neighbors = control_plane->get_intra_chip_neighbors(
-            start_mesh_chip_id.first, start_mesh_chip_id.second, RoutingDirection::E);
-        if (neighbors.size() > 0) {
-            physical_start_device_id = device->id();
-            end_mesh_chip_id = {start_mesh_chip_id.first, neighbors[0]};
-            physical_end_device_id = control_plane->get_physical_chip_id_from_mesh_chip_id(end_mesh_chip_id);
-            connection_found = true;
-            break;
-        }
-    }
-    if (!connection_found) {
+    if (!find_device_with_neighbor_in_direction(
+            start_mesh_chip_id,
+            end_mesh_chip_id,
+            physical_start_device_id,
+            physical_end_device_id,
+            RoutingDirection::E)) {
         GTEST_SKIP() << "No path found between sender and receivers";
     }
 
@@ -1180,50 +760,19 @@ TEST_F(Fabric2DPushFixture, TestAsyncWriteAtomicInc) {
     uint32_t data_size = tt::constants::TILE_HW * sizeof(uint32_t);
     uint32_t atomic_inc_size = sizeof(uint32_t);
 
-    auto receiver_shard_parameters =
-        ShardSpecBuffer(receiver_logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    ShardedBufferConfig receiver_shard_config = {
-        .device = receiver_device,
-        .size = data_size,
-        .page_size = data_size,
-        .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = receiver_shard_parameters,
-    };
-    auto receiver_buffer = CreateBuffer(receiver_shard_config);
-    ShardedBufferConfig receiver_atomic_shard_config = {
-        .device = receiver_device,
-        .size = atomic_inc_size,
-        .page_size = atomic_inc_size,
-        .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = receiver_shard_parameters,
-    };
-    auto receiver_atomic_buffer = CreateBuffer(receiver_atomic_shard_config);
-    // Reset buffer space for test validation
     std::vector<uint32_t> receiver_buffer_data(atomic_inc_size / sizeof(uint32_t), 0);
-    tt::tt_metal::detail::WriteToBuffer(receiver_atomic_buffer, receiver_buffer_data);
+    auto receiver_atomic_buffer =
+        PrepareBuffer(receiver_device, atomic_inc_size, receiver_logical_crs, receiver_buffer_data);
     receiver_buffer_data.resize(data_size / sizeof(uint32_t), 0);
-    tt::tt_metal::detail::WriteToBuffer(receiver_buffer, receiver_buffer_data);
+    auto receiver_buffer = PrepareBuffer(receiver_device, data_size, receiver_logical_crs, receiver_buffer_data);
 
     // Packet header needs to be inlined with the data being sent, so this test just allocates buffer space for both
     // together on the sender
     uint32_t sender_packet_header_and_data_size = tt::tt_fabric::PACKET_HEADER_SIZE_BYTES + data_size;
-    auto sender_shard_parameters =
-        ShardSpecBuffer(sender_logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    ShardedBufferConfig sender_shard_config = {
-        .device = sender_device,
-        .size = sender_packet_header_and_data_size,
-        .page_size = sender_packet_header_and_data_size,
-        .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = std::move(sender_shard_parameters),
-    };
-    auto sender_buffer = CreateBuffer(sender_shard_config);
-    // Write the data to send to the buffer
     std::vector<uint32_t> sender_buffer_data(sender_packet_header_and_data_size / sizeof(uint32_t), 0);
     std::iota(sender_buffer_data.begin() + PACKET_HEADER_SIZE_BYTES / sizeof(uint32_t), sender_buffer_data.end(), 0);
-    tt::tt_metal::detail::WriteToBuffer(sender_buffer, sender_buffer_data);
+    auto sender_buffer =
+        PrepareBuffer(sender_device, sender_packet_header_and_data_size, sender_logical_crs, sender_buffer_data);
 
     uint32_t atomic_inc = 5;
 
@@ -1241,32 +790,9 @@ TEST_F(Fabric2DPushFixture, TestAsyncWriteAtomicInc) {
 
     // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
-
-    // Allocate space for the client interface
-    uint32_t client_interface_cb_index = tt::CBIndex::c_0;
-    tt::tt_metal::CircularBufferConfig client_interface_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            tt::tt_fabric::CLIENT_INTERFACE_SIZE, {{client_interface_cb_index, DataFormat::UInt32}})
-            .set_page_size(client_interface_cb_index, tt::tt_fabric::CLIENT_INTERFACE_SIZE);
-    auto client_interface_cb =
-        tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
-
     std::map<string, string> defines = {};
-    std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 0, fabric_mode::PUSH};
-    auto sender_kernel = tt_metal::CreateKernel(
-        sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_atomic_inc_sender.cpp",
-        sender_logical_crs,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = sender_compile_time_args,
-            .defines = defines});
-
-    auto& sender_virtual_router_coord = routers[0].second;
-    auto sender_router_noc_xy =
-        tt_metal::hal.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y);
-
+    std::vector<uint32_t> sender_compile_time_args = {
+        (uint32_t)fabric_mode::PUSH, (uint32_t)TEST_ASYNC_WRITE_ATOMIC_INC, 0};
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -1276,25 +802,19 @@ TEST_F(Fabric2DPushFixture, TestAsyncWriteAtomicInc) {
         atomic_inc,
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
-        sender_router_noc_xy};
-    tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
+        tt_metal::hal.noc_xy_encoding(routers[0].second.x, routers[0].second.y)};
+
+    CreateSenderKernel(
+        sender_program,
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_atomic_inc_sender.cpp",
+        std::move(sender_compile_time_args),
+        sender_logical_core,
+        defines,
+        std::move(sender_runtime_args));
 
     // Create the receiver program for validation
     auto receiver_program = tt_metal::CreateProgram();
-    auto receiver_kernel = tt_metal::CreateKernel(
-        receiver_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver.cpp",
-        {receiver_logical_core},
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .defines = defines});
-
-    std::vector<uint32_t> receiver_runtime_args = {
-        receiver_buffer->address(),
-        data_size,
-    };
-    tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
+    CreateReceiverKernel(receiver_program, receiver_logical_core, defines, receiver_buffer->address(), data_size);
 
     // Launch sender and receiver programs and wait for them to finish
     this->RunProgramNonblocking(receiver_device, receiver_program);
@@ -1302,20 +822,11 @@ TEST_F(Fabric2DPushFixture, TestAsyncWriteAtomicInc) {
     this->WaitForSingleProgramDone(sender_device, sender_program);
     this->WaitForSingleProgramDone(receiver_device, receiver_program);
 
-    // Validate the data received by the receiver
-    std::vector<uint32_t> received_buffer_data;
-    tt::tt_metal::detail::ReadFromBuffer(receiver_buffer, received_buffer_data);
-    EXPECT_EQ(receiver_buffer_data, received_buffer_data);
-    received_buffer_data.clear();
-    tt::tt_metal::detail::ReadFromBuffer(receiver_atomic_buffer, received_buffer_data);
-    EXPECT_EQ(atomic_inc, received_buffer_data[0]);
+    ValidateBuffer(receiver_buffer_data, receiver_buffer);
+    ValidateBuffer(atomic_inc, receiver_atomic_buffer);
 }
 
 TEST_F(Fabric2DPullFixture, TestAsyncRawWriteAtomicInc) {
-    using tt::tt_metal::ShardedBufferConfig;
-    using tt::tt_metal::ShardOrientation;
-    using tt::tt_metal::ShardSpecBuffer;
-
     CoreCoord sender_logical_core = {0, 0};
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
@@ -1328,21 +839,12 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteAtomicInc) {
     auto control_plane = tt::Cluster::instance().get_control_plane();
 
     // Find a device with a neighbour in the East direction
-    bool connection_found = false;
-    for (auto* device : devices_) {
-        start_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
-        // Get neighbours within a mesh in the East direction
-        auto neighbors = control_plane->get_intra_chip_neighbors(
-            start_mesh_chip_id.first, start_mesh_chip_id.second, RoutingDirection::E);
-        if (neighbors.size() > 0) {
-            physical_start_device_id = device->id();
-            end_mesh_chip_id = {start_mesh_chip_id.first, neighbors[0]};
-            physical_end_device_id = control_plane->get_physical_chip_id_from_mesh_chip_id(end_mesh_chip_id);
-            connection_found = true;
-            break;
-        }
-    }
-    if (!connection_found) {
+    if (!find_device_with_neighbor_in_direction(
+            start_mesh_chip_id,
+            end_mesh_chip_id,
+            physical_start_device_id,
+            physical_end_device_id,
+            RoutingDirection::E)) {
         GTEST_SKIP() << "No path found between sender and receivers";
     }
 
@@ -1358,47 +860,14 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteAtomicInc) {
     uint32_t data_size = tt::constants::TILE_HW * sizeof(uint32_t);
     uint32_t atomic_inc_size = sizeof(uint32_t);
 
-    auto receiver_shard_parameters =
-        ShardSpecBuffer(receiver_logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    ShardedBufferConfig receiver_shard_config = {
-        .device = receiver_device,
-        .size = data_size,
-        .page_size = data_size,
-        .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = receiver_shard_parameters,
-    };
-    auto receiver_buffer = CreateBuffer(receiver_shard_config);
-    ShardedBufferConfig receiver_atomic_shard_config = {
-        .device = receiver_device,
-        .size = atomic_inc_size,
-        .page_size = atomic_inc_size,
-        .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = receiver_shard_parameters,
-    };
-    auto receiver_atomic_buffer = CreateBuffer(receiver_atomic_shard_config);
-    // Reset buffer space for test validation
     std::vector<uint32_t> receiver_buffer_data(atomic_inc_size / sizeof(uint32_t), 0);
-    tt::tt_metal::detail::WriteToBuffer(receiver_atomic_buffer, receiver_buffer_data);
+    auto receiver_atomic_buffer =
+        PrepareBuffer(receiver_device, atomic_inc_size, receiver_logical_crs, receiver_buffer_data);
     receiver_buffer_data.resize(data_size / sizeof(uint32_t), 0);
-    tt::tt_metal::detail::WriteToBuffer(receiver_buffer, receiver_buffer_data);
-
-    auto sender_shard_parameters =
-        ShardSpecBuffer(sender_logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    ShardedBufferConfig sender_shard_config = {
-        .device = sender_device,
-        .size = data_size,
-        .page_size = data_size,
-        .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = std::move(sender_shard_parameters),
-    };
-    auto sender_buffer = CreateBuffer(sender_shard_config);
-    // Write the data to send to the buffer
+    auto receiver_buffer = PrepareBuffer(receiver_device, data_size, receiver_logical_crs, receiver_buffer_data);
     std::vector<uint32_t> sender_buffer_data(data_size / sizeof(uint32_t), 0);
     std::iota(sender_buffer_data.begin(), sender_buffer_data.end(), 0);
-    tt::tt_metal::detail::WriteToBuffer(sender_buffer, sender_buffer_data);
+    auto sender_buffer = PrepareBuffer(sender_device, data_size, sender_logical_crs, sender_buffer_data);
 
     uint32_t atomic_inc = 5;
 
@@ -1410,33 +879,10 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteAtomicInc) {
 
     // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
-
-    // Allocate space for the client interface
-    uint32_t client_interface_cb_index = tt::CBIndex::c_0;
-    tt::tt_metal::CircularBufferConfig client_interface_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            tt::tt_fabric::CLIENT_INTERFACE_SIZE, {{client_interface_cb_index, DataFormat::UInt32}})
-            .set_page_size(client_interface_cb_index, tt::tt_fabric::CLIENT_INTERFACE_SIZE);
-    auto client_interface_cb =
-        tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
-
     std::map<string, string> defines = {};
     defines["FVC_MODE_PULL"] = "";
-    std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 1, fabric_mode::PULL};
-    auto sender_kernel = tt_metal::CreateKernel(
-        sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_atomic_inc_sender.cpp",
-        sender_logical_crs,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = sender_compile_time_args,
-            .defines = defines});
-
-    auto& sender_virtual_router_coord = routers[0].second;
-    auto sender_router_noc_xy =
-        tt_metal::hal.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y);
-
+    std::vector<uint32_t> sender_compile_time_args = {
+        (uint32_t)fabric_mode::PULL, (uint32_t)TEST_ASYNC_WRITE_ATOMIC_INC, 1};
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -1446,25 +892,19 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteAtomicInc) {
         atomic_inc,
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
-        sender_router_noc_xy};
-    tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
+        tt_metal::hal.noc_xy_encoding(routers[0].second.x, routers[0].second.y)};
+
+    CreateSenderKernel(
+        sender_program,
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_atomic_inc_sender.cpp",
+        std::move(sender_compile_time_args),
+        sender_logical_core,
+        defines,
+        std::move(sender_runtime_args));
 
     // Create the receiver program for validation
     auto receiver_program = tt_metal::CreateProgram();
-    auto receiver_kernel = tt_metal::CreateKernel(
-        receiver_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver.cpp",
-        {receiver_logical_core},
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .defines = defines});
-
-    std::vector<uint32_t> receiver_runtime_args = {
-        receiver_buffer->address(),
-        data_size,
-    };
-    tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
+    CreateReceiverKernel(receiver_program, receiver_logical_core, defines, receiver_buffer->address(), data_size);
 
     // Launch sender and receiver programs and wait for them to finish
     this->RunProgramNonblocking(receiver_device, receiver_program);
@@ -1472,20 +912,11 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteAtomicInc) {
     this->WaitForSingleProgramDone(sender_device, sender_program);
     this->WaitForSingleProgramDone(receiver_device, receiver_program);
 
-    // Validate the data received by the receiver
-    std::vector<uint32_t> received_buffer_data;
-    tt::tt_metal::detail::ReadFromBuffer(receiver_buffer, received_buffer_data);
-    EXPECT_EQ(sender_buffer_data, received_buffer_data);
-    received_buffer_data.clear();
-    tt::tt_metal::detail::ReadFromBuffer(receiver_atomic_buffer, received_buffer_data);
-    EXPECT_EQ(atomic_inc, received_buffer_data[0]);
+    ValidateBuffer(sender_buffer_data, receiver_buffer);
+    ValidateBuffer(atomic_inc, receiver_atomic_buffer);
 }
 
 TEST_F(Fabric2DPushFixture, TestAsyncRawWriteAtomicInc) {
-    using tt::tt_metal::ShardedBufferConfig;
-    using tt::tt_metal::ShardOrientation;
-    using tt::tt_metal::ShardSpecBuffer;
-
     CoreCoord sender_logical_core = {0, 0};
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
@@ -1498,21 +929,12 @@ TEST_F(Fabric2DPushFixture, TestAsyncRawWriteAtomicInc) {
     auto control_plane = tt::Cluster::instance().get_control_plane();
 
     // Find a device with a neighbour in the East direction
-    bool connection_found = false;
-    for (auto* device : devices_) {
-        start_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
-        // Get neighbours within a mesh in the East direction
-        auto neighbors = control_plane->get_intra_chip_neighbors(
-            start_mesh_chip_id.first, start_mesh_chip_id.second, RoutingDirection::E);
-        if (neighbors.size() > 0) {
-            physical_start_device_id = device->id();
-            end_mesh_chip_id = {start_mesh_chip_id.first, neighbors[0]};
-            physical_end_device_id = control_plane->get_physical_chip_id_from_mesh_chip_id(end_mesh_chip_id);
-            connection_found = true;
-            break;
-        }
-    }
-    if (!connection_found) {
+    if (!find_device_with_neighbor_in_direction(
+            start_mesh_chip_id,
+            end_mesh_chip_id,
+            physical_start_device_id,
+            physical_end_device_id,
+            RoutingDirection::E)) {
         GTEST_SKIP() << "No path found between sender and receivers";
     }
 
@@ -1528,47 +950,14 @@ TEST_F(Fabric2DPushFixture, TestAsyncRawWriteAtomicInc) {
     uint32_t data_size = tt::constants::TILE_HW * sizeof(uint32_t);
     uint32_t atomic_inc_size = sizeof(uint32_t);
 
-    auto receiver_shard_parameters =
-        ShardSpecBuffer(receiver_logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    ShardedBufferConfig receiver_shard_config = {
-        .device = receiver_device,
-        .size = data_size,
-        .page_size = data_size,
-        .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = receiver_shard_parameters,
-    };
-    auto receiver_buffer = CreateBuffer(receiver_shard_config);
-    ShardedBufferConfig receiver_atomic_shard_config = {
-        .device = receiver_device,
-        .size = atomic_inc_size,
-        .page_size = atomic_inc_size,
-        .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = receiver_shard_parameters,
-    };
-    auto receiver_atomic_buffer = CreateBuffer(receiver_atomic_shard_config);
-    // Reset buffer space for test validation
     std::vector<uint32_t> receiver_buffer_data(atomic_inc_size / sizeof(uint32_t), 0);
-    tt::tt_metal::detail::WriteToBuffer(receiver_atomic_buffer, receiver_buffer_data);
+    auto receiver_atomic_buffer =
+        PrepareBuffer(receiver_device, atomic_inc_size, receiver_logical_crs, receiver_buffer_data);
     receiver_buffer_data.resize(data_size / sizeof(uint32_t), 0);
-    tt::tt_metal::detail::WriteToBuffer(receiver_buffer, receiver_buffer_data);
-
-    auto sender_shard_parameters =
-        ShardSpecBuffer(sender_logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    ShardedBufferConfig sender_shard_config = {
-        .device = sender_device,
-        .size = data_size,
-        .page_size = data_size,
-        .buffer_type = tt_metal::BufferType::L1,
-        .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
-        .shard_parameters = std::move(sender_shard_parameters),
-    };
-    auto sender_buffer = CreateBuffer(sender_shard_config);
-    // Write the data to send to the buffer
+    auto receiver_buffer = PrepareBuffer(receiver_device, data_size, receiver_logical_crs, receiver_buffer_data);
     std::vector<uint32_t> sender_buffer_data(data_size / sizeof(uint32_t), 0);
     std::iota(sender_buffer_data.begin(), sender_buffer_data.end(), 0);
-    tt::tt_metal::detail::WriteToBuffer(sender_buffer, sender_buffer_data);
+    auto sender_buffer = PrepareBuffer(sender_device, data_size, sender_logical_crs, sender_buffer_data);
 
     uint32_t atomic_inc = 5;
 
@@ -1580,32 +969,9 @@ TEST_F(Fabric2DPushFixture, TestAsyncRawWriteAtomicInc) {
 
     // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
-
-    // Allocate space for the client interface
-    uint32_t client_interface_cb_index = tt::CBIndex::c_0;
-    tt::tt_metal::CircularBufferConfig client_interface_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            tt::tt_fabric::CLIENT_INTERFACE_SIZE, {{client_interface_cb_index, DataFormat::UInt32}})
-            .set_page_size(client_interface_cb_index, tt::tt_fabric::CLIENT_INTERFACE_SIZE);
-    auto client_interface_cb =
-        tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
-
     std::map<string, string> defines = {};
-    std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 1, fabric_mode::PUSH};
-    auto sender_kernel = tt_metal::CreateKernel(
-        sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_atomic_inc_sender.cpp",
-        sender_logical_crs,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = sender_compile_time_args,
-            .defines = defines});
-
-    auto& sender_virtual_router_coord = routers[0].second;
-    auto sender_router_noc_xy =
-        tt_metal::hal.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y);
-
+    std::vector<uint32_t> sender_compile_time_args = {
+        (uint32_t)fabric_mode::PUSH, (uint32_t)TEST_ASYNC_WRITE_ATOMIC_INC, 1};
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -1615,25 +981,19 @@ TEST_F(Fabric2DPushFixture, TestAsyncRawWriteAtomicInc) {
         atomic_inc,
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
-        sender_router_noc_xy};
-    tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
+        tt_metal::hal.noc_xy_encoding(routers[0].second.x, routers[0].second.y)};
+
+    CreateSenderKernel(
+        sender_program,
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_atomic_inc_sender.cpp",
+        std::move(sender_compile_time_args),
+        sender_logical_core,
+        defines,
+        std::move(sender_runtime_args));
 
     // Create the receiver program for validation
     auto receiver_program = tt_metal::CreateProgram();
-    auto receiver_kernel = tt_metal::CreateKernel(
-        receiver_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver.cpp",
-        {receiver_logical_core},
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .defines = defines});
-
-    std::vector<uint32_t> receiver_runtime_args = {
-        receiver_buffer->address(),
-        data_size,
-    };
-    tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
+    CreateReceiverKernel(receiver_program, receiver_logical_core, defines, receiver_buffer->address(), data_size);
 
     // Launch sender and receiver programs and wait for them to finish
     this->RunProgramNonblocking(receiver_device, receiver_program);
@@ -1641,20 +1001,11 @@ TEST_F(Fabric2DPushFixture, TestAsyncRawWriteAtomicInc) {
     this->WaitForSingleProgramDone(sender_device, sender_program);
     this->WaitForSingleProgramDone(receiver_device, receiver_program);
 
-    // Validate the data received by the receiver
-    std::vector<uint32_t> received_buffer_data;
-    tt::tt_metal::detail::ReadFromBuffer(receiver_buffer, received_buffer_data);
-    EXPECT_EQ(sender_buffer_data, received_buffer_data);
-    received_buffer_data.clear();
-    tt::tt_metal::detail::ReadFromBuffer(receiver_atomic_buffer, received_buffer_data);
-    EXPECT_EQ(atomic_inc, received_buffer_data[0]);
+    ValidateBuffer(sender_buffer_data, receiver_buffer);
+    ValidateBuffer(atomic_inc, receiver_atomic_buffer);
 }
 
 TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticast) {
-    using tt::tt_metal::ShardedBufferConfig;
-    using tt::tt_metal::ShardOrientation;
-    using tt::tt_metal::ShardSpecBuffer;
-
     CoreCoord sender_logical_core = {0, 0};
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
@@ -1872,10 +1223,6 @@ TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticast) {
 }
 
 TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticast) {
-    using tt::tt_metal::ShardedBufferConfig;
-    using tt::tt_metal::ShardOrientation;
-    using tt::tt_metal::ShardSpecBuffer;
-
     CoreCoord sender_logical_core = {0, 0};
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
@@ -2087,10 +1434,6 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticast) {
 }
 
 TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticastMultidirectional) {
-    using tt::tt_metal::ShardedBufferConfig;
-    using tt::tt_metal::ShardOrientation;
-    using tt::tt_metal::ShardSpecBuffer;
-
     CoreCoord sender_logical_core = {0, 0};
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};
@@ -2319,10 +1662,6 @@ TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticastMultidirectional) {
 }
 
 TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticastMultidirectional) {
-    using tt::tt_metal::ShardedBufferConfig;
-    using tt::tt_metal::ShardOrientation;
-    using tt::tt_metal::ShardSpecBuffer;
-
     CoreCoord sender_logical_core = {0, 0};
     CoreRangeSet sender_logical_crs = {sender_logical_core};
     CoreCoord receiver_logical_core = {1, 0};

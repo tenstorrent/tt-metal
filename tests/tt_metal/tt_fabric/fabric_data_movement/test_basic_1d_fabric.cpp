@@ -23,9 +23,11 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
 
     std::pair<mesh_id_t, chip_id_t> src_mesh_chip_id;
     std::pair<mesh_id_t, chip_id_t> dst_mesh_chip_id;
+    chip_id_t not_used_1;
+    chip_id_t not_used_2;
     // Find a device with a neighbour in the East direction
-    bool connection_found =
-        find_device_with_neighbor_in_direction(src_mesh_chip_id, dst_mesh_chip_id, RoutingDirection::E);
+    bool connection_found = find_device_with_neighbor_in_direction(
+        src_mesh_chip_id, dst_mesh_chip_id, not_used_1, not_used_2, RoutingDirection::E);
     if (!connection_found) {
         GTEST_SKIP() << "No path found between sender and receivers";
     }
@@ -177,9 +179,11 @@ TEST_F(Fabric1DFixture, TestUnicastConnAPI) {
 
     std::pair<mesh_id_t, chip_id_t> src_mesh_chip_id;
     std::pair<mesh_id_t, chip_id_t> dst_mesh_chip_id;
+    chip_id_t not_used_1;
+    chip_id_t not_used_2;
     // Find a device with a neighbour in the East direction
-    bool connection_found =
-        find_device_with_neighbor_in_direction(src_mesh_chip_id, dst_mesh_chip_id, RoutingDirection::E);
+    bool connection_found = find_device_with_neighbor_in_direction(
+        src_mesh_chip_id, dst_mesh_chip_id, not_used_1, not_used_2, RoutingDirection::E);
     if (!connection_found) {
         GTEST_SKIP() << "No path found between sender and receivers";
     }
