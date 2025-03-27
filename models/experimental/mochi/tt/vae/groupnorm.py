@@ -1,7 +1,7 @@
+import math
 import ttnn
 import torch
 from models.common.lightweightmodule import LightweightModule
-
 from models.experimental.mochi.tt.common import (
     to_tt_tensor,
 )
@@ -99,7 +99,7 @@ class GroupNorm(LightweightModule):
                 240 * 424: 40,
                 480 * 848: 135,
             }
-            num_out_blocks = num_out_blocks_map[HW] if HW in num_out_blocks_map else 4
+            num_out_blocks = num_out_blocks_map[HW] if HW in num_out_blocks_map else math.ceil(HW / 2000)
 
             grid_size_x = min(T, self.grid_size.x)
             # Apply group_norm

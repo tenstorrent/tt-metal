@@ -40,6 +40,11 @@ test_configs = [
     },
     {
         "name": "medium_latent",
+        "input_shape": (1, 12, 28, 40, 76),
+        # Expected output will be approximately: (1, 3, 163, 480, 848)
+    },
+    {
+        "name": "large_latent",
         "input_shape": (1, 12, 28, 60, 106),
         # Expected output will be approximately: (1, 3, 163, 480, 848)
     },
