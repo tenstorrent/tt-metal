@@ -29,13 +29,15 @@ def test_run_resnet50_trace_2cqs_inference(
     device,
     use_program_cache,
     batch_size_per_device,
+    iterations,
     imagenet_label_dict,
     act_dtype,
     weight_dtype,
     enable_async_mode,
     model_location_generator,
 ):
-    batch_size = batch_size_per_device * (1 if isinstance(device, ttnn.Device) else device.get_num_devices())
+    batch_size = batch_size_per_device * device.get_num_devices()
+    iterations = iterations // device.get_num_devices()
     profiler.clear()
     with torch.no_grad():
         resnet50_trace_2cq = ResNet50Trace2CQ()
@@ -49,7 +51,6 @@ def test_run_resnet50_trace_2cqs_inference(
         )
         profiler.end(f"compile")
         model_version = "microsoft/resnet-50"
-        iterations = 25
         image_processor = AutoImageProcessor.from_pretrained(model_version)
         logger.info("ImageNet-1k validation Dataset")
         input_loc = str(model_location_generator("ImageNet_data"))

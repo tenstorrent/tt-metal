@@ -39,13 +39,14 @@ def test_demo_sample(
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 1605632, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
-    "batch_size, act_dtype, weight_dtype",
-    ((16, ttnn.bfloat8_b, ttnn.bfloat8_b),),
+    "batch_size, iterations, act_dtype, weight_dtype",
+    ((16, 100, ttnn.bfloat8_b, ttnn.bfloat8_b),),
 )
 def test_demo_trace_with_imagenet(
     mesh_device,
     use_program_cache,
     batch_size,
+    iterations,
     imagenet_label_dict,
     act_dtype,
     weight_dtype,
@@ -56,6 +57,7 @@ def test_demo_trace_with_imagenet(
         mesh_device,
         use_program_cache,
         batch_size,
+        iterations,
         imagenet_label_dict,
         act_dtype,
         weight_dtype,
