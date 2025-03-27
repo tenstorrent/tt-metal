@@ -83,7 +83,6 @@ def test_model_inference(
     reset_seeds,
     ensure_gc,
 ):
-    pytest.skip("TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)")
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
     dtype = ttnn.bfloat8_b
