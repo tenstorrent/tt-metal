@@ -12,11 +12,11 @@ from models.demos.llama3_subdevices.tt.llama_common import (
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import skip_for_blackhole
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
+@skip_for_blackhole("Untested on blackhole!")
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
