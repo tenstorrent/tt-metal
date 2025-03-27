@@ -541,11 +541,7 @@ class DetectionModel:
         }
 
         self.conv_0 = Conv(
-            device,
-            parameters,
-            "model.0",
-            input_params=[3, 2, 1, 80, 3],
-            act_block_h=True,
+            device, parameters, "model.0", input_params=[3, 2, 1, 80, 3], act_block_h=True, deallocate_activation=True
         )
         self.conv_1 = Conv(
             device,
