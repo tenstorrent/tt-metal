@@ -182,7 +182,7 @@ void kernel_main() {
         fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
-    fabric_connection.close();
+    fabric_connection.close_start();
     // increment locally
     uint64_t out_ready_sem_noc_addr =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
@@ -202,6 +202,7 @@ void kernel_main() {
         DPRINT << "reset done\n";
     }
 
+    fabric_connection.close_finish();
     noc_async_write_barrier();
     DPRINT << "DONE \n";
 }
