@@ -285,6 +285,9 @@ std::pair<string, string> get_op_init_and_func_default(UnaryOpType op_type, std:
         case UnaryOpType::I0: op_init_and_name = {"i0_tile_init();", fmt::format("i0_tile({});", idst)}; break;
         case UnaryOpType::I1: op_init_and_name = {"i1_tile_init();", fmt::format("i1_tile({});", idst)}; break;
         case UnaryOpType::EXP: op_init_and_name = {"exp_tile_init();", fmt::format("exp_tile({});", idst)}; break;
+        case UnaryOpType::SIGMOID:
+            op_init_and_name = {"sigmoid_tile_init();", fmt::format("sigmoid_tile({});", idst)};
+            break;
         case UnaryOpType::ERF: op_init_and_name = {"erf_tile_init();", fmt::format("erf_tile({0});", idst)}; break;
         case UnaryOpType::ERFC: op_init_and_name = {"erfc_tile_init();", fmt::format("erfc_tile({});", idst)}; break;
         case UnaryOpType::ERFINV:
@@ -374,7 +377,9 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     } else if (name == "silu") {
         return UnaryWithParam(UnaryOpType::SILU);
     } else if (name == "sigmoid") {
-        return UnaryWithParam(UnaryOpType::SIGMOID);
+        return UnaryWithParam(UnaryOpType::SIGMOID, static_cast<float>(false));
+    } else if (name == "sigmoid_approx") {
+        return UnaryWithParam(UnaryOpType::SIGMOID, static_cast<float>(true));
     } else if (name == "sqrt") {
         return UnaryWithParam(UnaryOpType::SQRT);
     } else if (name == "exp") {
