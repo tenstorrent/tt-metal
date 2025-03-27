@@ -43,6 +43,17 @@ std::string fidelity_to_string(MathFidelity fidelity) {
     oss << fidelity;
     return oss.str();
 }
+int get_cycles_per_tile_for_fidelity(MathFidelity fidelity) {
+    const int LoFi_cycle = 16;
+
+    switch (fidelity) {
+        case MathFidelity::LoFi: return LoFi_cycle;
+        case MathFidelity::HiFi2: return LoFi_cycle * 2;
+        case MathFidelity::HiFi3: return LoFi_cycle * 3;
+        case MathFidelity::HiFi4: return LoFi_cycle * 4;
+        default: return LoFi_cycle;
+    }
+}
 std::array<Shape2D, 20> kSubblockHwChoices = {{{4, 2}, {2, 4}, {8, 1}, {1, 8}, {7, 1}, {1, 7}, {3, 2},
                                                {2, 3}, {6, 1}, {1, 6}, {5, 1}, {1, 5}, {2, 2}, {4, 1},
                                                {1, 4}, {3, 1}, {1, 3}, {2, 1}, {1, 2}, {1, 1}}};
@@ -147,23 +158,18 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
 
     TT_FATAL(grid_size.height() > 0 && grid_size.width() > 0, "Invalid grid size");
 
-    const char* TT_METAL_HOME = std::getenv("TT_METAL_HOME");
-    std::string ARTIFACTS_DIR = std::string(TT_METAL_HOME) + "/generated";
-    std::string FILE_NAME =
-        ARTIFACTS_DIR + "/matmul_2d_host_perf_report_" + dtype_to_string(dtype) + fidelity_to_string(math_fidelity);
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    std::string artifacts_dir = std::string(tt_metal_home) + "/generated";
+    std::string file_name =
+        artifacts_dir + "/matmul_2d_host_perf_report_" + dtype_to_string(dtype) + fidelity_to_string(math_fidelity);
 
     if (use_trace) {
-        FILE_NAME += "_traced.csv";
+        file_name += "_traced.csv";
     } else {
-        FILE_NAME += ".csv";
+        file_name += ".csv";
     }
 
-    int LoFi_cycle = 16;
-    int HiFi2_cycle = LoFi_cycle * 2;
-    int HiFi3_cycle = LoFi_cycle * 3;
-    int HiFi4_cycle = LoFi_cycle * 4;
-
-    std::ofstream file(FILE_NAME);
+    std::ofstream file(file_name);
     file << "m,k,n,use_trace,grid_size,in0_sharded,out_sharded,in0_storage_type,in1_storage_type,out_storage_type,"
             "dtype,math_fidelity,inference_time_avg (ns),TFLOPs (avg),Utilization (vs user grid),Utilization (vs 8x8 "
             "full grid)\n";
@@ -334,10 +340,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
 
     const double inference_time_avg_s = total_time.count() / num_measurement_iterations;
     double tflops = 2.0 * m * k * n / 1e12 / inference_time_avg_s;
-    int cycle_per_tile = (math_fidelity == MathFidelity::LoFi)    ? LoFi_cycle
-                         : (math_fidelity == MathFidelity::HiFi2) ? HiFi2_cycle
-                         : (math_fidelity == MathFidelity::HiFi3) ? HiFi3_cycle
-                                                                  : HiFi4_cycle;
+    int cycle_per_tile = get_cycles_per_tile_for_fidelity(math_fidelity);
     int num_cores_user_grid = grid_size.height() * grid_size.width();
     auto compute_grid_size = device->compute_with_storage_grid_size();
     int num_cores_full_grid = compute_grid_size.x * compute_grid_size.y;
