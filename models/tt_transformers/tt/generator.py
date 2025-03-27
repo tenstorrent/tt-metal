@@ -470,15 +470,15 @@ class Generator:
         batch_per_device = batch // data_parallel
 
         out_list = [[] for _ in range(data_parallel)]
-        output_xattn_masks = [[] for _ in range(data_parallel)]
-        output_full_text_row_masked_out_masks = [[] for _ in range(data_parallel)]
+        output_xattn_masks = [None for _ in range(batch)]
+        output_full_text_row_masked_out_masks = [None for _ in range(batch)]
 
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
             page_table = torch.chunk(page_table, self.data_parallel, 0)  # cross_page_table
         if cross_page_table is not None:
             assert isinstance(cross_page_table, torch.Tensor), "cross_page_table mush be torch.Tensor"
-            page_table = torch.chunk(cross_page_table, self.data_parallel, 0)
+            cross_page_table = torch.chunk(cross_page_table, self.data_parallel, 0)
 
         for group_user_id in range(batch_per_device):
             for model_id in range(data_parallel):
@@ -489,8 +489,9 @@ class Generator:
                 user_page_table = page_table[model_id] if page_table is not None else None
                 user_kv_cache = kv_cache[model_id] if kv_cache is not None else None
                 user_cross_page_table = cross_page_table[model_id] if kv_cache is not None else None
+                xattn_cache = xattn_caches[model_id] if xattn_caches is not None else None
                 (
-                    xattn_caches[model_id],
+                    xattn_cache,
                     cross_attention_masks,
                     full_text_row_masked_out_mask,
                     logits,
@@ -498,7 +499,7 @@ class Generator:
                     vision_images=vision_images[user_id],
                     vision_mask=vision_masks[user_id],
                     tokens=tokens[user_id : user_id + 1, :seq_len],  # Keep batch dimension
-                    xattn_caches=xattn_caches[model_id],
+                    xattn_caches=xattn_cache,
                     user_id=group_user_id,
                     total_len=total_lens[user_id],
                     prefill_len=seq_len,
@@ -507,9 +508,11 @@ class Generator:
                     cross_page_table=user_cross_page_table,
                     model_id=model_id,
                 )
+                if xattn_caches is not None:
+                    xattn_caches[model_id] = xattn_cache
                 out_list[model_id].append(logits)
-                output_xattn_masks[model_id].append(cross_attention_masks)
-                output_full_text_row_masked_out_masks[model_id].append(full_text_row_masked_out_mask)
+                output_xattn_masks[user_id] = cross_attention_masks
+                output_full_text_row_masked_out_masks[user_id] = full_text_row_masked_out_mask
 
         # We gather prefill output at the end of prefill to reduce unnecessary device sync
         for group_user_id in range(batch_per_device):
@@ -538,8 +541,17 @@ class Generator:
         read_from_device=True,
     ):
         B = tokens.shape[0]
+        data_parallel = min(B, self.data_parallel)
+        batch_per_device = B // data_parallel
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
+        cross_attention_masks = [
+            cross_attention_masks[i * batch_per_device : (i + 1) * batch_per_device] for i in range(data_parallel)
+        ]
+        full_text_row_masked_out_mask = [
+            full_text_row_masked_out_mask[i * batch_per_device : (i + 1) * batch_per_device]
+            for i in range(data_parallel)
+        ]
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
         cross_page_table = (
             torch.chunk(cross_page_table, self.data_parallel, 0) if cross_page_table is not None else None
@@ -640,12 +652,13 @@ class Generator:
         tt_logits = []
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
+            xattn_cache = xattn_caches[i] if xattn_caches is not None else None
             tt_logits_i = self.model[i].ttnn_decode_forward(
                 tt_h[i],
                 tt_xattn_mask[i],
                 tt_full_text_mask_expand_1NSH[i],
                 tt_full_text_mask_expand_11SD[i],
-                xattn_caches[i],
+                xattn_cache,
                 tt_position_id[i],
                 tt_rot_mats[i],
                 page_table=tt_page_table[i],
@@ -711,13 +724,14 @@ class Generator:
         # Compile run
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
+            xattn_cache = xattn_caches[i] if xattn_caches is not None else None
             # tt_logits_rm unused later, no need to make a list
             tt_logits_rm = self.model[i].ttnn_decode_forward(
                 tt_h[i],
                 tt_xattn_mask[i],
                 tt_full_text_mask_expand_1NSH[i],
                 tt_full_text_mask_expand_11SD[i],
-                xattn_caches[i],
+                xattn_cache,
                 tt_position_id[i],
                 tt_rot_mats[i],
                 page_table=tt_page_table[i],
@@ -796,6 +810,7 @@ class Generator:
         for i in range(self.data_parallel):
             B = tokens[i].shape[0]
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
+            xattn_cache = xattn_caches[i] if xattn_caches is not None else None
             (
                 tt_h_transform,
                 tt_rot_mats,
@@ -816,7 +831,7 @@ class Generator:
                 tt_xattn_mask_transform,
                 tt_full_text_mask_expand_1NSH_transform,
                 tt_full_text_mask_expand_11SD_transform,
-                xattn_caches[i],
+                xattn_cache,
                 tt_position_id[i],
                 tt_rot_mats,
                 page_table=tt_page_table[i],

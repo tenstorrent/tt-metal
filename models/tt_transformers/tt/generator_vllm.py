@@ -85,7 +85,7 @@ def initialize_vllm_text_transformer(
 
         assert model_args_i.model_name.replace("-", "") in hf_config._name_or_path.replace(
             "-", ""
-        ), f"The model specified in vLLM ({hf_config._name_or_path}) does not match the model name ({model_args_i.model_name}) with model weights ({model_args_i.DEFAULT_CKPT_DIR})."
+        ), f"The model specified in vLLM ({hf_config._name_or_path}) does not match the model name ({model_args_i.model_name}) with model weights ({model_args_i.CKPT_DIR})."
         if n_layers is not None:
             model_args_i.n_layers = n_layers
 
