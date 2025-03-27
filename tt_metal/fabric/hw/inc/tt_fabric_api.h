@@ -225,13 +225,44 @@ inline void fabric_async_write(
     }
 }
 #else
-inline void fabric_client_router_reserve(
+inline void fabric_client_connect(
     volatile tt_l1_ptr fabric_push_client_interface_t* client_interface,
     int32_t routing_plane,
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id) {
     uint32_t direction = get_next_hop_router_direction(client_interface, routing_plane, dst_mesh_id, dst_dev_id);
     uint32_t router_addr_h = get_next_hop_router_noc_xy(client_interface, routing_plane, dst_mesh_id, dst_dev_id);
+
+    uint64_t client_q_addr = get_noc_addr_helper(router_addr_h, FABRIC_ROUTER_CLIENT_QUEUE_START);
+    volatile fabric_push_client_queue_local_t* local_req_entry = &(client_interface->local_client_req_entry);
+
+    // get client 'id'
+    noc_fast_atomic_increment<DM_DEDICATED_NOC, true>(
+        noc_index,
+        NCRISC_AT_CMD_BUF,
+        client_q_addr + offsetof(fabric_push_client_queue_t, client_idx_counter),
+        NOC_UNICAST_WRITE_VC,
+        1,
+        31,
+        false,
+        false,
+        (uint32_t)&(local_req_entry->my_client_idx.ptr));
+    while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
+
+    uint64_t curr_client_idx_addr = client_q_addr + offsetof(fabric_push_client_queue_t, curr_client_idx);
+    // wait until the client ahead in the queue disconnects
+    while (true) {
+        noc_async_read_one_packet(curr_client_idx_addr, (uint32_t)&(local_req_entry->remote_curr_client_idx.ptr), 4);
+        noc_async_read_barrier();
+        if (local_req_entry->my_client_idx.ptr == local_req_entry->remote_curr_client_idx.ptr) {
+            break;
+        }
+    }
+
+    uint64_t router_wr_ptr_addr = client_q_addr + offsetof(fabric_push_client_queue_t, router_wr_ptr);
+    noc_async_read_one_packet(router_wr_ptr_addr, (uint32_t)&(local_req_entry->remote_router_wr_ptr.ptr), 4);
+    noc_async_read_barrier();
+
     uint64_t router_addr = get_noc_addr_helper(router_addr_h, FABRIC_ROUTER_REQ_QUEUE_START);
     router_addr += direction * sizeof(uint64_t);
     // stream register to receive router buffer space available updates.
@@ -243,7 +274,7 @@ inline void fabric_client_router_reserve(
     noc_inline_dw_write(router_addr + sizeof(uint32_t), xy_local_addr >> 32);
     client_interface->router_addr_h = router_addr_h;
     client_interface->buffer_size = FABRIC_ROUTER_OUTBOUND_BUF_SLOTS;
-    client_interface->wr_ptr = 0;
+    client_interface->wr_ptr = local_req_entry->remote_router_wr_ptr.ptr;
     client_interface->buffer_start = FABRIC_ROUTER_DATA_BUF_START + direction * FABRIC_ROUTER_OUTBOUND_BUF_SIZE;
     client_interface->router_push_addr = (STREAM_REG_ADDR(
         STREAM_ID_NOC_WORDS_RECEIVED + direction, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
@@ -253,6 +284,29 @@ inline void fabric_client_router_reserve(
         (STREAM_REG_ADDR(STREAM_ID_NOC_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
     *(uint32_t*)(STREAM_REG_ADDR(STREAM_ID_NOC_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX)) =
         client_interface->buffer_size;
+}
+
+inline void fabric_client_disconnect(volatile tt_l1_ptr fabric_push_client_interface_t* client_interface) {
+    // wait for slots to drain
+    while (*(uint32_t*)(client_interface->router_space) != FABRIC_ROUTER_OUTBOUND_BUF_SLOTS);
+
+    uint64_t client_q_addr = get_noc_addr_helper(client_interface->router_addr_h, FABRIC_ROUTER_CLIENT_QUEUE_START);
+
+    // update wr ptr for the next client
+    noc_inline_dw_write<true>(
+        client_q_addr + offsetof(fabric_push_client_queue_t, router_wr_ptr), client_interface->wr_ptr);
+
+    // update curr client index so that the next client in the queue can connect
+    noc_fast_atomic_increment<DM_DEDICATED_NOC, true>(
+        noc_index,
+        NCRISC_AT_CMD_BUF,
+        client_q_addr + offsetof(fabric_push_client_queue_t, curr_client_idx),
+        NOC_UNICAST_WRITE_VC,
+        1,
+        31,
+        false,
+        false);
+    while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
 }
 
 template <ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA>
