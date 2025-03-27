@@ -7,7 +7,7 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program_impl.hpp>
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "fabric_edm_types.hpp"

@@ -13,7 +13,7 @@
 #include "noc/noc_parameters.h"
 #include "tensix.h"
 
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 #include "hal_asserts.hpp"
 #include "blackhole/bh_hal.hpp"
 

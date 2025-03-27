@@ -248,9 +248,9 @@ std::optional<uint32_t> get_storage_core_bank_size(
     const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(device_id);
     if (core_desc.storage_core_bank_size.has_value()) {
         TT_FATAL(
-            core_desc.storage_core_bank_size.value() % tt_metal::hal.get_alignment(tt_metal::HalMemType::L1) == 0,
+            core_desc.storage_core_bank_size.value() % tt_metal::hal_ref.get_alignment(tt_metal::HalMemType::L1) == 0,
             "Storage core bank size must be {} B aligned",
-            tt_metal::hal.get_alignment(tt_metal::HalMemType::L1));
+            tt_metal::hal_ref.get_alignment(tt_metal::HalMemType::L1));
     }
     return core_desc.storage_core_bank_size;
 }

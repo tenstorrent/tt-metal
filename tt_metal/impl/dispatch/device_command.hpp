@@ -13,7 +13,7 @@
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "memcpy.hpp"
 #include <tt_stl/aligned_allocator.hpp>
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 #include "tt_align.hpp"
 
 namespace tt::tt_metal {
@@ -214,8 +214,8 @@ private:
     uint32_t cmd_sequence_sizeB = 0;
     void* cmd_region = nullptr;
     uint32_t cmd_write_offsetB = 0;
-    uint32_t pcie_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST);
-    uint32_t l1_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1);
+    uint32_t pcie_alignment = tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::HOST);
+    uint32_t l1_alignment = tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::L1);
 
     vector_aligned<uint32_t> cmd_region_vector;
 };

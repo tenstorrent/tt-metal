@@ -12,7 +12,7 @@ target_sources(
     PRIVATE
         tt_metal.cpp
         graph/graph_tracking.cpp
-        experimental/hal.cpp
+        hal.cpp
 )
 
 # TODO(afuller): this should be self-describing modules.

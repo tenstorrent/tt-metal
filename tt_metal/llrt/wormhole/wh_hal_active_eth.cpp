@@ -10,7 +10,7 @@
 #include <dev_msgs.h>
 #include "eth_l1_address_map.h"
 
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 #include "hal_asserts.hpp"
 #include "wormhole/wh_hal.hpp"
 

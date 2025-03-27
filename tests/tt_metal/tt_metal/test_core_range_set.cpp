@@ -68,7 +68,7 @@ void check_semaphores_are_initialized(
                     res);
                 std::vector<uint32_t> filtered_res;
                 static uint32_t num_u32_to_skip =
-                    tt_metal::hal.get_alignment(tt_metal::HalMemType::L1) / sizeof(uint32_t);
+                    tt_metal::hal_ref.get_alignment(tt_metal::HalMemType::L1) / sizeof(uint32_t);
                 for (int i = 0; i < res.size(); i += num_u32_to_skip) {
                     filtered_res.push_back(res.at(i));
                 }

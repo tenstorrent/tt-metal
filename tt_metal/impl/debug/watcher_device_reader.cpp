@@ -29,22 +29,22 @@
 #include "watcher_device_reader.hpp"
 #include "debug_helpers.hpp"
 
-#include <hal.hpp>
+#include "llrt/hal.hpp"
 
 using namespace tt::tt_metal;
 using std::string;
 
-#define NOC_MCAST_ADDR_START_X(addr) (hal.get_noc_mcast_addr_start_x(addr))
-#define NOC_MCAST_ADDR_START_Y(addr) (hal.get_noc_mcast_addr_start_y(addr))
-#define NOC_MCAST_ADDR_END_X(addr) (hal.get_noc_mcast_addr_end_x(addr))
-#define NOC_MCAST_ADDR_END_Y(addr) (hal.get_noc_mcast_addr_end_y(addr))
-#define NOC_UNICAST_ADDR_X(addr) (hal.get_noc_ucast_addr_x(addr))
-#define NOC_UNICAST_ADDR_Y(addr) (hal.get_noc_ucast_addr_y(addr))
-#define NOC_LOCAL_ADDR(addr) (hal.get_noc_local_addr(addr))
-#define NOC_OVERLAY_START_ADDR (hal.get_noc_overlay_start_addr())
-#define NOC_STREAM_REG_SPACE_SIZE (hal.get_noc_stream_reg_space_size())
-#define STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX (hal.get_noc_stream_remote_dest_buf_size_reg_index())
-#define STREAM_REMOTE_DEST_BUF_START_REG_INDEX (hal.get_noc_stream_remote_dest_buf_start_reg_index())
+#define NOC_MCAST_ADDR_START_X(addr) (hal_ref.get_noc_mcast_addr_start_x(addr))
+#define NOC_MCAST_ADDR_START_Y(addr) (hal_ref.get_noc_mcast_addr_start_y(addr))
+#define NOC_MCAST_ADDR_END_X(addr) (hal_ref.get_noc_mcast_addr_end_x(addr))
+#define NOC_MCAST_ADDR_END_Y(addr) (hal_ref.get_noc_mcast_addr_end_y(addr))
+#define NOC_UNICAST_ADDR_X(addr) (hal_ref.get_noc_ucast_addr_x(addr))
+#define NOC_UNICAST_ADDR_Y(addr) (hal_ref.get_noc_ucast_addr_y(addr))
+#define NOC_LOCAL_ADDR(addr) (hal_ref.get_noc_local_addr(addr))
+#define NOC_OVERLAY_START_ADDR (hal_ref.get_noc_overlay_start_addr())
+#define NOC_STREAM_REG_SPACE_SIZE (hal_ref.get_noc_stream_reg_space_size())
+#define STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX (hal_ref.get_noc_stream_remote_dest_buf_size_reg_index())
+#define STREAM_REMOTE_DEST_BUF_START_REG_INDEX (hal_ref.get_noc_stream_remote_dest_buf_start_reg_index())
 
 namespace {  // Helper functions
 
@@ -66,7 +66,7 @@ static const char* get_riscv_name(const CoreCoord& core, uint32_t type) {
 
 // Helper function to get stack size by riscv core type
 static uint32_t get_riscv_stack_size(const CoreDescriptor& core, uint32_t type) {
-    auto stack_size = hal.get_stack_size(type);
+    auto stack_size = hal_ref.get_stack_size(type);
     if (stack_size == 0xdeadbeef) {
         TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.coord.str(), type);
     }
@@ -101,7 +101,8 @@ static CoreCoord virtual_noc_coordinate(chip_id_t device_id, uint8_t noc_index, 
         // the system this coordinate belongs to.
         // Use this to convert to NOC0 coordinates and then derive Virtual Coords from it.
         CoreCoord physical_coord = {
-            hal.noc_coordinate(noc_index, grid_size.x, coord.x), hal.noc_coordinate(noc_index, grid_size.y, coord.y)};
+            hal_ref.noc_coordinate(noc_index, grid_size.x, coord.x),
+            hal_ref.noc_coordinate(noc_index, grid_size.y, coord.y)};
         return tt::Cluster::instance().get_virtual_coordinate_from_physical_coordinates(device_id, physical_coord);
     }
 }
@@ -189,7 +190,7 @@ WatcherDeviceReader::WatcherDeviceReader(
             read_data = tt::llrt::read_hex_vec_from_core(
                 device_id,
                 virtual_core,
-                hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::RETRAIN_COUNT),
+                hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::RETRAIN_COUNT),
                 sizeof(uint32_t));
             logical_core_to_eth_link_retraining_count[eth_core] = read_data[0];
         }
@@ -207,7 +208,7 @@ WatcherDeviceReader::~WatcherDeviceReader() {
             read_data = tt::llrt::read_hex_vec_from_core(
                 device_id,
                 virtual_core,
-                hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::RETRAIN_COUNT),
+                hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::RETRAIN_COUNT),
                 sizeof(uint32_t));
             uint32_t num_events = read_data[0] - logical_core_to_eth_link_retraining_count[eth_core];
             if (num_events > 0) {
@@ -341,7 +342,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
             riscv_id_t risc_id = core_and_risc.second;
 
             uint64_t addr =
-                hal.get_dev_addr(get_programmable_core_type(virtual_core, device_id), HalL1MemAddrType::WATCHER) +
+                hal_ref.get_dev_addr(get_programmable_core_type(virtual_core, device_id), HalL1MemAddrType::WATCHER) +
                 offsetof(watcher_msg_t, pause_status);
 
             // Clear only the one flag that we saved, in case another one was raised on device
@@ -380,12 +381,12 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     fprintf(f, "%s: ", core_str.c_str());
 
     // Ethernet cores have a different mailbox base addr
-    uint64_t mailbox_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX);
+    uint64_t mailbox_addr = hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX);
     if (is_eth_core) {
         if (is_active_eth_core) {
-            mailbox_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::MAILBOX);
+            mailbox_addr = hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::MAILBOX);
         } else {
-            mailbox_addr = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::MAILBOX);
+            mailbox_addr = hal_ref.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::MAILBOX);
         }
     }
 
@@ -423,7 +424,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
             DumpL1Status(virtual_core, &mbox_data->launch[launch_msg_read_ptr]);
         }
         if (!tt::llrt::RunTimeOptions::get_instance().watcher_noc_sanitize_disabled()) {
-            const auto NUM_NOCS_ = tt::tt_metal::hal.get_num_nocs();
+            const auto NUM_NOCS_ = tt::tt_metal::hal_ref.get_num_nocs();
             for (uint32_t noc = 0; noc < NUM_NOCS_; noc++) {
                 DumpNocSanitizeStatus(virtual_core, core_str, mbox_data, noc);
             }
@@ -496,8 +497,8 @@ void WatcherDeviceReader::DumpL1Status(CoreDescriptor& core, const launch_msg_t*
     std::vector<uint32_t> data;
     data = tt::llrt::read_hex_vec_from_core(device_id, core.coord, HAL_MEM_L1_BASE, sizeof(uint32_t));
     TT_ASSERT(core.type == CoreType::WORKER);
-    uint32_t core_type_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-    auto fw_launch_value = hal.get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr_value;
+    uint32_t core_type_idx = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    auto fw_launch_value = hal_ref.get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr_value;
     if (data[0] != fw_launch_value) {
         LogRunningKernels(core, launch_msg);
         TT_THROW("Watcher found corruption at L1[0] on core {}: read {}", core.coord.str(), data[0]);

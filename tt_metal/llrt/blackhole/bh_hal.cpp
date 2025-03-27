@@ -13,7 +13,7 @@
 #include "noc/noc_overlay_parameters.h"
 #include "tensix.h"
 
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 #include "blackhole/bh_hal.hpp"
 
 // Reserved DRAM addresses

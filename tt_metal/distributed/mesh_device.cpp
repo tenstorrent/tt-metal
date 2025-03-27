@@ -23,7 +23,7 @@
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 
-#include <hal.hpp>
+#include "llrt/hal.hpp"
 #include <mesh_coord.hpp>
 #include <small_vector.hpp>
 

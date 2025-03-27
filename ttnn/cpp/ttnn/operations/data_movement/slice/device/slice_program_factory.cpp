@@ -7,7 +7,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 
 #include "slice_op.hpp"
@@ -61,11 +61,11 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     }
 
     auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? ::experimental::hal::get_dram_alignment()
-                                    : ::experimental::hal::get_l1_alignment();
+                                    ? ::hal::get_dram_alignment()
+                                    : ::hal::get_l1_alignment();
     auto dst_buffer_alignment = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? ::experimental::hal::get_dram_alignment()
-                                    : ::experimental::hal::get_l1_alignment();
+                                    ? ::hal::get_dram_alignment()
+                                    : ::hal::get_l1_alignment();
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
     uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
     uint32_t misalignment = begins_bytes % src_buffer_alignment;
@@ -186,11 +186,11 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     uint32_t max_read_size = 4096;
 
     auto src_buffer_alignment = a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? ::experimental::hal::get_dram_alignment()
-                                    : ::experimental::hal::get_l1_alignment();
+                                    ? ::hal::get_dram_alignment()
+                                    : ::hal::get_l1_alignment();
     auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? ::experimental::hal::get_dram_alignment()
-                                    : ::experimental::hal::get_l1_alignment();
+                                    ? ::hal::get_dram_alignment()
+                                    : ::hal::get_l1_alignment();
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
 
     // if begins is not aligned then we need to pad the cb size, so that we can read from the nearest aligned address

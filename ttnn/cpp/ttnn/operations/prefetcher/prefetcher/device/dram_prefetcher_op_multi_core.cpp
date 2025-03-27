@@ -9,7 +9,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 
 #include <tt-metalium/global_circular_buffer_impl.hpp>
@@ -148,7 +148,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     uint32_t remote_cb_size = global_cb.size();
     uint32_t remote_cb_single_tile_size = max_tile_size;
 
-    auto L1_ALIGNMENT = tt::tt_metal::experimental::hal::get_l1_alignment();
+    auto L1_ALIGNMENT = tt::tt_metal::hal::get_l1_alignment();
     uint32_t remote_cb_index = tt::CBIndex::c_31;
     CircularBufferConfig remote_cb_config = CircularBufferConfig(remote_cb_size);
     remote_cb_config.remote_index(remote_cb_index)

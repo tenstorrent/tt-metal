@@ -13,7 +13,7 @@
 #include <dev_msgs.h>
 #include "noc/noc_parameters.h"
 
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 #include "hal_asserts.hpp"
 #include "wormhole/wh_hal.hpp"
 

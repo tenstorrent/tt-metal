@@ -260,7 +260,9 @@ TEST_F(DispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
         .core_range = {{0, 0}, {0, 0}},
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
         .dram_buffer_size = buffer_size,
-        .l1_buffer_addr = tt::align(hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED), hal.get_alignment(HalMemType::DRAM)),
+        .l1_buffer_addr = tt::align(
+            hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED),
+            hal_ref.get_alignment(HalMemType::DRAM)),
         .kernel_cfg = tt_metal::EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = tt_metal::NOC::NOC_0},
     };
 
@@ -282,10 +284,12 @@ TEST_F(DispatchFixture, IdleEthDRAMLoopbackSingleCore) {
     }
 
     unit_tests_common::dram::test_dram::DRAMConfig dram_test_config = {
-        .core_range = {{0, 0}, {0, 0}}, // Set below
+        .core_range = {{0, 0}, {0, 0}},  // Set below
         .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
         .dram_buffer_size = buffer_size,
-        .l1_buffer_addr = tt::align(hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED), hal.get_alignment(HalMemType::DRAM)),
+        .l1_buffer_addr = tt::align(
+            hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED),
+            hal_ref.get_alignment(HalMemType::DRAM)),
         .kernel_cfg = tt_metal::EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0},
     };
 

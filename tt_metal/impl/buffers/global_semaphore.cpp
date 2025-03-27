@@ -16,7 +16,7 @@
 #include <buffer.hpp>
 #include <buffer_constants.hpp>
 #include <device.hpp>
-#include <hal.hpp>
+#include "llrt/hal.hpp"
 
 #include "tt_cluster.hpp"
 

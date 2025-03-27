@@ -8,11 +8,10 @@
 #include <tt-metalium/constants.hpp>
 #include "conv3d_program_factory.hpp"
 
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::experimental::conv3d {
 

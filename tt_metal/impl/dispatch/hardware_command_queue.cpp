@@ -558,7 +558,7 @@ void HWCommandQueue::record_end() {
     auto& trace_data = this->trace_ctx_->data;
     trace_data = std::move(this->manager_.get_bypass_data());
     // Add trace end command to terminate the trace buffer
-    DeviceCommand command_sequence(hal.get_alignment(HalMemType::HOST));
+    DeviceCommand command_sequence(hal_ref.get_alignment(HalMemType::HOST));
     command_sequence.add_prefetch_exec_buf_end();
     for (int i = 0; i < command_sequence.size_bytes() / sizeof(uint32_t); i++) {
         trace_data.push_back(((uint32_t*)command_sequence.data())[i]);

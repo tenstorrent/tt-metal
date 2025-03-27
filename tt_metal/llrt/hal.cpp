@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 
 #include <tt_backend_api_types.hpp>
 #include <assert.hpp>

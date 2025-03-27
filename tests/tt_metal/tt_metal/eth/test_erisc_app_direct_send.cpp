@@ -229,7 +229,7 @@ bool send_over_eth(
 
     // TODO: this should be updated to use kernel api
     uint32_t active_eth_index =
-        tt_metal::hal.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+        tt_metal::hal_ref.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
     auto sender_firmware_path = tt_metal::BuildEnvManager::get_instance()
                                     .get_firmware_build_state(sender_device->build_id(), active_eth_index, 0, 0)
                                     .get_target_out_path("");

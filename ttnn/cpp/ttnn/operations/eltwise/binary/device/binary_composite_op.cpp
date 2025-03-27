@@ -9,7 +9,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "cpp/ttnn/operations/eltwise/ternary/where.hpp"
 #include "cpp/ttnn/operations/copy.hpp"
@@ -66,7 +66,7 @@ Tensor _addalpha(
 
 // nextafter
 Tensor _nextafter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    const float eps = tt::tt_metal::experimental::hal::get_eps();
+    const float eps = tt::tt_metal::hal::get_eps();
     Tensor result(input_a);
     {
         Tensor eps_gt(input_a);
@@ -368,7 +368,7 @@ Tensor ExecuteBinaryRemainder::invoke(
     TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Op is supported on Wormhole or Blackhole");
     DataType input_dtype = input_a.get_dtype();
 
-    float t_nan = tt::tt_metal::experimental::hal::get_nan();
+    float t_nan = tt::tt_metal::hal::get_nan();
 
     // No typecast for FP32 input
     const auto do_typecast = input_dtype != DataType::FLOAT32 or input_b.get_dtype() != DataType::FLOAT32;

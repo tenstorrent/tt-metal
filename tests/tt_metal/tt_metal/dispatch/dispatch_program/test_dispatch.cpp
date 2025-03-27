@@ -6,7 +6,7 @@
 
 #include "dispatch_fixture.hpp"
 
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 #include <tt-metalium/allocator.hpp>
 
 namespace tt::tt_metal {
@@ -66,7 +66,7 @@ static void test_sems_across_core_types(
 
             // Set up args
             vector<uint32_t> eth_rtas = {
-                tt::tt_metal::hal.noc_xy_encoding(phys_tensix_core.x, phys_tensix_core.y),
+                tt::tt_metal::hal_ref.noc_xy_encoding(phys_tensix_core.x, phys_tensix_core.y),
                 eth_sem_id,
                 tensix_sem_id,
                 eth_sem_init_val,
@@ -82,7 +82,7 @@ static void test_sems_across_core_types(
             SetRuntimeArgs(program, eth_kernel, eth_core, eth_rtas);
 
             vector<uint32_t> tensix_rtas = {
-                tt::tt_metal::hal.noc_xy_encoding(phys_eth_core.x, phys_eth_core.y),
+                tt::tt_metal::hal_ref.noc_xy_encoding(phys_eth_core.x, phys_eth_core.y),
                 tensix_sem_id,
                 eth_sem_id,
                 tensix_sem_init_val,

@@ -8,7 +8,7 @@
 #include <string>
 #include <umd/device/types/arch.h>
 
-namespace tt::tt_metal::experimental::hal {
+namespace tt::tt_metal::hal {
 
 /**
  * @brief Uses the hardware abstraction layer to inform client of the architecture
@@ -105,4 +105,4 @@ float get_nan();
  */
 float get_inf();
 
-}  // namespace tt::tt_metal::experimental::hal
+}  // namespace tt::tt_metal::hal
