@@ -240,7 +240,6 @@ def write_tensor_states(loaded: dict, tensor_states_path: str) -> None:
 @pytest.mark.parametrize(
     "input_base_path, model_name",
     [
-        # TODO: do we need to earlier models than 3.2-90B?
         # ("/proj_sw/user_dev/llama32-data/Llama3.2-1B-Instruct", "Llama3.2-1B-Instruct"),
         # ("/proj_sw/user_dev/llama32-data/Llama3.2-3B-Instruct", "Llama3.2-3B-Instruct"),
         # ("/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B-Instruct", "Llama3.1-8B-Instruct"),

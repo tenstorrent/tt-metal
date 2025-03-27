@@ -54,16 +54,31 @@ def get_unified_tensor(key, value, hidden_size):
     return res
 
 
+def copy_file_if_no_exist(src_path: Path, dst_path: Path, file_name: str) -> None:
+    src_file = src_path / file_name
+    if src_file.exists() and not (dst_path / file_name).exists():
+        shutil.copy(src_file, dst_path)
+        print(f"Copied {file_name} to {dst_path}")
+
+
 async def torch_save_async(chunk, file_full_path):
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, torch.save, chunk, file_full_path)
 
 
-async def repack(in_dir, out_dir, chunk_size):
+async def repack(in_dir, out_dir, chunk_size, stop_after: int = None):
     """
     Repack llama3.2-90b weights into checkpoints chunked by layers.
     Non-layer weights are saved in the first checkpoint.
+
+    Args:
+        in_dir: input directory containing llama3.2-90b weights from Meta
+        out_dir: output directory to save the chunked checkpoints
+        chunk_size: number of layers per chunk
+        stop_at: stop repacking at this many chunks
     """
+    assert stop_after is None or stop_after > 0, f"Invalid stop_at value: {stop_after}"
+
     # load model params
     params_file = Path(in_dir) / "params.json"
     assert params_file.exists(), f"params.json not found in {in_dir}"
@@ -103,9 +118,8 @@ async def repack(in_dir, out_dir, chunk_size):
     # save the first chunk
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    if params_file.exists() and not (out_dir / "params.json").exists():
-        shutil.copy(params_file, out_dir)
-        print(f"Copied params.json to {out_dir}")
+    copy_file_if_no_exist(Path(in_dir), out_dir, "params.json")
+    copy_file_if_no_exist(Path(in_dir), out_dir, "tokenizer.model")
     out_file = out_dir / f"vision-model-and-layers_{0}-{num_decoder_layers_in_first_chunk - 1}.pth"
     save_tasks.append(asyncio.create_task(torch_save_async(chunk, out_file)))
     print(f"Saved the following layers in {out_file}:")
@@ -113,8 +127,15 @@ async def repack(in_dir, out_dir, chunk_size):
         print("\t" + key)
     del chunk
 
+    if stop_after is not None and stop_after == 1:
+        await wait_with_progress(save_tasks, desc="Writing chunked checkpoints to files")
+        return  # early return to stop at the first chunk
+
     # save the rest of the merged checkpoints into chunks
     num_chunks = math.ceil((num_layers - num_decoder_layers_in_first_chunk) / chunk_size)
+    # set stop_after to num_chunks if it is None, which means repacking all layers
+    stop_after = num_chunks if stop_after is None else stop_after - 1  # [INFO] -1 because already saved the 1st chunk
+
     chunks = [list() for _ in range(num_chunks)]
     for key in merged_checkpoints.keys():
         assert key.startswith("text_model"), f"Unexpected key: {key}"
@@ -125,6 +146,9 @@ async def repack(in_dir, out_dir, chunk_size):
 
     print(f"Repacking {num_layers} layers into {num_chunks} chunks of size {chunk_size}")
     for chunk_id in tqdm(range(num_chunks)):
+        if chunk_id >= stop_after:
+            break
+
         chunk = {}
         for key in chunks[chunk_id]:
             chunk[key] = get_unified_tensor(key, merged_checkpoints[key], hidden_size)
@@ -160,6 +184,9 @@ if __name__ == "__main__":
     parser.add_argument("in_dir", type=str, help="input directory")
     parser.add_argument("out_dir", type=str, help="output directory")
     parser.add_argument("chunk_size", type=int, default=10, help="number of layers per chunk")
+    parser.add_argument(
+        "--stop_after", type=int, default=None, help="stop repacking after this many chunks are saved (default to all)"
+    )
     args = parser.parse_args()
 
-    asyncio.run(repack(args.in_dir, args.out_dir, args.chunk_size))
+    asyncio.run(repack(args.in_dir, args.out_dir, args.chunk_size, args.stop_after))

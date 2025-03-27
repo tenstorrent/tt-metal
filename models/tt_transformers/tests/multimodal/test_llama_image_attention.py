@@ -40,7 +40,7 @@ def test_attention_inference(batch, num_chunks, mesh_device, use_program_cache, 
     mesh_device.enable_async(True)
 
     model_args = ModelArgs(mesh_device)
-    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
+    state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = "vision_model.vision_encoder.transformer.resblocks.0.attn."
