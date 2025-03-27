@@ -38,6 +38,7 @@ runs:
 
     - name: 📂 Extract Build Files
       if: ${{ inputs.build-artifact-name != '' }}
+      working-directory: ${{ inputs.path }}
       run: tar -xf ttm_any.tar
       shell: bash
 
