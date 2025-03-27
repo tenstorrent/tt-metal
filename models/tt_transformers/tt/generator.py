@@ -45,6 +45,7 @@ class Generator:
         self.formatter = formatter
         self.data_parallel = len(self.model)
 
+    # Note: This function is called by vLLM
     def prefill_forward_text(self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None):
         batch, batch_seq_len = tokens.shape
 
@@ -185,6 +186,7 @@ class Generator:
             )
             return tt_logits
 
+    # Note: This function is called by vLLM
     def decode_forward_text(
         self,
         tokens,
@@ -448,6 +450,7 @@ class Generator:
 
         return xattn_caches, cross_attention_masks, full_text_row_masked_out_mask, tt_logits
 
+    # Note: This function is called by vLLM
     def prefill_forward(
         self,
         vision_images,
@@ -527,6 +530,7 @@ class Generator:
 
         return output_logits, output_xattn_masks, output_full_text_row_masked_out_masks
 
+    # Note: This function is called by vLLM
     def decode_forward(
         self,
         start_pos,
@@ -578,6 +582,7 @@ class Generator:
         else:
             return tt_logits
 
+    # Note: This function is called by vLLM
     def read_decode_output(self, tt_logits, unpadded_batch, argmax_on_device=False):
         batch_per_dp = unpadded_batch // self.data_parallel
         logits = []
@@ -1141,15 +1146,9 @@ class Generator:
         num_blocks = num_blocks_in_seq(prefill_len, block_size)
         return page_table[:, :num_blocks]
 
-    ## Destructor (used to delete ttnn trace if exists)
+    ## Destructor
 
     def __del__(self):
-        if hasattr(self, "trace_id"):
-            ttnn.release_trace(self.mesh_device, self.trace_id)
-
-        if hasattr(self, "trace_id_text"):
-            ttnn.release_trace(self.mesh_device, self.trace_id_text)
-
         # Workaround for issue #19052
         if self.data_parallel > 1:
             for m in self.model:
