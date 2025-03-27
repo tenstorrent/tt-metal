@@ -16,8 +16,7 @@ Tensor HaloOperation::invoke(
     bool transpose_mcast,
     uint32_t reshard_num_cores_nhw,
     const MemoryConfig& output_memory_config,
-    bool is_out_tiled,
-    bool in_place) {
+    bool is_out_tiled) {
     return halo_op(
         input_tensor,
         config,
@@ -26,7 +25,6 @@ Tensor HaloOperation::invoke(
         transpose_mcast,
         reshard_num_cores_nhw,
         std::move(output_memory_config),
-        is_out_tiled,
-        in_place);
+        is_out_tiled);
 }
 };  // namespace ttnn::operations::sliding_window::halo
