@@ -181,7 +181,18 @@ ttnn::Tensor gen_trans_mat() {
 }
 
 RotaryEmbeddingParams build_rope_params(uint32_t sequence_length, uint32_t head_dim, float theta, bool is_distributed) {
-    if (head_dim % 32U != 0U) {
+    auto adjusted_head_dim = head_dim;
+    if (is_distributed) {
+        auto num_devices = static_cast<uint32_t>(autograd::ctx().get_device().num_devices());
+        if (head_dim % num_devices != 0) {
+            throw std::invalid_argument(fmt::format(
+                "RoPE head_dim must be divisible by the number of devices, but got {} and {} devices",
+                head_dim,
+                num_devices));
+        }
+        adjusted_head_dim = head_dim / num_devices;
+    }
+    if (adjusted_head_dim % 32U != 0U) {
         throw std::invalid_argument(fmt::format("RoPE head_dim must be divisible by 32, but is {}", head_dim));
     }
     if (head_dim > 256U) {
@@ -193,7 +204,6 @@ RotaryEmbeddingParams build_rope_params(uint32_t sequence_length, uint32_t head_
     }
     auto [sin_freqs, cos_freqs] = gen_freqs(head_dim, sequence_length, theta, is_distributed);
     auto trans_mat = gen_trans_mat();
-
     return {
         .cos_cache = cos_freqs,
         .sin_cache = sin_freqs,
@@ -202,7 +212,7 @@ RotaryEmbeddingParams build_rope_params(uint32_t sequence_length, uint32_t head_
         .trans_mat = trans_mat,
 
         .sequence_length = sequence_length,
-        .head_dim = head_dim,
+        .head_dim = adjusted_head_dim,
     };
 }
 
