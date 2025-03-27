@@ -652,28 +652,42 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
             program, reduction_writer_kernel_id, output_corerangeset_per_link[link], reduction_writer_rt_args);
     }
 
-    auto& reader_args_by_core = GetRuntimeArgs(program, reduction_reader_kernel_id);
-    auto& writer_args_by_core = GetRuntimeArgs(program, reduction_writer_kernel_id);
+    auto& reduction_reader_args_by_core = GetRuntimeArgs(program, reduction_reader_kernel_id);
+    auto& reduction_writer_args_by_core = GetRuntimeArgs(program, reduction_writer_kernel_id);
 
     for (uint32_t i = 0; i < in_num_cores; i++) {
         const auto& core = in_cores_vec[i];
-        auto& reader_args = reader_args_by_core[core.x][core.y];
+        auto& reader_args = reduction_reader_args_by_core[core.x][core.y];
         reader_args[4] = i;
-        auto& writer_args = writer_args_by_core[core.x][core.y];
+        auto& writer_args = reduction_writer_args_by_core[core.x][core.y];
         writer_args[4] = i;
     }
 
     auto override_runtime_arguments_callback =
-        [worker_sender_reader_kernel_id, worker_sender_writer_kernel_id, sender_worker_cores, cb_out, cb_reduction](
+        [worker_sender_reader_kernel_id,
+         worker_sender_writer_kernel_id,
+         sender_worker_cores,
+         cb_out,
+         cb_reduction,
+         output_cores_vec,
+         reduction_reader_kernel_id,
+         reduction_writer_kernel_id](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
-
             const auto& input = input_tensors[0];
-            const auto& output = output_tensors[0];
             const auto& buffer_tensor = input_tensors[1];
+            const auto& batch_tensor = input_tensors[2];
+            const auto& output = output_tensors[0];
+            const auto& q_output = output_tensors[1];
+            const auto& k_output = output_tensors[2];
+            const auto& v_output = output_tensors[3];
+            auto q_base_addr = q_output.buffer()->address();
+            auto k_base_addr = k_output.buffer()->address();
+            auto v_base_addr = v_output.buffer()->address();
+            auto batch_base_addr = batch_tensor.buffer()->address();
 
             auto semaphore = static_cast<const ttnn::AllReduceCreateQkvHeads*>(operation)->semaphore;
 
@@ -688,9 +702,25 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
                 worker_writer_sender_runtime_args[1] = semaphore.address();
             }
+
+            auto& reduction_reader_args_by_core = GetRuntimeArgs(program, reduction_reader_kernel_id);
+            auto& reduction_writer_args_by_core = GetRuntimeArgs(program, reduction_writer_kernel_id);
+
+            for (uint32_t i = 0; i < output_cores_vec.size(); i++) {
+                const auto& core = output_cores_vec[i];
+                auto& reader_args = reduction_reader_args_by_core[core.x][core.y];
+                reader_args[0] = q_base_addr;
+                reader_args[1] = k_base_addr;
+                reader_args[2] = v_base_addr;
+                reader_args[3] = batch_base_addr;
+                auto& writer_args = reduction_writer_args_by_core[core.x][core.y];
+                writer_args[0] = q_base_addr;
+                writer_args[1] = k_base_addr;
+                writer_args[2] = v_base_addr;
+                writer_args[3] = batch_base_addr;
+            }
             UpdateDynamicCircularBufferAddress(program, cb_out, *output.buffer());
             UpdateDynamicCircularBufferAddress(program, cb_reduction, *buffer_tensor.buffer());
-
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
