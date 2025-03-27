@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <math.h>
 
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_op.hpp"
 #include <tt-metalium/work_split.hpp>

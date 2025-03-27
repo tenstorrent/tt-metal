@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <math.h>
+#include <optional>
+
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/buffer.hpp>
 #include "tt-metalium/circular_buffer.hpp"
@@ -16,8 +19,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/util.hpp>
-
-#include <optional>
 
 using namespace tt::constants;
 namespace ttnn::operations::normalization {
