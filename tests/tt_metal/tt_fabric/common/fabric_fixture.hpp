@@ -30,7 +30,7 @@ class ControlPlaneFixture : public ::testing::Test {
 };
 
 class BaseFabricFixture : public ::testing::Test {
-protected:
+public:
     tt::ARCH arch_;
     std::map<chip_id_t, tt::tt_metal::IDevice*> devices_map_;
     std::vector<tt::tt_metal::IDevice*> devices_;
