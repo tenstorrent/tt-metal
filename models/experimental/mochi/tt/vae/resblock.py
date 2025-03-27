@@ -1,4 +1,5 @@
 import ttnn
+from .groupnorm_torch import GroupNorm as GroupNormTorch
 from .groupnorm import GroupNorm
 from .conv3d import ContextParallelConv3d
 from models.common.lightweightmodule import LightweightModule

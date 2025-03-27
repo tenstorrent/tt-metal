@@ -179,16 +179,17 @@ def test_groupnorm_spatial_tt(device, num_groups, B, C, T, H, W, affine):
     ],
     ids=["variant1", "variant2", "variant3", "variant4"],
 )
-# @pytest.mark.parametrize(
-#     "mesh_device",
-#     [
-#         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-#             os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
-#         )
-#     ],
-#     indirect=True,
-# )
-def test_tt_groupnorm_module(device, num_groups, B, C, T, H, W, affine):
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+def test_tt_groupnorm_module(mesh_device, num_groups, B, C, T, H, W, affine):
     # Set a manual seed for reproducibility
     torch.manual_seed(42)
 
@@ -211,7 +212,7 @@ def test_tt_groupnorm_module(device, num_groups, B, C, T, H, W, affine):
 
     # Create our TTGroupNorm implementation
     tt_groupnorm = TTGroupNorm(
-        mesh_device=device,
+        mesh_device=mesh_device,
         state_dict=state_dict,
         state_dict_prefix="",
         num_groups=num_groups,
@@ -224,20 +225,18 @@ def test_tt_groupnorm_module(device, num_groups, B, C, T, H, W, affine):
 
     # Convert input to NTHWC format for TTGroupNorm
     input_nthwc = input_tensor.permute(0, 2, 3, 4, 1)  # B, T, H, W, C
-    input_nthwc = input_nthwc.reshape(B * T, 1, H * W, C)
     input_nthwc = ttnn.from_torch(
         input_nthwc,
         dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        # mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
     )
 
     # Run TTGroupNorm
     output_tt_nthwc = tt_groupnorm(input_nthwc)
-    output_tt = ttnn.to_torch(output_tt_nthwc)  # , mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
-    output_tt = output_tt.reshape(B, T, H, W, C)  # .permute(0, 4, 1, 2, 3)
+    output_tt = ttnn.to_torch(output_tt_nthwc, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
 
     # Convert TTGroupNorm output back to BCTHW format
     output_tt = output_tt.permute(0, 4, 1, 2, 3)  # B, C, T, H, W

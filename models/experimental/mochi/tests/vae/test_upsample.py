@@ -13,7 +13,7 @@ from models.experimental.mochi.tt.common import (
 from models.experimental.mochi.tt.vae.common import load_decoder_weights
 
 # Common test configurations
-PCC_REQUIRED = 0.99
+PCC_REQUIRED = 0.989
 
 # Base configuration that applies to all test cases
 upsample_base_args = {

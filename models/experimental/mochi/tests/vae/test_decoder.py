@@ -36,7 +36,7 @@ test_configs = [
     {
         "name": "small_latent",
         "input_shape": (1, 12, 28, 30, 53),
-        # Expected output will be approximately: (1, 3, 81, 240, 424)
+        # Expected output will be approximately: (1, 3, 163, 240, 424)
     },
     {
         "name": "medium_latent",
