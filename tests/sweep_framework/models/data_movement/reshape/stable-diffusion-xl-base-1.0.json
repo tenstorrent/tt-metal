@@ -1,0 +1,51 @@
+[
+  {
+    "Name": "reshape",
+    "Input Size": "[(1, 1024, 10, 64)]",
+    "Output Size": "[(1, 1024, 640)]",
+    "Attributes": "Tensor[(1, 1024, 10, 64)], 1, -1, 640",
+    "Count": 20
+  },
+  {
+    "Name": "reshape",
+    "Input Size": "[(1, 1024, 640)]",
+    "Output Size": "[(1, 32, 32, 640)]",
+    "Attributes": "Tensor[(1, 1024, 640)], 1, 32, 32, 640",
+    "Count": 5
+  },
+  {
+    "Name": "reshape",
+    "Input Size": "[(1, 16, 16, 1280)]",
+    "Output Size": "[(1, 256, 1280)]",
+    "Attributes": "Tensor[(1, 16, 16, 1280)], 1, 256, 1280",
+    "Count": 6
+  },
+  {
+    "Name": "reshape",
+    "Input Size": "[(1, 256, 1280)]",
+    "Output Size": "[(1, 16, 16, 1280)]",
+    "Attributes": "Tensor[(1, 256, 1280)], 1, 16, 16, 1280",
+    "Count": 6
+  },
+  {
+    "Name": "reshape",
+    "Input Size": "[(1, 256, 20, 64)]",
+    "Output Size": "[(1, 256, 1280)]",
+    "Attributes": "Tensor[(1, 256, 20, 64)], 1, -1, 1280",
+    "Count": 120
+  },
+  {
+    "Name": "reshape",
+    "Input Size": "[(1, 32, 32, 640)]",
+    "Output Size": "[(1, 1024, 640)]",
+    "Attributes": "Tensor[(1, 32, 32, 640)], 1, 1024, 640",
+    "Count": 5
+  },
+  {
+    "Name": "reshape",
+    "Input Size": "[(6, 256)]",
+    "Output Size": "[(1, 1536)]",
+    "Attributes": "Tensor[(6, 256)], (1, -1)",
+    "Count": 1
+  }
+]

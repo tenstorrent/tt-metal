@@ -1,0 +1,23 @@
+[
+  {
+    "Name": "sin",
+    "Input Size": "[(1, 128)]",
+    "Output Size": "[(1, 128)]",
+    "Attributes": "Tensor[(1, 128)]",
+    "Count": 1
+  },
+  {
+    "Name": "sin",
+    "Input Size": "[(4352, 28)]",
+    "Output Size": "[(4352, 28)]",
+    "Attributes": "Tensor[(4352, 28)]",
+    "Count": 2
+  },
+  {
+    "Name": "sin",
+    "Input Size": "[(4352, 8)]",
+    "Output Size": "[(4352, 8)]",
+    "Attributes": "Tensor[(4352, 8)]",
+    "Count": 1
+  }
+]

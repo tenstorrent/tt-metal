@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "rsqrt",
+    "Input Size": "[(1, 2048, 1)]",
+    "Output Size": "[(1, 2048, 1)]",
+    "Attributes": "Tensor[(1, 2048, 1)]",
+    "Count": 65
+  }
+]

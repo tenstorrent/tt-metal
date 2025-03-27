@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "bool",
+    "Input Size": "[(1, 1, 2048, 2048)]",
+    "Output Size": "[(1, 1, 2048, 2048)]",
+    "Attributes": "Tensor[(1, 1, 2048, 2048)]",
+    "Count": 1
+  }
+]

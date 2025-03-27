@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "tril",
+    "Input Size": "[(1, 1, 540, 589)]",
+    "Output Size": "[(1, 1, 540, 589)]",
+    "Attributes": "Tensor[(1, 1, 540, 589)]",
+    "Count": 40
+  }
+]

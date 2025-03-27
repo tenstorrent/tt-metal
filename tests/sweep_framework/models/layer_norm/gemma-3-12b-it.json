@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "layer_norm",
+    "Input Size": "[(2, 4096, 1152)]",
+    "Output Size": "[(2, 4096, 1152)]",
+    "Attributes": "Tensor[(2, 4096, 1152)], (1152,)",
+    "Count": 55
+  }
+]

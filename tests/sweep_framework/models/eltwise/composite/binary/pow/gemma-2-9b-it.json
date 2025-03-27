@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "pow",
+    "Input Size": "[(1, 256, 3584)]",
+    "Output Size": "[(1, 256, 3584)]",
+    "Attributes": "Tensor[(1, 256, 3584)], 2",
+    "Count": 169
+  }
+]

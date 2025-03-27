@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "flatten",
+    "Input Size": "[(2, 1152, 16, 16)]",
+    "Output Size": "[(2, 1152, 256)]",
+    "Attributes": "Tensor[(2, 1152, 16, 16)], 2",
+    "Count": 1
+  },
+  {
+    "Name": "flatten",
+    "Input Size": "[(2, 1152, 64, 64)]",
+    "Output Size": "[(2, 1152, 4096)]",
+    "Attributes": "Tensor[(2, 1152, 64, 64)], 2",
+    "Count": 1
+  }
+]

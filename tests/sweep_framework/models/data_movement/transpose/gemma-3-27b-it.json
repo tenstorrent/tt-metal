@@ -1,0 +1,65 @@
+[
+  {
+    "Name": "transpose",
+    "Input Size": "[(1, 32, 540, 128)]",
+    "Output Size": "[(1, 540, 32, 128)]",
+    "Attributes": "Tensor[(1, 32, 540, 128)], 1, 2",
+    "Count": 62
+  },
+  {
+    "Name": "transpose",
+    "Input Size": "[(1, 540, 16, 128)]",
+    "Output Size": "[(1, 16, 540, 128)]",
+    "Attributes": "Tensor[(1, 540, 16, 128)], 1, 2",
+    "Count": 124
+  },
+  {
+    "Name": "transpose",
+    "Input Size": "[(1, 540, 32, 128)]",
+    "Output Size": "[(1, 32, 540, 128)]",
+    "Attributes": "Tensor[(1, 540, 32, 128)], 1, 2",
+    "Count": 62
+  },
+  {
+    "Name": "transpose",
+    "Input Size": "[(1, 64, 540)]",
+    "Output Size": "[(1, 540, 64)]",
+    "Attributes": "Tensor[(1, 64, 540)], 1, 2",
+    "Count": 2
+  },
+  {
+    "Name": "transpose",
+    "Input Size": "[(2, 1152, 256)]",
+    "Output Size": "[(2, 256, 1152)]",
+    "Attributes": "Tensor[(2, 1152, 256)], 1, 2",
+    "Count": 1
+  },
+  {
+    "Name": "transpose",
+    "Input Size": "[(2, 1152, 4096)]",
+    "Output Size": "[(2, 4096, 1152)]",
+    "Attributes": "Tensor[(2, 1152, 4096)], 1, 2",
+    "Count": 1
+  },
+  {
+    "Name": "transpose",
+    "Input Size": "[(2, 16, 4096, 72)]",
+    "Output Size": "[(2, 4096, 16, 72)]",
+    "Attributes": "Tensor[(2, 16, 4096, 72)], 1, 2",
+    "Count": 27
+  },
+  {
+    "Name": "transpose",
+    "Input Size": "[(2, 4096, 1152)]",
+    "Output Size": "[(2, 1152, 4096)]",
+    "Attributes": "Tensor[(2, 4096, 1152)], 1, 2",
+    "Count": 1
+  },
+  {
+    "Name": "transpose",
+    "Input Size": "[(2, 4096, 16, 72)]",
+    "Output Size": "[(2, 16, 4096, 72)]",
+    "Attributes": "Tensor[(2, 4096, 16, 72)], 1, 2",
+    "Count": 81
+  }
+]

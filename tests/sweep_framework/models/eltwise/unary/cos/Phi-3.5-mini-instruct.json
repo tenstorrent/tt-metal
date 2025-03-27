@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "cos",
+    "Input Size": "[(1, 2048, 96)]",
+    "Output Size": "[(1, 2048, 96)]",
+    "Attributes": "Tensor[(1, 2048, 96)]",
+    "Count": 32
+  }
+]

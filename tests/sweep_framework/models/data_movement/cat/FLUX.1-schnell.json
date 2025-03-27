@@ -1,0 +1,44 @@
+[
+  {
+    "Name": "cat",
+    "Input Size": "[(1, 128), (1, 128)]",
+    "Output Size": "[(1, 256)]",
+    "Attributes": "Tensor[(1, 128)] Tensor[(1, 128)]",
+    "Count": 2
+  },
+  {
+    "Name": "cat",
+    "Input Size": "[(1, 24, 256, 128), (1, 24, 4096, 128)]",
+    "Output Size": "[(1, 24, 4352, 128)]",
+    "Attributes": "Tensor[(1, 24, 256, 128)] Tensor[(1, 24, 4096, 128)]",
+    "Count": 57
+  },
+  {
+    "Name": "cat",
+    "Input Size": "[(1, 256, 3072), (1, 4096, 3072)]",
+    "Output Size": "[(1, 4352, 3072)]",
+    "Attributes": "Tensor[(1, 256, 3072)] Tensor[(1, 4096, 3072)]",
+    "Count": 1
+  },
+  {
+    "Name": "cat",
+    "Input Size": "[(1, 4352, 3072), (1, 4352, 12288)]",
+    "Output Size": "[(1, 4352, 15360)]",
+    "Attributes": "Tensor[(1, 4352, 3072)] Tensor[(1, 4352, 12288)]",
+    "Count": 38
+  },
+  {
+    "Name": "cat",
+    "Input Size": "[(256, 3), (4096, 3)]",
+    "Output Size": "[(4352, 3)]",
+    "Attributes": "Tensor[(256, 3)] Tensor[(4096, 3)]",
+    "Count": 1
+  },
+  {
+    "Name": "cat",
+    "Input Size": "[(4352, 16), (4352, 56), (4352, 56)]",
+    "Output Size": "[(4352, 128)]",
+    "Attributes": "Tensor[(4352, 16)] Tensor[(4352, 56)] Tensor[(4352, 56)]",
+    "Count": 2
+  }
+]

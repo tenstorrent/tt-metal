@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "reshape",
+    "Input Size": "[(1, 8, 2, 256, 256)]",
+    "Output Size": "[(1, 16, 256, 256)]",
+    "Attributes": "Tensor[(1, 8, 2, 256, 256)], 1, 16, 256, 256",
+    "Count": 84
+  },
+  {
+    "Name": "reshape",
+    "Input Size": "[(256,)]",
+    "Output Size": "[(256, 1)]",
+    "Attributes": "Tensor[(256,)], -1, 1",
+    "Count": 1
+  }
+]

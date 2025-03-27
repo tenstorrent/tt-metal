@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "concat",
+    "Input Size": "[(1, 1280), (1, 1536)]",
+    "Output Size": "[(1, 2816)]",
+    "Attributes": "Tensor[(1, 1280)] Tensor[(1, 1536)]",
+    "Count": 1
+  }
+]

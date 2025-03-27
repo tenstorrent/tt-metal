@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "to",
+    "Input Size": "[(1, 77)]",
+    "Output Size": "[(1, 77)]",
+    "Attributes": "Tensor[(1, 77)]",
+    "Count": 1
+  },
+  {
+    "Name": "to",
+    "Input Size": "[(77, 77)]",
+    "Output Size": "[(77, 77)]",
+    "Attributes": "Tensor[(77, 77)], torch.float32",
+    "Count": 1
+  }
+]

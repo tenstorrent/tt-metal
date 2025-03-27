@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "clamp",
+    "Input Size": "[(2, 1, 1)]",
+    "Output Size": "[(2, 1, 1)]",
+    "Attributes": "Tensor[(2, 1, 1)]",
+    "Count": 1
+  }
+]

@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "__and__",
+    "Input Size": "[(336, 336), (336, 336)]",
+    "Output Size": "[(336, 336)]",
+    "Attributes": "Tensor[(336, 336)], Tensor[(336, 336)]",
+    "Count": 1
+  }
+]

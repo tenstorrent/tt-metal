@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "add",
+    "Input Size": "[(1, 1, 6)]",
+    "Output Size": "[(1, 6, 6)]",
+    "Attributes": "Tensor[(1, 1, 6)], Tensor[(6, 6)]",
+    "Count": 4
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 6), (1, 6)]",
+    "Output Size": "[(1, 6)]",
+    "Attributes": "Tensor[(1, 6)], Tensor[(1, 6)]",
+    "Count": 4
+  }
+]

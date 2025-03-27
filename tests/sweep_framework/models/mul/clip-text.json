@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "mul",
+    "Input Size": "[(1, 77, 3072), (1, 77, 3072)]",
+    "Output Size": "[(1, 77, 3072)]",
+    "Attributes": "Tensor[(1, 77, 3072)], Tensor[(1, 77, 3072)]",
+    "Count": 12
+  },
+  {
+    "Name": "mul",
+    "Input Size": "[(1, 77, 3072)]",
+    "Output Size": "[(1, 77, 3072)]",
+    "Attributes": "Tensor[(1, 77, 3072)], 1.702",
+    "Count": 12
+  }
+]

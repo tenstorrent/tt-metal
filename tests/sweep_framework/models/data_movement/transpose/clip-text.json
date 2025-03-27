@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "transpose",
+    "Input Size": "[(1, 12, 77, 64)]",
+    "Output Size": "[(1, 77, 12, 64)]",
+    "Attributes": "Tensor[(1, 12, 77, 64)], 1, 2",
+    "Count": 12
+  },
+  {
+    "Name": "transpose",
+    "Input Size": "[(1, 77, 12, 64)]",
+    "Output Size": "[(1, 12, 77, 64)]",
+    "Attributes": "Tensor[(1, 77, 12, 64)], 1, 2",
+    "Count": 36
+  }
+]

@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "squeeze",
+    "Input Size": "[(1, 1, 1, 336)]",
+    "Output Size": "[(1, 1, 336)]",
+    "Attributes": "Tensor[(1, 1, 1, 336)], -2",
+    "Count": 1
+  },
+  {
+    "Name": "squeeze",
+    "Input Size": "[(1, 1, 336, 336)]",
+    "Output Size": "[(1, 336, 336)]",
+    "Attributes": "Tensor[(1, 1, 336, 336)], 0",
+    "Count": 24
+  }
+]

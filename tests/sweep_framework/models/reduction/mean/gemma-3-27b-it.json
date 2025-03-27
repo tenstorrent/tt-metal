@@ -1,0 +1,30 @@
+[
+  {
+    "Name": "mean",
+    "Input Size": "[(1, 16, 540, 128)]",
+    "Output Size": "[(1, 16, 540, 1)]",
+    "Attributes": "Tensor[(1, 16, 540, 128)], -1",
+    "Count": 62
+  },
+  {
+    "Name": "mean",
+    "Input Size": "[(1, 32, 540, 128)]",
+    "Output Size": "[(1, 32, 540, 1)]",
+    "Attributes": "Tensor[(1, 32, 540, 128)], -1",
+    "Count": 62
+  },
+  {
+    "Name": "mean",
+    "Input Size": "[(1, 540, 5376)]",
+    "Output Size": "[(1, 540, 1)]",
+    "Attributes": "Tensor[(1, 540, 5376)], -1",
+    "Count": 249
+  },
+  {
+    "Name": "mean",
+    "Input Size": "[(2, 256, 1152)]",
+    "Output Size": "[(2, 256, 1)]",
+    "Attributes": "Tensor[(2, 256, 1152)], -1",
+    "Count": 1
+  }
+]

@@ -1,0 +1,58 @@
+[
+  {
+    "Name": "cumsum",
+    "Input Size": "[(1, 100, 128)]",
+    "Output Size": "[(1, 100, 128)]",
+    "Attributes": "Tensor[(1, 100, 128)], 1",
+    "Count": 1
+  },
+  {
+    "Name": "cumsum",
+    "Input Size": "[(1, 100, 128)]",
+    "Output Size": "[(1, 100, 128)]",
+    "Attributes": "Tensor[(1, 100, 128)], 2",
+    "Count": 1
+  },
+  {
+    "Name": "cumsum",
+    "Input Size": "[(1, 200, 255)]",
+    "Output Size": "[(1, 200, 255)]",
+    "Attributes": "Tensor[(1, 200, 255)], 1",
+    "Count": 1
+  },
+  {
+    "Name": "cumsum",
+    "Input Size": "[(1, 200, 255)]",
+    "Output Size": "[(1, 200, 255)]",
+    "Attributes": "Tensor[(1, 200, 255)], 2",
+    "Count": 1
+  },
+  {
+    "Name": "cumsum",
+    "Input Size": "[(1, 25, 32)]",
+    "Output Size": "[(1, 25, 32)]",
+    "Attributes": "Tensor[(1, 25, 32)], 1",
+    "Count": 1
+  },
+  {
+    "Name": "cumsum",
+    "Input Size": "[(1, 25, 32)]",
+    "Output Size": "[(1, 25, 32)]",
+    "Attributes": "Tensor[(1, 25, 32)], 2",
+    "Count": 1
+  },
+  {
+    "Name": "cumsum",
+    "Input Size": "[(1, 50, 64)]",
+    "Output Size": "[(1, 50, 64)]",
+    "Attributes": "Tensor[(1, 50, 64)], 1",
+    "Count": 1
+  },
+  {
+    "Name": "cumsum",
+    "Input Size": "[(1, 50, 64)]",
+    "Output Size": "[(1, 50, 64)]",
+    "Attributes": "Tensor[(1, 50, 64)], 2",
+    "Count": 1
+  }
+]

@@ -5,6 +5,11 @@ import argparse
 from collections import defaultdict
 
 
+def load_op_categories(json_path):
+    with open(json_path, "r") as f:
+        return json.load(f)
+
+
 def load_known_ops(op_file):
     with open(op_file, "r") as f:
         return set(line.strip().split(".")[-1] for line in f if line.strip())
@@ -27,7 +32,7 @@ def parse_trace_df(df):
             "Name": row["Name"],
             "Input Size": row["Input Size"],
             "Output Size": row["Output Size"],
-            "Attributes": eval(row["Attributes"]) if isinstance(row["Attributes"], str) else row["Attributes"],
+            "Attributes": str(row["Attributes"]).strip() if pd.notna(row["Attributes"]) else None,
             "Count": row["Count"],
         }
         for _, row in df.iterrows()
@@ -38,9 +43,11 @@ def safe_mkdir(path):
     os.makedirs(path, exist_ok=True)
 
 
-def main(op_file, model_dir, output_root="parsed_traces"):
+def main(op_file, model_dir, category_map, output_root="parsed_traces"):
+    op_categories = load_op_categories(args.category_map)
     known_ops = load_known_ops(op_file)
     unknown_ops = set()
+    uncategorized_ops = set()
     new = False
 
     for model_name in os.listdir(model_dir):
@@ -51,7 +58,7 @@ def main(op_file, model_dir, output_root="parsed_traces"):
             continue
 
         try:
-            df = pd.read_excel(trace_file)
+            df = pd.read_excel(trace_file, sheet_name=1)
         except Exception as e:
             print(f"[!] Error reading {trace_file}: {e}")
             continue
@@ -66,7 +73,16 @@ def main(op_file, model_dir, output_root="parsed_traces"):
                 unknown_ops.add(base_op)
 
             # Output path: parsed_traces/{base_op}/{model_name}.json
-            op_folder = os.path.join(output_root, base_op)
+            category_path = op_categories.get(base_op, base_op)  # fallback to base_op if not categorized
+            if category_path == "":
+                category_path = base_op
+            if base_op not in op_categories and base_op not in uncategorized_ops:
+                print(f"[!] WARNING: Op '{base_op}' not found in op_categories.json — placing in root folder.")
+            op_folder = os.path.join(output_root, category_path)
+
+            if base_op not in uncategorized_ops:
+                uncategorized_ops.add(base_op)
+
             safe_mkdir(op_folder)
             json_path = os.path.join(op_folder, f"{model_name}.json")
 
@@ -89,12 +105,13 @@ def main(op_file, model_dir, output_root="parsed_traces"):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Parse torchview_ops.xlsx files from model directories, organize by op, and output trace JSONs."
-    )
+    parser = argparse.ArgumentParser()
     parser.add_argument("--op_list", required=True, help="Path to .txt file with list of known ops (e.g., all_ops.txt)")
-    parser.add_argument("--model_traces", required=True, help="Path to directory containing model folders")
+    parser.add_argument("--model_dir", required=True, help="Path to directory containing model folders")
+    parser.add_argument(
+        "--category_map", required=True, help="Path to op_categories.json file mapping op names to category folders."
+    )
     parser.add_argument("--output_root", default="parsed_traces", help="Directory to save parsed JSON traces")
     args = parser.parse_args()
 
-    main(args.op_file, args.model_dir, args.output_root)
+    main(args.op_list, args.model_dir, args.category_map, args.output_root)

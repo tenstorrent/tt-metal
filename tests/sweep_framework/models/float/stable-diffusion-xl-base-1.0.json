@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "float",
+    "Input Size": "[(1, 1)]",
+    "Output Size": "[(1, 1)]",
+    "Attributes": "Tensor[(1, 1)]",
+    "Count": 1
+  },
+  {
+    "Name": "float",
+    "Input Size": "[(6, 1)]",
+    "Output Size": "[(6, 1)]",
+    "Attributes": "Tensor[(6, 1)]",
+    "Count": 1
+  }
+]

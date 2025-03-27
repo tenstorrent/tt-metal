@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "max",
+    "Input Size": "[(1, 1)]",
+    "Output Size": "[()]",
+    "Attributes": "Tensor[(1, 1)]",
+    "Count": 2
+  }
+]

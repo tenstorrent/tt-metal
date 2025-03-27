@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "nonzero",
+    "Input Size": "[(256,)]",
+    "Output Size": "[(256, 1)]",
+    "Attributes": "Tensor[(256,)]",
+    "Count": 96
+  }
+]

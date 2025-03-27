@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "masked_fill",
+    "Input Size": "[(1, 1, 540, 540), (1, 1, 540, 540)]",
+    "Output Size": "[(1, 1, 540, 540)]",
+    "Attributes": "Tensor[(1, 1, 540, 540)], Tensor[(1, 1, 540, 540)], -3.4028234663852886e+38",
+    "Count": 1
+  },
+  {
+    "Name": "masked_fill",
+    "Input Size": "[(1, 1, 540, 540), (1, 1, 540, 540)]",
+    "Output Size": "[(1, 1, 540, 540)]",
+    "Attributes": "Tensor[(1, 1, 540, 540)], Tensor[(1, 1, 540, 540)], 0.0",
+    "Count": 1
+  }
+]

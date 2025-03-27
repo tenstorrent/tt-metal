@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "sigmoid",
+    "Input Size": "[(1, 100, 4)]",
+    "Output Size": "[(1, 100, 4)]",
+    "Attributes": "Tensor[(1, 100, 4)]",
+    "Count": 1
+  }
+]

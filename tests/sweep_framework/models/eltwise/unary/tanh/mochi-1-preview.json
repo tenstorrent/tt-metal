@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "tanh",
+    "Input Size": "[(2, 1536)]",
+    "Output Size": "[(2, 1536)]",
+    "Attributes": "Tensor[(2, 1536)]",
+    "Count": 94
+  },
+  {
+    "Name": "tanh",
+    "Input Size": "[(2, 3072)]",
+    "Output Size": "[(2, 3072)]",
+    "Attributes": "Tensor[(2, 3072)]",
+    "Count": 96
+  }
+]

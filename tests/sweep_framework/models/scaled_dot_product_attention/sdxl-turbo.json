@@ -1,0 +1,30 @@
+[
+  {
+    "Name": "scaled_dot_product_attention",
+    "Input Size": "[(1, 10, 1024, 64), (1, 10, 1024, 64), (1, 10, 1024, 64)]",
+    "Output Size": "[(1, 10, 1024, 64)]",
+    "Attributes": "Tensor[(1, 10, 1024, 64)], Tensor[(1, 10, 1024, 64)], Tensor[(1, 10, 1024, 64)]",
+    "Count": 10
+  },
+  {
+    "Name": "scaled_dot_product_attention",
+    "Input Size": "[(1, 10, 1024, 64), (1, 10, 77, 64), (1, 10, 77, 64)]",
+    "Output Size": "[(1, 10, 1024, 64)]",
+    "Attributes": "Tensor[(1, 10, 1024, 64)], Tensor[(1, 10, 77, 64)], Tensor[(1, 10, 77, 64)]",
+    "Count": 10
+  },
+  {
+    "Name": "scaled_dot_product_attention",
+    "Input Size": "[(1, 20, 256, 64), (1, 20, 256, 64), (1, 20, 256, 64)]",
+    "Output Size": "[(1, 20, 256, 64)]",
+    "Attributes": "Tensor[(1, 20, 256, 64)], Tensor[(1, 20, 256, 64)], Tensor[(1, 20, 256, 64)]",
+    "Count": 60
+  },
+  {
+    "Name": "scaled_dot_product_attention",
+    "Input Size": "[(1, 20, 256, 64), (1, 20, 77, 64), (1, 20, 77, 64)]",
+    "Output Size": "[(1, 20, 256, 64)]",
+    "Attributes": "Tensor[(1, 20, 256, 64)], Tensor[(1, 20, 77, 64)], Tensor[(1, 20, 77, 64)]",
+    "Count": 60
+  }
+]

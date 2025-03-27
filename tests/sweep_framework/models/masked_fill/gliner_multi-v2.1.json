@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "masked_fill",
+    "Input Size": "[(1, 12, 336, 336), (1, 1, 336, 336)]",
+    "Output Size": "[(1, 12, 336, 336)]",
+    "Attributes": "Tensor[(1, 12, 336, 336)], Tensor[(1, 1, 336, 336)], Tensor[()]",
+    "Count": 12
+  }
+]

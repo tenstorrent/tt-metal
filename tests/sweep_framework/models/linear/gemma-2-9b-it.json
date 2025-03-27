@@ -1,0 +1,44 @@
+[
+  {
+    "Name": "linear",
+    "Input Size": "[(1, 256, 14336)]",
+    "Output Size": "[(1, 256, 3584)]",
+    "Attributes": "Tensor[(1, 256, 14336)], Tensor[(3584, 14336)], None",
+    "Count": 42
+  },
+  {
+    "Name": "linear",
+    "Input Size": "[(1, 256, 3584)]",
+    "Output Size": "[(1, 256, 14336)]",
+    "Attributes": "Tensor[(1, 256, 3584)], Tensor[(14336, 3584)], None",
+    "Count": 84
+  },
+  {
+    "Name": "linear",
+    "Input Size": "[(1, 256, 3584)]",
+    "Output Size": "[(1, 256, 2048)]",
+    "Attributes": "Tensor[(1, 256, 3584)], Tensor[(2048, 3584)], None",
+    "Count": 84
+  },
+  {
+    "Name": "linear",
+    "Input Size": "[(1, 256, 3584)]",
+    "Output Size": "[(1, 256, 256000)]",
+    "Attributes": "Tensor[(1, 256, 3584)], Tensor[(256000, 3584)], None",
+    "Count": 1
+  },
+  {
+    "Name": "linear",
+    "Input Size": "[(1, 256, 3584)]",
+    "Output Size": "[(1, 256, 4096)]",
+    "Attributes": "Tensor[(1, 256, 3584)], Tensor[(4096, 3584)], None",
+    "Count": 42
+  },
+  {
+    "Name": "linear",
+    "Input Size": "[(1, 256, 4096)]",
+    "Output Size": "[(1, 256, 3584)]",
+    "Attributes": "Tensor[(1, 256, 4096)], Tensor[(3584, 4096)], None",
+    "Count": 42
+  }
+]

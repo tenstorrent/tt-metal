@@ -1,0 +1,23 @@
+[
+  {
+    "Name": "matmul",
+    "Input Size": "[(1, 32, 2048, 2048), (1, 32, 2048, 96)]",
+    "Output Size": "[(1, 32, 2048, 96)]",
+    "Attributes": "Tensor[(1, 32, 2048, 2048)], Tensor[(1, 32, 2048, 96)]",
+    "Count": 32
+  },
+  {
+    "Name": "matmul",
+    "Input Size": "[(1, 32, 2048, 96), (1, 32, 96, 2048)]",
+    "Output Size": "[(1, 32, 2048, 2048)]",
+    "Attributes": "Tensor[(1, 32, 2048, 96)], Tensor[(1, 32, 96, 2048)]",
+    "Count": 32
+  },
+  {
+    "Name": "matmul",
+    "Input Size": "[(1, 48, 1), (1, 1, 2048)]",
+    "Output Size": "[(1, 48, 2048)]",
+    "Attributes": "Tensor[(1, 48, 1)], Tensor[(1, 1, 2048)]",
+    "Count": 32
+  }
+]

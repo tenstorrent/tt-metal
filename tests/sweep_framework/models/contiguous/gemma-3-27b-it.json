@@ -1,0 +1,37 @@
+[
+  {
+    "Name": "contiguous",
+    "Input Size": "[(1, 32, 540, 128)]",
+    "Output Size": "[(1, 32, 540, 128)]",
+    "Attributes": "Tensor[(1, 32, 540, 128)]",
+    "Count": 186
+  },
+  {
+    "Name": "contiguous",
+    "Input Size": "[(1, 540, 32, 128)]",
+    "Output Size": "[(1, 540, 32, 128)]",
+    "Attributes": "Tensor[(1, 540, 32, 128)]",
+    "Count": 62
+  },
+  {
+    "Name": "contiguous",
+    "Input Size": "[(1, 540, 4096)]",
+    "Output Size": "[(1, 540, 4096)]",
+    "Attributes": "Tensor[(1, 540, 4096)]",
+    "Count": 62
+  },
+  {
+    "Name": "contiguous",
+    "Input Size": "[(2, 1152, 64, 64)]",
+    "Output Size": "[(2, 1152, 64, 64)]",
+    "Attributes": "Tensor[(2, 1152, 64, 64)]",
+    "Count": 1
+  },
+  {
+    "Name": "contiguous",
+    "Input Size": "[(2, 4096, 16, 72)]",
+    "Output Size": "[(2, 4096, 16, 72)]",
+    "Attributes": "Tensor[(2, 4096, 16, 72)]",
+    "Count": 27
+  }
+]

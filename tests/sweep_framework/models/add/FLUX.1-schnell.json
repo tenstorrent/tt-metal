@@ -1,0 +1,93 @@
+[
+  {
+    "Name": "add",
+    "Input Size": "[(1, 1, 3072)]",
+    "Output Size": "[(1, 1, 3072)]",
+    "Attributes": "Tensor[(1, 1, 3072)], 1",
+    "Count": 114
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 24, 256, 1)]",
+    "Output Size": "[(1, 24, 256, 1)]",
+    "Attributes": "Tensor[(1, 24, 256, 1)], 1e-06",
+    "Count": 38
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 24, 4096, 1)]",
+    "Output Size": "[(1, 24, 4096, 1)]",
+    "Attributes": "Tensor[(1, 24, 4096, 1)], 1e-06",
+    "Count": 38
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 24, 4352, 1)]",
+    "Output Size": "[(1, 24, 4352, 1)]",
+    "Attributes": "Tensor[(1, 24, 4352, 1)], 1e-06",
+    "Count": 76
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 24, 4352, 128), (1, 24, 4352, 128)]",
+    "Output Size": "[(1, 24, 4352, 128)]",
+    "Attributes": "Tensor[(1, 24, 4352, 128)], Tensor[(1, 24, 4352, 128)]",
+    "Count": 114
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 256, 3072), (1, 1, 3072)]",
+    "Output Size": "[(1, 256, 3072)]",
+    "Attributes": "Tensor[(1, 256, 3072)], Tensor[(1, 1, 3072)]",
+    "Count": 38
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 256, 3072), (1, 256, 3072)]",
+    "Output Size": "[(1, 256, 3072)]",
+    "Attributes": "Tensor[(1, 256, 3072)], Tensor[(1, 256, 3072)]",
+    "Count": 38
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 3072), (1, 3072)]",
+    "Output Size": "[(1, 3072)]",
+    "Attributes": "Tensor[(1, 3072)], Tensor[(1, 3072)]",
+    "Count": 1
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 3072)]",
+    "Output Size": "[(1, 3072)]",
+    "Attributes": "Tensor[(1, 3072)], 1",
+    "Count": 1
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 4096, 3072), (1, 1, 3072)]",
+    "Output Size": "[(1, 4096, 3072)]",
+    "Attributes": "Tensor[(1, 4096, 3072)], Tensor[(1, 1, 3072)]",
+    "Count": 39
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 4096, 3072), (1, 4096, 3072)]",
+    "Output Size": "[(1, 4096, 3072)]",
+    "Attributes": "Tensor[(1, 4096, 3072)], Tensor[(1, 4096, 3072)]",
+    "Count": 38
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 4352, 3072), (1, 1, 3072)]",
+    "Output Size": "[(1, 4352, 3072)]",
+    "Attributes": "Tensor[(1, 4352, 3072)], Tensor[(1, 1, 3072)]",
+    "Count": 38
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 4352, 3072), (1, 4352, 3072)]",
+    "Output Size": "[(1, 4352, 3072)]",
+    "Attributes": "Tensor[(1, 4352, 3072)], Tensor[(1, 4352, 3072)]",
+    "Count": 38
+  }
+]

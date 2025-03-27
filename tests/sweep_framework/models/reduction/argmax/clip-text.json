@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "argmax",
+    "Input Size": "[(1, 77)]",
+    "Output Size": "[(1,)]",
+    "Attributes": "Tensor[(1, 77)]",
+    "Count": 1
+  }
+]

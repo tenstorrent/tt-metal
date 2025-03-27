@@ -1,0 +1,170 @@
+[
+  {
+    "Name": "group_norm",
+    "Input Size": "[(4, 512, 24, 20)]",
+    "Output Size": "[(4, 512, 24, 20)]",
+    "Attributes": "Tensor[(4, 512, 24, 20)], 32",
+    "Count": 8
+  },
+  {
+    "Name": "group_norm",
+    "Input Size": "[(4, 512, 24, 64)]",
+    "Output Size": "[(4, 512, 24, 64)]",
+    "Attributes": "Tensor[(4, 512, 24, 64)], 32",
+    "Count": 32
+  },
+  {
+    "Name": "group_norm",
+    "Input Size": "[(4, 512, 64, 20)]",
+    "Output Size": "[(4, 512, 64, 20)]",
+    "Attributes": "Tensor[(4, 512, 64, 20)], 32",
+    "Count": 16
+  },
+  {
+    "Name": "group_norm",
+    "Input Size": "[(4, 512, 64, 64)]",
+    "Output Size": "[(4, 512, 64, 64)]",
+    "Attributes": "Tensor[(4, 512, 64, 64)], 32",
+    "Count": 64
+  },
+  {
+    "Name": "group_norm",
+    "Input Size": "[(4, 768, 12, 10)]",
+    "Output Size": "[(4, 768, 12, 10)]",
+    "Attributes": "Tensor[(4, 768, 12, 10)], 32",
+    "Count": 18
+  },
+  {
+    "Name": "group_norm",
+    "Input Size": "[(4, 768, 12, 32)]",
+    "Output Size": "[(4, 768, 12, 32)]",
+    "Attributes": "Tensor[(4, 768, 12, 32)], 32",
+    "Count": 72
+  },
+  {
+    "Name": "group_norm",
+    "Input Size": "[(4, 768, 32, 10)]",
+    "Output Size": "[(4, 768, 32, 10)]",
+    "Attributes": "Tensor[(4, 768, 32, 10)], 32",
+    "Count": 36
+  },
+  {
+    "Name": "group_norm",
+    "Input Size": "[(4, 768, 32, 32)]",
+    "Output Size": "[(4, 768, 32, 32)]",
+    "Attributes": "Tensor[(4, 768, 32, 32)], 32",
+    "Count": 144
+  },
+  {
+    "Name": "group_norm",
+    "Input Size": "[(8, 128, 256, 256)]",
+    "Output Size": "[(8, 128, 256, 256)]",
+    "Attributes": "Tensor[(8, 128, 256, 256)], 32",
+    "Count": 1008
+  },
+  {
+    "Name": "group_norm",
+    "Input Size": "[(8, 128, 256, 80)]",
+    "Output Size": "[(8, 128, 256, 80)]",
+    "Attributes": "Tensor[(8, 128, 256, 80)], 32",
+    "Count": 252
+  },
+  {
+    "Name": "group_norm",
+    "Input Size": "[(8, 128, 96, 256)]",
+    "Output Size": "[(8, 128, 96, 256)]",
+    "Attributes": "Tensor[(8, 128, 96, 256)], 32",
+    "Count": 504
+  },
+  {
+    "Name": "group_norm",
+    "Input Size": "[(8, 128, 96, 80)]",
+    "Output Size": "[(8, 128, 96, 80)]",
+    "Attributes": "Tensor[(8, 128, 96, 80)], 32",
+    "Count": 126
+  },
+  {
+    "Name": "group_norm",
+    "Input Size": "[(8, 256, 128, 128)]",
+    "Output Size": "[(8, 256, 128, 128)]",
+    "Attributes": "Tensor[(8, 256, 128, 128)], 32",
+    "Count": 1008
+  },
+  {
+    "Name": "group_norm",
+    "Input Size": "[(8, 256, 128, 40)]",
+    "Output Size": "[(8, 256, 128, 40)]",
+    "Attributes": "Tensor[(8, 256, 128, 40)], 32",
+    "Count": 252
+  },
+  {
+    "Name": "group_norm",
+    "Input Size": "[(8, 256, 48, 128)]",
+    "Output Size": "[(8, 256, 48, 128)]",
+    "Attributes": "Tensor[(8, 256, 48, 128)], 32",
+    "Count": 504
+  },
+  {
+    "Name": "group_norm",
+    "Input Size": "[(8, 256, 48, 40)]",
+    "Output Size": "[(8, 256, 48, 40)]",
+    "Attributes": "Tensor[(8, 256, 48, 40)], 32",
+    "Count": 126
+  },
+  {
+    "Name": "group_norm",
+    "Input Size": "[(8, 512, 24, 20)]",
+    "Output Size": "[(8, 512, 24, 20)]",
+    "Attributes": "Tensor[(8, 512, 24, 20)], 32",
+    "Count": 80
+  },
+  {
+    "Name": "group_norm",
+    "Input Size": "[(8, 512, 24, 64)]",
+    "Output Size": "[(8, 512, 24, 64)]",
+    "Attributes": "Tensor[(8, 512, 24, 64)], 32",
+    "Count": 320
+  },
+  {
+    "Name": "group_norm",
+    "Input Size": "[(8, 512, 64, 20)]",
+    "Output Size": "[(8, 512, 64, 20)]",
+    "Attributes": "Tensor[(8, 512, 64, 20)], 32",
+    "Count": 160
+  },
+  {
+    "Name": "group_norm",
+    "Input Size": "[(8, 512, 64, 64)]",
+    "Output Size": "[(8, 512, 64, 64)]",
+    "Attributes": "Tensor[(8, 512, 64, 64)], 32",
+    "Count": 640
+  },
+  {
+    "Name": "group_norm",
+    "Input Size": "[(8, 768, 12, 10)]",
+    "Output Size": "[(8, 768, 12, 10)]",
+    "Attributes": "Tensor[(8, 768, 12, 10)], 32",
+    "Count": 54
+  },
+  {
+    "Name": "group_norm",
+    "Input Size": "[(8, 768, 12, 32)]",
+    "Output Size": "[(8, 768, 12, 32)]",
+    "Attributes": "Tensor[(8, 768, 12, 32)], 32",
+    "Count": 216
+  },
+  {
+    "Name": "group_norm",
+    "Input Size": "[(8, 768, 32, 10)]",
+    "Output Size": "[(8, 768, 32, 10)]",
+    "Attributes": "Tensor[(8, 768, 32, 10)], 32",
+    "Count": 108
+  },
+  {
+    "Name": "group_norm",
+    "Input Size": "[(8, 768, 32, 32)]",
+    "Output Size": "[(8, 768, 32, 32)]",
+    "Attributes": "Tensor[(8, 768, 32, 32)], 32",
+    "Count": 432
+  }
+]

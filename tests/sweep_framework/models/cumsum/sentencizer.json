@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "cumsum",
+    "Input Size": "[(1, 400)]",
+    "Output Size": "[(1, 400)]",
+    "Attributes": "Tensor[(1, 400)]",
+    "Count": 1
+  }
+]

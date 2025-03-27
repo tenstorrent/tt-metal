@@ -1,0 +1,23 @@
+[
+  {
+    "Name": "cat",
+    "Input Size": "[(1, 16, 540, 128), (1, 16, 540, 128)]",
+    "Output Size": "[(1, 16, 540, 256)]",
+    "Attributes": "Tensor[(1, 16, 540, 128)] Tensor[(1, 16, 540, 128)]",
+    "Count": 48
+  },
+  {
+    "Name": "cat",
+    "Input Size": "[(1, 540, 128), (1, 540, 128)]",
+    "Output Size": "[(1, 540, 256)]",
+    "Attributes": "Tensor[(1, 540, 128)] Tensor[(1, 540, 128)]",
+    "Count": 2
+  },
+  {
+    "Name": "cat",
+    "Input Size": "[(1, 8, 540, 128), (1, 8, 540, 128)]",
+    "Output Size": "[(1, 8, 540, 256)]",
+    "Attributes": "Tensor[(1, 8, 540, 128)] Tensor[(1, 8, 540, 128)]",
+    "Count": 48
+  }
+]

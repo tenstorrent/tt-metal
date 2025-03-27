@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "avg_pool2d",
+    "Input Size": "[(2, 1152, 64, 64)]",
+    "Output Size": "[(2, 1152, 16, 16)]",
+    "Attributes": "Tensor[(2, 1152, 64, 64)], 4, 4, 0, False, True, None",
+    "Count": 1
+  }
+]

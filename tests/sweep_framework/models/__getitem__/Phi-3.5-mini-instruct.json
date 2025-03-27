@@ -1,0 +1,65 @@
+[
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(1, 2048)]",
+    "Output Size": "[(1, 1, 1, 2048)]",
+    "Attributes": "Tensor[(1, 2048)], (slice(None, None, None), None, None, slice(None, None, None))",
+    "Count": 1
+  },
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(1, 2048)]",
+    "Output Size": "[(1, 1, 2048)]",
+    "Attributes": "Tensor[(1, 2048)], (slice(None, None, None), None, slice(None, None, None))",
+    "Count": 32
+  },
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(1, 2048, 9216)]",
+    "Output Size": "[(1, 2048, 3072)]",
+    "Attributes": "Tensor[(1, 2048, 9216)], (Ellipsis, slice(3072, 6144, None))",
+    "Count": 32
+  },
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(1, 2048, 9216)]",
+    "Output Size": "[(1, 2048, 3072)]",
+    "Attributes": "Tensor[(1, 2048, 9216)], (Ellipsis, slice(6144, None, None))",
+    "Count": 32
+  },
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(1, 2048, 9216)]",
+    "Output Size": "[(1, 2048, 3072)]",
+    "Attributes": "Tensor[(1, 2048, 9216)], (Ellipsis, slice(None, 3072, None))",
+    "Count": 32
+  },
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(1, 32, 2048, 96)]",
+    "Output Size": "[(1, 32, 2048, 48)]",
+    "Attributes": "Tensor[(1, 32, 2048, 96)], (Ellipsis, slice(48, None, None))",
+    "Count": 64
+  },
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(1, 32, 2048, 96)]",
+    "Output Size": "[(1, 32, 2048, 48)]",
+    "Attributes": "Tensor[(1, 32, 2048, 96)], (Ellipsis, slice(None, 48, None))",
+    "Count": 64
+  },
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(2048, 2048)]",
+    "Output Size": "[(1, 1, 2048, 2048)]",
+    "Attributes": "Tensor[(2048, 2048)], (None, None, slice(None, None, None), slice(None, None, None))",
+    "Count": 1
+  },
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(48,)]",
+    "Output Size": "[(1, 48, 1)]",
+    "Attributes": "Tensor[(48,)], (None, slice(None, None, None), None)",
+    "Count": 32
+  }
+]

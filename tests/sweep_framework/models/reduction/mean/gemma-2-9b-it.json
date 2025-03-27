@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "mean",
+    "Input Size": "[(1, 256, 3584)]",
+    "Output Size": "[(1, 256, 1)]",
+    "Attributes": "Tensor[(1, 256, 3584)], -1",
+    "Count": 169
+  }
+]

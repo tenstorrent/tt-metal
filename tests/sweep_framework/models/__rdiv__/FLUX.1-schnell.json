@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "__rdiv__",
+    "Input Size": "[(28,)]",
+    "Output Size": "[(28,)]",
+    "Attributes": "Tensor[(28,)], 1.0",
+    "Count": 2
+  },
+  {
+    "Name": "__rdiv__",
+    "Input Size": "[(8,)]",
+    "Output Size": "[(8,)]",
+    "Attributes": "Tensor[(8,)], 1.0",
+    "Count": 1
+  }
+]

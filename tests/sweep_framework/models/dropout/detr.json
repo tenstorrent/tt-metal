@@ -1,0 +1,51 @@
+[
+  {
+    "Name": "dropout",
+    "Input Size": "[(1, 100, 2048)]",
+    "Output Size": "[(1, 100, 2048)]",
+    "Attributes": "Tensor[(1, 100, 2048)]",
+    "Count": 6
+  },
+  {
+    "Name": "dropout",
+    "Input Size": "[(1, 100, 256)]",
+    "Output Size": "[(1, 100, 256)]",
+    "Attributes": "Tensor[(1, 100, 256)]",
+    "Count": 18
+  },
+  {
+    "Name": "dropout",
+    "Input Size": "[(1, 800, 2048)]",
+    "Output Size": "[(1, 800, 2048)]",
+    "Attributes": "Tensor[(1, 800, 2048)]",
+    "Count": 6
+  },
+  {
+    "Name": "dropout",
+    "Input Size": "[(1, 800, 256)]",
+    "Output Size": "[(1, 800, 256)]",
+    "Attributes": "Tensor[(1, 800, 256)]",
+    "Count": 13
+  },
+  {
+    "Name": "dropout",
+    "Input Size": "[(8, 100, 100)]",
+    "Output Size": "[(8, 100, 100)]",
+    "Attributes": "Tensor[(8, 100, 100)]",
+    "Count": 6
+  },
+  {
+    "Name": "dropout",
+    "Input Size": "[(8, 100, 800)]",
+    "Output Size": "[(8, 100, 800)]",
+    "Attributes": "Tensor[(8, 100, 800)]",
+    "Count": 6
+  },
+  {
+    "Name": "dropout",
+    "Input Size": "[(8, 800, 800)]",
+    "Output Size": "[(8, 800, 800)]",
+    "Attributes": "Tensor[(8, 800, 800)]",
+    "Count": 6
+  }
+]

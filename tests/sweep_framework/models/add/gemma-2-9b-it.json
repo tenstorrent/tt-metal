@@ -1,0 +1,37 @@
+[
+  {
+    "Name": "add",
+    "Input Size": "[(1, 1, 256, 256), (1, 1, 1, 256)]",
+    "Output Size": "[(1, 1, 256, 256)]",
+    "Attributes": "Tensor[(1, 1, 256, 256)], Tensor[(1, 1, 1, 256)]",
+    "Count": 1
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 16, 256, 256), (1, 16, 256, 256)]",
+    "Output Size": "[(1, 16, 256, 256)]",
+    "Attributes": "Tensor[(1, 16, 256, 256)], Tensor[(1, 16, 256, 256)]",
+    "Count": 42
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 256, 1)]",
+    "Output Size": "[(1, 256, 1)]",
+    "Attributes": "Tensor[(1, 256, 1)], 1e-06",
+    "Count": 169
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 256, 3584), (1, 256, 3584)]",
+    "Output Size": "[(1, 256, 3584)]",
+    "Attributes": "Tensor[(1, 256, 3584)], Tensor[(1, 256, 3584)]",
+    "Count": 84
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 8, 256, 256), (1, 8, 256, 256)]",
+    "Output Size": "[(1, 8, 256, 256)]",
+    "Attributes": "Tensor[(1, 8, 256, 256)], Tensor[(1, 8, 256, 256)]",
+    "Count": 42
+  }
+]

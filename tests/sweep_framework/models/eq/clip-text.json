@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "eq",
+    "Input Size": "[(1, 77)]",
+    "Output Size": "[(1, 77)]",
+    "Attributes": "Tensor[(1, 77)], 49407",
+    "Count": 1
+  }
+]

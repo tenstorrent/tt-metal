@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "einsum",
+    "Input Size": "[(1, 220, 12, 512), (1, 5, 512)]",
+    "Output Size": "[(1, 220, 12, 5)]",
+    "Attributes": "BLKD,BCD->BLKC, Tensor[(1, 220, 12, 512)], Tensor[(1, 5, 512)]",
+    "Count": 1
+  }
+]

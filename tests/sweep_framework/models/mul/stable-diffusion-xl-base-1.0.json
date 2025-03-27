@@ -1,0 +1,58 @@
+[
+  {
+    "Name": "mul",
+    "Input Size": "[(1, 1), (1, 160)]",
+    "Output Size": "[(1, 160)]",
+    "Attributes": "Tensor[(1, 1)], Tensor[(1, 160)]",
+    "Count": 1
+  },
+  {
+    "Name": "mul",
+    "Input Size": "[(1, 1024, 2560), (1, 1024, 2560)]",
+    "Output Size": "[(1, 1024, 2560)]",
+    "Attributes": "Tensor[(1, 1024, 2560)], Tensor[(1, 1024, 2560)]",
+    "Count": 10
+  },
+  {
+    "Name": "mul",
+    "Input Size": "[(1, 160)]",
+    "Output Size": "[(1, 160)]",
+    "Attributes": "Tensor[(1, 160)], 1",
+    "Count": 1
+  },
+  {
+    "Name": "mul",
+    "Input Size": "[(1, 256, 5120), (1, 256, 5120)]",
+    "Output Size": "[(1, 256, 5120)]",
+    "Attributes": "Tensor[(1, 256, 5120)], Tensor[(1, 256, 5120)]",
+    "Count": 60
+  },
+  {
+    "Name": "mul",
+    "Input Size": "[(128,)]",
+    "Output Size": "[(128,)]",
+    "Attributes": "Tensor[(128,)], -9.210340371976184",
+    "Count": 1
+  },
+  {
+    "Name": "mul",
+    "Input Size": "[(160,)]",
+    "Output Size": "[(160,)]",
+    "Attributes": "Tensor[(160,)], -9.210340371976184",
+    "Count": 1
+  },
+  {
+    "Name": "mul",
+    "Input Size": "[(6, 1), (1, 128)]",
+    "Output Size": "[(6, 128)]",
+    "Attributes": "Tensor[(6, 1)], Tensor[(1, 128)]",
+    "Count": 1
+  },
+  {
+    "Name": "mul",
+    "Input Size": "[(6, 128)]",
+    "Output Size": "[(6, 128)]",
+    "Attributes": "Tensor[(6, 128)], 1",
+    "Count": 1
+  }
+]

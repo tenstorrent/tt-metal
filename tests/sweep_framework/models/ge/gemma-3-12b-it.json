@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "ge",
+    "Input Size": "[(540,)]",
+    "Output Size": "[(540,)]",
+    "Attributes": "Tensor[(540,)], 588",
+    "Count": 40
+  }
+]

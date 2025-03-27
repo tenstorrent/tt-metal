@@ -1,0 +1,30 @@
+[
+  {
+    "Name": "view",
+    "Input Size": "[(1, 1024, 640)]",
+    "Output Size": "[(1, 1024, 10, 64)]",
+    "Attributes": "Tensor[(1, 1024, 640)], 1, -1, 10, 64",
+    "Count": 40
+  },
+  {
+    "Name": "view",
+    "Input Size": "[(1, 256, 1280)]",
+    "Output Size": "[(1, 256, 20, 64)]",
+    "Attributes": "Tensor[(1, 256, 1280)], 1, -1, 20, 64",
+    "Count": 240
+  },
+  {
+    "Name": "view",
+    "Input Size": "[(1, 77, 1280)]",
+    "Output Size": "[(1, 77, 20, 64)]",
+    "Attributes": "Tensor[(1, 77, 1280)], 1, -1, 20, 64",
+    "Count": 120
+  },
+  {
+    "Name": "view",
+    "Input Size": "[(1, 77, 640)]",
+    "Output Size": "[(1, 77, 10, 64)]",
+    "Attributes": "Tensor[(1, 77, 640)], 1, -1, 10, 64",
+    "Count": 20
+  }
+]
