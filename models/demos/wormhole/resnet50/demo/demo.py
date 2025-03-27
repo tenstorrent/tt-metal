@@ -11,6 +11,8 @@ from models.demos.wormhole.resnet50.tests.test_resnet50_performant_imagenet impo
     test_run_resnet50_trace_2cqs_inference,
 )
 
+test_run_resnet50_trace_2cqs_inference.__test__ = False
+
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
