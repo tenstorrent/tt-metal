@@ -27,45 +27,9 @@ struct RequantOp {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
-        const float in_scale,
+        const std::variant<Tensor, float>& in_scale,
         const int32_t in_zero_point,
-        const float out_scale,
-        const int32_t out_zero_point,
-        const std::optional<int32_t> axis,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
-        QueueId queue_id,
-        const Tensor& input_tensor,
-        const Tensor& in_scale,
-        const int32_t in_zero_point,
-        const float out_scale,
-        const int32_t out_zero_point,
-        const std::optional<int32_t> axis,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
-        QueueId queue_id,
-        const Tensor& input_tensor,
-        const float in_scale,
-        const int32_t in_zero_point,
-        const Tensor& out_scale,
-        const int32_t out_zero_point,
-        const std::optional<int32_t> axis,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
-        QueueId queue_id,
-        const Tensor& input_tensor,
-        const Tensor& in_scale,
-        const int32_t in_zero_point,
-        const Tensor& out_scale,
+        const std::variant<Tensor, float>& out_scale,
         const int32_t out_zero_point,
         const std::optional<int32_t> axis,
         const std::optional<const DataType>& output_dtype = std::nullopt,
