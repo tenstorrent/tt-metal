@@ -7,6 +7,7 @@
 #include "dropout_program_factory.hpp"
 
 #include "dropout_device_operation_types.hpp"
+#include "tt-metalium/mesh_workload.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
@@ -348,32 +349,41 @@ void DropoutProgramFactory::override_runtime_arguments(
     }
 }
 
-DropoutProgramFactoryPerDeviceSeed::cached_program_t DropoutProgramFactoryPerDeviceSeed::create_at(
+DropoutMeshWorkloadFactory::cached_mesh_workload_t DropoutMeshWorkloadFactory::create_mesh_workload(
     const operation_attributes_t& args,
-    const ttnn::MeshCoordinate& mesh_coord,
+    const std::vector<ttnn::MeshCoordinate>& mesh_coords,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    TT_ASSERT(
-        args.use_per_device_seed,
-        "Expected to Dropout op to select DropoutProgramFactory if no per-device seed is used.");
-    return DropoutProgramFactory::create(
-        override_per_device_seed(args, mesh_coord, tensor_args.input), tensor_args, output);
+    TT_ASSERT(args.use_per_device_seed, "DropoutMeshWorkloadFactory should only be used if per-device seed is used.");
+
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    for (const auto& mesh_coord : mesh_coords) {
+        const ttnn::MeshCoordinateRange mesh_coord_range{mesh_coord, mesh_coord};
+        auto single_device_program = DropoutProgramFactory::create(
+            override_per_device_seed(args, mesh_coord, tensor_args.input), tensor_args, output);
+        shared_variables[mesh_coord_range] = std::move(single_device_program.shared_variables);
+        workload.add_program(mesh_coord_range, std::move(single_device_program.program));
+    }
+    return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
 
-void DropoutProgramFactoryPerDeviceSeed::override_runtime_arguments_at(
-    cached_program_t& cached_program,
+void DropoutMeshWorkloadFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
     const operation_attributes_t& args,
-    const ttnn::MeshCoordinate& mesh_coord,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    TT_ASSERT(
-        args.use_per_device_seed,
-        "Expected to Dropout op to select DropoutProgramFactory if no per-device seed is used.");
-    DropoutProgramFactory::override_runtime_arguments(
-        cached_program,
-        override_per_device_seed(args, mesh_coord, tensor_args.input),
-        tensor_args,
-        tensor_return_value);
+    TT_ASSERT(args.use_per_device_seed, "DropoutMeshWorkloadFactory should only be used if per-device seed is used.");
+
+    for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
+        DropoutProgramFactory::cached_program_t cached_program(
+            program, cached_workload.shared_variables.at(mesh_coord_range));
+        DropoutProgramFactory::override_runtime_arguments(
+            cached_program,
+            override_per_device_seed(args, mesh_coord_range.start_coord(), tensor_args.input),
+            tensor_args,
+            tensor_return_value);
+    }
 }
 
 }  // namespace ttnn::operations::experimental::dropout::program

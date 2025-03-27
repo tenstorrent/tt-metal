@@ -37,23 +37,22 @@ struct DropoutProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-struct DropoutProgramFactoryPerDeviceSeed {
+struct DropoutMeshWorkloadFactory {
     using shared_variables_t = DropoutSharedVariables;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+    using cached_mesh_workload_t = ttnn::device_operation::CachedMeshWorkload<shared_variables_t>;
 
-    // Dropout generates N different but they differ only in seed per device
-    // Hash erases the seed
-    // override_runtime_arguments_at sets the seed to per-device seed.
-    static cached_program_t create_at(
+    // Dropout generates N different programs, but they differ only in the per-device seed set as a runtime argument.
+    // TODO: when heterogenous runtime arguments are supported, create a single program for all devices, and only
+    // override the runtime arguments for each device.
+    static cached_mesh_workload_t create_mesh_workload(
         const operation_attributes_t& operation_attributes,
-        const ttnn::MeshCoordinate& mesh_coord,
+        const std::vector<ttnn::MeshCoordinate>& mesh_coords,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
 
-    static void override_runtime_arguments_at(
-        cached_program_t& cached_program,
+    static void override_runtime_arguments(
+        cached_mesh_workload_t& cached_workload,
         const operation_attributes_t& operation_attributes,
-        const ttnn::MeshCoordinate& mesh_coord,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
 };
