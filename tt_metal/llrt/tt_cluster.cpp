@@ -532,11 +532,6 @@ const std::unordered_map<int, int> Cluster::get_worker_logical_to_virtual_y(chip
 }
 
 int Cluster::get_device_aiclk(const chip_id_t& chip_id) const {
-    if (this->arch_ == tt::ARCH::BLACKHOLE) {
-        // For Blackhole bring up remove AICLK query due to lack of ARC message support
-        log_info(tt::LogDevice, "For Blackhole hardcode AICLK to 1350 MHz due to lack of ARC message support");
-        return 1350;
-    }
     if (this->device_to_mmio_device_.find(chip_id) != this->device_to_mmio_device_.end()) {
         // get_clocks returns MMIO device ID -> clock frequency
         // There is one driver per MMIO device, so we use that to index returned map
