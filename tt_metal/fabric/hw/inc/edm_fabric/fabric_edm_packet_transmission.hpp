@@ -89,7 +89,6 @@ FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::LowLatencyPacketHeade
 
 // Since we unicast to local, we must omit the packet header
 // This function only does reads, and within scope there are no modifications to the packet header
-// __attribute__((optimize("jump-tables")))
 FORCE_INLINE void execute_chip_unicast_to_local_chip(
     tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
     uint16_t payload_size_bytes,
@@ -99,9 +98,6 @@ FORCE_INLINE void execute_chip_unicast_to_local_chip(
     uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) + sizeof(PACKET_HEADER_TYPE);
 
     tt::tt_fabric::NocSendType noc_send_type = header.noc_send_type;
-    // if (noc_send_type >= tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC) {
-    //     __builtin_unreachable();
-    // }
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
             const auto dest_address = header.command_fields.unicast_write.noc_address;
@@ -134,13 +130,13 @@ FORCE_INLINE void execute_chip_unicast_to_local_chip(
             if (header.command_fields.unicast_seminc.flush) {
                 if constexpr (enable_ring_support) {
                     auto start_trid = RX_CH_TRID_STARTS[rx_channel_id];
-                    auto end_trid = NUM_TRANSACTION_IDS;
+                    auto end_trid = start_trid + NUM_TRANSACTION_IDS;
                     for (size_t i = start_trid; i < end_trid; i++) {
                         while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(
                             tt::tt_fabric::edm_to_local_chip_noc, i));
                     }
                 } else {
-                    for (size_t i = 0; i < 4; i++) {
+                    for (size_t i = 0; i < NUM_TRANSACTION_IDS; i++) {
                         while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(
                             tt::tt_fabric::edm_to_local_chip_noc, i));
                     }
