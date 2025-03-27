@@ -7,8 +7,7 @@
 
 namespace ttnn::operations::experimental::reduction {
 
-// TODO(jbbieniek): add doc
-Tensor CumprodOperation::invoke(const Tensor& input_tensor, int64_t dim) {
+Tensor CumprodOperation::invoke(const Tensor& input_tensor, const int32_t dim) {
     return ttnn::prim::cumprod(input_tensor, dim);
 }
 

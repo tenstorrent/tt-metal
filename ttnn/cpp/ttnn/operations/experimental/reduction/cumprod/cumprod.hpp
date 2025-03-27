@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,10 +10,7 @@ namespace ttnn {
 namespace operations::experimental::reduction {
 
 struct CumprodOperation {
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        int64_t dim  // TODO(jbbieniek): int8_t?
-    );
+    static Tensor invoke(const Tensor& input_tensor, const int32_t dim);
 };
 
 }  // namespace operations::experimental::reduction

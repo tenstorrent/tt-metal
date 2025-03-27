@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@ namespace ttnn::operations::experimental::reduction {
 // the result depends on tensor_args!
 CumprodDeviceOperation::program_factory_t CumprodDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return SingleCore{};  // TODO(jbbieniek): enable a multi-core version once the implementation is ready
+    return SingleCore{};  // TODO(jbbieniek): enable multi-core version once the implementation is ready
 }
 
 void CumprodDeviceOperation::validate_on_program_cache_miss(
@@ -33,8 +33,7 @@ CumprodDeviceOperation::tensor_return_value_t CumprodDeviceOperation::create_out
 }
 
 CumprodDeviceOperation::invocation_result_t CumprodDeviceOperation::invoke(
-    const Tensor& input_tensor, const int64_t dim) {
-    // TODO(jbbieniek): finish this
+    const Tensor& input_tensor, const int32_t dim) {
     return {operation_attributes_t{dim}, tensor_args_t{input_tensor}};
 }
 

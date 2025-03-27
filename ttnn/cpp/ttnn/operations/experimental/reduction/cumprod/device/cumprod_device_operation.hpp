@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,12 +22,11 @@ using tt::tt_metal::TensorSpec;
 
 struct CumprodDeviceOperation {
     struct operation_attributes_t {
-        int64_t dim;
-        // TODO(jbbieniek): memory config?
+        int32_t dim;
     };
 
     struct tensor_args_t {
-        const Tensor& input_tensor;  // TODO(jbbieniek): output_tensor?
+        const Tensor& input_tensor;
     };
 
     using spec_return_value_t = ttnn::TensorSpec;
@@ -54,7 +53,7 @@ struct CumprodDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    struct MultiCore {  // TODO(jbbieniek): make sure it's correct when the time to implementation comes around
+    struct MultiCore {  // TODO(jbbieniek): make sure it's correct when the time to implement it comes around
         struct shared_variables_t {
             tt::tt_metal::KernelHandle unary_reader_kernel_id;
             tt::tt_metal::KernelHandle unary_writer_kernel_id;
@@ -93,7 +92,7 @@ struct CumprodDeviceOperation {
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    static invocation_result_t invoke(const Tensor& input_tensor, const int64_t dim);
+    static invocation_result_t invoke(const Tensor& input_tensor, const int32_t dim);
 };
 
 }  // namespace ttnn::operations::experimental::reduction
