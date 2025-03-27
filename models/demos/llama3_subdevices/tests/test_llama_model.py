@@ -316,7 +316,6 @@ def test_llama_model_inference(
                     buffer_key="SAMPLING",
                 )
                 tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
-                ttnn.deallocate(tt_out_gathered)
                 tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
                     tt_out_rm, dim=3, use_multicore=True, sub_core_grids=sub_core_grids
                 )
