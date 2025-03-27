@@ -763,29 +763,26 @@ void kernel_main() {
                     fabric_connection);
             }
         } else {
-            switch ((BF8_DIM3_TYPE)bf8_dim3_type) {
-                case T3K_FALCON40_8192:
-                case T3K_FALCON40_32768:
-                    fabric_send_falcon40<is_dram>(
-                        num_tiles_per_chip,
-                        ring_size,
-                        tile_cols_per_chip,
-                        tensor0_addrgen,
-                        pkt_hdr_forward,
-                        pkt_hdr_backward,
-                        fabric_connection);
-                    break;
-                case LLAMA_8B_N300:
-                    fabric_send_llama_8b_n300<is_dram>(
-                        num_tiles_per_chip,
-                        ring_size,
-                        tile_cols_per_chip,
-                        tensor0_addrgen,
-                        pkt_hdr_forward,
-                        pkt_hdr_backward,
-                        fabric_connection);
-                    break;
-                default: break;
+            if constexpr (
+                (BF8_DIM3_TYPE)bf8_dim3_type == T3K_FALCON40_8192 ||
+                (BF8_DIM3_TYPE)bf8_dim3_type == T3K_FALCON40_32768) {
+                fabric_send_falcon40<is_dram>(
+                    num_tiles_per_chip,
+                    ring_size,
+                    tile_cols_per_chip,
+                    tensor0_addrgen,
+                    pkt_hdr_forward,
+                    pkt_hdr_backward,
+                    fabric_connection);
+            } else if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == LLAMA_8B_N300) {
+                fabric_send_llama_8b_n300<is_dram>(
+                    num_tiles_per_chip,
+                    ring_size,
+                    tile_cols_per_chip,
+                    tensor0_addrgen,
+                    pkt_hdr_forward,
+                    pkt_hdr_backward,
+                    fabric_connection);
             }
         }
     } else {
