@@ -4,12 +4,8 @@
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
 #include "ckernel_sfpu_is_fp16_zero.h"
 #include "sfpi.h"
-
-using namespace sfpi;
 
 namespace ckernel
 {
@@ -24,11 +20,11 @@ inline void _calculate_sign_(const int iterations, uint exponent_size_8)
 #pragma GCC unroll 0
     for (int d = 0; d < iterations; d++)
     {
-        vFloat v   = dst_reg[0];
-        dst_reg[0] = vConst1;
+        sfpi::vFloat v   = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = sfpi::vConst1;
         v_if (v < 0.0F)
         {
-            dst_reg[0] = vConstNeg1;
+            sfpi::dst_reg[0] = sfpi::vConstNeg1;
         }
         v_endif;
 
@@ -36,11 +32,11 @@ inline void _calculate_sign_(const int iterations, uint exponent_size_8)
         // param0 != 0 is Float16 format and exp bias needs to be removed for zero check.
         v_if (_sfpu_is_fp16_zero_(v, exponent_size_8))
         {
-            dst_reg[0] = vConst0;
+            sfpi::dst_reg[0] = sfpi::vConst0;
         }
         v_endif;
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 

@@ -5,11 +5,11 @@
 #pragma once
 
 #include "ckernel.h"
-#include "ckernel_defs.h"
+#include "ckernel_addrmod.h"
+#include "ckernel_instr_params.h"
+#include "ckernel_ops.h"
 #include "ckernel_sfpu_load_config.h"
 #include "sfpi.h"
-
-using namespace sfpi;
 
 namespace ckernel
 {

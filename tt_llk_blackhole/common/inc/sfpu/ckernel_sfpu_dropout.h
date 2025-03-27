@@ -4,11 +4,10 @@
 
 #pragma once
 
-#include "ckernel.h"
 #include "ckernel_ops.h"
+#include "noc_nonblocking_api.h"
 #include "sfpi.h"
-
-using namespace sfpi;
+#include "sfpi_fp16.h"
 
 namespace ckernel
 {
@@ -55,7 +54,7 @@ inline void _calculate_dropout_(const int iterations, uint probability, uint sca
         TTI_SFPENCC(0, 0, 0, 0);
         TTI_SFPSTORE(0, 0, 3, 0);
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 

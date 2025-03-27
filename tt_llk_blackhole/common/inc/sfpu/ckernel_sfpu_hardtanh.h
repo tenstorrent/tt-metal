@@ -4,11 +4,8 @@
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
 #include "sfpi.h"
-
-using namespace sfpi;
+#include "sfpi_fp16.h"
 
 namespace ckernel
 {
@@ -23,14 +20,14 @@ inline void _calculate_hardtanh_(const int iterations, uint param0, uint param1,
     // param1 = -(pos_threshold - neg_threshold)
     // param2 = -(pos_threshold)
 
-    vFloat p0 = s2vFloat16(param0);
-    vFloat p1 = s2vFloat16(param1);
-    vFloat p2 = s2vFloat16(param2);
+    sfpi::vFloat p0 = sfpi::s2vFloat16(param0);
+    sfpi::vFloat p1 = sfpi::s2vFloat16(param1);
+    sfpi::vFloat p2 = sfpi::s2vFloat16(param2);
 // SFPU microcode
 #pragma GCC unroll 0
     for (int d = 0; d < iterations; d++)
     {
-        vFloat val = dst_reg[0];
+        sfpi::vFloat val = sfpi::dst_reg[0];
 
         val += p0; // 12 bits
         v_if (val < 0.0f)
@@ -48,9 +45,9 @@ inline void _calculate_hardtanh_(const int iterations, uint param0, uint param1,
 
         val += p2; // 12 bits
 
-        dst_reg[0] = val;
+        sfpi::dst_reg[0] = val;
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 

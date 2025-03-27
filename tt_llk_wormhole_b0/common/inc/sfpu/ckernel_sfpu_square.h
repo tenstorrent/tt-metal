@@ -4,12 +4,7 @@
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
-#include "noc_nonblocking_api.h"
 #include "sfpi.h"
-
-using namespace sfpi;
 
 namespace ckernel
 {
@@ -22,12 +17,12 @@ inline void _calculate_square_(const int iterations)
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        vFloat in     = dst_reg[0];
-        vFloat result = in * in;
+        sfpi::vFloat in     = sfpi::dst_reg[0];
+        sfpi::vFloat result = in * in;
 
-        dst_reg[0] = result;
+        sfpi::dst_reg[0] = result;
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 

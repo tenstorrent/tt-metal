@@ -4,12 +4,8 @@
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
-#include "noc_nonblocking_api.h"
 #include "sfpi.h"
-
-using namespace sfpi;
+#include "sfpi_fp16.h"
 
 namespace ckernel
 {
@@ -22,8 +18,8 @@ sfpi_inline void _calculate_log_body_(const uint log_base_scale_factor)
     ////////////////////////////
     // Load From dest + "normalize to calculation range"
     ////////////////////////////
-    vFloat in = dst_reg[0];
-    vFloat x  = setexp(in, 127); // set exp to exp bias (put in range of 1-2)
+    sfpi::vFloat in = sfpi::dst_reg[0];
+    sfpi::vFloat x  = setexp(in, 127); // set exp to exp bias (put in range of 1-2)
 
     // XXXXXX ask Namal? if we can derive the coefficients below to higher precision
     ////////////////////////////
@@ -38,28 +34,28 @@ sfpi_inline void _calculate_log_body_(const uint log_base_scale_factor)
     // D' = -A + B - C + D
     // A':0.1058, B':-0.7116, C':2.0871, D':-1.4753
     ////////////////////////////
-    vFloat a = vConstFloatPrgm1;
-    vFloat b = vConstFloatPrgm2;
+    sfpi::vFloat a = sfpi::vConstFloatPrgm1;
+    sfpi::vFloat b = sfpi::vConstFloatPrgm2;
     // XXXXX try variants of the below: B'=.7122, C'=2.0869
-    vFloat series_result = x * (x * (x * a + b) + 2.0871) + -1.4753f;
+    sfpi::vFloat series_result = x * (x * (x * a + b) + 2.0871) + -1.4753f;
 
     ////////////////////////////
     // Convert exponent to float
     ////////////////////////////
-    vInt exp = exexp(in);
+    sfpi::vInt exp = exexp(in);
     v_if (exp < 0)
     {
-        exp = setsgn(~exp + 1, 1);
+        exp = sfpi::setsgn(~exp + 1, 1);
     }
     v_endif;
 
-    vFloat expf      = int32_to_float(exp, 0);
-    vFloat vConstLn2 = vConstFloatPrgm0;
-    vFloat result    = expf * vConstLn2 + series_result; // exp correction: ln(1+x) + exp*ln(2)
+    sfpi::vFloat expf      = int32_to_float(exp, 0);
+    sfpi::vFloat vConstLn2 = sfpi::vConstFloatPrgm0;
+    sfpi::vFloat result    = expf * vConstLn2 + series_result; // exp correction: ln(1+x) + exp*ln(2)
 
     if constexpr (HAS_BASE_SCALING)
     {
-        result *= s2vFloat16a(log_base_scale_factor);
+        result *= sfpi::s2vFloat16a(log_base_scale_factor);
     }
 
     ////////////////////////////
@@ -71,7 +67,7 @@ sfpi_inline void _calculate_log_body_(const uint log_base_scale_factor)
     }
     v_endif;
 
-    dst_reg[0] = result;
+    sfpi::dst_reg[0] = result;
 }
 
 template <bool APPROXIMATION_MODE, bool HAS_BASE_SCALING, int ITERATIONS>
@@ -81,18 +77,18 @@ inline void _calculate_log_(const int iterations, uint log_base_scale_factor)
     for (int d = 0; d < iterations; d++)
     {
         _calculate_log_body_<HAS_BASE_SCALING>(log_base_scale_factor);
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE>
 inline void _init_log_()
 {
-    vConstFloatPrgm0 = 0.692871f; // ln2
+    sfpi::vConstFloatPrgm0 = 0.692871f; // ln2
 
     // XXXXX could do these to higher precision
-    vConstFloatPrgm1 = 0.1058f;
-    vConstFloatPrgm2 = -0.7166f;
+    sfpi::vConstFloatPrgm1 = 0.1058f;
+    sfpi::vConstFloatPrgm2 = -0.7166f;
 }
 
 } // namespace sfpu

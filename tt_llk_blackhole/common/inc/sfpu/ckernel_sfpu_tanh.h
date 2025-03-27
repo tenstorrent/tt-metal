@@ -4,12 +4,8 @@
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
 #include "ckernel_sfpu_load_config.h"
 #include "sfpi.h"
-
-using namespace sfpi;
 
 namespace ckernel
 {
@@ -20,23 +16,23 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _calculate_tanh_(const int iterations)
 {
     // SFPU microcode
-    vUInt l0 = l_reg[LRegs::LReg0];
-    vUInt l1 = l_reg[LRegs::LReg1];
-    vUInt l2 = l_reg[LRegs::LReg2];
+    sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vUInt l2 = sfpi::l_reg[sfpi::LRegs::LReg2];
 
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        vFloat val = dst_reg[0];
-        val        = lut(val, l0, l1, l2);
-        dst_reg[0] = val;
+        sfpi::vFloat val = sfpi::dst_reg[0];
+        val              = lut(val, l0, l1, l2);
+        sfpi::dst_reg[0] = val;
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 
-    l_reg[LRegs::LReg0] = l0;
-    l_reg[LRegs::LReg1] = l1;
-    l_reg[LRegs::LReg2] = l2;
+    sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
+    sfpi::l_reg[sfpi::LRegs::LReg1] = l1;
+    sfpi::l_reg[sfpi::LRegs::LReg2] = l2;
 }
 
 template <bool APPROXIMATION_MODE>

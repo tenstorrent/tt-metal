@@ -4,12 +4,10 @@
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
+#include "ckernel_addrmod.h"
+#include "ckernel_ops.h"
 #include "ckernel_sfpu_load_config.h"
 #include "sfpi.h"
-
-using namespace sfpi;
 
 namespace ckernel
 {
@@ -44,7 +42,7 @@ inline void _quant_int32_(const uint dst_offset)
             TTI_SFPSETSGN(0, 4, 0, 0);
         }
         TTI_SFPSTORE(0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_7, 0);
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
@@ -84,7 +82,7 @@ inline void _requant_int32_(const uint dst_offset)
             TTI_SFPSETSGN(0, 4, 0, 0);
         }
         TTI_SFPSTORE(0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_7, 0);
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
@@ -118,7 +116,7 @@ inline void _dequant_int32_(const uint dst_offset)
         TTI_NOP;
         // LREG_0 -> dest as fp32
         TTI_SFPSTORE(0, 3, ADDR_MOD_7, 0);
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 

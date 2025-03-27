@@ -4,12 +4,7 @@
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
-#include "noc_nonblocking_api.h"
 #include "sfpi.h"
-
-using namespace sfpi;
 
 namespace ckernel
 {
@@ -21,16 +16,16 @@ inline void _calculate_power_(const int iterations, uint exponent)
 {
     for (int d = 0; d < iterations; d++)
     {
-        vFloat in     = dst_reg[0];
-        vFloat result = in * in;
+        sfpi::vFloat in     = sfpi::dst_reg[0];
+        sfpi::vFloat result = in * in;
         for (uint i = 2; i < exponent; i++)
         {
             result *= in;
         }
 
-        dst_reg[0] = result;
+        sfpi::dst_reg[0] = result;
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 

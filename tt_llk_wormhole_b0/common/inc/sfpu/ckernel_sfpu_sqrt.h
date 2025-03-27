@@ -4,12 +4,8 @@
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
-#include "noc_nonblocking_api.h"
 #include "sfpi.h"
-
-using namespace sfpi;
+#include "sfpi_fp16.h"
 
 namespace ckernel
 {
@@ -22,19 +18,19 @@ inline void _calculate_sqrt_(const int iterations)
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        vFloat val = dst_reg[0];
+        sfpi::vFloat val = sfpi::dst_reg[0];
 
         if constexpr (APPROXIMATION_MODE)
         {
-            vUInt magic = vConstIntPrgm0;
+            sfpi::vUInt magic = sfpi::vConstIntPrgm0;
 
             // sqrt initial approximation
             //  adjust bias
-            vUInt val_s = magic + reinterpret<vUInt>(val);
+            sfpi::vUInt val_s = magic + sfpi::reinterpret<sfpi::vUInt>(val);
 
             // approximation of square root
             val_s >>= 1;
-            dst_reg[0] = reinterpret<vFloat>(val_s);
+            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(val_s);
         }
         else
         {
@@ -43,8 +39,8 @@ inline void _calculate_sqrt_(const int iterations)
             // u.i = SQRT_MAGIC_F - (u.i >> 1);
             v_if (val != 0.0f)
             {
-                vUInt magic   = vConstIntPrgm0;
-                vFloat approx = reinterpret<vFloat>(magic - (reinterpret<vUInt>(val) >> 1));
+                sfpi::vUInt magic   = sfpi::vConstIntPrgm0;
+                sfpi::vFloat approx = sfpi::reinterpret<sfpi::vFloat>(magic - (sfpi::reinterpret<sfpi::vUInt>(val) >> 1));
 
                 // Reciproot iterations
                 for (int r = 0; r < RECIPROCAL_ITERATIONS; r++)
@@ -53,12 +49,12 @@ inline void _calculate_sqrt_(const int iterations)
                     approx = ((approx * approx) * (val * -0.5f) + 1.5f) * approx;
                 }
 
-                dst_reg[0] = approx * val;
+                sfpi::dst_reg[0] = approx * val;
             }
             v_endif;
         }
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
@@ -67,11 +63,11 @@ inline void _init_sqrt_()
 {
     if (APPROXIMATION_MODE)
     {
-        vConstFloatPrgm0 = s2vFloat16b(127 << 7);
+        sfpi::vConstFloatPrgm0 = sfpi::s2vFloat16b(127 << 7);
     }
     else
     {
-        vConstFloatPrgm0 = s2vFloat16b(0x5f37);
+        sfpi::vConstFloatPrgm0 = sfpi::s2vFloat16b(0x5f37);
     }
 }
 

@@ -4,13 +4,8 @@
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
 #include "ckernel_sfpu_load_config.h"
-#include "noc_nonblocking_api.h"
 #include "sfpi.h"
-
-using namespace sfpi;
 
 namespace ckernel
 {
@@ -21,29 +16,29 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _calculate_sigmoid_(const int iterations)
 {
     constexpr int lut_mode = 0; // SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE1
-    vUInt l0               = l_reg[LRegs::LReg0];
-    vUInt l1               = l_reg[LRegs::LReg1];
-    vUInt l2               = l_reg[LRegs::LReg2];
-    vUInt l4               = l_reg[LRegs::LReg4];
-    vUInt l5               = l_reg[LRegs::LReg5];
-    vUInt l6               = l_reg[LRegs::LReg6];
+    sfpi::vUInt l0         = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vUInt l1         = sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vUInt l2         = sfpi::l_reg[sfpi::LRegs::LReg2];
+    sfpi::vUInt l4         = sfpi::l_reg[sfpi::LRegs::LReg4];
+    sfpi::vUInt l5         = sfpi::l_reg[sfpi::LRegs::LReg5];
+    sfpi::vUInt l6         = sfpi::l_reg[sfpi::LRegs::LReg6];
 
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        vFloat val = dst_reg[0];
+        sfpi::vFloat val = sfpi::dst_reg[0];
 
-        dst_reg[0] = lut2(val, l0, l1, l2, l4, l5, l6, lut_mode) + 0.5f;
+        sfpi::dst_reg[0] = lut2(val, l0, l1, l2, l4, l5, l6, lut_mode) + 0.5f;
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 
-    l_reg[LRegs::LReg0] = l0;
-    l_reg[LRegs::LReg1] = l1;
-    l_reg[LRegs::LReg2] = l2;
-    l_reg[LRegs::LReg4] = l4;
-    l_reg[LRegs::LReg5] = l5;
-    l_reg[LRegs::LReg6] = l6;
+    sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
+    sfpi::l_reg[sfpi::LRegs::LReg1] = l1;
+    sfpi::l_reg[sfpi::LRegs::LReg2] = l2;
+    sfpi::l_reg[sfpi::LRegs::LReg4] = l4;
+    sfpi::l_reg[sfpi::LRegs::LReg5] = l5;
+    sfpi::l_reg[sfpi::LRegs::LReg6] = l6;
 }
 
 template <bool APPROXIMATION_MODE>

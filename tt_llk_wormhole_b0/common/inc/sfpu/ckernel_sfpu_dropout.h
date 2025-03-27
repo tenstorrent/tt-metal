@@ -4,12 +4,12 @@
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
-#include "noc_nonblocking_api.h"
+#include <cstdint>
+
+#include "ckernel_ops.h"
 #include "sfpi.h"
 
-using namespace sfpi;
+// #include "debug/fw_debug.h"
 
 namespace ckernel
 {
@@ -23,8 +23,8 @@ inline void _calculate_dropout_(const int iterations, uint probability, uint sca
 {
     // SFPU microcode
 
-    FWLOG1("calculate_dropout() -- probability:%x", probability);
-    FWLOG1("calculate_dropout() -- scale:%x", scale);
+    // FWLOG1("calculate_dropout() -- probability:%x", probability);
+    // FWLOG1("calculate_dropout() -- scale:%x", scale);
 
     TT_SFPLOADI(p_sfpu::LREG1, 10, scale & 0xFFFF);
     TT_SFPLOADI(p_sfpu::LREG1, 8, scale >> 16);
@@ -35,7 +35,7 @@ inline void _calculate_dropout_(const int iterations, uint probability, uint sca
     {
         ////////////////////////
         // Scale samples
-        // dst_reg[0] = dst_reg[0] * s2vFloat16b(scale);
+        // sfpi::dst_reg[0] = sfpi::dst_reg[0] * s2vFloat16b(scale);
         ///////////////////////
         TTI_SFPLOAD(p_sfpu::LREG0, 0, 3, 0);
         TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
@@ -52,14 +52,14 @@ inline void _calculate_dropout_(const int iterations, uint probability, uint sca
         ////////////////////////
         // Drop samples
         // v_if (rand < probability)
-        //   dst_reg[0] = vConst0;
+        //   sfpi::dst_reg[0] = vConst0;
         ///////////////////////
         TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG3, 10);
         TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
         TTI_SFPENCC(0, 0, 0, 0);
         TTI_SFPSTORE(0, 0, 3, 0);
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
