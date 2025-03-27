@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -67,12 +67,7 @@ std::vector<Tensor> SortDeviceOperation::create_output_tensors(
 
 tt::tt_metal::operation::ProgramWithCallbacks SortDeviceOperation::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    if (input_tensors.at(0).get_padded_shape()[this->dim] < MULTICORE_MINIMUM_WIDTH) {
-        return detail::sort_single_core_interleaved(
-            input_tensors.at(0), this->dim, this->descending, this->stable, output_tensors.at(0), output_tensors.at(1));
-    }
-
-    return detail::sort_multi_core_interleaved(
+    return detail::sort_program_interleaved(
         input_tensors.at(0), this->dim, this->descending, this->stable, output_tensors.at(0), output_tensors.at(1));
 }
 }  // namespace ttnn::operations::experimental::reduction

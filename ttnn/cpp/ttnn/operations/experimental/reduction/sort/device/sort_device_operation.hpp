@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,11 +11,6 @@
 #include "ttnn/run_operation.hpp"
 
 namespace ttnn::operations::experimental::reduction {
-
-constexpr int8_t DIM_DEFAULT_VALUE = -1;
-constexpr bool DESCENDING_DEFAULT_VALUE = false;
-constexpr bool STABLE_DEFAULT_VALUE = false;
-constexpr uint32_t MULTICORE_MINIMUM_WIDTH = 8192;
 
 struct SortDeviceOperation {
     const int8_t dim;

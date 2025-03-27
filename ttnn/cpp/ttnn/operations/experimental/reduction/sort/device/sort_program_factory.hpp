@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::reduction::detail {
 
-operation::ProgramWithCallbacks sort_single_core_interleaved(
+operation::ProgramWithCallbacks sort_program_interleaved(
     const Tensor& input_tensor,
     const int8_t dim,
     const bool descending,
@@ -22,19 +22,10 @@ operation::ProgramWithCallbacks sort_single_core_interleaved(
     Tensor& value_tensor,
     Tensor& index_tensor) {
     tt::tt_metal::Program program{};
-    // TODO: Implementation in next PR
-    return {std::move(program), {}};
-}
 
-operation::ProgramWithCallbacks sort_multi_core_interleaved(
-    const Tensor& input_tensor,
-    const int8_t dim,
-    const bool descending,
-    const bool stable,
-    Tensor& value_tensor,
-    Tensor& index_tensor) {
-    tt::tt_metal::Program program{};
     // TODO: Implementation in next PR
+    tt::log_warning("sort_program_interleaved not implemented yet!");
+
     return {std::move(program), {}};
 }
 

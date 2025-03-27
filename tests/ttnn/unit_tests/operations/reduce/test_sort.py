@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -17,10 +17,17 @@ from models.utility_functions import skip_for_grayskull
         ([3, 3], -1, False),
         ([16, 16, 16], -1, True),
         ([3, 3], 1, False),
+        ([3, 16], 0, True),
+        ([32, 32], 0, False),
+        ([64, 64], 1, False),
+        ([128, 32], 1, True),
+        ([87, 87], 0, True),
+        ([1], 0, True),
+        ([], -1, True),
     ],
 )
 def test_sort_output_shape(shape, dim, descending, device):
-    torch.manual_seed(2005)
+    torch.manual_seed(0)
 
     torch_dtype = torch.bfloat16
     input = torch.randn(shape, dtype=torch_dtype)
@@ -43,14 +50,17 @@ def test_sort_output_shape(shape, dim, descending, device):
         ([16, 1], -1, False),
         ([1, 16], -1, False),
         ([3, 3], -1, True),
-        ([16, 16, 16], -1, True),
         ([3, 3], 1, False),
         ([16, 16, 16], 0, True),
-        ([30, 30, 30], 2, False),
+        ([64, 64], 1, False),
+        ([128, 32], 1, True),
+        ([87, 87], 0, True),
+        ([1], 0, True),
+        ([], -1, True),
     ],
 )
 def test_sort_output_shape_prealocated_output(shape, dim, descending, device):
-    torch.manual_seed(2005)
+    torch.manual_seed(0)
 
     torch_dtype = torch.bfloat16
     input = torch.randn(shape, dtype=torch_dtype)
