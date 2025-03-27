@@ -129,7 +129,7 @@ def run_device_perf_detailed(command, subdir, cols, op_name="", has_signposts=Fa
     return post_processed_results
 
 
-def check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=False):
+def check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=True):
     expected_results = {}
     failed = False
     for col, expected_perf in expected_perf_cols.items():
