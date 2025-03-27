@@ -261,7 +261,11 @@ int GraphProcessor::add_tensor(const Tensor& t) {
         [&t](auto&& storage) -> std::vector<tt::tt_metal::Buffer*> {
             using T = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<T, DeviceStorage>) {
-                return t.buffers();
+                if (storage.mesh_buffer) {
+                    return {storage.mesh_buffer->get_backing_buffer()};
+                } else {
+                    return t.buffers();
+                }
             }
             return {};
         },

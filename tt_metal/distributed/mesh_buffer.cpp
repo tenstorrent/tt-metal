@@ -170,6 +170,13 @@ Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const 
 
 Buffer* MeshBuffer::get_reference_buffer() const { return buffers_.values().front().get(); }
 
+Buffer* MeshBuffer::get_backing_buffer() const {
+    if (auto owned_state = std::get_if<OwnedBufferState>(&state_)) {
+        return owned_state->backing_buffer.get();
+    }
+    return nullptr;
+}
+
 DeviceAddr MeshBuffer::size() const {
     return std::visit(
         tt::stl::overloaded{
