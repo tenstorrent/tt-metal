@@ -30,23 +30,23 @@ runs:
     - name: 📦 Download Build Artifact
       if: ${{ inputs.build-artifact-name != '' }}
       uses: actions/download-artifact@v4
+      timeout-minutes: 10
       with:
         name: ${{ inputs.build-artifact-name }}
         path: $${ inputs.path }}
-        timeout-minutes: 10
 
     - name: 📂 Extract Build Files
       if: ${{ inputs.build-artifact-name != '' }}
-      run: tar -xvf ttm_any.tar
+      run: tar -xf ttm_any.tar
       shell: bash
 
     - name: 🧪 Download Python Wheel
       if: ${{ inputs.wheel-artifact-name != '' }}
       uses: actions/download-artifact@v4
+      timeout-minutes: 10
       with:
         name: ${{ inputs.wheel-artifact-name }}
         path: $${ inputs.path }}
-        timeout-minutes: 10
 
     - name: 💿 Install Wheel
       if: ${{ inputs.wheel-artifact-name != '' }}
