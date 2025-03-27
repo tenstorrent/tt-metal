@@ -124,7 +124,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncWrite) {
     defines["FVC_MODE_PULL"] = "";
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_sender.cpp",
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_async_write_sender.cpp",
         sender_logical_crs,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -285,7 +285,7 @@ TEST_F(Fabric2DPushFixture, TestAsyncWrite) {
     std::map<string, string> defines = {};
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_sender.cpp",
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_async_write_sender.cpp",
         sender_logical_crs,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -438,7 +438,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWrite) {
     defines["FVC_MODE_PULL"] = "";
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_sender.cpp",
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_async_write_sender.cpp",
         sender_logical_crs,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -590,7 +590,7 @@ TEST_F(Fabric2DPushFixture, TestAsyncRawWrite) {
     std::map<string, string> defines = {};
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_sender.cpp",
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_async_write_sender.cpp",
         sender_logical_crs,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -750,7 +750,7 @@ TEST_F(Fabric2DPullFixture, TestAtomicInc) {
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, fabric_mode::PULL};
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_atomic_inc_sender.cpp",
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_atomic_inc_sender.cpp",
         sender_logical_crs,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -909,7 +909,7 @@ TEST_F(Fabric2DPushFixture, TestAtomicInc) {
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, fabric_mode::PUSH};
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_atomic_inc_sender.cpp",
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_atomic_inc_sender.cpp",
         sender_logical_crs,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -1085,7 +1085,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncWriteAtomicInc) {
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 0, fabric_mode::PULL};
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_atomic_inc_sender.cpp",
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_async_write_atomic_inc_sender.cpp",
         sender_logical_crs,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -1264,7 +1264,7 @@ TEST_F(Fabric2DPushFixture, TestAsyncWriteAtomicInc) {
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 0, fabric_mode::PUSH};
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_atomic_inc_sender.cpp",
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_async_write_atomic_inc_sender.cpp",
         sender_logical_crs,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -1435,7 +1435,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteAtomicInc) {
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 1, fabric_mode::PULL};
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_atomic_inc_sender.cpp",
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_async_write_atomic_inc_sender.cpp",
         sender_logical_crs,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -1605,7 +1605,7 @@ TEST_F(Fabric2DPushFixture, TestAsyncRawWriteAtomicInc) {
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 1, fabric_mode::PUSH};
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_atomic_inc_sender.cpp",
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_async_write_atomic_inc_sender.cpp",
         sender_logical_crs,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -1831,7 +1831,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticast) {
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 0, fabric_mode::PULL};
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_multicast_sender.cpp",
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_async_write_multicast_sender.cpp",
         sender_logical_crs,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -2047,7 +2047,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticast) {
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 1, fabric_mode::PULL};
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_multicast_sender.cpp",
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_async_write_multicast_sender.cpp",
         sender_logical_crs,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -2276,7 +2276,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticastMultidirectional) {
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
         "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/"
-        "fabric_pull_async_write_multicast_multidirectional_sender.cpp",
+        "fabric_async_write_multicast_multidirectional_sender.cpp",
         sender_logical_crs,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -2500,7 +2500,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticastMultidirectional) {
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
         "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/"
-        "fabric_pull_async_write_multicast_multidirectional_sender.cpp",
+        "fabric_async_write_multicast_multidirectional_sender.cpp",
         sender_logical_crs,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
