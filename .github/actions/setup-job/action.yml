@@ -50,6 +50,7 @@ runs:
 
     - name: 💿 Install Wheel
       if: ${{ inputs.wheel-artifact-name != '' }}
+      working-directory: ${{ inputs.path }}
       run: |
         echo "📂 In directory: $(pwd)"
         echo "📄 Files:"
