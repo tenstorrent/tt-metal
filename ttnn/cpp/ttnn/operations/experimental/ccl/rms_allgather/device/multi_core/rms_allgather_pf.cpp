@@ -881,7 +881,14 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         }
         // Set all gather runtime args
 
-        std::vector<uint32_t> all_gather_rts;
+        uint32_t out_ready_sem_wait_value = ring_size * num_links;
+
+        std::vector<uint32_t> all_gather_rts = {
+            semaphore.address(),        // out_ready_sem_bank_addr (absolute address)
+            out_ready_sem_wait_value,   // out_ready_sem_wait_value
+            output.buffer()->address()  // tensor_address0
+        };
+
         if (i < num_links) {
             // Add RT values for the all gather core to all_gather_rts
             // Will be appended to the end of writer rt args
@@ -915,31 +922,19 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
                                              : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(
                                                    local_fabric_handle->uniquely_connect_worker(
                                                        device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
-            bool wait_output_semaphore = (i == 0);
-            bool reset_global_semaphore = (i == 0);
-            uint32_t out_ready_sem_wait_value = ring_size * num_links;
             std::vector<uint32_t> base_rt_args = {
-                output.buffer()->address(),           // tensor_address0
-                semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)
                 output_tensor_shard_num_pages,        // num_tiles_per_core
                 worker_num_tiles_to_read,             // num_tiles_to_read
                 output_first_core_tile_start_offset,  // first_core_tile_start_offset
                 output_tensor_cores_x.size(),         // num_cores
-                wait_output_semaphore,                // wait_output_semaphore
-                reset_global_semaphore,               // reset_global_semaphore
                 drain_sync_core.x,                    // out_ready_sem_noc0_x
-                drain_sync_core.y,                    // out_ready_sem_noc0_y
-                out_ready_sem_wait_value              // out_ready_sem_wait_value
+                drain_sync_core.y                     // out_ready_sem_noc0_y
             };
             all_gather_rts.insert(all_gather_rts.end(), base_rt_args.begin(), base_rt_args.end());
             all_gather_rts.insert(all_gather_rts.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
             all_gather_rts.insert(all_gather_rts.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
             append_fabric_connection_rt_args(forward_fabric_connection, core, program, all_gather_rts);
             append_fabric_connection_rt_args(backward_fabric_connection, core, program, all_gather_rts);
-        } else {
-            // Rubber band solution to the fact we update RT 3 and 4 with the semaphore and base address
-            all_gather_rts.push_back(0);
-            all_gather_rts.push_back(1);
         }
         // Set writer runtime args
 
@@ -1002,12 +997,12 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
 
                 if (writer_kernel_id == writer_mcast_sender_kernels_id) {
                     auto& runtime_args = writer_sender_args_by_core[core.x][core.y];
-                    runtime_args[3] = dst_buffer->address();
-                    runtime_args[4] = semaphore.address();
+                    runtime_args[5] = dst_buffer->address();
+                    runtime_args[3] = semaphore.address();
                 } else if (writer_kernel_id == writer_mcast_receiver_kernels_id) {
                     auto& runtime_args = writer_receiver_args_by_core[core.x][core.y];
-                    runtime_args[3] = dst_buffer->address();
-                    runtime_args[4] = semaphore.address();
+                    runtime_args[5] = dst_buffer->address();
+                    runtime_args[3] = semaphore.address();
                 }
             }
             UpdateDynamicCircularBufferAddress(program, cb_in0, *src_buffer_a);

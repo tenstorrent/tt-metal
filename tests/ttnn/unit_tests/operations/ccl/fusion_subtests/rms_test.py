@@ -92,9 +92,9 @@ def run_rms_trace(
     ag_memory_config = ttnn.create_sharded_memory_config(
         shape=(
             32,
-            256,
+            128,
         ),
-        core_grid=input_shard_grid,
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
@@ -107,7 +107,7 @@ def run_rms_trace(
     output_memory_config = ttnn.create_sharded_memory_config(
         shape=(
             input_shape[0] * input_shape[1] * input_shape[2],
-            output_pad_width * 8,
+            output_pad_width * num_devices,
         ),
         core_grid=output_shard_grid,
         strategy=ttnn.ShardStrategy.WIDTH,
@@ -147,22 +147,11 @@ def run_rms_trace(
     if use_new_version:
         tt_stats = ttnn.fused_rms_1_1_32_8192(
             input_tensor,
-            ccl_semaphore_handles,
             layer_norm_config,
+            1,
+            mesh_device,
+            ccl_semaphore_handles,
             is_pre=True,
-        )
-        print(tt_stats)
-
-        tt_out = ttnn.fused_rms_1_1_32_8192(
-            input_tensor,
-            ccl_semaphore_handles,
-            layer_norm_config,
-            dtype=ttnn.bfloat8_b,
-            memory_config=output_memory_config,
-            epsilon=epsilon,
-            weight=gamma_tensor,
-            stats=tt_stats,
-            is_pre=False,
         )
 
         logger.info("Capturing trace")
@@ -171,29 +160,11 @@ def run_rms_trace(
             for _ in range(warmup_iters):
                 tt_stats = ttnn.fused_rms_1_1_32_8192(
                     input_tensor,
-                    ccl_semaphore_handles,
                     layer_norm_config,
+                    1,
+                    mesh_device,
+                    ccl_semaphore_handles,
                     is_pre=True,
-                )
-                tt_stats_gathered = ttnn.experimental.all_gather_async(
-                    tt_stats,
-                    3,
-                    ccl_semaphore_handles,
-                    num_links=num_links,
-                    topology=ttnn.Topology.Linear,
-                    enable_persistent_fabric_mode=True,
-                    memory_config=ag_memory_config,
-                )
-                tt_out = ttnn.fused_rms_1_1_32_8192(
-                    input_tensor,
-                    ccl_semaphore_handles,
-                    layer_norm_config,
-                    dtype=ttnn.bfloat8_b,
-                    memory_config=output_memory_config,
-                    epsilon=epsilon,
-                    weight=gamma_tensor,
-                    stats=tt_stats_gathered,
-                    is_pre=False,
                 )
             ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
             logger.info("Done warmup")
@@ -202,29 +173,11 @@ def run_rms_trace(
         for _ in range(num_iters):
             tt_stats = ttnn.fused_rms_1_1_32_8192(
                 input_tensor,
-                ccl_semaphore_handles,
                 layer_norm_config,
+                1,
+                mesh_device,
+                ccl_semaphore_handles,
                 is_pre=True,
-            )
-            tt_stats_gathered = ttnn.experimental.all_gather_async(
-                tt_stats,
-                3,
-                ccl_semaphore_handles,
-                num_links=num_links,
-                topology=ttnn.Topology.Linear,
-                enable_persistent_fabric_mode=True,
-                memory_config=ag_memory_config,
-            )
-            tt_out = ttnn.fused_rms_1_1_32_8192(
-                input_tensor,
-                ccl_semaphore_handles,
-                layer_norm_config,
-                dtype=ttnn.bfloat8_b,
-                memory_config=output_memory_config,
-                epsilon=epsilon,
-                weight=gamma_tensor,
-                stats=tt_stats_gathered,
-                is_pre=False,
             )
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     else:

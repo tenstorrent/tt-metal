@@ -368,9 +368,9 @@ def test_all_gather_only(
         ),
     ],
 )
-@pytest.mark.parametrize("num_links", [3])
+@pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("use_new_version", [True])
-@pytest.mark.parametrize("num_iters, warmup_iters", [[20, 10]])
+@pytest.mark.parametrize("num_iters, warmup_iters", [[100, 10]])
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(

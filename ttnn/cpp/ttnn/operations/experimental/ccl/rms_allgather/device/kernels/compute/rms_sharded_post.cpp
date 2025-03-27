@@ -44,6 +44,7 @@ void MAIN {
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t scaler0 = 0;
 
+    // We need to block here until the stats tensor is filled with a semaphore
     binary_op_init_common(cb_stats, cb_scaler_global, cb_var);
 
     const uint32_t subblock_w = (block_w <= 2) ? subblock_w_volatile : subblock_w_const;

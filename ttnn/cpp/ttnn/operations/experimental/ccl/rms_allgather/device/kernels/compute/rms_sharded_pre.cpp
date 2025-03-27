@@ -32,7 +32,7 @@ void MAIN {
     constexpr uint32_t cb_ex2 = get_compile_time_arg_val(11);
     constexpr uint32_t fuse_preadd_cb_in = get_compile_time_arg_val(12);
     constexpr uint32_t cb_ex_external2 = get_compile_time_arg_val(13);
-    constexpr uint32_t cb_out = get_compile_time_arg_val(14);  // output
+    constexpr uint32_t cb_to_allgather_writer = get_compile_time_arg_val(14);  // output
     constexpr uint32_t cb_x = get_compile_time_arg_val(15);
     constexpr uint32_t cb_in1 = get_compile_time_arg_val(16);
     constexpr uint32_t cb_in0 = get_compile_time_arg_val(17);  // Input
@@ -148,7 +148,8 @@ void MAIN {
         const bool is_second_stage_reader = get_arg_val<uint32_t>(3) == 1;
         uint32_t num_blocks_reduce;
         num_blocks_reduce = (is_second_stage_reader) ? num_blocks_second_stage_reduction : num_blocks_first_stage;
-        const uint32_t cb_reduction_out = (!use_two_stage_reduce or is_second_stage_reader) ? cb_out : cb_ex2;
+        const uint32_t cb_reduction_out =
+            (!use_two_stage_reduce or is_second_stage_reader) ? cb_to_allgather_writer : cb_ex2;
         cb_wait_front(cb_scaler_global, 1);
         reconfig_data_format_srca(cb_x2, cb_ex_external2);
         reconfig_data_format_srcb(cb_scaler, cb_scaler_global);

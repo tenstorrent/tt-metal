@@ -31,22 +31,23 @@ void kernel_main() {
         const uint32_t scalar_c = get_arg_val<uint32_t>(0);
         generate_reduce_scaler(cb_in_4, scalar_c);
     }
+    size_t arg_idx = 2;
+    const uint32_t iteration_number = get_arg_val<uint32_t>(arg_idx++);
+    const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
+    ttnn::ccl::address_t tensor_address0 = get_arg_val<ttnn::ccl::address_t>(arg_idx++);
+
     // Start the all gather part
-    if (get_arg_val<uint32_t>(2) < num_links) {
+    if (iteration_number < num_links) {
         // Do this only on one of the cores
-        size_t arg_idx = 3;
+
         // To do add these to Program Factory on i=0 case
-        ttnn::ccl::address_t tensor_address0 = get_arg_val<ttnn::ccl::address_t>(arg_idx++);
-        const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
         uint32_t num_tiles_per_core = get_arg_val<uint32_t>(arg_idx++);
         uint32_t num_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
         uint32_t first_core_tile_start_offset = get_arg_val<uint32_t>(arg_idx++);
         uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
-        bool wait_output_semaphore = get_arg_val<uint32_t>(arg_idx++);
-        bool reset_global_semaphore = get_arg_val<uint32_t>(arg_idx++);
         const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
         const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
-        uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
         tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
         arg_idx += num_cores;
         tt_l1_ptr uint32_t* core_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
@@ -134,11 +135,9 @@ void kernel_main() {
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
         noc_semaphore_inc(out_ready_sem_noc_addr, 1);
         // 3. wait for mcast output ready semaphore
-        if (wait_output_semaphore) {
-            while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) < out_ready_sem_wait_value);
-        }
+        while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) < out_ready_sem_wait_value);
         // 4. global semaphore reset
-        if (reset_global_semaphore) {
+        if (iteration_number == 0) {
             const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem_bank_addr);
             noc_inline_dw_write(dest_noc_addr, 0);
         }
