@@ -118,10 +118,9 @@ namespace ttnn::distributed::test {
 using DistributedEndToEndTests = T3000MeshDeviceFixture;
 
 TEST_F(DistributedEndToEndTests, ProgramDispatchTest) {
-    auto mesh_device = MeshDevice::create(MeshDeviceConfig(MeshShape(2, 4)));
-
-    EXPECT_NE(mesh_device->get_devices().size(), 2);
-    EXPECT_EQ(mesh_device->shape(), MeshShape(1, 2));
+    auto mesh_device = DistributedEndToEndTests::mesh_device_;
+    EXPECT_EQ(mesh_device->get_devices().size(), 8);
+    EXPECT_EQ(mesh_device->shape(), MeshShape(2, 4));
 
     auto& cq = mesh_device->mesh_command_queue();
 
@@ -152,14 +151,8 @@ TEST_F(DistributedEndToEndTests, ProgramDispatchTest) {
     auto mesh_workload = CreateMeshWorkload();
     auto target_devices = MeshCoordinateRange(mesh_device->shape());
 
-    auto trace_id = BeginTraceCapture(mesh_device.get(), cq.id());
     AddProgramToMeshWorkload(mesh_workload, std::move(example_program), target_devices);
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
-    EndTraceCapture(mesh_device.get(), cq.id(), trace_id);
-
-    ReplayTrace(mesh_device.get(), cq.id(), trace_id, false);
-
-    ReleaseTrace(mesh_device.get(), trace_id);
 
     auto& program = mesh_workload.get_programs().at(target_devices);
 
@@ -172,10 +165,10 @@ TEST_F(DistributedEndToEndTests, ProgramDispatchTest) {
 TEST_F(DistributedEndToEndTests, BufferRoundtripTest) {
     using tt::tt_metal::distributed::ShardedBufferConfig;
 
-    auto mesh_device = MeshDevice::create(MeshDeviceConfig(MeshShape(2, 4)));
+    auto mesh_device = DistributedEndToEndTests::mesh_device_;
 
-    EXPECT_NE(mesh_device->get_devices().size(), 2);
-    EXPECT_EQ(mesh_device->shape(), MeshShape(1, 2));
+    EXPECT_NE(mesh_device->get_devices().size(), 8);
+    EXPECT_EQ(mesh_device->shape(), MeshShape(2, 4));
 
     auto& cq = mesh_device->mesh_command_queue();
 
@@ -219,7 +212,7 @@ TEST_F(DistributedEndToEndTests, BufferRoundtripTest) {
 TEST_F(DistributedEndToEndTests, EltwiseAddTests) {
     constexpr uint32_t ADD_OP_ID = 0;
 
-    auto mesh_device = MeshDevice::create(MeshDeviceConfig(MeshShape{2, 4}));
+    auto mesh_device = DistributedEndToEndTests::mesh_device_;
 
     // Define the global buffer shape and shard shape for distributed buffers
     auto shard_shape = Shape2D{32, 32};
@@ -264,12 +257,18 @@ TEST_F(DistributedEndToEndTests, EltwiseAddTests) {
     auto mesh_workload = CreateMeshWorkload();
     auto device_range = MeshCoordinateRange(mesh_device->shape());
 
+    auto trace_id = BeginTraceCapture(mesh_device.get(), cq.id());
     AddProgramToMeshWorkload(mesh_workload, std::move(*program), device_range);
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
 
     // Read back results
     std::vector<uint32_t> result_data(a_data.size(), 0);
     EnqueueReadMeshBuffer(cq, result_data, c, true /* blocking */);
+    EndTraceCapture(mesh_device.get(), cq.id(), trace_id);
+
+    ReplayTrace(mesh_device.get(), cq.id(), trace_id, false);
+
+    ReleaseTrace(mesh_device.get(), trace_id);
 
     // Verify results
     auto transform_to_golden = [val_to_add](const bfloat16& a) { return bfloat16(a.to_float() + val_to_add); };
