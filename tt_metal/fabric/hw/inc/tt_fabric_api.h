@@ -263,13 +263,11 @@ inline void fabric_async_write(
     uint32_t size,
     uint32_t header_id = 0) {
     if constexpr (mode & AsyncWriteMode::ADD_HEADER) {
-        DPRINT << "Adding header\n";
         fabric_async_write_add_header<T, data_mode>(
             client_interface, src_addr, dst_mesh_id, dst_dev_id, dst_addr, size, header_id);
     }
 
     if constexpr (std::is_same_v<T, volatile tt_l1_ptr fabric_pull_client_interface_t*>) {
-        DPRINT << "Pull mode of fabric_async_write\n";
         // Pull-based logic
         if constexpr (mode & AsyncWriteMode::ADD_PR) {
             if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
@@ -283,7 +281,6 @@ inline void fabric_async_write(
                 client_interface, routing, dst_mesh_id, dst_dev_id, header_id);
         }
     } else {
-        DPRINT << "Push mode of fabric_async_write\n";
         // Push-based logic
         if constexpr (mode & AsyncWriteMode::PUSH) {
             fabric_async_write_push_data<data_mode>(client_interface, src_addr, size, header_id);

@@ -29,7 +29,6 @@ void kernel_main() {
 
     uint32_t client_interface_addr = get_write_ptr(client_interface_cb);
 
-    DPRINT << "test_mode: " << test_mode << "\n";
     if constexpr (test_mode == fabric_mode::PULL) {
         volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface =
             reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
