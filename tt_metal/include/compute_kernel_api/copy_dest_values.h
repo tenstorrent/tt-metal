@@ -30,7 +30,7 @@ namespace ckernel {
  * | idst1          | The index of the tile in DST register buffer to copy values from      | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void copy_dest_values(uint idst0, uint32_t idst1) {
+ALWI void copy_dest_values(uint32_t idst0, uint32_t idst1) {
     MATH(llk_math_eltwise_binary_sfpu_copy_dest_values(idst0, idst1));
 }
 
