@@ -125,30 +125,31 @@ bool run_dm(IDevice* device, const DmConfig& test_config) {
 
 /* ========== Test case for varying transaction numbers and sizes ========== */
 TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPacketSizes) {
-    // TODO: Change num_of_transactions to test with different total data sizes
-    // TODO: Change transaction_size_pages to test with different packet sizes
     // TODO: Set page_size_bytes to minimum packet size (one flit) depending on ARCH
     // Parameters
-    size_t num_of_transactions = 1;     // Number of transactions
-    size_t transaction_size_pages = 1;  // Transaction size in pages
-    size_t page_size_bytes = 16 * 16;   // Page size in bytes
+    size_t max_transactions = 2;            // Bound for testing different number of transactions
+    size_t max_transaction_size_pages = 2;  // Bound for testing different transaction sizes
+    size_t page_size_bytes = 16 * 16;       // Page size in bytes
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    // Test config
-    unit_tests::dm::DmConfig test_config = {
-        .num_of_transactions = num_of_transactions,
-        .transaction_size_pages = transaction_size_pages,
-        .page_size_bytes = page_size_bytes,
-        .l1_data_format = DataFormat::Float16_b,
-        .cores = core_range_set};
+    for (size_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
+        for (size_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
+             transaction_size_pages *= 2) {
+            // Test config
+            unit_tests::dm::DmConfig test_config = {
+                .num_of_transactions = num_of_transactions,
+                .transaction_size_pages = transaction_size_pages,
+                .page_size_bytes = page_size_bytes,
+                .l1_data_format = DataFormat::Float16_b,
+                .cores = core_range_set};
 
-    // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        for (unsigned int i = 0; i < 2; i++) {
-            EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            // Run
+            for (unsigned int id = 0; id < num_devices_; id++) {
+                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            }
         }
     }
 }
