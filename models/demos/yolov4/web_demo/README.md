@@ -2,6 +2,8 @@
 
 ## How to run the web demo
 
+### Server side:
+
 - ssh into the server specifying the port:
   ```
   ssh -L 7000:localhost:7000 user@IP.ADDRESS
@@ -21,6 +23,8 @@
   ```
   source models/demos/yolov4/web_demo/server/run_uvicorn.sh
   ```
+
+### Client side:
 
 - git clone metal repo locally/on client side as well.
   ```
