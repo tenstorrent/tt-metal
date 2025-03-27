@@ -39,12 +39,6 @@ void DropoutDeviceOperation::validate_on_program_cache_miss(
         static_cast<int>(input_tensor.dtype()),
         static_cast<int>(output_datatype));
 
-    auto arch = input_tensor.device()->arch();
-    TT_FATAL(
-        arch == tt::ARCH::WORMHOLE_B0,
-        "Dropout operation is only supported on Wormhole. Device arch: {}",
-        magic_enum::enum_name(arch));
-
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE,
         "Dropout operation requires input to be on Device. Input storage type: {}",
