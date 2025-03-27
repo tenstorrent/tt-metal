@@ -103,6 +103,7 @@ bool run_dm(IDevice* device, const DmConfig& test_config) {
             .compile_args = writer_compile_args});
 
     // Assign unique id
+    log_info("Results for run id: {}", runtime_host_id);
     program.set_runtime_id(runtime_host_id++);
 
     // Launch program and record outputs
@@ -156,10 +157,38 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPacketSizes) {
     }
 }
 
-// TODO: New test for varying core locations
 /* ========== Test case for varying core locations ========== */
-// TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedCoreLocations) {
+TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedCoreLocations) {
+    size_t num_of_transactions = 1;     // Bound for testing different number of transactions
+    size_t transaction_size_pages = 1;  // Bound for testing different transaction sizes
+    size_t page_size_bytes = 32;        // Page size in bytes (=flit size): 32 bytes for WH, 64 for BH
+    if (arch_ == tt::ARCH::BLACKHOLE) {
+        page_size_bytes *= 2;
+    }
 
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        // Cores
+        auto grid_size = devices_.at(id)->compute_with_storage_grid_size();
+        log_info("Grid size x: {}, y: {}", grid_size.x, grid_size.y);
+
+        for (unsigned int x = 0; x < grid_size.x; x++) {
+            for (unsigned int y = 0; y < grid_size.y; y++) {
+                CoreRangeSet core_range_set(CoreRange({x, y}, {x, y}));
+
+                // Test config
+                unit_tests::dm::DmConfig test_config = {
+                    .num_of_transactions = num_of_transactions,
+                    .transaction_size_pages = transaction_size_pages,
+                    .page_size_bytes = page_size_bytes,
+                    .l1_data_format = DataFormat::Float16_b,
+                    .cores = core_range_set};
+
+                // Run
+                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            }
+        }
+    }
+}
 // TODO: New test for sharded DRAM buffer with
 //      1. different transaction numbers and sizes
 //      2. different core locations
