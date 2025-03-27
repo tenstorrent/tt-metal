@@ -245,7 +245,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         is_width_sharded,
         aligned_input_nstick_nbytes,
         skip_untilize,
-        skip_untilize ? input_npages : clamped_block_size_height,
+        clamped_block_size_height,  // Block size in sticks
         ntiles_per_block,
         0,            // Block start offset
         block_stride  // Block stride

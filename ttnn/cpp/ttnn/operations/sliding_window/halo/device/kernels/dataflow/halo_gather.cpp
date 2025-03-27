@@ -47,20 +47,29 @@ static inline uint64_t get_remote_core_l1_noc_addr(
     return get_noc_addr(noc_x, noc_y, out_base_l1_addr);
 }
 
-template <uint32_t StickSizeBytes, uint32_t PageSize, uint32_t BlockHeightSticks>
+template <uint32_t StickSizeBytes, uint32_t PageSize, bool EnableBlocking, uint32_t BlockHeightSticks>
 static inline void write_stick_async(
     uint32_t in_base_l1_addr,
     uint64_t out_base_l1_addr,
     uint16_t src_offset_id,
     uint16_t dst_offset_id,
     uint16_t transfer_size) {
-    const uint32_t src_offset =
-        (src_offset_id % BlockHeightSticks) * PageSize;  // Convert from global stick offset to local block stick offset
-    const uint32_t dst_offset = dst_offset_id * StickSizeBytes;
-    const uint32_t size = transfer_size * StickSizeBytes;
-    const uint32_t src_addr = in_base_l1_addr + src_offset;
-    const uint64_t dst_addr = out_base_l1_addr + dst_offset;
-    noc_async_write(src_addr, dst_addr, size);
+    if constexpr (EnableBlocking) {
+        const uint32_t src_offset = (src_offset_id % BlockHeightSticks) *
+                                    PageSize;  // Convert from global stick offset to local block stick offset
+        const uint32_t dst_offset = dst_offset_id * StickSizeBytes;
+        const uint32_t size = transfer_size * StickSizeBytes;
+        const uint32_t src_addr = in_base_l1_addr + src_offset;
+        const uint64_t dst_addr = out_base_l1_addr + dst_offset;
+        noc_async_write(src_addr, dst_addr, size);
+    } else {
+        const uint32_t src_offset = src_offset_id * PageSize;
+        const uint32_t dst_offset = dst_offset_id * StickSizeBytes;
+        const uint32_t size = transfer_size * StickSizeBytes;
+        const uint32_t src_addr = in_base_l1_addr + src_offset;
+        const uint64_t dst_addr = out_base_l1_addr + dst_offset;
+        noc_async_write(src_addr, dst_addr, size);
+    }
 }
 
 template <
@@ -129,7 +138,7 @@ static inline void run_halo_gather(
                     block_id += BlockStride;
                 }
             }
-            write_stick_async<StickSizeBytes, InputPageSizeAligned, BlockSizeHeight>(
+            write_stick_async<StickSizeBytes, InputPageSizeAligned, EnableBlocking, BlockSizeHeight>(
                 in_base_l1_addr, out_l1_addr, src_offset, dst_offset, transfer_size);
             transfers_remaining--;
         }
