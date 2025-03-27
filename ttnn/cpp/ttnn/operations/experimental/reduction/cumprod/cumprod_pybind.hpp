@@ -11,9 +11,9 @@
 
 #include "ttnn/operations/experimental/reduction/cumprod/cumprod.hpp"
 #include "ttnn/types.hpp"
-
 namespace ttnn::operations::experimental::reduction::cumprod::detail {
 namespace py = pybind11;
+
 void bind_cumprod_operation(py::module& module) {
     auto doc =
         R"doc(

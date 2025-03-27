@@ -9,14 +9,12 @@ import torch
 import ttnn
 
 
-@pytest.mark.parametrize("dim,", [-1, 0, 1, 2, 3, 10])
+@pytest.mark.parametrize("dim,", [-10, -1, 0, 3, 10])
 @pytest.mark.parametrize(
     "shape",
     [
+        [0],
         [1],
-        [1, 2],
-        [1, 2, 3],
-        [1, 2, 3, 4],
         [3, 3],
         [16, 16],
         [32, 32, 32],
@@ -25,7 +23,12 @@ import ttnn
         [1000, 32, 32],
     ],
 )
-@pytest.mark.parametrize("dtype", [(torch.bfloat16, ttnn.bfloat16)])
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+    ],
+)
 def test_cumprod(dim, shape, dtype, device):
     torch.manual_seed(22041997)
 

@@ -9,7 +9,7 @@ namespace ttnn::operations::experimental::reduction {
 // the result depends on tensor_args!
 CumprodDeviceOperation::program_factory_t CumprodDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return SingleCore{};  // TODO(jbbieniek): enable multi-core version once the implementation is ready
+    return CumprodProgramFactory{};
 }
 
 void CumprodDeviceOperation::validate_on_program_cache_miss(

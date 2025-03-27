@@ -32,28 +32,7 @@ struct CumprodDeviceOperation {
     using spec_return_value_t = ttnn::TensorSpec;
 
     using tensor_return_value_t = Tensor;
-
-    struct SingleCore {
-        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-    };
-
-    struct MultiCore {  // TODO(jbbieniek): make sure it's correct when the time to implement it comes around
+    struct CumprodProgramFactory {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle unary_reader_kernel_id;
             tt::tt_metal::KernelHandle unary_writer_kernel_id;
@@ -74,7 +53,7 @@ struct CumprodDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t = std::variant<SingleCore, MultiCore>;
+    using program_factory_t = std::variant<CumprodProgramFactory>;
 
     using invocation_result_t = std::tuple<operation_attributes_t, tensor_args_t>;
 
