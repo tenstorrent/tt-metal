@@ -97,7 +97,7 @@ jobs:
           run_args: |
             ${{ matrix.test-group.cmd }}
       - name: Save environment data
-        if: ${{ (matrix.test-group.name == 'Llama TG Perf Unit Tests') && !cancelled() }}
+        if: ${{ (matrix.test-group.name == 'Llama TG Perf Unit Tests' || matrix.test-group.name == 'TG Llama 70B model perf tests) && !cancelled() }}
         uses: ./.github/actions/docker-run
         with:
           docker_image: ${{ inputs.docker-image }}
@@ -109,7 +109,7 @@ jobs:
           install_wheel: true
           run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
       - name: Upload benchmark data
-        if: ${{ (matrix.test-group.name == 'Llama TG Perf Unit Tests') && !cancelled() }}
+        if: ${{ (matrix.test-group.name == 'Llama TG Perf Unit Tests' || matrix.test-group.name == 'TG Llama 70B model perf tests) && !cancelled() }}
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
