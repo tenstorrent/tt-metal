@@ -91,6 +91,9 @@ DistributionSpec::DistributionSpec(
 
     // Always set num_targets to num_targets used if num_targets provided > num_shards
     num_targets_ = std::min(num_targets, num_shards);
+
+    // Maximum number of shards per target if we have multiple shards per target
+    max_num_shards_per_target_ = tt::div_up(num_shards, num_targets_);
 }
 
 DistributionSpec DistributionSpec::from_shard_shape(
@@ -241,6 +244,27 @@ std::vector<DistributionSpec::TargetData> DistributionSpec::compute_metadata_for
     iterate_over_shards(metadata_for_targets, actual_shard_shape, shard_id, 0, 0);
 
     return metadata_for_targets;
+}
+
+const std::vector<DistributionSpec::TargetData>& DistributionSpec::get_metadata_for_targets(
+    const MappingMode mapping_mode) {
+    switch (mapping_mode) {
+        case DistributionSpec::MappingMode::COALESCED: {
+            if (!coalesced_metadata_for_targets_) {
+                coalesced_metadata_for_targets_ =
+                    std::make_shared<const std::vector<TargetData>>(compute_metadata_for_targets(mapping_mode));
+            }
+            return *coalesced_metadata_for_targets_;
+        }
+        case DistributionSpec::MappingMode::NONCOALESCED: {
+            if (!noncoalesced_metadata_for_targets_) {
+                noncoalesced_metadata_for_targets_ =
+                    std::make_shared<const std::vector<TargetData>>(compute_metadata_for_targets(mapping_mode));
+            }
+            return *noncoalesced_metadata_for_targets_;
+        }
+    }
+    TT_THROW("MappingMode {} is unsupported in get_metadata_for_targets!", mapping_mode);
 }
 
 }  // namespace tt::tt_metal
