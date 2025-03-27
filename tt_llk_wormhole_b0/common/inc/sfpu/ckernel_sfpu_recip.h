@@ -4,12 +4,7 @@
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
-#include "noc_nonblocking_api.h"
 #include "sfpi.h"
-
-using namespace sfpi;
 
 namespace ckernel
 {
@@ -17,26 +12,26 @@ namespace sfpu
 {
 
 template <int max_iter = 3>
-sfpi_inline vFloat _sfpu_reciprocal_(const vFloat in)
+sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat in)
 {
     // Force sign to 1 (make number negative)
-    vFloat val = setsgn(in, 1);
+    sfpi::vFloat val = sfpi::setsgn(in, 1);
 
     val = setexp(val, 126); // Set exponent to 126 to make the number in 0.5-1
     // Use 1.44 as first guess at x, ideal value would be 1.33.
     // Grayskull has hardwired 1.44 and uses it to avoid a load.
     // We use it here for consistency.
-    vFloat vConstLn2Recip = vConstFloatPrgm0;
-    vFloat two            = vConstFloatPrgm1;
-    vFloat result         = vConstLn2Recip * (val * vConstLn2Recip + two);
+    sfpi::vFloat vConstLn2Recip = sfpi::vConstFloatPrgm0;
+    sfpi::vFloat two            = sfpi::vConstFloatPrgm1;
+    sfpi::vFloat result         = vConstLn2Recip * (val * vConstLn2Recip + two);
 
     for (int s_iter = 0; s_iter < (max_iter - 1); s_iter++)
     {
         result = result * (val * result + two);
     }
 
-    vInt orig_exp = exexp(in);
-    vInt new_exp  = exexp(result);
+    sfpi::vInt orig_exp = exexp(in);
+    sfpi::vInt new_exp  = exexp(result);
 
     // "Subtract" exponents, and re-bias.
     // Execute: -1 - exp, then exp += 127
@@ -62,8 +57,8 @@ inline void _calculate_reciprocal_(const int iterations)
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        vFloat in  = dst_reg[0];
-        vFloat out = _sfpu_reciprocal_<APPROXIMATION_MODE ? 2 : 3>(in);
+        sfpi::vFloat in  = sfpi::dst_reg[0];
+        sfpi::vFloat out = _sfpu_reciprocal_<APPROXIMATION_MODE ? 2 : 3>(in);
 
         v_if (in < 0.0F)
         {
@@ -74,22 +69,22 @@ inline void _calculate_reciprocal_(const int iterations)
 
         if constexpr (is_fp32_dest_acc_en || APPROXIMATION_MODE)
         {
-            dst_reg[0] = out;
+            sfpi::dst_reg[0] = out;
         }
         else
         {
-            dst_reg[0] = reinterpret<vFloat>(float_to_fp16b(out, 0));
+            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, 0));
         }
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE>
 inline void _init_reciprocal_()
 {
-    vConstFloatPrgm0 = 1.442695f; // ln2_recip
-    vConstFloatPrgm1 = 2.0f;
+    sfpi::vConstFloatPrgm0 = 1.442695f; // ln2_recip
+    sfpi::vConstFloatPrgm1 = 2.0f;
 }
 
 } // namespace sfpu

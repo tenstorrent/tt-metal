@@ -4,12 +4,7 @@
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
-#include "noc_nonblocking_api.h"
 #include "sfpi.h"
-
-using namespace sfpi;
 
 namespace ckernel
 {
@@ -17,13 +12,13 @@ namespace sfpu
 {
 
 template <bool APPROXIMATION_MODE>
-sfpi_inline vFloat _sfpu_sine_maclaurin_series_(vFloat val)
+sfpi_inline sfpi::vFloat _sfpu_sine_maclaurin_series_(sfpi::vFloat val)
 {
     // Good for [-pi:pi]
     // Mclauren series = x - x^3/3! + x^5/5! - x^7/7! + x^9/9! - x^11/11!
-    vFloat tmp = val;
+    sfpi::vFloat tmp = val;
     // x
-    vFloat output = tmp;
+    sfpi::vFloat output = tmp;
     // x^3/3!
     tmp = tmp * val * val;
     output += -0.166666666 * tmp;
@@ -48,14 +43,14 @@ sfpi_inline vFloat _sfpu_sine_maclaurin_series_(vFloat val)
 }
 
 template <bool APPROXIMATION_MODE>
-sfpi_inline vFloat _sfpu_cosine_maclaurin_series_(vFloat val)
+sfpi_inline sfpi::vFloat _sfpu_cosine_maclaurin_series_(sfpi::vFloat val)
 {
     // Good for [-pi:pi]
     // Mclauren series = 1 - x^2/2! + x^4/4! - x^6/6! + x^8/8! - x^10/10! + x^12/12!
     // 1
-    vFloat output = 1.0f;
+    sfpi::vFloat output = 1.0f;
     // x^2/2!
-    vFloat tmp = val * val;
+    sfpi::vFloat tmp = val * val;
     output += -0.5 * tmp;
     // x^4/4!
     tmp = tmp * val * val;
@@ -83,11 +78,11 @@ inline void _calculate_sine_(const int iterations)
     // SFPU microcode
     for (int d = 0; d < iterations; d++)
     {
-        vFloat v             = dst_reg[0];
-        v                    = 0.318309886183791f * v; // *1/pi to get number of pi rads.
-        vInt whole_v         = float_to_int16(v, 0);
-        vFloat whole_v_float = int32_to_float(whole_v, 0);
-        v                    = v - whole_v_float;
+        sfpi::vFloat v             = sfpi::dst_reg[0];
+        v                          = 0.318309886183791f * v; // *1/pi to get number of pi rads.
+        sfpi::vInt whole_v         = float_to_int16(v, 0);
+        sfpi::vFloat whole_v_float = int32_to_float(whole_v, 0);
+        v                          = v - whole_v_float;
         v *= 3.141592653589793f; // fractional * pi to get it in [-pi:pi]
         v       = _sfpu_sine_maclaurin_series_<APPROXIMATION_MODE>(v);
         whole_v = whole_v & 0x1;
@@ -97,8 +92,8 @@ inline void _calculate_sine_(const int iterations)
             v *= -1;
         }
         v_endif;
-        dst_reg[0] = v;
-        dst_reg++;
+        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg++;
     }
 }
 
@@ -108,11 +103,11 @@ inline void _calculate_cosine_(const int iterations)
     // SFPU microcode
     for (int d = 0; d < iterations; d++)
     {
-        vFloat v             = dst_reg[0];
-        v                    = 0.318309886183791f * v; // *1/pi to get number of pi rads.
-        vInt whole_v         = float_to_int16(v, 0);
-        vFloat whole_v_float = int32_to_float(whole_v, 0);
-        v                    = v - whole_v_float;
+        sfpi::vFloat v             = sfpi::dst_reg[0];
+        v                          = 0.318309886183791f * v; // *1/pi to get number of pi rads.
+        sfpi::vInt whole_v         = float_to_int16(v, 0);
+        sfpi::vFloat whole_v_float = int32_to_float(whole_v, 0);
+        v                          = v - whole_v_float;
         v *= 3.141592653589793f; // fractional * pi to get it in [-pi:pi]
         v       = _sfpu_cosine_maclaurin_series_<APPROXIMATION_MODE>(v);
         whole_v = whole_v & 0x1;
@@ -122,8 +117,8 @@ inline void _calculate_cosine_(const int iterations)
             v *= -1;
         }
         v_endif;
-        dst_reg[0] = v;
-        dst_reg++;
+        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg++;
     }
 }
 

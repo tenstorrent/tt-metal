@@ -4,20 +4,15 @@
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
 #include "ckernel_sfpu_is_fp16_zero.h"
-#include "noc_nonblocking_api.h"
 #include "sfpi.h"
-
-using namespace sfpi;
 
 namespace ckernel
 {
 namespace sfpu
 {
 
-sfpi_inline void _calculate_comp_init_flag_(bool check, vFloat& flag1, vFloat& flag2, float init)
+sfpi_inline void _calculate_comp_init_flag_(bool check, sfpi::vFloat& flag1, sfpi::vFloat& flag2, float init)
 {
     flag1 = init;
     if (check)
@@ -40,8 +35,8 @@ inline void _calculate_comp_(const int iterations, uint exponent_size_8)
 
     for (int d = 0; d < iterations; d++)
     {
-        vFloat v = dst_reg[0];
-        vFloat flag1, flag2;
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::vFloat flag1, flag2;
         if constexpr (check_zero)
         {
             v_if (_sfpu_is_fp16_zero_(v, exponent_size_8))
@@ -67,7 +62,7 @@ inline void _calculate_comp_(const int iterations, uint exponent_size_8)
             v_endif;
         }
 
-        vFloat result;
+        sfpi::vFloat result;
         if constexpr (second_check)
         {
             // less_than_equal_zero
@@ -78,7 +73,7 @@ inline void _calculate_comp_(const int iterations, uint exponent_size_8)
             // Result will be either 0x0000(0.0) or 0x3F80(1.0)
             if constexpr (is_less_than_equal_zero)
             {
-                result = reinterpret<vFloat>(reinterpret<vUInt>(flag1) | reinterpret<vUInt>(flag2));
+                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vUInt>(flag1) | sfpi::reinterpret<sfpi::vUInt>(flag2));
             }
             else
             {
@@ -88,7 +83,7 @@ inline void _calculate_comp_(const int iterations, uint exponent_size_8)
                 // Do a bitwise And (flag1 & flag2) to get > condition.
                 // flag2 >= 0 AND flag1 != 0 => DST is Greater than zero
                 // Result will be either 0x0000(0.0) or 0x3F80(1.0)
-                result = reinterpret<vFloat>(reinterpret<vUInt>(flag1) & reinterpret<vUInt>(flag2));
+                result = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vUInt>(flag1) & sfpi::reinterpret<sfpi::vUInt>(flag2));
             }
         }
         else
@@ -96,9 +91,9 @@ inline void _calculate_comp_(const int iterations, uint exponent_size_8)
             result = flag1;
         }
 
-        dst_reg[0] = result;
+        sfpi::dst_reg[0] = result;
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 

@@ -4,14 +4,10 @@
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_load_config.h"
-#include "noc_nonblocking_api.h"
 #include "sfpi.h"
-
-using namespace sfpi;
+#include "sfpi_fp16.h"
 
 namespace ckernel
 {
@@ -19,13 +15,13 @@ namespace sfpu
 {
 
 template <bool APPROXIMATION_MODE>
-inline vFloat _calculate_gelu_core_(vFloat in)
+inline sfpi::vFloat _calculate_gelu_core_(sfpi::vFloat in)
 {
     // SFPU microcode:
     // result = (APPROX_MODE == 1)
     //   ? (1 + erf(x/sqrt(2)))
     //   : (1 + tanh( sqrt(2/pi) * (x + 0.044715*x^3) )
-    vFloat result;
+    sfpi::vFloat result;
     if constexpr (APPROXIMATION_MODE)
     {
         result = in;
@@ -33,8 +29,8 @@ inline vFloat _calculate_gelu_core_(vFloat in)
     else
     {
         // f = (0.044715*x^3 + x)
-        result = (in * in) * (in * s2vFloat16b(0.044715f)) + in;
-        result *= s2vFloat16b(0.79788f);
+        result = (in * in) * (in * sfpi::s2vFloat16b(0.044715f)) + in;
+        result *= sfpi::s2vFloat16b(0.79788f);
     }
 
     return result;
@@ -43,36 +39,36 @@ inline vFloat _calculate_gelu_core_(vFloat in)
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _calculate_gelu_(const int iterations)
 {
-    vUInt l0 = l_reg[LRegs::LReg0];
-    vUInt l1 = l_reg[LRegs::LReg1];
-    vUInt l2 = l_reg[LRegs::LReg2];
-    vUInt l4 = l_reg[LRegs::LReg4];
-    vUInt l5 = l_reg[LRegs::LReg5];
-    vUInt l6 = l_reg[LRegs::LReg6];
+    sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vUInt l2 = sfpi::l_reg[sfpi::LRegs::LReg2];
+    sfpi::vUInt l4 = sfpi::l_reg[sfpi::LRegs::LReg4];
+    sfpi::vUInt l5 = sfpi::l_reg[sfpi::LRegs::LReg5];
+    sfpi::vUInt l6 = sfpi::l_reg[sfpi::LRegs::LReg6];
 
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
-        // vFloat in = dst_reg[0];
-        // vFloat result = calculate_gelu_core<APPROXIMATION_MODE>(in);
+        // sfpi::vFloat in = sfpi::dst_reg[0];
+        // sfpi::vFloat result = calculate_gelu_core<APPROXIMATION_MODE>(in);
 
-        // vFloat half_in = in * half;
+        // sfpi::vFloat half_in = in * half;
         // result = lut(result, l0, l1, l2);
         // result = half_in * result + half_in;
 
-        // dst_reg[0] = result;
+        // sfpi::dst_reg[0] = result;
 
-        vFloat in      = dst_reg[0];
-        vFloat half    = vConstFloatPrgm0;
-        vFloat half_in = in * half;
-        vFloat result  = lut2_sign(in, l0, l1, l2, l4, l5, l6);
-        result         = half_in + result;
+        sfpi::vFloat in      = sfpi::dst_reg[0];
+        sfpi::vFloat half    = sfpi::vConstFloatPrgm0;
+        sfpi::vFloat half_in = in * half;
+        sfpi::vFloat result  = lut2_sign(in, l0, l1, l2, l4, l5, l6);
+        result               = half_in + result;
 
-        dst_reg[0] = result;
+        sfpi::dst_reg[0] = result;
 
-        dst_reg++;
+        sfpi::dst_reg++;
 
-        // dst_reg++;
+        // sfpi::dst_reg++;
         // TTI_SFPLOAD(3, 0, 1/*load addr mode*/,0);    // load from dest
         ////TTI_SFPMUL(3,11,9,7,0);           // lreg7 = 0.5*lreg3
         // TTI_SFPLUTFP32(7, 2);                // lreg7= LUT(3)
@@ -80,12 +76,12 @@ inline void _calculate_gelu_(const int iterations)
         // TTI_SFPSTORE(3, 0, 3/*store_addr_mod3*/, 0);   // and INCRWC by 4 using mode 3
     }
 
-    l_reg[LRegs::LReg0] = l0;
-    l_reg[LRegs::LReg1] = l1;
-    l_reg[LRegs::LReg2] = l2;
-    l_reg[LRegs::LReg4] = l4;
-    l_reg[LRegs::LReg5] = l5;
-    l_reg[LRegs::LReg6] = l6;
+    sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
+    sfpi::l_reg[sfpi::LRegs::LReg1] = l1;
+    sfpi::l_reg[sfpi::LRegs::LReg2] = l2;
+    sfpi::l_reg[sfpi::LRegs::LReg4] = l4;
+    sfpi::l_reg[sfpi::LRegs::LReg5] = l5;
+    sfpi::l_reg[sfpi::LRegs::LReg6] = l6;
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
@@ -95,72 +91,72 @@ inline void _calculate_gelu_derivative_(const int iterations)
     {
         constexpr int lut_mode = 1; // SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE1
 
-        vUInt l0 = l_reg[LRegs::LReg0];
-        vUInt l1 = l_reg[LRegs::LReg1];
-        vUInt l2 = l_reg[LRegs::LReg2];
-        vUInt l4 = l_reg[LRegs::LReg4];
-        vUInt l5 = l_reg[LRegs::LReg5];
-        vUInt l6 = l_reg[LRegs::LReg6];
+        sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
+        sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
+        sfpi::vUInt l2 = sfpi::l_reg[sfpi::LRegs::LReg2];
+        sfpi::vUInt l4 = sfpi::l_reg[sfpi::LRegs::LReg4];
+        sfpi::vUInt l5 = sfpi::l_reg[sfpi::LRegs::LReg5];
+        sfpi::vUInt l6 = sfpi::l_reg[sfpi::LRegs::LReg6];
 
 // SFPU microcode:
 #pragma GCC unroll 0
         for (int d = 0; d < iterations; d++)
         {
-            vFloat val = dst_reg[0];
-            val        = lut2(val, l0, l1, l2, l4, l5, l6, lut_mode);
+            sfpi::vFloat val = sfpi::dst_reg[0];
+            val              = lut2(val, l0, l1, l2, l4, l5, l6, lut_mode);
             v_if (val < 0.0F)
             {
                 val = val + 1.0f;
             }
             v_endif;
-            dst_reg[0] = val;
-            dst_reg++;
+            sfpi::dst_reg[0] = val;
+            sfpi::dst_reg++;
         }
 
-        l_reg[LRegs::LReg0] = l0;
-        l_reg[LRegs::LReg1] = l1;
-        l_reg[LRegs::LReg2] = l2;
-        l_reg[LRegs::LReg4] = l4;
-        l_reg[LRegs::LReg5] = l5;
-        l_reg[LRegs::LReg6] = l6;
+        sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
+        sfpi::l_reg[sfpi::LRegs::LReg1] = l1;
+        sfpi::l_reg[sfpi::LRegs::LReg2] = l2;
+        sfpi::l_reg[sfpi::LRegs::LReg4] = l4;
+        sfpi::l_reg[sfpi::LRegs::LReg5] = l5;
+        sfpi::l_reg[sfpi::LRegs::LReg6] = l6;
     }
     else
     {
         constexpr uint imm2 = 0xFF10;
 
-        vUInt l0 = l_reg[LRegs::LReg0];
-        vUInt l1 = l_reg[LRegs::LReg1];
+        sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
+        sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
 
 // SFPU microcode:
 #pragma GCC unroll 0
         for (int d = 0; d < iterations; d++)
         {
-            vFloat in             = dst_reg[0];
-            vFloat neg_half_sq_in = in * in * -0.5f;
+            sfpi::vFloat in             = sfpi::dst_reg[0];
+            sfpi::vFloat neg_half_sq_in = in * in * -0.5f;
 
             // exp = e^(val)
-            vFloat exp = _calculate_exponential_body_<false>(neg_half_sq_in);
+            sfpi::vFloat exp = _calculate_exponential_body_<false>(neg_half_sq_in);
 
             // exp = exp * 1/sqrt(2*pi)
-            vFloat partial = exp * in * s2vFloat16b(0.3989423F);
+            sfpi::vFloat partial = exp * in * sfpi::s2vFloat16b(0.3989423F);
 
-            vFloat result = _calculate_gelu_core_<true>(in);
+            sfpi::vFloat result = _calculate_gelu_core_<true>(in);
 
             result = lut(result, l0, l1, imm2);
 
-            dst_reg[0] = partial + result + 0.5f;
-            dst_reg++;
+            sfpi::dst_reg[0] = partial + result + 0.5f;
+            sfpi::dst_reg++;
         }
 
-        l_reg[LRegs::LReg0] = l0;
-        l_reg[LRegs::LReg1] = l1;
+        sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
+        sfpi::l_reg[sfpi::LRegs::LReg1] = l1;
     }
 }
 
 template <bool APPROXIMATION_MODE>
 inline void _init_gelu_()
 {
-    vConstFloatPrgm0 = 0.5f;
+    sfpi::vConstFloatPrgm0 = 0.5f;
 
     // // >= 3.0f
     // lreg2_hi=0.50;//3800
@@ -193,9 +189,9 @@ inline void _init_gelu_()
 template <bool APPROXIMATION_MODE>
 inline void _init_gelu_derivative_()
 {
-    vConstFloatPrgm0 = 1.442695f; // ln2_recip
-    vConstFloatPrgm1 = 2.0f;
-    vConstFloatPrgm2 = 0.863281f;
+    sfpi::vConstFloatPrgm0 = 1.442695f; // ln2_recip
+    sfpi::vConstFloatPrgm1 = 2.0f;
+    sfpi::vConstFloatPrgm2 = 0.863281f;
 
     uint imm0;
     uint imm1;

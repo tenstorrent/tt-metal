@@ -4,11 +4,7 @@
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
 #include "sfpi.h"
-
-using namespace sfpi;
 
 namespace ckernel
 {
@@ -20,15 +16,15 @@ inline void _calculate_max_(const int iterations)
 {
     for (int d = 0; d < iterations; d++)
     {
-        vFloat a = dst_reg[0];
-        vFloat b = dst_reg[32];
+        sfpi::vFloat a = sfpi::dst_reg[0];
+        sfpi::vFloat b = sfpi::dst_reg[32];
         v_if (a < b)
         {
-            dst_reg[0] = b;
+            sfpi::dst_reg[0] = b;
         }
         v_endif;
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 

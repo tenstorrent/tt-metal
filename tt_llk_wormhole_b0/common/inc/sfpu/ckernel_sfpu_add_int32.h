@@ -4,12 +4,8 @@
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
-#include "noc_nonblocking_api.h"
+#include "ckernel_ops.h"
 #include "sfpi.h"
-
-using namespace sfpi;
 
 namespace ckernel
 {
@@ -36,7 +32,7 @@ inline void _add_int32_(const uint dst_offset)
         TTI_SFPIADD(0, 1, 0, 4);
         // LREG_0 -> dest as int32
         TTI_SFPSTORE(0, sfpload_instr_mod, 3, 0);
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 

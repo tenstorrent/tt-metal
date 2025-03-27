@@ -4,11 +4,8 @@
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
-#include "sfpi.h"
-
-using namespace sfpi;
+#include "ckernel_addrmod.h"
+#include "ckernel_ops.h"
 
 namespace ckernel
 {
@@ -46,7 +43,7 @@ inline void _calculate_max_int32_(const int iterations)
         TTI_SFPSTORE(0, INSTR_MOD_LOAD_STORE, ADDR_MOD_7, 0);
 
         TTI_SFPENCC(0x003, 0, 0, 10);
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 

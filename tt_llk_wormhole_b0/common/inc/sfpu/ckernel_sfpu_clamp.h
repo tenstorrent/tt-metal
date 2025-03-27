@@ -4,12 +4,8 @@
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
-#include "noc_nonblocking_api.h"
 #include "sfpi.h"
-
-using namespace sfpi;
+#include "sfpi_fp16.h"
 
 namespace ckernel
 {
@@ -24,29 +20,29 @@ inline void _calculate_clamp_(const int iterations, uint param0, uint param1, ui
     // param1 = max
 
     // uint format = (param0 >> 16)&0x1;
-    s2vFloat16::Format format = s2vFloat16::fp16a;
+    sfpi::s2vFloat16::Format format = sfpi::s2vFloat16::fp16a;
 
     // SFPU microcode
-    vFloat min = s2vFloat16(param0, format);
-    vFloat max = s2vFloat16(param1, format);
+    sfpi::vFloat min = sfpi::s2vFloat16(param0, format);
+    sfpi::vFloat max = sfpi::s2vFloat16(param1, format);
 #pragma GCC unroll 0
     for (int d = 0; d < iterations; d++)
     {
-        vFloat val = dst_reg[0];
+        sfpi::vFloat val = sfpi::dst_reg[0];
 
         v_if (val < min)
         {
-            val = s2vFloat16(param0, format);
+            val = sfpi::s2vFloat16(param0, format);
         }
         v_elseif (val >= max)
         {
-            val = s2vFloat16(param1, format);
+            val = sfpi::s2vFloat16(param1, format);
         }
         v_endif;
 
-        dst_reg[0] = val + s2vFloat16b(param2); // 12 bits
+        sfpi::dst_reg[0] = val + sfpi::s2vFloat16b(param2); // 12 bits
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 

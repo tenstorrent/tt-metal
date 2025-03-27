@@ -4,12 +4,8 @@
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
-#include "noc_nonblocking_api.h"
+#include "ckernel_ops.h"
 #include "sfpi.h"
-
-using namespace sfpi;
 
 namespace ckernel
 {
@@ -36,7 +32,7 @@ inline void _calculate_binary_left_shift_(const uint dst_offset)
         TTI_SFPSHFT(0, 1, 0, 0);
         // store result
         TTI_SFPSTORE(0, 4, 3, 0);
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
@@ -64,7 +60,7 @@ inline void _calculate_binary_right_shift_(const uint dst_offset)
         TTI_SFPENCC(0, 0, 0, 0);
         // store result
         TTI_SFPSTORE(0, 4, 3, 0);
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 

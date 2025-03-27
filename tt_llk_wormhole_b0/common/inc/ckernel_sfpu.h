@@ -45,8 +45,6 @@
 #include "sfpu/ckernel_sfpu_trigonometry.h"
 #include "sfpu/ckernel_sfpu_typecast.h"
 
-// using namespace sfpi;
-
 // namespace ckernel
 // {
 // namespace sfpu
