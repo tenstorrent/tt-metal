@@ -1,1 +1,0 @@
-../../../wormhole/stable_diffusion/tests/test_upblock_2d.py

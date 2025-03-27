@@ -9,11 +9,10 @@
 #include "cpp/ttnn/operations/data_movement/sharded/sharded_common.hpp"
 #include "cpp/ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op.hpp"
 #include <tt-metalium/tt_align.hpp>
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement::detail {
 

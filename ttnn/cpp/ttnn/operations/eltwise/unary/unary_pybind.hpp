@@ -1820,7 +1820,7 @@ void py_module(py::module& module) {
     detail::bind_unary_operation_with_int_parameter(
         module,
         ttnn::round,
-        "decimals", "no. of decimal places to round off to",
+        "decimals", "no. of decimal places to round off to [supported range -6 to 7]",
         R"doc(Round the input tensor to `decimals` decimal places.)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc",
         R"doc(Not supported on Grayskull.)doc");

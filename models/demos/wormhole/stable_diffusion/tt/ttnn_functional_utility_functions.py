@@ -7,7 +7,6 @@ from tt_lib.fallback_ops import fallback_ops
 import math
 
 import torch
-from typing import Optional, Dict
 
 conv_cache = {}
 

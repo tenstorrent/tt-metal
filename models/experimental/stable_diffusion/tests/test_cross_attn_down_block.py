@@ -2,19 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional
 
-import torch.nn as nn
 import torch
 from diffusers import StableDiffusionPipeline
 from loguru import logger
-from functools import wraps
 import pytest
 
 
 import ttnn
 from models.utility_functions import (
-    torch_to_tt_tensor,
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
 )
@@ -25,7 +21,6 @@ from models.utility_functions import (
     is_blackhole,
 )
 from models.experimental.stable_diffusion.tt.unet_2d_blocks import TtCrossAttnDownBlock2D
-from models.experimental.stable_diffusion.tt.experimental_ops import UseDeviceConv
 
 
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")

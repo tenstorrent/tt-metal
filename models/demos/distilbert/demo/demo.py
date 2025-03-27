@@ -22,7 +22,6 @@ from ttnn.model_preprocessing import (
     preprocess_model_parameters,
 )
 
-from ttnn.model_preprocessing import *
 from transformers import DistilBertForQuestionAnswering, AutoTokenizer, pipeline
 
 import evaluate

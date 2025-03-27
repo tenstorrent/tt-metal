@@ -142,7 +142,9 @@ FORCE_INLINE void fill_cb_with_value(uint32_t cb_id, uint32_t value, int32_t num
     cb_reserve_back(cb_id, 1);
     const DataFormat data_format = get_dataformat(cb_id);
     switch ((uint)data_format & 0x1F) {
-        case ((uint8_t)DataFormat::Float32): process_data<uint32_t>(cb_id, value, num_of_elems); break;
+        case ((uint8_t)DataFormat::Float32):
+        case ((uint8_t)DataFormat::Int32):
+        case ((uint8_t)DataFormat::UInt32): process_data<uint32_t>(cb_id, value, num_of_elems); break;
         case ((uint8_t)DataFormat::Float16_b):
         default: process_data<uint16_t>(cb_id, value, num_of_elems); break;
     }

@@ -103,7 +103,7 @@ std::optional<uint32_t> HWCommandQueue::tid() const { return this->tid_; }
 SystemMemoryManager& HWCommandQueue::sysmem_manager() { return this->manager_; }
 
 void HWCommandQueue::reset_worker_state(
-    bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_memcpy_aligned<uint32_t>& go_signal_noc_data) {
+    bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_aligned<uint32_t>& go_signal_noc_data) {
     TT_FATAL(!this->manager_.get_bypass_mode(), "Cannot reset worker state during trace capture");
     // TODO: This could be further optimized by combining all of these into a single prefetch entry
     // Currently each one will be pushed into its own prefetch entry
@@ -130,7 +130,7 @@ void HWCommandQueue::reset_worker_state(
 }
 
 void HWCommandQueue::set_go_signal_noc_data_and_dispatch_sems(
-    uint32_t num_dispatch_sems, const vector_memcpy_aligned<uint32_t>& noc_mcast_unicast_data) {
+    uint32_t num_dispatch_sems, const vector_aligned<uint32_t>& noc_mcast_unicast_data) {
     program_dispatch::set_num_worker_sems_on_dispatch(device_, this->manager_, id_, num_dispatch_sems);
     program_dispatch::set_go_signal_noc_data_on_dispatch(device_, noc_mcast_unicast_data, this->manager_, id_);
 }
@@ -558,7 +558,7 @@ void HWCommandQueue::record_end() {
     auto& trace_data = this->trace_ctx_->data;
     trace_data = std::move(this->manager_.get_bypass_data());
     // Add trace end command to terminate the trace buffer
-    DeviceCommand command_sequence(hal.get_alignment(HalMemType::HOST));
+    DeviceCommand command_sequence(hal_ref.get_alignment(HalMemType::HOST));
     command_sequence.add_prefetch_exec_buf_end();
     for (int i = 0; i < command_sequence.size_bytes() / sizeof(uint32_t); i++) {
         trace_data.push_back(((uint32_t*)command_sequence.data())[i]);

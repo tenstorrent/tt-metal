@@ -47,6 +47,7 @@ jobs:
       build-type: ${{ inputs.build-type }}
       tracy: ${{ inputs.build-with-tracy }}
       build-wheel: true
+      version: 22.04
     secrets: inherit
   tg-quick:
     if: ${{ inputs.tg-quick }}
@@ -74,10 +75,14 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   tg-model-perf-tests:
+    if: ${{ inputs.tg-model-perf }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/tg-model-perf-tests-impl.yaml
-    if: ${{ inputs.tg-model-perf }}
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   tg-nightly-tests:
     needs: build-artifact
     if: ${{ inputs.tg-nightly }}

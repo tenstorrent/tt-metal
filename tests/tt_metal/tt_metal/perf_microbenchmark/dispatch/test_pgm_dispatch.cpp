@@ -7,7 +7,7 @@
 
 #include "umd/device/types/cluster_descriptor_types.h"
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/command_queue.hpp>
@@ -59,7 +59,7 @@ std::tuple<uint32_t, uint32_t> get_core_count() {
     uint32_t core_x = 0;
     uint32_t core_y = 0;
 
-    std::string arch_name = tt::tt_metal::experimental::hal::get_arch_name();
+    std::string arch_name = tt::tt_metal::hal::get_arch_name();
     if (arch_name == "grayskull") {
         core_x = 11;
         core_y = 8;
@@ -630,7 +630,7 @@ int main(int argc, char** argv) {
             .use_all_cores = true})
         ->Apply(Max8192Args)
         ->UseManualTime();
-    std::string arch_name = tt::tt_metal::experimental::hal::get_arch_name();
+    std::string arch_name = tt::tt_metal::hal::get_arch_name();
     if (arch_name == std::string("wormhole_b0")) {
         benchmark::RegisterBenchmark(
             "BM_pgm_dispatch/eth_dispatch",

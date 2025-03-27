@@ -1,10 +1,10 @@
 ChipSpec: {
   arch: blackhole,
   ethernet_ports: {
-    N: 0,
-    E: 0,
-    S: 0,
-    W: 0,
+    N: 7,
+    E: 7,
+    S: 7,
+    W: 7,
   }
 }
 

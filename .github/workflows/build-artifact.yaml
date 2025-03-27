@@ -233,7 +233,7 @@ jobs:
       - name: 📦 Package
         run: |
           nice -n 19 cmake --build build --target package
-          ls -1sh build/*.deb build/*.ddeb
+          ls -1sh build/*.deb build/*.ddeb || true
 
       - name: 🐍 Build wheel
         if: ${{ inputs.build-wheel }}
