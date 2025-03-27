@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+import torch
+import pytest
+from models.experimental.stable_diffusion_xl_base_1_0.ttnn_impl.tt_upsample2d import TtUpsample2D
+from diffusers import DiffusionPipeline
+from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import torch_random
+
+
+@pytest.mark.parametrize("input_shape, up_block_id", [((1, 1280, 32, 32), 0), ((1, 640, 64, 64), 1)])
+@pytest.mark.parametrize("stride", [(1, 1)])
+@pytest.mark.parametrize("padding", [(1, 1)])
+@pytest.mark.parametrize("dilation", [(1, 1)])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_downsample2d(device, input_shape, up_block_id, stride, padding, dilation, use_program_cache):
+    pipe = DiffusionPipeline.from_pretrained(
+        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, variant="fp16"
+    )
+    unet = pipe.unet
+    unet.eval()
+    state_dict = unet.state_dict()
+
+    torch_upsample = unet.up_blocks[up_block_id].upsamplers[0]
+    groups = 1
+    tt_upsample = TtUpsample2D(
+        device, state_dict, f"up_blocks.{up_block_id}.upsamplers.0", stride, padding, dilation, groups
+    )
+
+    torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
+    torch_output_tensor = torch_upsample(torch_input_tensor)
+
+    ttnn_input_tensor = tt_upsample.prepare_input(torch_input_tensor)
+    ttnn_output_tensor, output_shape = tt_upsample.forward(ttnn_input_tensor)
+    output_tensor = tt_upsample.postprocess_output(ttnn_output_tensor, output_shape)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.996)
