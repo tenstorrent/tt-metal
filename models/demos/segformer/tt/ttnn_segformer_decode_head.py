@@ -42,8 +42,8 @@ class TtSegformerDecodeHead:
 
         self.config = config
 
-    def __call__(self, encoder_hidden_states: ttnn.bfloat8_b, parameters) -> ttnn.Tensor:
-        device = encoder_hidden_states[-1].device()
+    def __call__(self, device, encoder_hidden_states: ttnn.bfloat8_b, parameters) -> ttnn.Tensor:
+        # device = encoder_hidden_states[-1].device()
         batch_size = encoder_hidden_states[-1].shape[0]
 
         all_hidden_states = ()
@@ -51,7 +51,7 @@ class TtSegformerDecodeHead:
         index = 0
         for encoder_hidden_state, mlp in zip(encoder_hidden_states, self.linear_c):
             height = width = int(math.sqrt(encoder_hidden_state.shape[-2]))
-            encoder_hidden_state = mlp(encoder_hidden_state, parameters=parameters["linear_c"][index])
+            encoder_hidden_state = mlp(device, encoder_hidden_state, parameters=parameters["linear_c"][index])
             encoder_hidden_state = ttnn.to_layout(encoder_hidden_state, layout=ttnn.ROW_MAJOR_LAYOUT)
             encoder_hidden_state = ttnn.reshape(encoder_hidden_state, (batch_size, height, width, -1))
 
@@ -74,11 +74,20 @@ class TtSegformerDecodeHead:
             )
             encoder_hidden_state = ttnn.to_memory_config(encoder_hidden_state, memory_config=input_memory_config)
 
-            encoder_hidden_state = ttnn.upsample(
-                encoder_hidden_state,
-                scale_factor=(128 // encoder_hidden_state.shape[2], 128 // encoder_hidden_state.shape[2]),
-                mode="bilinear",
+            # workaround hack until upscaling buffer assert is fixed in metal
+            out_shard_spec = ttnn.ShardSpec(
+                shard_grid, ((128 // encoder_hidden_state.shape[2]) ** 2 * shard_height, shard_width), shard_orientation
             )
+            out_memory_config = ttnn.MemoryConfig(
+                ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, out_shard_spec
+            )
+            if 128 // encoder_hidden_state.shape[2] > 1:
+                encoder_hidden_state = ttnn.upsample(
+                    encoder_hidden_state,
+                    scale_factor=(128 // encoder_hidden_state.shape[2], 128 // encoder_hidden_state.shape[2]),
+                    mode="bilinear",
+                    memory_config=out_memory_config,
+                )
 
             encoder_hidden_state_to_concat = ttnn.to_memory_config(
                 encoder_hidden_state, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16
@@ -104,5 +113,7 @@ class TtSegformerDecodeHead:
 
         hidden_states, __, __ = self.linear_fuse(device, concated_tensor_tile)
         logits, __, __ = self.classifier(device, hidden_states)
+        # hidden_states = self.linear_fuse(device, concated_tensor_tile)
+        # logits = self.classifier(device, hidden_states)
 
         return logits

@@ -145,7 +145,7 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     using tt::tt_metal::CircularBufferConfig;
 
     uint32_t next_cb_index = CBIndex::c_0;
-    uint32_t buffering_factor = 2;
+    uint32_t buffering_factor = 1;
 
     // input data is in a sharded CB
     uint32_t aligned_input_stick_nbytes = round_up_to_mul32(input_stick_nbytes);
