@@ -9,7 +9,6 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/tt_log.h>
 #include "ttnn/operation.hpp"
 
 using namespace tt::tt_metal;

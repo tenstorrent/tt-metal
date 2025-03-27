@@ -87,20 +87,22 @@ FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::LowLatencyPacketHeade
 }
 
 // Since we unicast to local, we must omit the packet header
+// This function only does reads, and within scope there are no modifications to the packet header
 FORCE_INLINE void execute_chip_unicast_to_local_chip(
-    volatile PACKET_HEADER_TYPE* const packet_start, uint16_t payload_size_bytes, uint32_t transaction_id) {
+    tt_l1_ptr PACKET_HEADER_TYPE* const packet_start, uint16_t payload_size_bytes, uint32_t transaction_id) {
     const auto& header = *packet_start;
     uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) + sizeof(PACKET_HEADER_TYPE);
 
-    tt::tt_fabric::NocSendType noc_send_type = packet_start->noc_send_type;
+    tt::tt_fabric::NocSendType noc_send_type = header.noc_send_type;
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
             const auto dest_address = header.command_fields.unicast_write.noc_address;
-            noc_async_write_one_packet_with_trid(
+            noc_async_write_one_packet_with_trid<false, false>(
                 payload_start_address,
                 dest_address,
                 payload_size_bytes,
                 transaction_id,
+                tt::tt_fabric::local_chip_data_cmd_buf,
                 tt::tt_fabric::edm_to_local_chip_noc);
         } break;
 
@@ -139,7 +141,7 @@ FORCE_INLINE void execute_chip_unicast_to_local_chip(
 }
 
 FORCE_INLINE void update_packet_header_for_next_hop(
-    volatile tt::tt_fabric::PacketHeader* packet_header, tt::tt_fabric::RoutingFields cached_routing_fields) {
+    volatile tt_l1_ptr tt::tt_fabric::PacketHeader* packet_header, tt::tt_fabric::RoutingFields cached_routing_fields) {
     // if the distance field is one, it means the range field decrements, else the start distance field decrements
     // TODO [optimization]: If we can make the terminal value 0, then we can save an instruction on the eq insn
     bool decrement_range = (cached_routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK) ==
@@ -150,9 +152,10 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 }
 
 FORCE_INLINE void update_packet_header_for_next_hop(
-    volatile tt::tt_fabric::LowLatencyPacketHeader* packet_header,
+    volatile tt_l1_ptr tt::tt_fabric::LowLatencyPacketHeader* packet_header,
     tt::tt_fabric::LowLatencyRoutingFields cached_routing_fields) {
-    packet_header->routing_fields.value >>= tt::tt_fabric::LowLatencyRoutingFields::FIELD_WIDTH;
+    packet_header->routing_fields.value =
+        cached_routing_fields.value >> tt::tt_fabric::LowLatencyRoutingFields::FIELD_WIDTH;
 }
 
 // This function forwards a packet to the downstream EDM channel for eventual sending
@@ -164,9 +167,10 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 // !!!WARNING!!! * do NOT call before determining if the packet should be consumed locally or forwarded
 // !!!WARNING!!! * ENSURE DOWNSTREAM EDM HAS SPACE FOR PACKET BEFORE CALLING
 // !!!WARNING!!!
-template <uint8_t NUM_SENDER_BUFFERS>
+// This function does a write, so needs to be volatile to avoid compiler optimizations
+template <uint8_t NUM_SENDER_BUFFERS, bool enable_ring_support>
 FORCE_INLINE void forward_payload_to_downstream_edm(
-    volatile PACKET_HEADER_TYPE* packet_header,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     uint16_t payload_size_bytes,
     ROUTING_FIELDS_TYPE cached_routing_fields,
     tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface,
@@ -177,6 +181,6 @@ FORCE_INLINE void forward_payload_to_downstream_edm(
     // This is a good place to print the packet header for debug if you are trying to inspect packets
     // because it is before we start manipulating the header for forwarding
     update_packet_header_for_next_hop(packet_header, cached_routing_fields);
-    downstream_edm_interface.send_payload_non_blocking_from_address_with_trid(
+    downstream_edm_interface.template send_payload_non_blocking_from_address_with_trid<enable_ring_support>(
         reinterpret_cast<size_t>(packet_header), payload_size_bytes + sizeof(PACKET_HEADER_TYPE), transaction_id);
 }

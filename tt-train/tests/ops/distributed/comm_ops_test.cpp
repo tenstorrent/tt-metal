@@ -284,6 +284,7 @@ TEST_F(N300CommOpsTest, TestAllGatherFullyTiled) {
 }
 
 TEST_F(N300CommOpsTest, TestScatterNotFullyTiled) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
@@ -325,6 +326,7 @@ TEST_F(N300CommOpsTest, TestScatterNotFullyTiled) {
 }
 
 TEST_F(N300CommOpsTest, TestScatterFullyTiled) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 

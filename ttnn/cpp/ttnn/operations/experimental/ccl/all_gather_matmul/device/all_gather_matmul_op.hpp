@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <tt-metalium/constants.hpp>
@@ -23,6 +24,7 @@
 #include "cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "cpp/ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn {
 namespace experimental {
@@ -44,7 +46,8 @@ struct AllGatherMatmul {
         const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt}) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program(
+    tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
+        const ttnn::MeshCoordinate& mesh_coordinate,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;

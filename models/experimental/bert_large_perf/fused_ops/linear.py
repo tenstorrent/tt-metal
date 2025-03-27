@@ -2,8 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Union, Optional
-from ttnn import matmul
+from typing import Optional
 import ttnn
 
 

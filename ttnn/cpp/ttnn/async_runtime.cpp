@@ -40,6 +40,7 @@ void read_buffer(
     const std::optional<BufferRegion>& region,
     size_t src_offset,
     bool blocking) {
+    TT_ASSERT(src_offset == 0, "src_offset is not supported");
     if (auto mesh_device = src.mesh_device()) {
         mesh_device->push_work([&]() {
             auto& cq = mesh_device->mesh_command_queue(*cq_id);
@@ -49,7 +50,6 @@ void read_buffer(
             }
         });
     } else {
-        TT_ASSERT(src_offset == 0, "src_offset is not supported");
         for (const auto worker : src.get_workers()) {
             auto dst_for_device = (dst.size() == 1) ? dst.at(0) : dst.at(worker->id());
             worker->push_work([worker, dst_for_device, src, cq_id, region, src_offset, blocking]() {

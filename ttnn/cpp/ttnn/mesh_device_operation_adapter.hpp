@@ -4,12 +4,15 @@
 
 #pragma once
 
+#include <tt-metalium/program_cache.hpp>
+
 #include <memory>
 #include <optional>
 #include <functional>
 #include <concepts>
-#include <tt-metalium/program_cache.hpp>
+#include <variant>
 #include "ttnn/mesh_device_operation_utils.hpp"
+#include "tools/profiler/op_profiler.hpp"
 
 namespace ttnn {
 
@@ -73,60 +76,41 @@ struct MeshDeviceOperationAdapter {
         }
     }
 
-    static auto create_mesh_workload(
+    template <typename ConcreteProgramFactory>
+    static tt::tt_metal::program_cache::detail::CachedMeshWorkload<typename ConcreteProgramFactory::shared_variables_t>
+    create_mesh_workload(
         tt::tt_metal::distributed::MeshDevice* mesh_device,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value) {
-        return std::visit(
-            [&]<typename ConcreteFactory>(const ConcreteFactory& concrete_factory) {
-                return mesh_device_operation_utils::create_mesh_workload<DeviceOperation, ConcreteFactory>(
-                    mesh_device, attrs, tensor_args, tensor_return_value);
-            },
-            select_program_factory(attrs, tensor_args));
+        return ttnn::mesh_device_operation_utils::
+            template create_mesh_workload<DeviceOperation, ConcreteProgramFactory>(
+                mesh_device, attrs, tensor_args, tensor_return_value);
     }
 
-    template <typename ConcreteWorkload>
+    template <typename ConcreteProgramFactory>
     static void override_mesh_runtime_arguments(
-        ConcreteWorkload& cached_workload,
+        tt::tt_metal::program_cache::detail::CachedMeshWorkload<typename ConcreteProgramFactory::shared_variables_t>&
+            cached_workload,
         tt::tt_metal::distributed::MeshDevice* mesh_device,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value) {
-        std::visit(
-            [&]<typename ConcreteFactory>(const ConcreteFactory& concrete_factory) {
-                mesh_device_operation_utils::override_mesh_runtime_arguments<ConcreteFactory>(
-                    cached_workload, mesh_device, attrs, tensor_args, tensor_return_value);
-            },
-            select_program_factory(attrs, tensor_args));
+        mesh_device_operation_utils::override_mesh_runtime_arguments<ConcreteProgramFactory>(
+            cached_workload, mesh_device, attrs, tensor_args, tensor_return_value);
     }
 
     static tt::stl::hash::hash_t compute_mesh_workload_hash(
         tt::tt_metal::distributed::MeshDevice* mesh_device,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args) {
-        return compute_program_hash(attrs, tensor_args);
+        // Hash the program hash and the tensor coordinates the workload is targeting.
+        auto hash = compute_program_hash(attrs, tensor_args);
+        for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args)) {
+            tt::utils::hash_combine(hash, coord);
+        }
+        return hash;
     }
-};
-
-template <typename T>
-concept MeshDeviceOperationAdapterType = requires {
-    typename T::device_operation_t;
-    typename T::operation_attributes_t;
-    typename T::tensor_args_t;
-    typename T::spec_return_value_t;
-    typename T::tensor_return_value_t;
-    typename T::program_factory_t;
-
-    // Check for the existence of key mesh-related methods
-    requires requires(
-        typename T::operation_attributes_t attrs,
-        typename T::tensor_args_t tensor_args,
-        typename T::tensor_return_value_t tensor_return_value,
-        tt::tt_metal::distributed::MeshDevice* mesh_device) {
-        T::create_mesh_workload(mesh_device, attrs, tensor_args, tensor_return_value);
-        T::compute_mesh_workload_hash(mesh_device, attrs, tensor_args);
-    };
 };
 
 template <typename T>
@@ -134,5 +118,8 @@ struct is_mesh_device_operation_adapter : std::false_type {};
 
 template <typename DeviceOp>
 struct is_mesh_device_operation_adapter<MeshDeviceOperationAdapter<DeviceOp>> : std::true_type {};
+
+template <typename T>
+inline constexpr bool is_mesh_device_operation_adapter_v = is_mesh_device_operation_adapter<T>::value;
 
 }  // namespace ttnn

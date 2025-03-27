@@ -81,9 +81,9 @@ public:
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and num_devices_ >= 8 and tt::tt_metal::GetNumPCIeDevices() == 4) {
             if (num_devices_ == TG_num_devices || num_devices_ == galaxy_6u_num_devices) {
-                mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{8, 4}});
+                mesh_device_ = MeshDevice::create(MeshDeviceConfig(MeshShape{8, 4}));
             } else {
-                mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{2, 4}});
+                mesh_device_ = MeshDevice::create(MeshDeviceConfig(MeshShape{2, 4}));
             }
 
             std::vector<chip_id_t> ids(num_devices_, 0);
@@ -2186,6 +2186,9 @@ struct WriteThroughputStabilityTestWithPersistentFabricParams {
     size_t num_devices_with_workers = 0;
     bool line_sync = true;
     FabricTestMode fabric_mode = FabricTestMode::Linear;
+
+    // True if you only want the workers on the end to send
+    bool disable_sends_for_interior_workers = false;
 };
 
 void RunWriteThroughputStabilityTestWithPersistentFabric(
@@ -2197,6 +2200,9 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
     size_t packet_payload_size_bytes = tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+    TT_FATAL(
+        !params.disable_sends_for_interior_workers || params.fabric_mode == FabricTestMode::Linear,
+        "This test can only be run with disable_sends_for_interior_workers set to true or fabric_mode set to Linear");
     bool use_tg = num_devices == 32;
     if (num_devices < 4) {
         log_info("This test can only be run on T3000 devices");
@@ -2241,15 +2247,43 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
     // Get the inner 4 device ring on a WH T3K device so that we can use both links for all devices
     std::vector<IDevice*> devices_;
     if (use_tg) {
-        devices_ = {
-            view.get_device(MeshCoordinate(0, 0)),
-            view.get_device(MeshCoordinate(1, 0)),
-            view.get_device(MeshCoordinate(2, 0)),
-            view.get_device(MeshCoordinate(3, 0)),
-            view.get_device(MeshCoordinate(4, 0)),
-            view.get_device(MeshCoordinate(5, 0)),
-            view.get_device(MeshCoordinate(6, 0)),
-            view.get_device(MeshCoordinate(7, 0))};
+        if (line_size <= 4) {
+            if (topology == ttnn::ccl::Topology::Ring) {
+                devices_ = {
+                    view.get_device(MeshCoordinate(0, 0)),
+                    view.get_device(MeshCoordinate(1, 0)),
+                    view.get_device(MeshCoordinate(1, 1)),
+                    view.get_device(MeshCoordinate(0, 1))};
+            } else {
+                devices_ = {
+                    view.get_device(MeshCoordinate(0, 0)),
+                    view.get_device(MeshCoordinate(1, 0)),
+                    view.get_device(MeshCoordinate(2, 0)),
+                    view.get_device(MeshCoordinate(3, 0))};
+            }
+        } else {
+            if (topology == ttnn::ccl::Topology::Ring) {
+                devices_ = {
+                    view.get_device(MeshCoordinate(0, 0)),
+                    view.get_device(MeshCoordinate(1, 0)),
+                    view.get_device(MeshCoordinate(2, 0)),
+                    view.get_device(MeshCoordinate(3, 0)),
+                    view.get_device(MeshCoordinate(3, 1)),
+                    view.get_device(MeshCoordinate(2, 1)),
+                    view.get_device(MeshCoordinate(1, 1)),
+                    view.get_device(MeshCoordinate(0, 1))};
+            } else {
+                devices_ = {
+                    view.get_device(MeshCoordinate(0, 0)),
+                    view.get_device(MeshCoordinate(1, 0)),
+                    view.get_device(MeshCoordinate(2, 0)),
+                    view.get_device(MeshCoordinate(3, 0)),
+                    view.get_device(MeshCoordinate(4, 0)),
+                    view.get_device(MeshCoordinate(5, 0)),
+                    view.get_device(MeshCoordinate(6, 0)),
+                    view.get_device(MeshCoordinate(7, 0))};
+            }
+        }
     } else {
         // Choosing pcie devices so that more links are supported. More links == more (likelihood of) congestion.
         if (line_size <= 4) {
@@ -2446,7 +2480,7 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
             bool end_of_line = line_index == line_size - 1;
             has_forward_connection = !end_of_line;
             has_backward_connection = !start_of_line;
-            unicast_forward = !end_of_line;
+            unicast_forward = line_index < (line_size / 2);
             mcast_fwd_hops = line_size - line_index - 1;
             mcast_bwd_hops = line_index;
             unicast_hops = unicast_forward ? mcast_fwd_hops : mcast_bwd_hops;
@@ -2511,17 +2545,20 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
                 }
             };
             // RT ARGS
+            bool disable_sends_for_worker =
+                params.disable_sends_for_interior_workers && (i != 0) && (i != line_size - 1);
+
             std::vector<uint32_t> rt_args = {
                 dest_bank_addr,
                 packet_payload_size_bytes,
                 dest_noc_x,
                 dest_noc_y,
 
-                num_mcasts,
+                disable_sends_for_worker ? 0 : num_mcasts,
                 mcast_fwd_hops,
                 mcast_bwd_hops,
 
-                num_unicasts,
+                disable_sends_for_worker ? 0 : num_unicasts,
                 unicast_hops,
                 unicast_forward,
 

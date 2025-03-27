@@ -115,7 +115,10 @@ public:
     // The data in the buffer is copied into a tensor with an owned storage.
     template <typename T>
     static Tensor from_span(
-        tt::stl::Span<const T> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
+        tt::stl::Span<const T> buffer,
+        const TensorSpec& spec,
+        std::optional<ttnn::AnyDevice> device = std::nullopt,
+        ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
     // Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
     //
@@ -140,7 +143,10 @@ public:
     // Same as `from_span`, but operates on a vector instead.
     template <typename T>
     static Tensor from_vector(
-        const std::vector<T>& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt) {
+        const std::vector<T>& buffer,
+        const TensorSpec& spec,
+        std::optional<ttnn::AnyDevice> device = std::nullopt,
+        ttnn::QueueId cq_id = ttnn::DefaultQueueId) {
         return from_span(tt::stl::Span<const T>(buffer), spec, device);
     }
 
@@ -148,7 +154,10 @@ public:
     // physical shape matches logical shape, and no type conversion is needed.
     template <typename T>
     static Tensor from_vector(
-        std::vector<T>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
+        std::vector<T>&& buffer,
+        const TensorSpec& spec,
+        std::optional<ttnn::AnyDevice> device = std::nullopt,
+        ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
     // Converts a `Tensor` to a `std::vector<T>`.
     // Elements in the vector will be stored in row-major order. The type of the requested vector has to match that of
@@ -329,6 +338,7 @@ Tensor create_device_tensor(
 // void *get_host_buffer(const Tensor &tensor);
 void* get_raw_host_data_ptr(const Tensor& tensor);
 
+// The set of memcpy functions below are used to copy data between host buffers/tensors and single-device tensors
 void memcpy(
     CommandQueue& queue,
     void* dst,

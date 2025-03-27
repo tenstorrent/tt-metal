@@ -42,16 +42,16 @@ namespace {
 
 template <typename T>
 Tensor create_owned_tensor_from_row_major_data(
-    std::vector<T>&& data, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt) {
+    std::vector<T>&& data, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device, ttnn::QueueId cq_id) {
     auto physical_data = tensor_impl::encode_tensor_data(std::move(data), spec);
 
     Tensor output(OwnedStorage{owned_buffer::create(std::move(physical_data))}, spec);
 
     if (device.has_value()) {
         if (auto mesh_device = device->get_mesh_device()) {
-            output = output.to_device(mesh_device, spec.memory_config());
+            output = output.to_device(mesh_device, spec.memory_config(), cq_id);
         } else {
-            output = output.to_device(device->get_devices(), spec.memory_config());
+            output = output.to_device(device->get_devices(), spec.memory_config(), cq_id);
         }
     }
 
@@ -339,17 +339,20 @@ const Storage& Tensor::get_storage() const { return this->tensor_attributes->sto
 
 template <>
 Tensor Tensor::from_span<float>(
-    tt::stl::Span<const float> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device) {
+    tt::stl::Span<const float> buffer,
+    const TensorSpec& spec,
+    std::optional<ttnn::AnyDevice> device,
+    ttnn::QueueId cq_id) {
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
     switch (spec.data_type()) {
         case DataType::FLOAT32:
             return create_owned_tensor_from_row_major_data(
-                std::vector<float>(buffer.begin(), buffer.end()), spec, device);
+                std::vector<float>(buffer.begin(), buffer.end()), spec, device, cq_id);
         case DataType::BFLOAT16: {
             return create_owned_tensor_from_row_major_data(
-                std::vector<bfloat16>(buffer.begin(), buffer.end()), spec, device);
+                std::vector<bfloat16>(buffer.begin(), buffer.end()), spec, device, cq_id);
         }
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: {
@@ -369,7 +372,7 @@ Tensor Tensor::from_span<float>(
 
             Tensor tensor(OwnedStorage{owned_buffer::create(std::move(packed_block_floats))}, spec);
             if (device.has_value()) {
-                tensor = tensor.to_device(device->get_devices(), spec.memory_config());
+                tensor = tensor.to_device(device->get_devices(), spec.memory_config(), cq_id);
             }
             return tensor;
         }
@@ -380,7 +383,8 @@ Tensor Tensor::from_span<float>(
 }
 
 template <typename T>
-Tensor Tensor::from_span(tt::stl::Span<const T> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device) {
+Tensor Tensor::from_span(
+    tt::stl::Span<const T> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device, ttnn::QueueId cq_id) {
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
@@ -389,7 +393,7 @@ Tensor Tensor::from_span(tt::stl::Span<const T> buffer, const TensorSpec& spec, 
         "Unsupported data type: got {}, expected: {}",
         spec.data_type(),
         convert_to_data_type<T>());
-    return create_owned_tensor_from_row_major_data(std::vector<T>(buffer.begin(), buffer.end()), spec, device);
+    return create_owned_tensor_from_row_major_data(std::vector<T>(buffer.begin(), buffer.end()), spec, device, cq_id);
 }
 
 template <typename T>
@@ -409,20 +413,21 @@ Tensor Tensor::from_borrowed_data(
 
 template <>
 Tensor Tensor::from_vector<float>(
-    std::vector<float>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device) {
+    std::vector<float>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device, ttnn::QueueId cq_id) {
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
     if (spec.data_type() == DataType::FLOAT32) {
         // User `buffer` directly, when no type conversion is needed.
-        return create_owned_tensor_from_row_major_data(std::move(buffer), spec, device);
+        return create_owned_tensor_from_row_major_data(std::move(buffer), spec, device, cq_id);
     } else {
-        return from_span(tt::stl::Span<const float>(buffer.data(), buffer.size()), spec, device);
+        return from_span(tt::stl::Span<const float>(buffer.data(), buffer.size()), spec, device, cq_id);
     }
 }
 
 template <typename T>
-Tensor Tensor::from_vector(std::vector<T>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device) {
+Tensor Tensor::from_vector(
+    std::vector<T>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device, ttnn::QueueId cq_id) {
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
@@ -431,7 +436,7 @@ Tensor Tensor::from_vector(std::vector<T>&& buffer, const TensorSpec& spec, std:
         "Unsupported data type: got {}, expected: {}",
         spec.data_type(),
         convert_to_data_type<T>());
-    return create_owned_tensor_from_row_major_data(std::move(buffer), spec, device);
+    return create_owned_tensor_from_row_major_data(std::move(buffer), spec, device, cq_id);
 }
 
 template <>
@@ -487,15 +492,30 @@ std::vector<T> Tensor::to_vector(ttnn::QueueId cq_id) const {
 
 // Instantiate explicitly for the supported types.
 template Tensor Tensor::from_span<bfloat16>(
-    tt::stl::Span<const bfloat16> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
+    tt::stl::Span<const bfloat16> buffer,
+    const TensorSpec& spec,
+    std::optional<ttnn::AnyDevice> device,
+    ttnn::QueueId cq_id);
 template Tensor Tensor::from_span<int32_t>(
-    tt::stl::Span<const int32_t> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
+    tt::stl::Span<const int32_t> buffer,
+    const TensorSpec& spec,
+    std::optional<ttnn::AnyDevice> device,
+    ttnn::QueueId cq_id);
 template Tensor Tensor::from_span<uint8_t>(
-    tt::stl::Span<const uint8_t> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
+    tt::stl::Span<const uint8_t> buffer,
+    const TensorSpec& spec,
+    std::optional<ttnn::AnyDevice> device,
+    ttnn::QueueId cq_id);
 template Tensor Tensor::from_span<uint16_t>(
-    tt::stl::Span<const uint16_t> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
+    tt::stl::Span<const uint16_t> buffer,
+    const TensorSpec& spec,
+    std::optional<ttnn::AnyDevice> device,
+    ttnn::QueueId cq_id);
 template Tensor Tensor::from_span<uint32_t>(
-    tt::stl::Span<const uint32_t> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
+    tt::stl::Span<const uint32_t> buffer,
+    const TensorSpec& spec,
+    std::optional<ttnn::AnyDevice> device,
+    ttnn::QueueId cq_id);
 template Tensor Tensor::from_borrowed_data<float>(
     tt::stl::Span<float> buffer,
     const ttnn::Shape& shape,
@@ -533,15 +553,15 @@ template Tensor Tensor::from_borrowed_data<uint32_t>(
     const std::function<void()>& on_destruction_callback,
     const std::optional<Tile>& tile);
 template Tensor Tensor::from_vector<bfloat16>(
-    std::vector<bfloat16>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
+    std::vector<bfloat16>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device, ttnn::QueueId cq_id);
 template Tensor Tensor::from_vector<int32_t>(
-    std::vector<int32_t>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
+    std::vector<int32_t>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device, ttnn::QueueId cq_id);
 template Tensor Tensor::from_vector<uint8_t>(
-    std::vector<uint8_t>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
+    std::vector<uint8_t>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device, ttnn::QueueId cq_id);
 template Tensor Tensor::from_vector<uint16_t>(
-    std::vector<uint16_t>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
+    std::vector<uint16_t>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device, ttnn::QueueId cq_id);
 template Tensor Tensor::from_vector<uint32_t>(
-    std::vector<uint32_t>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
+    std::vector<uint32_t>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device, ttnn::QueueId cq_id);
 
 template std::vector<bfloat16> Tensor::to_vector<bfloat16>(ttnn::QueueId cq_id) const;
 template std::vector<int32_t> Tensor::to_vector<int32_t>(ttnn::QueueId cq_id) const;
@@ -778,16 +798,9 @@ void memcpy(
     bool blocking) {
     TT_FATAL(is_device_tensor(src), "memcpy: src tensor must be on device");
 
-    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
-        TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
-    }
-
-    auto device = queue.device();
-    TT_FATAL(device->num_devices() == 1, "memcpy only supports single device mesh");
-    auto single_device_id = device->get_device_ids()[0];
+    TT_FATAL(queue.device()->num_devices() == 1, "memcpy only supports single device mesh");
     std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
-        .shard_coord = device->get_view().find_device(single_device_id),
+        .shard_coord = *distributed::MeshCoordinateRange(queue.device()->shape()).begin(),
         .host_data = dst,
         .region = region,
     }};
@@ -820,17 +833,9 @@ void memcpy(CommandQueue& queue, Tensor& dst, const void* src, const std::option
 void memcpy(
     distributed::MeshCommandQueue& queue, Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
     TT_FATAL(is_device_tensor(dst), "memcpy: memcpy to non-device tensor is not supported!");
-
-    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
-        TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
-    }
-
-    auto device = queue.device();
-    TT_FATAL(device->num_devices() == 1, "memcpy only supports single device mesh");
-    auto single_device_id = device->get_device_ids()[0];
+    TT_FATAL(queue.device()->num_devices() == 1, "memcpy only supports single device mesh");
     std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
-        .shard_coord = device->get_view().find_device(single_device_id),
+        .shard_coord = *distributed::MeshCoordinateRange(queue.device()->shape()).begin(),
         .host_data = const_cast<void*>(src),
         .region = region,
     }};
@@ -865,11 +870,6 @@ void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src, const std::opti
 
 void memcpy(
     distributed::MeshCommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region) {
-    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
-        TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
-    }
-
     TT_ASSERT(dst.get_dtype() == src.get_dtype());
     TT_ASSERT(dst.get_layout() == src.get_layout());
 

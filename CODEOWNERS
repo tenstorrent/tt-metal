@@ -60,7 +60,8 @@ tt_metal/impl/device/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal
 tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra
 
 # fabric
-tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho
+tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT
+tests/tt_metal/microbenchmarks/ethernet/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT
 
 # metal - dispatch
 tt_metal/impl/dispatch/kernels/packet_* @ubcheema @aliuTT
@@ -150,6 +151,7 @@ tests/ttnn/unit_tests/operations/fused/ @bbradelTT @nsorabaTT @vsureshTT @edwinl
 tests/ttnn/unit_tests/operations/reduce/ @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT
 tests/ttnn/nightly/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions
 tests/ttnn/nightly/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions
+tests/ttnn/integration_tests/resnet/ @tenstorrent/metalium-developers-convolutions
 tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
 tests/sweep_framework/sweeps
 tests/sweep_framework/sweeps/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT

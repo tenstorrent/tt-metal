@@ -13,6 +13,7 @@
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
 #include "tt-metalium/hal_exp.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace ccl {
@@ -61,12 +62,12 @@ size_t LineTopology::get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInter
 ttnn::ccl::Topology LineTopology::topology() const { return ttnn::ccl::Topology::Linear; }
 
 std::tuple<uint32_t, std::optional<chip_id_t>, std::optional<chip_id_t>> get_device_index_and_sender_receiver_ids(
-    const Tensor& input_tensor, const std::vector<IDevice*>& devices, const ttnn::ccl::Topology& topology) {
+    const IDevice* target_device, const std::vector<IDevice*>& devices, const ttnn::ccl::Topology& topology) {
     uint32_t num_devices = devices.size();
     bool is_linear = topology == ttnn::ccl::Topology::Linear;
     uint32_t device_index = 0;  // Initialize device index
     for (uint32_t i = 0; i < num_devices; ++i) {
-        if (devices.at(i) == input_tensor.device()) {
+        if (devices.at(i) == target_device) {
             device_index = i;
             bool is_last_chip_in_clockwise_direction = is_linear && i == (num_devices - 1);
             bool is_last_chip_in_counter_clockwise_direction = is_linear && i == 0;

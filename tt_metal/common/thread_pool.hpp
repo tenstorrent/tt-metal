@@ -29,5 +29,5 @@ std::shared_ptr<ThreadPool> create_device_bound_thread_pool(int num_threads);
 // NUMA aware manner (will be "closest" to the device it serves). Used for production data-paths.
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
     const std::vector<tt::tt_metal::IDevice*>& physical_devices);
-
+std::shared_ptr<ThreadPool> create_passthrough_thread_pool();
 }  // namespace tt::tt_metal

@@ -34,6 +34,8 @@ class MeshDeviceView;
 class MeshSubDeviceManagerId;
 class MeshTraceBuffer;
 
+using DeviceIds = std::vector<int>;
+
 class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevice> {
 private:
     // Resource management class / RAII wrapper for *physical devices* of the mesh
@@ -67,7 +69,7 @@ private:
     };
 
     std::shared_ptr<ScopedDevices> scoped_devices_;
-    MeshDeviceID mesh_id_;
+    int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
     // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
     std::shared_ptr<MeshDevice> parent_mesh_;
@@ -107,7 +109,7 @@ public:
 
     // IDevice interface implementation
     tt::ARCH arch() const override;
-    MeshDeviceID id() const override;
+    int id() const override;
     chip_id_t build_id() const override;
     uint8_t num_hw_cqs() const override;
     bool is_initialized() const override;
@@ -225,6 +227,7 @@ public:
     std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     bool is_mmio_capable() const override;
+    std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
 
     // A MeshDevice is a collection of devices arranged in a 2D grid.
     // The type parameter allows the caller to specify how to linearize the devices in the mesh.

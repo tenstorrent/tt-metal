@@ -59,6 +59,7 @@ struct DeviceStorage {
     MemoryConfig memory_config() const;
     void insert_buffer(const std::shared_ptr<Buffer>& buffer_);
     Buffer* get_buffer() const;
+    std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("memory_config");
     const auto attribute_values() const { return std::make_tuple(this->memory_config()); }

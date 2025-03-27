@@ -29,9 +29,12 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     const DispatchCoreConfig& dispatch_core_config,
     const std::optional<MeshCoordinate>& offset,
     const std::vector<int>& physical_device_ids) {
-    auto config =
-        MeshDeviceConfig{.mesh_shape = mesh_shape, .offset = offset, .physical_device_ids = physical_device_ids};
-    return MeshDevice::create(config, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config);
+    return MeshDevice::create(
+        MeshDeviceConfig(mesh_shape, offset, physical_device_ids),
+        l1_small_size,
+        trace_region_size,
+        num_command_queues,
+        dispatch_core_config);
 }
 
 void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device) { mesh_device->close(); }
@@ -152,7 +155,7 @@ std::vector<int> get_t3k_physical_device_ids_ring() {
     auto num_devices = instance.get_shape().mesh_size();
     TT_FATAL(num_devices == 8, "T3000 ring topology only works with 8 devices");
 
-    auto physical_device_ids = instance.get_mapped_physical_device_ids(MeshDeviceConfig{.mesh_shape = MeshShape(1, 8)});
+    auto physical_device_ids = instance.get_mapped_physical_device_ids(MeshShape(1, 8));
     return physical_device_ids;
 }
 

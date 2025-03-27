@@ -71,8 +71,7 @@ def run_conv(
     filter_width,
     stride_h,
     stride_w,
-    pad_h,
-    pad_w,
+    padding,
     config_override,
     dilation=1,
     use_shallow_conv_variant=False,
@@ -114,6 +113,25 @@ def run_conv(
             "Untilize_out is not supported when out_c > 256 for Height Sharded. https://github.com/tenstorrent/tt-metal/issues/18633"
         )
 
+    if hasattr(padding, "__len__"):
+        if len(padding) == 2:
+            pad_top = padding[0]
+            pad_bottom = padding[0]
+            pad_left = padding[1]
+            pad_right = padding[1]
+        elif len(padding) == 4:
+            pad_top = padding[0]
+            pad_bottom = padding[1]
+            pad_left = padding[2]
+            pad_right = padding[3]
+        else:
+            raise ValueError("Padding should be a scalar or a list of 2 or 4 elements")
+    else:
+        pad_top = padding
+        pad_bottom = padding
+        pad_left = padding
+        pad_right = padding
+
     torch.manual_seed(0)
     conv_input_shape = (total_batch_size, input_channels, input_height, input_width)
     conv_weight_shape = (output_channels, input_channels // groups, filter_height, filter_width)
@@ -124,12 +142,18 @@ def run_conv(
     torch_weight_tensor = randomize_torch_tensor(torch_tensor_map, conv_weight_shape)
     torch_bias_tensor = randomize_torch_tensor(torch_tensor_map, conv_bias_shape) * 10 if has_bias else None
 
-    torch_out_golden_tensor = torch.nn.functional.conv2d(
+    torch_padded_input = torch.nn.functional.pad(
         torch_input_tensor_nchw,
+        (pad_left, pad_right, pad_top, pad_bottom),
+        mode="constant",
+        value=0,
+    )
+    torch_out_golden_tensor = torch.nn.functional.conv2d(
+        torch_padded_input,
         torch_weight_tensor,
         bias=torch_bias_tensor.reshape(-1) if has_bias else None,
         stride=(stride_h, stride_w),
-        padding=(pad_h, pad_w),
+        padding=(0, 0),
         dilation=(dilation, dilation),
         groups=groups,
     )
@@ -200,7 +224,7 @@ def run_conv(
         bias_tensor=tt_bias_tensor,
         kernel_size=(filter_height, filter_width),
         stride=(stride_h, stride_w),
-        padding=(pad_h, pad_w),
+        padding=(pad_top, pad_bottom, pad_left, pad_right),
         dilation=(dilation, dilation),
         batch_size=batch_size,
         input_height=input_height,
@@ -224,7 +248,7 @@ def run_conv(
             bias_tensor=tt_bias_tensor,
             kernel_size=(filter_height, filter_width),
             stride=(stride_h, stride_w),
-            padding=(pad_h, pad_w),
+            padding=(pad_top, pad_bottom, pad_left, pad_right),
             dilation=(dilation, dilation),
             batch_size=batch_size,
             input_height=input_height,
@@ -240,7 +264,6 @@ def run_conv(
         )
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
-
     # torch_output_tensor is in row major layout and NHWC shape
     # NHWC to NCHW
     torch_output_tensor = torch_output_tensor.reshape(
@@ -290,8 +313,7 @@ def run_conv_with_split(
     filter_width,
     stride_h,
     stride_w,
-    pad_h,
-    pad_w,
+    padding,
     config_override,
     shard_layout=None,
     split_factor=2,
@@ -299,6 +321,25 @@ def run_conv_with_split(
     packer_l1_acc=False,
     auto_shard=False,
 ):
+    if hasattr(padding, "__len__"):
+        if len(padding) == 2:
+            pad_top = padding[0]
+            pad_bottom = padding[0]
+            pad_left = padding[1]
+            pad_right = padding[1]
+        elif len(padding) == 4:
+            pad_top = padding[0]
+            pad_bottom = padding[1]
+            pad_left = padding[2]
+            pad_right = padding[3]
+        else:
+            raise ValueError("Padding should be a scalar or a list of 2 or 4 elements")
+    else:
+        pad_top = padding
+        pad_bottom = padding
+        pad_left = padding
+        pad_right = padding
+
     torch.manual_seed(0)
     assert input_channels % split_factor == 0
     split_input_channels = input_channels // split_factor
@@ -309,12 +350,19 @@ def run_conv_with_split(
     conv_bias_shape = (1, 1, 1, output_channels)
     torch_bias_tensor = randomize_torch_tensor(torch_tensor_map, conv_bias_shape)
     torch_bias_zeroes_tensor = randomize_torch_tensor(torch_tensor_map, conv_bias_shape)
-    torch_out_golden_tensor = torch.nn.functional.conv2d(
+
+    torch_padded_input = torch.nn.functional.pad(
         torch_input_tensor_nchw,
+        (pad_left, pad_right, pad_top, pad_bottom),
+        mode="constant",
+        value=0,
+    )
+    torch_out_golden_tensor = torch.nn.functional.conv2d(
+        torch_padded_input,
         torch_weight_tensor,
         bias=torch_bias_tensor.reshape(-1),
         stride=(stride_h, stride_w),
-        padding=(pad_h, pad_w),
+        padding=(0, 0),
     )
 
     split_input_tensors = torch.split(torch_input_tensor_nchw, split_input_channels, 1)
@@ -362,7 +410,7 @@ def run_conv_with_split(
             bias_tensor=tt_bias_tensor,
             kernel_size=(filter_height, filter_width),
             stride=(stride_h, stride_w),
-            padding=(pad_h, pad_w),
+            padding=(pad_top, pad_bottom, pad_left, pad_right),
             batch_size=batch_size,
             input_height=input_height,
             input_width=input_width,
@@ -420,11 +468,11 @@ def run_conv_with_split(
     [False],
 )
 @pytest.mark.parametrize(
-    "filter, pad",
+    "filter, padding",
     [
-        [3, 1],
+        [3, (1, 2, 2, 3)],
         [1, 0],
-        [5, 2],
+        [5, (2, 4, 3, 5)],
     ],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4])
@@ -445,11 +493,14 @@ def test_conv_features(
     config,
     filter,
     stride,
-    pad,
+    padding,
     output_layout,
     fp32_accum,
     packer_l1_acc,
 ):
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and shard_layout == WS:
+        pytest.skip("Bug in Width Sharded Row Major Tensor Creation when height%32!=0. #19408")
+
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
 
@@ -471,8 +522,7 @@ def test_conv_features(
         filter,
         stride,
         stride,
-        pad,
-        pad,
+        padding,
         config,
         shard_layout=shard_layout,
         output_layout=output_layout,
@@ -550,7 +600,6 @@ def test_conv_features_multi_device(
         filter,
         stride,
         stride,
-        pad,
         pad,
         config,
         shard_layout=shard_layout,
@@ -641,7 +690,6 @@ def test_conv_activation(
         filter,
         stride,
         stride,
-        pad,
         pad,
         config,
         shard_layout=shard_layout,
@@ -896,8 +944,7 @@ def test_conv_for_segformer_512x512(
         filter_width,
         stride_h,
         stride_w,
-        pad_h,
-        pad_w,
+        (pad_h, pad_w),
         config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
         groups=groups,
@@ -1014,8 +1061,7 @@ def test_resnet50_conv_wh(
         filter_width,
         stride_h,
         stride_w,
-        pad_h,
-        pad_w,
+        (pad_h, pad_w),
         config_override=config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
         transpose_shards=True,  ## use RM (transpose_mcast=False) with 2D on WH
@@ -1074,8 +1120,7 @@ def test_conv_mem_config_wh(
         filter_width,
         stride_h,
         stride_w,
-        pad_h,
-        pad_w,
+        (pad_h, pad_w),
         shard_layout=shard_layout,
         config_override=config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
@@ -1198,8 +1243,7 @@ def test_resnet50_conv_wh_fp32(
         filter_width,
         stride_h,
         stride_w,
-        pad_h,
-        pad_w,
+        (pad_h, pad_w),
         shard_layout=shard_layout,
         config_override=config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
@@ -1315,8 +1359,7 @@ def test_sd_conv(
             filter_width,
             stride_h,
             stride_w,
-            pad_h,
-            pad_w,
+            (pad_h, pad_w),
             config_override,
             shard_layout=shard_layout,
             split_factor=3 if input_channels == 1920 else 2,
@@ -1337,8 +1380,7 @@ def test_sd_conv(
             filter_width,
             stride_h,
             stride_w,
-            pad_h,
-            pad_w,
+            (pad_h, pad_w),
             config_override,
             shard_layout=shard_layout,
             use_shallow_conv_variant=(input_channels == 16),
@@ -1469,8 +1511,7 @@ def test_sd_conv_wh(
             filter_width,
             stride_h,
             stride_w,
-            pad_h,
-            pad_w,
+            (pad_h, pad_w),
             config_override,
             shard_layout=shard_layout,
             split_factor=3 if input_channels == 1920 else 2,
@@ -1493,8 +1534,7 @@ def test_sd_conv_wh(
             filter_width,
             stride_h,
             stride_w,
-            pad_h,
-            pad_w,
+            (pad_h, pad_w),
             config_override,
             shard_layout=shard_layout,
             use_shallow_conv_variant=(input_channels == 16),
@@ -1584,8 +1624,7 @@ def test_unet_conv_wh(
         filter_width,
         stride_h,
         stride_w,
-        pad_h,
-        pad_w,
+        (pad_h, pad_w),
         config_override,
         shard_layout=shard_layout,
         use_shallow_conv_variant=use_shallow_conv_variant,
@@ -1682,8 +1721,7 @@ def test_unet_conv_groups_2_wh(
         filter_width,
         stride_h,
         stride_w,
-        pad_h,
-        pad_w,
+        (pad_h, pad_w),
         config_override,
         shard_layout=shard_layout,
         use_shallow_conv_variant=use_shallow_conv_variant,
@@ -1779,8 +1817,7 @@ def test_unet_conv_groups_4_6_wh(
         filter_width,
         stride_h,
         stride_w,
-        pad_h,
-        pad_w,
+        (pad_h, pad_w),
         config_override,
         shard_layout=shard_layout,
         use_shallow_conv_variant=use_shallow_conv_variant,
@@ -1877,8 +1914,7 @@ def test_unet_conv_groups_8_wh(
         filter_width,
         stride_h,
         stride_w,
-        pad_h,
-        pad_w,
+        (pad_h, pad_w),
         config_override,
         shard_layout=shard_layout,
         use_shallow_conv_variant=use_shallow_conv_variant,
@@ -1942,8 +1978,7 @@ def test_halo_reshard_conv(
         filter_width,
         stride_h,
         stride_w,
-        pad_h,
-        pad_w,
+        (pad_h, pad_w),
         config_override,
         shard_layout=shard_layout,
         auto_shard=auto_shard,
@@ -2006,8 +2041,7 @@ def test_conv_core_nondivis(
         filter_width,
         stride_h,
         stride_w,
-        pad_h,
-        pad_w,
+        (pad_h, pad_w),
         config_override,
         shard_layout=shard_layout,
         auto_shard=auto_shard,
@@ -2089,7 +2123,6 @@ def test_conv_dilation(
         filter,
         stride,
         stride,
-        pad,
         pad,
         config_override,
         shard_layout=shard_layout,
@@ -2183,8 +2216,7 @@ def test_conv_groups(
         filter_width,
         stride_h,
         stride_w,
-        pad_h,
-        pad_w,
+        (pad_h, pad_w),
         config_override,
         shard_layout=shard_layout,
         use_shallow_conv_variant=use_shallow_conv_variant,
@@ -2302,8 +2334,7 @@ def test_yolov4_conv_groups_larger_than_one(
         filter_width,
         stride_h,
         stride_w,
-        pad_h,
-        pad_w,
+        (pad_h, pad_w),
         config_override,
         shard_layout=shard_layout,
         use_shallow_conv_variant=use_shallow_conv_variant,
@@ -2377,8 +2408,7 @@ def test_swin_s_conv(
         filter_width,
         stride_h,
         stride_w,
-        pad_h,
-        pad_w,
+        (pad_h, pad_w),
         config_override,
         shard_layout=shard_layout,
         use_shallow_conv_variant=use_shallow_conv_variant,
@@ -2446,8 +2476,7 @@ def test_model_k_256x256(
         filter_width,
         stride_h,
         stride_w,
-        pad_h,
-        pad_w,
+        (pad_h, pad_w),
         None,
         shard_layout=shard_layout,
         dilation=dilation,
@@ -2526,8 +2555,7 @@ def test_conv_for_vanilla_unet(
         filter_width,
         stride_h,
         stride_w,
-        pad_h,
-        pad_w,
+        (pad_h, pad_w),
         config_override,
         shard_layout=shard_layout,
         use_shallow_conv_variant=use_shallow_conv_variant,
@@ -2703,8 +2731,7 @@ def test_split_reader_regression(
         filter_width,
         stride_h,
         stride_w,
-        pad_h,
-        pad_w,
+        (pad_h, pad_w),
         config_override=config_override,
         use_shallow_conv_variant=True,
         has_bias=False,
@@ -2739,10 +2766,42 @@ def test_small_in_large_out_channels_auto_shard(device, torch_tensor_map):
         kernel_size[1],
         stride[0],
         stride[1],
-        padding[0],
-        padding[1],
+        padding,
         None,
         auto_shard=True,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_silu_auto_shard_mm_conv(device, torch_tensor_map):
+    batch_size = 1
+    in_channels = 64
+    out_channels = 64
+    kernel_size = (1, 1)
+    stride = (1, 1)
+    padding = (0, 0)
+    height = 160
+    width = 160
+
+    run_conv(
+        device,
+        torch_tensor_map,
+        ttnn.MathFidelity.LoFi,
+        ttnn.bfloat16,
+        ttnn.bfloat16,
+        batch_size,
+        out_channels,
+        in_channels,
+        height,
+        width,
+        kernel_size[0],
+        kernel_size[1],
+        stride[0],
+        stride[1],
+        padding,
+        None,
+        auto_shard=True,
+        activation="silu",
     )
 
 
@@ -2790,8 +2849,7 @@ def test_block_sharding_relu_act_block_h(
         kernel[1],
         stride[0],
         stride[1],
-        padding[0],
-        padding[1],
+        padding,
         config_override=config_override,
         shard_layout=shard_layout,
         activation=activation,
@@ -2865,8 +2923,7 @@ def test_conv2d_model_fruit(
         filter_width=kernel[1],
         stride_h=stride[0],
         stride_w=stride[1],
-        pad_h=padding[0],
-        pad_w=padding[1],
+        padding=padding,
         config_override=config_override,
         dilation=dilation[0],
         use_shallow_conv_variant=use_shallow_conv_variant,
@@ -2885,3 +2942,139 @@ def test_conv2d_model_fruit(
         output_mesh_composer=None,
         enable_split_reader=enable_split_reader,
     )
+
+
+@pytest.mark.parametrize(
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, activations_dtype, groups, kernel, stride, padding, dilation, auto_shard, use_shallow_conv_variant, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, enable_split_reader, split_factor",
+    (
+        # 1024x1024 resolution
+        # kernel 3x3
+        (1, 1280, 1280, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 1280, 1280, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 1280, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 1920, 1280, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 1920, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 2560, 1280, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 320, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 320, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 640, 1280, 32, 32,  ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 640, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 640, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 2),
+        (1, 640, 640, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 960, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 960, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 6),
+
+        # stride 2x2
+        (1, 320, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 640, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+
+        # output_channels 4
+        (1, 320, 4, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+
+        # input_channels 4
+        (1, 4, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), True, True,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+
+
+        # kernel 1x1
+        (1, 1280, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 1920, 1280, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 1920, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 2560, 1280, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 320, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 640, 1280, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 640, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 960, 640, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+        (1, 960, 320, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), True, False,  0, 1, False, ttnn.MathFidelity.LoFi, False, False, False, 1),
+    ),
+)
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv2d_sdxl(
+    device,
+    torch_tensor_map,
+    batch,
+    input_channels,
+    output_channels,
+    input_height,
+    input_width,
+    weights_dtype,
+    activations_dtype,
+    groups,
+    kernel,
+    stride,
+    padding,
+    dilation,
+    auto_shard,
+    use_shallow_conv_variant,
+    act_block_h_override,
+    act_block_w_div,
+    deallocate_activation,
+    math_fidelity,
+    fp32_accum,
+    packer_l1_acc,
+    enable_split_reader,
+    split_factor
+):
+    config_override = {}
+    config_override["act_block_h"] = act_block_h_override
+    config_override["act_block_w_div"] = act_block_w_div
+
+    if split_factor > 1:
+        run_conv_with_split(
+            device,
+            torch_tensor_map,
+            math_fidelity,
+            activations_dtype,
+            weights_dtype,
+            batch,
+            output_channels,
+            input_channels,
+            input_height,
+            input_width,
+            kernel[0],
+            kernel[1],
+            stride[0],
+            stride[1],
+            padding,
+            config_override,
+            shard_layout=None,
+            split_factor=split_factor,
+            fp32_accum=fp32_accum,
+            packer_l1_acc=packer_l1_acc,
+            auto_shard=auto_shard
+        )
+    else:
+        run_conv(
+            device=device,
+            torch_tensor_map=torch_tensor_map,
+            math_fidelity=math_fidelity,
+            activations_dtype=activations_dtype,
+            weights_dtype=weights_dtype,
+            batch_size=batch,
+            output_channels=output_channels,
+            input_channels=input_channels,
+            input_height=input_height,
+            input_width=input_width,
+            filter_height=kernel[0],
+            filter_width=kernel[1],
+            stride_h=stride[0],
+            stride_w=stride[1],
+            padding=padding,
+            config_override=config_override,
+            dilation=dilation[0],
+            use_shallow_conv_variant=use_shallow_conv_variant,
+            fp32_accum=fp32_accum,
+            packer_l1_acc=packer_l1_acc,
+            output_layout=ttnn.TILE_LAYOUT,
+            deallocate_activation=deallocate_activation,
+            debug=False,
+            groups=groups,
+            has_bias=True,
+            shard_layout=None,
+            auto_shard=auto_shard,
+            memory_config=None,
+            input_mesh_mapper=None,
+            weight_mesh_mapper=None,
+            output_mesh_composer=None,
+            enable_split_reader=enable_split_reader,
+        )

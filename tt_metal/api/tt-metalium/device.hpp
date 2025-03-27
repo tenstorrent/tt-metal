@@ -44,6 +44,10 @@ class CommandQueue;
 class TraceBuffer;
 struct TraceDescriptor;
 
+namespace distributed {
+class MeshDevice;
+}
+
 class IDevice {
 public:
     IDevice() = default;
@@ -213,6 +217,10 @@ public:
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
 
     virtual bool is_mmio_capable() const = 0;
+
+    // Allowing to get corresponding MeshDevice for a given device to properly schedule programs / create buffers for
+    // it. This is currently used exclusively by profiler.
+    virtual std::shared_ptr<distributed::MeshDevice> get_mesh_device() = 0;
 
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
 };

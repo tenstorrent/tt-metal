@@ -59,7 +59,7 @@ INSTANTIATE_TEST_SUITE_P(
         .input_hw = {32, 32},
         .window_hw = {3, 3},
         .stride_hw = {1, 1},
-        .pad_hw = {1, 1},
+        .padding = {1, 1, 1, 1},
         .output_pad_hw = {0, 0},
         .dilation_hw = {1, 1},
         .num_cores_nhw = 1,

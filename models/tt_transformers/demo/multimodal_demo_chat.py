@@ -6,7 +6,6 @@ from typing import Optional
 from loguru import logger
 
 from PIL import Image as PIL_Image
-from termcolor import cprint
 
 import pytest
 import os

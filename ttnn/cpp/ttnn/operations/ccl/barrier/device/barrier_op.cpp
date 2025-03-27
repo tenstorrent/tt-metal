@@ -28,30 +28,19 @@ std::vector<Tensor> Barrier::create_output_tensors(const std::vector<Tensor>& in
     return input_tensors;
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks Barrier::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    return ccl::barrier::detail::barrier_with_workers(
-        input_tensors.at(0),
-        output_tensors.at(0),
-        this->is_starting_core,
-        this->ring_size,
-        this->ring_index,
-        this->receiver_device_id,
-        this->sender_device_id,
-        this->topology);
-}
-
-void Barrier::update_structure(const Tensor& input_tensor) {
-    // Need to resolve the neighbours of this tensor
-    // Can only be done in launch_op as it differs for different input tensors
-    const auto devices = this->devices;
+tt::tt_metal::operation::ProgramWithCallbacks Barrier::create_program_at(
+    const ttnn::MeshCoordinate& mesh_coord,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    const auto* target_device = input_tensors.at(0).mesh_device()->get_device(mesh_coord);
+    const auto devices = input_tensors.at(0).mesh_device()->get_devices();
     const bool is_linear = (topology == ttnn::ccl::Topology::Linear);
-    const uint32_t num_devices = this->ring_size;
+    const uint32_t num_devices = devices.size();
     uint32_t device_index = 0;
     std::optional<chip_id_t> receiver_device_id = std::nullopt;
     std::optional<chip_id_t> sender_device_id = std::nullopt;
     for (uint32_t i = 0; i < num_devices; ++i) {
-        if (devices.at(i) == input_tensor.device()) {
+        if (devices.at(i) == target_device) {
             bool is_last_chip_in_clockwise_direction = is_linear && i == (num_devices - 1);
             bool is_last_chip_in_counter_clockwise_direction = is_linear && i == 0;
             device_index = i;
@@ -64,25 +53,29 @@ void Barrier::update_structure(const Tensor& input_tensor) {
             break;
         }
     }
-    this->receiver_device_id = receiver_device_id;
-    this->sender_device_id = sender_device_id;
-    this->ring_index = device_index;
-    this->is_starting_core = device_index == 0;
+
+    return ccl::barrier::detail::barrier_with_workers(
+        input_tensors.at(0),
+        output_tensors.at(0),
+        /*is_starting_core*/ (device_index == 0),
+        num_devices,
+        device_index,
+        receiver_device_id,
+        sender_device_id,
+        this->topology);
 }
+
 namespace operations::ccl {
 
 Tensor barrier_function(const Tensor& input_tensor, const ttnn::Barrier& barrier_struct) {
-    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
+    std::vector<Tensor> output_tensors = {Tensor(input_tensor.mesh_device())};
     tt::tt_metal::operation::launch_op(
         [barrier_struct](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const Tensor& input_tensor = input_tensors.at(0);
-            // need to copy and update barrier struct for this particular tensor
-            ttnn::Barrier new_barrier_struct = barrier_struct;
-            new_barrier_struct.update_structure(input_tensor);
-            return tt::tt_metal::operation::run(new_barrier_struct, {input_tensor});
+            return tt::tt_metal::operation::run(barrier_struct, {input_tensor});
         },
         {input_tensor},
         output_tensors);

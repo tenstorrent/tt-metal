@@ -21,16 +21,16 @@ using CachedMeshWorkload = tt::tt_metal::program_cache::detail::CachedMeshWorklo
 
 // Determines if the device operation and a given program factory use heterogenous dispatch (constructing a single
 // program for the entire mesh workload, or creating a program for each device within the mesh).
-// For the old infra type-erased `DeviceOperation`, this is determined by `uses_heterogenous_dispatch` method.
-// For the new infra, this is determined by the presence of `create_at` method for creating programs at a specific
-// location.
-template <typename device_operation_t, typename program_factory_t>
-auto uses_heterogenous_dispatch() {
-    if constexpr (requires { device_operation_t::uses_heterogenous_dispatch(); }) {
-        auto res = device_operation_t::uses_heterogenous_dispatch();
-        return res;
+// For the old infra type-erased `DeviceOperation`, this is determined by `uses_heterogenous_dispatch` method on the
+// program factory.
+// For the new infra, this is determined by the presence of `create_at` method for creating programs at
+// a specific location.
+template <typename ConcreteProgramFactory, typename OperationAttributes>
+auto uses_heterogenous_dispatch(const OperationAttributes& attrs) {
+    if constexpr (requires { ConcreteProgramFactory::uses_heterogenous_dispatch(attrs); }) {
+        return ConcreteProgramFactory::uses_heterogenous_dispatch(attrs);
     } else {
-        constexpr bool has_create_at = requires { &program_factory_t::create_at; };
+        constexpr bool has_create_at = requires { &ConcreteProgramFactory::create_at; };
         return has_create_at;
     }
 }
@@ -48,6 +48,32 @@ bool all_tensors_have_uniform_storage(const TensorArgs& tensor_args) {
         },
         tensor_args);
     return first_uniform;
+}
+
+// Filters shards from `tensor_return_value` that are in `tensor_coordinates`.
+template <typename TensorReturnValue>
+void filter_tensor_shards(
+    const std::vector<ttnn::MeshCoordinate>& tensor_coordinates, TensorReturnValue& tensor_return_value) {
+    tt::stl::reflection::visit_object_of_type<Tensor>(
+        [&](const Tensor& tensor_to_return) {
+            auto& tensor_storage = std::get<tt::tt_metal::DeviceStorage>(tensor_to_return.tensor_attributes->storage);
+
+            auto coord_it = tensor_coordinates.cbegin();
+            auto storage_it = tensor_storage.specs.begin();
+            auto insert_it = tensor_storage.specs.begin();
+            while (coord_it != tensor_coordinates.end() && storage_it != tensor_storage.specs.end()) {
+                if (storage_it->first == *coord_it) {
+                    std::swap(*insert_it, *storage_it);
+                    ++insert_it;
+                    ++coord_it;
+                    ++storage_it;
+                } else {
+                    ++storage_it;
+                }
+            }
+            tensor_storage.specs.erase(insert_it, tensor_storage.specs.end());
+        },
+        tensor_return_value);
 }
 
 // Verifies all tensors span the same set of coordinates, and returns them in a vector.
@@ -115,19 +141,19 @@ void apply_override_runtime_arguments(
 
 template <
     typename DeviceOperationT,
-    typename ProgramFactoryT,
+    typename ConcreteProgramFactory,
     typename AttributesT,
     typename TensorArgsT,
     typename ReturnValueT>
-CachedMeshWorkload<typename ProgramFactoryT::shared_variables_t> create_mesh_workload(
+CachedMeshWorkload<typename ConcreteProgramFactory::shared_variables_t> create_mesh_workload(
     ttnn::MeshDevice* mesh_device,
     const AttributesT& attrs,
     const TensorArgsT& tensor_args,
     ReturnValueT& tensor_return_value) {
-    using shared_vars_t = typename ProgramFactoryT::shared_variables_t;
+    using shared_vars_t = typename ConcreteProgramFactory::shared_variables_t;
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
-    ProgramFactoryT program_factory;
-    constexpr bool has_create = requires { &ProgramFactoryT::create; };
+    ConcreteProgramFactory program_factory;
+    constexpr bool has_create = requires { &ConcreteProgramFactory::create; };
 
     std::unordered_map<ttnn::MeshCoordinateRange, shared_vars_t> coordinate_range_to_shared_variables;
 
@@ -141,7 +167,7 @@ CachedMeshWorkload<typename ProgramFactoryT::shared_variables_t> create_mesh_wor
 
     // Fast path - create a single program for all devices.
     // No customization and uniform tensor storage spanning all devices.
-    if (!uses_heterogenous_dispatch<DeviceOperationT, ProgramFactoryT>() &&
+    if (!uses_heterogenous_dispatch<ConcreteProgramFactory>(attrs) &&
         mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
         const ttnn::MeshCoordinateRange mesh_coordinate_range(mesh_device->shape());
         auto cached_program = make_program(ttnn::MeshCoordinate(0, 0));

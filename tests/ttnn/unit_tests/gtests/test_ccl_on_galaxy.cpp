@@ -108,10 +108,12 @@ std::shared_ptr<bfloat16[]> create_container_for_readback_data(const uint32_t bu
     }
 }
 
-TEST(GalaxyTests, TestAllGatherDeadlock) {
+// TODO: #18686 - Decide if this test should be re-enabled on mesh infra.
+TEST(GalaxyTests, DISABLED_TestAllGatherDeadlock) {
     if (not tt::Cluster::instance().is_galaxy_cluster()) {
         GTEST_SKIP() << "Skipping Galaxy test, since this is not a Galaxy System";
     }
+    tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::DISABLED);
     validate_num_tunnels_and_tunnel_depth();
 
     ttnn::MeshShape mesh_shape = get_mesh_shape();
@@ -159,17 +161,16 @@ TEST(GalaxyTests, TestAllGatherDeadlock) {
                 // Push inputs.
                 ttnn::write_buffer(ttnn::DefaultQueueId, input_tensor, {host_data});
                 // Configure CCL running on this device.
+                // TODO: #18686 - sender_device_id and receiver_device_id are not passed to `ReduceScatter` any more.
+                // Instead, they are calcualte when launching an Op based on `MeshCoordinate` that infra provides.
                 uint32_t receiver_device_id = device_ids[(dev_idx) + 1 % num_devices_in_row];
                 uint32_t sender_device_id = device_ids[(dev_idx + num_devices_in_row - 1) % num_devices_in_row];
                 auto all_gather_op = ttnn::AllGather{
                     3,
                     2,
                     num_devices_in_row,
-                    dev_idx,
                     std::nullopt,
                     std::nullopt,
-                    receiver_device_id,
-                    sender_device_id,
                     input_tensor.memory_config(),
                     ttnn::ccl::Topology::Linear};
                 // Send CCL to this device. All CCLs will complete simultaneously.
@@ -198,10 +199,12 @@ TEST(GalaxyTests, TestAllGatherDeadlock) {
     ttnn::distributed::close_mesh_device(mesh);
 }
 
-TEST(GalaxyTests, TestReduceScatterDeadlock) {
+// TODO: #18686 - Decide if this test should be re-enabled on mesh infra.
+TEST(GalaxyTests, DISABLED_TestReduceScatterDeadlock) {
     if (not tt::Cluster::instance().is_galaxy_cluster()) {
         GTEST_SKIP() << "Skipping Galaxy test, since this is not a Galaxy System";
     }
+    tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::DISABLED);
     validate_num_tunnels_and_tunnel_depth();
 
     ttnn::MeshShape mesh_shape = get_mesh_shape();
@@ -270,6 +273,8 @@ TEST(GalaxyTests, TestReduceScatterDeadlock) {
             // Push inputs.
             ttnn::write_buffer(ttnn::DefaultQueueId, input_tensor, {host_data});
             // Configure CCL running on this device.
+            // TODO: #18686 - sender_device_id and receiver_device_id are not passed to `ReduceScatter` any more.
+            // Instead, they are calcualte when launching an Op based on `MeshCoordinate` that infra provides.
             uint32_t receiver_device_id = device_ids[(dev_idx + 1) % ring_devices.size()];
             uint32_t sender_device_id = device_ids[(dev_idx + ring_devices.size() - 1) % ring_devices.size()];
             auto all_gather_op = ttnn::ReduceScatter{
@@ -277,9 +282,6 @@ TEST(GalaxyTests, TestReduceScatterDeadlock) {
                 scatter_dim,
                 1,
                 static_cast<uint32_t>(ring_devices.size()),
-                dev_idx,
-                receiver_device_id,
-                sender_device_id,
                 input_tensor.memory_config(),
                 ttnn::ccl::Topology::Ring};
             // Send CCL to this device. All CCLs will complete simultaneously.

@@ -23,6 +23,8 @@
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/api/tt-metalium/device_pool.hpp"
+#include "tt_metal/distributed/fd_mesh_command_queue.hpp"
+#include "tt_metal/distributed/sd_mesh_command_queue.hpp"
 
 #include <hal.hpp>
 #include <mesh_coord.hpp>
@@ -32,16 +34,18 @@
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 
 namespace tt::tt_metal::distributed {
-
 namespace {
-MeshDeviceID generate_unique_mesh_id() {
-    static std::atomic<MeshDeviceID> next_id{0};
+
+int generate_unique_mesh_id() {
+    static std::atomic<int> next_id{0};
     return next_id++;
 }
 
 std::shared_ptr<ThreadPool> create_default_thread_pool(const std::vector<IDevice*>& physical_devices) {
     // Bind the thread-pool to the physical devices being used.
-    if (tt::parse_env("TT_MESH_BOOST_THREAD_POOL", false)) {
+    if (physical_devices.size() == 1) {
+        return create_passthrough_thread_pool();
+    } else if (tt::parse_env("TT_MESH_BOOST_THREAD_POOL", false)) {
         return create_boost_thread_pool(physical_devices.size());
     } else {
         return create_device_bound_thread_pool(physical_devices);
@@ -86,7 +90,9 @@ MeshDevice::ScopedDevices::ScopedDevices(
     const DispatchCoreConfig& dispatch_core_config,
     const MeshDeviceConfig& config) :
     ScopedDevices(
-        SystemMesh::instance().request_available_devices(config),
+        config.physical_device_ids().empty()
+            ? SystemMesh::instance().get_mapped_physical_device_ids(config.mesh_shape(), config.offset())
+            : config.physical_device_ids(),
         l1_small_size,
         trace_region_size,
         num_command_queues,
@@ -99,7 +105,13 @@ MeshDevice::ScopedDevices::ScopedDevices(
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config) {
     opened_devices_ = tt::tt_metal::detail::CreateDevices(
-        device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
+        device_ids,
+        num_command_queues,
+        l1_small_size,
+        trace_region_size,
+        dispatch_core_config,
+        {},
+        /*init_profiler*/ false);
 
     for (auto device_id : device_ids) {
         devices_.push_back(opened_devices_.at(device_id));
@@ -164,11 +176,16 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     tt::stl::Span<const std::uint32_t> l1_bank_remap) {
     auto scoped_devices = std::make_shared<ScopedDevices>(
         l1_small_size, trace_region_size, num_command_queues, dispatch_core_config, config);
-    MeshContainer<IDevice*> devices(config.mesh_shape, scoped_devices->root_devices());
+    auto root_devices = scoped_devices->root_devices();
+    MeshContainer<IDevice*> devices(config.mesh_shape(), root_devices);
     auto mesh_device = std::make_shared<MeshDevice>(
         std::move(scoped_devices), std::make_unique<MeshDeviceView>(devices), std::shared_ptr<MeshDevice>());
 
     mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, l1_bank_remap);
+    for (auto device : root_devices) {
+        dynamic_cast<Device*>(device)->mesh_device = mesh_device;
+    }
+    DevicePool::instance().init_profiler();
     return mesh_device;
 }
 
@@ -197,9 +214,9 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
         device_ids.size());
     std::map<int, std::shared_ptr<MeshDevice>> result;
     for (size_t i = 0; i < device_ids.size(); i++) {
-        submeshes[i]->initialize(num_command_queues, l1_small_size, trace_region_size, l1_bank_remap);
         result[device_ids[i]] = submeshes[i];
     }
+    DevicePool::instance().init_profiler();
 
     return result;
 }
@@ -258,6 +275,15 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
 
     auto submesh = std::make_shared<MeshDevice>(
         scoped_devices_, std::make_unique<MeshDeviceView>(submesh_devices_container), shared_from_this());
+    const auto& allocator_config = reference_device()->allocator()->get_config();
+    submesh->initialize(
+        num_hw_cqs(),
+        allocator_config.l1_small_size,
+        allocator_config.trace_region_size,
+        allocator_config.l1_bank_remap);
+    for (auto device : submesh->get_devices()) {
+        dynamic_cast<Device*>(device)->mesh_device = submesh;
+    }
 
     submeshes_.push_back(submesh);
     log_trace(LogMetal, "Instantiating submesh {}: {} with offset: {}", submesh->id(), submesh_shape, offset);
@@ -313,7 +339,6 @@ IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
 IDevice* MeshDevice::get_device(const MeshCoordinate& coord) const { return view_->get_device(coord); }
 
 MeshCommandQueue& MeshDevice::mesh_command_queue(std::size_t cq_id) const {
-    TT_FATAL(this->using_fast_dispatch(), "Can only access the MeshCommandQueue when using Fast Dispatch.");
     TT_FATAL(cq_id < mesh_command_queues_.size(), "cq_id {} is out of range", cq_id);
     return *(mesh_command_queues_[cq_id]);
 }
@@ -372,8 +397,7 @@ std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_sha
         return view_->get_line_devices();
     }
 
-    auto new_physical_device_ids =
-        SystemMesh::instance().request_available_devices(MeshDeviceConfig{.mesh_shape = new_shape});
+    auto new_physical_device_ids = SystemMesh::instance().get_mapped_physical_device_ids(new_shape);
 
     for (size_t i = 0; i < new_physical_device_ids.size(); i++) {
         if (physical_device_id_to_linearized_index.find(new_physical_device_ids[i]) ==
@@ -420,7 +444,7 @@ const MeshDeviceView& MeshDevice::get_view() const {
     return *view_;
 }
 
-MeshDeviceID MeshDevice::id() const { return mesh_id_; }
+int MeshDevice::id() const { return mesh_id_; }
 // For a mesh, build id is the same as the device id for the reference device
 chip_id_t MeshDevice::build_id() const { return reference_device()->id(); }
 
@@ -704,13 +728,17 @@ bool MeshDevice::initialize(
     mesh_command_queues_.reserve(this->num_hw_cqs());
     if (this->using_fast_dispatch()) {
         for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
-            mesh_command_queues_.push_back(std::make_unique<MeshCommandQueue>(
+            mesh_command_queues_.push_back(std::make_unique<FDMeshCommandQueue>(
                 this,
                 cq_id,
                 dispatch_thread_pool_,
                 reader_thread_pool_,
                 worker_launch_message_buffer_state  //
                 ));
+        }
+    } else {
+        for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
+            mesh_command_queues_.push_back(std::make_unique<SDMeshCommandQueue>(this, cq_id));
         }
     }
     return true;
@@ -891,6 +919,8 @@ void MeshDevice::mesh_reset_sub_device_stall_group() {
         device->push_work([device]() { device->reset_sub_device_stall_group(); });
     }
 }
+
+std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }
 
 MeshSubDeviceManagerId::MeshSubDeviceManagerId(const MeshDevice& mesh_device) {
     this->sub_device_manager_ids.reserve(mesh_device.num_devices());

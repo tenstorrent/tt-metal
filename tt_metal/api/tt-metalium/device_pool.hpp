@@ -21,9 +21,7 @@
 
 namespace tt {
 namespace tt_metal::detail {
-
 void CloseDevices(const std::map<chip_id_t, tt_metal::IDevice*>& devices);
-
 }  // namespace tt_metal::detail
 
 class DevicePool {
@@ -46,7 +44,8 @@ public:
         size_t l1_small_size,
         size_t trace_region_size,
         const tt_metal::DispatchCoreConfig& dispatch_core_config,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {}) noexcept;
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        bool init_profiler = true) noexcept;
 
     tt_metal::IDevice* get_active_device(chip_id_t device_id) const;
     std::vector<tt_metal::IDevice*> get_all_active_devices() const;
@@ -56,6 +55,7 @@ public:
     void register_worker_thread_for_device(tt_metal::IDevice* device, std::thread::id worker_thread_id);
     void unregister_worker_thread_for_device(tt_metal::IDevice* device);
     const std::unordered_set<std::thread::id>& get_worker_thread_ids() const;
+    void init_profiler() const;
 
 private:
     ~DevicePool();
@@ -81,7 +81,6 @@ private:
     std::unordered_map<uint32_t, uint32_t> worker_thread_to_cpu_core_map;
     std::unordered_map<uint32_t, uint32_t> completion_queue_reader_to_cpu_core_map;
     void init_firmware_on_active_devices() const;
-    void init_profiler_devices() const;
     void activate_device(chip_id_t id);
     // Initialize state on the host for this device
     void initialize_host(tt_metal::IDevice* dev) const;

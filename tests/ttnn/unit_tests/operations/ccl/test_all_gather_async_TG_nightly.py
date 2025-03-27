@@ -59,6 +59,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_gather import (
         ),
     ),
 )
+@pytest.mark.parametrize("use_persistent_output", [True, False])
 @pytest.mark.parametrize("replication_factor", [8])
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
@@ -74,6 +75,7 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
     num_links,
     input_dtype,
     layout,
+    use_persistent_output,
     use_program_cache,
     function_level_defaults,
     enable_async,
@@ -110,6 +112,7 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
         enable_persistent_fabric=True,
         create_persistent_fabric=True,
         teardown_persistent_fabric=True,
+        use_persistent_output=use_persistent_output,
     )
 
 
@@ -199,6 +202,7 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
         # ),
     ),
 )
+@pytest.mark.parametrize("use_persistent_output", [True, False])
 @pytest.mark.parametrize("replication_factor", [4])
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
@@ -214,6 +218,7 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
     num_links,
     input_dtype,
     layout,
+    use_persistent_output,
     use_program_cache,
     function_level_defaults,
     enable_async,
@@ -251,6 +256,7 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
         enable_persistent_fabric=True,
         create_persistent_fabric=True,
         teardown_persistent_fabric=True,
+        use_persistent_output=use_persistent_output,
     )
 
 
@@ -286,6 +292,7 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
         ttnn.BufferType.L1,
     ],
 )
+@pytest.mark.parametrize("use_persistent_output", [True, False])
 @pytest.mark.parametrize("replication_factor", [4])
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
@@ -297,6 +304,7 @@ def test_line_all_gather_on_TG_cols_nightly(
     num_links,
     input_dtype,
     layout,
+    use_persistent_output,
     buffer_type,
     use_program_cache,
     function_level_defaults,
@@ -326,4 +334,5 @@ def test_line_all_gather_on_TG_cols_nightly(
         enable_persistent_fabric=True,
         create_persistent_fabric=True,
         teardown_persistent_fabric=True,
+        use_persistent_output=use_persistent_output,
     )

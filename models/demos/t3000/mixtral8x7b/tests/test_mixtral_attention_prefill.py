@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
 import torch
 import pytest
 from loguru import logger
@@ -15,7 +14,7 @@ from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     get_rot_transformation_mat,
     set_model_args,
 )
-from models.demos.t3000.mixtral8x7b.reference.model import Attention, precompute_freqs_cis, RMSNorm
+from models.demos.t3000.mixtral8x7b.reference.model import Attention, precompute_freqs_cis
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 from models.utility_functions import (
     comp_pcc,

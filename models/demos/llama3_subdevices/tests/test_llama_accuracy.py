@@ -2,20 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
-import bz2
 import pytest
 from loguru import logger
 import os
 import ttnn
 from models.demos.llama3_subdevices.tt.llama_common import (
-    get_prefill_rot_mat,
     HostEmbedding,
     PagedAttentionConfig,
 )
 from models.demos.llama3_subdevices.tt.llama_model import TtTransformer
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
-from models.demos.llama3_subdevices.demo.demo import preprocess_inputs_prefill
 from pathlib import Path
 
 
@@ -258,7 +255,12 @@ def test_tt_model_acc(
 
             ttnn.synchronize_device(mesh_device)
             tt_out_gathered = tt_model.tt_ccl.line_all_gather(
-                tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                tt_out[0],
+                dim=3,
+                num_links=2,
+                cluster_axis=0,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                buffer_key="SAMPLING",
             )
             tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
             ttnn.deallocate(tt_out_gathered)
@@ -326,7 +328,7 @@ def test_tt_model_acc(
             page_table=page_table_tt,
         )
         tt_out_gathered = tt_model.tt_ccl.line_all_gather(
-            tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="SAMPLING"
         )
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
         ttnn.deallocate(tt_out_gathered)

@@ -335,21 +335,35 @@ constexpr bool implements_create_program_at() {
                is_detected_v<has_create_program_at_t, T, const ttnn::MeshCoordinate&, const Tensors&, OptionalTensors&>;
 }
 
-template <class T, class... Args>
-using has_create_program_with_optional_input_tensors_t =
-    decltype(std::declval<T>().create_program(std::declval<Args>()...));
-
 template <class T>
 constexpr bool implements_create_program_with_optional_input_tensors() {
     return std::experimental::is_detected_v<
-               has_create_program_with_optional_input_tensors_t,
+               has_create_program_t,
                T,
                const Tensors&,
                const std::vector<std::optional<const Tensor>>&,
                Tensors&> or
            std::experimental::is_detected_v<
-               has_create_program_with_optional_input_tensors_t,
+               has_create_program_t,
                T,
+               const Tensors&,
+               const std::vector<std::optional<const Tensor>>&,
+               OptionalTensors&>;
+}
+
+template <class T>
+constexpr bool implements_create_program_at_with_optional_input_tensors() {
+    return std::experimental::is_detected_v<
+               has_create_program_at_t,
+               T,
+               const ttnn::MeshCoordinate&,
+               const Tensors&,
+               const std::vector<std::optional<const Tensor>>&,
+               Tensors&> or
+           std::experimental::is_detected_v<
+               has_create_program_at_t,
+               T,
+               const ttnn::MeshCoordinate&,
                const Tensors&,
                const std::vector<std::optional<const Tensor>>&,
                OptionalTensors&>;
@@ -393,7 +407,8 @@ constexpr bool implements_compute_program_hash_with_optional_input_tensors() {
 template <class T>
 constexpr bool is_device_operation() {
     return implements_create_program<T>() || implements_create_program_at<T>() ||
-           implements_create_program_with_optional_input_tensors<T>();
+           implements_create_program_with_optional_input_tensors<T>() ||
+           implements_create_program_at_with_optional_input_tensors<T>();
 }
 
 template <class T, class... Args>
@@ -577,7 +592,8 @@ public:
                         "Operation doesn't implement both the validate and the correct create_program methods");
                 } else if constexpr (
                     detail::implements_validate_with_optional_input_tensors<T>() and
-                    not detail::implements_create_program_with_optional_input_tensors<T>()) {
+                    not(detail::implements_create_program_with_optional_input_tensors<T>() ||
+                        detail::implements_create_program_at_with_optional_input_tensors<T>())) {
                     static_assert(
                         tt::stl::concepts::always_false_v<T>,
                         "Operation doesn't implement both the validate and the correct create_program methods with the "
@@ -649,7 +665,6 @@ public:
                const OptionalConstTensors& optional_input_tensors,
                OutputTensors& output_tensors) -> CacheableProgram<OutputTensors> {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
-                // TODO: extend `program_at` to support optional input tensors?
                 if constexpr (detail::implements_create_program_at<T>()) {
                     TT_ASSERT(optional_input_tensors.empty());
                     return operation.create_program_at(mesh_coord, input_tensors, output_tensors);
@@ -659,6 +674,10 @@ public:
                 } else if constexpr (detail::implements_create_program_with_optional_input_tensors<T>()) {
                     TT_ASSERT(not optional_input_tensors.empty());
                     return operation.create_program(input_tensors, optional_input_tensors, output_tensors);
+                } else if constexpr (detail::implements_create_program_at_with_optional_input_tensors<T>()) {
+                    TT_ASSERT(not optional_input_tensors.empty());
+                    return operation.create_program_at(
+                        mesh_coord, input_tensors, optional_input_tensors, output_tensors);
                 } else {
                     static_assert(tt::stl::concepts::always_false_v<T>, "Operation doesn't implement create_program");
                 }
@@ -698,14 +717,18 @@ public:
                     TT_ASSERT(optional_input_tensors.empty());
                     return operation.compute_program_hash(input_tensors);
                 } else if constexpr (detail::implements_compute_program_hash_with_optional_input_tensors<T>()) {
-                    static_assert(detail::implements_create_program_with_optional_input_tensors<T>());
+                    static_assert(
+                        detail::implements_create_program_with_optional_input_tensors<T>() ||
+                        detail::implements_create_program_at_with_optional_input_tensors<T>());
                     TT_ASSERT(not optional_input_tensors.empty());
                     return operation.compute_program_hash(input_tensors, optional_input_tensors);
                 } else if constexpr (
                     detail::implements_create_program<T>() || detail::implements_create_program_at<T>()) {
                     TT_ASSERT(optional_input_tensors.empty());
                     return hash_operation<T>(operation, input_tensors);
-                } else if constexpr (detail::implements_create_program_with_optional_input_tensors<T>()) {
+                } else if constexpr (
+                    detail::implements_create_program_with_optional_input_tensors<T>() ||
+                    detail::implements_create_program_at_with_optional_input_tensors<T>()) {
                     TT_ASSERT(not optional_input_tensors.empty());
                     return hash_operation<T>(operation, input_tensors, optional_input_tensors);
                 } else {
@@ -721,7 +744,10 @@ public:
                 return false;
             }
         }},
-        uses_heterogenous_dispatch_impl_{[]() -> bool { return detail::implements_create_program_at<T>(); }},
+        uses_heterogenous_dispatch_impl_{[]() -> bool {
+            return detail::implements_create_program_at<T>() ||
+                   detail::implements_create_program_at_with_optional_input_tensors<T>();
+        }},
         create_profiler_info_impl_{[](const storage_t& storage, const Tensors& input_tensors) -> const ProfilerInfo {
             const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
             std::optional<std::string> preferred_name = std::string(tt::stl::get_type_name<T>());

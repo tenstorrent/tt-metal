@@ -354,10 +354,12 @@ std::map<chip_id_t, IDevice*> CreateDevices(
     const size_t l1_small_size,
     const size_t trace_region_size,
     const DispatchCoreConfig& dispatch_core_config,
-    const std::vector<uint32_t>& l1_bank_remap) {
+    const std::vector<uint32_t>& l1_bank_remap,
+    bool init_profiler) {
     ZoneScoped;
     bool is_galaxy = tt::Cluster::instance().is_galaxy_cluster();
-    tt::DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config);
+    tt::DevicePool::initialize(
+        device_ids, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config, {}, init_profiler);
     const auto devices = tt::DevicePool::instance().get_all_active_devices();
     std::map<chip_id_t, IDevice*> ret_devices;
     // Only include the mmio device in the active devices set returned to the caller if we are not running
@@ -666,21 +668,28 @@ void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id) {
     }
 }
 
-void LaunchProgram(IDevice* device, const std::shared_ptr<Program>& program, bool wait_until_cores_done) {
-    LaunchProgram(device, *program, wait_until_cores_done);
+void LaunchProgram(
+    IDevice* device, const std::shared_ptr<Program>& program, bool wait_until_cores_done, bool force_slow_dispatch) {
+    LaunchProgram(device, *program, wait_until_cores_done, force_slow_dispatch);
 }
 
-void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done) {
+void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done, bool force_slow_dispatch) {
     {  // Profiler scope start
         ZoneScoped;
-        detail::DispatchStateCheck(false);
+        /// This function is shared between FD and SD.
+        // We call this function when initializing HW Command Queues or when reading Profiler Device to Device
+        // sync information from the accelerators.
+        // Must be set by the user only when its safe to mix slow dispatch with fast dispatch (advanced feature).
+        if (!force_slow_dispatch) {
+            detail::DispatchStateCheck(false);
+        }
         detail::CompileProgram(device, program);
         if (!program.is_finalized()) {
             program_dispatch::finalize_program_offsets(program, device);
         }
 
-        detail::WriteRuntimeArgsToDevice(device, program);
-        detail::ConfigureDeviceWithProgram(device, program);
+        detail::WriteRuntimeArgsToDevice(device, program, force_slow_dispatch);
+        detail::ConfigureDeviceWithProgram(device, program, force_slow_dispatch);
 
         auto device_id = device->id();
 
@@ -721,7 +730,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
     }
 }
 
-void WaitProgramDone(IDevice* device, Program& program) {
+void WaitProgramDone(IDevice* device, Program& program, bool dump_device_profile_results) {
     auto device_id = device->id();
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
     std::unordered_set<CoreCoord> not_done_cores;
@@ -735,17 +744,21 @@ void WaitProgramDone(IDevice* device, Program& program) {
     }
     // Wait for all cores to be done
     llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
-    DumpDeviceProfileResults(device, program);
+    if (dump_device_profile_results) {
+        DumpDeviceProfileResults(device, program);
+    }
 }
 
-bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool fd_bootloader_mode) {
+bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_slow_dispatch) {
     ZoneScoped;
     bool pass = true;
-    // This is function is shared between FD and SD.
-    // We call this function when initializing HW Command Queues (tracked as fd_bootloader_mode) for Fast Dispatch.
-    // Used to Launch programs for Slow dispatch.
-    bool using_fast_dispatch = fd_bootloader_mode;
-    detail::DispatchStateCheck(using_fast_dispatch);
+    // This function is shared between FD and SD.
+    // We call this function when initializing HW Command Queues or when reading Profiler Device to Device
+    // sync information from the accelerators.
+    // Must be set by the user only when its safe to mix slow dispatch with fast dispatch (advanced feature).
+    if (!force_slow_dispatch) {
+        detail::DispatchStateCheck(false);
+    }
 
     auto device_id = device->id();
 
@@ -802,10 +815,16 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool fd_bootl
     return pass;
 }
 
-void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool fd_bootloader_mode) {
+void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow_dispatch) {
     ZoneScoped;
     auto device_id = device->id();
-    detail::DispatchStateCheck(fd_bootloader_mode);
+    // This function is shared between FD and SD.
+    // We call this function when initializing HW Command Queues or when reading Profiler Device to Device
+    // sync information from the accelerators.
+    // Must be set by the user only when its safe to mix slow dispatch with fast dispatch (advanced feature).
+    if (!force_slow_dispatch) {
+        detail::DispatchStateCheck(false);
+    }
 
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
@@ -867,9 +886,9 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool fd_bootloa
     }
 }
 
-void CompileProgram(IDevice* device, Program& program, bool fd_bootloader_mode) {
+void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch) {
     ZoneScoped;
-    program.compile(device, fd_bootloader_mode);
+    program.compile(device, force_slow_dispatch);
 }
 
 void SynchronizeWorkerThreads(const std::vector<IDevice*>& workers) {
