@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <math.h>
+
 #include <tt-metalium/work_split.hpp>
 #include "cpp/ttnn/operations/data_movement/move/device/move_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
