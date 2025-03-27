@@ -43,14 +43,13 @@ std::string fidelity_to_string(MathFidelity fidelity) {
     oss << fidelity;
     return oss.str();
 }
-
-std::vector<Shape2D> SUBBLOCK_HW_CHOICES = {{4, 2}, {2, 4}, {8, 1}, {1, 8}, {7, 1}, {1, 7}, {3, 2},
-                                            {2, 3}, {6, 1}, {1, 6}, {5, 1}, {1, 5}, {2, 2}, {4, 1},
-                                            {1, 4}, {3, 1}, {1, 3}, {2, 1}, {1, 2}, {1, 1}};
+std::array<Shape2D, 20> kSubblockHwChoices = {{{4, 2}, {2, 4}, {8, 1}, {1, 8}, {7, 1}, {1, 7}, {3, 2},
+                                               {2, 3}, {6, 1}, {1, 6}, {5, 1}, {1, 5}, {2, 2}, {4, 1},
+                                               {1, 4}, {3, 1}, {1, 3}, {2, 1}, {1, 2}, {1, 1}}};
 
 Shape2D get_subblock_sizes(
     int m_tiles_per_core, int n_tiles_per_core, bool out_sharded = false, bool fp32_dest_acc_en = false) {
-    for (const Shape2D& subblock_hw : SUBBLOCK_HW_CHOICES) {
+    for (const Shape2D& subblock_hw : kSubblockHwChoices) {
         const int out_subblock_h = subblock_hw.height();
         const int out_subblock_w = subblock_hw.width();
 
@@ -74,111 +73,77 @@ Shape2D get_subblock_sizes(
     return {1, 1};
 }
 
-struct Matmul_Test_Config {
-    DataType dtype_ = DataType::BFLOAT16;
-    MathFidelity fidelity_ = MathFidelity::HiFi2;
-    bool enable_tracing_ = false;
-    bool use_program_cache_ = true;
-    int num_warmup_iterations_ = 1;
-    int num_measurement_iterations_ = 1;
-    Matmul_Test_Config(
-        DataType dtype,
-        MathFidelity fidelity,
-        bool enable_tracing,
-        bool use_program_cache = true,
-        int num_warmup_iterations = 1,
-        int num_measurement_iterations = 1) :
-        dtype_(dtype),
-        fidelity_(fidelity),
-        enable_tracing_(enable_tracing),
-        use_program_cache_(use_program_cache),
-        num_warmup_iterations_(num_warmup_iterations),
-        num_measurement_iterations_(num_measurement_iterations) {}
+struct MatmulTestConfig {
+    DataType dtype = DataType::BFLOAT16;
+    MathFidelity fidelity = MathFidelity::HiFi2;
+    bool enable_tracing = false;
+    int num_warmup_iterations = 1;
+    int num_measurement_iterations = 1;
+    bool enable_program_cache = true;
 };
 
-struct Matmul_Shape {
-    int m_ = 512;
-    int k_ = 512;
-    int n_ = 512;
+struct MatmulShape {
+    int m = 512;
+    int k = 512;
+    int n = 512;
 
-    bool in0_sharded_ = true;
-    bool out_sharded_ = true;
+    bool in0_sharded = true;
+    bool out_sharded = true;
 
-    int in0_block_w_div_ = 1;
-    int num_out_blocks_h_ = 1;
-    int num_out_blocks_w_ = 1;
+    int in0_block_w_div = 1;
+    int num_out_blocks_h = 1;
+    int num_out_blocks_w = 1;
 
-    Shape2D grid_size_ = {8, 8};
-    Shape2D tile_shape_ = {32, 32};
-
-    Matmul_Shape(
-        int m,
-        int k,
-        int n,
-        bool in0_sharded,
-        bool out_sharded,
-        int in0_block_w_div,
-        int num_out_blocks_h,
-        int num_out_blocks_w,
-        Shape2D grid_size = {8, 8},
-        Shape2D tile_shape = {32, 32}) :
-        m_(m),
-        k_(k),
-        n_(n),
-        in0_sharded_(in0_sharded),
-        out_sharded_(out_sharded),
-        in0_block_w_div_(in0_block_w_div),
-        num_out_blocks_h_(num_out_blocks_h),
-        num_out_blocks_w_(num_out_blocks_w),
-        grid_size_(grid_size),
-        tile_shape_(tile_shape) {}
+    Shape2D grid_size = {8, 8};
+    Shape2D tile_shape = {32, 32};
 };
 
 class Matmul2DHostPerfTestFixture : public ttnn::TTNNFixtureWithDevice,
-                                    public testing::WithParamInterface<std::tuple<Matmul_Test_Config, Matmul_Shape>> {
+                                    public testing::WithParamInterface<std::tuple<MatmulTestConfig, MatmulShape>> {
 public:
-    Matmul2DHostPerfTestFixture() : ttnn::TTNNFixtureWithDevice(65536, 200000) {}
+    Matmul2DHostPerfTestFixture() :
+        ttnn::TTNNFixtureWithDevice(/*trace_region_size=*/65536, /*l1_small_size=*/200000) {}
 };
 
 TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     GTEST_SKIP() << "WH di/dt hang, need to skip CI and run locally only";
 
     // Parse test config
-    const Matmul_Test_Config& test_config = std::get<0>(GetParam());
-    const int& num_warmup_iterations = test_config.num_warmup_iterations_;
-    const int& num_measurement_iterations = test_config.num_measurement_iterations_;
-    const bool& use_program_cache = test_config.use_program_cache_;
+    const MatmulTestConfig& test_config = std::get<0>(GetParam());
+    const int num_warmup_iterations = test_config.num_warmup_iterations;
+    const int num_measurement_iterations = test_config.num_measurement_iterations;
 
-    DataType dtype = test_config.dtype_;
-    MathFidelity math_fidelity = test_config.fidelity_;
-    const bool use_trace = test_config.enable_tracing_;
+    DataType dtype = test_config.dtype;
+    MathFidelity math_fidelity = test_config.fidelity;
+    const bool use_trace = test_config.enable_tracing;
 
     TT_FATAL(num_measurement_iterations > 0, "Won't have data without at least one measurement iteration");
-    TT_ASSERT(
-        num_warmup_iterations > 0 && use_program_cache,
-        "Test requires a warmup iteration to be performed with program cache enabled, else unrealistically high "
-        "dispatch overhead and will be observed and is not representative of expected performance");
 
     tt::tt_metal::IDevice* device = device_;
 
-    if (use_program_cache) {
+    const bool enable_program_cache = test_config.enable_program_cache;
+    if (use_trace) {
+        TT_FATAL(enable_program_cache, "Tracing requires program cache to be enabled");
+    }
+    if (enable_program_cache) {
         device->enable_program_cache();
     }
+
     // Parse shape params
-    const Matmul_Shape& matmul_shape = std::get<1>(GetParam());
+    const MatmulShape& MatmulShape = std::get<1>(GetParam());
 
-    const Shape2D& grid_size = matmul_shape.grid_size_;
-    const int& tile_h = matmul_shape.tile_shape_.height();
-    const int& tile_w = matmul_shape.tile_shape_.width();
+    const Shape2D& grid_size = MatmulShape.grid_size;
+    const int tile_h = MatmulShape.tile_shape.height();
+    const int tile_w = MatmulShape.tile_shape.width();
 
-    const int m = matmul_shape.m_;
-    const int k = matmul_shape.k_;
-    const int n = matmul_shape.n_;
-    const bool in0_sharded = matmul_shape.in0_sharded_;
-    const bool out_sharded = matmul_shape.out_sharded_;
-    const int in0_block_w_div = matmul_shape.in0_block_w_div_;
-    const int num_out_blocks_h = matmul_shape.num_out_blocks_h_;
-    const int num_out_blocks_w = matmul_shape.num_out_blocks_w_;
+    const int m = MatmulShape.m;
+    const int k = MatmulShape.k;
+    const int n = MatmulShape.n;
+    const bool in0_sharded = MatmulShape.in0_sharded;
+    const bool out_sharded = MatmulShape.out_sharded;
+    const int in0_block_w_div = MatmulShape.in0_block_w_div;
+    const int num_out_blocks_h = MatmulShape.num_out_blocks_h;
+    const int num_out_blocks_w = MatmulShape.num_out_blocks_w;
 
     TT_FATAL(grid_size.height() > 0 && grid_size.width() > 0, "Invalid grid size");
 
@@ -203,14 +168,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
             "dtype,math_fidelity,inference_time_avg (ns),TFLOPs (avg),Utilization (vs user grid),Utilization (vs 8x8 "
             "full grid)\n";
 
-    if (use_trace) {
-        TT_FATAL(
-            use_program_cache,
-            "Tracing requires program cache to be enabled, as DRAM can't be written to during tracing");
-    }
-
     tt::log_info("Running test with dtype: {}, math_fidelity: {}, use_trace: {}", dtype, math_fidelity, use_trace);
-    std::vector<std::tuple<int, int, int, bool, bool, int, int, int>> matmul_shapes;
 
     const int in0_block_w = k / grid_size.height() / 32 / in0_block_w_div;
     const int per_core_M = m / grid_size.width() / tile_h;
@@ -242,7 +200,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
 
     // In0 is all ones
     const std::vector<float> in0_data(m * k, 1.0f);
-    ttnn::Tensor in0_t = Tensor::from_vector(
+    ttnn::Tensor input_tensor_0 = Tensor::from_vector(
         in0_data,
         ttnn::TensorSpec(
             ttnn::Shape({m, k}), tt::tt_metal::TensorLayout(dtype, tt::tt_metal::Layout::TILE, in0_memory_config)),
@@ -254,7 +212,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
         return value;
     });
 
-    ttnn::Tensor in1_t = Tensor::from_vector(
+    ttnn::Tensor input_tensor_1 = Tensor::from_vector(
         in1_data,
         ttnn::TensorSpec(
             ttnn::Shape({k, n}),
@@ -316,8 +274,8 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
     // Warmup iterations
     for (int iter = 0; iter < num_warmup_iterations; ++iter) {
         output_tensor = ttnn::operations::matmul::matmul(
-            in0_t,
-            in1_t,
+            input_tensor_0,
+            input_tensor_1,
             /*bias=*/std::nullopt,
             /*parameters=*/matmul_params);
         device->push_work([device]() mutable { Synchronize(device, std::nullopt, std::vector<SubDeviceId>()); });
@@ -334,8 +292,8 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
         auto tid = ttnn::operations::trace::begin_trace_capture(device, ttnn::DefaultQueueId);
         for (int iter = 0; iter < num_measurement_iterations; ++iter) {
             output_tensor = ttnn::operations::matmul::matmul(
-                in0_t,
-                in1_t,
+                input_tensor_0,
+                input_tensor_1,
                 /*bias=*/std::nullopt,
                 /*parameters=*/matmul_params);
             output_tensor.deallocate();
@@ -360,8 +318,8 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
             for (int iter = 0; iter < num_measurement_iterations; ++iter) {
                 auto start_time = std::chrono::high_resolution_clock::now();
                 output_tensor = ttnn::operations::matmul::matmul(
-                    in0_t,
-                    in1_t,
+                    input_tensor_0,
+                    input_tensor_1,
                     /*bias=*/std::nullopt,
                     /*parameters=*/matmul_params);
                 device->push_work(
@@ -412,22 +370,22 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
          << utilization_full_grid_percentage << "\n";
 
     // Deallocate input tensors
-    in0_t.deallocate();
-    in1_t.deallocate();
+    input_tensor_0.deallocate();
+    input_tensor_1.deallocate();
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    /*Prefix for the instantiated tests*/ MatmulTests_BFLOAT16,
-    /*Test suite*/ Matmul2DHostPerfTestFixture,
+    MatmulTests_BFLOAT16,
+    Matmul2DHostPerfTestFixture,
     ::testing::Combine(
-        // Matmul_Test_Configs to use
-        ::testing::ValuesIn(std::vector<Matmul_Test_Config>{
+        // MatmulTestConfigs to use
+        ::testing::ValuesIn(std::vector<MatmulTestConfig>{
             {DataType::BFLOAT16, MathFidelity::HiFi2, /*enable_tracing=*/false},
             {DataType::BFLOAT16, MathFidelity::HiFi2, /*enable_tracing=*/true},
             {DataType::BFLOAT16, MathFidelity::HiFi4, /*enable_tracing=*/false},
             {DataType::BFLOAT16, MathFidelity::HiFi4, /*enable_tracing=*/true}}),
-        // Matmul_Shapes to use
-        ::testing::ValuesIn(std::vector<Matmul_Shape>{
+        // MatmulShapes to use
+        ::testing::ValuesIn(std::vector<MatmulShape>{
             {/*m=*/512,
              /*k=*/512,
              /*n=*/512,
@@ -550,17 +508,17 @@ INSTANTIATE_TEST_SUITE_P(
              /*num_out_blocks_w=*/8}})));
 
 INSTANTIATE_TEST_SUITE_P(
-    /*Prefix for the instantiated tests*/ MatmulTests_BFLOAT8B,
-    /*Test suite*/ Matmul2DHostPerfTestFixture,
+    MatmulTests_BFLOAT8B,
+    Matmul2DHostPerfTestFixture,
     ::testing::Combine(
-        // Matmul_Test_Configs to use
-        ::testing::ValuesIn(std::vector<Matmul_Test_Config>{
+        // MatmulTestConfigs to use
+        ::testing::ValuesIn(std::vector<MatmulTestConfig>{
             {DataType::BFLOAT8_B, MathFidelity::HiFi2, /*enable_tracing=*/false},
             {DataType::BFLOAT8_B, MathFidelity::HiFi2, /*enable_tracing=*/true},
             {DataType::BFLOAT8_B, MathFidelity::LoFi, /*enable_tracing=*/false},
             {DataType::BFLOAT8_B, MathFidelity::LoFi, /*enable_tracing=*/true}}),
-        // Matmul_Shapes to use
-        ::testing::ValuesIn(std::vector<Matmul_Shape>{
+        // MatmulShapes to use
+        ::testing::ValuesIn(std::vector<MatmulShape>{
             {/*m=*/512,
              /*k=*/512,
              /*n=*/512,
@@ -683,15 +641,15 @@ INSTANTIATE_TEST_SUITE_P(
              /*num_out_blocks_w=*/8}})));
 
 INSTANTIATE_TEST_SUITE_P(
-    /*Prefix for the instantiated tests*/ MatmulTests_BFLOAT4B,
-    /*Test suite*/ Matmul2DHostPerfTestFixture,
+    MatmulTests_BFLOAT4B,
+    Matmul2DHostPerfTestFixture,
     ::testing::Combine(
-        // Matmul_Test_Configs to use
-        ::testing::ValuesIn(std::vector<Matmul_Test_Config>{
+        // MatmulTestConfigs to use
+        ::testing::ValuesIn(std::vector<MatmulTestConfig>{
             {DataType::BFLOAT4_B, MathFidelity::LoFi, /*enable_tracing=*/false},
             {DataType::BFLOAT4_B, MathFidelity::LoFi, /*enable_tracing=*/true}}),
-        // Matmul_Shapes to use
-        ::testing::ValuesIn(std::vector<Matmul_Shape>{
+        // MatmulShapes to use
+        ::testing::ValuesIn(std::vector<MatmulShape>{
             {/*m=*/512,
              /*k=*/512,
              /*n=*/512,
