@@ -60,32 +60,11 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+      - name: ⬇️  Setup Job
+        uses: ./.github/actions/setup-job
         with:
-          submodules: recursive
-          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
-
-      - name: ⬇️ Download Build
-        uses: actions/download-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: ${{ inputs.build-artifact-name }}
-          path: docker-job
-
-      - name: Extract files
-        run: tar -xvf ttm_any.tar
-
-      - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ inputs.wheel-artifact-name }}
-          path: docker-job
-
-      - name: Install Wheel
-        run: |
-          WHEEL_FILENAME=$(ls -1 *.whl)
-          pip3 install $WHEEL_FILENAME
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
       - name: Run unit regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}

@@ -1,0 +1,10 @@
+vim ./tg-quick.yaml
+vim ./tg-stress.yaml
+vim ./tt-metal-l2-nightly.yaml
+vim ./tg-unit-tests-impl.yaml
+vim ./ttnn-run-sweeps.yaml
+vim ./umd-unit-tests.yaml
+vim ./run-profiler-regression.yaml
+vim ./conda-post-commit.yaml
+vim ./ttnn-post-commit.yaml
+vim ./tt-train-post-commit.yaml
