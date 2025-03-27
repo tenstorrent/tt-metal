@@ -464,17 +464,6 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
     num_cores_x = device->compute_with_storage_grid_size().x;
     semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
 
-    // compute core data and create semaphore
-    auto core_id_to_noc_coords = [is_block_sharded, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
-        auto num_cores_x = device->compute_with_storage_grid_size().x;
-        auto core_coord = is_block_sharded ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id))
-                                           : CoreCoord(core_id % num_cores_x, core_id / num_cores_x);
-        return device->worker_core_from_logical_core(core_coord);
-    };
-    noc_00 = core_id_to_noc_coords(0);
-    num_cores_x = device->compute_with_storage_grid_size().x;
-    semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
-
     auto aligned_input_nstick_nbytes = out_stick_nbytes;
     log_debug(tt::LogOp, "out_stick_nbytes = {}", out_stick_nbytes);
     log_debug(tt::LogOp, "input_tensor.buffer()->alignment() = {}", input_tensor.buffer()->alignment());
