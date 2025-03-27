@@ -15,6 +15,8 @@ using namespace tt::test_utils;
 
 namespace unit_tests::dm {
 
+uint32_t runtime_host_id = 0;
+
 // Test config
 struct DmConfig {
     size_t total_num_tiles = 0;
@@ -93,6 +95,9 @@ bool run_dm(IDevice* device, const DmConfig& test_config) {
             .noc = NOC::RISCV_0_default,
             .compile_args = writer_compile_args});
 
+    // Assign unique id
+    program.set_runtime_id(runtime_host_id++);
+
     // Launch program and record outputs
     vector<uint32_t> packed_output;
     detail::WriteToBuffer(input_dram_buffer, packed_input);
@@ -135,7 +140,9 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleaved) {
 
     // Run
     for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+        for (unsigned int i = 0; i < 2; i++) {
+            EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+        }
     }
 }
 
