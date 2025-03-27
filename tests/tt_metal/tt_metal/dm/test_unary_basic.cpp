@@ -125,11 +125,13 @@ bool run_dm(IDevice* device, const DmConfig& test_config) {
 
 /* ========== Test case for varying transaction numbers and sizes ========== */
 TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPacketSizes) {
-    // TODO: Set page_size_bytes to minimum packet size (one flit) depending on ARCH
     // Parameters
     size_t max_transactions = 2;            // Bound for testing different number of transactions
     size_t max_transaction_size_pages = 2;  // Bound for testing different transaction sizes
-    size_t page_size_bytes = 16 * 16;       // Page size in bytes
+    size_t page_size_bytes = 32;            // Page size in bytes (=flit size): 32 bytes for WH, 64 for BH
+    if (arch_ == tt::ARCH::BLACKHOLE) {
+        page_size_bytes *= 2;
+    }
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
