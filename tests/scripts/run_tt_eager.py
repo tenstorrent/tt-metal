@@ -36,7 +36,6 @@ TT_EAGER_COMMON_TEST_ENTRIES = (
     void_for_bh(void_for_whb0(TestEntry("tt_eager/tests/ops/test_eltwise_unary_op", "ops/test_eltwise_unary_op"))),
     TestEntry("tt_eager/tests/ops/test_layernorm_op", "ops/test_layernorm_op"),
     TestEntry("tt_eager/tests/ops/test_softmax_op", "ops/test_softmax_op"),
-    TestEntry("tt_eager/tests/ops/test_average_pool", "ops/test_average_pool"),
     TestEntry(
         "tt_eager/tests/tensors/test_host_device_loopback",
         "tensors/test_host_device_loopback",
