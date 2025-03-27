@@ -59,6 +59,7 @@ def summarize_to_csv(
                     "Line Size",
                     "Num Links",
                     "Disable Interior Workers",
+                    "Unidirectional",
                     "Bandwidth (B/c)",
                     "Packets/Second",
                 ]
@@ -74,6 +75,7 @@ def summarize_to_csv(
                 line_size,
                 num_links,
                 disable_sends_for_interior_workers,
+                unidirectional,
                 bandwidth,
                 packets_per_second,
             ]
@@ -613,7 +615,9 @@ def print_bandwidth_summary():
     df = pd.read_csv(csv_path)
 
     # Sort by test name and packet size
-    df = df.sort_values(["Test Name", "Packet Size", "Line Size", "Num Links", "Disable Interior Workers"])
+    df = df.sort_values(
+        ["Test Name", "Packet Size", "Line Size", "Num Links", "Disable Interior Workers", "Unidirectional"]
+    )
 
     # Format table with raw values
     table = tabulate(
@@ -624,6 +628,7 @@ def print_bandwidth_summary():
             "Line Size",
             "Num Links",
             "Disable Interior Workers",
+            "Unidirectional",
             "Bandwidth (B/c)",
             "Packets/Second",
         ],

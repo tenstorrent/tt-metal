@@ -349,29 +349,6 @@ enum PacketLocalForwardType : uint8_t {
     PACKET_FORWARD_LOCAL_AND_REMOTE = 0x3
 };
 
-static constexpr uint32_t SWITCH_INTERVAL =
-#ifndef DEBUG_PRINT_ENABLED
-    get_compile_time_arg_val(0);
-#else
-    0;
-#endif
-
-static constexpr bool enable_first_level_ack = get_compile_time_arg_val(1);
-static constexpr bool fuse_receiver_flush_and_completion_ptr = get_compile_time_arg_val(2);
-static constexpr bool enable_ring_support = get_compile_time_arg_val(3);
-static constexpr bool dateline_connection = get_compile_time_arg_val(4);
-
-// TODO: Pipe from host
-static constexpr size_t NUM_USED_SENDER_CHANNELS =
-    enable_ring_support ? NUM_RING_SENDER_CHANNELS : NUM_LINE_SENDER_CHANNELS;
-static constexpr size_t NUM_USED_RECEIVER_CHANNELS =
-    enable_ring_support ? NUM_RING_RECEIVER_CHANNELS : NUM_LINE_RECEIVER_CHANNELS;
-static constexpr size_t VC0_RECEIVER_CHANNEL = dateline_connection ? 1 : 0;
-// On a dateline connection, we would never forward through the dateline on VC1
-
-// Doesn't REALLY matter but for consistency I picked the next available ID
-static constexpr size_t worker_info_offset_past_connection_semaphore = 32;
-
 // tracks if the main loop made any progress. If many loop iterations were completed without
 // did_something=true (i.e. no progress was made), then we allow for context switch in case
 // the link is down
@@ -1027,8 +1004,6 @@ void kernel_main() {
     //
     // COMMON CT ARGS (not specific to sender or receiver)
     //
-    static constexpr bool is_handshake_sender = get_compile_time_arg_val(5) != 0;
-    static constexpr size_t handshake_addr = get_compile_time_arg_val(6);
     *reinterpret_cast<volatile uint32_t*>(handshake_addr) = 0;
     auto eth_transaction_ack_word_addr = handshake_addr + sizeof(eth_channel_sync_t);
 
@@ -1049,27 +1024,6 @@ void kernel_main() {
     } else {
         erisc::datamover::handshake::receiver_side_start(handshake_addr);
     }
-
-    // the size of one of the buffers within a sender channel
-    // For example if `channel_buffer_size` = 4k, with `SENDER_NUM_BUFFERS` = 2
-    // then the total amount of buffering for that
-    static constexpr size_t channel_buffer_size = get_compile_time_arg_val(7);
-
-    static constexpr size_t SENDER_NUM_BUFFERS = get_compile_time_arg_val(8);
-    static constexpr size_t RECEIVER_NUM_BUFFERS = get_compile_time_arg_val(9);
-    static constexpr size_t local_sender_0_channel_address = get_compile_time_arg_val(10);
-    static constexpr size_t local_sender_channel_0_connection_info_addr = get_compile_time_arg_val(11);
-    static constexpr size_t local_sender_1_channel_address = get_compile_time_arg_val(12);
-    static constexpr size_t local_sender_channel_1_connection_info_addr = get_compile_time_arg_val(13);
-    static constexpr size_t local_sender_2_channel_address = get_compile_time_arg_val(14);
-    static constexpr size_t local_sender_channel_2_connection_info_addr = get_compile_time_arg_val(15);
-    static constexpr size_t local_receiver_0_channel_buffer_address = get_compile_time_arg_val(16);
-    static constexpr size_t remote_receiver_0_channel_buffer_address = get_compile_time_arg_val(17);
-    static constexpr size_t local_receiver_1_channel_buffer_address = get_compile_time_arg_val(18);
-    static constexpr size_t remote_receiver_1_channel_buffer_address = get_compile_time_arg_val(19);
-    static constexpr size_t remote_sender_0_channel_address = get_compile_time_arg_val(20);
-    static constexpr size_t remote_sender_1_channel_address = get_compile_time_arg_val(21);
-    static constexpr size_t remote_sender_2_channel_address = get_compile_time_arg_val(22);
 
     DPRINT << "SENDER_NUM_BUFFERS: " << (uint32_t)SENDER_NUM_BUFFERS << "\n";
     DPRINT << "RECEIVER_NUM_BUFFERS: " << (uint32_t)RECEIVER_NUM_BUFFERS << "\n";
@@ -1094,44 +1048,15 @@ void kernel_main() {
 
     // TODO: CONVERT TO SEMAPHORE
     volatile auto termination_signal_ptr =
-        reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(get_compile_time_arg_val(23));
+        reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_addr);
 #ifdef WAIT_FOR_HOST_SIGNAL
-    volatile auto edm_local_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_compile_time_arg_val(24));
+    volatile auto edm_local_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(edm_local_sync_ptr_addr);
 #endif
-    volatile auto edm_status_ptr =
-        reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::EDMStatus*>(get_compile_time_arg_val(25));
+    volatile auto edm_status_ptr = reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::EDMStatus*>(edm_status_ptr_addr);
 
     // In persistent mode, we must rely on static addresses for our local semaphores that are locally
     // initialized, rather than metal device APIs. This way different subdevice programs can reliably
     // resolve the semaphore addresses on the EDM core
-    static constexpr bool persistent_mode = get_compile_time_arg_val(26) != 0;
-
-    // Per-channel counters
-    static constexpr bool enable_fabric_counters = get_compile_time_arg_val(27) != 0;
-    static constexpr size_t receiver_channel_0_counters_address = get_compile_time_arg_val(28);
-    static constexpr size_t receiver_channel_1_counters_address = get_compile_time_arg_val(29);
-    static constexpr size_t sender_channel_0_counters_address = get_compile_time_arg_val(30);
-    static constexpr size_t sender_channel_1_counters_address = get_compile_time_arg_val(31);
-    static constexpr size_t sender_channel_2_counters_address = get_compile_time_arg_val(32);
-
-    static constexpr bool enable_packet_header_recording = get_compile_time_arg_val(33) != 0;
-    static constexpr size_t receiver_0_completed_packet_header_cb_address = get_compile_time_arg_val(34);
-    static constexpr size_t receiver_0_completed_packet_header_cb_size_headers = get_compile_time_arg_val(35);
-    static constexpr size_t receiver_1_completed_packet_header_cb_address = get_compile_time_arg_val(36);
-    static constexpr size_t receiver_1_completed_packet_header_cb_size_headers = get_compile_time_arg_val(37);
-    static constexpr size_t sender_0_completed_packet_header_cb_address = get_compile_time_arg_val(38);
-    static constexpr size_t sender_0_completed_packet_header_cb_size_headers = get_compile_time_arg_val(39);
-    static constexpr size_t sender_1_completed_packet_header_cb_address = get_compile_time_arg_val(40);
-    static constexpr size_t sender_1_completed_packet_header_cb_size_headers = get_compile_time_arg_val(41);
-    static constexpr size_t sender_2_completed_packet_header_cb_address = get_compile_time_arg_val(42);
-    static constexpr size_t sender_2_completed_packet_header_cb_size_headers = get_compile_time_arg_val(43);
-
-#ifdef WAIT_FOR_HOST_SIGNAL
-    static constexpr bool is_local_handshake_master = get_compile_time_arg_val(44);
-    static constexpr uint32_t local_handshake_master_eth_chan = get_compile_time_arg_val(45);
-    static constexpr uint32_t num_local_edms = get_compile_time_arg_val(46);
-    static constexpr uint32_t edm_channels_mask = get_compile_time_arg_val(47);
-#endif
 
     std::array<PacketHeaderRecorder, NUM_SENDER_CHANNELS> sender_channel_packet_recorders{
         PacketHeaderRecorder(
