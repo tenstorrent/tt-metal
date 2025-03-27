@@ -21,7 +21,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ],
 )
 @pytest.mark.parametrize("input_in_l1", [True, False])
-def test_interleaved_to_sharded_hash(device, first_dtype, second_dtype, input_in_l1):
+@pytest.mark.parametrize("keep_l1_aligned", [True, False])
+def test_interleaved_to_sharded_hash(device, first_dtype, second_dtype, input_in_l1, keep_l1_aligned):
     ttnn.enable_program_cache(device)
 
     # Sample tensor size and shard config
@@ -53,8 +54,12 @@ def test_interleaved_to_sharded_hash(device, first_dtype, second_dtype, input_in
 
     # Do interleaved to sharded op on device several times to load the program from cache
     for iter in range(0, 5):
-        output_tensor = ttnn.interleaved_to_sharded(input_tensor_device, sharded_mem_config, first_dtype)
+        output_tensor = ttnn.interleaved_to_sharded(
+            input_tensor_device, sharded_mem_config, first_dtype, keep_l1_aligned=keep_l1_aligned
+        )
         pcc_passed_a, pcc_message_a = assert_with_pcc(input_tensor_torch, ttnn.to_torch(output_tensor), pcc=0.9999)
 
-        output_tensor = ttnn.interleaved_to_sharded(input_tensor_device, sharded_mem_config, second_dtype)
+        output_tensor = ttnn.interleaved_to_sharded(
+            input_tensor_device, sharded_mem_config, second_dtype, keep_l1_aligned=keep_l1_aligned
+        )
         pcc_passed_b, pcc_message_b = assert_with_pcc(input_tensor_torch, ttnn.to_torch(output_tensor), pcc=0.9999)
