@@ -43,6 +43,11 @@ Buffer* DeviceStorage::get_buffer() const {
     return this->buffer.get();
 }
 
+std::shared_ptr<distributed::MeshBuffer> DeviceStorage::get_mesh_buffer() const {
+    TT_FATAL(mesh_buffer != nullptr, "Mesh buffer is not allocated");
+    return mesh_buffer;
+}
+
 bool DeviceStorage::is_allocated() const {
     if (this->mesh_buffer.get() != nullptr) {
         return this->mesh_buffer->is_allocated();
