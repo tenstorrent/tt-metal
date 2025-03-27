@@ -409,19 +409,14 @@ If the tool runs without error, your system has been configured correctly.</p>
 <h3>Option 2: From Docker Release Image<a class="headerlink" href="#option-2-from-docker-release-image" title="Permalink to this heading"></a>
 </h3>
 <p>Installing from Docker Release Image is the quickest way to access our APIs and to start running AI models.</p>
-<p>Download the latest Docker release from our <a class="reference external" href="https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&amp;amp;tab=packages&amp;amp;q=tt-metalium-ubuntu-20.04-amd64-release">Docker registry</a> page</p>
+<p>Download the latest Docker release from our <a class="reference external" href="https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&amp;amp;tab=packages&amp;amp;q=tt-metalium-ubuntu-22.04-amd64-release">Docker registry</a> page</p>
 <div class="highlight-sh notranslate">
-<div class="highlight"><pre><span></span>docker<span class="w"> </span>pull<span class="w"> </span>ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release:latest-rc
-docker<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span>/dev/hugepages-1G:/dev/hugepages-1G<span class="w"> </span>--device<span class="w"> </span>/dev/tenstorrent<span class="w"> </span>ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release:latest-rc<span class="w"> </span>bash
-</pre></div>
-</div>
-<p>When inside of the container,</p>
-<div class="highlight-sh notranslate">
-<div class="highlight"><pre><span></span>python3<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import ttnn"</span>
+<div class="highlight"><pre><span></span>docker<span class="w"> </span>pull<span class="w"> </span>ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-amd64-release:latest-rc
+docker<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span>/dev/hugepages-1G:/dev/hugepages-1G<span class="w"> </span>--device<span class="w"> </span>/dev/tenstorrent<span class="w"> </span>ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-amd64-release:latest-rc<span class="w"> </span>bash
 </pre></div>
 </div>
 <ul class="simple">
-<li><p>For more information on the Docker Release Images, visit our <a class="reference external" href="https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&amp;amp;tab=packages&amp;amp;q=tt-metalium-ubuntu-20.04-amd64-release">Docker registry page</a>.</p></li>
+<li><p>For more information on the Docker Release Images, visit our <a class="reference external" href="https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&amp;amp;tab=packages&amp;amp;q=tt-metalium-ubuntu-22.04-amd64-release">Docker registry page</a>.</p></li>
 <li><p>Continue to <a class="reference internal" href="#you-are-all-set"><span class="std std-ref">You Are All Set!</span></a></p></li>
 </ul>
 </section>
