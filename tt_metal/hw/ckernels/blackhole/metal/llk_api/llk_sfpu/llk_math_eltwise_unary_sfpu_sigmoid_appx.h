@@ -14,13 +14,12 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_sigmoid_appx_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::sigmoid_appx, APPROXIMATE>(sfpu::sigmoid_appx_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::sigmoid_appx, APPROXIMATE>(sfpu::sigmoid_appx_init);
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_sigmoid_appx(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_sigmoid_appx<APPROXIMATE>, dst_index, vector_mode);
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(ckernel::sfpu::calculate_sigmoid_appx, dst_index, vector_mode);
 }
 
 }  // namespace ckernel
