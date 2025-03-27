@@ -36,7 +36,7 @@ SubDeviceManager::SubDeviceManager(
     tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device) :
     id_(next_sub_device_manager_id_++),
     sub_devices_(sub_devices.begin(), sub_devices.end()),
-    local_l1_size_(tt::align(local_l1_size, hal.get_alignment(HalMemType::L1))),
+    local_l1_size_(tt::align(local_l1_size, hal_ref.get_alignment(HalMemType::L1))),
     device_(device) {
     TT_ASSERT(device != nullptr, "Device must not be null");
     this->validate_sub_devices();
@@ -87,9 +87,7 @@ const SubDevice& SubDeviceManager::sub_device(SubDeviceId sub_device_id) const {
     return sub_devices_[sub_device_index];
 }
 
-const vector_memcpy_aligned<uint32_t>& SubDeviceManager::noc_mcast_unicast_data() const {
-    return noc_mcast_unicast_data_;
-}
+const vector_aligned<uint32_t>& SubDeviceManager::noc_mcast_unicast_data() const { return noc_mcast_unicast_data_; }
 
 uint8_t SubDeviceManager::num_noc_mcast_txns(SubDeviceId sub_device_id) const {
     auto sub_device_index = this->get_sub_device_index(sub_device_id);

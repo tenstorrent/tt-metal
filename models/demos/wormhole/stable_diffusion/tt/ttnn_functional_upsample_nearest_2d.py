@@ -2,12 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import ttnn
 
 import math
-
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import reshard_to
 
 
 class upsample_nearest2d:

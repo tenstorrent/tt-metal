@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <math.h>
+
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/util.hpp>
 #include "copy_device_operation.hpp"

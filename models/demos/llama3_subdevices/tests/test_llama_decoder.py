@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
-import time
 import pytest
 from loguru import logger
 import os

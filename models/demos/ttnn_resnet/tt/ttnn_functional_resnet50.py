@@ -13,7 +13,6 @@ from models.utility_functions import (
 )
 from typing import List
 from loguru import logger
-from tests.ttnn.utils_for_testing import assert_with_pcc
 
 hardcoded_matmul_config_linear = {
     8: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(

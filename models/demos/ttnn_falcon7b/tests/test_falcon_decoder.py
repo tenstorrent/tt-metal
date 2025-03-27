@@ -20,8 +20,6 @@ from models.demos.ttnn_falcon7b.tt.common import (
     strip_state_dict_prefix,
 )
 
-from loguru import logger
-
 
 PRETRAINED_MODEL_NAME = f"tiiuae/falcon-7b-instruct"
 

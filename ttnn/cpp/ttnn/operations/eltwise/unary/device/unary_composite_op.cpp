@@ -22,7 +22,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 namespace ttnn::operations::unary {
 
@@ -67,7 +67,7 @@ Tensor _acosh(const Tensor& input_a, const std::optional<MemoryConfig>& output_m
         // input > 1, output is acosh(input)
         Tensor nan_res = ttnn::multiply(
             ttnn::le(input_a, t_one, std::nullopt, output_mem_config),
-            tt::tt_metal::experimental::hal::get_nan(),
+            tt::tt_metal::hal::get_nan(),
             std::nullopt,
             output_mem_config);
         t_result = ttnn::multiply(
@@ -774,10 +774,7 @@ Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig
         ttnn::multiply(logit_input, ttnn::reciprocal(linput_m1, output_mem_config), std::nullopt, output_mem_config);
     linput_m1.deallocate();
     Tensor t_inf = ttnn::multiply(
-        ttnn::sign(input_a, output_mem_config),
-        tt::tt_metal::experimental::hal::get_inf(),
-        std::nullopt,
-        output_mem_config);
+        ttnn::sign(input_a, output_mem_config), tt::tt_metal::hal::get_inf(), std::nullopt, output_mem_config);
     Tensor logit_result;
     if (eps == 0.0 || eps == 1.0) {
         logit_result = ttnn::where(
@@ -785,7 +782,7 @@ Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig
             t_inf,
             ttnn::where(
                 ttnn::eq(logit_input, 1.0, std::nullopt, output_mem_config),
-                tt::tt_metal::experimental::hal::get_inf(),
+                tt::tt_metal::hal::get_inf(),
                 ttnn::log(log_input, output_mem_config)));
     } else {
         logit_result = ttnn::where(
@@ -793,7 +790,7 @@ Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig
             t_inf,
             ttnn::where(
                 ttnn::ltz(log_input, output_mem_config),
-                tt::tt_metal::experimental::hal::get_nan(),
+                tt::tt_metal::hal::get_nan(),
                 ttnn::log(log_input, output_mem_config)));
     }
     return logit_result;

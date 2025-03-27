@@ -5,10 +5,7 @@
 import os
 import ttnn
 from pathlib import Path
-from models.utility_functions import is_wormhole_b0
 from loguru import logger
-import tarfile
-import urllib.request
 
 
 class TtModelArgs:

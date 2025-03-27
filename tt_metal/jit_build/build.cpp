@@ -18,7 +18,7 @@
 #include <kernel.hpp>
 #include "tt_metal/llrt/tt_elffile.hpp"
 #include "env_lib.hpp"
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 
 namespace fs = std::filesystem;
 
@@ -55,6 +55,12 @@ static void build_failure(const string& target_name, const string& op, const str
     } else {
         TT_THROW("Failed to open {} failure log file {}", op, log_file);
     }
+}
+
+static void write_successful_jit_build_marker(const JitBuildState& build, const JitBuildSettings* settings) {
+    const string out_dir = (settings == nullptr) ? build.get_out_path() + "/"
+                                                 : build.get_out_path() + settings->get_full_kernel_name() + "/";
+    std::ofstream file(out_dir + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
 }
 
 static void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path) {
@@ -180,9 +186,9 @@ void JitBuildEnv::init(
     }
 
     if (tt::llrt::RunTimeOptions::get_instance().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
-        this->defines_ += "-DDEBUG_PRINT_ENABLED -DL1_UNRESERVED_BASE=" +
-                          to_string(hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED)) +
-                          " ";
+        this->defines_ +=
+            "-DDEBUG_PRINT_ENABLED -DL1_UNRESERVED_BASE=" +
+            to_string(hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED)) + " ";
     }
 
     if (tt::llrt::RunTimeOptions::get_instance().get_record_noc_transfers()) {
@@ -405,7 +411,6 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
 
     // clang-format off
     this->includes_ = env_.includes_ +
-        "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/inc " +
         "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/common " +
         "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io " +
         "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api " +
@@ -819,6 +824,7 @@ void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
     // ZoneScoped;
 
     build.build(settings);
+    write_successful_jit_build_marker(build, settings);
 }
 
 void jit_build_set(const JitBuildStateSet& build_set, const JitBuildSettings* settings) {
@@ -831,6 +837,10 @@ void jit_build_set(const JitBuildStateSet& build_set, const JitBuildSettings* se
     }
 
     sync_events(events);
+    for (size_t i = 0; i < build_set.size(); ++i) {
+        auto& build = build_set[i];
+        write_successful_jit_build_marker(*build, settings);
+    }
 }
 
 void jit_build_subset(const JitBuildStateSubset& build_subset, const JitBuildSettings* settings) {
@@ -842,6 +852,10 @@ void jit_build_subset(const JitBuildStateSubset& build_subset, const JitBuildSet
     }
 
     sync_events(events);
+    for (size_t i = 0; i < build_subset.size; ++i) {
+        auto& build = build_subset.build_ptr[i];
+        write_successful_jit_build_marker(*build, settings);
+    }
 }
 
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events) {
