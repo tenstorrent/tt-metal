@@ -42,7 +42,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: ./.github/actions/setup-job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
