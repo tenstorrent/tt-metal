@@ -937,10 +937,11 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
                         flat_data[1][2] += 3;
                     }
                 }
-            }
-            else {
+            } else {
                 int32_t rev_i_end = data.size();
-                for (uint32_t i = 0; i < data.size(); ++i) {  // normal forward direction local config in region where input / output shards don't overlap (for in place operation)
+                for (uint32_t i = 0; i < data.size();
+                     ++i) {  // normal forward direction local config in region where input / output shards don't
+                             // overlap (for in place operation)
                     auto [src_start, dst_start, length] = data[i];
                     if (dst_start > src_start + in_out_shard_size_delta) {
                         rev_i_end = i;
@@ -951,7 +952,9 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
                     flat_data[0][idx1++] = length;
                     flat_data[0][2] += 3;
                 }
-                for (int32_t i = data.size() - 1; i >= rev_i_end; --i) { // reverse direction local config in region where input / output shards overlap (for in place operation)
+                for (int32_t i = data.size() - 1; i >= rev_i_end;
+                     --i) {  // reverse direction local config in region where input / output shards overlap (for in
+                             // place operation)
                     auto [src_start, dst_start, length] = data[i];
                     flat_data[0][idx1++] = src_start;
                     flat_data[0][idx1++] = dst_start;
@@ -1153,21 +1156,11 @@ uint32_t get_repeat_factor_for_replicating_nhw_config_across_grid(const Parallel
             uint32_t ncores_y = p_config.grid.ranges().begin()->end_coord.y + 1;
             uint32_t ncores_x = p_config.grid.ranges().begin()->end_coord.x + 1;
             if (p_config.shard_orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR) {
-                TT_ASSERT(
-                    config.size() == ncores_y,
-                    "Invalid config size {} (!= {}) for BLOCK_SHARDED ROW_MAJOR",
-                    config.size(),
-                    ncores_y);
                 return ncores_x;
             } else if (p_config.shard_orientation == tt::tt_metal::ShardOrientation::COL_MAJOR) {
-                TT_ASSERT(
-                    config.size() == ncores_x,
-                    "Invalid config size {} (!= {}) for BLOCK_SHARDED COL_MAJOR",
-                    config.size(),
-                    ncores_x);
                 return ncores_y;
             } else {
-                TT_ASSERT(false, "Unsupported shard orientation");
+                TT_FATAL(false, "Unsupported shard orientation");
             }
         }
         default: TT_FATAL(false, "Unsupported shard scheme");
