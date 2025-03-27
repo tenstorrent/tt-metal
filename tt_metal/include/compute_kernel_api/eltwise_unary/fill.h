@@ -46,7 +46,7 @@ ALWI void fill_tile(uint32_t idst, float param0) { MATH((llk_math_eltwise_unary_
  */
 // clang-format on
 ALWI void fill_tile_bitcast(uint32_t idst, uint32_t param0) {
-    MATH((llk_math_eltwise_unary_sfpu_fill<APPROX>(idst, param0)));
+    MATH((llk_math_eltwise_unary_sfpu_fill_bitcast<APPROX>(idst, param0)));
 }
 /**
  * Please refer to documentation for any_init.
