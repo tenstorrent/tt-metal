@@ -11,14 +11,13 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/util.hpp>
 
-#include "tt-metalium/hal_exp.hpp"
+#include "tt-metalium/hal.hpp"
 
 namespace ttnn {
 namespace operations {
 
 using namespace tt;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 using namespace constants;
 
 std::tuple<CoreRangeSet, CoreRangeSet, CoreRangeSet> add_core_offset(
