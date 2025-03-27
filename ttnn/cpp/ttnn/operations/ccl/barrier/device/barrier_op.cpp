@@ -60,6 +60,7 @@ tt::tt_metal::operation::ProgramWithCallbacks Barrier::create_program_at(
         /*is_starting_core*/ (device_index == 0),
         num_devices,
         device_index,
+        target_device->id(),
         receiver_device_id,
         sender_device_id,
         this->topology);
