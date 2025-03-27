@@ -169,7 +169,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             clamped_block_size_height / TILE_HEIGHT  // number of tiles in height dimension that make up a block
 
         };
-        tt::log_info("CT args: {} - RT args: {}", compute_ct_args, number_of_blocks_per_core);
         KernelHandle untilize_kernel_id =
             CreateKernel(program, compute_kernel_name, all_cores, ComputeConfig{.compile_args = compute_ct_args});
 
