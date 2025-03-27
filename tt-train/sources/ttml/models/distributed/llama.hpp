@@ -7,6 +7,7 @@
 #include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
 #include "models/common/transformer_common.hpp"
+#include "models/llama.hpp"
 #include "modules/llama_block.hpp"
 #include "ops/rope_op.hpp"
 #include "yaml-cpp/yaml.h"
@@ -14,17 +15,7 @@
 namespace ttml::models::distributed::llama {
 
 using RunnerType = common::transformer::RunnerType;
-
-struct LlamaConfig {
-    uint32_t num_heads = 6U;
-    uint32_t num_groups = 3U;
-    uint32_t embedding_dim = 384U;  // embedding dimension, must be divisible by num_heads
-    float dropout_prob = 0.0F;
-    uint32_t num_blocks = 6U;
-    uint32_t vocab_size = 256U;
-    uint32_t max_sequence_length = 256U;
-    RunnerType runner_type = RunnerType::Default;
-};
+using models::llama::LlamaConfig;
 
 class DistributedLlama : public ttml::autograd::ModuleBase {
 private:
@@ -41,8 +32,6 @@ public:
     ttml::autograd::TensorPtr operator()(const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask);
 };
 
-[[nodiscard]] LlamaConfig read_config(const YAML::Node& config);
-[[nodiscard]] YAML::Node write_config(const LlamaConfig& llama_config);
 [[nodiscard]] std::shared_ptr<DistributedLlama> create(const LlamaConfig& config);
 [[nodiscard]] std::shared_ptr<DistributedLlama> create(const YAML::Node& config);
 

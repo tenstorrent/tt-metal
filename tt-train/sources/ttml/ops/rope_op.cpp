@@ -11,6 +11,7 @@
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
+#include "core/distributed_mapping.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/ttnn_all_includes.hpp"
 #include "core/xtensor_utils.hpp"
@@ -129,7 +130,8 @@ autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbedding
     return out;
 }
 
-std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(uint32_t head_dim, uint32_t sequence_length, float theta = 10000.0F) {
+std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(
+    uint32_t head_dim, uint32_t sequence_length, float theta = 10000.0F, bool is_distributed = false) {
     int d = head_dim;
     // compute freqs: 1.0 / (theta ** (2 * (i-1) / head_dim)) for i in [1, head_dim/2]
     xt::xarray<uint32_t> expt_data = xt::arange(0, d) / 2;
@@ -155,7 +157,14 @@ std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(uint32_t head_dim, uint32_t sequ
     xt::xarray<float> cos_freqs = xt::cos(scaled_freqs);
 
     auto* device = &autograd::ctx().get_device();
-    return {core::from_xtensor(sin_freqs, device), core::from_xtensor(cos_freqs, device)};
+    if (!is_distributed) {
+        return {core::from_xtensor(sin_freqs, device), core::from_xtensor(cos_freqs, device)};
+    }
+
+    core::XTensorToMeshVariant<float> shard_composer = core::ShardXTensorToMesh<float>(device->shape(), 3);
+    return {
+        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(sin_freqs, device, shard_composer),
+        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(cos_freqs, device, shard_composer)};
 }
 
 ttnn::Tensor gen_trans_mat() {
@@ -171,7 +180,7 @@ ttnn::Tensor gen_trans_mat() {
     return core::from_xtensor(trans_mat, device);
 }
 
-RotaryEmbeddingParams build_rope_params(uint32_t sequence_length, uint32_t head_dim, float theta) {
+RotaryEmbeddingParams build_rope_params(uint32_t sequence_length, uint32_t head_dim, float theta, bool is_distributed) {
     if (head_dim % 32U != 0U) {
         throw std::invalid_argument(fmt::format("RoPE head_dim must be divisible by 32, but is {}", head_dim));
     }
@@ -182,7 +191,7 @@ RotaryEmbeddingParams build_rope_params(uint32_t sequence_length, uint32_t head_
     if (head_dim == 0U) {
         throw std::invalid_argument("RoPE head_dim must be non-zero.");
     }
-    auto [sin_freqs, cos_freqs] = gen_freqs(head_dim, sequence_length, theta);
+    auto [sin_freqs, cos_freqs] = gen_freqs(head_dim, sequence_length, theta, is_distributed);
     auto trans_mat = gen_trans_mat();
 
     return {

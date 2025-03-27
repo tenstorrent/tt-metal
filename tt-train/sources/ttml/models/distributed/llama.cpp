@@ -5,6 +5,8 @@
 #include "llama.hpp"
 
 #include "autograd/tensor.hpp"
+#include "core/distributed_mapping.hpp"
+#include "core/tt_tensor_utils.hpp"
 #include "modules/distributed/linear.hpp"
 #include "modules/distributed/llama_block.hpp"
 #include "modules/embedding_module.hpp"
@@ -13,6 +15,29 @@
 #include "ops/unary_ops.hpp"
 
 namespace ttml::models::distributed::llama {
+
+namespace {
+
+void weights_initialization(DistributedLlama& model) {
+    auto params = model.parameters();
+    for (auto& [name, tensor_ptr] : params) {
+        const auto& tensor = tensor_ptr->get_value();
+        if (name.find("weight") != std::string::npos) {
+            auto tensor_shape = tensor.get_logical_shape();
+            auto* device = &autograd::ctx().get_device();
+            auto num_devices = static_cast<uint32_t>(device->num_devices());
+            tensor_shape[0] *= num_devices;
+            core::XTensorToMeshVariant<float> shard_composer = core::ShardXTensorToMesh<float>(device->shape(), 0);
+            auto weight_xtensor = init::normal_init(tensor_shape, {0.F, 0.02F});
+            tensor_ptr->set_value(
+                core::from_xtensor<float, ttnn::DataType::BFLOAT16>(weight_xtensor, device, shard_composer));
+        } else if (name.find("bias") != std::string::npos) {
+            init::constant_init(tensor_ptr, tensor.get_logical_shape(), 0.F);
+        }
+    }
+}
+
+}  // namespace
 
 DistributedLlama::DistributedLlama(const LlamaConfig& config) {
     uint32_t vocab_size = config.vocab_size;
@@ -50,7 +75,8 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
     }
     tok_emb = std::make_shared<ttml::modules::Embedding>(vocab_size_divisible_by_32, embedding_dim);
 
-    m_rope_params = ops::build_rope_params(max_sequence_length, embedding_dim / num_heads);
+    m_rope_params = ops::build_rope_params(
+        max_sequence_length, embedding_dim / num_heads, /* theta */ 10000.F, /* is_distributed */ true);
     blocks.reserve(num_blocks);
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         blocks.push_back(std::make_shared<modules::distributed::DistributedLlamaBlock>(
@@ -68,7 +94,7 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
     register_module(ln_fc, "ln_fc");
     register_module(fc, "fc");
 
-    common::transformer::initialize_weights_gpt2(*this);
+    weights_initialization(*this);
 }
 
 autograd::TensorPtr DistributedLlama::operator()(
@@ -90,37 +116,11 @@ autograd::TensorPtr DistributedLlama::operator()(
     return log_softmax;
 }
 
-LlamaConfig read_config(const YAML::Node& config) {
-    LlamaConfig llama_config;
-    llama_config.num_heads = config["num_heads"].as<uint32_t>();
-    llama_config.num_groups = config["num_groups"].as<uint32_t>();
-    llama_config.embedding_dim = config["embedding_dim"].as<uint32_t>();
-    llama_config.dropout_prob = config["dropout_prob"].as<float>();
-    llama_config.num_blocks = config["num_blocks"].as<uint32_t>();
-    llama_config.vocab_size = config["vocab_size"].as<uint32_t>();
-    llama_config.max_sequence_length = config["max_sequence_length"].as<uint32_t>();
-    llama_config.runner_type = common::transformer::read_runner_type(config);
-
-    return llama_config;
-}
-
-YAML::Node write_config(const LlamaConfig& llama_config) {
-    YAML::Node config;
-    config["num_heads"] = llama_config.num_heads;
-    config["num_groups"] = llama_config.num_groups;
-    config["embedding_dim"] = llama_config.embedding_dim;
-    config["dropout_prob"] = llama_config.dropout_prob;
-    config["num_blocks"] = llama_config.num_blocks;
-    config["vocab_size"] = llama_config.vocab_size;
-    config["max_sequence_length"] = llama_config.max_sequence_length;
-    return config;
-}
-
 std::shared_ptr<DistributedLlama> create(const LlamaConfig& config) {
     return std::make_shared<DistributedLlama>(config);
 }
 std::shared_ptr<DistributedLlama> create(const YAML::Node& config) {
-    LlamaConfig llama_config = read_config(config);
+    LlamaConfig llama_config = models::llama::read_config(config);
     return std::make_shared<DistributedLlama>(llama_config);
 }
 

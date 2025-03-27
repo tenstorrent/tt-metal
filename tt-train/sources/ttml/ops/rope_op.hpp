@@ -21,7 +21,8 @@ struct RotaryEmbeddingParams {
 
 autograd::TensorPtr rope(const autograd::TensorPtr& input, const RotaryEmbeddingParams& rope_params);
 
-RotaryEmbeddingParams build_rope_params(uint32_t sequence_length, uint32_t head_dim, float theta = 10000.0F);
+RotaryEmbeddingParams build_rope_params(
+    uint32_t sequence_length, uint32_t head_dim, float theta = 10000.0F, bool is_distributed = false);
 // Throws an exception if the input is bad, parameters are bad, or the two are
 // incompatible with one another.
 void validate_rope_input_and_params(const autograd::TensorPtr& input, const RotaryEmbeddingParams& rope_params);
