@@ -17,8 +17,10 @@
 #include "datasets/dataloader.hpp"
 #include "datasets/in_memory_token_dataset.hpp"
 #include "datasets/utils.hpp"
+#include "models/common/transformer_common.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/gpt2.hpp"
+#include "models/llama.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
@@ -39,25 +41,23 @@ void signal_handler(int signum) {
     exit(signum);
 }
 
-using Model = std::variant<
-    std::shared_ptr<ttml::models::gpt2::Transformer>,
-    std::shared_ptr<ttml::models::distributed::gpt2::DistributedTransformer>>;
+using Model = std::shared_ptr<ttml::autograd::ModuleBase>;
 
 void model_to_eval(Model &model) {
-    std::visit([](auto &model) { model->eval(); }, model);
+    model->eval();
 }
 
 void model_to_train(Model &model) {
-    std::visit([](auto &model) { model->train(); }, model);
+    model->train();
 }
 
 ttml::autograd::TensorPtr run_model(
     Model &model, const ttml::autograd::TensorPtr &data, const ttml::autograd::TensorPtr &mask) {
-    return std::visit([&data, &mask](auto &model) { return (*model)(data, mask); }, model);
+    return (*model)(data, mask);
 }
 
 ttml::serialization::NamedParameters get_model_parameters(Model &model) {
-    return std::visit([](auto &model) { return model->parameters(); }, model);
+    return model->parameters();
 }
 
 uint64_t get_number_of_parameters(Model &model, bool enable_tp) {
@@ -364,6 +364,7 @@ EvalConfig parse_eval_config(const YAML::Node &yaml_config) {
 
 struct TrainingConfig {
     std::string project_name;
+    std::string model_type;  // one of "gpt2", "llama"
     uint32_t seed = 5489U;
     uint32_t model_save_interval = 500;
     uint32_t batch_size = 64;
@@ -383,13 +384,14 @@ struct TrainingConfig {
     std::string tokenizer_path = std::string(DATA_FOLDER) + gpt2_tokenizer_file_name;
     bool use_clip_grad_norm = false;
     float clip_grad_norm_max_norm = 1.0F;
-    ttml::models::gpt2::TransformerConfig transformer_config;
+    std::variant<ttml::models::gpt2::TransformerConfig, ttml::models::llama::LlamaConfig> transformer_config;
 };
 
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
     TrainingConfig config;
     auto training_config = yaml_config["training_config"];
     config.project_name = training_config["project_name"].as<std::string>("tt_train_nano_gpt");
+    config.model_type = training_config["model_type"].as<std::string>();
     config.seed = training_config["seed"].as<uint32_t>();
     config.model_save_interval = training_config["model_save_interval"].as<uint32_t>();
     config.batch_size = training_config["batch_size"].as<uint32_t>();
@@ -410,7 +412,13 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
 
-    config.transformer_config = ttml::models::gpt2::read_config(training_config["transformer_config"]);
+    if (config.model_type == "gpt2") {
+        config.transformer_config = ttml::models::gpt2::read_config(training_config["transformer_config"]);
+    } else if (config.model_type == "llama") {
+        config.transformer_config = ttml::models::llama::read_config(training_config["transformer_config"]);
+    } else {
+        throw std::runtime_error("Unknown model type: " + config.model_type);
+    }
     return config;
 }
 
@@ -469,27 +477,50 @@ int main(int argc, char **argv) {
     }
 
     if (enable_wandb) {
+        auto positional_embedding_type = std::visit(
+            [](auto &&arg) -> std::string {
+                if constexpr (requires { arg.positional_embedding_type; }) {
+                    return arg.positional_embedding_type == ttml::models::gpt2::PositionalEmbeddingType::Trainable
+                               ? "trainable"
+                               : "fixed";
+                } else {
+                    return "n/a";
+                }
+            },
+            config.transformer_config);
+
         wandbcpp::init({.project = config.project_name, .name = generate_run_name(run_name, config, add_time_to_name)});
         wandbcpp::update_config({
             {"model", "transformer"},
-            {"num_heads", static_cast<int>(config.transformer_config.num_heads)},
-            {"embedding_dim", static_cast<int>(config.transformer_config.embedding_dim)},
-            {"num_blocks", static_cast<int>(config.transformer_config.num_blocks)},
-            {"dropout_prob", config.transformer_config.dropout_prob},
+            {"num_heads",
+             static_cast<int>(std::visit([](auto &&arg) { return arg.num_heads; }, config.transformer_config))},
+            {"num_groups",
+             static_cast<int>(std::visit(
+                 [](auto &&arg) {
+                     if constexpr (requires { arg.num_groups; }) {
+                         return arg.num_groups;
+                     } else {
+                         return arg.num_heads;
+                     }
+                 },
+                 config.transformer_config))},
+            {"embedding_dim",
+             static_cast<int>(std::visit([](auto &&arg) { return arg.embedding_dim; }, config.transformer_config))},
+            {"num_blocks",
+             static_cast<int>(std::visit([](auto &&arg) { return arg.num_blocks; }, config.transformer_config))},
+            {"dropout_prob", std::visit([](auto &&arg) { return arg.dropout_prob; }, config.transformer_config)},
             {"learning_rate", config.learning_rate},
             {"weight_decay", config.weight_decay},
             {"batch_size", static_cast<int>(config.batch_size)},
-            {"sequence_length", static_cast<int>(config.transformer_config.max_sequence_length)},
+            {"sequence_length",
+             static_cast<int>(
+                 std::visit([](auto &&arg) { return arg.max_sequence_length; }, config.transformer_config))},
             {"max_steps", static_cast<int>(config.max_steps)},
             {"seed", static_cast<int>(config.seed)},
             {"tokenizer_type", config.tokenizer_type},
             {"use_kahan_summation", config.use_kahan_summation},
             {"gradient_accumulation_steps", static_cast<int>(config.gradient_accumulation_steps)},
-            {"positional_embedding_type",
-             config.transformer_config.positional_embedding_type ==
-                     ttml::models::gpt2::PositionalEmbeddingType::Trainable
-                 ? "trainable"
-                 : "fixed"},
+            {"positional_embedding_type", positional_embedding_type},
             {"scheduler_type", config.scheduler_type},
             {"using_clip_grad_norm", config.use_clip_grad_norm},
             {"clip_grad_norm_max_norm", config.clip_grad_norm_max_norm},
@@ -520,7 +551,7 @@ int main(int argc, char **argv) {
     fmt::print("Total batch size {}\n", config.batch_size * config.gradient_accumulation_steps);
     fmt::print("Scheduler type {}\n", config.scheduler_type);
     fmt::print("Seed {}\n", ttml::autograd::ctx().get_seed());
-    auto sequence_length = config.transformer_config.max_sequence_length;
+    auto sequence_length = std::visit([](auto &&arg) { return arg.max_sequence_length; }, config.transformer_config);
 
     auto create_dataset_and_tokenizer =
         [](const auto &text, const auto sequence_length, const auto &tokenizer_path, const auto &tokenizer_type) {
@@ -558,7 +589,7 @@ int main(int argc, char **argv) {
     };
     CachedHostData cached_data;
     std::vector<float> mask;
-    auto num_heads = config.transformer_config.num_heads;
+    auto num_heads = std::visit([](auto &&arg) { return arg.num_heads; }, config.transformer_config);
     mask.reserve(sequence_length * sequence_length);
     for (int i = 0; i < sequence_length; ++i) {
         for (int j = 0; j < sequence_length; ++j) {
@@ -629,15 +660,33 @@ int main(int argc, char **argv) {
     fmt::print("Overriding vocab size to be divisible by 32\n");
     auto num_devices = static_cast<uint32_t>(device->num_devices());
     // this is workaround for tensor parallel case, we need to have vocab size divisible by 32 per device
-    config.transformer_config.vocab_size =
-        round_up_to_tile(tokenizer->get_vocab_size(), (enable_tp ? num_devices : 1U) * 32U);
+    std::visit(
+        [&](auto &&arg) {
+            if constexpr (requires { arg.vocab_size; }) {
+                arg.vocab_size = round_up_to_tile(tokenizer->get_vocab_size(), (enable_tp ? num_devices : 1U) * 32U);
+            } else {
+                throw std::runtime_error(
+                    "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
+            }
+        },
+        config.transformer_config);
 
-    Model model;
-    if (enable_tp) {
-        model = ttml::models::distributed::gpt2::create(config.transformer_config);
-    } else {
-        model = ttml::models::gpt2::create(config.transformer_config);
-    }
+    Model model = std::visit(
+        [enable_tp](auto &&arg) -> Model {
+            if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
+                return ttml::models::llama::create(arg);
+            } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::gpt2::TransformerConfig>) {
+                if (enable_tp) {
+                    return ttml::models::distributed::gpt2::create(arg);
+                } else {
+                    return ttml::models::gpt2::create(arg);
+                }
+            } else {
+                throw std::runtime_error(
+                    "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
+            }
+        },
+        config.transformer_config);
 
     auto adamw_params = ttml::optimizers::AdamWConfig();
     adamw_params.lr = config.learning_rate;
@@ -673,7 +722,7 @@ int main(int argc, char **argv) {
             generate(
                 model,
                 *tokenizer,
-                config.transformer_config.max_sequence_length,
+                std::visit([](auto &&arg) { return arg.max_sequence_length; }, config.transformer_config),
                 num_heads,
                 sequence_length,
                 enable_tp,

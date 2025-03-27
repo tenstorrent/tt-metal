@@ -9,11 +9,11 @@
 namespace ttml::ops {
 
 struct RotaryEmbeddingParams {
-    ttnn::Tensor cos_cache;
-    ttnn::Tensor sin_cache;
-    ttnn::Tensor neg_cos_cache;
-    ttnn::Tensor neg_sin_cache;
-    ttnn::Tensor trans_mat;
+    ttnn::Tensor cos_cache{};
+    ttnn::Tensor sin_cache{};
+    ttnn::Tensor neg_cos_cache{};
+    ttnn::Tensor neg_sin_cache{};
+    ttnn::Tensor trans_mat{};
 
     uint32_t sequence_length = 0;
     uint32_t head_dim = 0;
