@@ -167,19 +167,14 @@ source python_env/bin/activate
 ### Option 2: From Docker Release Image
 Installing from Docker Release Image is the quickest way to access our APIs and to start running AI models.
 
-Download the latest Docker release from our [Docker registry](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-20.04-amd64-release) page
+Download the latest Docker release from our [Docker registry](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-22.04-amd64-release) page
 
 ```sh
-docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release:latest-rc
-docker run -it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release:latest-rc bash
+docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-amd64-release:latest-rc
+docker run -it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-amd64-release:latest-rc bash
 ```
 
-When inside of the container,
-```sh
-python3 -c "import ttnn"
-```
-
-- For more information on the Docker Release Images, visit our [Docker registry page](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-20.04-amd64-release).
+- For more information on the Docker Release Images, visit our [Docker registry page](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-22.04-amd64-release).
 
 - Continue to [You Are All Set!](#you-are-all-set)
 
