@@ -31,9 +31,6 @@ inline void pack_contig_tiles_dim3_bf16(
     uint32_t tile_id = 0;
     uint32_t total_cols = tile_cols_per_chip * ring_size;
     uint32_t end_abs_tile_id = dim3_rel2abs_tile_id(num_tiles - 1, tile_cols_per_chip, ring_size, my_chip_id);
-    DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] BEGIN pack_contig_tiles_dim3 tile_id: " << total
-           << ", num_tiles: " << num_tiles << ", tile_cols_per_chip: " << tile_cols_per_chip
-           << ", end_abs_tile_id: " << end_abs_tile_id << "\n";
     while (total < num_tiles) {
         uint32_t abs_tile_id = dim3_rel2abs_tile_id(tile_id, tile_cols_per_chip, ring_size, my_chip_id);
         const uint32_t l1_write_addr_base = get_write_ptr(cb0_id);
@@ -42,23 +39,15 @@ inline void pack_contig_tiles_dim3_bf16(
             if (dim3_was_stride_sent(
                     abs_tile_id, total_cols, tile_cols_per_chip, packet_size_in_pages * num_banks, my_chip_id)) {
                 cb_reserve_back(cb0_id, packet_size_in_pages);
-                // TODO: loop
-                DPRINT << "\t\t\t[R][" << (uint32_t)my_chip_id << "] non contig total: " << total << ", id: " << tile_id
-                       << ", abs_id: " << dim3_rel2abs_tile_id(tile_id, tile_cols_per_chip, ring_size, my_chip_id)
-                       << "\n";
                 noc_async_read_tile(tile_id, addrgen, l1_write_addr);
                 tile_id++;
                 total++;
                 noc_async_read_barrier();
                 cb_push_back(cb0_id, packet_size_in_pages);
             } else {
-                DPRINT << "\t\t[R][" << (uint32_t)my_chip_id << "] SKIP!! total: " << total << ", tile_id: " << tile_id
-                       << ", abs_tile_id: " << abs_tile_id << "\n";
-                tile_id++;
+                tile_id++;  // skip tile as it is already processed
             }
         } else {
-            DPRINT << "\t\t[R][" << (uint32_t)my_chip_id << "] total: " << total << ", tile_id: " << tile_id
-                   << ", abs_tile_id: " << abs_tile_id << "\n";
             cb_reserve_back(cb0_id, packet_size_in_pages);
             // check whether there is contiguous tile, the tile is in the local chip/buffer
             if ((abs_tile_id + num_banks) <= end_abs_tile_id &&
@@ -66,9 +55,6 @@ inline void pack_contig_tiles_dim3_bf16(
                 // +12ed tile exists in same bank of output tensor
                 uint32_t id = tile_id;
                 for (uint32_t j = 0; j < packet_size_in_pages; j++) {
-                    DPRINT << "\t\t\t[R][" << (uint32_t)my_chip_id << "] contig total: " << total << ", id: " << id
-                           << ", abs_id: " << dim3_rel2abs_tile_id(id, tile_cols_per_chip, ring_size, my_chip_id)
-                           << ", write_addr: " << l1_write_addr << "\n";
                     noc_async_read_tile(id, addrgen, l1_write_addr);
                     l1_write_addr += tensor0_page_size;
                     id = dim3_abs2rel_tile_id(abs_tile_id + num_banks, tile_cols_per_chip, ring_size, my_chip_id);
@@ -77,9 +63,6 @@ inline void pack_contig_tiles_dim3_bf16(
                 total += packet_size_in_pages;
             } else {
                 // TODO: loop
-                DPRINT << "\t\t\t[R][" << (uint32_t)my_chip_id << "] non contig total: " << total << ", id: " << tile_id
-                       << ", abs_id: " << dim3_rel2abs_tile_id(tile_id, tile_cols_per_chip, ring_size, my_chip_id)
-                       << "\n";
                 noc_async_read_tile(tile_id, addrgen, l1_write_addr);
                 tile_id++;
                 total++;
@@ -88,8 +71,6 @@ inline void pack_contig_tiles_dim3_bf16(
             cb_push_back(cb0_id, packet_size_in_pages);
         }
     }
-    DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] DONE pack_contig_tiles_dim3 total: " << total
-           << ", num_tiles: " << num_tiles << "\n";
 }
 
 template <bool DRAM>
@@ -101,7 +82,6 @@ inline void pack_full_contig(uint32_t contig_total, uint32_t& tile_id, Interleav
         uint32_t l1_write_addr = l1_write_addr_base;
         uint32_t id = tile_id;
         for (uint32_t j = 0; j < packet_size_in_pages; j++) {
-            DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] full contig id: " << id << "\n";
             noc_async_read_tile(id, addrgen, l1_write_addr);
             l1_write_addr += tensor0_page_size;
             id += num_banks;
@@ -125,15 +105,12 @@ inline void pack_2contig_bf8(uint32_t contig_total, uint32_t& tile_id, Interleav
         uint32_t l1_write_addr = l1_write_addr_base;
         uint32_t id = tile_id;
         for (uint32_t j = 0; j < 2; j++) {
-            DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] 2contig id: " << id << ", tile_id: " << tile_id
-                   << ", total_local: " << total_local << ", contig_total: " << contig_total << "\n";
             noc_async_read_tile(id, addrgen, l1_write_addr);
             l1_write_addr += tensor0_page_size;
             id += num_banks;
         }
         tile_id++;
         total_local++;
-        DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] 2contig -- tile_id: " << tile_id << "\n";
         noc_async_read_barrier();
         cb_push_back(cb0_id, 2);
         if (total_local % num_banks == 0) {
@@ -151,8 +128,6 @@ inline void pack_non_contig(uint32_t num_tiles, uint32_t& tile_id, InterleavedAd
         uint32_t l1_write_addr = l1_write_addr_base;
         uint32_t id = tile_id;
         for (uint32_t j = 0; j < 1; j++) {
-            DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] non contig id: " << id << ", write_addr: " << l1_write_addr
-                   << "\n";
             noc_async_read_tile(id, addrgen, l1_write_addr);
             l1_write_addr += tensor0_page_size;
             id += num_banks;
@@ -173,13 +148,9 @@ inline void pack_llama_8b_n300(
     constexpr uint32_t rest_tiles = 12;
     uint32_t tile_id = 0;
     uint32_t total = 0;
-    DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] BEGIN pack_llama70_t3k_prefill num_tiles: " << num_tiles
-           << ", packet_size_in_pages: " << packet_size_in_pages << "\n";
     pack_full_contig(num_full_contig, tile_id, addrgen);
     pack_2contig_bf8(num_2contig, tile_id, addrgen);
     pack_non_contig(rest_tiles, tile_id, addrgen);
-    DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] DONE pack_llama70_t3k_prefill num_tiles: " << num_tiles
-           << ", num_banks: " << num_banks << ", packet_size_in_pages: " << packet_size_in_pages << "\n";
 }
 
 template <bool DRAM>
@@ -188,8 +159,6 @@ inline void pack_dim3_bf16_rest16_optimized(
     uint32_t tile_id = 0;
     const uint32_t num_contig2 = 4;
     uint32_t row = num_tiles / tile_cols_per_chip;
-    DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] BEGIN pack_dim3_bf16_rest16_optimized num_tiles: " << num_tiles
-           << ", packet_size_in_pages: " << packet_size_in_pages << "\n";
     // 32768 -> 128 tiles. 24x5 + 8
     for (uint32_t i = 0; i < row; i++) {
         pack_full_contig(num_contig2, tile_id, addrgen);
@@ -204,8 +173,6 @@ inline void pack_dim3_bf16_rest8_optimized(
     uint32_t tile_id = 0;
     const uint32_t num_contig2 = num_banks * 5;
     uint32_t row = num_tiles / tile_cols_per_chip;
-    DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] BEGIN pack_dim3_bf16_rest8_optimized num_tiles: " << num_tiles
-           << ", packet_size_in_pages: " << packet_size_in_pages << "\n";
     // 32768 -> 128 tiles. 24x5 + 8
     if constexpr (my_chip_id % 3 == 0) {
         for (uint32_t i = 0; i < row; i++) {
@@ -259,7 +226,6 @@ inline void pack_falcon40(
     const uint32_t num_contig2 = num_banks;
     uint32_t row = num_tiles / tile_cols_per_chip;
     if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == T3K_FALCON40_8192) {
-        DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] T3K_FALCON40_8192 row: " << row << " \n";
         if constexpr (my_chip_id % 3 == 0) {
             for (uint32_t i = 0; i < row; i++) {
                 if (i % 3 == 0) {
@@ -304,7 +270,6 @@ inline void pack_falcon40(
             }
         }
     } else if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == T3K_FALCON40_32768) {
-        DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] T3K_FALCON40_32768 row: " << row << " \n";
         uint32_t num_full_contig = 24;
         if constexpr (my_chip_id % 3 == 0) {
             for (uint32_t i = 0; i < row; i++) {
@@ -388,14 +353,8 @@ inline void pack_tiles_dim2_bf8(
     uint32_t num_tiles = rest_half_contig_ids + (filled_bank_tiles + rest_full_contig_ids);
     uint32_t outer_id = 0;
 
-    DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] pack_tiles_dim2_bf8 rest_orphan_tiles:" << rest_orphan_tiles
-           << ", rest_half_contig_ids: " << rest_half_contig_ids << ", total: " << total << ", num_tiles: " << num_tiles
-           << "\n";
-
     while (total < num_tiles) {
         uint32_t num_2contig = min(rest_half_contig_ids - outer_id, 2);
-        DPRINT << "\t[R][" << (uint32_t)my_chip_id << "] total: " << total << ", num_tiles: " << num_tiles
-               << ", num_2contig: " << num_2contig << "\n";
 
         cb_reserve_back(cb0_id, packet_size_in_pages);
         const uint32_t l1_write_addr_base = get_write_ptr(cb0_id);
@@ -404,8 +363,6 @@ inline void pack_tiles_dim2_bf8(
         uint32_t id = total + tile_id_start;
         for (uint32_t k = 0; k < num_2contig; k++) {
             for (uint32_t j = 0; j < 2; j++) {
-                DPRINT << "\t\t[R][" << (uint32_t)my_chip_id << "] tile_id: " << id + j * num_banks
-                       << ", l1_write_addr: " << l1_write_addr << ", j: " << j << "\n";
                 noc_async_read_tile(id + j * num_banks, tensor0_addrgen, l1_write_addr);
                 l1_write_addr += tensor0_page_size;
             }
@@ -437,8 +394,6 @@ inline void pack_tiles_dim2_bf16(
     } else {
         rest_orphan_tiles = num_tiles_per_chip % (num_banks * packet_size_in_pages);
     }
-    DPRINT << "[R][" << (uint32_t)my_chip_id << "] filled_bank_rows:" << filled_bank_rows
-           << ", rest_orphan_tiles:" << rest_orphan_tiles << "\n";
     total += tile_id_start;
     pack_non_contig(rest_orphan_tiles, total, tensor0_addrgen);
 }
@@ -454,9 +409,6 @@ inline void pack_tiles_dim2(
     if (num_banks * (packet_size_in_pages - 1) < rest_tiles) {
         rest_full_contig_ids = rest_tiles % (num_banks * (packet_size_in_pages - 1));
     }
-    DPRINT << "[R][" << (uint32_t)my_chip_id << "] pack_tiles_dim2 filled_bank_rows:" << filled_bank_rows
-           << ", rest_tiles: " << rest_tiles << ", rest_full_contig_ids: " << rest_full_contig_ids << "\n";
-
     pack_full_contig(filled_bank_rows * num_banks + rest_full_contig_ids, total, tensor0_addrgen);
     if constexpr (packet_size_in_pages == 2) {
         pack_tiles_dim2_bf16<DRAM>(
