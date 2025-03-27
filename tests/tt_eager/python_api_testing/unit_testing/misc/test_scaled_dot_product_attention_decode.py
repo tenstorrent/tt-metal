@@ -1039,6 +1039,7 @@ def run_test_sdpa_decode_paged_attention_single_iter(
         # [32, 32, 8, 4096, 128, (8, 8), True],  # llama 3.1 8b
         [8, 16, 4, 4096, 128, (8, 2), True],  # llama 3.1 8b N300
         [1, 8, 1, 128 * 1024, 128, (8, 4), True],  # llama 3.1 8b N300
+        [1, 32, 8, 32 * 1024, 128, (8, 8), True],  # llama3.1 8b (performance-batch-1 settings)
         # [1, 8, 1, 32768, 128, (8, 1), True],  # Llama2-70B
         # [16, 8, 1, 32768, 128, (8, 6), False, False],  # Llama2-70B
         # [8, 8, 1, 32768, 128, (8, 6), True, False],  # Llama2-70B
@@ -1046,7 +1047,7 @@ def run_test_sdpa_decode_paged_attention_single_iter(
         # [32, 8, 1, 32768, 128, (8, 8), True, True],  # Mixtral8x7b
     ),
 )
-@pytest.mark.parametrize("block_size", (64, 128), ids=["paged_64", "paged_128"])
+@pytest.mark.parametrize("block_size", (32, 64, 128), ids=["paged_32", "paged_64", "paged_128"])
 def test_sdpa_decode_paged_attention(
     device, b, nh, nkv, s, d, kv_dtype, grid_size, q_dtype, cur_pos_tensor, block_size, use_program_cache
 ):
