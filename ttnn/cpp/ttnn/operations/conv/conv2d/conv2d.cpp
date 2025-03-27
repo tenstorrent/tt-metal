@@ -146,7 +146,7 @@ Result conv2d_DRAM(
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
     TT_FATAL(conv_config.dtype != tt::tt_metal::DataType::BFLOAT8_B, "Conv DRAM currently doesn't support BFLOAT8_B");
 
-    // Tensor dram_output_tensor = ttnn::zeros(
+    // Tensor dram_output_tensor = ttnn::zeros(     //Kept for debugging. Will remove later.
     //         ttnn::Shape({batch_size, output_height, output_width, out_channels}),
     //         conv_config.dtype,
     //         tt_metal::Layout::ROW_MAJOR,
@@ -217,27 +217,6 @@ Result conv2d_DRAM(
                     auto_shard = true;
                 }
 
-                // if (!input_memory_config.has_value() || input_slice_height != input_memory_config_slice_dim) {
-                //     input_memory_config = get_input_memory_config(
-                //         conv_config,
-                //         in_channels,
-                //         out_channels,
-                //         batch_size,
-                //         input_slice_height,
-                //         input_width,
-                //         output_slice_height,
-                //         output_width,
-                //         compute_grid_size,
-                //         Layout::ROW_MAJOR,
-                //         mm_conv);
-                //     input_memory_config_slice_dim = input_slice_height;
-                //     tt::log_info(
-                //         tt::LogOp,
-                //         "DRAM Height slicing using {}, Input Slice Height = {}, Input Memory Config = {} ",
-                //         conv_config.shard_layout.value(),
-                //         input_slice_height,
-                //         input_memory_config.value());
-                // }
                 auto sliced_input_tensor = ttnn::slice(
                     queue_id,
                     input_tensor,
@@ -343,27 +322,7 @@ Result conv2d_DRAM(
                     compute_config);
                 auto_shard = true;
             }
-            // if (!input_memory_config.has_value() || input_slice_width != input_memory_config_slice_dim) {
-            //     input_memory_config = get_input_memory_config(
-            //         conv_config,
-            //         in_channels,
-            //         out_channels,
-            //         batch_size,
-            //         input_height,
-            //         input_slice_width,
-            //         output_height,
-            //         output_slice_width,
-            //         compute_grid_size,
-            //         Layout::ROW_MAJOR,
-            //         mm_conv);
-            //     input_memory_config_slice_dim = input_slice_width;
-            //     tt::log_info(
-            //         tt::LogOp,
-            //         "DRAM Width slicing using {}, Input Slice Height = {}, Input Memory Config = {} ",
-            //         conv_config.shard_layout.value(),
-            //         input_slice_width,
-            //         input_memory_config.value());
-            // }
+
             auto sliced_input_tensor = ttnn::slice(
                 queue_id,
                 input_tensor,
@@ -376,7 +335,6 @@ Result conv2d_DRAM(
                     1,
                 }  // Step
             );
-            log_info(tt::LogOp, "Sliced input tensor shape: {}", sliced_input_tensor.get_logical_shape());
             auto conv_config_l1 = conv_config;
             conv_config_l1.reshard_if_not_optimal = true;
             conv_config_l1.output_layout = Layout::TILE;
@@ -401,7 +359,6 @@ Result conv2d_DRAM(
                     conv_config_l1,
                     compute_config_,
                     memory_config_);
-            tt::log_info(LogOp, "Output Memory Config: {}", sliced_output_tensor.memory_config());
             if (sliced_output_tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED &&
                 sliced_output_tensor.memory_config().memory_layout != TensorMemoryLayout::BLOCK_SHARDED) {
                 sliced_output_tensor = ttnn::to_memory_config(
@@ -422,7 +379,6 @@ Result conv2d_DRAM(
                 std::array<uint32_t, 4>{0, 0, output_slice_width_start, 0},
                 std::array<uint32_t, 4>{batch_size, output_height, output_slice_width_end, out_channels},
                 std::array<uint32_t, 4>{1, 1, 1, 1});
-            log_info(tt::LogOp, "Dram output tensor shape: {}", dram_output_tensor.get_logical_shape());
             first_run = false;
         }
     }

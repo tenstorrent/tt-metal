@@ -108,8 +108,7 @@ def test_conv_features(
     (
         (10,  64,  4096, 512,   True,    2,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1), 16, 32 * 16, ttnn.MathFidelity.LoFi,  True,  False),
         (128, 128, 1024, 1024, False,   32,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 32, 0,       ttnn.MathFidelity.HiFi4, True,  False),
-        # Hangs, due to small in_channels
-        # (128, 3,   1024, 1024, False,   32,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 32, 0,       ttnn.MathFidelity.HiFi4, True,  False),
+        (128, 16,   1024, 1024, False,   32,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 32, 0,       ttnn.MathFidelity.HiFi4, True,  False),
         (16,  512, 128,  128,  False,   32,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 32, 0,       ttnn.MathFidelity.HiFi4, True,  False),
         (256, 128, 1024, 1024, False,   32,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 32, 32 * 4,  ttnn.MathFidelity.HiFi4, True,  False),
         (256, 256, 1024, 1024, False,   32,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 32, 32 * 8,  ttnn.MathFidelity.HiFi4, True,  False),
@@ -118,7 +117,7 @@ def test_conv_features(
         (512, 512, 256,  256,  False,   32,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 32, 0,       ttnn.MathFidelity.HiFi4, True,  False),
         (512, 256, 512,  512,  False,   32,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 32, 0,       ttnn.MathFidelity.HiFi4, True,  False),
         (512, 512, 512,  512,  False,   32,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 32, 0,       ttnn.MathFidelity.HiFi4, True,  False),
-        # (64,  64,  384,  64,    True,  128,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1), 32, 0,       ttnn.MathFidelity.HiFi4, True,  False),
+        (64,  64,  384,  64,    True,  128,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1), 32, 0,       ttnn.MathFidelity.HiFi4, True,  False),
         (64,  64,  1024, 128,   True,   32,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1), 32, 0,       ttnn.MathFidelity.LoFi,  True,  False),
         (64,  64,  512,  64,    True,  128,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1), 32, 0,       ttnn.MathFidelity.LoFi,  True,  False),
         (4,   32,  1024, 1024,  True,    2,  ttnn.bfloat8_b, ttnn.bfloat16, (5, 5), (1, 1), (0, 0), (1, 1), 16, 32,      ttnn.MathFidelity.LoFi,  True,  False),
