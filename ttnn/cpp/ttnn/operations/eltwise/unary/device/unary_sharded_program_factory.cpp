@@ -7,7 +7,7 @@
 #include <algorithm>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
@@ -17,7 +17,7 @@ namespace ttnn::operations::unary::program {
 static const std::string compute_root_sharded = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/";
 
 using namespace tt::constants;
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {

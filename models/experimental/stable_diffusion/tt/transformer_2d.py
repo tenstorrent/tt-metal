@@ -4,17 +4,15 @@
 
 from typing import Optional
 from functools import partial
-from loguru import logger
 
 import torch.nn as nn
-import torch
 
 import ttnn
 from tt_lib.fallback_ops import fallback_ops
 from models.experimental.stable_diffusion.tt.cross_attention import TtCrossAttention
 from models.experimental.stable_diffusion.tt.feedforward import TtFeedForward
 from models.experimental.stable_diffusion.sd_utils import make_linear
-from models.utility_functions import pad_by_zero, torch2tt_tensor, torch_to_tt_tensor_rm
+from models.utility_functions import torch_to_tt_tensor_rm
 from models.experimental.stable_diffusion.tt.experimental_ops import Conv2d
 
 

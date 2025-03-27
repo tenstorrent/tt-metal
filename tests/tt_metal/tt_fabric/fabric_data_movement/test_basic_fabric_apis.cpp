@@ -161,7 +161,8 @@ void RunAsyncWriteTest(
     tt::Cluster::instance().l1_barrier(physical_end_device_id);
     tt::Cluster::instance().l1_barrier(physical_start_device_id);
 
-    auto receiver_noc_encoding = tt::tt_metal::hal.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
+    auto receiver_noc_encoding =
+        tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
     // Create the sender program
     std::vector<uint32_t> sender_compile_time_args = {
@@ -173,7 +174,7 @@ void RunAsyncWriteTest(
         data_size,
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
-        tt_metal::hal.noc_xy_encoding(routers[0].second.x, routers[0].second.y)};
+        tt_metal::hal_ref.noc_xy_encoding(routers[0].second.x, routers[0].second.y)};
     std::map<string, string> defines = {};
     if (mode == fabric_mode::PULL) {
         defines["FVC_MODE_PULL"] = "";
@@ -181,7 +182,7 @@ void RunAsyncWriteTest(
     auto sender_program = tt_metal::CreateProgram();
     CreateSenderKernel(
         sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_sender.cpp",
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_async_write_sender.cpp",
         std::move(sender_compile_time_args),
         sender_logical_core,
         defines,
@@ -258,7 +259,8 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode) {
     tt::Cluster::instance().l1_barrier(physical_end_device_id);
     tt::Cluster::instance().l1_barrier(physical_start_device_id);
 
-    auto receiver_noc_encoding = tt::tt_metal::hal.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
+    auto receiver_noc_encoding =
+        tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
     // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
@@ -275,11 +277,11 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode) {
         wrap_boundary,
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
-        tt_metal::hal.noc_xy_encoding(routers[0].second.x, routers[0].second.y)};
+        tt_metal::hal_ref.noc_xy_encoding(routers[0].second.x, routers[0].second.y)};
 
     CreateSenderKernel(
         sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_atomic_inc_sender.cpp",
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_atomic_inc_sender.cpp",
         std::move(sender_compile_time_args),
         sender_logical_core,
         defines,
@@ -370,11 +372,13 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
     tt::Cluster::instance().l1_barrier(physical_end_device_id);
     tt::Cluster::instance().l1_barrier(physical_start_device_id);
 
-    auto receiver_noc_encoding = tt::tt_metal::hal.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
+    auto receiver_noc_encoding =
+        tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
     // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
     std::map<string, string> defines = {};
+
     if (mode == fabric_mode::PULL) {
         defines["FVC_MODE_PULL"] = "";
     }
@@ -389,11 +393,11 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
         atomic_inc,
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
-        tt_metal::hal.noc_xy_encoding(routers[0].second.x, routers[0].second.y)};
+        tt_metal::hal_ref.noc_xy_encoding(routers[0].second.x, routers[0].second.y)};
 
     CreateSenderKernel(
         sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_atomic_inc_sender.cpp",
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_async_write_atomic_inc_sender.cpp",
         std::move(sender_compile_time_args),
         sender_logical_core,
         defines,
@@ -586,7 +590,8 @@ TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticast) {
     // Wait for buffer data to be written to device
     tt::Cluster::instance().l1_barrier(physical_start_device_id);
 
-    auto receiver_noc_encoding = tt::tt_metal::hal.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
+    auto receiver_noc_encoding =
+        tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
     // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
@@ -603,7 +608,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticast) {
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 0, fabric_mode::PULL};
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_multicast_sender.cpp",
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_async_write_multicast_sender.cpp",
         sender_logical_crs,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -621,7 +626,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticast) {
         auto& sender_virtual_router_coord = routers[0].second;
         sender_router_noc_xys.try_emplace(
             routing_direction,
-            tt_metal::hal.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y));
+            tt_metal::hal_ref.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y));
     }
 
     std::vector<uint32_t> sender_runtime_args = {
@@ -796,7 +801,8 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticast) {
     // Wait for buffer data to be written to device
     tt::Cluster::instance().l1_barrier(physical_start_device_id);
 
-    auto receiver_noc_encoding = tt::tt_metal::hal.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
+    auto receiver_noc_encoding =
+        tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
     // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
@@ -813,7 +819,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticast) {
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 1, fabric_mode::PULL};
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_pull_async_write_multicast_sender.cpp",
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_async_write_multicast_sender.cpp",
         sender_logical_crs,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -831,7 +837,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticast) {
         auto& sender_virtual_router_coord = routers[0].second;
         sender_router_noc_xys.try_emplace(
             routing_direction,
-            tt_metal::hal.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y));
+            tt_metal::hal_ref.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y));
     }
 
     std::vector<uint32_t> sender_runtime_args = {
@@ -1019,7 +1025,8 @@ TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticastMultidirectional) {
     // Wait for buffer data to be written to device
     tt::Cluster::instance().l1_barrier(physical_start_device_id);
 
-    auto receiver_noc_encoding = tt::tt_metal::hal.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
+    auto receiver_noc_encoding =
+        tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
     // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
@@ -1037,7 +1044,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticastMultidirectional) {
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
         "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/"
-        "fabric_pull_async_write_multicast_multidirectional_sender.cpp",
+        "fabric_async_write_multicast_multidirectional_sender.cpp",
         sender_logical_crs,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -1055,7 +1062,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticastMultidirectional) {
         auto& sender_virtual_router_coord = routers[0].second;
         sender_router_noc_xys.try_emplace(
             routing_direction,
-            tt_metal::hal.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y));
+            tt_metal::hal_ref.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y));
     }
 
     std::vector<uint32_t> sender_runtime_args = {
@@ -1238,7 +1245,8 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticastMultidirectional) {
     // Wait for buffer data to be written to device
     tt::Cluster::instance().l1_barrier(physical_start_device_id);
 
-    auto receiver_noc_encoding = tt::tt_metal::hal.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
+    auto receiver_noc_encoding =
+        tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
     // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
@@ -1256,7 +1264,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticastMultidirectional) {
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
         "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/"
-        "fabric_pull_async_write_multicast_multidirectional_sender.cpp",
+        "fabric_async_write_multicast_multidirectional_sender.cpp",
         sender_logical_crs,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -1274,7 +1282,7 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticastMultidirectional) {
         auto& sender_virtual_router_coord = routers[0].second;
         sender_router_noc_xys.try_emplace(
             routing_direction,
-            tt_metal::hal.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y));
+            tt_metal::hal_ref.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y));
     }
 
     std::vector<uint32_t> sender_runtime_args = {

@@ -7,10 +7,9 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_log.h>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/tt_align.hpp>
@@ -18,7 +17,6 @@
 static const uint32_t max_read_size = 2048;  // max read size in bytes for reader and writer kernels
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement::detail {
 
