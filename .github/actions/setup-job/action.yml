@@ -4,9 +4,11 @@ inputs:
   build-artifact-name:
     required: false
     description: Name of the build artifact
+    default: ''
   wheel-artifact-name:
     required: false
     description: Name of the wheel artifact
+    default: ''
   path:
     required: false
     description: Where to checkout
