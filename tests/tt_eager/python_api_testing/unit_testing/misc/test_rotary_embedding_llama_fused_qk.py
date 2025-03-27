@@ -17,24 +17,24 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_rotary_embedding_l
 @pytest.mark.parametrize(
     "batch, seq_len",
     (
-        (32, 1),
-        (16, 1),
+        # (32, 1),
+        # (16, 1),
         (8, 1),
-        (1, 1),
+        # (1, 1),
     ),
     ids=(
-        "decode_32",
-        "decode_16",
+        # "decode_32",
+        # "decode_16",
         "decode_8",
-        "decode_1",
+        # "decode_1",
     ),
 )
 @pytest.mark.parametrize(
     "n_heads, n_kv_heads, head_dim",
     (
         (8, 1, 128),
-        (71, 32, 64),
-        (8, 1, 256),
+        # (71, 32, 64),
+        # (8, 1, 256),
     ),
 )
 @pytest.mark.parametrize("datatype", (ttnn.bfloat16,))

@@ -72,7 +72,7 @@ class TtLlamaMLP(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dim, mesh_shape=args.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
             memory_config=w2_mem_config if "w2" in name else w1_w3_mem_config,
-            # cache_file_name=cache_name(name),
+            cache_file_name=cache_name(name),
         )
 
         self.four_bit_mlp = args.optimizations.bfp4_mlp
@@ -214,7 +214,7 @@ class TtLlamaMLP(LightweightModule):
             sub_device_id=self.worker_sub_device_id if mode == "decode" else None,
         )
         # print("linear", w2_out)
-        ttnn.deallocate(w2_in)
+        # ttnn.deallocate(w2_in)
 
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out, cluster_axis=0, num_links=3, memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"]

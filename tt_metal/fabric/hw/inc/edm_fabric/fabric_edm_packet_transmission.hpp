@@ -123,6 +123,9 @@ FORCE_INLINE void execute_chip_unicast_to_local_chip(
         case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
             const uint64_t dest_address = header.command_fields.unicast_seminc.noc_address;
             const auto increment = header.command_fields.unicast_seminc.val;
+            for (size_t i = 0; i < 4; i++) {
+                while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, i));
+            }
             noc_semaphore_inc(dest_address, increment, tt::tt_fabric::edm_to_local_chip_noc);
 
         } break;
