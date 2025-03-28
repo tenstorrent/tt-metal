@@ -142,14 +142,14 @@ FORCE_INLINE void execute_chip_unicast_to_local_chip(
                     }
                 }
             }
-            noc_semaphore_inc(dest_address, increment, tt::tt_fabric::edm_to_local_chip_noc);
+            noc_semaphore_inc<true>(dest_address, increment, tt::tt_fabric::edm_to_local_chip_noc);
 
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_INLINE_WRITE: {
             const auto dest_address = header.command_fields.unicast_inline_write.noc_address;
             const auto value = header.command_fields.unicast_inline_write.value;
-            noc_inline_dw_write(dest_address, value, 0xF, tt::tt_fabric::edm_to_local_chip_noc);
+            noc_inline_dw_write<false, true>(dest_address, value, 0xF, tt::tt_fabric::edm_to_local_chip_noc);
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC:
