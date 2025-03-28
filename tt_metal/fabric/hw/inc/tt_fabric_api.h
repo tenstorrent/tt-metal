@@ -152,14 +152,13 @@ FORCE_INLINE void fabric_wait_for_pull_request_words_flushed(
     }
 }
 
-template <typename T>
-inline void fabric_wait_for_pull_request_bytes_flushed(T client_interface, uint32_t size) {
+inline void fabric_wait_for_pull_request_bytes_flushed(
+    volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface, uint32_t size) {
     uint32_t size_in_words = (size + PACKET_WORD_SIZE_BYTES - 1) >> 4;
     fabric_wait_for_pull_request_words_flushed(client_interface, size_in_words);
 }
 
-template <typename T>
-inline void fabric_wait_for_pull_request_flushed(T client_interface) {
+inline void fabric_wait_for_pull_request_flushed(volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface) {
     uint32_t words_written = client_interface->local_pull_request.pull_request.words_written;
     fabric_wait_for_pull_request_words_flushed(client_interface, words_written);
 }
@@ -194,13 +193,11 @@ inline void fabric_async_write_add_header(
     tt_fabric_add_header_checksum(packet_header);
 }
 
-template <typename T>
 inline void fabric_client_connect(
-    T client_interface, int32_t routing_plane, uint16_t dst_mesh_id, uint16_t dst_dev_id) {
-    static_assert(
-        std::is_same_v<T, volatile fabric_push_client_interface_t*>,
-        "T must be volatile fabric_push_client_interface_t*");
-
+    volatile fabric_push_client_interface_t* client_interface,
+    int32_t routing_plane,
+    uint16_t dst_mesh_id,
+    uint16_t dst_dev_id) {
     uint32_t direction = get_next_hop_router_direction(client_interface, routing_plane, dst_mesh_id, dst_dev_id);
     uint32_t router_addr_h = get_next_hop_router_noc_xy(client_interface, routing_plane, dst_mesh_id, dst_dev_id);
 
@@ -367,6 +364,10 @@ inline void fabric_async_write_multicast_add_header(
     uint16_t n_depth,
     uint16_t s_depth,
     uint32_t header_id = 0) {
+    static_assert(
+        std::is_same_v<T, volatile fabric_pull_client_interface_t*> ||
+            std::is_same_v<T, volatile fabric_push_client_interface_t*>,
+        "T must be either volatile fabric_pull_client_interface_t* or volatile fabric_push_client_interface_t*");
     packet_header_t* packet_header;
     if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
         packet_header = (packet_header_t*)(src_addr);

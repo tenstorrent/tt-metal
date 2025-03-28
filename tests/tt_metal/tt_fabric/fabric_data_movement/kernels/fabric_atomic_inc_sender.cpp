@@ -47,7 +47,7 @@ void kernel_main() {
             (volatile fabric_push_client_interface_t*)client_interface_addr;
 
         fabric_endpoint_init<decltype(client_interface), RoutingType::ROUTING_TABLE>(client_interface, 0 /* unused */);
-        fabric_client_connect<decltype(client_interface)>(client_interface, 0, dst_mesh_id, dst_device_id);
+        fabric_client_connect(client_interface, 0, dst_mesh_id, dst_device_id);
         fabric_atomic_inc<
             decltype(client_interface),
             ClientDataMode::PACKETIZED_DATA,
@@ -60,5 +60,6 @@ void kernel_main() {
             dst_noc_addr,  // destination write address
             atomic_inc,
             wrap_boundary);
+        fabric_client_disconnect(client_interface);
     }
 }

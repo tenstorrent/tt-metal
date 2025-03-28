@@ -57,7 +57,7 @@ void kernel_main() {
             (volatile fabric_push_client_interface_t*)client_interface_addr;
 
         fabric_endpoint_init<decltype(client_interface), RoutingType::ROUTING_TABLE>(client_interface, 0 /* unused */);
-        fabric_client_connect<decltype(client_interface)>(client_interface, 0, dst_mesh_id, dst_device_id);
+        fabric_client_connect(client_interface, 0, dst_mesh_id, dst_device_id);
         fabric_async_write_atomic_inc<
             decltype(client_interface),
             (ClientDataMode)data_mode,
@@ -73,5 +73,6 @@ void kernel_main() {
             packet_size_bytes,    // number of bytes to write to remote destination
             atomic_inc            // atomic increment value
         );
+        fabric_client_disconnect(client_interface);
     }
 }

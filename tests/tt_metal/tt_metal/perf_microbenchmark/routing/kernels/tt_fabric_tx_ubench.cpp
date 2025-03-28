@@ -219,7 +219,7 @@ void kernel_main() {
         }
     }
 #else
-    fabric_client_connect<decltype(client_interface)>(client_interface, 0, dest_device >> 16, dest_device & 0xFFFF);
+    fabric_client_connect(client_interface, 0, dest_device >> 16, dest_device & 0xFFFF);
     uint64_t start_timestamp = get_timestamp();
     uint32_t* payload = (uint32_t*)data_buffer_start_addr;
     while (true) {
