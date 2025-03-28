@@ -4,7 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include <span>
+#include <stdexcept>
+#include <vector>
 
 #include "dataset_base.hpp"
 

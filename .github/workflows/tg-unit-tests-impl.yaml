@@ -51,7 +51,7 @@ jobs:
 
       - name: Build UMD device and tests
         run: |
-          cmake -B build -G Ninja -DTT_UMD_BUILD_TESTS=ON -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake
+          cmake -B build -G Ninja -DTT_UMD_BUILD_TESTS=ON -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
           cmake --build build --target umd_tests
 
       - name: Run UMD unit regression tests

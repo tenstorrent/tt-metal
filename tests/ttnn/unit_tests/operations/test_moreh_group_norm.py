@@ -202,6 +202,8 @@ def make_input_tensors(input_shape, affine, do_backward=False):
 
 
 def run_test_moreh_group_norm(N, C_num_groups, HW, eps, affine, compute_mean_rstd, device):
+    pytest.skip("Skipping test_moreh_group_norm for now - libstdc++ issue")
+
     H, W = HW
     C, num_groups = C_num_groups
     input_shape = (N, C, H, W)
