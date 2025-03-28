@@ -6,6 +6,8 @@
 
 #include "pybind11/decorators.hpp"
 #include "ttnn/operations/eltwise/binary_ng/binary_ng.hpp"
+#include "ttnn/operations/eltwise/binary_ng/subalpha/subalpha.hpp"
+
 
 namespace ttnn::operations::binary_ng {
 namespace detail {
@@ -173,6 +175,83 @@ void bind_inplace_binary_ng_operation(py::module& module, T op, const std::strin
             py::arg("post_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             py::arg("queue_id") = DefaultQueueId});
 }
+
+template <typename T>
+void bind_subalpha(
+    py::module& module,
+    const T& operation,
+    const std::string& description,
+    const std::string& math,
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& note = "") {
+    auto doc = fmt::format(
+        R"doc(
+        {2}
+
+        .. math::
+            {3}
+
+        Args:
+            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor_b (ttnn.Tensor): the input tensor.
+            alpha (float): the value to be multiplied.
+
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {4}
+                 - TILE
+                 - 2, 3, 4
+
+            {5}
+
+        Example:
+            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> alpha = 1.0
+            >>> output = {1}(tensor1, tensor2, alpha)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        description,
+        math,
+        supported_dtype,
+        note);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const T& self,
+               const Tensor& input_tensor_a,
+               const Tensor& input_tensor_b,
+               float alpha,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor,
+               QueueId queue_id) -> ttnn::Tensor {
+                return self(queue_id, input_tensor_a, input_tensor_b, alpha, memory_config, output_tensor);
+            },
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::arg("alpha") = 1.0f,
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId});
+}
 }  // namespace detail
 
 void py_module(py::module& module) {
@@ -235,5 +314,10 @@ void py_module(py::module& module) {
         module, ttnn::experimental::logaddexp_, "Binary Logaddexp In-place Operation");
     detail::bind_inplace_binary_ng_operation(
         module, ttnn::experimental::logaddexp2_, "Binary Logaddexp2 In-place Operation");
+    detail::bind_subalpha(
+        module, ttnn::experimental::subalpha,
+        R"doc(Computes subalpha for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(\mathrm{{output\_tensor}} = \mathrm{{input\_tensor\_a\ - input\_tensor\_b\ * \alpha}})doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 }
 }  // namespace ttnn::operations::binary_ng
