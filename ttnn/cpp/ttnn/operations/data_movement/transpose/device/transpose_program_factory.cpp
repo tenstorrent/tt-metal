@@ -11,6 +11,10 @@
 #include <tt-metalium/util.hpp>
 #include "ttnn/operation.hpp"
 
+#include <cstdint>
+#include <math.h>
+#include <vector>
+
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::detail {

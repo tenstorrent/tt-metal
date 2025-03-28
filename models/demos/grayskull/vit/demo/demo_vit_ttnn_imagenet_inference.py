@@ -12,9 +12,9 @@ from loguru import logger
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-from models.experimental.functional_vit.tt import ttnn_optimized_sharded_vit
+from models.demos.vit.tt import ttnn_optimized_sharded_vit_gs
 from models.utility_functions import is_wormhole_b0, torch2tt_tensor, is_blackhole
-from models.experimental.vit.vit_helper_funcs import get_data_loader, get_batch
+from models.demos.wormhole.vit.demo.vit_helper_funcs import get_data_loader, get_batch
 
 import ast
 
@@ -38,13 +38,13 @@ def test_vit(device):
     config = transformers.ViTConfig.from_pretrained(model_name)
     config.num_hidden_layers = 12
     model = transformers.ViTForImageClassification.from_pretrained(model_name, config=config)
-    config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
+    config = ttnn_optimized_sharded_vit_gs.update_model_config(config, batch_size)
     image_processor = AutoImageProcessor.from_pretrained(model_name)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         device=device,
-        custom_preprocessor=ttnn_optimized_sharded_vit.custom_preprocessor,
+        custom_preprocessor=ttnn_optimized_sharded_vit_gs.custom_preprocessor,
     )
 
     # cls_token & position embeddings expand to batch_size
@@ -119,7 +119,7 @@ def test_vit(device):
             tt_dtype=ttnn.bfloat16,
         )
 
-        output = ttnn_optimized_sharded_vit.vit(
+        output = ttnn_optimized_sharded_vit_gs.vit(
             config,
             pixel_values,
             head_masks,

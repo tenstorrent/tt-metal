@@ -37,6 +37,6 @@ build_metal.sh --enable-profiler # need build to enable the profiler
 ## Results
 
 - The Imagenet-21K inference accuracy is 79%
-- Model runtime (host end-2-end) is 912 FPS
+- Model runtime (host end-2-end) is 1100 FPS
 
 ---

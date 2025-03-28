@@ -63,7 +63,9 @@ struct fabric_router_l1_config_t {
     std::uint16_t my_mesh_id;  // Do we need this if we tag routing tables with magic values for outbound eth channels
                                // and route to local NOC?
     std::uint16_t my_device_id;
-    std::uint8_t padding[8];  // pad to 16-byte alignment.
+    std::uint16_t east_dim;
+    std::uint16_t north_dim;
+    std::uint8_t padding[4];  // pad to 16-byte alignment.
 } __attribute__((packed));
 
 }  // namespace tt::tt_fabric

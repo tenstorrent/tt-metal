@@ -57,6 +57,38 @@ typedef struct _tt_routing {
 
 static_assert(sizeof(tt_routing) == 16);
 
+typedef struct _tt_low_latency_routing_vector {
+    static constexpr uint32_t FIELD_WIDTH = 8;
+    static constexpr uint32_t FIELD_MASK = 0b1111;
+    static constexpr uint32_t NOOP = 0b0000;
+    static constexpr uint32_t FORWARD_EAST = 0b0001;
+    static constexpr uint32_t FORWARD_WEST = 0b0010;
+    static constexpr uint32_t FORWARD_NORTH = 0b0100;
+    static constexpr uint32_t FORWARD_SOUTH = 0b1000;
+
+    static constexpr uint32_t FORWARD_ONLY = 0b10;
+    static constexpr uint32_t WRITE_AND_FORWARD = 0b11;
+    static constexpr uint32_t MAX_NUM_ENCODINGS = sizeof(uint32_t) * CHAR_BIT / FIELD_WIDTH;
+    static constexpr uint32_t FWD_ONLY_FIELD = 0xAAAAAAAA;
+    static constexpr uint32_t WR_ONLY_FIELD = 0x55555555;
+    uint32_t hop_index;
+    uint32_t value[4];
+} tt_low_latency_routing_vector;
+
+typedef struct _tt_low_latency_routing {
+    uint32_t packet_size_bytes;
+    uint32_t target_offset_l;
+    uint32_t target_offset_h;
+    uint32_t command;
+    tt_low_latency_routing_vector route_vector;
+    uint32_t atomic_offset_l;
+    uint32_t atomic_offset_h;
+    uint16_t atomic_increment;
+    uint16_t atomic_wrap;
+} tt_low_latency_routing;
+
+static_assert(sizeof(tt_low_latency_routing) == PACKET_HEADER_SIZE_BYTES);
+
 typedef struct _tt_session {
     uint32_t command;
     uint32_t target_offset_l;  // RDMA address
@@ -135,6 +167,11 @@ typedef struct _packet_header {
     packet_params packet_parameters;
 } packet_header_t;
 #endif
+typedef struct _low_latency_packet_header {
+    tt_low_latency_routing routing;
+} low_latency_packet_header_t;
+
+static_assert(sizeof(low_latency_packet_header_t) == PACKET_HEADER_SIZE_BYTES);
 
 static_assert(sizeof(packet_header_t) == PACKET_HEADER_SIZE_BYTES);
 
