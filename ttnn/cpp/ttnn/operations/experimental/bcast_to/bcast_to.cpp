@@ -12,8 +12,8 @@
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-namespace ttnn::operations::experimental {
-
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 auto check_shape(const Tensor& input, const ttnn::Shape& output_shape) {
     auto input_shape = input.get_logical_shape();
     TT_FATAL(
@@ -51,14 +51,17 @@ auto check_shape(const Tensor& input, const ttnn::Shape& output_shape) {
             output_dim);
     }
 }
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
+namespace ttnn::operations::experimental {
 Tensor BcastTo::invoke(
     QueueId queue_id,
     const Tensor& input,
     const Shape& output_shape,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    check_shape(input, output_shape);
+    CMAKE_UNIQUE_NAMESPACE::check_shape(input, output_shape);
 
     return ttnn::prim::bcast_to(queue_id, input, output_shape, memory_config, output);
 }

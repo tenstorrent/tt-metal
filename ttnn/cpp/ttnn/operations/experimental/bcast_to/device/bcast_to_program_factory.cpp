@@ -19,15 +19,16 @@
 #include "bcast_to_device_operation.hpp"
 #include "bcast_to_utils.hpp"
 
-using namespace tt::tt_metal;
 using namespace ttnn::operations::experimental::broadcast_to;
+
+namespace ttnn::operations::experimental::broadcast_to {
+using namespace tt::tt_metal;
 
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_shape_dims(const Tensor& x) {
     const auto& shape = x.padded_shape();
     const auto& tile = x.tensor_spec().tile();
     return {shape[-4], shape[-3], shape[-2] / tile.get_height(), shape[-1] / tile.get_width()};
 }
-
 template <typename F>
 void set_or_update_runtime_arguments(
     Program& program,
@@ -73,11 +74,22 @@ void set_or_update_runtime_arguments(
         }
 
         uint32_t oHtWt = oHt * oWt;
+        uint32_t tiles_per_batch = oHtWt * oC;
+        uint32_t start_n = start_tile_id / tiles_per_batch;
+        uint32_t start_remaining = start_tile_id % tiles_per_batch;
+        uint32_t start_c = start_remaining / oHtWt;
+        uint32_t start_t = start_remaining % oHtWt;
+        uint32_t start_th = start_t / oWt;
+        uint32_t start_tw = start_t % oWt;
+
         std::array reader_runtime_args = {
             input.buffer()->address(),
-            start_tile_id,
+            start_n,
+            start_c,
+            start_t,
+            start_th,
+            start_tw,
             num_tiles_per_core,
-            oHtWt,
             iHt * iWt * iC * (iN > 1),
             iHt * iWt * (iC > 1),
             oN,
@@ -88,21 +100,28 @@ void set_or_update_runtime_arguments(
 
         std::array writer_runtime_args = {
             output.buffer()->address(),
-            start_tile_id,
+            start_n,
+            start_c,
+            start_t,
+            start_th,
+            start_tw,
             num_tiles_per_core,
-            oHtWt,
             iHt * iWt * iC * (iN > 1),
             iHt * iWt * (iC > 1),
             oN,
             oC,
             oHt,
-            oWt};
+            oWt,
+            start_tile_id};
         handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
         std::array compute_runtime_args = {
-            start_tile_id,
+            start_n,
+            start_c,
+            start_t,
+            start_th,
+            start_tw,
             num_tiles_per_core,
-            oHtWt,
             iHt * iWt * iC * (iN > 1),
             iHt * iWt * (iC > 1),
             oN,
@@ -115,7 +134,6 @@ void set_or_update_runtime_arguments(
     }
 }
 
-namespace ttnn::operations::experimental::broadcast_to {
 BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastToTileFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
