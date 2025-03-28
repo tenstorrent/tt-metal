@@ -19,7 +19,7 @@ class TtDownsample2D(nn.Module):
         weights = state_dict[f"{module_path}.conv.weight"]
         bias = state_dict[f"{module_path}.conv.bias"]
 
-        self.tt_weights = ttnn.from_torch(weights, ttnn.bfloat16)  # , device=device#, layout=ttnn.TILE_LAYOUT
+        self.tt_weights = ttnn.from_torch(weights, ttnn.bfloat16)
         self.tt_bias = (
             ttnn.from_torch(bias.unsqueeze(0).unsqueeze(0).unsqueeze(0), ttnn.bfloat16) if bias is not None else None
         )
