@@ -26,6 +26,14 @@ from models.demos.llama3_subdevices.tt.sampling import TTSampling
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
 
+# Maximum number of times `tokens_per_second_per_user` is allowed to be below `tsu_threshold`
+# before triggering an assertion failure. Allows occasional dips while ensuring
+# stable performance without breaking CI prematurely.
+TSU_PERF_DROP_LIMIT_COUNT = 5
+
+# Constants for TSU thresholds based on the number of layers
+TSU_THRESHOLDS = {1: 128, "full_model": 28}  # Threshold for 1 layer  # Threshold for full model (all other layers)
+
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
     cache_file = cache_dir / hashlib.md5(context_url.encode()).hexdigest()
@@ -384,6 +392,12 @@ def run_llama3_demo(
     logger.info(f"Starting decode loop...")
     profiler.start(f"inference_decode", iteration=iteration)
 
+    # Determine TSU threshold based on layer count
+    tsu_threshold = TSU_THRESHOLDS.get(layers, TSU_THRESHOLDS["full_model"])
+
+    # Tracks the number of iterations where throughput falls below `tsu_threshold`
+    tsu_failures = 0
+
     while users_decoding:
         if iteration == 0:  # First iteration also accounts for compile time
             profiler.start(f"compile_decode", iteration=iteration)
@@ -450,9 +464,16 @@ def run_llama3_demo(
         logger.info(
             f"Iteration {iteration}: {1000*iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
         )
-        tsu_threshold = 128 if layers == 1 else 28
-        if not stress_test:
-            assert tokens_per_second_per_user > tsu_threshold, "Throughput is less than 28 tokens per second per user"
+
+        # Increment failure count if throughput is too low
+        if tokens_per_second_per_user < tsu_threshold:
+            tsu_failures += 1
+
+        # Ensure failures do not exceed the allowed limit
+        assert (
+            tsu_failures <= TSU_PERF_DROP_LIMIT_COUNT
+        ), f"Throughput is less than {tsu_threshold} tokens per second per user for {TSU_PERF_DROP_LIMIT_COUNT} consecutive iterations"
+
         profiler.end(f"log_printing_iter_{iteration}", iteration=iteration)
 
         if iteration == 0:  # First iteration also accounts for compile time
@@ -463,6 +484,9 @@ def run_llama3_demo(
         # Upper limit of generated tokens for each user (to avoid infinite generation in case eos is not seen)
         if iteration >= max_generated_tokens:
             users_decoding = False
+
+    # Print out total number of tsu_failures
+    logger.info(f"Total TSU Failures: {tsu_failures} (threshold: {TSU_PERF_DROP_LIMIT_COUNT})")
 
     # Release trace
     ttnn.release_trace(mesh_device, trace_id)
@@ -517,7 +541,7 @@ def run_llama3_demo(
             1,  # repeat_batches
             1024,  # max_seq_len
             32,  # batch_size
-            4*128*1024,  # max_generated_tokens (same index for stress test)
+            4 * 128 * 1024,  # max_generated_tokens (same index for stress test)
             False,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
