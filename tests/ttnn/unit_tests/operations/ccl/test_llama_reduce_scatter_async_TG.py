@@ -271,7 +271,7 @@ def run_reduce_scatter_test(
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 83968, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True
+    "device_params", [{"trace_region_size": 90000, "dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True
 )
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(

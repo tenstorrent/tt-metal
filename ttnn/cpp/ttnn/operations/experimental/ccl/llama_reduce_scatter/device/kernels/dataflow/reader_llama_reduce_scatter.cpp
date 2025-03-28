@@ -6,6 +6,7 @@
 #include "dataflow_api.h"
 #include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+// #include <unistd.h>
 
 template <uint8_t noc_ind = noc_index>
 FORCE_INLINE std::uint64_t static_noc_multicast_addr(
@@ -121,7 +122,7 @@ void kernel_main() {
 
             noc_async_read(output_noc_address, receiver_l1_address, page_size_bytes);
         }
-
+        // noc_semaphore_wait((uint32_t*)receiver_semaphore_address, other_devices*3);
         if (receiver_core) {
             // Precompute multicast semaphore address once
             const uint64_t multicast_semaphore_addr = static_noc_multicast_addr(
@@ -131,8 +132,16 @@ void kernel_main() {
                 packet_worker_end_y,
                 local_semaphore_address);
 
-            noc_semaphore_wait((uint32_t*)receiver_semaphore_address, other_devices);
+            // while (*(uint32_t*)receiver_semaphore_address != other_devices*3) {
+            //     DPRINT << "waiting for semaphore value: " << *(uint32_t*)receiver_semaphore_address << ENDL();
+            // }
 
+            noc_semaphore_wait((uint32_t*)receiver_semaphore_address, other_devices * 3);
+            // uint32_t start_time = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+            // uint32_t end_time = start_time;
+            // while (end_time - start_time < 1000000) {
+            //     end_time = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+            // }
             noc_semaphore_set_multicast(
                 receiver_semaphore_address,
                 multicast_semaphore_addr,
@@ -140,7 +149,7 @@ void kernel_main() {
 
             noc_async_atomic_barrier();
         } else {
-            noc_semaphore_wait((uint32_t*)local_semaphore_address, other_devices);
+            noc_semaphore_wait((uint32_t*)local_semaphore_address, other_devices * 3);
         }
 
         noc_async_read_barrier();

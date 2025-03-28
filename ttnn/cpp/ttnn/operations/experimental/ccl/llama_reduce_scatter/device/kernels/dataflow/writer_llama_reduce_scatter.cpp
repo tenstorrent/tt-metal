@@ -120,7 +120,6 @@ void kernel_main() {
         const uint32_t packet_offset = base_receiver_l1_addr + chip_id_offset;
 
         for (uint32_t target_device_id : device_order) {
-            DPRINT << "Packet header size: " << (uint32_t)packet_header_size << ENDL();
             // Calculate device-specific constants once per device
             const uint32_t num_hops = std::abs(int(target_device_id) - int(chip_id));
             unicast_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
@@ -140,10 +139,6 @@ void kernel_main() {
                 cb_wait_front(fabric_sender_cb_id, curr_packet_num_pages);
                 const auto sender_l1_addr = get_read_ptr(fabric_sender_cb_id);
 
-                if (curr_packet_size_bytes > 0) {
-                    DPRINT << "Sending packet " << packet << " to " << receiver_core_x << ", " << receiver_core_y
-                           << " with size " << curr_packet_size_bytes << " bytes" << ENDL();
-                }
                 unicast_packet_header->to_noc_unicast_write(
                     tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, curr_packet_size_bytes);
 
@@ -157,32 +152,33 @@ void kernel_main() {
 
                 cb_pop_front(fabric_sender_cb_id, curr_packet_num_pages);
             }
-            if (is_atomic_inc_core) {
-                noc_semaphore_wait((uint32_t*)sender_ready_semaphore_address, num_sender_cores - 1);
-                noc_semaphore_set((uint32_t*)sender_ready_semaphore_address, INVALID);
+            // if (is_atomic_inc_core) {
+            // noc_semaphore_wait((uint32_t*)sender_ready_semaphore_address, num_sender_cores - 1);
+            // noc_semaphore_set((uint32_t*)sender_ready_semaphore_address, INVALID);
 
-                noc_semaphore_set_multicast(sender_next_semaphore, sender_next_multicast_semaphore_addr, num_dests);
-                noc_async_atomic_barrier();
-                sem_inc_packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                    sem_noc_addr,
-                    static_cast<uint16_t>(1),  // increment 1
-                    32});
+            // noc_semaphore_set_multicast(sender_next_semaphore, sender_next_multicast_semaphore_addr, num_dests);
+            // noc_async_atomic_barrier();
+            const uint64_t sem_noc_addr =
+                get_noc_addr(packet_receiver_core_x, packet_receiver_core_y, receiver_semaphore_address);
+            sem_inc_packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                sem_noc_addr,
+                static_cast<uint16_t>(1),  // increment 1
+                32});
 
-                // Write the mcast packet (forward)
-                sem_inc_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
-                fabric_conn.wait_for_empty_write_slot();
+            // Write the mcast packet (forward)
+            sem_inc_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
+            fabric_conn.wait_for_empty_write_slot();
 
-                fabric_conn.send_payload_flush_blocking_from_address(
-                    (uint32_t)sem_inc_packet_header, packet_header_size);
+            fabric_conn.send_payload_flush_blocking_from_address((uint32_t)sem_inc_packet_header, packet_header_size);
 
-            } else {
-                const uint64_t sender_noc_addr =
-                    get_noc_addr(sender_atomic_inc_core_x, sender_atomic_inc_core_y, sender_ready_semaphore_address);
-                noc_semaphore_inc(sender_noc_addr, 1);
-                noc_async_atomic_barrier();
-                noc_semaphore_wait((uint32_t*)sender_next_semaphore, VALID);
-                noc_semaphore_set((uint32_t*)sender_next_semaphore, INVALID);
-            }
+            // } else {
+            //     const uint64_t sender_noc_addr =
+            //         get_noc_addr(sender_atomic_inc_core_x, sender_atomic_inc_core_y, sender_ready_semaphore_address);
+            //     noc_semaphore_inc(sender_noc_addr, 1);
+            //     noc_async_atomic_barrier();
+            //     noc_semaphore_wait((uint32_t*)sender_next_semaphore, VALID);
+            //     noc_semaphore_set((uint32_t*)sender_next_semaphore, INVALID);
+            // }
         }
 
         if (is_atomic_inc_core) {
