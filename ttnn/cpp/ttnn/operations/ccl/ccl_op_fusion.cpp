@@ -99,7 +99,7 @@ void MatmulFusedOpSignaler::init_all_gather(
 void MatmulFusedOpSignaler::init_fused_op(
     Program& program,
     const IDevice* device,
-    const std::variant<CoreRange, CoreRangeSet, CoreCoord>& core_range_to_signal,
+    const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
     FusedOpSignalerMode fused_op_signaler_mode) {
     this->fused_op_signaler_mode = fused_op_signaler_mode;
 

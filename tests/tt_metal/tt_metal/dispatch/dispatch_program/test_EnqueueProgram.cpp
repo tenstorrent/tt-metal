@@ -129,9 +129,7 @@ void initialize_dummy_kernels(Program& program, const CoreRangeSet& cr_set) {
 }
 
 void initialize_dummy_semaphores(
-    Program& program,
-    const std::variant<CoreRange, CoreRangeSet, CoreCoord>& core_ranges,
-    const vector<uint32_t>& init_values) {
+    Program& program, const std::variant<CoreRange, CoreRangeSet>& core_ranges, const vector<uint32_t>& init_values) {
     for (uint32_t i = 0; i < init_values.size(); i++) {
         CreateSemaphore(program, core_ranges, init_values[i]);
     }

@@ -177,8 +177,6 @@ CoreRangeSet::CoreRangeSet(const std::set<CoreRange>& core_ranges) : ranges_(cor
 
 CoreRangeSet::CoreRangeSet(const CoreRange& core_range) : ranges_{core_range} {}
 
-CoreRangeSet::CoreRangeSet(const CoreCoord& core) : ranges_{CoreRange(core)} {}
-
 void swap(CoreRangeSet& first, CoreRangeSet& second) {
     std::scoped_lock lock(first.ranges_guard, second.ranges_guard);
     std::swap(first.ranges_, second.ranges_);
@@ -280,11 +278,6 @@ template CoreRangeSet CoreRangeSet::merge<std::set<CoreRange>>(const std::set<Co
 template <>
 CoreRangeSet CoreRangeSet::merge<CoreRangeSet>(const CoreRangeSet& other) const {
     return this->merge(other.ranges());
-}
-
-template <>
-CoreRangeSet CoreRangeSet::merge<CoreCoord>(const CoreCoord& other) const {
-    return this->merge(CoreRange(other));
 }
 
 bool CoreRangeSet::intersects(const CoreCoord& other) const {

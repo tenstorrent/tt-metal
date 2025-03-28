@@ -96,7 +96,7 @@ struct MatmulFusedOpSignaler {
     void init_fused_op(
         tt::tt_metal::Program& program,
         const tt::tt_metal::IDevice* device,
-        const std::variant<CoreRange, CoreRangeSet, CoreCoord>& core_range_to_signal,
+        const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
 
     void push_matmul_fused_op_rt_args(std::vector<uint32_t>& out_rt_args, bool use_in1_offset);
