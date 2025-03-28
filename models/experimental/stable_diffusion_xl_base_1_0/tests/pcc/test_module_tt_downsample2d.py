@@ -3,10 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 import torch
 import pytest
+import ttnn
 from models.experimental.stable_diffusion_xl_base_1_0.ttnn_impl.tt_downsample2d import TtDownsample2D
 from diffusers import DiffusionPipeline
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
+from models.experimental.stable_diffusion_xl_base_1_0.ttnn_impl.sdxl_utility import (
+    to_channel_last_ttnn,
+    from_channel_last_ttnn,
+)
 
 
 @pytest.mark.parametrize("input_shape, down_block_id", [((1, 320, 128, 128), 0), ((1, 640, 64, 64), 1)])
@@ -31,8 +36,10 @@ def test_downsample2d(device, input_shape, down_block_id, stride, padding, dilat
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_output_tensor = torch_downsample(torch_input_tensor)
 
-    ttnn_input_tensor = tt_downsample.prepare_input(torch_input_tensor)
-    ttnn_output_tensor, output_shape = tt_downsample.forward(ttnn_input_tensor)
-    output_tensor = tt_downsample.postprocess_output(ttnn_output_tensor, output_shape)
+    ttnn_input_tensor = to_channel_last_ttnn(torch_input_tensor, ttnn.bfloat16, device, ttnn.DRAM_MEMORY_CONFIG)
+    ttnn_output_tensor, output_shape = tt_downsample.forward(ttnn_input_tensor, input_shape)
+    output_tensor = from_channel_last_ttnn(
+        ttnn_output_tensor, [input_shape[0], output_shape[0], output_shape[1], torch_output_tensor.shape[1]]
+    )
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.998)
