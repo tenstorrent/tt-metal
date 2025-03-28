@@ -12,13 +12,15 @@ from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SI
 # import pytest
 
 
-def run_dm_tests(profile):
+def run_dm_tests(profile, gtest_filter):
     log_file_path = f"{PROFILER_LOGS_DIR}/{PROFILER_DEVICE_SIDE_LOG}"
     if profile or not os.path.exists(log_file_path):
         logger.info(f"Profiling Kernels...")
-        os.system(
-            f"TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 {os.environ['TT_METAL_HOME']}/build/test/tt_metal/unit_tests_dm"
-        )
+        cmd = f"TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 {os.environ['TT_METAL_HOME']}/build/test/tt_metal/unit_tests_dm"
+
+        if gtest_filter:
+            cmd += f" --gtest-filter='*{gtest_filter}*'"
+        os.system(cmd)
 
     setup = device_post_proc_config.default_setup()
     setup.deviceInputLog = log_file_path
@@ -74,5 +76,7 @@ def run_dm_tests(profile):
 if __name__ == "__main__":
     parser = ArgumentParser(description="Generate reference outputs for LLaMA accuracy testing.")
     parser.add_argument("-p", "--profile", action="store_true")
+    parser.add_argument("--gtest-filter", dest="gtest_filter")
     args = parser.parse_args()
-    run_dm_tests(args.profile)
+
+    run_dm_tests(*vars(args).values())
