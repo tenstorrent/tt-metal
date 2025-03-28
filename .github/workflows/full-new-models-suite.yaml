@@ -30,11 +30,15 @@ jobs:
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      version: 22.04
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
     with:
       tracy: true
       build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      version: 22.04
     secrets: inherit
   device-perf-single-card:
     needs: build-artifact-profiler
