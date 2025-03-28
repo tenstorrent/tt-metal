@@ -12,9 +12,9 @@ from loguru import logger
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-from models.experimental.functional_vit.tt import ttnn_optimized_sharded_vit_wh
+from models.demos.vit.tt import ttnn_optimized_sharded_vit_wh
 from models.utility_functions import torch2tt_tensor, is_blackhole
-from models.experimental.vit.vit_helper_funcs import get_data_loader, get_batch
+from models.demos.wormhole.vit.demo.vit_helper_funcs import get_data_loader, get_batch
 
 import ast
 

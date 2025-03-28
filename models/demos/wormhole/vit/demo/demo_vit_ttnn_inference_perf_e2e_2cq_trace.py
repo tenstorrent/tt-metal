@@ -9,7 +9,7 @@ from loguru import logger
 
 import ttnn
 
-from models.experimental.functional_vit.tt import ttnn_optimized_sharded_vit_wh
+from models.demos.vit.tt import ttnn_optimized_sharded_vit_wh
 from models.utility_functions import is_blackhole
 
 from models.utility_functions import (
