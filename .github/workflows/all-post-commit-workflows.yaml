@@ -183,6 +183,7 @@ jobs:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   run-profiler-regression:
     needs: build-artifact-profiler
     strategy:

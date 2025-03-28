@@ -1,0 +1,62 @@
+name: Setup Job
+description: Common setup steps for workflows
+inputs:
+  build-artifact-name:
+    required: false
+    description: Name of the build artifact
+    default: ''
+  wheel-artifact-name:
+    required: false
+    description: Name of the wheel artifact
+    default: ''
+  path:
+    required: false
+    description: Where to checkout
+    default: docker-job
+runs:
+  using: "composite"
+  steps:
+    - name: 🧬 Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        path: ${{ inputs.path }}
+
+    - name: 🧪 Check Required Tools
+      run: |
+        echo "🔍 Verifying tools..."
+        command -v tar >/dev/null 2>&1 && tar --version || { echo "❌ tar not found"; exit 1; }
+        command -v pip3 >/dev/null 2>&1 && pip3 --version || { echo "❌ pip3 not found"; exit 1; }
+      shell: bash
+
+    - name: 📦 Download Build Artifact
+      if: ${{ inputs.build-artifact-name != '' }}
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ inputs.build-artifact-name }}
+        path: ${{ inputs.path }}
+
+    - name: 📂 Extract Build Files
+      if: ${{ inputs.build-artifact-name != '' }}
+      working-directory: ${{ inputs.path }}
+      run: tar -xf ttm_any.tar
+      shell: bash
+
+    - name: 🧪 Download Python Wheel
+      if: ${{ inputs.wheel-artifact-name != '' }}
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ inputs.wheel-artifact-name }}
+        path: ${{ inputs.path }}
+
+    - name: 💿 Install Wheel
+      if: ${{ inputs.wheel-artifact-name != '' }}
+      working-directory: ${{ inputs.path }}
+      run: |
+        echo "📂 In directory: $(pwd)"
+        echo "📄 Files:"
+        ls -la
+        WHEEL_FILENAME=$(ls -1 *.whl)
+        echo "📦 Installing $WHEEL_FILENAME"
+        pip3 install "$WHEEL_FILENAME"
+      shell: bash
