@@ -185,6 +185,9 @@ CachedMeshWorkload<typename ConcreteProgramFactory::shared_variables_t> create_m
         return CachedMeshWorkload<shared_vars_t>{std::move(mesh_workload), std::move(shared_variables)};
     } else {
         // Create separate programs for each device.
+        tt::log_warning(
+            tt::LogOp,
+            "Tensors that are distributed across mesh device unevenly negatively affect Op dispatch performance.");
         for (const auto& coord : extract_tensor_coordinates(tensor_args)) {
             auto cached_program = make_program(coord);
             const ttnn::MeshCoordinateRange coordinate_range(coord, coord);
@@ -222,14 +225,17 @@ void override_mesh_runtime_arguments(
     const TensorArgs& tensor_args,
     TensorReturnValue& tensor_return_value) {
     ConcreteProgramFactory program_factory;
-
+    // Update RTAs per program once
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_variables = cached_workload.shared_variables.at(coordinate_range);
-
-        for (const auto& coord : coordinate_range) {
-            apply_override_runtime_arguments(
-                program_factory, program, shared_variables, attrs, coord, tensor_args, tensor_return_value);
-        }
+        apply_override_runtime_arguments(
+            program_factory,
+            program,
+            shared_variables,
+            attrs,
+            *(coordinate_range.begin()),
+            tensor_args,
+            tensor_return_value);
     }
 }
 
