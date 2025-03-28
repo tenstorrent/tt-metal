@@ -136,16 +136,14 @@ struct MeshDeviceOperationAdapter {
         for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
             auto& shared_variables = cached_workload.shared_variables.at(coordinate_range);
 
-            for (const auto& coord : coordinate_range) {
-                mesh_device_operation_utils::apply_override_runtime_arguments(
-                    program_factory,
-                    program,
-                    shared_variables,
-                    attrs,
-                    *(coordinate_range.begin()),
-                    tensor_args,
-                    tensor_return_value);
-            }
+            mesh_device_operation_utils::apply_override_runtime_arguments(
+                program_factory,
+                program,
+                shared_variables,
+                attrs,
+                *(coordinate_range.begin()),
+                tensor_args,
+                tensor_return_value);
         }
     }
 
