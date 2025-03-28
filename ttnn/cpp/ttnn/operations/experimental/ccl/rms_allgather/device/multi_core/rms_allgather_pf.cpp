@@ -355,8 +355,8 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     ex_external_CB_size = ex_external_CB_size * pre_all_gather_stats_block_tiles;
     uint32_t num_none_all_to_all_workers = num_blocks - num_cores_all_to_all;
 
-    CoreCoord start_core = {0, 0};                   // Place all gather in start core
-    CoreRange sender_cores(start_core, start_core);  // place all gather in sender core
+    CoreCoord start_core = {0, 0};
+    CoreRange sender_cores(start_core, start_core);
     CoreRangeSet all_to_all_cores;
     CoreRangeSet all_to_all_workers_except_sender;
     CoreRangeSet not_all_to_all_workers;
@@ -437,10 +437,11 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
         not_all_to_all_workers = applyStartOffset(not_all_to_all_workers, grid_offset.value());
     }
     // Mcast args
+    auto post_fusion_semaphore_core = CoreCoord(0, 0);
     auto reduce_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto reduce_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto reduce_second_stage_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
-
+    uint32_t post_fusion_semaphore_id = tt::tt_metal::CreateSemaphore(program, post_fusion_semaphore_core, 0);
     // Create circular buffers
 
     // in1 sharded
@@ -997,12 +998,12 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
 
                 if (writer_kernel_id == writer_mcast_sender_kernels_id) {
                     auto& runtime_args = writer_sender_args_by_core[core.x][core.y];
-                    runtime_args[5] = dst_buffer->address();
                     runtime_args[3] = semaphore.address();
+                    runtime_args[5] = dst_buffer->address();
                 } else if (writer_kernel_id == writer_mcast_receiver_kernels_id) {
                     auto& runtime_args = writer_receiver_args_by_core[core.x][core.y];
-                    runtime_args[5] = dst_buffer->address();
                     runtime_args[3] = semaphore.address();
+                    runtime_args[5] = dst_buffer->address();
                 }
             }
             UpdateDynamicCircularBufferAddress(program, cb_in0, *src_buffer_a);

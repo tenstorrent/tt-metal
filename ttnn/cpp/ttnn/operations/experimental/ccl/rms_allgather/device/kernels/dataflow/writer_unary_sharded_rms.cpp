@@ -25,11 +25,11 @@ void kernel_main() {
     constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(8);
     constexpr uint32_t num_links = get_compile_time_arg_val(9);
     const uint32_t scalar_w = get_arg_val<uint32_t>(1);
-    generate_reduce_scaler(cb_in_2, scalar_w);
+    wh_generate_reduce_scaler<false>(cb_in_2, scalar_w);
 
     if constexpr (is_all_to_all_worker) {
         const uint32_t scalar_c = get_arg_val<uint32_t>(0);
-        generate_reduce_scaler(cb_in_4, scalar_c);
+        wh_generate_reduce_scaler<false>(cb_in_4, scalar_c);
     }
     size_t arg_idx = 2;
     const uint32_t iteration_number = get_arg_val<uint32_t>(arg_idx++);
@@ -52,8 +52,9 @@ void kernel_main() {
         arg_idx += num_cores;
         tt_l1_ptr uint32_t* core_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
         arg_idx += num_cores;
-        size_t arg_for_fab = arg_idx;
-        auto fabric_connection = FabricConnectionManager::build_from_args(arg_idx);
+        auto fabric_connection =
+            FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
+                arg_idx);
 
         // packet header cb
         cb_reserve_back(reserved_packet_header_cb_id, 1);
@@ -74,9 +75,7 @@ void kernel_main() {
             tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
         pkt_hdr_backward->to_chip_multicast(
             tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
-        if (fabric_connection.is_logically_connected()) {
-            fabric_connection.open();
-        }
+        fabric_connection.open_finish();
         // 1. mcast via fabric to remote tensor addresses
         uint32_t tiles_read = 0;
         uint32_t shard_tile_id = first_core_tile_start_offset;
@@ -130,6 +129,7 @@ void kernel_main() {
             fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
                 packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
         }
+        fabric_connection.close();
         // increment locally
         uint64_t out_ready_sem_noc_addr =
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
@@ -140,9 +140,6 @@ void kernel_main() {
         if (iteration_number == 0) {
             const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem_bank_addr);
             noc_inline_dw_write(dest_noc_addr, 0);
-        }
-        if (fabric_connection.is_logically_connected()) {
-            fabric_connection.close();
         }
         noc_async_write_barrier();
     }
