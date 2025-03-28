@@ -59,6 +59,7 @@ def summarize_to_csv(
                     "Line Size",
                     "Num Links",
                     "Disable Interior Workers",
+                    "Unidirectional",
                     "Bandwidth (B/c)",
                     "Packets/Second",
                 ]
@@ -74,6 +75,7 @@ def summarize_to_csv(
                 line_size,
                 num_links,
                 disable_sends_for_interior_workers,
+                unidirectional,
                 bandwidth,
                 packets_per_second,
             ]
@@ -236,9 +238,13 @@ def run_fabric_edm(
     bw_threshold = 0.07
     if packet_size <= 2048 and fabric_mode != FabricTestMode.Linear:
         bw_threshold = 0.12
-    assert expected_bw - bw_threshold <= bandwidth <= expected_bw + bw_threshold, "Bandwidth mismatch"
+    assert (
+        expected_bw - bw_threshold <= bandwidth <= expected_bw + bw_threshold
+    ), f"Bandwidth mismatch. expected: {expected_bw} B/c, actual: {bandwidth} B/c"
     if expected_Mpps is not None:
-        assert expected_Mpps - 0.01 <= mega_packets_per_second <= expected_Mpps + 0.01, "Packets per second mismatch"
+        assert (
+            expected_Mpps - 0.01 <= mega_packets_per_second <= expected_Mpps + 0.01
+        ), f"Packets per second mismatch. expected: {expected_Mpps} Mpps, actual: {mega_packets_per_second} Mpps"
 
 
 @pytest.mark.parametrize("num_mcasts", [200000])
@@ -330,6 +336,7 @@ def test_fabric_8chip_one_link_edm_mcast_full_ring_bw(
     )
 
 
+# expected_Mpps = expected millions of packets per second
 @pytest.mark.parametrize("num_mcasts", [200000])
 @pytest.mark.parametrize("num_unicasts", [0])
 @pytest.mark.parametrize("num_op_invocations", [1])
@@ -608,7 +615,9 @@ def print_bandwidth_summary():
     df = pd.read_csv(csv_path)
 
     # Sort by test name and packet size
-    df = df.sort_values(["Test Name", "Packet Size", "Line Size", "Num Links", "Disable Interior Workers"])
+    df = df.sort_values(
+        ["Test Name", "Packet Size", "Line Size", "Num Links", "Disable Interior Workers", "Unidirectional"]
+    )
 
     # Format table with raw values
     table = tabulate(
@@ -619,6 +628,7 @@ def print_bandwidth_summary():
             "Line Size",
             "Num Links",
             "Disable Interior Workers",
+            "Unidirectional",
             "Bandwidth (B/c)",
             "Packets/Second",
         ],
