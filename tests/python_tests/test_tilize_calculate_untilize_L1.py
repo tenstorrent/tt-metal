@@ -67,7 +67,6 @@ param_ids = generate_param_ids(all_params)
     clean_params(all_params),
     ids=param_ids,
 )
-@pytest.mark.skip(reason="Not fully implemented")
 def test_tilize_calculate_untilize_L1(
     testname, formats, dest_acc, mathop, math_fidelity, tile_cnt
 ):
@@ -111,7 +110,6 @@ def test_tilize_calculate_untilize_L1(
             else torch.bfloat16
         ),
     )
-    print(res_tensor.view(32, 32))
 
     if formats.pack_dst in [DataFormat.Float16_b, DataFormat.Float16]:
         atol = 0.1

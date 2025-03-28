@@ -44,6 +44,24 @@ void run_kernel()
     _llk_unpack_tilize_init_(UNPACK_B_IN, UNPACK_B_OUT, 1, FACE_R_DIM, false);
     _llk_unpack_tilize_(L1_ADDRESS(buffer_B), 0, UNPACK_B_IN, 1, FACE_R_DIM, 4, false);
 
+    /*
+    In this test we fuse two LLK pipeline runs, one is to unpack untilized buffers/operands from L1 (39-45) and pack them in tilized format(130-145).
+    The next run unpacks these two tilized operands, performs a math compute and pack them out in utilized format.
+    Since we have set all three TRISCs to run at the same time, fusing these two runs will cause a race condition where unpacker will immediately read from
+    L1 before the packer has completed writing to L1. To prevent the unpacker from prematurely reading from L1 before packer has completed write
+    the unpacker needs to wait for packer to finish writing to L1 before it starts reading from L1 for the second iteration of LLK pipeline.
+
+    Synchronization is accomplished between the packer and unpacker operations using the PACK_DONE semaphore.
+    The packer first writes data to L1 and signals the unpacker by incrementing the semaphore (PACK_DONE = 1).
+    The unpacker waits for the semaphore to be set to 1 before reading the data from L1.
+    This ensures that the unpacker does not read premature or incorrect data, preventing data race conditions.
+    Once the unpacker starts reading, it decrements the semaphore (PACK_DONE = 0) signalling it has started processing data.
+    */
+
+    t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(
+        semaphore::PACK_DONE); // Unpacker waits on signal when packer will increment semaphore to 1 (waits while semaphore == 0), utilizing SEMWAIT.
+    t6_semaphore_get<>(semaphore::PACK_DONE); // It will acquire the semaphore t6_semaphore_get (decrementing the semaphore back to 0) signalling it has begun
+                                              // processing data from L1
     _llk_unpack_AB_hw_configure_<is_fp32_dest_acc_en, StochRndType::None>(UNPACK_A_IN, UNPACK_B_IN, UNPACK_A_OUT, UNPACK_B_OUT, FACE_R_DIM, 0, 4);
     _llk_unpack_AB_init_<>();
     _llk_unpack_AB_<>(L1_ADDRESS(buffer_A_tilized), L1_ADDRESS(buffer_B_tilized));
@@ -132,9 +150,10 @@ void run_kernel()
 
     _llk_packer_wait_for_math_done_();
     _llk_pack_<DstSync::SyncFull, UNTILIZE, is_fp32_dest_acc_en>(operand_B_dst_index, L1_ADDRESS(buffer_B_tilized));
-    _llk_pack_dest_section_done_<DstSync::SyncFull, is_fp32_dest_acc_en>();
-
-    // Needed to reconfigure pack for regular not tilized pack for BH
+    _llk_pack_dest_section_done_<DstSync::SyncFull, is_fp32_dest_acc_en>(); // Packer will execute _llk_pack_dest_section_done_ function which ensures the write
+                                                                            // to L1 is fully is complete.
+    t6_semaphore_post<>(semaphore::PACK_DONE); // The packer signals to the unpacker that it has finished writing to L1 by posting (incrementing) the semaphore.
+                                               // Now unpacker's wait condition is satisfied, allowing it to begin processing data from L1.
 
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<UNTILIZE, is_fp32_dest_acc_en, !TILIZE>(PACK_IN, PACK_OUT, 16 * 16 * 4);

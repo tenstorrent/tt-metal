@@ -33,6 +33,7 @@ void device_setup()
     // Initialize tensix semaphores
     TTI_SEMINIT(1, 0, ckernel::semaphore::UNPACK_TO_DEST);
     TTI_SEMINIT(1, 0, ckernel::semaphore::MATH_DONE);
+    TTI_SEMINIT(1, 0, ckernel::semaphore::PACK_DONE);
 }
 
 int main()

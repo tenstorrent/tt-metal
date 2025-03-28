@@ -33,13 +33,9 @@ int main()
     *mailbox                            = 0x2; // write value different than 1 to mailbox to indicate kernel is running
 
     std::fill(ckernel::regfile, ckernel::regfile + 64, 0);
-    *mailbox = 0x3;
     ckernel::reset_cfg_state_id();
-    *mailbox = 0x4;
     ckernel::reset_dest_offset_id();
-    *mailbox = 0x5;
     run_kernel();
-    *mailbox = 0x6;
     ckernel::tensix_sync();
     *mailbox = ckernel::KERNEL_COMPLETE; // 0x1
 
