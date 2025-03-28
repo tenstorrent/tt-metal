@@ -17,12 +17,21 @@ from models.tt_transformers.tt.common import (
     calculate_hidden_dim,
     get_out_subblock_w,
     encode_prompt_instruct,
+    encode_prompt_hf,
+    nearest_multiple,
 )
 from typing import Tuple
 from models.utility_functions import nearest_32
 from pathlib import Path
+from enum import Enum, auto
 from tqdm import tqdm
 from dataclasses import dataclass
+from models.tt_transformers.tt.load_checkpoints import (
+    load_meta_state_dict,
+    load_hf_state_dict,
+    convert_hf_to_meta,
+    standardize_hf_keys,
+)
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
     PREFETCHER_NOC1_GRID,
@@ -108,6 +117,11 @@ class LlamaOptimizations:
         return cls(bfp4_mlp=True)
 
 
+class CheckpointType(Enum):
+    Meta = auto()
+    HuggingFace = auto()
+
+
 class TtModelArgs:
     OP_KEYS = (
         # Embedding
@@ -155,6 +169,7 @@ class TtModelArgs:
         self.max_batch_size = max_batch_size
         self.tile_size = 32
         self.is_70b = False
+        self.from_hf_url = False  # updated below if true
         self.max_prefill_chunk_size = max_seq_len
         self.use_prefetcher = False
 
@@ -178,95 +193,84 @@ class TtModelArgs:
         self.start_core = ttnn.CoreCoord(1, 0)
 
         LLAMA_DIR = os.getenv("LLAMA_DIR")
+        HF_MODEL = os.getenv("HF_MODEL")
+        assert not (LLAMA_DIR and HF_MODEL), "Only one of LLAMA_DIR or HF_MODEL should be set"
         if LLAMA_DIR:
-            if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH"), os.getenv("LLAMA_CACHE_PATH")]):
-                logger.warning(
-                    "LLAMA_DIR is set and will override LLAMA_CKPT_DIR, LLAMA_TOKENIZER_PATH, and LLAMA_CACHE_PATH"
-                )
-            self.DEFAULT_CKPT_DIR = LLAMA_DIR
-            self.DEFAULT_TOKENIZER_PATH = LLAMA_DIR
-            self.DEFAULT_CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
+            if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH")]):
+                logger.warning("LLAMA_DIR will override LLAMA_CKPT_DIR and LLAMA_TOKENIZER_PATH")
+            self.CKPT_DIR = LLAMA_DIR
+            self.TOKENIZER_PATH = LLAMA_DIR
+            self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
+            if not self.CACHE_PATH:
+                self.CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
+            self.model_name = os.path.basename(LLAMA_DIR)  # May be overridden by config
+        elif HF_MODEL:
+            self.CKPT_DIR = HF_MODEL
+            self.TOKENIZER_PATH = HF_MODEL
+            self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
+            if not self.CACHE_PATH:
+                self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
+            self.model_name = HF_MODEL  # May be overridden by config
+            self.from_hf_url = True
         else:
-            assert "Please set $LLAMA_DIR to a valid checkpoint directory"
+            assert (
+                False
+            ), "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct or LLAMA_DIR to a Meta-style checkpoint directory"
 
-        if not dummy_weights:
+        if not dummy_weights and not HF_MODEL:
             # Assert if all folders and files exist
             assert os.path.exists(
-                self.DEFAULT_CKPT_DIR
-            ), f"Checkpoint directory {self.DEFAULT_CKPT_DIR} does not exist, please set LLAMA_DIR=... or LLAMA_CKPT_DIR=..."
-            assert os.path.isfile(
-                self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
-            ), f"Tokenizer file {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'} does not exist, please set LLAMA_TOKENIZER_PATH=..."
-            if not os.path.exists(self.DEFAULT_CACHE_PATH):
-                os.makedirs(self.DEFAULT_CACHE_PATH)
-            assert os.path.exists(
-                self.DEFAULT_CACHE_PATH
-            ), f"Cache directory {self.DEFAULT_CACHE_PATH} does not exist, please set LLAMA_CACHE_PATH=..."
-            # Check if weights exist in the specified folder. If not warn the user to run the download and untar script.
-            #            assert os.path.isfile(
-            #                self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"
-            #            ), f"weights consolidated.00.pth file does not exist. Please use the script `models/demos/llama3/scripts/get_weights.py` to download and untar the weights."
+                self.CKPT_DIR
+            ), f"Checkpoint directory {self.CKPT_DIR} does not exist, please set LLAMA_DIR=... or LLAMA_CKPT_DIR=..."
+            os.makedirs(self.CACHE_PATH, exist_ok=True)
 
-            logger.info(f"Checkpoint directory: {self.DEFAULT_CKPT_DIR}")
-            logger.info(f"Tokenizer file: {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'}")
-            logger.info(f"Cache directory: {self.DEFAULT_CACHE_PATH}")
+        logger.info(f"Checkpoint directory: {self.CKPT_DIR}")
+        logger.info(f"Tokenizer file: {self.TOKENIZER_PATH + '/tokenizer.model'}")
+        logger.info(f"Cache directory: {self.CACHE_PATH}")
 
-        # Set the model name based on the checkpoint directory being loaded
-        if "3.2-1B" in LLAMA_DIR:
-            local_params = "LLAMA3_2_1B_PARAMS"
-            self.model_name = "3.2-1B"
-            self.rope_scaling_factor = 32
-        elif "3.2-3B" in LLAMA_DIR:
-            local_params = "LLAMA3_2_3B_PARAMS"
-            self.model_name = "3.2-3B"
-            self.rope_scaling_factor = 32
-        elif "3.1-8B" in LLAMA_DIR:
-            local_params = "LLAMA3_1_8B_PARAMS"
-            self.model_name = "3.1-8B"
-            self.rope_scaling_factor = 8
-        elif "3.2-11B" in LLAMA_DIR:
-            local_params = "LLAMA3_2_11B_PARAMS"
-            self.model_name = "3.2-11B"
-            self.rope_scaling_factor = 8  # shared with 3.1-8B
-        elif "70B" in LLAMA_DIR:
-            local_params = "LLAMA3_1_70B_PARAMS"
-            self.model_name = "3.1-70B"
-            self.rope_scaling_factor = 8
-            self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
-            self.max_prefill_chunk_size = 64 * 1024  # 70B on T3K maxes out at 64k tokens prefill
-        elif "3.3-70B-Instruct" in LLAMA_DIR:
-            local_params = "LLAMA3_1_70B_PARAMS"
-            self.model_name = "3.1-70B"
-            self.rope_scaling_factor = 8
-            self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
-            self.max_prefill_chunk_size = 64 * 1024  # 70B on T3K maxes out at 64k tokens prefill
-        else:
-            # NOTE: 3.2-90B and 3.3-70B also use scaling factor of 8
-            raise ValueError(f"Unsupported LLAMA model: {LLAMA_DIR}")
+        # Some consumers like SentencePiece only accept str not Path for files
+        self.model_base_path = Path(self.CKPT_DIR)
+        self.model_cache_path = Path(self.CACHE_PATH)
+
+        # Load weights and tokenizer
+        self.consolidated_weights_path = self.CKPT_DIR + "/consolidated.00.pth"
+        self.tokenizer_path = self.TOKENIZER_PATH + "/tokenizer.model"
+
+        self.instruct = instruct
+        # If the weights file contain the keyword `instruct` also set self.instruct to true
+        if "instruct" in self.CKPT_DIR.lower():
+            self.instruct = True
+
+        # Load model params
+        if HF_MODEL:
+            self.checkpoint_type = CheckpointType.HuggingFace
+            self._set_hf_params(self.CKPT_DIR)
+        elif not dummy_weights:
+            self.checkpoint_type = self.detect_checkpoint_type()
+            self._set_model_params(self.CKPT_DIR)
+        else:  # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
+            self.checkpoint_type = CheckpointType.Meta
+            if "3.2-1B" in self.CKPT_DIR:
+                local_params = "LLAMA3_2_1B_PARAMS"
+            elif "3.2-3B" in self.CKPT_DIR:
+                local_params = "LLAMA3_2_3B_PARAMS"
+            elif "3.1-8B" in self.CKPT_DIR:
+                local_params = "LLAMA3_1_8B_PARAMS"
+            elif "3.2-11B" in self.CKPT_DIR:
+                local_params = "LLAMA3_2_11B_PARAMS"
+            elif "3.1-70B" in self.CKPT_DIR:
+                local_params = "LLAMA3_1_70B_PARAMS"
+            else:
+                raise ValueError(
+                    f"No local params found for {self.CKPT_DIR}, dummy weights are not supported for this model"
+                )
+            self._set_model_params(self.LOCAL_LLAMA_PARAMS[local_params])
 
         if callable(optimizations):
             self.optimizations = optimizations(self.model_name)
         else:
             self.optimizations = optimizations
 
-        # Load model params
-        if not dummy_weights:
-            self._set_llama_params(self.DEFAULT_CKPT_DIR)
-        else:  # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
-            self._set_llama_params(self.LOCAL_LLAMA_PARAMS[local_params])
-
-        # Some consumers like SentencePiece only accept str not Path for files
-        self.model_base_path = Path(self.DEFAULT_CKPT_DIR)
-        self.model_cache_path = Path(self.DEFAULT_CACHE_PATH)
-
-        # Load weights and tokenizer
-        self.consolidated_weights_path = self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"
-        self.tokenizer_path = self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
-
-        self.instruct = instruct
-        # If the weights file contain the keyword `instruct` also set self.instruct to true
-        if "instruct" in self.DEFAULT_CACHE_PATH.lower():
-            self.instruct = True
         self.dummy_weights = dummy_weights
         self.tile_padded_batch_rows = self.tile_size * int(math.ceil(self.max_batch_size / self.tile_size))
 
@@ -293,9 +297,11 @@ class TtModelArgs:
         self.model_config.update({f"{key}_TILE": ttnn.TILE_LAYOUT for key in self.OP_KEYS if "LAYOUT" in key})
 
         self.cos, self.sin = precompute_freqs(
-            self.head_dim, self.max_seq_len * 2, self.rope_theta, self.use_scaled_rope, self.rope_scaling_factor
+            self.head_dim, self.max_seq_len * 2, self.rope_theta, self.rope_scaling_factor, self.orig_context_len
         )  # for prefill
         self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
+
+        self.tokenizer = None if dummy_weights else self.create_tokenizer()
 
         device = mesh_device.get_devices()[0] if mesh_device is not None else None
         self.cluster_shape = list(mesh_device.shape)
@@ -909,6 +915,16 @@ class TtModelArgs:
                 prefetch=False,
             )
 
+            self.model_config["LM_HEAD_PREFILL_PROGCFG"] = self.matmul_1d_config_from_tensor_shapes(
+                in0_shape=(1, 1, 32, 2048),
+                in1_shape=(1, 1, 2048, 16384),
+                grid=ttnn.CoreGrid(x=7, y=8),  # (7,10) leads to hangs
+                act=None,
+                is_fp32_accumulate=False,
+                # overwrite_subblock_w=None,
+                # overwrite_subblock_h=None,
+            )
+
             attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)
             attn_input_sub_core_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
                 self.start_core, 32, self.sub_core_grids, row_wise=True
@@ -1310,23 +1326,73 @@ class TtModelArgs:
         )
         return xs_1BSH
 
-    def _set_llama_params_from_dict(self, params):
-        # Text params
-        self.dim = params["dim"]
-        self.ffn_dim_multiplier = params["ffn_dim_multiplier"]
-        self.multiple_of = params["multiple_of"]
-        self.n_heads = params["n_heads"]
-        self.n_kv_heads = params["n_kv_heads"]
-        self.n_layers = params["n_layers"]
-        self.norm_eps = params["norm_eps"]
-        self.rope_theta = params["rope_theta"]
-        self.use_scaled_rope = params["use_scaled_rope"]
+    def _set_params_from_dict(self, params):
+        # Common params with different names between Meta and HF
+        self.dim = params.get("dim", params.get("hidden_size"))
+        self.n_heads = params.get("n_heads", params.get("num_attention_heads"))
+        self.n_kv_heads = params.get("n_kv_heads", params.get("num_key_value_heads"))
+        self.n_layers = params.get("n_layers", params.get("num_hidden_layers"))
+        self.full_model_n_layers = self.n_layers
+        self.norm_eps = params.get("norm_eps", params.get("rms_norm_eps"))
         self.vocab_size = params["vocab_size"]
         self.padded_vocab_size = 128 * 1024
-        self.head_dim = self.dim // self.n_heads
-        self.hidden_dim = calculate_hidden_dim(self.dim, self.ffn_dim_multiplier, self.multiple_of)
+        self.head_dim = params.get("head_dim", self.dim // self.n_heads)
 
-        # Vision params
+        # Handle different MLP dimension specifications
+        if "intermediate_size" in params:
+            self.hidden_dim = params["intermediate_size"]
+            self.ffn_dim_multiplier = None
+            self.multiple_of = None
+        else:
+            self.ffn_dim_multiplier = params["ffn_dim_multiplier"]
+            self.multiple_of = params["multiple_of"]
+            self.hidden_dim = calculate_hidden_dim(self.dim, self.ffn_dim_multiplier, self.multiple_of)
+
+        if "_name_or_path" in params:
+            self.model_name = os.path.basename(params["_name_or_path"])
+
+        if self.base_model_name == "Qwen2.5-7B" and self.num_devices not in [0, 2, 4]:
+            raise AssertionError(
+                "Qwen2.5-7B is only supported on 2 or 4 devices, run on an N300 or use MESH_DEVICE=N150x4"
+            )
+
+        self.unpadded_hidden_dim = self.hidden_dim
+        # Don't need to pad for CPU runs
+        if self.num_devices:
+            # Default padding cores for each model, 0 if not set here
+            default_padded_cores = {
+                "Qwen2.5-72B": 32,
+                "Qwen2.5-7B": 16,
+                "QwQ-32B": 16,
+            }.get(self.base_model_name, 0)
+
+            # Override MLP padding cores from env var
+            mlp_padded_cores = int(os.environ.get("PAD_MLP_CORES", default_padded_cores))
+
+            # Only pad if MLP_PADDED_CORES is non-zero
+            if mlp_padded_cores > 0:
+                padded_hidden_dim = nearest_multiple(
+                    self.hidden_dim, mlp_padded_cores * self.tile_size * self.num_devices
+                )
+                if padded_hidden_dim != self.hidden_dim:
+                    logger.info(
+                        f"PAD_MLP_CORES={mlp_padded_cores}, padding hidden dim from {self.hidden_dim} to {padded_hidden_dim}"
+                    )
+                    self.hidden_dim = padded_hidden_dim
+
+        # RoPE params
+        self.rope_theta = params.get("rope_theta")
+        # If use_scaled_rope is not present, assume setting rope_scaling means use scaled rope
+        # If it is present and is set to false, do not use scaled rope
+        # Setting self.rope_scaling_factor to None is our way of saying do not use scaled rope
+        if "rope_scaling" in params and params.get("use_scaled_rope", True):
+            self.rope_scaling_factor = params.get("factor", None)
+            self.orig_context_len = params.get("original_max_position_embeddings", None)
+        else:
+            self.rope_scaling_factor = None
+            self.orig_context_len = None
+
+        # Vision params (Meta-specific)
         self.vision_chunk_size = params.get("vision_chunk_size", -1)
         self.vision_max_num_chunks = params.get("vision_max_num_chunks", 4)
         self.vision_num_cross_attention_layers = params.get("vision_num_cross_attention_layers", -1)
@@ -1346,18 +1412,81 @@ class TtModelArgs:
         self.vision_in_channels = 3
 
     @property
+    def use_scaled_rope(self):
+        return self.rope_scaling_factor is not None
+
+    @property
+    def base_model_name(self):
+        return self.model_name.split("B-")[0] + "B" if "B-" in self.model_name else self.model_name
+
+    @property
     def vision_chunk_ntok(self):
         """
         Returns the number of tokens per chunk, accounting for the extra class token
         """
         return (self.vision_chunk_size // self.vision_patch_size) ** 2 + 1
 
-    def _set_llama_params(self, checkpoint_dir):
+    def _set_model_params(self, checkpoint_dir):
+        if self.checkpoint_type == CheckpointType.Meta:
+            self._set_params(checkpoint_dir)
+        elif self.checkpoint_type == CheckpointType.HuggingFace:
+            self._set_hf_params(checkpoint_dir)
+        else:
+            raise ValueError(f"Unsupported checkpoint type: {self.checkpoint_type}")
+
+    def _set_params(self, checkpoint_dir):
         params_file = os.path.join(checkpoint_dir, "params.json")
         assert os.path.exists(params_file), f"params.json file not found at {params_file}"
         with open(params_file, "r") as f:
             params = json.load(f)
-        self._set_llama_params_from_dict(params)
+        self._set_params_from_dict(params)
+
+        # Meta-style config dicts don't specity model name or rope_scaling_factor so hard-code these
+        # Set the model name based on the checkpoint directory being loaded
+        if "3.2-1B" in checkpoint_dir:
+            self.model_name = "Llama3.2-1B" + ("-Instruct" if self.instruct else "")
+            self.rope_scaling_factor = 32
+        elif "3.2-3B" in checkpoint_dir:
+            self.model_name = "Llama3.2-3B" + ("-Instruct" if self.instruct else "")
+            self.rope_scaling_factor = 32
+        elif "3.1-8B" in checkpoint_dir:
+            self.model_name = "Llama3.1-8B" + ("-Instruct" if self.instruct else "")
+            self.rope_scaling_factor = 8
+        elif "3.2-11B" in checkpoint_dir:
+            self.model_name = "Llama3.2-11B" + ("-Instruct" if self.instruct else "")
+            self.rope_scaling_factor = 8  # shared with 3.1-8B
+        elif "3.1-70B" in checkpoint_dir:
+            self.model_name = "Llama3.1-70B" + ("-Instruct" if self.instruct else "")
+            self.rope_scaling_factor = 8
+            self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
+            self.max_prefill_chunk_size = 64 * 1024
+        elif "3.3-70B" in checkpoint_dir:
+            self.model_name = "Llama3.3-70B" + ("-Instruct" if self.instruct else "")
+            self.rope_scaling_factor = 8
+            self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
+            self.max_prefill_chunk_size = 64 * 1024
+        else:
+            logger.warning(f"Unknown Meta-style model: {checkpoint_dir}")
+        self.orig_context_len = 8192
+
+    def _set_hf_params(self, checkpoint_dir):
+        if self.from_hf_url:
+            from transformers import AutoConfig
+
+            config = AutoConfig.from_pretrained(self.model_name).to_dict()
+        else:
+            config_file = os.path.join(checkpoint_dir, "config.json")
+            assert os.path.exists(config_file), f"config.json file not found at {config_file}"
+            with open(config_file, "r") as f:
+                config = json.load(f)
+        self._set_params_from_dict(config)
+        # TODO Hack for deepseek distill 70b. generalize if needed
+        if "Llama-70B" in checkpoint_dir:  # if we're using a distill version of 70B, use same settings as Llama-70b
+            self.model_name = "Deepseek-R1-Distill-70B"
+            self.rope_scaling_factor = 8
+            self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
+            self.max_prefill_chunk_size = 64 * 1024
+            self.orig_context_len = 8192
 
     def __repr__(self):
         return f"""ModelArgs(
@@ -1415,13 +1544,21 @@ class TtModelArgs:
             state_dict = reference_model.state_dict()
             state_dict_prefix = self.get_state_dict_prefix("", None)
             state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
+        elif self.checkpoint_type == CheckpointType.Meta:
+            state_dict = load_meta_state_dict(self.CKPT_DIR, self.n_layers)
         else:
-            state_dict = load_llama_state_dict(self.DEFAULT_CKPT_DIR, self.n_layers)
+            assert self.checkpoint_type == CheckpointType.HuggingFace
+            if self.from_hf_url:
+                from transformers import AutoModelForCausalLM
 
+                model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                state_dict = model.state_dict()
+            else:
+                state_dict = load_hf_state_dict(self.CKPT_DIR)
+            state_dict = standardize_hf_keys(state_dict)
+            state_dict = convert_hf_to_meta(state_dict, self.head_dim)
         keys_dict = list(state_dict.keys())[:]
-        remv = [
-            f"layers.{i}." for i in list(range(self.n_layers, 32))
-        ]  # TODO, this is not generalized to all models. it assumes max layers = 32
+        remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
         for k in keys_dict:
             if any([r in k for r in remv]):
                 state_dict.pop(k)
@@ -1737,11 +1874,65 @@ class TtModelArgs:
             inplace=False,
         )
 
-    def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
-        if instruct:
-            return encode_prompt_instruct(self.tokenizer, prompt_text, system_prompt_text)
+    def detect_checkpoint_type(self) -> CheckpointType:
+        """Detect if checkpoint directory contains Meta or HuggingFace format weights.
+
+        Returns:
+            CheckpointType: Meta or HuggingFace enum value
+
+        Raises:
+            ValueError: If neither Meta nor HuggingFace checkpoint format is detected
+        """
+        config_path = os.path.join(self.CKPT_DIR, "config.json")
+        params_path = os.path.join(self.CKPT_DIR, "params.json")
+
+        if os.path.exists(config_path):
+            with open(config_path) as f:
+                config = json.load(f)
+                if "transformers_version" in config:
+                    return CheckpointType.HuggingFace
+
+        if os.path.exists(params_path):
+            return CheckpointType.Meta
+
+        raise ValueError(
+            f"Could not detect Meta or HuggingFace checkpoint format in {self.CKPT_DIR}. "
+            "Directory should contain either config.json (HuggingFace) or params.json (Meta)."
+        )
+
+    def create_tokenizer(self):
+        """Create and return a Tokenizer instance based on the checkpoint type."""
+        if self.checkpoint_type == CheckpointType.Meta:
+            # Use the Meta Tokenizer
+            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
+
+            return Tokenizer(self.tokenizer_path)
         else:
-            return self.tokenizer.encode(prompt_text, bos=True, eos=False)
+            # Create a HuggingFace AutoTokenizer
+            from transformers import AutoTokenizer
+
+            tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
+
+            # Add meta-compatible stop token list to the HF tokenizer
+            if not "stop_tokens" in tokenizer.__dict__:
+                tokenizer.stop_tokens = [tokenizer.eos_token_id]
+            return tokenizer
+
+    def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
+        if self.checkpoint_type == CheckpointType.Meta:
+            if instruct:
+                return encode_prompt_instruct(self.tokenizer, prompt_text, system_prompt_text)
+            else:
+                return self.tokenizer.encode(prompt_text, bos=True, eos=False)
+        else:
+            if instruct:
+                try:
+                    return encode_prompt_hf(self.tokenizer, prompt_text, system_prompt_text)
+                except ValueError as e:
+                    logger.warning(f"Failed to encode chat prompt, are you sure this is an instruct model? Error: {e}")
+                    logger.warning(f"Falling back to base model encoding with no chat template")
+
+            return self.tokenizer.encode(prompt_text, add_special_tokens=False)
 
 
 def load_llama_state_dict(ckpt_dir, n_layers=None, start_layer_idx=0):

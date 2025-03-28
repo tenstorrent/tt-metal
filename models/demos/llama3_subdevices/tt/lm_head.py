@@ -126,6 +126,8 @@ class LMHead(LightweightModule):
                 for split_size in split_sizes
             ]
 
+        self.prefill_pc = args.model_config["LM_HEAD_PREFILL_PROGCFG"]
+
     def forward_on_host(self, x: ttnn.Tensor):
         x_torch = ttnn.to_torch(
             x,
@@ -184,11 +186,10 @@ class LMHead(LightweightModule):
                     x,
                     weight_l1,
                     compute_kernel_config=self.compute_kernel_config,
-                    core_grid=ttnn.CoreGrid(y=10, x=7),
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    program_config=self.prefill_pc,
                     dtype=ttnn.bfloat8_b,
                 )
-
             # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.tt_ccl.worker_sub_device_id])
 
             outputs.append(output)
