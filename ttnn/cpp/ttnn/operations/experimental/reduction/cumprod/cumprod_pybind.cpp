@@ -21,11 +21,26 @@ void bind_cumprod_operation(py::module& module) {
                 ttnn.Tensor: the output tensor (for now, it is a copy of input_tensor, because only scaffold is implemented).
 
             Example:
+                >>> # return
+
                 >>> tensor = ttnn.from_torch(torch.tensor((1, 2, 3), dtype=torch.bfloat16), device=device)
                 >>> # Note that the call below will output the same tensor it was fed for the time being,
                 >>> # until the actual implementation is provided.
                 >>> output = ttnn.experimental.cumprod(tensor, 1)
                 >>> assert tensor.shape == output.shape
+                >>> assert tensor.dtype == output.dtyoe
+
+                >>> # preallocation and return
+
+                >>> tensor = ttnn.from_torch(torch.tensor((1, 2, 3), dtype=torch.uint8), device=device)
+                >>> # Note that the call below will output the same tensor it was fed for the time being,
+                >>> # until the actual implementation is provided.
+                >>> tensor_copy = ttnn.zeros_like(tensor)
+                >>> output = ttnn.experimental.cumprod(tensor, 1, out=tensor_copy)
+                >>> assert tensor.shape == output.shape
+                >>> assert tensor.dtype == output.dtype
+                >>> assert tensor.shape == output.shape
+                >>> assert tensor.dtype == output.dtyoe
             )doc";
 
     using OperationType = decltype(ttnn::experimental::cumprod);
@@ -34,11 +49,18 @@ void bind_cumprod_operation(py::module& module) {
         ttnn::experimental::cumprod,
         doc,
         ttnn::pybind_overload_t{
-            [](const OperationType& self, const ttnn::Tensor& input_tensor, const int32_t dim) {
-                return self(input_tensor, dim);
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const int32_t dim,
+               std::optional<Tensor> optional_out,
+               const std::optional<MemoryConfig>& memory_config) {
+                return self(input_tensor, dim, optional_out, memory_config);
             },
             py::arg("input_tensor").noconvert(),
-            py::arg("dim")});
+            py::arg("dim"),
+            py::kw_only(),
+            py::arg("out") = std::nullopt,
+            py::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::experimental::reduction::cumprod::detail

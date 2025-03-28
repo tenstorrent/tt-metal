@@ -22,11 +22,13 @@ using tt::tt_metal::TensorSpec;
 
 struct CumprodDeviceOperation {
     struct operation_attributes_t {
-        int32_t dim;
+        const int32_t dim;
+        const tt::tt_metal::MemoryConfig output_memory_config;
     };
 
     struct tensor_args_t {
         const Tensor& input_tensor;
+        std::optional<Tensor> optional_out{std::nullopt};
     };
 
     using spec_return_value_t = ttnn::TensorSpec;
@@ -71,7 +73,11 @@ struct CumprodDeviceOperation {
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    static invocation_result_t invoke(const Tensor& input_tensor, const int32_t dim);
+    static invocation_result_t invoke(
+        const Tensor& input_tensor,
+        const int32_t dim,
+        std::optional<Tensor> optional_out,
+        const MemoryConfig& memory_config);
 };
 
 }  // namespace ttnn::operations::experimental::reduction

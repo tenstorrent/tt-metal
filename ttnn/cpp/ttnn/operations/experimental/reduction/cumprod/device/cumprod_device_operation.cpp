@@ -19,22 +19,37 @@ void CumprodDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {}
 
 CumprodDeviceOperation::spec_return_value_t CumprodDeviceOperation::compute_output_specs(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.optional_out.has_value()) {
+        return tensor_args.optional_out->get_tensor_spec();
+    }
+
+    auto output_layout = Layout::TILE;
+    if (attributes.output_memory_config.is_sharded()) {
+        output_layout = tensor_args.input_tensor.get_layout();
+    }
+
+    const auto output_shape = tensor_args.input_tensor.logical_shape();
     return TensorSpec(
-        input_tensor.get_logical_shape(),
-        TensorLayout(input_tensor.get_dtype(), tt::tt_metal::PageConfig(input_tensor.get_layout()), MemoryConfig{}));
+        output_shape,
+        TensorLayout(tensor_args.input_tensor.get_dtype(), output_layout, attributes.output_memory_config));
 }
 
 CumprodDeviceOperation::tensor_return_value_t CumprodDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.input_tensor.device());
+    if (tensor_args.optional_out.has_value()) {
+        return *tensor_args.optional_out;
+    }
+    return create_device_tensor(
+        compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
 CumprodDeviceOperation::invocation_result_t CumprodDeviceOperation::invoke(
-    const Tensor& input_tensor, const int32_t dim) {
-    return {operation_attributes_t{dim}, tensor_args_t{input_tensor}};
+    const Tensor& input_tensor,
+    const int32_t dim,
+    std::optional<Tensor> optional_out,
+    const MemoryConfig& memory_config) {
+    return {operation_attributes_t{dim, memory_config}, tensor_args_t{input_tensor, optional_out}};
 }
 
 }  // namespace ttnn::operations::experimental::reduction

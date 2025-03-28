@@ -4,13 +4,18 @@
 
 #pragma once
 
+#include <optional>
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
 namespace operations::experimental::reduction {
 
 struct CumprodOperation {
-    static Tensor invoke(const Tensor& input_tensor, const int32_t dim);
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        const int32_t dim,
+        std::optional<Tensor> optional_out = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
 }  // namespace operations::experimental::reduction
