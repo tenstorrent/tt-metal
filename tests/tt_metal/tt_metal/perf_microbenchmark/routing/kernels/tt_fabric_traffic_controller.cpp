@@ -77,11 +77,11 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_notification_address);
 
 #ifdef FVC_MODE_PULL
-        volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface =
-            reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
+        volatile fabric_pull_client_interface_t* client_interface =
+            reinterpret_cast<volatile fabric_pull_client_interface_t*>(client_interface_addr);
 #else
-        fabric_push_client_interface_t* client_interface =
-            reinterpret_cast<fabric_push_client_interface_t*>(client_interface_addr);
+        volatile fabric_push_client_interface_t* client_interface =
+            reinterpret_cast<volatile fabric_push_client_interface_t*>(client_interface_addr);
 #endif
 
         fabric_endpoint_init<decltype(client_interface), RoutingType::ROUTING_TABLE>(
