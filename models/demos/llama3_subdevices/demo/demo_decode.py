@@ -535,8 +535,9 @@ def run_llama3_demo(
     [
         ("random", 1),
         ("instruct", 80),
+        ("instruct", 10),
     ],
-    ids=["quick", "full"],
+    ids=["quick", "full", "measure"],
 )
 @pytest.mark.parametrize(
     "optimizations",
