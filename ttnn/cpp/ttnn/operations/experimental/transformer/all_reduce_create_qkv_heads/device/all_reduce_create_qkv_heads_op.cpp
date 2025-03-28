@@ -42,9 +42,13 @@ AllReduceCreateQkvHeads create_all_reduce_create_qkv_heads_struct(
             semaphore = semaphores.at(i);  // Get raw pointer
             if (i != 0) {
                 backward_device = devices.at(i - 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                backward_device = devices.at(num_devices - 1);
             }
             if (i != num_devices - 1) {
                 forward_device = devices.at(i + 1);
+            } else if (topology == ttnn::ccl::Topology::Ring) {
+                forward_device = devices.at(0);
             }
         }
     }
@@ -377,9 +381,6 @@ std::tuple<Tensor, Tensor, Tensor, Tensor> all_reduce_create_qkv_heads(
     bool input_on_subcoregrids,
     std::optional<const uint32_t> slice_size,
     const std::optional<MemoryConfig>& final_memory_config) {
-    TT_FATAL(
-        topology == ttnn::ccl::Topology::Linear,
-        "This all_reduce API with cluster_axis is currently supported only for the Linear topology");
     const auto mesh_view = mesh_device.get_view();
     auto devices = input_tensor.get_workers();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();

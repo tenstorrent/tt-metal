@@ -25,6 +25,14 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_i
     round_up,
 )
 
+LINEAR_TOPOLOGY = True
+if LINEAR_TOPOLOGY:
+    ALL_GATHER_TOPOLOGY = ttnn.Topology.Linear
+    WRAP_MESH = False
+else:
+    ALL_GATHER_TOPOLOGY = ttnn.Topology.Ring
+    WRAP_MESH = True
+
 
 def check_mesh_tensor_alloc(tensor):
     device_tensors = ttnn.get_device_tensors(tensor)
@@ -84,7 +92,13 @@ def run_all_reduce_qkv_heads_perf_impl(
     sub_device_stall_group = [worker_sub_device_id]
     if create_persistent_fabric:
         mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-            mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
+            mesh_device,
+            [worker_sub_device],
+            0,
+            0,
+            enable_persistent_fabric,
+            wrap_fabric_around_mesh=WRAP_MESH,
+            topology=ALL_GATHER_TOPOLOGY,
         )
         mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
@@ -200,7 +214,7 @@ def run_all_reduce_qkv_heads_perf_impl(
             mesh_device=mesh_device,
             multi_device_global_semaphore=ccl_semaphore_handles[0],
             memory_config=output_mem_config,
-            topology=ttnn.Topology.Linear,
+            topology=ALL_GATHER_TOPOLOGY,
             num_links=num_links,
             subdevice_id=worker_sub_device_id,
         )  # [1, 1, 32, 1280]
@@ -268,7 +282,7 @@ def run_all_reduce_qkv_heads_perf_impl(
                     mesh_device=mesh_device,
                     multi_device_global_semaphore=ccl_semaphore_handles[0],
                     memory_config=output_mem_config,
-                    topology=ttnn.Topology.Linear,
+                    topology=ALL_GATHER_TOPOLOGY,
                     num_links=num_links,
                     subdevice_id=worker_sub_device_id,
                 )  # [1, 1, 32, 1280]
@@ -303,7 +317,7 @@ def run_all_reduce_qkv_heads_perf_impl(
                 mesh_device=mesh_device,
                 multi_device_global_semaphore=ccl_semaphore_handles[0],
                 memory_config=output_mem_config,
-                topology=ttnn.Topology.Linear,
+                topology=ALL_GATHER_TOPOLOGY,
                 num_links=num_links,
                 subdevice_id=worker_sub_device_id,
             )  # [1, 1, 32, 1280]
@@ -376,7 +390,7 @@ def run_all_reduce_qkv_heads_perf_impl(
         if enable_persistent_fabric and teardown_persistent_fabric:
             mesh_device.reset_sub_device_stall_group()
             t1 = time()
-            teardown_fabric_interface(mesh_device)
+            teardown_fabric_interface(mesh_device, wrap_fabric_around_mesh=WRAP_MESH, topology=ALL_GATHER_TOPOLOGY)
             t2 = time()
             logger.info(f"Teardown time: {t2 - t1}")
 
@@ -427,7 +441,13 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
     sub_device_stall_group = [worker_sub_device_id]
     if create_persistent_fabric:
         mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-            mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
+            mesh_device,
+            [worker_sub_device],
+            0,
+            0,
+            enable_persistent_fabric,
+            wrap_fabric_around_mesh=WRAP_MESH,
+            topology=ALL_GATHER_TOPOLOGY,
         )
         mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
@@ -545,7 +565,7 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
             queue_id=0,
             num_heads=8,
             memory_config=output_mem_config,
-            topology=ttnn.Topology.Linear,
+            topology=ALL_GATHER_TOPOLOGY,
             num_links=num_links,
             subdevice_id=worker_sub_device_id,
             num_kv_heads=1,
@@ -605,7 +625,7 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
                     queue_id=0,
                     num_heads=8,
                     memory_config=output_mem_config,
-                    topology=ttnn.Topology.Linear,
+                    topology=ALL_GATHER_TOPOLOGY,
                     num_links=num_links,
                     subdevice_id=worker_sub_device_id,
                     num_kv_heads=1,
@@ -630,7 +650,7 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
                 queue_id=0,
                 num_heads=8,
                 memory_config=output_mem_config,
-                topology=ttnn.Topology.Linear,
+                topology=ALL_GATHER_TOPOLOGY,
                 num_links=num_links,
                 subdevice_id=worker_sub_device_id,
                 num_kv_heads=1,
@@ -691,7 +711,7 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
         if enable_persistent_fabric and teardown_persistent_fabric:
             mesh_device.reset_sub_device_stall_group()
             t1 = time()
-            teardown_fabric_interface(mesh_device)
+            teardown_fabric_interface(mesh_device, wrap_fabric_around_mesh=WRAP_MESH, topology=ALL_GATHER_TOPOLOGY)
             t2 = time()
             logger.info(f"Teardown time: {t2 - t1}")
 
@@ -731,7 +751,13 @@ def run_all_reduce_qkv_heads_fuse_impl(
     sub_device_stall_group = [worker_sub_device_id]
     if create_persistent_fabric:
         mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-            mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
+            mesh_device,
+            [worker_sub_device],
+            0,
+            0,
+            enable_persistent_fabric,
+            wrap_fabric_around_mesh=WRAP_MESH,
+            topology=ALL_GATHER_TOPOLOGY,
         )
         mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
@@ -847,7 +873,7 @@ def run_all_reduce_qkv_heads_fuse_impl(
             queue_id=0,
             num_heads=8,
             memory_config=output_mem_config,
-            topology=ttnn.Topology.Linear,
+            topology=ALL_GATHER_TOPOLOGY,
             num_links=num_links,
             subdevice_id=worker_sub_device_id,
             num_kv_heads=1,
@@ -939,7 +965,7 @@ def run_all_reduce_qkv_heads_fuse_impl(
         if enable_persistent_fabric and teardown_persistent_fabric:
             mesh_device.reset_sub_device_stall_group()
             t1 = time()
-            teardown_fabric_interface(mesh_device)
+            teardown_fabric_interface(mesh_device, wrap_fabric_around_mesh=WRAP_MESH, topology=ALL_GATHER_TOPOLOGY)
             t2 = time()
             logger.info(f"Teardown time: {t2 - t1}")
 
