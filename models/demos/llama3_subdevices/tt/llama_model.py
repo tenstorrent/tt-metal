@@ -230,7 +230,7 @@ class TtTransformer(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         tokens = ttnn.unsqueeze_to_4D(tokens)
-
+        current_pos[:] = current_pos[0]
         rot_current_pos = torch.maximum(
             current_pos, torch.tensor(0, dtype=torch.int64)
         )  # Ensure position indices are non-negative
@@ -408,7 +408,7 @@ class TtTransformer(LightweightModule):
 
             if self.is_decode_setup is False:
                 self.setup_decode()
-                self.decode_setup = True
+                self.is_decode_setup = True
                 # prefetch
                 for layer in self.layers:
                     layer.prefetch(self.prefetcher_setup, self.tt_ccl)
@@ -419,12 +419,21 @@ class TtTransformer(LightweightModule):
         else:
             if self.is_decode_setup:
                 self.tt_ccl.close()
-                del self.prefetcher_setup
+                del self.tt_ccl
+                if self.prefetcher_setup is not None:
+                    self.mesh_device.clear_loaded_sub_device_manager()
+                    self.mesh_device.remove_sub_device_manager(self.prefetcher_setup.mesh_sub_device_manager_id)
+                    del self.prefetcher_setup
+                ttnn.synchronize_device(self.mesh_device)
                 self.is_decode_setup = False
 
             if self.is_prefill_setup is False:
                 self.setup_prefill()
                 self.is_prefill_setup = True
+                for layer in self.layers:
+                    layer.prefetch(self.prefetcher_setup, self.tt_ccl)
+                self.norm.tt_ccl = self.tt_ccl
+                self.lm_head.tt_ccl = self.tt_ccl
 
     def forward(
         self,
