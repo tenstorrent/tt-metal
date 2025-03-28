@@ -321,9 +321,7 @@ void set_or_update_runtime_arguments(
             cND};
         handle_args(program, reader_kernel_id, core, reader_runtime_args);
 
-        const bool is_quant_op = (operation_attributes.binary_op_type == BinaryOpType::QUANT) ||
-                                 (operation_attributes.binary_op_type == BinaryOpType::REQUANT) ||
-                                 (operation_attributes.binary_op_type == BinaryOpType::DEQUANT);
+        const bool is_quant_op = operation_attributes.is_quant_op;
         TT_FATAL(
             is_quant_op == ((operation_attributes.post_activations.size() == 1) &&
                             (operation_attributes.post_activations[0].op_type ==
@@ -360,6 +358,9 @@ void set_or_update_runtime_arguments(
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         } else {
             const auto scalar = *operation_attributes.scalar;
+            // TODO: technically we should use the b_dtype deduced by ProgramFactory::create here, but currently only
+            // quant ops have different dtypes for a & b and we want to force f32 for better accuracy when scale is
+            // passed as a scalar, so we'll leave this here
             const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.get_dtype(), is_quant_op);
             std::array writer_runtime_args = {
                 packed_scalar,
@@ -399,9 +400,11 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
-    const auto a_dtype = a.get_dtype();
-    const auto b_dtype = b.has_value() ? b->get_dtype() : a_dtype;
-    auto is_sfpu_op = operation_attributes.is_sfpu;
+    const bool is_sfpu_op = operation_attributes.is_sfpu;
+    const bool is_quant_op = operation_attributes.is_quant_op;
+    if (is_quant_op) {
+        TT_FATAL(is_sfpu_op, "Quantization op is SFPU-only");
+    }
 
     auto program = CreateProgram();
     auto* device = a.device();
@@ -414,11 +417,15 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     uint32_t b_num_tiles_per_shard = has_sharding ? shard_specs->b_shard_spec.numel() / tile_hw : 0;
     uint32_t c_num_tiles_per_shard = has_sharding ? shard_specs->c_shard_spec.numel() / tile_hw : 0;
 
-    auto a_data_format = datatype_to_dataformat_converter(a_dtype);
-    auto b_data_format = b.has_value() ? datatype_to_dataformat_converter(b->get_dtype())
-                         : is_sfpu_op  ? datatype_to_dataformat_converter(a_dtype)
-                                       : DataFormat::Float16_b;
-    auto c_data_format = datatype_to_dataformat_converter(c.get_dtype());
+    const auto a_dtype = a.get_dtype();
+    // Always pass the more accurate fp32 when the quantization scale is passed as a scalar
+    const auto b_dtype = b.has_value() ? b->get_dtype()
+                         : is_quant_op ? DataType::FLOAT32
+                         : is_sfpu_op  ? a_dtype
+                                       : DataType::BFLOAT16;
+    const auto a_data_format = datatype_to_dataformat_converter(a_dtype);
+    const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
+    const auto c_data_format = datatype_to_dataformat_converter(c.get_dtype());
 
     uint32_t a_single_tile_size = tt_metal::detail::TileSize(a_data_format);
     uint32_t b_single_tile_size = tt_metal::detail::TileSize(b_data_format);
@@ -535,27 +542,10 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     auto kernel_config = CMAKE_UNIQUE_NAMESPACE::BinaryNgKernelConfig(operation_attributes.subtile_broadcast_type);
 
-    std::map<std::string, std::string> dataflow_defines;
-    if (is_sfpu_op && a_dtype == DataType::FLOAT32) {
-        dataflow_defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
-        dataflow_defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
-        dataflow_defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<float>";
-        dataflow_defines["FILL_WITH_VALUE_FLOAT"] = "fill_with_val<1024, float>";
-    } else if (is_sfpu_op && a_dtype == DataType::INT32) {
-        dataflow_defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
-        dataflow_defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
-        dataflow_defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<int32_t>";
-        dataflow_defines["FILL_WITH_VALUE"] = "fill_with_val<1024, int32_t>";
-    } else {
-        dataflow_defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfloat16";
-        dataflow_defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfloat16";
-        dataflow_defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfloat16";
-        dataflow_defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16";
-    }
-    auto reader_defines = dataflow_defines;
+    // READER KERNEL
+    auto reader_defines = make_dataflow_defines(a_dtype, is_sfpu_op);
     reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
 
-    // READER KERNEL
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op),
@@ -570,7 +560,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         writer_kernel = kernel_config.writer_kernel;
         compute_kernel = kernel_config.compute_kernel;
     }
-    auto writer_defines = dataflow_defines;
+    auto writer_defines = make_dataflow_defines(b_dtype, is_sfpu_op);
     writer_defines["SRC_SHARDED"] = b_sharded ? "1" : "0";
     writer_defines["DST_SHARDED"] = c_sharded ? "1" : "0";
 
