@@ -2531,7 +2531,10 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
             program,
             "tests/ttnn/unit_tests/gtests/ccl/kernels/edm_fabric_writer.cpp",
             worker_cores,
-            tt_metal::WriterDataMovementConfig(worker_ct_args));
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt_metal::NOC::NOC_0,
+                .compile_args = worker_ct_args});
         worker_kernel_ids.push_back(worker_kernel_id);
         for (size_t l = 0; l < num_links; l++) {
             auto worker_core = worker_cores_vec[l];
