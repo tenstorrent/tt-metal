@@ -330,6 +330,7 @@ def test_fabric_8chip_one_link_edm_mcast_full_ring_bw(
     )
 
 
+# expected_Mpps = expected millions of packets per second
 @pytest.mark.parametrize("num_mcasts", [200000])
 @pytest.mark.parametrize("num_unicasts", [0])
 @pytest.mark.parametrize("num_op_invocations", [1])
