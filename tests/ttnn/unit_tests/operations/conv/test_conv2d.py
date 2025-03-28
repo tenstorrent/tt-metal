@@ -73,7 +73,8 @@ def run_conv(
     stride_w,
     padding,
     config_override,
-    dilation=1,
+    dilation_h=1,
+    dilation_w=1,
     use_shallow_conv_variant=False,
     transpose_shards=True,  # https://github.com/tenstorrent/tt-metal/issues/17897
     fp32_accum=False,
@@ -156,7 +157,7 @@ def run_conv(
         bias=torch_bias_tensor.reshape(-1) if has_bias else None,
         stride=(stride_h, stride_w),
         padding=(0, 0),
-        dilation=(dilation, dilation),
+        dilation=(dilation_h, dilation_w),
         groups=groups,
     )
     act_func = get_torch_act_func_from_string(activation)
@@ -227,7 +228,7 @@ def run_conv(
         kernel_size=(filter_height, filter_width),
         stride=(stride_h, stride_w),
         padding=(pad_top, pad_bottom, pad_left, pad_right),
-        dilation=(dilation, dilation),
+        dilation=(dilation_h, dilation_w),
         batch_size=batch_size,
         input_height=input_height,
         input_width=input_width,
@@ -251,7 +252,7 @@ def run_conv(
             kernel_size=(filter_height, filter_width),
             stride=(stride_h, stride_w),
             padding=(pad_top, pad_bottom, pad_left, pad_right),
-            dilation=(dilation, dilation),
+            dilation=(dilation_h, dilation_w),
             batch_size=batch_size,
             input_height=input_height,
             input_width=input_width,
@@ -2083,10 +2084,12 @@ def test_conv_core_nondivis(
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize(
-    "filter, dilation, pad",
+    "filter_hw, dilation_hw, pad_hw",
     [
-        [3, 2, 2],
-        [3, 3, 3],
+        [(3, 3), (2, 2), (2, 2)],
+        [(3, 3), (3, 3), (3, 3)],
+        [(3, 3), (1, 2), (3, 3)],
+        [(3, 3), (2, 1), (3, 3)],
     ],
 )
 def test_conv_dilation(
@@ -2103,11 +2106,11 @@ def test_conv_dilation(
     input_width,
     act_block_w_div,
     shard_layout,
-    filter,
+    filter_hw,
     stride,
-    pad,
+    pad_hw,
     output_layout,
-    dilation,
+    dilation_hw,
 ):
     config_override = {"act_block_w_div": act_block_w_div}
     run_conv(
@@ -2121,15 +2124,16 @@ def test_conv_dilation(
         input_channels,
         input_height,
         input_width,
-        filter,
-        filter,
+        filter_hw[0],
+        filter_hw[1],
         stride,
         stride,
-        pad,
+        pad_hw,
         config_override,
         shard_layout=shard_layout,
         output_layout=output_layout,
-        dilation=dilation,
+        dilation_h=dilation_hw[0],
+        dilation_w=dilation_hw[1],
         has_bias=False,
     )
 
@@ -2481,7 +2485,8 @@ def test_model_k_256x256(
         (pad_h, pad_w),
         None,
         shard_layout=shard_layout,
-        dilation=dilation,
+        dilation_h=dilation,
+        dilation_w=dilation,
         auto_shard=auto_shard,
     )
 
@@ -2927,7 +2932,8 @@ def test_conv2d_model_fruit(
         stride_w=stride[1],
         padding=padding,
         config_override=config_override,
-        dilation=dilation[0],
+        dilation_h=dilation[0],
+        dilation_w=dilation[1],
         use_shallow_conv_variant=use_shallow_conv_variant,
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
@@ -3017,6 +3023,9 @@ def test_conv2d_sdxl(
     enable_split_reader,
     split_factor
 ):
+    if (input_channels == 1920 or input_channels == 2560) and input_height == 32 and input_width == 32 and kernel[0] == 1 and kernel[1] == 1 and is_blackhole():
+        pytest.skip("Temporary skip until #19831 is not closed")
+
     config_override = {}
     config_override["act_block_h"] = act_block_h_override
     config_override["act_block_w_div"] = act_block_w_div
@@ -3063,7 +3072,8 @@ def test_conv2d_sdxl(
             stride_w=stride[1],
             padding=padding,
             config_override=config_override,
-            dilation=dilation[0],
+            dilation_h=dilation[0],
+            dilation_w=dilation[1],
             use_shallow_conv_variant=use_shallow_conv_variant,
             fp32_accum=fp32_accum,
             packer_l1_acc=packer_l1_acc,
