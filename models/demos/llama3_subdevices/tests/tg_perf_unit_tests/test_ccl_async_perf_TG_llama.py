@@ -8,15 +8,15 @@ from loguru import logger
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
 
-THRESHOLD = 0.4
+THRESHOLD = 0.35
 
 
 @pytest.mark.parametrize(
     "ag_type, warmup_iters, perf_target_us",
     [
-        ("sdpa", 15, 9.49),
-        ("binary_mult", 15, 10.54),
-        ("layernorm", 15, 6.47),
+        ("sdpa", 15, 9.01),
+        ("binary_mult", 15, 10.10),
+        ("layernorm", 15, 6.22),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
