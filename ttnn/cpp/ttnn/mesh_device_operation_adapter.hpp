@@ -12,9 +12,9 @@
 #include <concepts>
 #include <variant>
 #include "ttnn/mesh_device_operation_utils.hpp"
-#include "tools/profiler/op_profiler.hpp"
+#include "ttnn/operation_concepts.hpp"
 
-namespace ttnn {
+namespace ttnn::device_operation {
 
 /**
  * A generic adapter that adds mesh device capabilities to any existing device operation.
@@ -83,9 +83,8 @@ struct MeshDeviceOperationAdapter {
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value) {
-        return ttnn::mesh_device_operation_utils::
-            template create_mesh_workload<DeviceOperation, ConcreteProgramFactory>(
-                mesh_device, attrs, tensor_args, tensor_return_value);
+        return mesh_device_operation_utils::create_mesh_workload<ConcreteProgramFactory>(
+            mesh_device, attrs, tensor_args, tensor_return_value);
     }
 
     template <typename ConcreteProgramFactory>
@@ -122,4 +121,16 @@ struct is_mesh_device_operation_adapter<MeshDeviceOperationAdapter<DeviceOp>> : 
 template <typename T>
 inline constexpr bool is_mesh_device_operation_adapter_v = is_mesh_device_operation_adapter<T>::value;
 
-}  // namespace ttnn
+/**
+ * @brief Concept that defines a device operation that has a mesh device adapter.
+ *
+ * This concept requires that the type satisfies both the DeviceOperationConcept
+ * and the MeshDeviceOperationAdapterType concept. It represents operations that
+ * can be executed across multiple devices in a mesh configuration using the
+ * adapter pattern.
+ */
+template <typename device_operation_t>
+concept DeviceOperationWithMeshDeviceAdapter =
+    DeviceOperationConcept<device_operation_t> && is_mesh_device_operation_adapter_v<device_operation_t>;
+
+}  // namespace ttnn::device_operation

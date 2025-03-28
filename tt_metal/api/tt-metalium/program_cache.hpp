@@ -6,131 +6,69 @@
 
 #include <unordered_map>
 
-#include "program_impl.hpp"
 #include <tt_stl/unique_any.hpp>
-#include "mesh_workload.hpp"
 #include <tt_stl/overloaded.hpp>
 
-namespace tt::tt_metal::program_cache::detail {
-template <typename shared_variables_t>
-struct CachedMeshWorkload {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    // Shared variables between create and override_runtime_arguments functions
-    std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, shared_variables_t>
-        coordinate_range_to_shared_variables;
+#include "program_impl.hpp"
+#include "mesh_workload.hpp"
 
-    CachedMeshWorkload(
-        tt::tt_metal::distributed::MeshWorkload&& workload,
-        std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, shared_variables_t>&&
-            coordinate_range_to_shared_variables) :
-        workload{std::move(workload)},
-        coordinate_range_to_shared_variables{std::move(coordinate_range_to_shared_variables)} {}
-};
+namespace tt::tt_metal::program_cache::detail {
 
 template <typename shared_variables_t>
 struct CachedProgram {
-    tt::tt_metal::Program program;
-    // Cached program needs to share shared_variables between create and override_runtime_arguments functions
-    shared_variables_t shared_variables;
-
-    CachedProgram(tt::tt_metal::Program&& program, shared_variables_t&& shared_variables) :
-        program{std::move(program)}, shared_variables{std::forward<shared_variables_t>(shared_variables)} {}
-};
-
-template <typename shared_variables_t>
-struct CachedProgramRef {
-    std::reference_wrapper<tt::tt_metal::Program> program;
-    // Cached program needs to share shared_variables between create and override_runtime_arguments functions
-    std::reference_wrapper<shared_variables_t> shared_variables;
-
-    CachedProgramRef(tt::tt_metal::Program& program, shared_variables_t& shared_variables) :
-        program{program}, shared_variables{shared_variables} {}
-};
-
-// Adapter that provides a unified interface for both CachedProgram and CachedMeshWorkload
-template <typename shared_variables_t>
-class ProgramAdapter {
 private:
-    using CachedObject = std::variant<
-        CachedMeshWorkload<shared_variables_t>,
-        CachedProgram<shared_variables_t>,
-        CachedProgramRef<shared_variables_t>>;
-    CachedObject cached_object_;
-    // Helper to retrieve the first program from a mesh workload
-    static tt::tt_metal::Program& get_first_program(CachedMeshWorkload<shared_variables_t>& cached_mesh_workload) {
-        // Get the programs map from the workload
-        auto& programs = cached_mesh_workload.workload.get_programs();
+    std::optional<tt::tt_metal::Program> owned_program;
+    std::optional<shared_variables_t> owned_shared_variables;
 
-        // There must be at least one program in the workload
-        TT_FATAL(!programs.empty(), "Mesh workload must have at least one program");
-
-        // Return the first program in the workload
-        auto& first_program_pair = *programs.begin();
-        return first_program_pair.second;
-    }
-    static shared_variables_t& get_first_shared_variables(
-        CachedMeshWorkload<shared_variables_t>& cached_mesh_workload) {
-        // Get the first shared variables from the map
-        // careful, this is an unordered map so the "first" element is arbitrary
-        auto& map = cached_mesh_workload.coordinate_range_to_shared_variables;
-        TT_FATAL(!map.empty(), "Shared variables map is empty");
-        return map.begin()->second;
-    }
+    // Hidden to avoid misuse of `CachedProgram` as a proxy.
+    CachedProgram(tt::tt_metal::Program& program, shared_variables_t& shared_variables) :
+        program{program}, shared_variables{shared_variables} {}
 
 public:
-    // These are references to the original objects
     tt::tt_metal::Program& program;
+
+    // Cached program needs to share shared_variables between create and override_runtime_arguments functions
     shared_variables_t& shared_variables;
 
-    // Constructor for CachedProgram
-    ProgramAdapter(CachedProgram<shared_variables_t>&& cached_program) :
-        cached_object_(std::move(cached_program)),
-        program(std::get<CachedProgram<shared_variables_t>>(cached_object_).program),
-        shared_variables(std::get<CachedProgram<shared_variables_t>>(cached_object_).shared_variables) {}
-    ProgramAdapter(CachedProgramRef<shared_variables_t>&& cached_program_ref) :
-        cached_object_(std::move(cached_program_ref)),
-        program(std::get<CachedProgramRef<shared_variables_t>>(cached_object_).program),
-        shared_variables(std::get<CachedProgramRef<shared_variables_t>>(cached_object_).shared_variables) {}
+    CachedProgram(tt::tt_metal::Program&& program, shared_variables_t&& shared_variables) :
+        owned_program{std::move(program)},
+        owned_shared_variables{std::move(shared_variables)},
+        program{*owned_program},
+        shared_variables{*owned_shared_variables} {}
 
-    // Constructor for CachedProgram, CachedProgramRef, and CachedMeshWorkload
-    ProgramAdapter(tt::tt_metal::Program&& program, shared_variables_t&& shared_vars) :
-        ProgramAdapter(CachedProgram<shared_variables_t>{std::move(program), std::move(shared_vars)}) {}
-    ProgramAdapter(tt::tt_metal::Program& program, shared_variables_t& shared_vars) :
-        ProgramAdapter(CachedProgramRef<shared_variables_t>{program, shared_vars}) {}
-    ProgramAdapter(CachedMeshWorkload<shared_variables_t>&& cached_mesh_workload) :
-        cached_object_(std::move(cached_mesh_workload)),
-        program(get_first_program(std::get<CachedMeshWorkload<shared_variables_t>>(cached_object_))),
-        shared_variables(get_first_shared_variables(std::get<CachedMeshWorkload<shared_variables_t>>(cached_object_))) {
+    // Move constructor is needed to make `CachedProgram` work with `unique_any`.
+    // `CachedProgram` with owned `program` and `shared_variables` are moved; unowned proxies have their references
+    // effectively copied.
+    CachedProgram(CachedProgram&& other) noexcept :
+        owned_program(std::move(other.owned_program)),
+        owned_shared_variables(std::move(other.owned_shared_variables)),
+        program(owned_program ? *owned_program : other.program),
+        shared_variables(owned_shared_variables ? *owned_shared_variables : other.shared_variables) {}
+
+    // Creates a "proxy" `CachedProgram` that references `program` and `shared_variables`.
+    // Used for adapting `CachedMeshWorkload` to `CachedProgram`, and interfacing with TTNN Ops in
+    // `override_runtime_arguments` methods.
+    static CachedProgram proxy(tt::tt_metal::Program& program, shared_variables_t& shared_variables) {
+        return CachedProgram{program, shared_variables};
     }
 
-    ProgramAdapter(ProgramAdapter&& other) noexcept :
-        cached_object_{std::move(other.cached_object_)},
-        program{std::visit(
-            tt::stl::overloaded{
-                [&](CachedMeshWorkload<shared_variables_t>& obj) -> tt::tt_metal::Program& {
-                    return get_first_program(obj);
-                },
-                [&](CachedProgram<shared_variables_t>& obj) -> tt::tt_metal::Program& { return obj.program; },
-                [&](CachedProgramRef<shared_variables_t>& obj) -> tt::tt_metal::Program& { return obj.program; }},
-            cached_object_)},
-        shared_variables{std::visit(
-            tt::stl::overloaded{
-                [&](CachedMeshWorkload<shared_variables_t>& obj) -> shared_variables_t& {
-                    return get_first_shared_variables(obj);
-                },
-                [&](CachedProgram<shared_variables_t>& obj) -> shared_variables_t& { return obj.shared_variables; },
-                [&](CachedProgramRef<shared_variables_t>& obj) -> shared_variables_t& { return obj.shared_variables; }},
-            cached_object_)} {}
+    CachedProgram(const CachedProgram&) = delete;
+    CachedProgram& operator=(const CachedProgram&) = delete;
+    CachedProgram& operator=(CachedProgram&&) = delete;
+};
 
-    // Get the CachedMeshWorkload (throws if not a mesh workload)
-    CachedMeshWorkload<shared_variables_t>& get_cached_mesh_workload() {
-        return std::get<CachedMeshWorkload<shared_variables_t>>(cached_object_);
-    }
+template <typename shared_variables_t>
+struct CachedMeshWorkload {
+    tt::tt_metal::distributed::MeshWorkload workload;
 
-    // Get the CachedProgram (throws if not a program)
-    CachedProgram<shared_variables_t>& get_cached_program() {
-        return std::get<CachedProgram<shared_variables_t>>(cached_object_);
-    }
+    // Shared variables between create and override_runtime_arguments functions.
+    // Correspnds to ranges defined in `workload`.
+    std::unordered_map<distributed::MeshCoordinateRange, shared_variables_t> shared_variables;
+
+    CachedMeshWorkload(
+        tt::tt_metal::distributed::MeshWorkload&& workload,
+        std::unordered_map<distributed::MeshCoordinateRange, shared_variables_t>&& shared_variables) :
+        workload{std::move(workload)}, shared_variables{std::move(shared_variables)} {}
 };
 
 struct CachedProgramFactory {
@@ -138,11 +76,16 @@ struct CachedProgramFactory {
     static constexpr auto ALIGNMENT = 32;
 
     tt::stl::unique_any<MAX_SIZE, ALIGNMENT> cached_program;
-    // program_factory_index is used to map a runtime value to a program factory type that is being used
-    std::size_t program_factory_index;
+
+    // Used to map a runtime value to a program factory type that is being used
+    std::size_t program_factory_index = 0;
 
     template <typename shared_variables_t>
-    CachedProgramFactory(ProgramAdapter<shared_variables_t>&& cached_program, std::size_t program_factory_index) :
+    CachedProgramFactory(CachedMeshWorkload<shared_variables_t>&& cached_workload, std::size_t program_factory_index) :
+        cached_program{std::move(cached_workload)}, program_factory_index{program_factory_index} {}
+
+    template <typename shared_variables_t>
+    CachedProgramFactory(CachedProgram<shared_variables_t>&& cached_program, std::size_t program_factory_index) :
         cached_program{std::move(cached_program)}, program_factory_index{program_factory_index} {}
 };
 
