@@ -4,6 +4,7 @@
 
 #include "scaled_dot_product_attention.hpp"
 
+#include <cmath>
 #include <stdexcept>
 
 #include "autograd/auto_context.hpp"
@@ -147,7 +148,7 @@ autograd::TensorPtr scaled_dot_product_attention(
     auto [batch_num, heads, seq_len, embedding_dim] = query->get_value().get_logical_shape().to_array_4D();
     auto groups = value->get_value().get_logical_shape().to_array_4D()[1];
 
-    const float scale = 1.0F / std::sqrtf(static_cast<float>(embedding_dim));
+    const float scale = 1.0F / std::sqrt(static_cast<float>(embedding_dim));
     auto q_scaled = ttnn::experimental::mul(query->get_value(), scale);
     auto key_tensor = key->get_value();
 
@@ -236,7 +237,7 @@ autograd::TensorPtr scaled_sigmoid_dot_product_attention(
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask) {
-    const float scale = 1.0F / std::sqrtf(static_cast<float>(query->get_value().get_logical_shape()[-1]));
+    const float scale = 1.0F / std::sqrt(static_cast<float>(query->get_value().get_logical_shape()[-1]));
     // (B, H, S, E) x (B, H, E, S) -> (B, H, S, S)
     auto qk_t =
         ttnn_fixed::matmul(query->get_value(), key->get_value(), /* transpose_a */ false, /* transpose_b */ true);
@@ -248,7 +249,7 @@ autograd::TensorPtr scaled_sigmoid_dot_product_attention(
     // (B, H, S, S)
     // auto attention_weights = ttnn_fixed::softmax(qk_scaled, /* axis */ 3);
     auto attention_weights = ttnn::sigmoid(
-        ttnn::subtract(qk_scaled, std::logf(static_cast<float>(query->get_value().get_logical_shape()[-2]))));
+        ttnn::subtract(qk_scaled, std::log(static_cast<float>(query->get_value().get_logical_shape()[-2]))));
 
     // (B, H, S, S) x (B, H, S, E) -> (B, H, S, E)
     auto attention_qkv =
@@ -266,8 +267,7 @@ autograd::TensorPtr scaled_sigmoid_dot_product_attention(
             auto grad_scaled_dot =
                 ttnn::sigmoid_bw(
                     grad_attention_weights,
-                    ttnn::subtract(
-                        qk_scaled, std::logf(static_cast<float>(query->get_value().get_logical_shape()[-2]))))
+                    ttnn::subtract(qk_scaled, std::log(static_cast<float>(query->get_value().get_logical_shape()[-2]))))
                     .front();
 
             if (mask.has_value()) {
