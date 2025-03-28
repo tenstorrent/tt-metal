@@ -639,10 +639,13 @@ typedef struct test_device {
             device_handle->id(), router_virtual_cores[master_router_idx], signal, FABRIC_ROUTER_HOST_SIGNAL_PTR);
 
         uint32_t master_router_status = 0;
-        while ((static_cast<uint32_t>(tt::tt_fabric::fabric_router_status::Terminating) != master_router_status) &&
-               (static_cast<uint32_t>(tt::tt_fabric::fabric_router_status::Terminated) != master_router_status)) {
+        while (true) {
             master_router_status = tt::llrt::read_hex_vec_from_core(
                 device_handle->id(), router_virtual_cores[master_router_idx], FABRIC_ROUTER_STATUS_PTR, 4)[0];
+            if ((static_cast<uint32_t>(tt::tt_fabric::fabric_router_status::Terminating) == master_router_status) ||
+                (static_cast<uint32_t>(tt::tt_fabric::fabric_router_status::Terminated) == master_router_status)) {
+                break;
+            }
         }
     }
 
