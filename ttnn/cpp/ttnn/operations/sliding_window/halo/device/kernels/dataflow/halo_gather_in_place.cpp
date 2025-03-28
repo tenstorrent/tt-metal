@@ -7,7 +7,7 @@
 
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG 0
+#define ENABLE_DEBUG 1
 
 #if ENABLE_DEBUG
 #include "debug/dprint_pages.h"
@@ -193,15 +193,20 @@ void kernel_main() {
     constexpr bool is_col_major = get_compile_time_arg_val(13) == 1;
     constexpr uint32_t is_width_sharded = get_compile_time_arg_val(14);
     constexpr uint32_t input_aligned_page_size = get_compile_time_arg_val(15);
-    constexpr uint32_t noc_00_x = get_compile_time_arg_val(17);
-    constexpr uint32_t noc_00_y = get_compile_time_arg_val(18);
-    constexpr uint32_t num_cores_nhw = get_compile_time_arg_val(19);
-    constexpr uint32_t num_cores_c = get_compile_time_arg_val(20);
-    constexpr uint32_t num_cores_x = get_compile_time_arg_val(21);
-    constexpr uint32_t semaphore_id = get_compile_time_arg_val(22);
-    constexpr uint32_t max_out_nsticks_per_core = get_compile_time_arg_val(23);
+    constexpr uint32_t remote_read = get_compile_time_arg_val(16);  // Unused parameter
+    constexpr uint32_t num_cores_nhw = get_compile_time_arg_val(17);
+    constexpr uint32_t num_cores_c = get_compile_time_arg_val(18);
+    constexpr uint32_t num_cores_x = get_compile_time_arg_val(19);
+    constexpr uint32_t semaphore_id = get_compile_time_arg_val(20);
+    constexpr uint32_t max_out_nsticks_per_core = get_compile_time_arg_val(21);
 
     constexpr uint32_t num_cores = num_cores_nhw * num_cores_c;
+
+    uint32_t arg_idx = 0;
+    tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    arg_idx += num_cores;
+    tt_l1_ptr uint32_t* core_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    arg_idx += num_cores;
 
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
     constexpr uint16_t pad_core_id = 0xFFFF;
@@ -242,10 +247,10 @@ void kernel_main() {
 
     noc_async_read_barrier();
     noc_async_write_barrier();
+
     for (uint16_t noc = 0; noc < num_cores; ++noc) {
-        uint16_t noc_x = noc % num_cores_x;
-        uint16_t noc_y = noc / num_cores_x;
-        const uint64_t ref_semaphore_noc_addr = get_noc_addr(noc_x + noc_00_x, noc_y + noc_00_y, semaphore_addr);
+        DPRINT << "id=" << noc << " x=" << core_noc_x[noc] << " y=" << core_noc_y[noc] << ENDL();
+        const uint64_t ref_semaphore_noc_addr = get_noc_addr(core_noc_x[noc], core_noc_y[noc], semaphore_addr);
         noc_semaphore_inc(ref_semaphore_noc_addr, 1);
     }
 
