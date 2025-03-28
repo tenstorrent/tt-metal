@@ -533,7 +533,7 @@ FORCE_INLINE void check_worker_connections(
     } else if (local_sender_channel_worker_interface.has_worker_teardown_request()) {
         did_something = true;
         channel_connection_established = false;
-        local_sender_channel_worker_interface.teardown_connection(
+        local_sender_channel_worker_interface.template teardown_connection<true>(
             local_sender_channel_worker_interface.local_rdptr.get_ptr());
     }
 }
@@ -1302,7 +1302,7 @@ void kernel_main() {
 
     if (has_downstream_edm_vc0_buffer_connection) {
         for (auto& downstream_edm_noc_interface : downstream_edm_noc_interfaces) {
-            downstream_edm_noc_interface.open();
+            downstream_edm_noc_interface.template open<true>();
             *downstream_edm_noc_interface.from_remote_buffer_slot_rdptr_ptr = 0;
             ASSERT(*downstream_edm_noc_interface.from_remote_buffer_slot_rdptr_ptr == 0);
         }
