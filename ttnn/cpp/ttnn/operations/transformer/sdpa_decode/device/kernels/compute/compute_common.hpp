@@ -177,6 +177,7 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
         for (uint32_t j = 0; j < cols; ++j) {
             acquire_dst();
             mul_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
+            DPRINT << "15b" << ENDL();
             cb_pop_front(in0_cb, 1);
             cb_reserve_back(in0_cb, 1);
             pack_tile(0, in0_cb);
@@ -607,9 +608,9 @@ void flash_attention_loop(
         DPRINT << "6" << ENDL();
         /* QK -= cb_cur_max */
         /* QK = exp(QK)*/
-        reconfig_data_format(cb_qk_im, cb_cur_max);
-        pack_reconfig_data_format(cb_qk_im);
-        sub_exp_block_bcast_cols_inplace(cb_qk_im, cb_cur_max, Sq_chunk_t, Sk_chunk_t);
+        // reconfig_data_format(cb_qk_im, cb_cur_max);
+        // pack_reconfig_data_format(cb_qk_im);
+        // sub_exp_block_bcast_cols_inplace(cb_qk_im, cb_cur_max, Sq_chunk_t, Sk_chunk_t);
 
         DPRINT << "7" << ENDL();
         /* cb_cur_sum = sum(cb_qk_im, dim=-1) */
@@ -648,10 +649,13 @@ void flash_attention_loop(
 
         /* OUT_ACC += OUT_IM */
         if (k_chunk == k_chunk_start) {
+            DPRINT << "10a" << ENDL();
             reconfig_data_format_srca(cb_out_im);
             pack_reconfig_data_format(cb_out_accumulate_im);
             copy_block(cb_out_im, cb_out_accumulate_im, out_chunk_tiles);
+            DPRINT << "10a" << ENDL();
         } else {
+            DPRINT << "10b" << ENDL();
             reconfig_data_format(cb_prev_max, cb_cur_max);  // DEBUG
             pack_reconfig_data_format(cb_exp_max_diff);
             /* cb_exp_max_diff = torch.exp(cb_prev_max - cb_cur_max) */
@@ -678,17 +682,22 @@ void flash_attention_loop(
         }
 
         if (k_chunk < k_chunk_end - 1 || do_reduce) {
+            DPRINT << "11a" << ENDL();
             // Set cb_prev_sum and cb_prev_max
             reconfig_data_format(cb_cur_max, cb_cur_max);  // DEBUG
             pack_reconfig_data_format(cb_prev_max);
             copy_block(cb_cur_max, cb_prev_max, Sq_chunk_t);
             copy_block(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
+            DPRINT << "11a" << ENDL();
 
         } else {
+            DPRINT << "11b" << ENDL();
             // Write o, m, l into cb_out
             copy_block(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
             copy_block(cb_cur_max, cb_out_m, Sq_chunk_t);
             copy_block(cb_cur_sum, cb_out_l, Sq_chunk_t);
+            DPRINT << "11b" << ENDL();
         }
     }
+    DPRINT << "DONE" << ENDL();
 }
