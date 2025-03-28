@@ -405,9 +405,6 @@ void handle_mesh_adapter_cache_hit(
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     tt::stl::hash::hash_t program_hash) {
-    // Important! `TT_DNN_DEVICE_OP` must be used in conjunction with `TracyOpMeshWorkload` to feed profiler regresion
-    // tests well-formed data.
-    ZoneScopedN("TT_DNN_DEVICE_OP");
     mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
 
     auto& cached_program_factory = program_cache.get(program_hash);
@@ -439,15 +436,20 @@ void handle_mesh_adapter_cache_hit(
             }},
         program_factory);
 
-    mesh_device_operation_utils::set_runtime_id(workload, mesh_device);
-    if (mesh_device_operation_utils::track_workload(workload, mesh_device)) {
-        return;
+    {  // Important! `TT_DNN_DEVICE_OP` must be used in conjunction with `TracyOpMeshWorkload` to feed profiler
+       // regresion
+        // tests well-formed data.
+        ZoneScopedN("TT_DNN_DEVICE_OP");
+        mesh_device_operation_utils::set_runtime_id(workload, mesh_device);
+        if (mesh_device_operation_utils::track_workload(workload, mesh_device)) {
+            return;
+        }
+
+        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(*cq_id), workload, false);
+
+        TracyOpMeshWorkload(
+            mesh_device, workload, mesh_device_operation_t{}, operation_attributes, tensor_args, tensor_return_value);
     }
-
-    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(*cq_id), workload, false);
-
-    TracyOpMeshWorkload(
-        mesh_device, workload, mesh_device_operation_t{}, operation_attributes, tensor_args, tensor_return_value);
 }
 
 // Helper for creating and caching a mesh workload
@@ -460,15 +462,15 @@ void create_and_cache_mesh_workload(
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
     tt::stl::hash::hash_t program_hash) {
-    // Important! `TT_DNN_DEVICE_OP` must be used in conjunction with `TracyOpMeshWorkload` to feed profiler regresion
-    // tests well-formed data.
-    ZoneScopedN("TT_DNN_DEVICE_OP");
     mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
 
     auto program_factory = mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args);
     auto program_factory_index = program_factory.index();
 
     auto enqueue_workload = [&](tt::tt_metal::distributed::MeshWorkload& workload) {
+        // Important! `TT_DNN_DEVICE_OP` must be used in conjunction with `TracyOpMeshWorkload` to feed profiler
+        // regresion tests well-formed data.
+        ZoneScopedN("TT_DNN_DEVICE_OP");
         mesh_device_operation_utils::set_runtime_id(workload, mesh_device);
         if (mesh_device_operation_utils::track_workload(workload, mesh_device)) {
             return;
