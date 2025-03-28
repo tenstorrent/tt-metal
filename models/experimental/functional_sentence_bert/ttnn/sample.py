@@ -6,6 +6,13 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 SDPAProgramConfig = ttnn._ttnn.operations.transformer.SDPAProgramConfig
 
 
+def p(x, a="x"):
+    print(f"{a}'s  shape: {x.shape}")
+    print(f"{a}'s  layout: {x.layout}")
+    print(f"{a}'s  dtype: {x.dtype}")
+    print(f"{a}'s config: {x.memory_config()}")
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_emb(device):
     # torch
@@ -71,3 +78,43 @@ def test_sdpa(device, inputs):
     )
     attn_output = ttnn.to_torch(attn_output)
     assert_with_pcc(torch_attn_output, attn_output, 0.999)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
+def test_sharded_add(device):
+    torch_input_tensor_a = torch.rand((8, 384, 768), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand((1, 384, 768), dtype=torch.bfloat16)
+    shard_shape = (384, 96)
+
+    torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    # input_tensor_a = ttnn.to_layout(input_tensor_a, ttnn.TILE_LAYOUT)
+    block_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=input_tensor_a.shape,
+        core_grid=ttnn.CoreGrid(y=8, x=8),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.COL_MAJOR,
+        # use_height_and_width_as_shard_shape=True,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    # input_tensor_b = ttnn.to_layout(input_tensor_b, ttnn.TILE_LAYOUT)
+    input_tensor_a = ttnn.to_memory_config(input_tensor_a, block_sharded_mem_config)
+    p(input_tensor_a, "1st")
+    input_tensor_b = ttnn.to_memory_config(input_tensor_b, block_sharded_mem_config)
+    p(input_tensor_b, "2nd")
+    ttnn_out = input_tensor_a + input_tensor_b
+    p(ttnn_out, "result")
+    ttnn_out = ttnn.to_torch(ttnn_out)
+    assert_with_pcc(torch_output_tensor, ttnn_out, 1.0)
