@@ -942,8 +942,7 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
         tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         ttnn::ccl::Topology::Linear,
         num_links,
-        subdevice_managers->worker_subdevice_id.at(devices[0]->id()),
-        fabric_handle);
+        subdevice_managers->worker_subdevice_id.at(devices[0]->id()));
 
     // wait for op completion
     log_info(tt::LogTest, "Waiting for Op finish");

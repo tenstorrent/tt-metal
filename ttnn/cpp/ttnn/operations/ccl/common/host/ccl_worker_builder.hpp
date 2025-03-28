@@ -73,12 +73,13 @@ void generate_multi_input_command_stream_kernel_rt_args(
     std::vector<Tensor const*> const& tensors,
     std::vector<size_t> const& page_sizes,
     IDevice* device,
+    uint32_t link,
     uint32_t num_pages_per_edm_buffer,  // TODO: get from fabric
     CoreRangeSet const& worker_core_range,
     std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> const& ccl_command_stream0,
     std::optional<std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand>> const& ccl_command_stream1,
-    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& forward_fabric_connections,
-    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& backward_fabric_connections,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
     std::optional<std::unordered_map<const Tensor*, IDevice*>> const& tensor_device_override = std::nullopt,
     std::optional<std::vector<size_t>> const& tensor_indices = std::nullopt,
     ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider = nullptr);

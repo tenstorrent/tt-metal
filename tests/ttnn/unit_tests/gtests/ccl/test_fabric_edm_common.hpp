@@ -114,6 +114,7 @@ public:
     void TearDown() {
         device_open = false;
         mesh_device_->close();
+        tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
     }
 
     tt::ARCH arch_;
@@ -626,18 +627,18 @@ void generate_multi_input_test_worker_reader_kernel(
         std::ranges::copy(optional_teardown_sequence.value(), std::back_inserter(ccl_command_stream0));
     }
 
-    ttnn::ccl::worker_detail::generate_multi_input_command_stream_kernel_rt_args(
-        program,
-        sender_worker_reader_kernel,
-        tensors,
-        {page_size, page_size},
-        device,
-        num_pages_per_edm_buffer,  // TODO: get from fabric
-        worker_core_range,
-        ccl_command_stream0,
-        ccl_command_stream1,
-        chip0_worker_forward_fabric_connection,
-        chip0_worker_backward_fabric_connection);
+    // ttnn::ccl::worker_detail::generate_multi_input_command_stream_kernel_rt_args(
+    //     program,
+    //     sender_worker_reader_kernel,
+    //     tensors,
+    //     {page_size, page_size},
+    //     device,
+    //     num_pages_per_edm_buffer,  // TODO: get from fabric
+    //     worker_core_range,
+    //     ccl_command_stream0,
+    //     ccl_command_stream1,
+    //     chip0_worker_forward_fabric_connection,
+    //     chip0_worker_backward_fabric_connection);
 }
 
 void generate_multi_input_test_worker_kernels_for_local_tensor_write(
@@ -1928,6 +1929,7 @@ bool RunPipelinedWorkersTest(
                 {&device_tensors[stage]},
                 {page_size_bytes},
                 device,
+                0,  // link = 0, don't care, since we aren't specifying connections
                 cb_packet_size_in_pages,
                 {worker_cores.at(worker)},
                 reader_cmd_stream,
@@ -1940,6 +1942,7 @@ bool RunPipelinedWorkersTest(
                 {&device_tensors[stage + 1]},
                 {page_size_bytes},
                 device,
+                0,  // link = 0, don't care, since we aren't specifying connections
                 cb_packet_size_in_pages,
                 {worker_cores.at(worker)},
                 writer_cmd_stream,

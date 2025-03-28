@@ -8,6 +8,7 @@
 #include "hostdevcommon/kernel_structs.h"
 #include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include <tt-metalium/fabric_host_utils.hpp>
 #include "tt-metalium/kernel_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include <tt-metalium/erisc_datamover_builder.hpp>
@@ -1065,12 +1066,13 @@ void generate_multi_input_command_stream_kernel_rt_args(
     std::vector<Tensor const*> const& tensors,
     std::vector<size_t> const& page_sizes,
     IDevice* device,
+    uint32_t link,
     uint32_t num_pages_per_edm_buffer,  // TODO: get from fabric
     CoreRangeSet const& worker_core_range,
     ttnn::ccl::cmd::CclHostLowLevelCommandSequence const& ccl_command_stream0,
     std::optional<ttnn::ccl::cmd::CclHostLowLevelCommandSequence> const& ccl_command_stream1,
-    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& forward_fabric_connections,
-    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& backward_fabric_connections,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
     std::optional<std::unordered_map<const Tensor*, IDevice*>> const& tensor_device_override,
     std::optional<std::vector<size_t>> const& tensor_indices,
     ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider) {
@@ -1165,18 +1167,15 @@ void generate_multi_input_command_stream_kernel_rt_args(
         }
         // else: Interleaved addrgen passes no additional args - we specify interleaved addrgen as the default
     }
-
-    rt_args.push_back(forward_fabric_connections.has_value());
-    if (forward_fabric_connections.has_value()) {
-        const auto new_rt_args =
-            generate_edm_connection_rt_args(*forward_fabric_connections, program, worker_core_range);
-        std::copy(new_rt_args.begin(), new_rt_args.end(), std::back_inserter(rt_args));
+    rt_args.push_back(forward_device.has_value() and forward_device.value());
+    auto worker_core = corerange_to_cores(worker_core_range).at(0);
+    if (forward_device.has_value() and forward_device.value()) {
+        tt::tt_fabric::append_fabric_connection_rt_args(device->id(), forward_device.value()->id(), link, program, {worker_core}, rt_args);
     }
-    rt_args.push_back(backward_fabric_connections.has_value());
-    if (backward_fabric_connections.has_value()) {
-        const auto new_rt_args =
-            generate_edm_connection_rt_args(*backward_fabric_connections, program, worker_core_range);
-        std::copy(new_rt_args.begin(), new_rt_args.end(), std::back_inserter(rt_args));
+
+    rt_args.push_back(backward_device.has_value() and backward_device.value());
+    if (backward_device.has_value() and backward_device.value()) {
+        tt::tt_fabric::append_fabric_connection_rt_args(device->id(), backward_device.value()->id(), link, program, {worker_core}, rt_args);
     }
 
     for (size_t i = 0; i < num_command_streams; i++) {
