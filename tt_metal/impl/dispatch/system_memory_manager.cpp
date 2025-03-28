@@ -5,7 +5,7 @@
 #include <tt-metalium/system_memory_manager.hpp>
 #include <tt-metalium/dispatch_mem_map.hpp>
 #include <tt-metalium/command_queue_common.hpp>
-#include <tt-metalium/memcpy.hpp>
+#include "memcpy.hpp"
 
 #include <tt-metalium/launch_message_ring_buffer_state.hpp>
 #include <tt-metalium/tt_align.hpp>
@@ -219,7 +219,7 @@ void* SystemMemoryManager::issue_queue_reserve(uint32_t cmd_size_B, const uint8_
     uint32_t issue_q_write_ptr = this->get_issue_queue_write_ptr(cq_id);
 
     const uint32_t command_issue_limit = this->get_issue_queue_limit(cq_id);
-    if (issue_q_write_ptr + align(cmd_size_B, tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST)) >
+    if (issue_q_write_ptr + align(cmd_size_B, tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::HOST)) >
         command_issue_limit) {
         this->wrap_issue_queue_wr_ptr(cq_id);
         issue_q_write_ptr = this->get_issue_queue_write_ptr(cq_id);
@@ -266,7 +266,8 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
     }
 
     // All data needs to be PCIE_ALIGNMENT aligned
-    uint32_t push_size_16B = align(push_size_B, tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST)) >> 4;
+    uint32_t push_size_16B =
+        align(push_size_B, tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::HOST)) >> 4;
 
     SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
     CoreType core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type();

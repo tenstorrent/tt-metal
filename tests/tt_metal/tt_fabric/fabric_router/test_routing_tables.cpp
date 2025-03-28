@@ -19,7 +19,7 @@ TEST_F(ControlPlaneFixture, TestTGMeshGraphInit) {
 }
 
 TEST_F(ControlPlaneFixture, TestTGControlPlaneInit) {
-    tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::FABRIC_2D);
+    tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::FABRIC_2D);
     const std::filesystem::path tg_mesh_graph_desc_path =
         std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
@@ -40,7 +40,7 @@ TEST_F(ControlPlaneFixture, TestTGMeshAPIs) {
 }
 
 TEST_F(ControlPlaneFixture, TestTGFabricRoutes) {
-    tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::FABRIC_2D);
+    tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::FABRIC_2D);
     const std::filesystem::path tg_mesh_graph_desc_path =
         std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
@@ -60,7 +60,7 @@ TEST_F(ControlPlaneFixture, TestT3kMeshGraphInit) {
 }
 
 TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
-    tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::FABRIC_2D);
+    tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::FABRIC_2D);
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml";
@@ -69,7 +69,7 @@ TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
 }
 
 TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
-    tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::FABRIC_2D);
+    tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::FABRIC_2D);
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml";
@@ -86,7 +86,7 @@ TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
 }
 
 TEST_F(ControlPlaneFixture, TestQuantaGalaxyControlPlaneInit) {
-    tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::FABRIC_2D);
+    tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::FABRIC_2D);
     const std::filesystem::path quanta_galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/quanta_galaxy_mesh_graph_descriptor.yaml";

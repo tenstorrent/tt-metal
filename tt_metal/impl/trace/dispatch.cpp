@@ -161,24 +161,24 @@ void issue_trace_commands(
 }
 
 uint32_t compute_trace_cmd_size(uint32_t num_sub_devices) {
-    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
+    uint32_t pcie_alignment = hal_ref.get_alignment(HalMemType::HOST);
     uint32_t go_signals_cmd_size =
         align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) * num_sub_devices;
 
     uint32_t cmd_sequence_sizeB =
         DispatchQueryManager::instance().dispatch_s_enabled() *
-            hal.get_alignment(
+            hal_ref.get_alignment(
                 HalMemType::HOST) +  // dispatch_d -> dispatch_s sem update (send only if dispatch_s is running)
         go_signals_cmd_size +        // go signal cmd
-        (hal.get_alignment(
+        (hal_ref.get_alignment(
              HalMemType::HOST) +  // wait to ensure that reset go signal was processed (dispatch_d)
                                   // when dispatch_s and dispatch_d are running on 2 cores, workers update dispatch_s.
                                   // dispatch_s is responsible for resetting worker count and giving dispatch_d the
                                   // latest worker state. This is encapsulated in the dispatch_s wait command (only to
                                   // be sent when dispatch is distributed on 2 cores)
-         (DispatchQueryManager::instance().distributed_dispatcher()) * hal.get_alignment(HalMemType::HOST)) *
+         (DispatchQueryManager::instance().distributed_dispatcher()) * hal_ref.get_alignment(HalMemType::HOST)) *
             num_sub_devices +
-        hal.get_alignment(HalMemType::HOST);  // CQ_PREFETCH_CMD_EXEC_BUF
+        hal_ref.get_alignment(HalMemType::HOST);  // CQ_PREFETCH_CMD_EXEC_BUF
 
     return cmd_sequence_sizeB;
 }

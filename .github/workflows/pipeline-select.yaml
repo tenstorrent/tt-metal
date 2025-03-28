@@ -46,18 +46,24 @@ jobs:
     with:
       build-type: ${{ inputs.build-type }}
       tracy: ${{ inputs.build-with-tracy }}
+      build-wheel: true
+      version: "22.04"
     secrets: inherit
   single-card-demo-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/single-card-demo-tests-impl.yaml
     if: ${{ inputs.single-card-demo }}
+    uses: ./.github/workflows/single-card-demo-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   single-card-perf-models-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/perf-models-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     if: ${{ inputs.single-card-perf-models }}
@@ -67,7 +73,7 @@ jobs:
     uses: ./.github/workflows/perf-device-models-impl.yaml
     if: ${{ inputs.single-card-perf-device-models }}
     with:
-      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   single-card-nightly:
@@ -75,7 +81,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     if: ${{ inputs.single-card-nightly }}
@@ -87,4 +93,4 @@ jobs:
     with:
       arch: wormhole_b0
       runner-label: tt-beta-ubuntu-2204-n300-large-stable
-      os: ubuntu-22.04
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}

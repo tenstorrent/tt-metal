@@ -5,12 +5,11 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operation.hpp"
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement::detail {
 

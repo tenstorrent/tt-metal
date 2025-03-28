@@ -5,9 +5,7 @@
 from dataclasses import dataclass
 import os
 import json
-import re
 import torch
-import torch.nn.functional as F
 
 import datasets
 import pytest

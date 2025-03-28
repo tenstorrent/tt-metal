@@ -16,7 +16,7 @@ from tt_metal.tools.profiler.process_model_log import (
     run_device_profiler,
     get_samples_per_s,
 )
-from models.perf.perf_utils import today, process_perf_results
+from models.perf.perf_utils import process_perf_results
 
 
 def run_device_perf(command, subdir, num_iterations, cols, batch_size, op_name="", has_signposts=False):

@@ -50,6 +50,9 @@ void kernel_main() {
 #else
     fvc_inbound_push_state_t fvc_inbound_state;
     fvc_outbound_push_state_t fvc_outbound_state[4];
+    volatile tt_l1_ptr fabric_push_client_queue_t* client_queue =
+        reinterpret_cast<tt_l1_ptr fabric_push_client_queue_t*>(FABRIC_ROUTER_CLIENT_QUEUE_START);
+    zero_l1_buf((tt_l1_ptr uint32_t*)client_queue, sizeof(fabric_push_client_queue_t));
 #endif
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
@@ -184,8 +187,8 @@ void kernel_main() {
         if (fvc_outbound_state[curr_outbound_buffer].forward_data_from_fvc_buffer(eth_outbound_wrptr)) {
             loop_count = 0;
         } else {
-            if (*fvc_outbound_state[next_outbound_buffer].noc_word_credits ||
-                *fvc_outbound_state[next_outbound_buffer].sender_words_cleared) {
+            if (*fvc_outbound_state[next_outbound_buffer].slot_credits ||
+                *fvc_outbound_state[next_outbound_buffer].sender_slots_cleared) {
                 curr_outbound_buffer = next_outbound_buffer;
             }
             next_outbound_buffer = (next_outbound_buffer + 1) & 0x3;
