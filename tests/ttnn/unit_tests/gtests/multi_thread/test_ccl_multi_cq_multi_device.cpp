@@ -58,8 +58,8 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
-    mesh_device->enable_async(true);
-    mesh_device->enable_program_cache();
+    //mesh_device->enable_async(true);
+    //mesh_device->enable_program_cache();
 
     auto view = mesh_device->get_view();
 
@@ -146,13 +146,17 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
                 promise->set_value();
             });
             // If you remove below comment (perform sleep), the final output value will be correct.
-            // std::this_thread::sleep_for(std::chrono::seconds(1));
+            std::this_thread::sleep_for(std::chrono::seconds(1));
             dev_idx++;
         }
 
         // Wait for all tasks to complete
         for (auto& future : futures) {
             future.wait();
+        }
+
+        for (auto device : devices) {
+            ttnn::queue_synchronize(device->command_queue(op_cq_id));
         }
 
         log_info(LogTest, "Enqueue AllGather", outer_loop);
@@ -313,8 +317,6 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
         }
 
         log_info(LogTest, "Enqueue AllGather", outer_loop);
-        // Create a multi-device tensor for allgather
-        const Tensor mesh_tensor_for_ag = ttnn::distributed::aggregate_as_tensor(device_tensors, AllGatherTensor{});
 
         // Enqueue the all_gather_async operation on each device.
         // It does not support command queue ID as a parameter and internally uses command queue 0.

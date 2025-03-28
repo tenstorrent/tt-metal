@@ -32,6 +32,7 @@ enum class AllGatherAsyncVersion {
 };
 
 struct AllGatherAsync {
+    std::vector<IDevice*> devices;
     const uint32_t dim;
     const uint32_t num_links;
     const uint32_t ring_size;
@@ -43,6 +44,7 @@ struct AllGatherAsync {
     std::optional<uint32_t> cluster_axis;
 
     AllGatherAsync(
+        std::vector<IDevice*> devices,
         uint32_t dim,
         uint32_t num_links,
         uint32_t ring_size,
@@ -52,6 +54,7 @@ struct AllGatherAsync {
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         bool enable_persistent_fabric_mode,
         std::optional<uint32_t> cluster_axis) :
+        devices(std::move(devices)),
         dim(dim),
         num_links(num_links),
         ring_size(ring_size),

@@ -212,15 +212,21 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
 tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     std::vector<IDevice*> devices;
-    if (this->cluster_axis.has_value()) {
-        const auto& mesh_view = input_tensors[0].mesh_device()->get_view();
-        devices = (this->cluster_axis.value() == 0) ? mesh_view.get_devices_on_column(coord[1])
-                                                    : mesh_view.get_devices_on_row(coord[0]);
+    IDevice* target_device;
+    if (input_tensors[0].mesh_device()) {
+        if (this->cluster_axis.has_value()) {
+            const auto& mesh_view = input_tensors[0].mesh_device()->get_view();
+            devices = (this->cluster_axis.value() == 0) ? mesh_view.get_devices_on_column(coord[1])
+                                                        : mesh_view.get_devices_on_row(coord[0]);
+        } else {
+            devices = input_tensors[0].mesh_device()->get_devices();
+        }
+        const auto* target_device = input_tensors[0].mesh_device()->get_device(coord);
     } else {
-        devices = input_tensors[0].mesh_device()->get_devices();
+        devices = this->devices;
+        target_device = input_tensors[0].device();
     }
 
-    const auto* target_device = input_tensors[0].mesh_device()->get_device(coord);
     const int num_devices = devices.size();
     std::optional<IDevice*> forward_device = std::nullopt;
     std::optional<IDevice*> backward_device = std::nullopt;
@@ -387,6 +393,7 @@ Tensor all_gather_async(
 
             return tt::tt_metal::operation::run(
                 ttnn::AllGatherAsync(
+                    devices,
                     dim,
                     num_links,
                     num_devices,
@@ -443,6 +450,7 @@ std::vector<Tensor> all_gather_async(
         CoreCoord grid_size = devices[i]->compute_with_storage_grid_size();
         auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
 
+        devices[i]->push_work([&](){
         tt::tt_metal::operation::launch_op(
             [dim,
              num_links,
@@ -460,6 +468,7 @@ std::vector<Tensor> all_gather_async(
 
                 return tt::tt_metal::operation::run(
                     ttnn::AllGatherAsync(
+                        devices,
                         dim,
                         num_links,
                         num_devices,
@@ -475,7 +484,8 @@ std::vector<Tensor> all_gather_async(
             },
             {input_tensor},
             cur_output_tensors);
-        output_tensors.push_back(output_tensor);
+        output_tensors.push_back(cur_output_tensors.at(0));
+        });
     }
     return output_tensors;
 }
@@ -520,6 +530,7 @@ Tensor all_gather_async(
          num_preferred_links,
          memory_config,
          cluster_axis,
+         devices,
          num_devices,
          topology,
          multi_device_global_semaphore,
@@ -531,6 +542,7 @@ Tensor all_gather_async(
             const auto& input_tensor = input_tensors.at(0);
             return tt::tt_metal::operation::run(
                 ttnn::AllGatherAsync{
+                    devices,
                     gather_dim,
                     num_preferred_links.has_value() ? num_preferred_links.value() : 1,
                     num_devices,
