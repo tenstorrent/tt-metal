@@ -49,6 +49,7 @@ sentencepiece==0.1.97
 numba>=0.58.1
 librosa==0.10.0
 timm==0.6.13
+ultralytics==8.2
 opencv-python-headless==4.8.1.78
 diffusers==0.12.1
 accelerate==0.27.2
@@ -70,4 +71,3 @@ huggingface-hub==0.25.2
 pydantic==2.9.2 # Required for Superset benchmarking
 fiftyone==0.25.2 # Required for Yolo benchmarking
 jiwer==3.0.5 # Required for speech recognition evaluation
-ultralytics==8.3.96
