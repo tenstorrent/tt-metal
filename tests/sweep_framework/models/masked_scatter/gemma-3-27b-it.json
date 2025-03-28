@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "masked_scatter",
+    "Input Size": "[(1, 540, 5376), (1, 540, 5376), (2, 256, 5376)]",
+    "Output Size": "[(1, 540, 5376)]",
+    "Attributes": "Tensor[(1, 540, 5376)], Tensor[(1, 540, 5376)], Tensor[(2, 256, 5376)]",
+    "Count": 1
+  }
+]

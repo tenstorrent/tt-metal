@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "unsqueeze",
+    "Input Size": "[(1, 540)]",
+    "Output Size": "[(1, 540, 1)]",
+    "Attributes": "Tensor[(1, 540)], -1",
+    "Count": 1
+  },
+  {
+    "Name": "unsqueeze",
+    "Input Size": "[(1, 540, 256)]",
+    "Output Size": "[(1, 1, 540, 256)]",
+    "Attributes": "Tensor[(1, 540, 256)], 1",
+    "Count": 96
+  }
+]

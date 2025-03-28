@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "int",
+    "Input Size": "[()]",
+    "Output Size": "[()]",
+    "Attributes": "Tensor[()]",
+    "Count": 40
+  }
+]

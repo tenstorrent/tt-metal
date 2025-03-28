@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "float",
+    "Input Size": "[(1, 1, 800, 1019)]",
+    "Output Size": "[(1, 1, 800, 1019)]",
+    "Attributes": "Tensor[(1, 1, 800, 1019)]",
+    "Count": 4
+  },
+  {
+    "Name": "float",
+    "Input Size": "[(128,)]",
+    "Output Size": "[(128,)]",
+    "Attributes": "Tensor[(128,)]",
+    "Count": 4
+  }
+]

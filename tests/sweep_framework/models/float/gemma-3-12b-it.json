@@ -1,0 +1,37 @@
+[
+  {
+    "Name": "float",
+    "Input Size": "[(1, 1, 540)]",
+    "Output Size": "[(1, 1, 540)]",
+    "Attributes": "Tensor[(1, 1, 540)]",
+    "Count": 4
+  },
+  {
+    "Name": "float",
+    "Input Size": "[(1, 16, 540, 256)]",
+    "Output Size": "[(1, 16, 540, 256)]",
+    "Attributes": "Tensor[(1, 16, 540, 256)]",
+    "Count": 48
+  },
+  {
+    "Name": "float",
+    "Input Size": "[(1, 540, 3840)]",
+    "Output Size": "[(1, 540, 3840)]",
+    "Attributes": "Tensor[(1, 540, 3840)]",
+    "Count": 193
+  },
+  {
+    "Name": "float",
+    "Input Size": "[(1, 8, 540, 256)]",
+    "Output Size": "[(1, 8, 540, 256)]",
+    "Attributes": "Tensor[(1, 8, 540, 256)]",
+    "Count": 48
+  },
+  {
+    "Name": "float",
+    "Input Size": "[(2, 256, 1152)]",
+    "Output Size": "[(2, 256, 1152)]",
+    "Attributes": "Tensor[(2, 256, 1152)]",
+    "Count": 1
+  }
+]

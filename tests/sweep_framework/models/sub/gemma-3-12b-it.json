@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "sub",
+    "Input Size": "[(589,)]",
+    "Output Size": "[(589,)]",
+    "Attributes": "Tensor[(589,)], 1",
+    "Count": 40
+  }
+]

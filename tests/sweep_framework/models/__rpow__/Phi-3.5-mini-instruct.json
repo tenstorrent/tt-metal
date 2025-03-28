@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "__rpow__",
+    "Input Size": "[(48,)]",
+    "Output Size": "[(48,)]",
+    "Attributes": "Tensor[(48,)], 10000.0",
+    "Count": 32
+  }
+]

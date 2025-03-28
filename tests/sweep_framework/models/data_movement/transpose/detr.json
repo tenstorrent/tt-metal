@@ -1,0 +1,44 @@
+[
+  {
+    "Name": "transpose",
+    "Input Size": "[(1, 100, 8, 32)]",
+    "Output Size": "[(1, 8, 100, 32)]",
+    "Attributes": "Tensor[(1, 100, 8, 32)], 1, 2",
+    "Count": 24
+  },
+  {
+    "Name": "transpose",
+    "Input Size": "[(1, 8, 100, 32)]",
+    "Output Size": "[(1, 100, 8, 32)]",
+    "Attributes": "Tensor[(1, 8, 100, 32)], 1, 2",
+    "Count": 12
+  },
+  {
+    "Name": "transpose",
+    "Input Size": "[(1, 8, 800, 32)]",
+    "Output Size": "[(1, 800, 8, 32)]",
+    "Attributes": "Tensor[(1, 8, 800, 32)], 1, 2",
+    "Count": 6
+  },
+  {
+    "Name": "transpose",
+    "Input Size": "[(1, 800, 8, 32)]",
+    "Output Size": "[(1, 8, 800, 32)]",
+    "Attributes": "Tensor[(1, 800, 8, 32)], 1, 2",
+    "Count": 30
+  },
+  {
+    "Name": "transpose",
+    "Input Size": "[(8, 100, 32)]",
+    "Output Size": "[(8, 32, 100)]",
+    "Attributes": "Tensor[(8, 100, 32)], 1, 2",
+    "Count": 6
+  },
+  {
+    "Name": "transpose",
+    "Input Size": "[(8, 800, 32)]",
+    "Output Size": "[(8, 32, 800)]",
+    "Attributes": "Tensor[(8, 800, 32)], 1, 2",
+    "Count": 12
+  }
+]

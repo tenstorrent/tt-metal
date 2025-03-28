@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "type_as",
+    "Input Size": "[(336, 336), (336, 336)]",
+    "Output Size": "[(336, 336)]",
+    "Attributes": "Tensor[(336, 336)], Tensor[(336, 336)]",
+    "Count": 1
+  },
+  {
+    "Name": "type_as",
+    "Input Size": "[(336, 336)]",
+    "Output Size": "[()]",
+    "Attributes": "Tensor[()], Tensor[(336, 336)]",
+    "Count": 1
+  }
+]

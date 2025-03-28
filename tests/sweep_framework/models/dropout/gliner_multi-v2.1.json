@@ -1,0 +1,23 @@
+[
+  {
+    "Name": "dropout",
+    "Input Size": "[(1, 220, 2048)]",
+    "Output Size": "[(1, 220, 2048)]",
+    "Attributes": "Tensor[(1, 220, 2048)]",
+    "Count": 2
+  },
+  {
+    "Name": "dropout",
+    "Input Size": "[(1, 2640, 2048)]",
+    "Output Size": "[(1, 2640, 2048)]",
+    "Attributes": "Tensor[(1, 2640, 2048)]",
+    "Count": 1
+  },
+  {
+    "Name": "dropout",
+    "Input Size": "[(1, 5, 2048)]",
+    "Output Size": "[(1, 5, 2048)]",
+    "Attributes": "Tensor[(1, 5, 2048)]",
+    "Count": 1
+  }
+]

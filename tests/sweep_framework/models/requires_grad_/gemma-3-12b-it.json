@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "requires_grad_",
+    "Input Size": "[(1,)]",
+    "Output Size": "[(1,)]",
+    "Attributes": "Tensor[(1,)], True",
+    "Count": 1
+  }
+]

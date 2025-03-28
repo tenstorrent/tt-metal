@@ -1,0 +1,23 @@
+[
+  {
+    "Name": "add",
+    "Input Size": "[(1, 77, 768), (1, 77, 768)]",
+    "Output Size": "[(1, 77, 768)]",
+    "Attributes": "Tensor[(1, 77, 768)], Tensor[(1, 77, 768)]",
+    "Count": 24
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 77, 768)]",
+    "Output Size": "[(1, 77, 768)]",
+    "Attributes": "Tensor[(1, 77, 768)], Tensor[(1, 77, 768)]",
+    "Count": 1
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(77,)]",
+    "Output Size": "[(77,)]",
+    "Attributes": "Tensor[(77,)], 1",
+    "Count": 1
+  }
+]

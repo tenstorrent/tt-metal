@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "stack",
+    "Input Size": "[(14, 30, 53), (14, 30, 53), (14, 30, 53)]",
+    "Output Size": "[(14, 30, 53, 3)]",
+    "Attributes": "Tensor[(14, 30, 53)] Tensor[(14, 30, 53)] Tensor[(14, 30, 53)]",
+    "Count": 1
+  },
+  {
+    "Name": "stack",
+    "Input Size": "[(2, 22260, 24, 64), (2, 22260, 24, 64)]",
+    "Output Size": "[(2, 22260, 24, 64, 2)]",
+    "Attributes": "Tensor[(2, 22260, 24, 64)] Tensor[(2, 22260, 24, 64)]",
+    "Count": 96
+  }
+]

@@ -1,0 +1,23 @@
+[
+  {
+    "Name": "view",
+    "Input Size": "[(1, 77)]",
+    "Output Size": "[(1, 77)]",
+    "Attributes": "Tensor[(1, 77)], -1, 77",
+    "Count": 1
+  },
+  {
+    "Name": "view",
+    "Input Size": "[(1, 77, 768)]",
+    "Output Size": "[(1, 77, 12, 64)]",
+    "Attributes": "Tensor[(1, 77, 768)], 1, -1, 12, 64",
+    "Count": 36
+  },
+  {
+    "Name": "view",
+    "Input Size": "[(77,)]",
+    "Output Size": "[(77, 1)]",
+    "Attributes": "Tensor[(77,)], 77, 1",
+    "Count": 1
+  }
+]

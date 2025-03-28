@@ -1,0 +1,23 @@
+[
+  {
+    "Name": "__get__",
+    "Input Size": "[(1, 8, 589, 256)]",
+    "Output Size": "[(1, 8, 256, 589)]",
+    "Attributes": "Tensor[(1, 8, 589, 256)]",
+    "Count": 4
+  },
+  {
+    "Name": "__get__",
+    "Input Size": "[(1, 8, 589, 256)]",
+    "Output Size": "[(1, 8, 589, 256)]",
+    "Attributes": "Tensor[(1, 8, 589, 256)]",
+    "Count": 4
+  },
+  {
+    "Name": "__get__",
+    "Input Size": "[(1, 8, 589, 256)]",
+    "Output Size": "[(256, 589, 8, 1)]",
+    "Attributes": "Tensor[(1, 8, 589, 256)]",
+    "Count": 2
+  }
+]

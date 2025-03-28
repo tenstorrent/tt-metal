@@ -1,0 +1,65 @@
+[
+  {
+    "Name": "add",
+    "Input Size": "[(1, 1024, 640), (1, 1024, 640)]",
+    "Output Size": "[(1, 1024, 640)]",
+    "Attributes": "Tensor[(1, 1024, 640)], Tensor[(1, 1024, 640)]",
+    "Count": 30
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 1280), (1, 1280)]",
+    "Output Size": "[(1, 1280)]",
+    "Attributes": "Tensor[(1, 1280)], Tensor[(1, 1280)]",
+    "Count": 1
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 1280, 16, 16), (1, 1280, 1, 1)]",
+    "Output Size": "[(1, 1280, 16, 16)]",
+    "Attributes": "Tensor[(1, 1280, 16, 16)], Tensor[(1, 1280, 1, 1)]",
+    "Count": 7
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 1280, 16, 16), (1, 1280, 16, 16)]",
+    "Output Size": "[(1, 1280, 16, 16)]",
+    "Attributes": "Tensor[(1, 1280, 16, 16)], Tensor[(1, 1280, 16, 16)]",
+    "Count": 13
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 256, 1280), (1, 256, 1280)]",
+    "Output Size": "[(1, 256, 1280)]",
+    "Attributes": "Tensor[(1, 256, 1280)], Tensor[(1, 256, 1280)]",
+    "Count": 180
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 320, 64, 64), (1, 320, 1, 1)]",
+    "Output Size": "[(1, 320, 64, 64)]",
+    "Attributes": "Tensor[(1, 320, 64, 64)], Tensor[(1, 320, 1, 1)]",
+    "Count": 5
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 320, 64, 64), (1, 320, 64, 64)]",
+    "Output Size": "[(1, 320, 64, 64)]",
+    "Attributes": "Tensor[(1, 320, 64, 64)], Tensor[(1, 320, 64, 64)]",
+    "Count": 5
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 640, 32, 32), (1, 640, 1, 1)]",
+    "Output Size": "[(1, 640, 32, 32)]",
+    "Attributes": "Tensor[(1, 640, 32, 32)], Tensor[(1, 640, 1, 1)]",
+    "Count": 5
+  },
+  {
+    "Name": "add",
+    "Input Size": "[(1, 640, 32, 32), (1, 640, 32, 32)]",
+    "Output Size": "[(1, 640, 32, 32)]",
+    "Attributes": "Tensor[(1, 640, 32, 32)], Tensor[(1, 640, 32, 32)]",
+    "Count": 10
+  }
+]

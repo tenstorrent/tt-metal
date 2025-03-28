@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "matmul",
+    "Input Size": "[(1, 12, 400, 400), (1, 12, 400, 64)]",
+    "Output Size": "[(1, 12, 400, 64)]",
+    "Attributes": "Tensor[(1, 12, 400, 400)], Tensor[(1, 12, 400, 64)]",
+    "Count": 12
+  },
+  {
+    "Name": "matmul",
+    "Input Size": "[(1, 12, 400, 64), (1, 12, 64, 400)]",
+    "Output Size": "[(1, 12, 400, 400)]",
+    "Attributes": "Tensor[(1, 12, 400, 64)], Tensor[(1, 12, 64, 400)]",
+    "Count": 12
+  }
+]

@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "scaled_dot_product_attention",
+    "Input Size": "[(1, 32, 540, 128), (1, 32, 540, 128), (1, 32, 540, 128), (1, 1, 540, 540)]",
+    "Output Size": "[(1, 32, 540, 128)]",
+    "Attributes": "Tensor[(1, 32, 540, 128)], Tensor[(1, 32, 540, 128)], Tensor[(1, 32, 540, 128)]",
+    "Count": 62
+  },
+  {
+    "Name": "scaled_dot_product_attention",
+    "Input Size": "[(2, 16, 4096, 72), (2, 16, 4096, 72), (2, 16, 4096, 72)]",
+    "Output Size": "[(2, 16, 4096, 72)]",
+    "Attributes": "Tensor[(2, 16, 4096, 72)], Tensor[(2, 16, 4096, 72)], Tensor[(2, 16, 4096, 72)]",
+    "Count": 27
+  }
+]

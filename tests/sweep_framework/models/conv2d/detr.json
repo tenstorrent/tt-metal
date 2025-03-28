@@ -1,0 +1,149 @@
+[
+  {
+    "Name": "conv2d",
+    "Input Size": "[(1, 1024, 50, 64)]",
+    "Output Size": "[(1, 256, 50, 64)]",
+    "Attributes": "Tensor[(1, 1024, 50, 64)], Tensor[(256, 1024, 1, 1)], None, (1, 1), (0, 0), (1, 1), 1",
+    "Count": 5
+  },
+  {
+    "Name": "conv2d",
+    "Input Size": "[(1, 1024, 50, 64)]",
+    "Output Size": "[(1, 512, 50, 64)]",
+    "Attributes": "Tensor[(1, 1024, 50, 64)], Tensor[(512, 1024, 1, 1)], None, (1, 1), (0, 0), (1, 1), 1",
+    "Count": 1
+  },
+  {
+    "Name": "conv2d",
+    "Input Size": "[(1, 128, 100, 128)]",
+    "Output Size": "[(1, 128, 100, 128)]",
+    "Attributes": "Tensor[(1, 128, 100, 128)], Tensor[(128, 128, 3, 3)], None, (1, 1), (1, 1), (1, 1), 1",
+    "Count": 3
+  },
+  {
+    "Name": "conv2d",
+    "Input Size": "[(1, 128, 100, 128)]",
+    "Output Size": "[(1, 512, 100, 128)]",
+    "Attributes": "Tensor[(1, 128, 100, 128)], Tensor[(512, 128, 1, 1)], None, (1, 1), (0, 0), (1, 1), 1",
+    "Count": 4
+  },
+  {
+    "Name": "conv2d",
+    "Input Size": "[(1, 128, 200, 255)]",
+    "Output Size": "[(1, 128, 100, 128)]",
+    "Attributes": "Tensor[(1, 128, 200, 255)], Tensor[(128, 128, 3, 3)], None, (2, 2), (1, 1), (1, 1), 1",
+    "Count": 1
+  },
+  {
+    "Name": "conv2d",
+    "Input Size": "[(1, 2048, 25, 32)]",
+    "Output Size": "[(1, 256, 25, 32)]",
+    "Attributes": "Tensor[(1, 2048, 25, 32)], Tensor[(256, 2048, 1, 1)], Tensor[(256,)], (1, 1), (0, 0), (1, 1), 1",
+    "Count": 1
+  },
+  {
+    "Name": "conv2d",
+    "Input Size": "[(1, 2048, 25, 32)]",
+    "Output Size": "[(1, 512, 25, 32)]",
+    "Attributes": "Tensor[(1, 2048, 25, 32)], Tensor[(512, 2048, 1, 1)], None, (1, 1), (0, 0), (1, 1), 1",
+    "Count": 2
+  },
+  {
+    "Name": "conv2d",
+    "Input Size": "[(1, 256, 100, 128)]",
+    "Output Size": "[(1, 256, 50, 64)]",
+    "Attributes": "Tensor[(1, 256, 100, 128)], Tensor[(256, 256, 3, 3)], None, (2, 2), (1, 1), (1, 1), 1",
+    "Count": 1
+  },
+  {
+    "Name": "conv2d",
+    "Input Size": "[(1, 256, 200, 255)]",
+    "Output Size": "[(1, 128, 200, 255)]",
+    "Attributes": "Tensor[(1, 256, 200, 255)], Tensor[(128, 256, 1, 1)], None, (1, 1), (0, 0), (1, 1), 1",
+    "Count": 1
+  },
+  {
+    "Name": "conv2d",
+    "Input Size": "[(1, 256, 200, 255)]",
+    "Output Size": "[(1, 64, 200, 255)]",
+    "Attributes": "Tensor[(1, 256, 200, 255)], Tensor[(64, 256, 1, 1)], None, (1, 1), (0, 0), (1, 1), 1",
+    "Count": 2
+  },
+  {
+    "Name": "conv2d",
+    "Input Size": "[(1, 256, 50, 64)]",
+    "Output Size": "[(1, 1024, 50, 64)]",
+    "Attributes": "Tensor[(1, 256, 50, 64)], Tensor[(1024, 256, 1, 1)], None, (1, 1), (0, 0), (1, 1), 1",
+    "Count": 6
+  },
+  {
+    "Name": "conv2d",
+    "Input Size": "[(1, 256, 50, 64)]",
+    "Output Size": "[(1, 256, 50, 64)]",
+    "Attributes": "Tensor[(1, 256, 50, 64)], Tensor[(256, 256, 3, 3)], None, (1, 1), (1, 1), (1, 1), 1",
+    "Count": 5
+  },
+  {
+    "Name": "conv2d",
+    "Input Size": "[(1, 3, 800, 1019)]",
+    "Output Size": "[(1, 64, 400, 510)]",
+    "Attributes": "Tensor[(1, 3, 800, 1019)], Tensor[(64, 3, 7, 7)], None, (2, 2), (3, 3), (1, 1), 1",
+    "Count": 1
+  },
+  {
+    "Name": "conv2d",
+    "Input Size": "[(1, 512, 100, 128)]",
+    "Output Size": "[(1, 128, 100, 128)]",
+    "Attributes": "Tensor[(1, 512, 100, 128)], Tensor[(128, 512, 1, 1)], None, (1, 1), (0, 0), (1, 1), 1",
+    "Count": 3
+  },
+  {
+    "Name": "conv2d",
+    "Input Size": "[(1, 512, 100, 128)]",
+    "Output Size": "[(1, 256, 100, 128)]",
+    "Attributes": "Tensor[(1, 512, 100, 128)], Tensor[(256, 512, 1, 1)], None, (1, 1), (0, 0), (1, 1), 1",
+    "Count": 1
+  },
+  {
+    "Name": "conv2d",
+    "Input Size": "[(1, 512, 25, 32)]",
+    "Output Size": "[(1, 2048, 25, 32)]",
+    "Attributes": "Tensor[(1, 512, 25, 32)], Tensor[(2048, 512, 1, 1)], None, (1, 1), (0, 0), (1, 1), 1",
+    "Count": 3
+  },
+  {
+    "Name": "conv2d",
+    "Input Size": "[(1, 512, 25, 32)]",
+    "Output Size": "[(1, 512, 25, 32)]",
+    "Attributes": "Tensor[(1, 512, 25, 32)], Tensor[(512, 512, 3, 3)], None, (1, 1), (1, 1), (1, 1), 1",
+    "Count": 2
+  },
+  {
+    "Name": "conv2d",
+    "Input Size": "[(1, 512, 50, 64)]",
+    "Output Size": "[(1, 512, 25, 32)]",
+    "Attributes": "Tensor[(1, 512, 50, 64)], Tensor[(512, 512, 3, 3)], None, (2, 2), (1, 1), (1, 1), 1",
+    "Count": 1
+  },
+  {
+    "Name": "conv2d",
+    "Input Size": "[(1, 64, 200, 255)]",
+    "Output Size": "[(1, 256, 200, 255)]",
+    "Attributes": "Tensor[(1, 64, 200, 255)], Tensor[(256, 64, 1, 1)], None, (1, 1), (0, 0), (1, 1), 1",
+    "Count": 3
+  },
+  {
+    "Name": "conv2d",
+    "Input Size": "[(1, 64, 200, 255)]",
+    "Output Size": "[(1, 64, 200, 255)]",
+    "Attributes": "Tensor[(1, 64, 200, 255)], Tensor[(64, 64, 1, 1)], None, (1, 1), (0, 0), (1, 1), 1",
+    "Count": 1
+  },
+  {
+    "Name": "conv2d",
+    "Input Size": "[(1, 64, 200, 255)]",
+    "Output Size": "[(1, 64, 200, 255)]",
+    "Attributes": "Tensor[(1, 64, 200, 255)], Tensor[(64, 64, 3, 3)], None, (1, 1), (1, 1), (1, 1), 1",
+    "Count": 3
+  }
+]

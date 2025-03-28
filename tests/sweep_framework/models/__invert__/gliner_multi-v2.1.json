@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "__invert__",
+    "Input Size": "[(1, 1, 336, 336)]",
+    "Output Size": "[(1, 1, 336, 336)]",
+    "Attributes": "Tensor[(1, 1, 336, 336)]",
+    "Count": 12
+  }
+]

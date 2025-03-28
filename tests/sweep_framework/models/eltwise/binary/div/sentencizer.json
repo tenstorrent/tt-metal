@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "div",
+    "Input Size": "[(1, 12, 400, 400)]",
+    "Output Size": "[(1, 12, 400, 400)]",
+    "Attributes": "Tensor[(1, 12, 400, 400)], 8.0",
+    "Count": 12
+  }
+]

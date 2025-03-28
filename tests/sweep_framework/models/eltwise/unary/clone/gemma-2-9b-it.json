@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "clone",
+    "Input Size": "[(1, 1, 256, 256)]",
+    "Output Size": "[(1, 1, 256, 256)]",
+    "Attributes": "Tensor[(1, 1, 256, 256)]",
+    "Count": 1
+  }
+]

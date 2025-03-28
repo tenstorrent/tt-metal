@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "zero_",
+    "Input Size": "[(1, 8, 589, 256)]",
+    "Output Size": "[(1, 8, 589, 256)]",
+    "Attributes": "Tensor[(1, 8, 589, 256)]",
+    "Count": 80
+  }
+]

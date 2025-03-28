@@ -1,0 +1,37 @@
+[
+  {
+    "Name": "chunk",
+    "Input Size": "[(2, 12288)]",
+    "Output Size": "[(2, 3072), (2, 3072), (2, 3072), (2, 3072)]",
+    "Attributes": "Tensor[(2, 12288)], 4",
+    "Count": 48
+  },
+  {
+    "Name": "chunk",
+    "Input Size": "[(2, 22260, 16384)]",
+    "Output Size": "[(2, 22260, 8192), (2, 22260, 8192)]",
+    "Attributes": "Tensor[(2, 22260, 16384)], 2",
+    "Count": 48
+  },
+  {
+    "Name": "chunk",
+    "Input Size": "[(2, 256, 8192)]",
+    "Output Size": "[(2, 256, 4096), (2, 256, 4096)]",
+    "Attributes": "Tensor[(2, 256, 8192)], 2",
+    "Count": 47
+  },
+  {
+    "Name": "chunk",
+    "Input Size": "[(2, 6144)]",
+    "Output Size": "[(2, 1536), (2, 1536), (2, 1536), (2, 1536)]",
+    "Attributes": "Tensor[(2, 6144)], 4",
+    "Count": 47
+  },
+  {
+    "Name": "chunk",
+    "Input Size": "[(2, 6144)]",
+    "Output Size": "[(2, 3072), (2, 3072)]",
+    "Attributes": "Tensor[(2, 6144)], 2",
+    "Count": 1
+  }
+]

@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "log",
+    "Input Size": "[(336, 336)]",
+    "Output Size": "[(336, 336)]",
+    "Attributes": "Tensor[(336, 336)]",
+    "Count": 1
+  }
+]

@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(1, 77, 768), (1,), (1,)]",
+    "Output Size": "[(1, 768)]",
+    "Attributes": "Tensor[(1, 77, 768)], Tensor[(1,)] Tensor[(1,)]",
+    "Count": 1
+  },
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(77, 77)]",
+    "Output Size": "[(1, 1, 77, 77)]",
+    "Attributes": "Tensor[(77, 77)], (None, None, slice(None, None, None), slice(None, None, None))",
+    "Count": 1
+  }
+]

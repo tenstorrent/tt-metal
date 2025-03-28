@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "neg",
+    "Input Size": "[(1, 16, 540, 128)]",
+    "Output Size": "[(1, 16, 540, 128)]",
+    "Attributes": "Tensor[(1, 16, 540, 128)]",
+    "Count": 48
+  },
+  {
+    "Name": "neg",
+    "Input Size": "[(1, 8, 540, 128)]",
+    "Output Size": "[(1, 8, 540, 128)]",
+    "Attributes": "Tensor[(1, 8, 540, 128)]",
+    "Count": 48
+  }
+]

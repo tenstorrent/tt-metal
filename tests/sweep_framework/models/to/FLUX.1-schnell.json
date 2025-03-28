@@ -1,0 +1,65 @@
+[
+  {
+    "Name": "to",
+    "Input Size": "[(1, 1, 4352, 128)]",
+    "Output Size": "[(1, 1, 4352, 128)]",
+    "Attributes": "Tensor[(1, 1, 4352, 128)], cpu",
+    "Count": 228
+  },
+  {
+    "Name": "to",
+    "Input Size": "[(1, 24, 256, 128)]",
+    "Output Size": "[(1, 24, 256, 128)]",
+    "Attributes": "Tensor[(1, 24, 256, 128)], torch.float32",
+    "Count": 38
+  },
+  {
+    "Name": "to",
+    "Input Size": "[(1, 24, 4096, 128)]",
+    "Output Size": "[(1, 24, 4096, 128)]",
+    "Attributes": "Tensor[(1, 24, 4096, 128)], torch.float32",
+    "Count": 38
+  },
+  {
+    "Name": "to",
+    "Input Size": "[(1, 24, 4352, 128)]",
+    "Output Size": "[(1, 24, 4352, 128)]",
+    "Attributes": "Tensor[(1, 24, 4352, 128)], torch.float32",
+    "Count": 190
+  },
+  {
+    "Name": "to",
+    "Input Size": "[(1, 256)]",
+    "Output Size": "[(1, 256)]",
+    "Attributes": "Tensor[(1, 256)]",
+    "Count": 1
+  },
+  {
+    "Name": "to",
+    "Input Size": "[(1, 3072)]",
+    "Output Size": "[(1, 3072)]",
+    "Attributes": "Tensor[(1, 3072)], torch.float32",
+    "Count": 1
+  },
+  {
+    "Name": "to",
+    "Input Size": "[(1, 4352, 3072)]",
+    "Output Size": "[(1, 4352, 3072)]",
+    "Attributes": "Tensor[(1, 4352, 3072)], torch.float32",
+    "Count": 57
+  },
+  {
+    "Name": "to",
+    "Input Size": "[(1,)]",
+    "Output Size": "[(1,)]",
+    "Attributes": "Tensor[(1,)], torch.float32",
+    "Count": 1
+  },
+  {
+    "Name": "to",
+    "Input Size": "[(4352, 128)]",
+    "Output Size": "[(4352, 128)]",
+    "Attributes": "Tensor[(4352, 128)], cpu",
+    "Count": 2
+  }
+]

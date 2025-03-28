@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "exp",
+    "Input Size": "[(128,)]",
+    "Output Size": "[(128,)]",
+    "Attributes": "Tensor[(128,)]",
+    "Count": 1
+  },
+  {
+    "Name": "exp",
+    "Input Size": "[(160,)]",
+    "Output Size": "[(160,)]",
+    "Attributes": "Tensor[(160,)]",
+    "Count": 1
+  }
+]

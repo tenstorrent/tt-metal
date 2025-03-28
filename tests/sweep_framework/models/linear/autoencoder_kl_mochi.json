@@ -1,0 +1,114 @@
+[
+  {
+    "Name": "linear",
+    "Input Size": "[(2, 14, 12, 10, 768)]",
+    "Output Size": "[(2, 14, 12, 10, 6144)]",
+    "Attributes": "Tensor[(2, 14, 12, 10, 768)], Tensor[(6144, 768)], Tensor[(6144,)]",
+    "Count": 1
+  },
+  {
+    "Name": "linear",
+    "Input Size": "[(2, 14, 12, 32, 768)]",
+    "Output Size": "[(2, 14, 12, 32, 6144)]",
+    "Attributes": "Tensor[(2, 14, 12, 32, 768)], Tensor[(6144, 768)], Tensor[(6144,)]",
+    "Count": 4
+  },
+  {
+    "Name": "linear",
+    "Input Size": "[(2, 14, 32, 10, 768)]",
+    "Output Size": "[(2, 14, 32, 10, 6144)]",
+    "Attributes": "Tensor[(2, 14, 32, 10, 768)], Tensor[(6144, 768)], Tensor[(6144,)]",
+    "Count": 2
+  },
+  {
+    "Name": "linear",
+    "Input Size": "[(2, 14, 32, 32, 768)]",
+    "Output Size": "[(2, 14, 32, 32, 6144)]",
+    "Attributes": "Tensor[(2, 14, 32, 32, 768)], Tensor[(6144, 768)], Tensor[(6144,)]",
+    "Count": 8
+  },
+  {
+    "Name": "linear",
+    "Input Size": "[(2, 42, 24, 20, 512)]",
+    "Output Size": "[(2, 42, 24, 20, 2048)]",
+    "Attributes": "Tensor[(2, 42, 24, 20, 512)], Tensor[(2048, 512)], Tensor[(2048,)]",
+    "Count": 1
+  },
+  {
+    "Name": "linear",
+    "Input Size": "[(2, 42, 24, 64, 512)]",
+    "Output Size": "[(2, 42, 24, 64, 2048)]",
+    "Attributes": "Tensor[(2, 42, 24, 64, 512)], Tensor[(2048, 512)], Tensor[(2048,)]",
+    "Count": 4
+  },
+  {
+    "Name": "linear",
+    "Input Size": "[(2, 42, 64, 20, 512)]",
+    "Output Size": "[(2, 42, 64, 20, 2048)]",
+    "Attributes": "Tensor[(2, 42, 64, 20, 512)], Tensor[(2048, 512)], Tensor[(2048,)]",
+    "Count": 2
+  },
+  {
+    "Name": "linear",
+    "Input Size": "[(2, 42, 64, 64, 512)]",
+    "Output Size": "[(2, 42, 64, 64, 2048)]",
+    "Attributes": "Tensor[(2, 42, 64, 64, 512)], Tensor[(2048, 512)], Tensor[(2048,)]",
+    "Count": 8
+  },
+  {
+    "Name": "linear",
+    "Input Size": "[(2, 84, 128, 128, 256)]",
+    "Output Size": "[(2, 84, 128, 128, 512)]",
+    "Attributes": "Tensor[(2, 84, 128, 128, 256)], Tensor[(512, 256)], Tensor[(512,)]",
+    "Count": 8
+  },
+  {
+    "Name": "linear",
+    "Input Size": "[(2, 84, 128, 40, 256)]",
+    "Output Size": "[(2, 84, 128, 40, 512)]",
+    "Attributes": "Tensor[(2, 84, 128, 40, 256)], Tensor[(512, 256)], Tensor[(512,)]",
+    "Count": 2
+  },
+  {
+    "Name": "linear",
+    "Input Size": "[(2, 84, 256, 256, 128)]",
+    "Output Size": "[(2, 84, 256, 256, 3)]",
+    "Attributes": "Tensor[(2, 84, 256, 256, 128)], Tensor[(3, 128)], Tensor[(3,)]",
+    "Count": 8
+  },
+  {
+    "Name": "linear",
+    "Input Size": "[(2, 84, 256, 80, 128)]",
+    "Output Size": "[(2, 84, 256, 80, 3)]",
+    "Attributes": "Tensor[(2, 84, 256, 80, 128)], Tensor[(3, 128)], Tensor[(3,)]",
+    "Count": 2
+  },
+  {
+    "Name": "linear",
+    "Input Size": "[(2, 84, 48, 128, 256)]",
+    "Output Size": "[(2, 84, 48, 128, 512)]",
+    "Attributes": "Tensor[(2, 84, 48, 128, 256)], Tensor[(512, 256)], Tensor[(512,)]",
+    "Count": 4
+  },
+  {
+    "Name": "linear",
+    "Input Size": "[(2, 84, 48, 40, 256)]",
+    "Output Size": "[(2, 84, 48, 40, 512)]",
+    "Attributes": "Tensor[(2, 84, 48, 40, 256)], Tensor[(512, 256)], Tensor[(512,)]",
+    "Count": 1
+  },
+  {
+    "Name": "linear",
+    "Input Size": "[(2, 84, 96, 256, 128)]",
+    "Output Size": "[(2, 84, 96, 256, 3)]",
+    "Attributes": "Tensor[(2, 84, 96, 256, 128)], Tensor[(3, 128)], Tensor[(3,)]",
+    "Count": 4
+  },
+  {
+    "Name": "linear",
+    "Input Size": "[(2, 84, 96, 80, 128)]",
+    "Output Size": "[(2, 84, 96, 80, 3)]",
+    "Attributes": "Tensor[(2, 84, 96, 80, 128)], Tensor[(3, 128)], Tensor[(3,)]",
+    "Count": 1
+  }
+]

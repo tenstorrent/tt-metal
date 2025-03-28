@@ -1,0 +1,37 @@
+[
+  {
+    "Name": "unflatten",
+    "Input Size": "[(2, 22260, 3072)]",
+    "Output Size": "[(2, 22260, 24, 128)]",
+    "Attributes": "Tensor[(2, 22260, 3072)], 2, (24, -1)",
+    "Count": 144
+  },
+  {
+    "Name": "unflatten",
+    "Input Size": "[(2, 256, 3072)]",
+    "Output Size": "[(2, 256, 24, 128)]",
+    "Attributes": "Tensor[(2, 256, 3072)], 2, (24, -1)",
+    "Count": 144
+  },
+  {
+    "Name": "unflatten",
+    "Input Size": "[(2, 257, 8192)]",
+    "Output Size": "[(2, 257, 2, 8, 512)]",
+    "Attributes": "Tensor[(2, 257, 8192)], 2, (2, 8, 512)",
+    "Count": 1
+  },
+  {
+    "Name": "unflatten",
+    "Input Size": "[(2, 4096)]",
+    "Output Size": "[(2, 8, 512)]",
+    "Attributes": "Tensor[(2, 4096)], 1, (8, 512)",
+    "Count": 1
+  },
+  {
+    "Name": "unflatten",
+    "Input Size": "[(28, 1590, 3072)]",
+    "Output Size": "[(2, 14, 1590, 3072)]",
+    "Attributes": "Tensor[(28, 1590, 3072)], 0, (2, -1)",
+    "Count": 1
+  }
+]

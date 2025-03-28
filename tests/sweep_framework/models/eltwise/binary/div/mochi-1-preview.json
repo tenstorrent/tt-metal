@@ -1,0 +1,30 @@
+[
+  {
+    "Name": "div",
+    "Input Size": "[(128,)]",
+    "Output Size": "[(128,)]",
+    "Attributes": "Tensor[(128,)], 128.0",
+    "Count": 1
+  },
+  {
+    "Name": "div",
+    "Input Size": "[(2, 256, 1), (2, 1, 1)]",
+    "Output Size": "[(2, 256, 1)]",
+    "Attributes": "Tensor[(2, 256, 1)], Tensor[(2, 1, 1)]",
+    "Count": 1
+  },
+  {
+    "Name": "div",
+    "Input Size": "[(30,)]",
+    "Output Size": "[(30,)]",
+    "Attributes": "Tensor[(30,)], 2",
+    "Count": 1
+  },
+  {
+    "Name": "div",
+    "Input Size": "[(53,)]",
+    "Output Size": "[(53,)]",
+    "Attributes": "Tensor[(53,)], 2",
+    "Count": 1
+  }
+]

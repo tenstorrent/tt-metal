@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "contiguous",
+    "Input Size": "[(1, 12, 336, 64)]",
+    "Output Size": "[(1, 12, 336, 64)]",
+    "Attributes": "Tensor[(1, 12, 336, 64)]",
+    "Count": 36
+  },
+  {
+    "Name": "contiguous",
+    "Input Size": "[(1, 336, 12, 64)]",
+    "Output Size": "[(1, 336, 12, 64)]",
+    "Attributes": "Tensor[(1, 336, 12, 64)]",
+    "Count": 12
+  }
+]

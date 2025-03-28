@@ -1,0 +1,30 @@
+[
+  {
+    "Name": "permute",
+    "Input Size": "[(1, 1280, 16, 16)]",
+    "Output Size": "[(1, 16, 16, 1280)]",
+    "Attributes": "Tensor[(1, 1280, 16, 16)], 0, 2, 3, 1",
+    "Count": 6
+  },
+  {
+    "Name": "permute",
+    "Input Size": "[(1, 16, 16, 1280)]",
+    "Output Size": "[(1, 1280, 16, 16)]",
+    "Attributes": "Tensor[(1, 16, 16, 1280)], 0, 3, 1, 2",
+    "Count": 6
+  },
+  {
+    "Name": "permute",
+    "Input Size": "[(1, 32, 32, 640)]",
+    "Output Size": "[(1, 640, 32, 32)]",
+    "Attributes": "Tensor[(1, 32, 32, 640)], 0, 3, 1, 2",
+    "Count": 5
+  },
+  {
+    "Name": "permute",
+    "Input Size": "[(1, 640, 32, 32)]",
+    "Output Size": "[(1, 32, 32, 640)]",
+    "Attributes": "Tensor[(1, 640, 32, 32)], 0, 2, 3, 1",
+    "Count": 5
+  }
+]

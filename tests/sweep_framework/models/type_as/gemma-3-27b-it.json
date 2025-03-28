@@ -1,0 +1,37 @@
+[
+  {
+    "Name": "type_as",
+    "Input Size": "[(1, 16, 540, 128), (1, 16, 540, 128)]",
+    "Output Size": "[(1, 16, 540, 128)]",
+    "Attributes": "Tensor[(1, 16, 540, 128)], Tensor[(1, 16, 540, 128)]",
+    "Count": 62
+  },
+  {
+    "Name": "type_as",
+    "Input Size": "[(1, 32, 540, 128), (1, 32, 540, 128)]",
+    "Output Size": "[(1, 32, 540, 128)]",
+    "Attributes": "Tensor[(1, 32, 540, 128)], Tensor[(1, 32, 540, 128)]",
+    "Count": 62
+  },
+  {
+    "Name": "type_as",
+    "Input Size": "[(1, 540, 5376), (1, 540, 5376)]",
+    "Output Size": "[(1, 540, 5376)]",
+    "Attributes": "Tensor[(1, 540, 5376)], Tensor[(1, 540, 5376)]",
+    "Count": 249
+  },
+  {
+    "Name": "type_as",
+    "Input Size": "[(2, 256, 1152), (2, 256, 1152)]",
+    "Output Size": "[(2, 256, 1152)]",
+    "Attributes": "Tensor[(2, 256, 1152)], Tensor[(2, 256, 1152)]",
+    "Count": 1
+  },
+  {
+    "Name": "type_as",
+    "Input Size": "[(2, 256, 5376), (2, 4096, 1152)]",
+    "Output Size": "[(2, 256, 5376)]",
+    "Attributes": "Tensor[(2, 256, 5376)], Tensor[(2, 4096, 1152)]",
+    "Count": 1
+  }
+]

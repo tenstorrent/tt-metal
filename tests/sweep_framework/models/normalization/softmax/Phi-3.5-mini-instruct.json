@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "softmax",
+    "Input Size": "[(1, 32, 2048, 2048)]",
+    "Output Size": "[(1, 32, 2048, 2048)]",
+    "Attributes": "Tensor[(1, 32, 2048, 2048)]",
+    "Count": 32
+  }
+]

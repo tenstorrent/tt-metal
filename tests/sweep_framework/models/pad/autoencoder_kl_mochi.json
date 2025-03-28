@@ -1,0 +1,114 @@
+[
+  {
+    "Name": "pad",
+    "Input Size": "[(2, 128, 84, 256, 256)]",
+    "Output Size": "[(2, 128, 86, 258, 258)]",
+    "Attributes": "Tensor[(2, 128, 84, 256, 256)], (1, 1, 1, 1, 2, 0)",
+    "Count": 48
+  },
+  {
+    "Name": "pad",
+    "Input Size": "[(2, 128, 84, 256, 80)]",
+    "Output Size": "[(2, 128, 86, 258, 82)]",
+    "Attributes": "Tensor[(2, 128, 84, 256, 80)], (1, 1, 1, 1, 2, 0)",
+    "Count": 12
+  },
+  {
+    "Name": "pad",
+    "Input Size": "[(2, 128, 84, 96, 256)]",
+    "Output Size": "[(2, 128, 86, 98, 258)]",
+    "Attributes": "Tensor[(2, 128, 84, 96, 256)], (1, 1, 1, 1, 2, 0)",
+    "Count": 24
+  },
+  {
+    "Name": "pad",
+    "Input Size": "[(2, 128, 84, 96, 80)]",
+    "Output Size": "[(2, 128, 86, 98, 82)]",
+    "Attributes": "Tensor[(2, 128, 84, 96, 80)], (1, 1, 1, 1, 2, 0)",
+    "Count": 6
+  },
+  {
+    "Name": "pad",
+    "Input Size": "[(2, 256, 84, 128, 128)]",
+    "Output Size": "[(2, 256, 86, 130, 130)]",
+    "Attributes": "Tensor[(2, 256, 84, 128, 128)], (1, 1, 1, 1, 2, 0)",
+    "Count": 48
+  },
+  {
+    "Name": "pad",
+    "Input Size": "[(2, 256, 84, 128, 40)]",
+    "Output Size": "[(2, 256, 86, 130, 42)]",
+    "Attributes": "Tensor[(2, 256, 84, 128, 40)], (1, 1, 1, 1, 2, 0)",
+    "Count": 12
+  },
+  {
+    "Name": "pad",
+    "Input Size": "[(2, 256, 84, 48, 128)]",
+    "Output Size": "[(2, 256, 86, 50, 130)]",
+    "Attributes": "Tensor[(2, 256, 84, 48, 128)], (1, 1, 1, 1, 2, 0)",
+    "Count": 24
+  },
+  {
+    "Name": "pad",
+    "Input Size": "[(2, 256, 84, 48, 40)]",
+    "Output Size": "[(2, 256, 86, 50, 42)]",
+    "Attributes": "Tensor[(2, 256, 84, 48, 40)], (1, 1, 1, 1, 2, 0)",
+    "Count": 6
+  },
+  {
+    "Name": "pad",
+    "Input Size": "[(2, 512, 42, 24, 20)]",
+    "Output Size": "[(2, 512, 44, 26, 22)]",
+    "Attributes": "Tensor[(2, 512, 42, 24, 20)], (1, 1, 1, 1, 2, 0)",
+    "Count": 8
+  },
+  {
+    "Name": "pad",
+    "Input Size": "[(2, 512, 42, 24, 64)]",
+    "Output Size": "[(2, 512, 44, 26, 66)]",
+    "Attributes": "Tensor[(2, 512, 42, 24, 64)], (1, 1, 1, 1, 2, 0)",
+    "Count": 32
+  },
+  {
+    "Name": "pad",
+    "Input Size": "[(2, 512, 42, 64, 20)]",
+    "Output Size": "[(2, 512, 44, 66, 22)]",
+    "Attributes": "Tensor[(2, 512, 42, 64, 20)], (1, 1, 1, 1, 2, 0)",
+    "Count": 16
+  },
+  {
+    "Name": "pad",
+    "Input Size": "[(2, 512, 42, 64, 64)]",
+    "Output Size": "[(2, 512, 44, 66, 66)]",
+    "Attributes": "Tensor[(2, 512, 42, 64, 64)], (1, 1, 1, 1, 2, 0)",
+    "Count": 64
+  },
+  {
+    "Name": "pad",
+    "Input Size": "[(2, 768, 14, 12, 10)]",
+    "Output Size": "[(2, 768, 16, 14, 12)]",
+    "Attributes": "Tensor[(2, 768, 14, 12, 10)], (1, 1, 1, 1, 2, 0)",
+    "Count": 18
+  },
+  {
+    "Name": "pad",
+    "Input Size": "[(2, 768, 14, 12, 32)]",
+    "Output Size": "[(2, 768, 16, 14, 34)]",
+    "Attributes": "Tensor[(2, 768, 14, 12, 32)], (1, 1, 1, 1, 2, 0)",
+    "Count": 72
+  },
+  {
+    "Name": "pad",
+    "Input Size": "[(2, 768, 14, 32, 10)]",
+    "Output Size": "[(2, 768, 16, 34, 12)]",
+    "Attributes": "Tensor[(2, 768, 14, 32, 10)], (1, 1, 1, 1, 2, 0)",
+    "Count": 36
+  },
+  {
+    "Name": "pad",
+    "Input Size": "[(2, 768, 14, 32, 32)]",
+    "Output Size": "[(2, 768, 16, 34, 34)]",
+    "Attributes": "Tensor[(2, 768, 14, 32, 32)], (1, 1, 1, 1, 2, 0)",
+    "Count": 144
+  }
+]

@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "gelu",
+    "Input Size": "[(1, 400, 3072)]",
+    "Output Size": "[(1, 400, 3072)]",
+    "Attributes": "Tensor[(1, 400, 3072)]",
+    "Count": 12
+  }
+]

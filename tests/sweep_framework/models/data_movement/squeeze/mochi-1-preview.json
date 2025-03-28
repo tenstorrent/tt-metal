@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "squeeze",
+    "Input Size": "[(2, 8, 1, 512)]",
+    "Output Size": "[(2, 8, 512)]",
+    "Attributes": "Tensor[(2, 8, 1, 512)], 2",
+    "Count": 1
+  }
+]

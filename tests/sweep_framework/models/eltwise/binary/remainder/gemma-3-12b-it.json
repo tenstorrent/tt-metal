@@ -1,0 +1,9 @@
+[
+  {
+    "Name": "remainder",
+    "Input Size": "[(589,)]",
+    "Output Size": "[(589,)]",
+    "Attributes": "Tensor[(589,)], 589",
+    "Count": 40
+  }
+]

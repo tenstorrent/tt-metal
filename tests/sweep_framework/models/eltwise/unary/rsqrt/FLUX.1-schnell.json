@@ -1,0 +1,23 @@
+[
+  {
+    "Name": "rsqrt",
+    "Input Size": "[(1, 24, 256, 1)]",
+    "Output Size": "[(1, 24, 256, 1)]",
+    "Attributes": "Tensor[(1, 24, 256, 1)]",
+    "Count": 38
+  },
+  {
+    "Name": "rsqrt",
+    "Input Size": "[(1, 24, 4096, 1)]",
+    "Output Size": "[(1, 24, 4096, 1)]",
+    "Attributes": "Tensor[(1, 24, 4096, 1)]",
+    "Count": 38
+  },
+  {
+    "Name": "rsqrt",
+    "Input Size": "[(1, 24, 4352, 1)]",
+    "Output Size": "[(1, 24, 4352, 1)]",
+    "Attributes": "Tensor[(1, 24, 4352, 1)]",
+    "Count": 76
+  }
+]

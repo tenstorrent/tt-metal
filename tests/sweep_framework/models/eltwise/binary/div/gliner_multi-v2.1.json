@@ -1,0 +1,30 @@
+[
+  {
+    "Name": "div",
+    "Input Size": "[(12, 336, 336)]",
+    "Output Size": "[(12, 336, 336)]",
+    "Attributes": "Tensor[(12, 336, 336)], Tensor[()]",
+    "Count": 24
+  },
+  {
+    "Name": "div",
+    "Input Size": "[(12, 64, 336)]",
+    "Output Size": "[(12, 64, 336)]",
+    "Attributes": "Tensor[(12, 64, 336)], Tensor[()]",
+    "Count": 12
+  },
+  {
+    "Name": "div",
+    "Input Size": "[(336, 336)]",
+    "Output Size": "[(336, 336)]",
+    "Attributes": "Tensor[(336, 336)], 128",
+    "Count": 1
+  },
+  {
+    "Name": "div",
+    "Input Size": "[(336, 336)]",
+    "Output Size": "[(336, 336)]",
+    "Attributes": "Tensor[(336, 336)], Tensor[()]",
+    "Count": 1
+  }
+]

@@ -1,0 +1,100 @@
+[
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(1, 4)]",
+    "Output Size": "[(1, 4)]",
+    "Attributes": "Tensor[(1, 4)], (slice(None, None, None), slice(None, 4, None))",
+    "Count": 1
+  },
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(1, 4)]",
+    "Output Size": "[(1,)]",
+    "Attributes": "Tensor[(1, 4)], (slice(None, None, None), 0)",
+    "Count": 1
+  },
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(1, 4)]",
+    "Output Size": "[(1,)]",
+    "Attributes": "Tensor[(1, 4)], (slice(None, None, None), 1)",
+    "Count": 1
+  },
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(1, 4)]",
+    "Output Size": "[(1,)]",
+    "Attributes": "Tensor[(1, 4)], (slice(None, None, None), 2)",
+    "Count": 1
+  },
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(1, 4)]",
+    "Output Size": "[(1,)]",
+    "Attributes": "Tensor[(1, 4)], (slice(None, None, None), 3)",
+    "Count": 1
+  },
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(1, 4)]",
+    "Output Size": "[(4,)]",
+    "Attributes": "Tensor[(1, 4)], (0, slice(None, None, None))",
+    "Count": 1
+  },
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(1, 4, 100), (1,)]",
+    "Output Size": "[(1, 4, 100)]",
+    "Attributes": "Tensor[(1, 4, 100)], (RecorderTensor([0]), slice(None, None, None))",
+    "Count": 1
+  },
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(1, 4, 128), (1,)]",
+    "Output Size": "[(1, 4, 128)]",
+    "Attributes": "Tensor[(1, 4, 128)], (RecorderTensor([0]), slice(None, None, None))",
+    "Count": 1
+  },
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(1, 4, 6)]",
+    "Output Size": "[(1, 6)]",
+    "Attributes": "Tensor[(1, 4, 6)], (slice(None, None, None), 0)",
+    "Count": 1
+  },
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(1, 4, 6)]",
+    "Output Size": "[(1, 6)]",
+    "Attributes": "Tensor[(1, 4, 6)], (slice(None, None, None), 1)",
+    "Count": 1
+  },
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(1, 4, 6)]",
+    "Output Size": "[(1, 6)]",
+    "Attributes": "Tensor[(1, 4, 6)], (slice(None, None, None), 2)",
+    "Count": 1
+  },
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(1, 4, 6)]",
+    "Output Size": "[(1, 6)]",
+    "Attributes": "Tensor[(1, 4, 6)], (slice(None, None, None), 3)",
+    "Count": 1
+  },
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(1,)]",
+    "Output Size": "[()]",
+    "Attributes": "Tensor[(1,)], 0",
+    "Count": 1
+  },
+  {
+    "Name": "__getitem__",
+    "Input Size": "[(4,)]",
+    "Output Size": "[()]",
+    "Attributes": "Tensor[(4,)], 0",
+    "Count": 1
+  }
+]

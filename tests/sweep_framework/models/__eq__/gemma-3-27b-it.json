@@ -1,0 +1,30 @@
+[
+  {
+    "Name": "__eq__",
+    "Input Size": "[(1, 1, 540), (1, 540, 1)]",
+    "Output Size": "[(1, 540, 540)]",
+    "Attributes": "Tensor[(1, 1, 540)], Tensor[(1, 540, 1)]",
+    "Count": 1
+  },
+  {
+    "Name": "__eq__",
+    "Input Size": "[(1, 1, 540, 540)]",
+    "Output Size": "[(1, 1, 540, 540)]",
+    "Attributes": "Tensor[(1, 1, 540, 540)], 0",
+    "Count": 1
+  },
+  {
+    "Name": "__eq__",
+    "Input Size": "[(1, 540)]",
+    "Output Size": "[(1, 540)]",
+    "Attributes": "Tensor[(1, 540)], 0",
+    "Count": 1
+  },
+  {
+    "Name": "__eq__",
+    "Input Size": "[(1, 540)]",
+    "Output Size": "[(1, 540)]",
+    "Attributes": "Tensor[(1, 540)], 262144",
+    "Count": 1
+  }
+]

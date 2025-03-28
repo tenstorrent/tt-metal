@@ -1,0 +1,23 @@
+[
+  {
+    "Name": "view",
+    "Input Size": "[(1, 256, 16, 256)]",
+    "Output Size": "[(1, 256, 4096)]",
+    "Attributes": "Tensor[(1, 256, 16, 256)], 1, 256, -1",
+    "Count": 42
+  },
+  {
+    "Name": "view",
+    "Input Size": "[(1, 256, 2048)]",
+    "Output Size": "[(1, 256, 8, 256)]",
+    "Attributes": "Tensor[(1, 256, 2048)], 1, 256, 8, 256",
+    "Count": 84
+  },
+  {
+    "Name": "view",
+    "Input Size": "[(1, 256, 4096)]",
+    "Output Size": "[(1, 256, 16, 256)]",
+    "Attributes": "Tensor[(1, 256, 4096)], 1, 256, 16, 256",
+    "Count": 42
+  }
+]

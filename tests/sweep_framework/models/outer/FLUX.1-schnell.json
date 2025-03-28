@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "outer",
+    "Input Size": "[(4352,), (28,)]",
+    "Output Size": "[(4352, 28)]",
+    "Attributes": "Tensor[(4352,)], Tensor[(28,)]",
+    "Count": 2
+  },
+  {
+    "Name": "outer",
+    "Input Size": "[(4352,), (8,)]",
+    "Output Size": "[(4352, 8)]",
+    "Attributes": "Tensor[(4352,)], Tensor[(8,)]",
+    "Count": 1
+  }
+]

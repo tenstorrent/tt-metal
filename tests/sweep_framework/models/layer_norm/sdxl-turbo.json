@@ -1,0 +1,16 @@
+[
+  {
+    "Name": "layer_norm",
+    "Input Size": "[(1, 1024, 640)]",
+    "Output Size": "[(1, 1024, 640)]",
+    "Attributes": "Tensor[(1, 1024, 640)], (640,)",
+    "Count": 30
+  },
+  {
+    "Name": "layer_norm",
+    "Input Size": "[(1, 256, 1280)]",
+    "Output Size": "[(1, 256, 1280)]",
+    "Attributes": "Tensor[(1, 256, 1280)], (1280,)",
+    "Count": 180
+  }
+]
