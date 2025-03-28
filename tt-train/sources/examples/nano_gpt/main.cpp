@@ -19,6 +19,7 @@
 #include "datasets/utils.hpp"
 #include "models/common/transformer_common.hpp"
 #include "models/distributed/gpt2.hpp"
+#include "models/distributed/llama.hpp"
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
 #include "ops/binary_ops.hpp"
@@ -674,7 +675,11 @@ int main(int argc, char **argv) {
     Model model = std::visit(
         [enable_tp](auto &&arg) -> Model {
             if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
-                return ttml::models::llama::create(arg);
+                if (enable_tp) {
+                    return ttml::models::distributed::llama::create(arg);
+                } else {
+                    return ttml::models::llama::create(arg);
+                }
             } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::gpt2::TransformerConfig>) {
                 if (enable_tp) {
                     return ttml::models::distributed::gpt2::create(arg);
