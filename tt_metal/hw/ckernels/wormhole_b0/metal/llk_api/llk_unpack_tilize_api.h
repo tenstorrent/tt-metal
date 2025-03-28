@@ -82,13 +82,22 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, s
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const bool narrow_tile = get_operand_narrow_tile(operand_id);
+    const bool is_32bit_integer = (unpack_src_format[operand_id] == (const int32_t)DataFormat::UInt32) ||
+                                  (unpack_src_format[operand_id] == (const int32_t)DataFormat::Int32);
 
     std::uint32_t base_address =
         get_local_cb_interface(operand_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
 
     WAYPOINT("UPTW");
     _llk_unpack_tilize_(
-        base_address, tile_index, unpack_src_format[operand_id], block_ct_dim, face_r_dim, num_faces, narrow_tile);
+        base_address,
+        tile_index,
+        unpack_src_format[operand_id],
+        block_ct_dim,
+        face_r_dim,
+        num_faces,
+        narrow_tile,
+        is_32bit_integer);
     WAYPOINT("UPTD");
 }
 
