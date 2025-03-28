@@ -74,10 +74,16 @@ class BertEmbeddings(nn.Module):
         past_key_values_length: int = 0,
     ) -> torch.Tensor:
         inputs_embeds = self.word_embeddings(input_ids)
+        torch.save(
+            inputs_embeds,
+            "/home/ubuntu/venkatesh/tt-metal/models/experimental/functional_sentence_bert/dumps/torch_out.pth",
+        )
         token_type_embeddings = self.token_type_embeddings(token_type_ids)
         embeddings = inputs_embeds + token_type_embeddings
         position_embeddings = self.position_embeddings(position_ids)
+        print("ops before add", embeddings.shape, position_embeddings.shape)
         embeddings += position_embeddings
+
         embeddings = self.LayerNorm(embeddings)
         return embeddings
 
@@ -433,7 +439,12 @@ class BertEncoder(nn.Module):
                 past_key_value,
                 output_attentions,
             )
+            print("wts are dumped")
             hidden_states = layer_outputs[0]
+            torch.save(
+                hidden_states,
+                f"/home/ubuntu/venkatesh/tt-metal/models/experimental/functional_sentence_bert/dumps/torch_out_{i}.pth",
+            )
 
         if not return_dict:
             return tuple(

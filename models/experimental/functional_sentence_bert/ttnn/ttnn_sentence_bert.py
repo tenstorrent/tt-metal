@@ -7,6 +7,44 @@ from typing import Optional
 
 SDPAProgramConfig = ttnn._ttnn.operations.transformer.SDPAProgramConfig
 
+layernorm_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+    compute_with_storage_grid_size=(8, 8),
+    subblock_w=3,
+    block_h=12,
+    block_w=3,
+    inplace=True,
+)
+ff1_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    compute_with_storage_grid_size=(8, 8),
+    in0_block_w=3,
+    out_subblock_h=1,
+    out_subblock_w=8,
+    per_core_M=12,
+    per_core_N=16,
+    transpose_mcast=True,
+    fused_activation=(ttnn.UnaryOpType.GELU, True),
+)
+f_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    compute_with_storage_grid_size=(8, 8),
+    in0_block_w=4,
+    out_subblock_h=1,
+    out_subblock_w=6,
+    per_core_M=12,
+    per_core_N=12,
+    transpose_mcast=True,
+    fused_activation=None,
+)
+query_key_value_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    compute_with_storage_grid_size=(8, 8),
+    in0_block_w=3,
+    out_subblock_h=1,
+    out_subblock_w=6,
+    per_core_M=12,
+    per_core_N=12,
+    transpose_mcast=True,
+    fused_activation=None,
+)
+
 
 def p(x, a="x"):
     print(f"{a}'s  shape: {x.shape}")
@@ -16,8 +54,9 @@ def p(x, a="x"):
 
 
 class ttnn_BertEmbeddings:
-    def __init__(self, parameters):
+    def __init__(self, parameters, config):
         self.parameters = parameters
+        self.config = config
         self.word_embeddings = ttnn.embedding
         self.position_embeddings = ttnn.embedding
         self.token_type_embeddings = ttnn.embedding
@@ -25,26 +64,87 @@ class ttnn_BertEmbeddings:
         self.add = ttnn.add
 
     def __call__(self, input_ids: ttnn.Tensor, token_type_ids: ttnn.Tensor, position_ids: ttnn.Tensor, device):
+        p(input_ids, "un sharded input_ids")
+        if input_ids.is_sharded():
+            input_ids = ttnn.sharded_to_interleaved(input_ids, ttnn.L1_MEMORY_CONFIG)
+        shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))])
+        shard_spec = ttnn.ShardSpec(
+            shard_grid,
+            (input_ids.shape[-1], ((self.parameters.word_embeddings.weight.shape[-1]) // 8)),
+            ttnn.ShardOrientation.COL_MAJOR,
+        )
+        output_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.BufferType.L1,
+            shard_spec,
+        )
         inputs_embeds = self.word_embeddings(
             input_ids,
             weight=self.parameters.word_embeddings.weight,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,  # output_mem_config,
+            padding_idx=self.config.pad_token_id,
         )
+        # torch.save(
+        #     ttnn.to_torch(inputs_embeds),
+        #     "/home/ubuntu/venkatesh/tt-metal/models/experimental/functional_sentence_bert/dumps/ttnn_out.pth",
+        # )
+        ttnn.deallocate(input_ids)
         p(inputs_embeds, "after word")
         token_type_embeddings = self.token_type_embeddings(
-            token_type_ids, self.parameters.token_type_embeddings.weight, layout=ttnn.TILE_LAYOUT
+            token_type_ids,
+            self.parameters.token_type_embeddings.weight,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        embeddings = inputs_embeds + token_type_embeddings
+        ttnn.deallocate(token_type_ids)
         p(token_type_embeddings, "after token")
         position_embeddings = self.position_embeddings(
-            position_ids, self.parameters.position_embeddings.weight, layout=ttnn.TILE_LAYOUT
+            position_ids,
+            self.parameters.position_embeddings.weight,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        ttnn.deallocate(position_ids)
+        p(position_embeddings, "BEFORE position")
+        p(embeddings, "BEFORE add1")
+        # position_embeddings = ttnn.sharded_to_interleaved(position_embeddings,ttnn.L1_MEMORY_CONFIG)
+        # embeddings = ttnn.sharded_to_interleaved(embeddings,ttnn.L1_MEMORY_CONFIG)
         p(position_embeddings, "after position")
-        embeddings = inputs_embeds + token_type_embeddings + position_embeddings
-
+        p(embeddings, "after add1")
+        # p(position_embeddings,"before repeat")
+        # position_embeddings = ttnn.repeat_interleave(position_embeddings,8,dim=0)
+        # p(position_embeddings,"after repeat")
+        embeddings = position_embeddings + embeddings
+        # a = position_embeddings.memory_config()
+        # b = embeddings.memory_config()
+        # embeddings = ttnn.from_device(embeddings)
+        # embeddings = ttnn.to_device(embeddings, device=device)
+        # embeddings = ttnn.to_memory_config(embeddings, b)
+        # position_embeddings = ttnn.from_device(position_embeddings)
+        # position_embeddings = ttnn.to_device(position_embeddings, device=device)
+        # position_embeddings = ttnn.to_memory_config(position_embeddings, a)
+        # embeddings_d = ttnn.add(position_embeddings, embeddings, memory_config=embeddings.memory_config())
+        # torch.save(
+        #     ttnn.to_torch(embeddings_d).squeeze(),
+        #     "/home/ubuntu/venkatesh/tt-metal/models/experimental/functional_sentence_bert/dumps/ttnn_out.pth",
+        # )
+        # # p(embeddings, "after add2")
+        p(embeddings, "after add")
+        ttnn.deallocate(inputs_embeds)
+        ttnn.deallocate(token_type_embeddings)
+        ttnn.deallocate(position_embeddings)
         embeddings = self.LayerNorm(
-            embeddings, weight=self.parameters.LayerNorm.weight, bias=self.parameters.LayerNorm.bias
+            embeddings,
+            weight=self.parameters.LayerNorm.weight,
+            bias=self.parameters.LayerNorm.bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,  # ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            epsilon=self.config.layer_norm_eps,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
+            # program_config=layernorm_program_config,
         )
+        p(embeddings, "out is")
         return embeddings
 
 
@@ -54,43 +154,60 @@ class ttnn_BertOutput:
         self.config = config
         self.dense = ttnn.linear
         self.LayerNorm = ttnn.layer_norm
-        self.add = ttnn.add
 
     def __call__(self, hidden_states: ttnn.Tensor, input_tensor: ttnn.Tensor):
-        hidden_states = self.dense(
+        p(hidden_states, "infor-out")
+        bert_output_lin = self.dense(
             hidden_states,
             self.parameters.dense.weight,
             bias=self.parameters.dense.bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            program_config=f_program_config,
         )
-        hidden_states = self.add(hidden_states, input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
-        hidden_states = self.LayerNorm(
-            hidden_states,
+        p(bert_output_lin, "outfor-out")
+        p(input_tensor, "in2")
+        bert_output_lin = ttnn.reshard(bert_output_lin, input_tensor.memory_config())
+        print("after resahrd")
+        p(bert_output_lin, "outfor-out")
+        p(input_tensor, "in2")
+        bert_out = self.LayerNorm(
+            bert_output_lin,
+            residual_input_tensor=input_tensor,
             weight=self.parameters.LayerNorm.weight,
             bias=self.parameters.LayerNorm.bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
             epsilon=self.config.layer_norm_eps,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
+            program_config=layernorm_program_config,
         )
-        # print("ttnn out of BertOutput is ",hidden_states.shape)
-        return hidden_states
+        # ttnn.deallocate(bert_output_lin)
+        # ttnn.deallocate(input_tensor)
+        return bert_out
 
 
 class ttnn_BertIntermediate:
     def __init__(self, parameters):
         self.dense = ttnn.linear
-        self.intermediate_act_fn = ttnn.gelu
         self.parameters = parameters
 
     def __call__(self, hidden_states: ttnn.Tensor):
-        hidden_states = self.dense(
+        p(hidden_states, "in-intermediate")
+        out_intermediate = self.dense(
             hidden_states,
             self.parameters.dense.weight,
             bias=self.parameters.dense.bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            # activation="gelu",
+            program_config=ff1_matmul_program_config,
+            # dtype=ttnn.bfloat8_b,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                packer_l1_acc=False,
+            ),
         )
-        hidden_states = self.intermediate_act_fn(hidden_states)
-        return hidden_states
+        p(out_intermediate, "out-intermediate")
+        return out_intermediate
 
 
 class ttnn_BertSelfOutput:
@@ -99,52 +216,63 @@ class ttnn_BertSelfOutput:
         self.config = config
         self.dense = ttnn.linear
         self.LayerNorm = ttnn.layer_norm
-        self.add = ttnn.add
 
     def __call__(self, hidden_states: ttnn.Tensor, input_tensor: ttnn.Tensor):
-        hidden_states = self.dense(
+        p(hidden_states, "before self-out linear")
+        output = self.dense(
             hidden_states,
             self.parameters.dense.weight,
             bias=self.parameters.dense.bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            program_config=query_key_value_matmul_program_config,
         )
-        hidden_states = self.add(hidden_states, input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
-        hidden_states = self.LayerNorm(
-            hidden_states,
+        p(output, "after self-out linear")
+        output_sh = ttnn.reshard(output, input_tensor.memory_config())
+        ttnn.deallocate(output)
+        p(output, "self_linear_out")
+        p(input_tensor, "input2")
+        # ttnn.deallocate(hidden_states)
+        out_norm = self.LayerNorm(
+            output_sh,
+            residual_input_tensor=input_tensor,
             weight=self.parameters.LayerNorm.weight,
             bias=self.parameters.LayerNorm.bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
             epsilon=self.config.layer_norm_eps,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
+            # core_grid=ttnn.CoreGrid(y=8,x=8)
+            program_config=layernorm_program_config,
         )
-        # print("ttnn out ofBertSelfOutput is ",hidden_states.shape)
-        return hidden_states
+        p(out_norm, "after self-out layernorm")
+        return out_norm
 
 
-class ttnn_BertPooler:
-    def __init__(self, parameters):
-        self.dense = ttnn.linear
-        self.activation = ttnn.tanh
-        self.parameters = parameters
+# class ttnn_BertPooler:
+#     def __init__(self, parameters):
+#         self.dense = ttnn.linear
+#         self.activation = ttnn.tanh
+#         self.parameters = parameters
 
-    def __call__(self, hidden_states: ttnn.Tensor):
-        print("pooler forward is called", hidden_states.shape)
-        first_token_tensor = hidden_states[:, 0, :]
-        print("pooler forward first token is called", first_token_tensor.shape)
-        pooled_output = self.dense(
-            first_token_tensor,
-            self.parameters.dense.weight,
-            bias=self.parameters.dense.bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        pooled_output = self.activation(pooled_output)
-        return pooled_output
+#     def __call__(self, hidden_states: ttnn.Tensor):
+#         p(hidden_states, "in-pool")
+#         first_token_tensor = hidden_states[:, 0, :]
+#         # ttnn.deallocate(hidden_states)
+#         pooled_output = self.dense(
+#             first_token_tensor,
+#             self.parameters.dense.weight,
+#             bias=self.parameters.dense.bias,
+#             memory_config=ttnn.L1_MEMORY_CONFIG,
+#             core_grid=ttnn.CoreGrid(y=first_token_tensor.shape[0], x=8),
+#         )
+#         pooled_output = self.activation(pooled_output)
+#         return pooled_output
 
 
 class ttnn_BertSelfAttention:
     # init - 3 linear's,
     def __init__(self, parameters, config):
         self.parameters = parameters
+        self.config = config
         self.query = ttnn.linear
         self.key = ttnn.linear
         self.value = ttnn.linear
@@ -157,101 +285,49 @@ class ttnn_BertSelfAttention:
         attention_mask: Optional[ttnn.Tensor] = None,
         device=None,
     ):
-        query_layer = self.query(
+        # p(hidden_states,"before qkv linear")
+        query_key_value_output = ttnn.linear(  # 40 cores used
             hidden_states,
-            self.parameters.query.weight,
-            bias=self.parameters.query.bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            self.parameters.query_key_value.weight,
+            bias=self.parameters.query_key_value.bias,
+            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            program_config=query_key_value_matmul_program_config
+            # dtype=ttnn.bfloat,
         )
-        query_layer = ttnn.reshape(
+        # p(query_key_value_output,"after qkv linear")
+        query_key_value_output_d = ttnn.to_memory_config(query_key_value_output, ttnn.DRAM_MEMORY_CONFIG)
+        (
             query_layer,
-            (query_layer.shape[0], query_layer.shape[1], self.num_attention_heads, self.attention_head_size),
-        )
-        query_layer = ttnn.permute(query_layer, (0, 2, 1, 3))
-        # query_layer = ttnn.reshape(
-        #     query_layer,
-        #     (1, query_layer.shape[0]*query_layer.shape[1], query_layer.shape[2], query_layer.shape[3]),
-        # )
-        key_layer = self.key(
-            hidden_states,
-            self.parameters.key.weight,
-            bias=self.parameters.key.bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        key_layer = ttnn.reshape(
-            key_layer, (key_layer.shape[0], key_layer.shape[1], self.num_attention_heads, self.attention_head_size)
-        )
-        key_layer = ttnn.permute(key_layer, (0, 2, 1, 3))
-        # key_layer = ttnn.reshape(
-        #     key_layer, (1,key_layer.shape[0]*key_layer.shape[1], key_layer.shape[2], key_layer.shape[3])
-        # )
-        value_layer = self.value(
-            hidden_states,
-            self.parameters.value.weight,
-            bias=self.parameters.value.bias,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        value_layer = ttnn.reshape(
+            key_layer,
             value_layer,
-            (value_layer.shape[0], value_layer.shape[1], self.num_attention_heads, self.attention_head_size),
+        ) = ttnn.transformer.split_query_key_value_and_split_heads(
+            query_key_value_output_d,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            num_heads=self.config.num_attention_heads,
         )
-        value_layer = ttnn.permute(value_layer, (0, 2, 1, 3))
-        # value_layer = ttnn.reshape(
-        #     value_layer,
-        #     (1,value_layer.shape[0]*value_layer.shape[1], value_layer.shape[2], value_layer.shape[3]),
-        # )
-        query_layer = ttnn.to_memory_config(query_layer, ttnn.DRAM_MEMORY_CONFIG)
-        key_layer = ttnn.to_memory_config(key_layer, ttnn.DRAM_MEMORY_CONFIG)
-        value_layer = ttnn.to_memory_config(value_layer, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(query_key_value_output)
+        key_layer = ttnn.permute(key_layer, (0, 1, 3, 2))
         p(query_layer, "query")
         p(key_layer, "key")
         p(value_layer, "value")
         p(attention_mask, "mask")
-        # query_layer = ttnn.to_torch(query_layer)
-        # key_layer = ttnn.to_torch(key_layer)
-        # value_layer = ttnn.to_torch(value_layer)
-        # attention_mask = ttnn.to_torch(attention_mask)
-        # attn_output = torch.nn.functional.scaled_dot_product_attention(
-        #     query_layer,
-        #     key_layer,
-        #     value_layer,
-        #     attn_mask=attention_mask,
-        #     dropout_p=0.0,
-        #     is_causal=False,
-        # )
-        # program_config = ttnn.SDPAProgramConfig(
-        #     compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-        #     q_chunk_size=32,
-        #     k_chunk_size=32,
-        #     exp_approx_mode=True,
-        # )
-        # compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        #     math_fidelity=ttnn.MathFidelity.HiFi4,
-        #     math_approx_mode=False,
-        #     fp32_dest_acc_en=True,
-        #     packer_l1_acc=False,
-        # )
         attn_output = ttnn.transformer.scaled_dot_product_attention(
             query_layer,
             key_layer,
             value_layer,
             attn_mask=attention_mask,
             is_causal=False,
-            # program_config =program_config,
-            # compute_kernel_config=compute_kernel_config
         )
-        #
-        # attn_output = ttnn.from_torch(attn_output,device=device,layout=ttnn.TILE_LAYOUT,memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(query_layer)
+        ttnn.deallocate(key_layer)
+        ttnn.deallocate(value_layer)
+        # ttnn.deallocate(attention_mask)
         p(attn_output, "aftr scaled_dot_product_attention")
-        # attn_output = ttnn.reshape(
-        #     attn_output, (2,12,8,64)
-        # )
         attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
         attn_output = ttnn.reshape(
             attn_output, (attn_output.shape[0], attn_output.shape[1], attn_output.shape[2] * attn_output.shape[3])
         )
-        p(attn_output, "attnn output")
-        return (attn_output,)
+        return attn_output
 
 
 class ttnn_BertAttention:
@@ -264,15 +340,22 @@ class ttnn_BertAttention:
         self,
         hidden_states: ttnn.Tensor,
         attention_mask: Optional[ttnn.Tensor] = None,
-        # head_mask: Optional[ttnn.Tensor] = None,
-        # encoder_hidden_states: Optional[ttnn.Tensor] = None,
-        # encoder_attention_mask: Optional[ttnn.Tensor] = None,
         device=None,
     ):
         self_outputs = self.self(hidden_states, attention_mask, device=device)
-        attention_output = self.output(self_outputs[0], hidden_states)
-        outputs = (attention_output,) + self_outputs[1:]
-        return outputs
+        self_outputs_sharded = ttnn.to_memory_config(
+            self_outputs,
+            memory_config=ttnn.create_sharded_memory_config(
+                self_outputs.shape,
+                core_grid=device.core_grid,
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.COL_MAJOR,
+            ),
+        )
+        ttnn.deallocate(self_outputs)  # dram
+        attention_output = self.output(self_outputs_sharded, hidden_states)
+        ttnn.deallocate(self_outputs_sharded)
+        return attention_output
 
 
 class ttnn_BertLayer:
@@ -292,12 +375,11 @@ class ttnn_BertLayer:
         device=None,
     ):
         self_attention_outputs = self.attention(hidden_states, attention_mask, device=device)
-        attention_output = self_attention_outputs[0]
-        outputs = self_attention_outputs[1:]
-        intermediate_output = self.intermediate(attention_output)
-        layer_output = self.output(intermediate_output, attention_output)
-        outputs = (layer_output,) + outputs
-        return outputs
+        ttnn.deallocate(hidden_states)
+        self_attention_outputs = ttnn.reallocate(self_attention_outputs)
+        intermediate_output = self.intermediate(self_attention_outputs)
+        layer_output = self.output(intermediate_output, self_attention_outputs)
+        return layer_output
 
 
 class ttnn_BertEncoder:
@@ -311,26 +393,26 @@ class ttnn_BertEncoder:
         self,
         hidden_states: ttnn.Tensor,
         attention_mask: Optional[ttnn.Tensor] = None,
-        # head_mask: Optional[ttnn.Tensor] = None,
-        # encoder_hidden_states: Optional[ttnn.Tensor] = None,
-        # encoder_attention_mask: Optional[ttnn.Tensor] = None,
-        # return_dict: Optional[bool] = True,
         device=None,
     ):
-        for i in range(len(self.layers)):
+        for i in range(len(self.layers)):  #
+            print("iteration is ", i)
             layer_outputs = self.layers[i](hidden_states, attention_mask, device=device)
-            print("tttnn layer out", layer_outputs[0].shape)
-            hidden_states = layer_outputs[0]
-            # torch.save(ttnn.to_torch(hidden_states),f"/home/ubuntu/venkatesh/tt-metal/models/experimental/functional_sentence_bert/dumps/ttnn_out_{i}.pth")
+            print("tttnn layer out", layer_outputs.shape)
+            # torch.save(
+            #     ttnn.to_torch(layer_outputs),
+            #     f"/home/ubuntu/venkatesh/tt-metal/models/experimental/functional_sentence_bert/dumps/ttnn_out_{i}.pth",
+            # )
+            hidden_states = layer_outputs
         print("tt out of encoder", hidden_states.shape)
         return hidden_states
 
 
 class ttnn_BertModel:
     def __init__(self, parameters, config):
-        self.embeddings = ttnn_BertEmbeddings(parameters.embeddings)
+        self.embeddings = ttnn_BertEmbeddings(parameters.embeddings, config)
         self.encoder = ttnn_BertEncoder(parameters.encoder, config)
-        self.pooler = ttnn_BertPooler(parameters.pooler)
+        # self.pooler = ttnn_BertPooler(parameters.pooler)
 
     def __call__(
         self,
@@ -341,9 +423,26 @@ class ttnn_BertModel:
         device=None,
     ):
         embedding_output = self.embeddings(input_ids, token_type_ids, position_ids, device=device)
-        sequence_output = self.encoder(embedding_output, attention_mask, device=device)
-        pooled_output = self.pooler(sequence_output)
-        return (sequence_output, pooled_output)
+        # embedding_output  = torch.load("/home/ubuntu/venkatesh/tt-metal/models/experimental/functional_sentence_bert/dumps/torch_emb_out.pth")
+        p(embedding_output, "before sharding 1st input")
+        # embedding_output = ttnn.from_torch(embedding_output,dtype=ttnn.bfloat16,layout=ttnn.TILE_LAYOUT,device=device,memory_config=ttnn.L1_MEMORY_CONFIG)
+        encoder_input = ttnn.to_memory_config(
+            embedding_output,
+            memory_config=ttnn.create_sharded_memory_config(
+                embedding_output.shape,
+                core_grid=device.core_grid,
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.COL_MAJOR,
+            ),
+        )
+        ttnn.deallocate(embedding_output)
+        encoder_input = ttnn.reallocate(encoder_input)
+        p(embedding_output, "after sharding 1st input")
+        sequence_output = self.encoder(encoder_input, attention_mask, device=device)
+        ttnn.deallocate(encoder_input)
+        # sequence_output = ttnn.to_memory_config(sequence_output, ttnn.L1_MEMORY_CONFIG)
+        # pooled_output = self.pooler(sequence_output)
+        return sequence_output
 
 
 def preprocess_inputs(
