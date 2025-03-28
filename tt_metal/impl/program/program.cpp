@@ -137,14 +137,15 @@ class Program_ {
     bool is_finalized() const;
     void set_finalized();
     void allocate_kernel_bin_buf_on_device(IDevice* device);
-    bool is_cached() const { return this->cached_; }
+    bool is_cached() const { return this->cached_device_hash_.has_value(); }
     ProgramBinaryStatus get_program_binary_status(std::size_t device_id) const {
         if (auto it = this->binaries_on_device_.find(device_id); it != this->binaries_on_device_.end()) {
             return it->second;
         }
         return ProgramBinaryStatus::NotSent;
     }
-    void set_cached() { this->cached_ = true; }
+    void set_cached(uint64_t device_hash) { this->cached_device_hash_ = device_hash; }
+    const std::optional<uint64_t>& get_cached() const { return this->cached_device_hash_; }
     void set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status) {
         this->binaries_on_device_[device_id] = status;
     }
@@ -172,7 +173,9 @@ class Program_ {
        ProgramTransferInfo program_transfer_info;
 
        bool finalized_;
-       bool cached_;
+       // Used only when devices do not have virtualization enabled and used to check that programs are only rerun on
+       // the same device
+       std::optional<uint64_t> cached_device_hash_;
 
        // TODO: Should map based on the hash of the configured sub-devices
        // This way we can cache it agnostic of the device
@@ -233,6 +236,7 @@ class Program_ {
     // Counts how much space is needed for each core + each launch buffer msg queue.
     std::vector<uint32_t> program_config_sizes_;
 
+    // The rta_updates from one cached command sequence may reference data in another cached command sequence.
     std::unordered_map<uint64_t, ProgramCommandSequence> cached_program_command_sequences_;
 
     friend std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id);
@@ -315,7 +319,7 @@ detail::Program_::Program_() :
     runtime_id(0),
     local_circular_buffer_allocation_needed_(false),
     finalized_(false),
-    cached_(false) {
+    cached_device_hash_(std::nullopt) {
     uint32_t programmable_core_count = hal_ref.get_programmable_core_type_count();
     for (uint32_t i = 0; i < programmable_core_count; i++) {
         kernels_.push_back({});
@@ -1255,11 +1259,6 @@ const std::vector<SubDeviceId> &detail::Program_::determine_sub_device_ids(const
     auto& sub_device_ids_map = this->sub_device_ids_[device->id()];
     auto sub_device_ids = sub_device_ids_map.find(sub_device_manager_id);
     if (this->compiled_.empty() || sub_device_ids == sub_device_ids_map.end()) {
-        if (!this->compiled_.empty()) {
-            TT_FATAL(
-                sub_device_ids_map.empty(),
-                "Multiple sub device managers are not currently supported for a single program");
-        }
         if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr || sub_device_manager_id == device->get_default_sub_device_manager_id()) {
             // No sub device manager, nothing to validate
             auto [sub_device_ids, _] =
@@ -1315,24 +1314,33 @@ void Program::set_launch_msg_sem_offsets() { pimpl_->set_launch_msg_sem_offsets(
 void Program::populate_dispatch_data(IDevice* device) { pimpl_->populate_dispatch_data(device); }
 
 void Program::generate_dispatch_commands(IDevice* device) {
-    uint64_t command_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key;
+    uint64_t command_hash = *device->get_active_sub_device_manager_id();
+
+    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key;
     if (not hal_ref.is_coordinate_virtualization_enabled()) {
         // When coordinate virtualization is not enabled, explicitly encode the device
-        // id into the command hash, to always assert on programs being reused across devices.
-        command_hash = (command_hash << 32) | (device->id());
+        // id into the device hash, to always assert on programs being reused across devices.
+        device_hash = (device_hash << 32) | (device->id());
+    }
+    if (!pimpl_->is_cached()) {
+        pimpl_->set_cached(device_hash);
+    } else {
+        TT_FATAL(
+            *pimpl_->get_cached() == device_hash,
+            "Enqueueing a Program across devices with different cores harvested is not supported, unless coordinate "
+            "virtualization is enabled (only enabled on Wormhole and above).");
     }
     auto& cached_program_command_sequences = this->get_cached_program_command_sequences();
-    if (!pimpl_->is_cached()) {
+    if (!cached_program_command_sequences.contains(command_hash)) {
+        // Programs currently only support spanning a single sub-device
         auto sub_device_id = this->determine_sub_device_ids(device)[0];
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
         program_dispatch::assemble_device_commands(program_command_sequence, *this, device, sub_device_id);
+        // TODO: We currently do not have a mechanism of removing entries in the cache when a manager is removed
+        // This means programs will contain stale entries in the cache until the program is deleted
         cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
-        pimpl_->set_cached();
-    } else {
-        auto cached_cmd_iter = cached_program_command_sequences.find(command_hash);
-        TT_FATAL(cached_cmd_iter != cached_program_command_sequences.end(), "Enqueueing a Program across devices with different cores harvested is not supported, unless coordinate virtualization is enabled (only enabled on Wormhole and above).");
     }
 }
 

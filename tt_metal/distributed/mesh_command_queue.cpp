@@ -151,6 +151,7 @@ void MeshCommandQueue::clear_expected_num_workers_completed() {
 
 void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
     in_use_ = true;
+    uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
     std::unordered_set<SubDeviceId> sub_device_ids = mesh_workload.determine_sub_device_ids(mesh_device_);
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
     SubDeviceId sub_device_id = *(sub_device_ids.begin());
@@ -195,7 +196,7 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
     // current device state. Write the finalized program command sequence to each
     // physical device tied to the program.
     for (auto& [device_range, program] : mesh_workload.get_programs()) {
-        auto& program_cmd_seq = mesh_workload.get_dispatch_cmds_for_program(program);
+        auto& program_cmd_seq = mesh_workload.get_dispatch_cmds_for_program(program, command_hash);
         program_dispatch::update_program_dispatch_commands(
             program,
             program_cmd_seq,
@@ -266,7 +267,7 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
     mesh_workload.set_last_used_command_queue_for_testing(this);
 
     if (blocking) {
-        this->finish();
+        this->finish({sub_device_id});
     }
 }
 

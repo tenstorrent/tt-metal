@@ -246,9 +246,9 @@ std::unordered_set<SubDeviceId> MeshWorkload::determine_sub_device_ids(MeshDevic
     return sub_devices_;
 }
 
-ProgramCommandSequence& MeshWorkload::get_dispatch_cmds_for_program(Program& program) {
+ProgramCommandSequence& MeshWorkload::get_dispatch_cmds_for_program(Program& program, uint64_t command_hash) {
     // Get the dispatch commands associated with this program
-    return program.get_cached_program_command_sequences().begin()->second;
+    return program.get_cached_program_command_sequences().at(command_hash);
 }
 
 // The functions below are for testing purposes only
