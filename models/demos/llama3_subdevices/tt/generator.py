@@ -5,7 +5,7 @@
 import ttnn
 import torch
 from loguru import logger
-
+from typing import List
 from llama_models.llama3.api.datatypes import (
     InterleavedTextMedia,
     StopReason,
@@ -43,8 +43,22 @@ class Generator:
         self.mesh_device = mesh_device
         self.tokenizer = tokenizer
         self.formatter = formatter
+        if isinstance(self.model_args, List):
+            self.model_args = self.model_args[0]
+        if isinstance(self.model, List):
+            self.model = self.model[0]
 
     def prefill_forward_text(self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None):
+        if hasattr(self, "trace_id"):
+            ttnn.release_trace(self.mesh_device, self.trace_id)
+            del self.trace_id
+
+        if hasattr(self, "trace_id_text"):
+            ttnn.release_trace(self.mesh_device, self.trace_id_text)
+            del self.trace_id_text
+        if self.model.is_prefill_setup is False:
+            self.model.switch_mode("prefill")
+        kv_cache = kv_cache[0]
         batch, batch_seq_len = tokens.shape
         output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
@@ -54,7 +68,8 @@ class Generator:
                 page_table, torch.Tensor
             ), "page_table must be a torch.Tensor when passing into prefill_forward"
 
-        for user_id in range(batch):
+        # only run 1 user prefill for now
+        for user_id in range(1):
             logger.info(f"Prefilling User {user_id + 1}")
             seq_len = prompt_lens[user_id]
             last_token_idx = seq_len - 1
@@ -76,6 +91,7 @@ class Generator:
             except Exception as e:
                 logger.error(f"Error prefilling user {user_id}: {e}")
 
+        for user_id in range(batch):
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
             output_logits[user_id] = logits
 
@@ -178,6 +194,9 @@ class Generator:
         read_from_device=True,
         argmax_on_device=False,
     ):
+        if self.model.is_decode_setup is False:
+            self.model.switch_mode("decode")
+        kv_cache = kv_cache[0]
         decode_kwargs = {
             "current_pos": start_pos,
             "tokens": tokens,
@@ -945,6 +964,8 @@ class Generator:
 
         if hasattr(self, "trace_id_text"):
             ttnn.release_trace(self.mesh_device, self.trace_id_text)
+
+        self.model.tt_ccl.close()
 
         if hasattr(super(Generator, self), "__del__"):
             super().__del__()

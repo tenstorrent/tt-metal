@@ -149,7 +149,7 @@ def create_tt_model(
     if use_paged_kv_cache:
         tt_kv_cache = [l.attention.layer_past for l in model.layers]
 
-    return tt_model_args, model, page_table, tt_kv_cache
+    return tt_model_args, model, page_table, [tt_kv_cache]
 
 
 # List of supported Parameters for demo.py
@@ -190,7 +190,7 @@ def create_tt_model(
             1024,  # max_seq_len
             32,  # batch_size
             200,  # max_generated_tokens
-            False,  # paged_attention
+            True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
@@ -500,7 +500,6 @@ def test_demo_text(
                 # TODO Fix use case with temperature > 0
                 _, out_tok = sample_host(
                     logits,
-                    None,
                     temperature=sampling_params["temperature"],
                     top_p=sampling_params["top_p"],
                     on_host=True,
