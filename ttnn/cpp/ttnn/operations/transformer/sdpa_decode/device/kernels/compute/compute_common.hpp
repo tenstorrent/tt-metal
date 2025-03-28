@@ -89,7 +89,7 @@ void reduce_c() {
     const uint32_t num_tiles = rows * cols;
     cb_wait_front(scale_cb, 1);
     cb_wait_front(in0_cb, num_tiles);
-    cb_reserve_back(out_cb, rows);
+    // cb_reserve_back(out_cb, rows);
 
     constexpr uint32_t reduce_dst_idx = 0;
 
@@ -140,12 +140,15 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t
 
     constexpr uint32_t dst_tiles = SUB_EXP_GRANULARITY;
     uint32_t granularity = cols >> LOG2_SUB_EXP_GRANULARITY;
+    DPRINT << "6a" << ENDL();
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; u++) {
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
+                DPRINT << "6b" << ENDL();
                 exp_tile<true>(j);
+                DPRINT << "6c" << ENDL();
             }
             tile_regs_commit();
             cb_pop_front(in0_cb, dst_tiles);
@@ -217,9 +220,11 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles consumed
 
+    DPRINT << "3a" << ENDL();
     add_tiles_init(in0_cb, in1_cb);
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
+    DPRINT << "3b" << ENDL();
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
         add_tiles(in0_cb, in1_cb, 0, i, 0);
@@ -229,6 +234,7 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
         cb_push_back(in0_cb, 1);
         release_dst();
     }
+    DPRINT << "3c" << ENDL();
     if (pop_in1) {
         cb_pop_front(in1_cb, num_tiles);
     }
@@ -407,11 +413,6 @@ ALWI void cb_matmul_blocks2(
     uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
     uint32_t in0_index_offset = 0;
 
-    // UNPACK(( DPRINT << in0_num_subblocks << ENDL() ));
-    // UNPACK(( DPRINT << in1_num_subblocks << ENDL() ));
-    // UNPACK(( DPRINT << in0_block_w << ENDL() ));
-    // UNPACK(( DPRINT << subblock_h << ENDL() ));
-    // UNPACK(( DPRINT << subblock_w << ENDL() ));
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
         uint32_t in1_index_offset = 0;
         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
@@ -552,6 +553,7 @@ void flash_attention_loop(
         /* QK = Q_CHUNK @ K_CHUNK */
         reconfig_data_format(cb_q_in, cb_k_in);  // DEBUG
         pack_reconfig_data_format(cb_qk_im);
+
         cb_matmul_blocks1(
             cb_q_in,
             cb_k_in,
@@ -569,6 +571,7 @@ void flash_attention_loop(
 
         /* QK *= SCALE */
         mul_block_bcast_scalar_inplace(cb_qk_im, cb_scale_in, qk_chunk_tiles);
+        DPRINT << "3" << ENDL();
 
         if constexpr (is_causal) {
             // For decode, we only apply mask at the last chunk for causal mode
@@ -584,6 +587,7 @@ void flash_attention_loop(
             }
         }
 
+        DPRINT << "4" << ENDL();
         reconfig_data_format(cb_qk_im, cb_identity_scale_in);
         pack_reconfig_data_format(cb_cur_max);
         reduce_c<
@@ -595,16 +599,19 @@ void flash_attention_loop(
             Sq_chunk_t,
             Sk_chunk_t>();
 
+        DPRINT << "5" << ENDL();
         if (k_chunk > k_chunk_start) {
             reconfig_data_format(cb_cur_max, cb_prev_max);
             max_block_inplace(cb_cur_max, cb_prev_max, Sq_chunk_t);
         }
+        DPRINT << "6" << ENDL();
         /* QK -= cb_cur_max */
         /* QK = exp(QK)*/
         reconfig_data_format(cb_qk_im, cb_cur_max);
         pack_reconfig_data_format(cb_qk_im);
         sub_exp_block_bcast_cols_inplace(cb_qk_im, cb_cur_max, Sq_chunk_t, Sk_chunk_t);
 
+        DPRINT << "7" << ENDL();
         /* cb_cur_sum = sum(cb_qk_im, dim=-1) */
         reconfig_data_format(cb_qk_im, cb_identity_scale_in);
         pack_reconfig_data_format(cb_cur_sum);
@@ -616,6 +623,7 @@ void flash_attention_loop(
             cb_cur_sum,
             Sq_chunk_t,
             Sk_chunk_t>();
+        DPRINT << "8" << ENDL();
 
         /* OUT_IM = QK @ V_CHUNK */
         reconfig_data_format(cb_qk_im, cb_v_in);  // DEBUG
@@ -636,6 +644,7 @@ void flash_attention_loop(
             false /*transpose*/);
         reconfig_data_format_srca(cb_out_im);
         cb_pop_front(cb_qk_im, qk_chunk_tiles);
+        DPRINT << "9" << ENDL();
 
         /* OUT_ACC += OUT_IM */
         if (k_chunk == k_chunk_start) {
