@@ -122,3 +122,53 @@ def test_ar_tg_llama_perf(
     assert (
         measured_avg_us < perf_target_us + THRESHOLD
     ), f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
+
+
+@pytest.mark.parametrize(
+    "ar_type, warmup_iters, perf_target_us",
+    [
+        ("concat_heads", 10, 25),
+    ],
+)
+@pytest.mark.models_device_performance_bare_metal
+def test_fused_all_gather_concat_perf(
+    ar_type,
+    warmup_iters,
+    perf_target_us,
+):
+    profiler = BenchmarkProfiler()
+    benchmark_data = BenchmarkData()
+    step_name = f"all_gather_{ar_type}"
+
+    subdir = "llama_ccl_perf"
+    command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_minimals.py::test_concat_fuse -k {ar_type}"
+    cols = ["DEVICE KERNEL"]
+    op_name = "AllGatherConcat"
+    warmup_iters = warmup_iters * 4  # 5 iterations per device
+
+    profiler.start("run")
+    profiler.start(step_name)
+    results = run_device_perf_detailed(command, subdir, cols, op_name, has_signposts=True, warmup_iters=0)
+    profiler.end(step_name)
+    profiler.end("run")
+
+    # Get the measured performance
+    measured_min_us = results[cols[0]]["MIN"] / 1000
+    measured_max_us = results[cols[0]]["MAX"] / 1000
+    measured_avg_us = results[cols[0]]["AVG"] / 1000
+    measured_std_us = results[cols[0]]["STD"] / 1000
+
+    logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
+
+    # Save the measurement
+    benchmark_data.add_measurement(profiler, 0, step_name, f"all_gather-{ar_type}-min-us", measured_min_us)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"all_gather-{ar_type}-max-us", measured_max_us)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"all_gather-{ar_type}-avg-us", measured_avg_us)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"all_gather-{ar_type}-std-us", measured_std_us)
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type=f"all_gather_concat_heads_fused",
+        ml_model_name="llama70b-tg-ccl",
+    )
+
+    assert measured_avg_us < perf_target_us, f"Performance target not met: {measured_avg_us} us > {perf_target_us} us"
