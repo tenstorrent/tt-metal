@@ -3,7 +3,7 @@
 import os
 import sys
 from argparse import ArgumentParser
-from loguru import logger
+from loguru import logger  # type: ignore
 
 from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
@@ -14,12 +14,13 @@ from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SI
 
 def run_dm_tests(profile, gtest_filter):
     log_file_path = f"{PROFILER_LOGS_DIR}/{PROFILER_DEVICE_SIDE_LOG}"
-    if profile or not os.path.exists(log_file_path):
+    if profile or not os.path.exists(log_file_path) or gtest_filter:
         logger.info(f"Profiling Kernels...")
         cmd = f"TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 {os.environ['TT_METAL_HOME']}/build/test/tt_metal/unit_tests_dm"
 
         if gtest_filter:
-            cmd += f" --gtest-filter='*{gtest_filter}*'"
+            cmd += f' --gtest_filter="*{gtest_filter}*"'
+
         os.system(cmd)
 
     setup = device_post_proc_config.default_setup()
@@ -56,21 +57,22 @@ def run_dm_tests(profile, gtest_filter):
     # Average stats
     logger.info(f"Averages")
     logger.info(f'Reader duration: {reader_analysis["stats"]["Average"]}')
-    logger.info(f'Writer duration: {writer_analysis["stats"]["Average"]}')
+    logger.info(f'Writer duration: {writer_analysis["stats"]["Average"]}\n')
 
     # # # # # # Performance check method # # # # # #
-    # unicast_cycles_lower_bound = 300
-    # unicast_cycles_upper_bound = 400
-    # unicast_cycles_within_bounds = unicast_cycles_lower_bound <= unicast_cycles <= unicast_cycles_upper_bound
+    reader_cycles = reader_analysis["series"][0]["duration_cycles"]
+    reader_cycles_lower_bound = 700
+    reader_cycles_upper_bound = 800
+    reader_cycles_within_bounds = reader_cycles_lower_bound <= reader_cycles <= reader_cycles_upper_bound
 
-    # if not unicast_cycles_within_bounds:
-    #     logger.warning(
-    #         f"Unicast cycles not within bounds. Received {unicast_cycles}, was expecting between {unicast_cycles_lower_bound} and {unicast_cycles_upper_bound}"
-    #     )
-    # else:
-    #     logger.info(f"Unicast cycles within bounds. Received {unicast_cycles}")
+    if not reader_cycles_within_bounds:
+        logger.warning(
+            f"Reader cycles not within bounds. Received {reader_cycles}, was expecting between {reader_cycles_lower_bound} and {reader_cycles_upper_bound}"
+        )
+    else:
+        logger.info(f"Reader cycles within bounds. Received {reader_cycles}")
 
-    # assert unicast_cycles_within_bounds
+    assert reader_cycles_within_bounds
 
 
 if __name__ == "__main__":
