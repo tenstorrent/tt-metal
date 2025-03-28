@@ -70,6 +70,12 @@ inline __attribute__((always_inline)) void notify_brisc_and_wait() {
         if (run_value == RUN_SYNC_MSG_GO || run_value == RUN_SYNC_MSG_LOAD) {
             break;
         }
+#if defined(ARCH_WORMHOLE)
+        // Avoid hammering L1 while other cores are trying to work. Seems not to
+        // be needed on Blackhole, probably because invalidate_l1_cache takes
+        // time.
+        asm volatile("nop; nop; nop; nop; nop");
+#endif
         invalidate_l1_cache();
     }
 }
