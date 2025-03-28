@@ -517,7 +517,7 @@ def run_llama3_demo(
             1,  # repeat_batches
             1024,  # max_seq_len
             32,  # batch_size
-            4*128*1024,  # max_generated_tokens (same index for stress test)
+            4 * 128 * 1024,  # max_generated_tokens (same index for stress test)
             False,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
@@ -576,6 +576,11 @@ def test_llama_demo(
 ):
     if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
         pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
+
+    assert_msg = (
+        "Ring buffer size not set. Needs to be set env TT_METAL_WORKER_RINGBUFFER_SIZE=122880 (120KB) for best perf"
+    )
+    assert os.environ.get("TT_METAL_WORKER_RINGBUFFER_SIZE") is not None, assert_msg
 
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
