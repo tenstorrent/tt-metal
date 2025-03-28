@@ -114,7 +114,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    uses: ./.github/workflows/ufabric-build-and-tests.yaml
+    uses: ./.github/workflows/fabric-build-and-tests.yaml
     with:
       os: ubuntu-22.04
       arch: ${{ matrix.test-group.arch }}
