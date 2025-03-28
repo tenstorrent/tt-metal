@@ -18,7 +18,7 @@ namespace ttml::models::distributed::llama {
 
 namespace {
 
-void weights_initialization(DistributedLlama& model) {
+void initialize_weights(DistributedLlama& model) {
     auto params = model.parameters();
     for (auto& [name, tensor_ptr] : params) {
         const auto& tensor = tensor_ptr->get_value();
@@ -93,7 +93,7 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
     register_module(ln_fc, "ln_fc");
     register_module(fc, "fc");
 
-    weights_initialization(*this);
+    initialize_weights(*this);
 }
 
 autograd::TensorPtr DistributedLlama::operator()(
