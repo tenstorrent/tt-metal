@@ -16,8 +16,9 @@ def p(x, a="x"):
 
 
 class ttnn_BertEmbeddings:
-    def __init__(self, parameters):
+    def __init__(self, parameters, config):
         self.parameters = parameters
+        self.config = config
         self.word_embeddings = ttnn.embedding
         self.position_embeddings = ttnn.embedding
         self.token_type_embeddings = ttnn.embedding
@@ -30,20 +31,31 @@ class ttnn_BertEmbeddings:
             weight=self.parameters.word_embeddings.weight,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            padding_idx=self.config.pad_token_id,
         )
+        ttnn.deallocate(input_ids)
         p(inputs_embeds, "after word")
         token_type_embeddings = self.token_type_embeddings(
             token_type_ids, self.parameters.token_type_embeddings.weight, layout=ttnn.TILE_LAYOUT
         )
+        ttnn.deallocate(token_type_ids)
         p(token_type_embeddings, "after token")
         position_embeddings = self.position_embeddings(
             position_ids, self.parameters.position_embeddings.weight, layout=ttnn.TILE_LAYOUT
         )
+        ttnn.deallocate(position_ids)
         p(position_embeddings, "after position")
         embeddings = inputs_embeds + token_type_embeddings + position_embeddings
-
+        ttnn.deallocate(inputs_embeds)
+        ttnn.deallocate(token_type_embeddings)
+        ttnn.deallocate(position_embeddings)
         embeddings = self.LayerNorm(
-            embeddings, weight=self.parameters.LayerNorm.weight, bias=self.parameters.LayerNorm.bias
+            embeddings,
+            weight=self.parameters.LayerNorm.weight,
+            bias=self.parameters.LayerNorm.bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            epsilon=self.config.layer_norm_eps,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
         )
         return embeddings
 
@@ -54,32 +66,32 @@ class ttnn_BertOutput:
         self.config = config
         self.dense = ttnn.linear
         self.LayerNorm = ttnn.layer_norm
-        self.add = ttnn.add
 
     def __call__(self, hidden_states: ttnn.Tensor, input_tensor: ttnn.Tensor):
-        hidden_states = self.dense(
+        output = self.dense(
             hidden_states,
             self.parameters.dense.weight,
             bias=self.parameters.dense.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=ttnn.CoreGrid(y=hidden_states.shape[0], x=8),
         )
-        hidden_states = self.add(hidden_states, input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
         hidden_states = self.LayerNorm(
-            hidden_states,
+            output,
+            residual_input_tensor=input_tensor,
             weight=self.parameters.LayerNorm.weight,
             bias=self.parameters.LayerNorm.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             epsilon=self.config.layer_norm_eps,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
         )
-        # print("ttnn out of BertOutput is ",hidden_states.shape)
+        ttnn.deallocate(output)
+        ttnn.deallocate(input_tensor)
         return hidden_states
 
 
 class ttnn_BertIntermediate:
     def __init__(self, parameters):
         self.dense = ttnn.linear
-        self.intermediate_act_fn = ttnn.gelu
         self.parameters = parameters
 
     def __call__(self, hidden_states: ttnn.Tensor):
@@ -88,8 +100,14 @@ class ttnn_BertIntermediate:
             self.parameters.dense.weight,
             bias=self.parameters.dense.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            activation="gelu",
+            # dtype=ttnn.bfloat8_b,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                packer_l1_acc=False,
+            ),
         )
-        hidden_states = self.intermediate_act_fn(hidden_states)
         return hidden_states
 
 
@@ -99,25 +117,26 @@ class ttnn_BertSelfOutput:
         self.config = config
         self.dense = ttnn.linear
         self.LayerNorm = ttnn.layer_norm
-        self.add = ttnn.add
 
     def __call__(self, hidden_states: ttnn.Tensor, input_tensor: ttnn.Tensor):
-        hidden_states = self.dense(
+        output = self.dense(
             hidden_states,
             self.parameters.dense.weight,
             bias=self.parameters.dense.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=ttnn.CoreGrid(y=hidden_states.shape[0], x=8),
         )
-        hidden_states = self.add(hidden_states, input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(hidden_states)
         hidden_states = self.LayerNorm(
-            hidden_states,
+            output,
+            residual_input_tensor=input_tensor,
             weight=self.parameters.LayerNorm.weight,
             bias=self.parameters.LayerNorm.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             epsilon=self.config.layer_norm_eps,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
         )
-        # print("ttnn out ofBertSelfOutput is ",hidden_states.shape)
+        ttnn.deallocate(input_tensor)
         return hidden_states
 
 
@@ -128,14 +147,14 @@ class ttnn_BertPooler:
         self.parameters = parameters
 
     def __call__(self, hidden_states: ttnn.Tensor):
-        print("pooler forward is called", hidden_states.shape)
         first_token_tensor = hidden_states[:, 0, :]
-        print("pooler forward first token is called", first_token_tensor.shape)
+        # ttnn.deallocate(hidden_states)
         pooled_output = self.dense(
             first_token_tensor,
             self.parameters.dense.weight,
             bias=self.parameters.dense.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=ttnn.CoreGrid(y=first_token_tensor.shape[0], x=8),
         )
         pooled_output = self.activation(pooled_output)
         return pooled_output
@@ -264,9 +283,6 @@ class ttnn_BertAttention:
         self,
         hidden_states: ttnn.Tensor,
         attention_mask: Optional[ttnn.Tensor] = None,
-        # head_mask: Optional[ttnn.Tensor] = None,
-        # encoder_hidden_states: Optional[ttnn.Tensor] = None,
-        # encoder_attention_mask: Optional[ttnn.Tensor] = None,
         device=None,
     ):
         self_outputs = self.self(hidden_states, attention_mask, device=device)
@@ -311,10 +327,6 @@ class ttnn_BertEncoder:
         self,
         hidden_states: ttnn.Tensor,
         attention_mask: Optional[ttnn.Tensor] = None,
-        # head_mask: Optional[ttnn.Tensor] = None,
-        # encoder_hidden_states: Optional[ttnn.Tensor] = None,
-        # encoder_attention_mask: Optional[ttnn.Tensor] = None,
-        # return_dict: Optional[bool] = True,
         device=None,
     ):
         for i in range(len(self.layers)):
@@ -328,7 +340,7 @@ class ttnn_BertEncoder:
 
 class ttnn_BertModel:
     def __init__(self, parameters, config):
-        self.embeddings = ttnn_BertEmbeddings(parameters.embeddings)
+        self.embeddings = ttnn_BertEmbeddings(parameters.embeddings, config)
         self.encoder = ttnn_BertEncoder(parameters.encoder, config)
         self.pooler = ttnn_BertPooler(parameters.pooler)
 
