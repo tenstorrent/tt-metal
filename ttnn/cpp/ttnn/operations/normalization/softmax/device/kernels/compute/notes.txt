@@ -1,0 +1,65 @@
+First loop through the data is for multiplying the fused scale mask to the input
+    in: cb_in0, cb_fused_scale
+    out: cb_scale_mask
+
+Next loop is for adding the cb_fused_attn to the cb_scale_mask
+    in: cb_scale_mask, cb_fused_attn
+    out: cb_x
+    If casual we direct add
+    else we bcast rows add
+
+    Then if not numeric stable we use exp approx
+
+Next loop
+    in: cb_in0, cb_mask_padded?
+    out:cb_x which == cb_exps
+    if mask padded data
+        if weird condition
+            We bcast tows add cb_in0 to cb_mask_padded
+            Then exp if not numeric stable
+        else
+            cpy cb_in0
+    in: cb_in0
+    out: cb_exps
+    else
+        copy tile to dst registers and then exp it
+
+
+Next loop
+    in: cb_exps, cb_bcast_scaler
+    out: cb_recipsumexps
+    We reduce the previous loops data REDUCE:ROW
+
+Next loop
+    in: cb_exps, cb_recipsumexps
+    out: cb_out0
+    We calculate the final value by mult tiles broadcast cols
+
+
+New softmax for large_tensors
+
+Two loops
+
+First loop:
+    first cb_in0 + cb_fused_scale = cb_scale_mask,
+    cb_x = e^cb_scale_mask + cb_fused_attn
+        or
+    cb_x = e^cb_in0 + cb_mask_padded
+        or
+    cb_x = e^cb_in0
+
+    cb_exps = e^cb_x
+    Calculates the sum of ∑e^x_i
+        cb_recipsumexps = reduce row cb_exps
+
+
+Second loop calculate
+    cb_x = e^cb_scale_mask + cb_fused_attn
+        or
+    cb_x = e^cb_in0 + cb_mask_padded
+        or
+    cb_x = e^cb_in0
+
+    cb_exps = e^cb_x
+    cb_out = cb_exps * cb_recipsumexps
+the final value
