@@ -363,6 +363,24 @@ static_assert(sizeof(fabric_client_interface_t) == CLIENT_INTERFACE_SIZE);
 static_assert(sizeof(fabric_pull_client_interface_t) % 16 == 0);
 static_assert(sizeof(fabric_pull_client_interface_t) == PULL_CLIENT_INTERFACE_SIZE);
 
+constexpr uint32_t FABRIC_ROUTER_CLIENT_QUEUE_SIZE = 48;
+typedef struct _fabric_push_client_queue {
+    chan_ptr client_idx_counter;
+    chan_ptr curr_client_idx;
+    chan_ptr router_wr_ptr;
+} fabric_push_client_queue_t;
+static_assert(sizeof(fabric_push_client_queue_t) % 16 == 0);
+static_assert(sizeof(fabric_push_client_queue_t) == FABRIC_ROUTER_CLIENT_QUEUE_SIZE);
+
+constexpr uint32_t FABRIC_ROUTER_CLIENT_QUEUE_LOCAL_SIZE = 48;
+typedef struct _fabric_push_client_queue_local {
+    chan_ptr my_client_idx;
+    chan_ptr remote_curr_client_idx;
+    chan_ptr remote_router_wr_ptr;
+} fabric_push_client_queue_local_t;
+static_assert(sizeof(fabric_push_client_queue_local_t) % 16 == 0);
+static_assert(sizeof(fabric_push_client_queue_local_t) == FABRIC_ROUTER_CLIENT_QUEUE_LOCAL_SIZE);
+
 typedef struct _fabric_push_client_interface {
     uint32_t num_routing_planes;
     uint32_t routing_tables_l1_offset;
@@ -374,6 +392,7 @@ typedef struct _fabric_push_client_interface {
     uint32_t router_space;
     uint32_t update_router_space;
     uint32_t reserved[3];
+    fabric_push_client_queue_local_t local_client_req_entry;
     packet_header_t header_buffer[CLIENT_HEADER_BUFFER_ENTRIES];
 } fabric_push_client_interface_t;
 
@@ -395,7 +414,8 @@ constexpr uint32_t FVCC_IN_BUF_START = FVCC_SYNC_BUF_START + FVCC_SYNC_BUF_SIZE;
 constexpr uint32_t FVCC_IN_BUF_SIZE = FVCC_BUF_SIZE_BYTES;
 
 // Fabric Virtual Channel start/size
-constexpr uint32_t FABRIC_ROUTER_REQ_QUEUE_START = FVCC_IN_BUF_START + FVCC_IN_BUF_SIZE;
+constexpr uint32_t FABRIC_ROUTER_CLIENT_QUEUE_START = FVCC_IN_BUF_START + FVCC_IN_BUF_SIZE;
+constexpr uint32_t FABRIC_ROUTER_REQ_QUEUE_START = FABRIC_ROUTER_CLIENT_QUEUE_START + FABRIC_ROUTER_CLIENT_QUEUE_SIZE;
 constexpr uint32_t FABRIC_ROUTER_REQ_QUEUE_SIZE = sizeof(chan_req_buf);
 constexpr uint32_t FABRIC_ROUTER_DATA_BUF_START = FABRIC_ROUTER_REQ_QUEUE_START + FABRIC_ROUTER_REQ_QUEUE_SIZE;
 constexpr uint32_t FABRIC_ROUTER_OUTBOUND_BUF_SIZE = 0x4000;

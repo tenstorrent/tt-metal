@@ -2193,6 +2193,8 @@ struct WriteThroughputStabilityTestWithPersistentFabricParams {
 
     // True if you only want the workers on the end to send
     bool disable_sends_for_interior_workers = false;
+
+    bool disable_end_workers_in_backward_direction = false;
 };
 
 void RunWriteThroughputStabilityTestWithPersistentFabric(
@@ -2207,6 +2209,10 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
     TT_FATAL(
         !params.disable_sends_for_interior_workers || params.fabric_mode == FabricTestMode::Linear,
         "This test can only be run with disable_sends_for_interior_workers set to true or fabric_mode set to Linear");
+    TT_FATAL(
+        !params.disable_end_workers_in_backward_direction || params.fabric_mode == FabricTestMode::Linear,
+        "This test can only be run with disable_end_workers_in_backward_direction set to true or fabric_mode set to "
+        "Linear");
     bool use_tg = num_devices == 32;
     if (num_devices < 4) {
         log_info("This test can only be run on T3000 devices");
@@ -2552,7 +2558,8 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
             };
             // RT ARGS
             bool disable_sends_for_worker =
-                params.disable_sends_for_interior_workers && (i != 0) && (i != line_size - 1);
+                (params.disable_sends_for_interior_workers && (i != 0) && (i != line_size - 1)) ||
+                (params.disable_end_workers_in_backward_direction && (i == line_size - 1));
 
             std::vector<uint32_t> rt_args = {
                 dest_bank_addr,

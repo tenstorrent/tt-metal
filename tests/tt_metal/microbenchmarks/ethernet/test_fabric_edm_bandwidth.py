@@ -36,7 +36,14 @@ def get_device_freq():
 
 
 def summarize_to_csv(
-    test_name, packet_size, line_size, num_links, disable_sends_for_interior_workers, bandwidth, packets_per_second
+    test_name,
+    packet_size,
+    line_size,
+    num_links,
+    disable_sends_for_interior_workers,
+    unidirectional,
+    bandwidth,
+    packets_per_second,
 ):
     """Write test results to a CSV file organized by packet size"""
     csv_path = os.path.join(os.environ["TT_METAL_HOME"], "generated/profiler/.logs/bandwidth_summary.csv")
@@ -52,6 +59,7 @@ def summarize_to_csv(
                     "Line Size",
                     "Num Links",
                     "Disable Interior Workers",
+                    "Unidirectional",
                     "Bandwidth (B/c)",
                     "Packets/Second",
                 ]
@@ -67,13 +75,16 @@ def summarize_to_csv(
                 line_size,
                 num_links,
                 disable_sends_for_interior_workers,
+                unidirectional,
                 bandwidth,
                 packets_per_second,
             ]
         )
 
 
-def read_golden_results(test_name, packet_size, line_size, num_links, disable_sends_for_interior_workers):
+def read_golden_results(
+    test_name, packet_size, line_size, num_links, disable_sends_for_interior_workers, unidirectional
+):
     """Print a summary table of all test results by packet size"""
     csv_path = os.path.join(
         os.environ["TT_METAL_HOME"], "tests/tt_metal/microbenchmarks/ethernet/fabric_edm_bandwidth_golden.csv"
@@ -91,13 +102,20 @@ def read_golden_results(test_name, packet_size, line_size, num_links, disable_se
         & (df["Line Size"] == line_size)
         & (df["Num Links"] == num_links)
         & (df["Disable Interior Workers"] == disable_sends_for_interior_workers)
+        & (df["Unidirectional"] == unidirectional)
     ]
 
     return results["Bandwidth (B/c)"].values[0], results["Packets/Second"].values[0]
 
 
 def profile_results(
-    zone_name, packets_per_src_chip, line_size, packet_size, fabric_mode, disable_sends_for_interior_workers
+    zone_name,
+    packets_per_src_chip,
+    line_size,
+    packet_size,
+    fabric_mode,
+    disable_sends_for_interior_workers,
+    unidirectional=False,
 ):
     freq_hz = get_device_freq() * 1000.0 * 1000.0
     setup = device_post_proc_config.default_setup()
@@ -127,6 +145,8 @@ def profile_results(
         traffic_streams_through_boundary = line_size / 2
         if disable_sends_for_interior_workers:
             traffic_streams_through_boundary = 1
+        if unidirectional:
+            traffic_streams_through_boundary = 1
     total_packets_sent = packets_per_src_chip * traffic_streams_through_boundary
     total_byte_sent = total_packets_sent * packet_size
     bandwidth = total_byte_sent / max(main_loop_cycles)
@@ -146,6 +166,7 @@ def run_fabric_edm(
     packet_size,
     fabric_mode,
     disable_sends_for_interior_workers,
+    unidirectional=False,
 ):
     logger.warning("removing file profile_log_device.csv")
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
@@ -160,7 +181,8 @@ def run_fabric_edm(
                 {line_size} \
                 {packet_size} \
                 {fabric_mode.value} \
-                {int(disable_sends_for_interior_workers)}"
+                {int(disable_sends_for_interior_workers)} \
+                {int(unidirectional)}"
     rc = os.system(cmd)
     if rc != 0:
         if os.WEXITSTATUS(rc) == 1:
@@ -174,10 +196,22 @@ def run_fabric_edm(
 
     num_messages = num_mcasts + num_unicasts
     bandwidth_inner_loop, packets_per_second_inner_loop = profile_results(
-        zone_name_inner, num_messages, line_size, packet_size, fabric_mode, disable_sends_for_interior_workers
+        zone_name_inner,
+        num_messages,
+        line_size,
+        packet_size,
+        fabric_mode,
+        disable_sends_for_interior_workers,
+        unidirectional=unidirectional,
     )
     bandwidth, packets_per_second = profile_results(
-        zone_name_main, num_messages, line_size, packet_size, fabric_mode, disable_sends_for_interior_workers
+        zone_name_main,
+        num_messages,
+        line_size,
+        packet_size,
+        fabric_mode,
+        disable_sends_for_interior_workers,
+        unidirectional=unidirectional,
     )
     logger.info("bandwidth_inner_loop: {} B/c", bandwidth_inner_loop)
     logger.info("bandwidth: {} B/c", bandwidth)
@@ -188,18 +222,29 @@ def run_fabric_edm(
     # Add summary to CSV
     test_name = f"{'unicast' if is_unicast else 'mcast'}_{fabric_mode.name}"
     summarize_to_csv(
-        test_name, packet_size, line_size, num_links, disable_sends_for_interior_workers, bandwidth, packets_per_second
+        test_name,
+        packet_size,
+        line_size,
+        num_links,
+        disable_sends_for_interior_workers,
+        unidirectional,
+        bandwidth,
+        packets_per_second,
     )
     expected_bw, expected_pps = read_golden_results(
-        test_name, packet_size, line_size, num_links, disable_sends_for_interior_workers
+        test_name, packet_size, line_size, num_links, disable_sends_for_interior_workers, unidirectional
     )
     expected_Mpps = expected_pps / 1000000 if expected_pps is not None else None
     bw_threshold = 0.07
     if packet_size <= 2048 and fabric_mode != FabricTestMode.Linear:
         bw_threshold = 0.12
-    assert expected_bw - bw_threshold <= bandwidth <= expected_bw + bw_threshold, "Bandwidth mismatch"
+    assert (
+        expected_bw - bw_threshold <= bandwidth <= expected_bw + bw_threshold
+    ), f"Bandwidth mismatch. expected: {expected_bw} B/c, actual: {bandwidth} B/c"
     if expected_Mpps is not None:
-        assert expected_Mpps - 0.01 <= mega_packets_per_second <= expected_Mpps + 0.01, "Packets per second mismatch"
+        assert (
+            expected_Mpps - 0.01 <= mega_packets_per_second <= expected_Mpps + 0.01
+        ), f"Packets per second mismatch. expected: {expected_Mpps} Mpps, actual: {mega_packets_per_second} Mpps"
 
 
 @pytest.mark.parametrize("num_mcasts", [200000])
@@ -291,6 +336,7 @@ def test_fabric_8chip_one_link_edm_mcast_full_ring_bw(
     )
 
 
+# expected_Mpps = expected millions of packets per second
 @pytest.mark.parametrize("num_mcasts", [200000])
 @pytest.mark.parametrize("num_unicasts", [0])
 @pytest.mark.parametrize("num_op_invocations", [1])
@@ -321,6 +367,7 @@ def test_fabric_4_chip_one_link_mcast_saturate_chip_to_chip_ring_bw(
     )
 
 
+# expected_Mpps = expected millions of packets per second
 @pytest.mark.parametrize("num_mcasts", [200000])
 @pytest.mark.parametrize("num_unicasts", [0])
 @pytest.mark.parametrize("num_op_invocations", [1])
@@ -348,6 +395,62 @@ def test_fabric_4chip_one_link_mcast_bw(
         packet_size,
         FabricTestMode.Linear,
         False,
+    )
+
+
+@pytest.mark.parametrize("num_mcasts", [200000])
+@pytest.mark.parametrize("num_unicasts", [0])
+@pytest.mark.parametrize("num_op_invocations", [1])
+@pytest.mark.parametrize("line_sync", [True])
+@pytest.mark.parametrize("line_size", [4])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+def test_fabric_4chip_one_link_bidirectional_single_producer_mcast_bw(
+    num_mcasts, num_unicasts, num_links, num_op_invocations, line_sync, line_size, packet_size
+):
+    run_fabric_edm(
+        False,
+        num_mcasts,
+        num_unicasts,
+        num_links,
+        num_op_invocations,
+        line_sync,
+        line_size,
+        packet_size,
+        FabricTestMode.Linear,
+        disable_sends_for_interior_workers=True,
+        unidirectional=False,
+    )
+
+
+@pytest.mark.parametrize("num_mcasts", [200000])
+@pytest.mark.parametrize("num_unicasts", [0])
+@pytest.mark.parametrize("num_op_invocations", [1])
+@pytest.mark.parametrize("line_sync", [True])
+@pytest.mark.parametrize("line_size", [4])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+def test_fabric_4chip_one_link_unidirectional_single_producer_mcast_bw(
+    num_mcasts,
+    num_unicasts,
+    num_links,
+    num_op_invocations,
+    line_sync,
+    line_size,
+    packet_size,
+):
+    run_fabric_edm(
+        False,
+        num_mcasts,
+        num_unicasts,
+        num_links,
+        num_op_invocations,
+        line_sync,
+        line_size,
+        packet_size,
+        FabricTestMode.Linear,
+        disable_sends_for_interior_workers=True,
+        unidirectional=True,
     )
 
 
@@ -512,7 +615,9 @@ def print_bandwidth_summary():
     df = pd.read_csv(csv_path)
 
     # Sort by test name and packet size
-    df = df.sort_values(["Test Name", "Packet Size", "Line Size", "Num Links", "Disable Interior Workers"])
+    df = df.sort_values(
+        ["Test Name", "Packet Size", "Line Size", "Num Links", "Disable Interior Workers", "Unidirectional"]
+    )
 
     # Format table with raw values
     table = tabulate(
@@ -523,6 +628,7 @@ def print_bandwidth_summary():
             "Line Size",
             "Num Links",
             "Disable Interior Workers",
+            "Unidirectional",
             "Bandwidth (B/c)",
             "Packets/Second",
         ],
