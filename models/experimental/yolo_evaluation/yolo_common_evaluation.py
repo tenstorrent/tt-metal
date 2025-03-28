@@ -444,7 +444,7 @@ def evaluation(
     "model_type",
     [
         ("tt_model"),
-        # ("torch_model"),
+        ("torch_model"),
     ],
 )
 @pytest.mark.parametrize(
@@ -457,7 +457,7 @@ def evaluation(
 @pytest.mark.parametrize(
     "resolution",
     [
-        # (320, 320),
+        (320, 320),
         (640, 640),
     ],
 )
