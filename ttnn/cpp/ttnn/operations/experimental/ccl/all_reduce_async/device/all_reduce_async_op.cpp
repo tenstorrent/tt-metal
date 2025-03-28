@@ -249,7 +249,7 @@ Tensor all_reduce_async(
 }  // namespace experimental
 }  // namespace operations
 
-std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> ar_choose_worker_cores(
     size_t num_links, size_t num_workers_per_link, bool persistent_fabric_mode, const CoreRangeSet& available_cores) {
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
