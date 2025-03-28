@@ -486,20 +486,25 @@ def run_llama3_demo(
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 # FAKE_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export FAKE_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test",
+    "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test",
     [
-        # (  # Batch-1 run (Latency) - single user, small prompt
-        #     "models/demos/llama3/demo/input_data_questions_prefill_128.json",  # input_prompts
-        #     True,  # instruct mode
-        #     1,  # repeat_batches
-        #     1024,  # max_seq_len
-        #     1,  # batch_size
-        #     200,  # max_generated_tokens
-        #     False,  # True,  # paged_attention
-        #     {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
-        #     {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-        # ),
-        (  # Batch-32 run (Throughput) - 32 users, small prompt
+        (  # full demo, batch 32
+            "instruct",
+            80,
+            "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            32,  # batch_size
+            200,  # max_generated_tokens
+            False,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
+            {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
+            False,  # stress_test
+        ),
+        (  # quick 1L demo
+            "random",
+            1,
             "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -512,6 +517,7 @@ def run_llama3_demo(
             False,  # stress_test
         ),
         (  # Stress test: batch-32 very long generations but at same token index
+            
             "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -523,21 +529,27 @@ def run_llama3_demo(
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
         ),
+        (  # 10 layers for devive perf measurements
+            "random",
+            10,
+            "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            32,  # batch_size
+            1,  # max_generated_tokens
+            False,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
+            {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
+            False,  # stress_test
+        ),
     ],
     ids=[
-        # "batch-1",  # latency
-        "batch-32-demo",  # throughput
-        "batch-32-stress-test",  # stress test with long context
+        "full",  # full demo
+        "quick", # 1L demo
+        "stress-test",  # stress test with many iterations and same token index, full model
+        "measure-device-perf",  # 10L demo for device performance measurements
     ],
-)
-@pytest.mark.parametrize(
-    "weights, layers",
-    [
-        ("random", 1),
-        ("instruct", 80),
-        ("instruct", 10),
-    ],
-    ids=["quick", "full", "measure"],
 )
 @pytest.mark.parametrize(
     "optimizations",
