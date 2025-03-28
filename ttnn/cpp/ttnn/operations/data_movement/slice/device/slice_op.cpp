@@ -5,6 +5,7 @@
 #include <tt-metalium/constants.hpp>
 #include "slice_op.hpp"
 #include "slice_program_factory.hpp"
+#include "tt-metalium/buffer_constants.hpp"
 
 using namespace tt::tt_metal;
 
@@ -136,6 +137,10 @@ std::vector<ttnn::TensorSpec> SliceDeviceOperation::compute_output_specs(
     };
     for (uint32_t i = 0; i < out_shape.size(); i++) {
         out_shape[i] = output_dim_i(i);
+    }
+    if (this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        auto output_shard_shape = this->output_mem_config.shard_spec->shape;
+        out_shape[out_shape.size() - 1] = output_shard_shape[1];
     }
     ttnn::Shape output_tensor_shape(std::move(out_shape));
     return {ttnn::TensorSpec(
