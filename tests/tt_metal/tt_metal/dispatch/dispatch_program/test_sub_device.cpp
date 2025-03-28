@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "gtest/gtest.h"
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/device.hpp>
@@ -29,6 +30,62 @@ namespace tt::tt_metal {
 
 constexpr uint32_t k_local_l1_size = 3200;
 const std::string k_coordinates_kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/read_my_coordinates.cpp";
+
+TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceCBAllocation) {
+    auto* device = devices_[0];
+    CoreRangeSet sharded_cores_1 = CoreRange({0, 0}, {2, 2});
+    SubDevice sub_device_1(std::array{sharded_cores_1});
+    auto sub_device_manager_1 = device->create_sub_device_manager({sub_device_1}, k_local_l1_size);
+    DeviceAddr l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    DeviceAddr l1_max_size = device->l1_size_per_core();
+    DeviceAddr l1_total_size = l1_max_size - l1_unreserved_base;
+    device->load_sub_device_manager(sub_device_manager_1);
+    uint32_t global_buffer_size = l1_total_size - k_local_l1_size * 2;
+    ShardSpecBuffer global_shard_spec_buffer =
+        ShardSpecBuffer(sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sharded_cores_1.num_cores(), 1});
+    ShardedBufferConfig global_shard_config = {
+        device,
+        sharded_cores_1.num_cores() * global_buffer_size,
+        global_buffer_size,
+        BufferType::L1,
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        global_shard_spec_buffer};
+
+    auto global_buffer = CreateBuffer(global_shard_config);
+    Program program = CreateProgram();
+
+    uint32_t cb_size = k_local_l1_size;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
+    tt::tt_metal::CircularBufferConfig cb_src0_config =
+        tt::tt_metal::CircularBufferConfig(k_local_l1_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(src0_cb_index, hal::get_l1_alignment());
+    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, sharded_cores_1, cb_src0_config);
+
+    program.allocate_circular_buffers(device);
+    detail::ValidateCircularBufferRegion(program, device);
+    UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size * 3);
+    program.allocate_circular_buffers(device);
+    EXPECT_THROW(detail::ValidateCircularBufferRegion(program, device), std::exception);
+    global_buffer.reset();
+    detail::ValidateCircularBufferRegion(program, device);
+    ShardSpecBuffer local_shard_spec_buffer =
+        ShardSpecBuffer(sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sharded_cores_1.num_cores(), 1});
+
+    uint32_t local_buffer_size = k_local_l1_size / 2;
+    ShardedBufferConfig local_shard_config = {
+        device,
+        sharded_cores_1.num_cores() * local_buffer_size,
+        local_buffer_size,
+        BufferType::L1,
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        local_shard_spec_buffer};
+
+    auto local_buffer = CreateBuffer(local_shard_config, SubDeviceId{0});
+    EXPECT_THROW(detail::ValidateCircularBufferRegion(program, device), std::exception);
+    UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size / 4);
+    program.allocate_circular_buffers(device);
+    detail::ValidateCircularBufferRegion(program, device);
+}
 
 void test_sub_device_synchronization(IDevice* device) {
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
