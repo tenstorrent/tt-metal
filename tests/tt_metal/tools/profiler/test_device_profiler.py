@@ -267,7 +267,7 @@ def test_dispatch_cores():
 @skip_for_grayskull()
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {
-        "Ethernet CQ Dispatch": [17, 12, 3899],
+        "Ethernet CQ Dispatch": [17, 1567],
         "Ethernet CQ Prefetch": [18, 1951],
     }
     devicesData = run_device_profiler_test(
