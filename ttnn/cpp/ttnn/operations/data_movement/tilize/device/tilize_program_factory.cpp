@@ -108,18 +108,25 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
 
     // Set llk specific defines for perf measurement
     const bool enabe_llk_perf = std::getenv("TT_ENABLE_LLK_PERF");
+    const bool llk_perf_block = std::getenv("TT_LLK_PERF_BLOCK");
     if (enabe_llk_perf) {
         llk_perf_defines["LLK_TILIZE_PERF"] = "1";
+
+        if (llk_perf_block) {
+            llk_perf_defines["LLK_PERF_BLOCK"] = "1";
+        } else {
+            llk_perf_defines["LLK_PERF_OP"] = "1";
+        }
 
         const bool llk_perf_unpack = std::getenv("TT_LLK_PERF_UNPACK");
         const bool llk_perf_math = std::getenv("TT_LLK_PERF_MATH");
         const bool llk_perf_pack = std::getenv("TT_LLK_PERF_PACK");
         if (llk_perf_unpack) {
-            llk_perf_defines["LLK_UNPACK_PERF"] = 1;
+            llk_perf_defines["LLK_UNPACK_PERF"] = "1";
         } else if (llk_perf_math) {
-            llk_perf_defines["LLK_MATH_PERF"] = 1;
+            llk_perf_defines["LLK_MATH_PERF"] = "1";
         } else if (llk_perf_pack) {
-            llk_perf_defines["LLK_PACK_PERF"] = 1;
+            llk_perf_defines["LLK_PACK_PERF"] = "1";
         }
     }
 

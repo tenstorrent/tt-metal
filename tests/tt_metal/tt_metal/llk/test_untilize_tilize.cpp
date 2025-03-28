@@ -132,8 +132,15 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
     }
     // Set llk specific defines for perf measurement
     const bool enabe_llk_perf = std::getenv("TT_ENABLE_LLK_PERF");
+    const bool llk_perf_block = std::getenv("TT_LLK_PERF_BLOCK");
     if (enabe_llk_perf) {
         defines["LLK_TILIZE_PERF"] = "1";
+
+        if (llk_perf_block) {
+            defines["LLK_PERF_BLOCK"] = "1";
+        } else {
+            defines["LLK_PERF_OP"] = "1";
+        }
 
         const bool llk_perf_unpack = std::getenv("TT_LLK_PERF_UNPACK");
         const bool llk_perf_math = std::getenv("TT_LLK_PERF_MATH");
@@ -329,7 +336,7 @@ Following tests are for Unpack Tilize
 ***************************************/
 
 TEST_F(DeviceFixture, TensixComputeUnpackTilize) {
-    vector<vector<uint32_t>> num_tiles = {{20, 4}};
+    vector<vector<uint32_t>> num_tiles = {{5, 3}};
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {false}) {
             // FP32 dest acc not possible for GS

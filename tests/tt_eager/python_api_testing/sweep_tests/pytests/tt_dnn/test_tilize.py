@@ -13,7 +13,7 @@ import ttnn
 import os
 
 # shapes = [[[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]]]
-shapes = [[[1, 1, 640, 128]]]
+shapes = [[[1, 1, 10 * 32, 5 * 32]]]
 
 
 @pytest.mark.parametrize(
