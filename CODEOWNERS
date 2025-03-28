@@ -221,4 +221,4 @@ ttnn/CMakeLists.txt @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt
 
 
 # tt-train
-tt-train/** @dmakoviichuk-tt @rfurko-tt
+tt-train/** @dmakoviichuk-tt @rfurko-tt ayerofieiev-tt 
