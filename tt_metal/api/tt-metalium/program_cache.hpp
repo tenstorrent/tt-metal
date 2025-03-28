@@ -20,6 +20,10 @@ private:
     std::optional<tt::tt_metal::Program> owned_program;
     std::optional<shared_variables_t> owned_shared_variables;
 
+    // Hidden to avoid misuse of `CachedProgram` as a proxy.
+    CachedProgram(tt::tt_metal::Program& program, shared_variables_t& shared_variables) :
+        program{program}, shared_variables{shared_variables} {}
+
 public:
     tt::tt_metal::Program& program;
 
@@ -32,11 +36,25 @@ public:
         program{*owned_program},
         shared_variables{*owned_shared_variables} {}
 
+    // Move constructor is needed to make `CachedProgram` work with `unique_any`.
+    // `CachedProgram` with owned `program` and `shared_variables` are moved; unowned proxies have their references
+    // effectively copied.
+    CachedProgram(CachedProgram&& other) noexcept :
+        owned_program(std::move(other.owned_program)),
+        owned_shared_variables(std::move(other.owned_shared_variables)),
+        program(owned_program ? *owned_program : other.program),
+        shared_variables(owned_shared_variables ? *owned_shared_variables : other.shared_variables) {}
+
     // Creates a "proxy" `CachedProgram` that references `program` and `shared_variables`.
     // Used for adapting `CachedMeshWorkload` to `CachedProgram`, and interfacing with TTNN Ops in
     // `override_runtime_arguments` methods.
-    CachedProgram(tt::tt_metal::Program& program, shared_variables_t& shared_variables) :
-        program{program}, shared_variables{shared_variables} {}
+    static CachedProgram proxy(tt::tt_metal::Program& program, shared_variables_t& shared_variables) {
+        return CachedProgram{program, shared_variables};
+    }
+
+    CachedProgram(const CachedProgram&) = delete;
+    CachedProgram& operator=(const CachedProgram&) = delete;
+    CachedProgram& operator=(CachedProgram&&) = delete;
 };
 
 template <typename shared_variables_t>

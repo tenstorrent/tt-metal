@@ -376,10 +376,10 @@ void DropoutMeshWorkloadFactory::override_runtime_arguments(
     TT_ASSERT(args.use_per_device_seed, "DropoutMeshWorkloadFactory should only be used if per-device seed is used.");
 
     for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
-        DropoutProgramFactory::cached_program_t cached_program(
+        auto cached_program_proxy = DropoutProgramFactory::cached_program_t::proxy(
             program, cached_workload.shared_variables.at(mesh_coord_range));
         DropoutProgramFactory::override_runtime_arguments(
-            cached_program,
+            cached_program_proxy,
             override_per_device_seed(args, mesh_coord_range.start_coord(), tensor_args.input),
             tensor_args,
             tensor_return_value);

@@ -61,8 +61,8 @@ auto compute_program_hash(
 
 template <typename device_operation_t>
 tt::tt_metal::Program& create_or_get_program_from_cache(
-    auto& program_cache,
-    auto program_cache_hit,
+    tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
+    bool program_cache_hit,
     auto program_hash,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args,
@@ -86,8 +86,7 @@ tt::tt_metal::Program& create_or_get_program_from_cache(
                         program_cache.insert(
                             program_hash,
                             tt::tt_metal::program_cache::detail::CachedProgramFactory{
-                                tt::tt_metal::program_cache::detail::CachedProgram(
-                                    ProgramFactory::create(operation_attributes, tensor_args, tensor_return_value)),
+                                ProgramFactory::create(operation_attributes, tensor_args, tensor_return_value),
                                 program_factory_index});
                         auto& cached_program_factory = program_cache.get(program_hash);
                         auto& cached_program = cached_program_factory.cached_program.template get<cached_program_t>();
@@ -98,11 +97,8 @@ tt::tt_metal::Program& create_or_get_program_from_cache(
                         program_cache.insert(
                             program_hash,
                             tt::tt_metal::program_cache::detail::CachedProgramFactory{
-                                tt::tt_metal::program_cache::detail::CachedProgram(ProgramFactory::create_at(
-                                    operation_attributes,
-                                    ttnn::MeshCoordinate(0, 0),
-                                    tensor_args,
-                                    tensor_return_value)),
+                                ProgramFactory::create_at(
+                                    operation_attributes, ttnn::MeshCoordinate(0, 0), tensor_args, tensor_return_value),
                                 program_factory_index});
                         auto& cached_program_factory = program_cache.get(program_hash);
                         auto& cached_program = cached_program_factory.cached_program.template get<cached_program_t>();
@@ -346,9 +342,10 @@ void launch_on_worker_thread(
             tensor_return_value);
 
     } else {
-        auto program = std::visit(
+        std::shared_ptr<tt::tt_metal::Program> program = std::visit(
             tt::stl::overloaded{
-                [&]<ProgramFactoryConcept ProgramFactory>(const ProgramFactory&) {
+                [&]<ProgramFactoryConcept ProgramFactory>(
+                    const ProgramFactory&) -> std::shared_ptr<tt::tt_metal::Program> {
                     if constexpr (requires { &ProgramFactory::create; }) {
                         auto cached_program =
                             ProgramFactory::create(operation_attributes, tensor_args, tensor_return_value);

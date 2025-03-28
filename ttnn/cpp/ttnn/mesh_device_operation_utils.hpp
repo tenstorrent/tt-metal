@@ -134,12 +134,12 @@ void apply_override_runtime_arguments(
                 tensor_args,
                 return_value);
         }) {
-        // Wrap reference to `program` and `shared_vars` in a "cached program" object.
-        typename ConcreteProgramFactory::cached_program_t cached_program(program, shared_vars);
+        // Proxy references to `program` and `shared_vars` as a `CachedProgram` object.
+        auto cached_program_proxy = ConcreteProgramFactory::cached_program_t::proxy(program, shared_vars);
         if constexpr (requires { &ConcreteProgramFactory::override_runtime_arguments_at; }) {
-            factory.override_runtime_arguments_at(cached_program, attrs, coord, tensor_args, return_value);
+            factory.override_runtime_arguments_at(cached_program_proxy, attrs, coord, tensor_args, return_value);
         } else {
-            factory.override_runtime_arguments(cached_program, attrs, tensor_args, return_value);
+            factory.override_runtime_arguments(cached_program_proxy, attrs, tensor_args, return_value);
         }
     } else {
         if constexpr (requires { &ConcreteProgramFactory::override_runtime_arguments_at; }) {
