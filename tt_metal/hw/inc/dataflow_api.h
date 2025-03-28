@@ -1499,7 +1499,7 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  * | be        | Byte-enable                                            | uint8_t  | 0x1-0xF                                                       | False    |
  */
 // clang-format on
-template <bool write_to_stream_reg = false>
+template <bool write_to_stream_reg = false, bool posted = false>
 FORCE_INLINE void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t noc = noc_index) {
     WAYPOINT("NWIW");
     DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
@@ -1553,7 +1553,7 @@ FORCE_INLINE void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 
         be,  // byte-enable
         NOC_UNICAST_WRITE_VC,
         false,  // mcast
-        false   // posted
+        posted  // posted
     );
 #endif
     WAYPOINT("NWID");
@@ -1631,8 +1631,8 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
  * | incr      | The value to increment by                                      | uint32_t | Any uint32_t value                                            | True     |
  */
 // clang-format on
-FORCE_INLINE
-void noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index) {
+template <bool posted = false>
+FORCE_INLINE void noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index) {
     /*
     [REFER TO grayskull/noc/noc.h for the documentation of noc_atomic_increment()]
     Generic increment with 32-bit wrap.
@@ -1650,7 +1650,7 @@ void noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index)
         incr,
         31 /*wrap*/,
         false /*linked*/,
-        false /*posted*/,
+        posted /*posted*/,
         MEM_NOC_ATOMIC_RET_VAL_ADDR);
     WAYPOINT("NSID");
 }
