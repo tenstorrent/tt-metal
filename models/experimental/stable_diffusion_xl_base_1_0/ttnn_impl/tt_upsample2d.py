@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import torch
 import ttnn
 
 
@@ -31,36 +30,14 @@ class TtUpsample2D(nn.Module):
         self.kernel_w = self.tt_weights.shape[2]
         self.kernel_h = self.tt_weights.shape[3]
 
-    def prepare_input(self, hidden_states):
-        self.input_shape = hidden_states.shape
-        hidden_states = torch.permute(hidden_states, (0, 2, 3, 1))
-        tt_input = ttnn.from_torch(
-            hidden_states,
-            ttnn.bfloat16,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        return tt_input
-
-    def postprocess_output(self, hidden_states, output_shape):
-        torch_hidden_states = ttnn.to_torch(hidden_states)
-        torch_hidden_states = torch_hidden_states.reshape(
-            self.input_shape[0], output_shape[0], output_shape[1], torch_hidden_states.shape[-1]
-        )
-        torch_hidden_states = torch_hidden_states[:, :, :, : self.output_channels]
-        torch_hidden_states = torch.permute(torch_hidden_states, (0, 3, 1, 2))
-
-        return torch_hidden_states
-
     def interpolate(self, hidden_states):
         hidden_states = ttnn.upsample(hidden_states, (2, 2))
         B, H, W, C = list(hidden_states.shape)
-        self.input_shape = [B, C, H, W]
-        return hidden_states
+        return hidden_states, [B, C, H, W]
 
     def forward(self, hidden_states):
-        hidden_states = self.interpolate(hidden_states)
-        B, C, H, W = self.input_shape
+        hidden_states, input_shape = self.interpolate(hidden_states)
+        B, C, H, W = input_shape
 
         conv_config = ttnn.Conv2dConfig(
             dtype=ttnn.bfloat16,
