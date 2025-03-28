@@ -122,6 +122,12 @@ int main(int argc, char *argv[]) {
                     *trisc_run = RUN_SYNC_MSG_DONE;
                 }
             }
+#if defined(ARCH_WORMHOLE)
+            // Avoid hammering L1 while other cores are trying to work. Seems not to
+            // be needed on Blackhole, probably because invalidate_l1_cache takes
+            // time.
+            asm volatile("nop; nop; nop; nop; nop");
+#endif
             invalidate_l1_cache();
         }
         DeviceZoneScopedMainN("TRISC-FW");
