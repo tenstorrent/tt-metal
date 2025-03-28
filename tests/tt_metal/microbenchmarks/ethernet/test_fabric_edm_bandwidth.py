@@ -459,9 +459,9 @@ def test_fabric_4chip_one_link_unidirectional_single_producer_mcast_bw(
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [4])
-@pytest.mark.parametrize("num_links", [2])
+@pytest.mark.parametrize("num_links", [2, 3, 4])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
-def test_fabric_4chip_two_link_mcast_bw(
+def test_fabric_4chip_multi_link_mcast_bw(
     num_mcasts,
     num_unicasts,
     num_links,
