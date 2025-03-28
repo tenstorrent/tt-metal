@@ -27,13 +27,11 @@ void kernel_main() {
     uint32_t packet_size_bytes = PACKET_HEADER_SIZE_BYTES;
 
     uint32_t client_interface_addr = get_write_ptr(client_interface_cb);
-    using ClientInterfaceType = typename ClientInterfaceSelector<test_mode>::type;
-    volatile tt_l1_ptr ClientInterfaceType client_interface =
-        (volatile tt_l1_ptr ClientInterfaceType)client_interface_addr;
-
-    fabric_endpoint_init<volatile ClientInterfaceType>(client_interface, 0 /* unused */);
     if constexpr (test_mode == fabric_mode::PULL) {
-        fabric_atomic_inc<volatile ClientInterfaceType, ClientDataMode::PACKETIZED_DATA, AsyncWriteMode::ALL>(
+        volatile fabric_pull_client_interface_t* client_interface =
+            (volatile fabric_pull_client_interface_t*)client_interface_addr;
+        fabric_endpoint_init<decltype(client_interface)>(client_interface, 0 /* unused */);
+        fabric_atomic_inc<decltype(client_interface), ClientDataMode::PACKETIZED_DATA, AsyncWriteMode::ALL>(
             client_interface,
             router_noc_xy,
             src_addr,  // source address in sender’s memory
@@ -45,9 +43,13 @@ void kernel_main() {
 
         fabric_wait_for_pull_request_flushed(client_interface);
     } else {
-        fabric_client_connect<volatile ClientInterfaceType>(client_interface, 0, dst_mesh_id, dst_device_id);
+        volatile fabric_push_client_interface_t* client_interface =
+            (volatile fabric_push_client_interface_t*)client_interface_addr;
+
+        fabric_endpoint_init<decltype(client_interface), RoutingType::ROUTING_TABLE>(client_interface, 0 /* unused */);
+        fabric_client_connect<decltype(client_interface)>(client_interface, 0, dst_mesh_id, dst_device_id);
         fabric_atomic_inc<
-            volatile ClientInterfaceType,
+            decltype(client_interface),
             ClientDataMode::PACKETIZED_DATA,
             (AsyncWriteMode)(AsyncWriteMode::PUSH | AsyncWriteMode::ADD_HEADER)>(
             client_interface,

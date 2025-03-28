@@ -28,14 +28,13 @@ void kernel_main() {
     uint32_t packet_size_bytes = num_bytes + PACKET_HEADER_SIZE_BYTES;
 
     uint32_t client_interface_addr = get_write_ptr(client_interface_cb);
-    using ClientInterfaceType = typename ClientInterfaceSelector<test_mode>::type;
-    volatile tt_l1_ptr ClientInterfaceType client_interface =
-        (volatile tt_l1_ptr ClientInterfaceType)client_interface_addr;
+    volatile fabric_pull_client_interface_t* client_interface =
+        (volatile fabric_pull_client_interface_t*)client_interface_addr;
 
-    fabric_endpoint_init<volatile ClientInterfaceType>(client_interface, 0 /* unused */);
+    fabric_endpoint_init<decltype(client_interface)>(client_interface, 0 /* unused */);
 
     fabric_async_write_multicast<
-        volatile ClientInterfaceType,
+        decltype(client_interface),
         (ClientDataMode)data_mode,
         AsyncWriteMode::ALL,
         RoutingType::ROUTER_XY>(

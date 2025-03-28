@@ -34,15 +34,14 @@ void kernel_main() {
     uint32_t packet_size_bytes = num_bytes + PACKET_HEADER_SIZE_BYTES;
 
     uint32_t client_interface_addr = get_write_ptr(client_interface_cb);
-    using ClientInterfaceType = typename ClientInterfaceSelector<test_mode>::type;
-    volatile tt_l1_ptr ClientInterfaceType client_interface =
-        (volatile tt_l1_ptr ClientInterfaceType)client_interface_addr;
+    volatile fabric_pull_client_interface_t* client_interface =
+        (volatile fabric_pull_client_interface_t*)client_interface_addr;
     for (uint32_t i = 0; i < num_dirs; i++) {
-        fabric_endpoint_init<volatile ClientInterfaceType>(client_interface + i, 0 /* unused */);
+        fabric_endpoint_init<decltype(client_interface)>(client_interface + i, 0 /* unused */);
     }
 
     fabric_async_write_multicast<
-        volatile ClientInterfaceType,
+        decltype(client_interface),
         (ClientDataMode)data_mode,
         AsyncWriteMode::ALL,
         RoutingType::ROUTER_XY>(
@@ -70,7 +69,7 @@ void kernel_main() {
         packet_header->packet_parameters.mcast_parameters.west = w_depth;
 
         fabric_async_write_multicast<
-            volatile ClientInterfaceType,
+            decltype(client_interface),
             (ClientDataMode)data_mode,
             AsyncWriteMode::ADD_AND_SEND_PR,
             RoutingType::ROUTER_XY>(
@@ -89,7 +88,7 @@ void kernel_main() {
         // For sideband header, we will use header slot in second client interface.
         // Use AsyncWriteMode::ALL, since the header slot needs to be initialized.
         fabric_async_write_multicast<
-            volatile ClientInterfaceType,
+            decltype(client_interface),
             (ClientDataMode)data_mode,
             AsyncWriteMode::ALL,
             RoutingType::ROUTER_XY>(
@@ -106,7 +105,7 @@ void kernel_main() {
             0);
     }
     // Flush all pull requests
-    client_interface = reinterpret_cast<volatile tt_l1_ptr ClientInterfaceType>(client_interface_addr);
+    client_interface = reinterpret_cast<volatile fabric_pull_client_interface_t*>(client_interface_addr);
     for (uint32_t i = 0; i < num_dirs; i++) {
         fabric_wait_for_pull_request_flushed(client_interface);
         client_interface++;
