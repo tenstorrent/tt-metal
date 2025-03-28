@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/erisc_datamover_builder.hpp>
+#include <tt-metalium/fabric_host_utils.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_graph.hpp>
+
 #include <array>
 #include <cstddef>
 #include <map>
@@ -15,7 +17,7 @@
 #include "assert.hpp"
 #include "control_plane.hpp"
 #include "fabric_edm_packet_header.hpp"
-#include "fabric_host_utils.hpp"
+
 #include "metal_soc_descriptor.h"
 #include "impl/context/metal_context.hpp"
 #include <magic_enum/magic_enum.hpp>

@@ -6,6 +6,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/fabric_host_utils.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -82,16 +83,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         is_first_chip,
         is_last_chip);
 
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_fabric_handle =
-        ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
-            device,
-            forward_device.value_or(nullptr),
-            backward_device.value_or(nullptr),
-            &program,
-            enable_persistent_fabric_mode,
-            num_links,
-            topology);
-
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
     std::vector<Tensor> output_tensors = {output_tensor};
@@ -105,7 +96,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, device, sub_device_id);
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
+    const auto& edm_config = tt::tt_fabric::get_default_fabric_config();
+    const size_t packet_size_bytes = edm_config.channel_buffer_size_bytes;
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages = 3 * num_pages_per_packet;  // tripple buffering
@@ -190,16 +182,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
             // drain sync core is the first worker core
             drain_sync_core = device->worker_core_from_logical_core(core);
         }
-        std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> forward_fabric_connection =
-            !forward_device.has_value()
-                ? std::nullopt
-                : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
-                      device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
-        std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> backward_fabric_connection =
-            !backward_device.has_value()
-                ? std::nullopt
-                : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
-                      device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
 
         // Set reader runtime args
         uint32_t base_pages_per_worker = input_tensor_num_pages / num_links;
@@ -238,8 +220,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         for (const auto& arg : writer_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
-        append_fabric_connection_rt_args(forward_fabric_connection, core, program, writer_rt_args);
-        append_fabric_connection_rt_args(backward_fabric_connection, core, program, writer_rt_args);
+        writer_rt_args.push_back(forward_device.has_value());
+        if (forward_device.has_value()) {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                input_tensor.device()->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
+        }
+        writer_rt_args.push_back(backward_device.has_value());
+        if (backward_device.has_value()) {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                input_tensor.device()->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
+        }
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
     }
 
@@ -302,16 +292,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         is_first_chip,
         is_last_chip);
 
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_fabric_handle =
-        ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
-            device,
-            forward_device.value_or(nullptr),
-            backward_device.value_or(nullptr),
-            &program,
-            enable_persistent_fabric_mode,
-            num_links,
-            topology);
-
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
     std::vector<Tensor> output_tensors = {output_tensor};
@@ -342,7 +322,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     tt::log_debug(tt::LogOp, "output_tensor_shard_num_pages: {}", output_tensor_shard_num_pages);
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
+    const auto& edm_config = tt::tt_fabric::get_default_fabric_config();
+    const size_t packet_size_bytes = edm_config.channel_buffer_size_bytes;
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages =
@@ -472,17 +453,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
             // drain sync core is the first worker core
             drain_sync_core = device->worker_core_from_logical_core(core);
         }
-        std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> forward_fabric_connection =
-            !forward_device.has_value()
-                ? std::nullopt
-                : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
-                      device, ttnn::ccl::EdmLineFabricOpInterface::FORWARD));
-        std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> backward_fabric_connection =
-            !backward_device.has_value()
-                ? std::nullopt
-                : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>(local_fabric_handle->uniquely_connect_worker(
-                      device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
-
         // Set reader runtime args
         std::vector<uint32_t> reader_rt_args = {
             input_tensor.buffer()->address(),    // tensor_address0
@@ -522,8 +492,18 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         for (const auto& arg : writer_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
-        append_fabric_connection_rt_args(forward_fabric_connection, core, program, writer_rt_args);
-        append_fabric_connection_rt_args(backward_fabric_connection, core, program, writer_rt_args);
+
+        writer_rt_args.push_back(forward_device.has_value());
+        if (forward_device.has_value()) {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                input_tensor.device()->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
+        }
+        writer_rt_args.push_back(backward_device.has_value());
+        if (backward_device.has_value()) {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                input_tensor.device()->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
+        }
+
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
     }
 

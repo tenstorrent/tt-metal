@@ -127,7 +127,9 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
 @pytest.mark.parametrize("replication_factor", [8])
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 17068032}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"trace_region_size": 17068032, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
+)
 def test_all_gather_tg_llama(
     mesh_device,
     num_devices,
