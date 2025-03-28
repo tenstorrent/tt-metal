@@ -12,6 +12,7 @@
 #include <tt-metalium/program_cache.hpp>
 
 #include "overloaded.hpp"
+#include "tt-metalium/logger.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation_concepts.hpp"
@@ -104,7 +105,7 @@ std::vector<ttnn::MeshCoordinate> extract_tensor_coordinates(const TensorArgs& t
     return tensor_coordinates;
 }
 
-// Apply override_runtime_arguments in a uniform way across different program factory interfaces because
+// Applies override_runtime_arguments in a uniform way across different program factory interfaces because
 // we have many different program factory interfaces we're currently supporting.
 template <
     ProgramFactoryConcept ConcreteProgramFactory,
@@ -116,9 +117,20 @@ void apply_override_runtime_arguments(
     tt::tt_metal::Program& program,
     typename ConcreteProgramFactory::shared_variables_t& shared_vars,
     const OperationAttributes& attrs,
-    const ttnn::MeshCoordinate& coord,
+    const ttnn::MeshCoordinateRange& coord_range,
     const TensorArgs& tensor_args,
     TensorReturnValue& return_value) {
+    auto call_override_runtime_arguments = [&](auto& program_or_cached_program) {
+        if constexpr (requires { &ConcreteProgramFactory::override_runtime_arguments; }) {
+            factory.override_runtime_arguments(program_or_cached_program, attrs, tensor_args, return_value);
+        } else {
+            for (const auto& coord : coord_range) {
+                factory.override_runtime_arguments_at(
+                    program_or_cached_program, attrs, coord, tensor_args, return_value);
+            }
+        }
+    };
+
     if constexpr (
         requires {
             typename ConcreteProgramFactory::cached_program_t;
@@ -130,23 +142,15 @@ void apply_override_runtime_arguments(
             factory.override_runtime_arguments_at(
                 std::declval<typename ConcreteProgramFactory::cached_program_t&>(),
                 attrs,
-                coord,
+                std::declval<ttnn::MeshCoordinate>(),
                 tensor_args,
                 return_value);
         }) {
         // Proxy references to `program` and `shared_vars` as a `CachedProgram` object.
         auto cached_program_proxy = ConcreteProgramFactory::cached_program_t::proxy(program, shared_vars);
-        if constexpr (requires { &ConcreteProgramFactory::override_runtime_arguments_at; }) {
-            factory.override_runtime_arguments_at(cached_program_proxy, attrs, coord, tensor_args, return_value);
-        } else {
-            factory.override_runtime_arguments(cached_program_proxy, attrs, tensor_args, return_value);
-        }
+        call_override_runtime_arguments(cached_program_proxy);
     } else {
-        if constexpr (requires { &ConcreteProgramFactory::override_runtime_arguments_at; }) {
-            factory.override_runtime_arguments_at(program, shared_vars, attrs, coord, tensor_args, return_value);
-        } else {
-            factory.override_runtime_arguments(program, shared_vars, attrs, tensor_args, return_value);
-        }
+        call_override_runtime_arguments(program);
     }
 }
 
@@ -184,6 +188,10 @@ CachedMeshWorkload<typename ConcreteProgramFactory::shared_variables_t> create_m
         shared_variables[mesh_coordinate_range] = std::move(cached_program.shared_variables);
         return CachedMeshWorkload<shared_vars_t>{std::move(mesh_workload), std::move(shared_variables)};
     } else {
+        tt::log_warning(
+            tt::LogOp,
+            "Tensors that are distributed across mesh device unevenly negatively affect Op dispatch performance.");
+
         // Create separate programs for each device.
         for (const auto& coord : extract_tensor_coordinates(tensor_args)) {
             auto cached_program = make_program(coord);
@@ -226,10 +234,8 @@ void override_mesh_runtime_arguments(
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_variables = cached_workload.shared_variables.at(coordinate_range);
 
-        for (const auto& coord : coordinate_range) {
-            apply_override_runtime_arguments(
-                program_factory, program, shared_variables, attrs, coord, tensor_args, tensor_return_value);
-        }
+        apply_override_runtime_arguments(
+            program_factory, program, shared_variables, attrs, coordinate_range, tensor_args, tensor_return_value);
     }
 }
 
