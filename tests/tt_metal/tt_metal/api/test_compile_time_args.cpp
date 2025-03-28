@@ -6,7 +6,6 @@
 
 #include "device.hpp"
 #include "device_fixture.hpp"
-#include "hal.hpp"
 #include <numeric>
 #include <string>
 #include <tt-metalium/kernel.hpp>
@@ -21,7 +20,7 @@ TEST_F(DeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
         CoreCoord core = {0, 0};
         Program program;
 
-        const uint32_t write_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
+        const uint32_t write_addr = hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
 
         const std::map<string, string>& defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}};
 
