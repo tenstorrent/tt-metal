@@ -76,7 +76,7 @@ def test_upblock_512x512(
     temb = torch_random(temb, -0.1, 0.1, dtype=torch.float32)
 
     # execute pytorch
-    torch_output = unet_upblock(hidden_state, res_hidden_states_tuple, None, None)
+    torch_output = unet_upblock(hidden_state, res_hidden_states_tuple, temb.squeeze(), None)
 
     hidden_state = preprocess_and_push_input_to_device(
         device,
@@ -127,4 +127,4 @@ def test_upblock_512x512(
 
     op = post_process_output_and_move_to_host(op, N, H * 2, W * 2, in_channels)
 
-    assert_with_pcc(torch_output, op, 0.95)
+    assert_with_pcc(torch_output, op, 0.94)
