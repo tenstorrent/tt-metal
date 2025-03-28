@@ -232,6 +232,7 @@ struct WorkerToFabricEdmSenderImpl {
     // for the read barrier to complete before returning, saving some cycles for advanced users.
     // !!! IMPORTANT !!!
     // Must be called alongside (before) open_finish().
+    template <bool posted = false>
     void open_start() {
         const auto dest_noc_addr_coord_only = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
 
@@ -255,12 +256,14 @@ struct WorkerToFabricEdmSenderImpl {
             reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_teardown_semaphore_address));
         const uint64_t connection_worker_xy_address =
             dest_noc_addr_coord_only | reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_xy));
-        noc_inline_dw_write(dest_edm_location_info_addr, reinterpret_cast<size_t>(from_remote_buffer_slot_rdptr_ptr));
-        noc_inline_dw_write(edm_teardown_semaphore_address_address, reinterpret_cast<size_t>(worker_teardown_addr));
-        noc_inline_dw_write(connection_worker_xy_address, WorkerXY(my_x[0], my_y[0]).to_uint32());
+        noc_inline_dw_write<false, posted>(
+            dest_edm_location_info_addr, reinterpret_cast<size_t>(from_remote_buffer_slot_rdptr_ptr));
+        noc_inline_dw_write<false, posted>(
+            edm_teardown_semaphore_address_address, reinterpret_cast<size_t>(worker_teardown_addr));
+        noc_inline_dw_write<false, posted>(connection_worker_xy_address, WorkerXY(my_x[0], my_y[0]).to_uint32());
 
         const uint64_t edm_connection_handshake_noc_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
-        noc_inline_dw_write(edm_connection_handshake_noc_addr, open_connection_value);
+        noc_inline_dw_write<false, posted>(edm_connection_handshake_noc_addr, open_connection_value);
     }
 
     // Advanced usage API:
@@ -278,8 +281,9 @@ struct WorkerToFabricEdmSenderImpl {
         ASSERT(this->buffer_slot_wrptr < 20);
     }
 
+    template <bool posted = false>
     void open() {
-        open_start();
+        open_start<posted>();
         open_finish();
     }
 
@@ -358,10 +362,10 @@ private:
     FORCE_INLINE void update_edm_buffer_slot_wrptr(uint8_t noc = noc_index) {
         if constexpr (stateful_api) {
             if constexpr (enable_ring_support) {
-                noc_inline_dw_write_with_state<true, false, false>(
+                noc_inline_dw_write_with_state<true, false, true>(
                     this->buffer_slot_wrptr, this->edm_buffer_slot_wrptr_addr, this->sync_noc_cmd_buf, noc);
             } else {
-                noc_inline_dw_write_with_state<false, false, false>(
+                noc_inline_dw_write_with_state<false, false, true>(
                     this->buffer_slot_wrptr, 0, this->sync_noc_cmd_buf, noc);
             }
         } else {
