@@ -192,6 +192,7 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedCoreLocations) {
 // TODO: New test for sharded DRAM buffer with
 //      1. different transaction numbers and sizes
 //      2. different core locations
-// TODO: New test for core-to-core transactions. May use master and slave core range sets, added in the test config
+// TODO: New test for core-to-core transactions. May use master and slave core range sets, added in the test config.
+// Might use a separate test file
 
 }  // namespace tt::tt_metal
