@@ -5,6 +5,7 @@
 import torch
 import pytest
 import ttnn
+import random
 from tests.tt_eager.python_api_testing.unit_testing.backward_ops.utility_funcs import data_gen_with_range, compare_pcc
 from models.utility_functions import skip_for_blackhole
 
@@ -974,3 +975,35 @@ def test_unary_sqrt_ttnn(input_shapes, device):
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([64, 64])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_bitwise_not(input_shapes, device):
+    torch.manual_seed(213919)
+    in_data1 = torch.randint(-1000, 1000, input_shapes, dtype=torch.int32)
+    corner_cases = [0, 1, -1, 2147483647, -2147483648]
+
+    # Randomly replace some elements with corner cases
+    num_replacements = int(in_data1.numel() * 0.001)  # Replace ~0.1% of elements
+
+    indices = torch.randint(0, in_data1.numel(), (num_replacements,))
+    for idx in indices:
+        in_data1.view(-1)[idx] = random.choice(corner_cases)
+
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.bitwise_not(input_tensor1)
+    golden_function = ttnn.get_golden_function(ttnn.bitwise_not)
+    golden_tensor = golden_function(in_data1)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
+    assert pcc == 1
