@@ -2561,24 +2561,70 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
                 (params.disable_sends_for_interior_workers && (i != 0) && (i != line_size - 1)) ||
                 (params.disable_end_workers_in_backward_direction && (i == line_size - 1));
 
+            // Get forward and backward destination coordinates
+            const size_t dest_noc_x_fwd = device->worker_core_from_logical_core(dest_core_coord[l]).x;
+            const size_t dest_noc_y_fwd = device->worker_core_from_logical_core(dest_core_coord[l]).y;
+            const size_t dest_noc_x_bwd = device->worker_core_from_logical_core(dest_core_coord[l]).x;
+            const size_t dest_noc_y_bwd = device->worker_core_from_logical_core(dest_core_coord[l]).y;
+
+            // New format for send types
+            size_t num_send_types = 0;
+            std::vector<size_t> send_types;
+            std::vector<size_t> chip_send_types;
+            std::vector<size_t> send_counts_per_type;
+            std::vector<size_t> num_fwd_hops_per_type;
+            std::vector<size_t> num_bwd_hops_per_type;
+            std::vector<size_t> send_type_payload_sizes;
+
+            if (!disable_sends_for_worker && num_mcasts > 0) {
+                send_types.push_back(static_cast<size_t>(tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE));
+                chip_send_types.push_back(static_cast<size_t>(tt::tt_fabric::CHIP_MULTICAST));
+                send_counts_per_type.push_back(num_mcasts);
+                num_fwd_hops_per_type.push_back(mcast_fwd_hops);
+                num_bwd_hops_per_type.push_back(mcast_bwd_hops);
+                send_type_payload_sizes.push_back(packet_payload_size_bytes);
+                num_send_types++;
+            }
+
+            if (!disable_sends_for_worker && num_unicasts > 0) {
+                send_types.push_back(static_cast<size_t>(tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE));
+                chip_send_types.push_back(static_cast<size_t>(tt::tt_fabric::CHIP_UNICAST));
+                send_counts_per_type.push_back(num_unicasts);
+                num_fwd_hops_per_type.push_back(unicast_forward ? unicast_hops : 0);
+                num_bwd_hops_per_type.push_back(unicast_forward ? 0 : unicast_hops);
+                send_type_payload_sizes.push_back(packet_payload_size_bytes);
+                num_send_types++;
+            }
+
             std::vector<uint32_t> rt_args = {
                 dest_bank_addr,
                 packet_payload_size_bytes,
-                dest_noc_x,
-                dest_noc_y,
-
-                disable_sends_for_worker ? 0 : num_mcasts,
-                mcast_fwd_hops,
-                mcast_bwd_hops,
-
-                disable_sends_for_worker ? 0 : num_unicasts,
-                unicast_hops,
-                unicast_forward,
-
-                source_payload_cb_index,  // source_l1_buffer_address,
-                packet_header_cb_index,
-                packet_header_cb_size_in_headers,
+                dest_noc_x_fwd,
+                dest_noc_y_fwd,
+                dest_noc_x_bwd,
+                dest_noc_y_bwd,
+                num_send_types,
             };
+
+            // Reserve space for all arrays upfront
+            rt_args.reserve(
+                rt_args.size() + num_send_types * 6 +  // 6 arrays of size num_send_types
+                3 +                                    // CB indices
+                (has_forward_connection ? 10 : 1) +    // Forward connection args
+                (has_backward_connection ? 10 : 1) +   // Backward connection args
+                (params.line_sync ? 6 : 0));           // Line sync args
+
+            // Add send types arrays using std::copy
+            std::copy(send_types.begin(), send_types.end(), std::back_inserter(rt_args));
+            std::copy(chip_send_types.begin(), chip_send_types.end(), std::back_inserter(rt_args));
+            std::copy(send_counts_per_type.begin(), send_counts_per_type.end(), std::back_inserter(rt_args));
+            std::copy(num_fwd_hops_per_type.begin(), num_fwd_hops_per_type.end(), std::back_inserter(rt_args));
+            std::copy(num_bwd_hops_per_type.begin(), num_bwd_hops_per_type.end(), std::back_inserter(rt_args));
+            std::copy(send_type_payload_sizes.begin(), send_type_payload_sizes.end(), std::back_inserter(rt_args));
+
+            rt_args.push_back(source_payload_cb_index);
+            rt_args.push_back(packet_header_cb_index);
+            rt_args.push_back(packet_header_cb_size_in_headers);
 
             build_connection_args(has_forward_connection, ttnn::ccl::EdmLineFabricOpInterface::FORWARD, rt_args);
             build_connection_args(has_backward_connection, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD, rt_args);
@@ -2844,26 +2890,53 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
                     std::copy(new_rt_args.begin(), new_rt_args.end(), std::back_inserter(rt_args_out));
                 }
             };
+
+            // Define the send type parameters
+            const size_t num_send_types = 1;
+            std::vector<uint32_t> send_types = {static_cast<uint32_t>(tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE)};
+            std::vector<uint32_t> chip_send_types = {static_cast<uint32_t>(tt::tt_fabric::CHIP_UNICAST)};
+            std::vector<uint32_t> send_counts_per_type = {static_cast<uint32_t>(num_op_invocations)};
+            std::vector<uint32_t> num_fwd_hops_per_type = {
+                static_cast<uint32_t>(has_forward_connection ? mcast_fwd_hops : 0)};
+            std::vector<uint32_t> num_bwd_hops_per_type = {
+                static_cast<uint32_t>(has_backward_connection ? mcast_bwd_hops : 0)};
+            std::vector<uint32_t> send_type_payload_sizes = {static_cast<uint32_t>(packet_payload_size_bytes)};
+
+            // Initialize the base runtime args
             // RT ARGS
             std::vector<uint32_t> rt_args = {
                 dest_bank_addr,
                 packet_payload_size_bytes,
                 dest_noc_x,
                 dest_noc_y,
+                dest_noc_x,
+                dest_noc_y,
 
-                num_mcasts,
-                mcast_fwd_hops,
-                mcast_bwd_hops,
+                // Number of send types
+                num_send_types};
 
-                num_unicasts,
-                unicast_hops,
-                unicast_forward,
+            // Reserve space for all the arrays we'll add
+            rt_args.reserve(
+                rt_args.size() + num_send_types * 6 +  // 6 arrays of size num_send_types
+                3 +                                    // CB indices
+                (has_forward_connection ? 10 : 1) +    // Forward connection args
+                (has_backward_connection ? 10 : 1) +   // Backward connection args
+                (line_sync ? 6 : 0));                  // Line sync args
 
-                source_payload_cb_index,  // source_l1_buffer_address,
-                packet_header_cb_index,
-                packet_header_cb_size_in_headers,
-            };
+            // Copy in all the send type arrays
+            std::copy(send_types.begin(), send_types.end(), std::back_inserter(rt_args));
+            std::copy(chip_send_types.begin(), chip_send_types.end(), std::back_inserter(rt_args));
+            std::copy(send_counts_per_type.begin(), send_counts_per_type.end(), std::back_inserter(rt_args));
+            std::copy(num_fwd_hops_per_type.begin(), num_fwd_hops_per_type.end(), std::back_inserter(rt_args));
+            std::copy(num_bwd_hops_per_type.begin(), num_bwd_hops_per_type.end(), std::back_inserter(rt_args));
+            std::copy(send_type_payload_sizes.begin(), send_type_payload_sizes.end(), std::back_inserter(rt_args));
 
+            // Add CB indices
+            rt_args.push_back(source_payload_cb_index);
+            rt_args.push_back(packet_header_cb_index);
+            rt_args.push_back(packet_header_cb_size_in_headers);
+
+            // Add fabric connection args
             build_connection_args(has_forward_connection, ttnn::ccl::EdmLineFabricOpInterface::FORWARD, rt_args);
             build_connection_args(has_backward_connection, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD, rt_args);
 

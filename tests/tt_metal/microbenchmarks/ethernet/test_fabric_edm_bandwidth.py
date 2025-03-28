@@ -191,7 +191,7 @@ def run_fabric_edm(
         logger.info("Error in running the test")
         assert False
 
-    zone_name_inner = "MAIN-WRITE-UNICAST-ZONE" if is_unicast else "MAIN-WRITE-MCAST-ZONE"
+    zone_name_inner = "MAIN-TEST-BODY"
     zone_name_main = "MAIN-TEST-BODY"
 
     num_messages = num_mcasts + num_unicasts
