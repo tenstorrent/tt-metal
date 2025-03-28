@@ -79,7 +79,7 @@ class ControlPlane {
 
        chip_id_t get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_coord) const;
 
-       bool validate_mesh_connections(mesh_id_t mesh_id) const;
+       void validate_mesh_connections(mesh_id_t mesh_id) const;
 
        std::vector<chip_id_t> get_mesh_physical_chip_ids(
            std::uint32_t mesh_ns_size,
