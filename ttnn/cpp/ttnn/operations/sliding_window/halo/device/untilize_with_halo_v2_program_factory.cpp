@@ -249,6 +249,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     uint32_t num_cores_x = 0;
     uint32_t semaphore_id = 0;
     uint32_t remote_temp_cb_id = 0;
+    std::vector<uint32_t> output_tensor_cores_x;
+    std::vector<uint32_t> output_tensor_cores_y;
     if (in_place) {
         int32_t in_out_buffer_start_delta = max_out_nsticks_per_core - input_npages;
         const auto delta =
@@ -268,16 +270,15 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             CBHandle remote_temp_cb = CreateCircularBuffer(program, all_cores, remote_temp_cb_config);
         }
 
-        // compute core data and create semaphore
-        auto core_id_to_noc_coords = [is_block_sharded, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
-            auto num_cores_x = device->compute_with_storage_grid_size().x;
-            auto core_coord = is_block_sharded ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id))
-                                               : CoreCoord(core_id % num_cores_x, core_id / num_cores_x);
-            return device->worker_core_from_logical_core(core_coord);
-        };
-        noc_00 = core_id_to_noc_coords(0);
-        num_cores_x = device->compute_with_storage_grid_size().x;
         semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+
+        const bool is_rm_orientation = input_tensor.shard_spec()->orientation == ShardOrientation::ROW_MAJOR;
+        const auto cores = corerange_to_cores(all_cores, std::nullopt, is_rm_orientation);
+        for (const auto& core : cores) {
+            auto worker = device->worker_core_from_logical_core(core);
+            output_tensor_cores_x.push_back(worker.x);
+            output_tensor_cores_y.push_back(worker.y);
+        }
     }
 
     auto aligned_input_nstick_nbytes = out_stick_nbytes;
@@ -306,8 +307,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         is_width_sharded,
         aligned_input_nstick_nbytes,
         true,
-        noc_00.x,
-        noc_00.y,
         ncores_nhw,
         ncores_c,
         num_cores_x,
@@ -340,6 +339,12 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});
+
+    std::vector<uint32_t> reader_rt_args;
+    reader_rt_args.insert(reader_rt_args.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
+    reader_rt_args.insert(reader_rt_args.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
+    SetRuntimeArgs(program, reader_kernel_id0, all_cores, reader_rt_args);
+    SetRuntimeArgs(program, reader_kernel_id1, all_cores, reader_rt_args);
 
     if (!capture_buffers) {
         padding_config_buffer1 = nullptr;
