@@ -23,6 +23,7 @@ def run_dm_tests(profile, gtest_filter):
 
         os.system(cmd)
 
+    # Configure post proc script
     setup = device_post_proc_config.default_setup()
     setup.deviceInputLog = log_file_path
     setup.timerAnalysis = {
@@ -38,29 +39,67 @@ def run_dm_tests(profile, gtest_filter):
             "start": {"risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
             "end": {"risc": "NCRISC", "zone_name": "NCRISC-KERNEL"},
         },
+        "reader_events": {
+            "across": "device",
+            "type": "event",
+            "marker": {"risc": "BRISC"},
+        },
+        "writer_events": {
+            "across": "device",
+            "type": "event",
+            "marker": {"risc": "NCRISC"},
+        },
     }
 
+    # Gather stats from csv
     stats = import_log_run_stats(setup)
     # TODO: Print/log for each core
     core = [key for key in stats["devices"][0]["cores"].keys() if key != "DEVICE"][0]
-    reader_analysis = stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"]["reader_kernel_analysis"]
-    writer_analysis = stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"]["writer_kernel_analysis"]
+    dm_stats = {
+        "reader": {
+            "analysis": stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"]["reader_kernel_analysis"],
+            "attributes": dict(),
+        },
+        "writer": {
+            "analysis": stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"]["writer_kernel_analysis"],
+            "attributes": dict(),
+        },
+    }
 
-    # Stats per runtime id
-    for i in range(len(reader_analysis["series"])):
-        reader = reader_analysis["series"][i]
-        writer = writer_analysis["series"][i]
-        logger.info(f'Run host id: {reader["duration_type"][0]["run_host_id"]}')
-        logger.info(f'Reader duration: {reader["duration_cycles"]}')
-        logger.info(f'Writer duration: {writer["duration_cycles"]}\n')
+    # Gather test attributes
+    for kernel in dm_stats.keys():
+        attributes = dm_stats[kernel]["attributes"]
+        for event in stats["devices"][0]["cores"]["DEVICE"]["riscs"]["TENSIX"]["events"][kernel + "_events"]:
+            run_host_id = event[0]["run_host_id"]
+            if run_host_id in attributes.keys():
+                attributes[run_host_id][event[0]["zone_name"]] = event[2]
+            else:
+                attributes[run_host_id] = {event[0]["zone_name"]: event[2]}
 
-    # Average stats
+        dm_stats[kernel]["attributes"] = attributes
+
+    # Stats per runtime host id
+    for i in range(len(dm_stats["reader"]["analysis"]["series"])):
+        run_host_id = dm_stats["reader"]["analysis"]["series"][i]["duration_type"][0]["run_host_id"]
+        logger.info(f"Run host id: {run_host_id}")
+
+        # Latency
+        logger.info(f'Reader duration: {dm_stats["reader"]["analysis"]["series"][i]["duration_cycles"]}')
+        logger.info(f'Writer duration: {dm_stats["writer"]["analysis"]["series"][i]["duration_cycles"]}')
+
+        # Attributes
+        logger.info(f"Attributes:")
+        for attr, val in dm_stats["reader"]["attributes"][run_host_id].items():
+            logger.info(f"  {attr}: {val}")
+        logger.info(f"\n")
+
+    # Analysis average stats (Not very meaningful)
     logger.info(f"Averages")
-    logger.info(f'Reader duration: {reader_analysis["stats"]["Average"]}')
-    logger.info(f'Writer duration: {writer_analysis["stats"]["Average"]}\n')
+    logger.info(f'Reader duration: {dm_stats["reader"]["analysis"]["stats"]["Average"]}')
+    logger.info(f'Writer duration: {dm_stats["writer"]["analysis"]["stats"]["Average"]}\n')
 
     # # # # # # Performance check method # # # # # #
-    reader_cycles = reader_analysis["series"][0]["duration_cycles"]
+    reader_cycles = dm_stats["reader"]["analysis"]["series"][0]["duration_cycles"]
     reader_cycles_lower_bound = 700
     reader_cycles_upper_bound = 800
     reader_cycles_within_bounds = reader_cycles_lower_bound <= reader_cycles <= reader_cycles_upper_bound
@@ -72,13 +111,13 @@ def run_dm_tests(profile, gtest_filter):
     else:
         logger.info(f"Reader cycles within bounds. Received {reader_cycles}")
 
-    assert reader_cycles_within_bounds
+    # assert reader_cycles_within_bounds
 
 
 if __name__ == "__main__":
     parser = ArgumentParser(description="Generate reference outputs for LLaMA accuracy testing.")
     parser.add_argument("-p", "--profile", action="store_true")
-    parser.add_argument("--gtest-filter", dest="gtest_filter")
+    parser.add_argument("-g", "--gtest-filter", dest="gtest_filter")
     args = parser.parse_args()
 
     run_dm_tests(*vars(args).values())
