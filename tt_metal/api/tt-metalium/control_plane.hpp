@@ -60,6 +60,8 @@ class ControlPlane {
        std::vector<chan_id_t> get_active_fabric_eth_channels_in_direction(
            mesh_id_t mesh_id, chip_id_t chip_id, RoutingDirection routing_direction) const;
 
+       eth_chan_directions get_eth_chan_direction(mesh_id_t mesh_id, chip_id_t chip_id, int chan) const;
+
    private:
        std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
        std::vector<std::vector<chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping_;
@@ -91,6 +93,7 @@ class ControlPlane {
 
        // Takes RoutingTableGenerator table and converts to routing tables for each ethernet port
        void convert_fabric_routing_table_to_chip_routing_table();
+       eth_chan_directions routing_direction_to_eth_direction(RoutingDirection direction) const;
 };
 
 }  // namespace tt::tt_fabric

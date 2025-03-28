@@ -1583,9 +1583,12 @@ FORCE_INLINE void noc_inline_dw_write_set_state(
 }
 
 // on BH this api can only write to stream register, writing to L1 will cause hangs!
-template <bool update_addr_lo = false, bool update_counter = true, bool posted = false>
+template <bool update_addr_lo = false, bool update_counter = true, bool posted = false, bool update_addr_hi = false>
 FORCE_INLINE void noc_inline_dw_write_with_state(
     uint32_t val, uint32_t addr = 0, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
+    // only either hi or lo address should be getting updated
+    static_assert("Error: Only High or Low address update is supported" && (update_addr_lo && update_addr_hi) == 0);
+
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if constexpr (update_counter) {
             if constexpr (posted) {
@@ -1600,6 +1603,8 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
     while (!noc_cmd_buf_ready(noc, cmd_buf));
     if constexpr (update_addr_lo) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, addr);
+    } else if constexpr (update_addr_hi) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, addr);
     }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
