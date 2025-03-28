@@ -104,7 +104,7 @@ jobs:
       os: ubuntu-22.04
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-  # Fabric Unit Tests
+  # Fabric Tests
   fabric-tests:
     needs: build-artifact
     secrets: inherit
