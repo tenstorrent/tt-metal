@@ -337,7 +337,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
 
     auto schedule = detail::distribute_work_evenly(
         input_shard_cores_per_device, num_workers_per_link * num_links, tiles_per_core_width, num_pages_per_packet);
-    auto atomic_inc_core = detail::find_atomic_inc_core(schedule);
     auto schedule_string = detail::schedule_to_string(schedule);
 
     // input sharded buffer
@@ -498,17 +497,9 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         return worker_cores;
     };
 
-    auto sender_atomic_inc_core = sender_cores.at(atomic_inc_core);
-    auto sender_atomic_inc_core_worker_core = to_worker_cores({sender_atomic_inc_core}).at(0);
-
     auto packet_bounding_box = packet_worker_cores_grid.bounding_box();
     auto packet_start_worker_core = to_worker_cores({packet_bounding_box.start_coord});
     auto packet_end_worker_core = to_worker_cores({packet_bounding_box.end_coord});
-
-    auto non_atomic_cores = sender_core_grid.subtract(sender_atomic_inc_core);
-    auto non_atomic_bounding_box = non_atomic_cores.bounding_box();
-    auto non_atomic_start_core = to_worker_cores({non_atomic_bounding_box.start_coord});
-    auto non_atomic_end_core = to_worker_cores({non_atomic_bounding_box.end_coord});
 
     std::vector<uint32_t> reader_compile_time_args = {
         input_tensor_cb_id,
@@ -567,19 +558,8 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         num_devices,
         input_page_size,
         output_cores_per_device,
-        packet_start_worker_core.at(0).x,
-        packet_start_worker_core.at(0).y,
-        packet_end_worker_core.at(0).x,
-        packet_end_worker_core.at(0).y,
         packet_receiver_worker_core.x,
         packet_receiver_worker_core.y,
-        sender_atomic_inc_core_worker_core.x,
-        sender_atomic_inc_core_worker_core.y,
-        sender_cores.size(),
-        non_atomic_start_core.at(0).x,
-        non_atomic_start_core.at(0).y,
-        non_atomic_end_core.at(0).x,
-        non_atomic_end_core.at(0).y,
     };
 
     auto writer_defines = reader_defines;
@@ -608,7 +588,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
 
     uint32_t offset_for_input = chip_id * input_shard_cores_per_device * tiles_per_core_width;
     uint32_t local_page = 0;
-    uint32_t reader_receiver_for_device_id = 0;
 
     std::vector<uint32_t> reader_runtime_args = {
         cross_device_semaphore->address(), local_semaphore, false, false, 0, false, 0, 0};
@@ -622,16 +601,15 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     uint32_t is_writer_sender_core_idx = 2;
     uint32_t is_writer_worker_core_idx = 3;
     uint32_t is_linear_output_page_start_idx = 4;
-    uint32_t is_atomic_inc_core_idx = 5;
-    uint32_t writer_sender_packet_start_idx = 6;
-    uint32_t writer_sender_packet_end_idx = 7;
+    uint32_t writer_sender_packet_start_idx = 5;
+    uint32_t writer_sender_packet_end_idx = 6;
 
     uint32_t sender_packet_start = 0;
     uint32_t sender_core_idx = 0;
 
     for (auto core : all_cores) {
         std::vector<uint32_t> writer_runtime_args = {
-            cross_device_semaphore->address(), local_semaphore, false, false, 0, false, 0, 0};
+            cross_device_semaphore->address(), local_semaphore, false, false, 0, 0, 0};
 
         if (sender_core_grid.contains(core)) {
             reader_runtime_args[is_reader_sender_core_idx] = true;
@@ -644,12 +622,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
             writer_runtime_args[is_writer_worker_core_idx] = false;
             writer_runtime_args[writer_sender_packet_start_idx] = sender_packet_start;
             writer_runtime_args[writer_sender_packet_end_idx] = sender_packet_start + schedule[sender_core_idx].size();
-
-            if (core == sender_atomic_inc_core) {
-                writer_runtime_args[is_atomic_inc_core_idx] = true;
-            } else {
-                writer_runtime_args[is_atomic_inc_core_idx] = false;
-            }
 
             sender_packet_start += schedule[sender_core_idx].size();
             sender_core_idx++;

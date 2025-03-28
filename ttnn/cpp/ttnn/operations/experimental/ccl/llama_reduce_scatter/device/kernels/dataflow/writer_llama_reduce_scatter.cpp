@@ -48,19 +48,8 @@ void kernel_main() {
     constexpr uint32_t num_devices = get_compile_time_arg_val(11);
     constexpr uint32_t page_size_bytes = get_compile_time_arg_val(12);
     constexpr uint32_t output_cores_per_device = get_compile_time_arg_val(13);
-    constexpr uint32_t noc_start_x = get_compile_time_arg_val(14);
-    constexpr uint32_t noc_start_y = get_compile_time_arg_val(15);
-    constexpr uint32_t noc_end_x = get_compile_time_arg_val(16);
-    constexpr uint32_t noc_end_y = get_compile_time_arg_val(17);
-    constexpr uint32_t packet_receiver_core_x = get_compile_time_arg_val(18);
-    constexpr uint32_t packet_receiver_core_y = get_compile_time_arg_val(19);
-    constexpr uint32_t sender_atomic_inc_core_x = get_compile_time_arg_val(20);
-    constexpr uint32_t sender_atomic_inc_core_y = get_compile_time_arg_val(21);
-    constexpr uint32_t num_sender_cores = get_compile_time_arg_val(22);
-    constexpr uint32_t sender_noc_start_x = get_compile_time_arg_val(23);
-    constexpr uint32_t sender_noc_start_y = get_compile_time_arg_val(24);
-    constexpr uint32_t sender_noc_end_x = get_compile_time_arg_val(25);
-    constexpr uint32_t sender_noc_end_y = get_compile_time_arg_val(26);
+    constexpr uint32_t packet_receiver_core_x = get_compile_time_arg_val(14);
+    constexpr uint32_t packet_receiver_core_y = get_compile_time_arg_val(15);
 
     // Derived compile-time constants
     constexpr uint32_t input_tensor_cores = input_shard_cores_per_device * num_devices;
@@ -71,8 +60,6 @@ void kernel_main() {
             ? num_pages_per_packet
             : input_shard_cores_per_device * tiles_per_core_width % num_pages_per_packet;
     constexpr size_t packet_header_size = sizeof(PACKET_HEADER_TYPE);
-    constexpr uint32_t num_dests =
-        ((sender_noc_end_x - sender_noc_start_x + 1) * (sender_noc_end_y - sender_noc_start_y + 1));
 
     // Precomputed constants for better optimization
     constexpr uint32_t chip_id_offset = chip_id * num_pages_per_packet * page_size_bytes;
@@ -90,7 +77,6 @@ void kernel_main() {
     bool sender_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     bool worker_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t linear_output_page_start_idx = get_arg_val<uint32_t>(rt_arg_idx++);
-    bool is_atomic_inc_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_packet_start = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_packet_end = get_arg_val<uint32_t>(rt_arg_idx++);
 
