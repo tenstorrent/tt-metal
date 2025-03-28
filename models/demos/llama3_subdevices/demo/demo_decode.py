@@ -517,38 +517,22 @@ def run_llama3_demo(
             False,  # stress_test
         ),
         (  # Stress test: batch-32 very long generations but at same token index
-            
             "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
             32,  # batch_size
-            4*128*1024,  # max_generated_tokens (same index for stress test)
+            4 * 128 * 1024,  # max_generated_tokens (same index for stress test)
             False,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
         ),
-        (  # 10 layers for devive perf measurements
-            "random",
-            10,
-            "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
-            True,  # instruct mode
-            1,  # repeat_batches
-            1024,  # max_seq_len
-            32,  # batch_size
-            1,  # max_generated_tokens
-            False,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
-            {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
-            False,  # stress_test
-        ),
     ],
     ids=[
         "full",  # full demo
-        "quick", # 1L demo
+        "quick",  # 1L demo
         "stress-test",  # stress test with many iterations and same token index, full model
-        "measure-device-perf",  # 10L demo for device performance measurements
     ],
 )
 @pytest.mark.parametrize(
