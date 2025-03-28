@@ -194,47 +194,9 @@ inline void fabric_async_write_add_header(
     tt_fabric_add_header_checksum(packet_header);
 }
 
-#ifdef FVC_MODE_PULL
-// Write packetized data over fabric to dst_mesh, dst_dev.
-// Packet is at src_addr in sender L1.
-template <
-    ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA,
-    AsyncWriteMode mode = AsyncWriteMode::ALL,
-    RoutingType routing_type = RoutingType::ROUTER_XY>
-inline void fabric_async_write(
-    volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface,
-    uint32_t routing,   // routing refers to the router noc xy to use when using ROUTER_XY,
-                        // and the routing plane to use when using ROUTING_TABLE
-    uint32_t src_addr,  // source address in sender’s memory
-    uint16_t dst_mesh_id,
-    uint16_t dst_dev_id,
-    uint64_t dst_addr,
-    uint32_t size,  // number of bytes to write to remote destination
-    uint32_t header_id = 0) {
-    if constexpr (mode & AsyncWriteMode::ADD_HEADER) {
-        fabric_async_write_add_header<decltype(client_interface), data_mode>(
-            client_interface, src_addr, dst_mesh_id, dst_dev_id, dst_addr, size, header_id);
-    }
-
-    if constexpr (mode & AsyncWriteMode::ADD_PR) {
-        if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
-            fabric_setup_pull_request<data_mode>(client_interface, src_addr, size);
-        } else {
-            fabric_setup_pull_request<data_mode>(client_interface, src_addr, size - PACKET_HEADER_SIZE_BYTES);
-        }
-    }
-
-    if constexpr (mode & AsyncWriteMode::SEND_PR) {
-        fabric_send_pull_request<data_mode, routing_type>(
-            client_interface, routing, dst_mesh_id, dst_dev_id, header_id);
-    }
-}
-#else
+template <typename T>
 inline void fabric_client_connect(
-    volatile tt_l1_ptr fabric_push_client_interface_t* client_interface,
-    int32_t routing_plane,
-    uint16_t dst_mesh_id,
-    uint16_t dst_dev_id) {
+    T client_interface, int32_t routing_plane, uint16_t dst_mesh_id, uint16_t dst_dev_id) {
     static_assert(
         std::is_same_v<std::remove_pointer_t<std::remove_volatile_t<T>>, fabric_push_client_interface_t>,
         "T must be volatile fabric_push_client_interface_t*");

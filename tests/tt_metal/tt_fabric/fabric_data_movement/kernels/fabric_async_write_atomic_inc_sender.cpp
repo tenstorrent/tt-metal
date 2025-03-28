@@ -54,7 +54,7 @@ void kernel_main() {
 
         fabric_wait_for_pull_request_flushed(client_interface);
     } else {
-        fabric_client_router_reserve<volatile ClientInterfaceType>(client_interface, 0, dst_mesh_id, dst_device_id);
+        fabric_client_connect<volatile ClientInterfaceType>(client_interface, 0, dst_mesh_id, dst_device_id);
         fabric_async_write_atomic_inc<
             volatile ClientInterfaceType,
             (ClientDataMode)data_mode,

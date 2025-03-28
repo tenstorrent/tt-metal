@@ -25,9 +25,9 @@ inline void send_packet(
     uint64_t dst_addr,
     uint32_t size) {
 #ifdef FVC_MODE_PULL
-    fabric_async_write<ClientDataMode::PACKETIZED_DATA, AsyncWriteMode::ALL, RoutingType::ROUTING_TABLE>(
+    fabric_async_write<T, ClientDataMode::PACKETIZED_DATA, AsyncWriteMode::ALL, RoutingType::ROUTING_TABLE>(
 #else
-    fabric_async_write<ClientDataMode::PACKETIZED_DATA, AsyncWriteMode::ALL>(
+    fabric_async_write<T, ClientDataMode::PACKETIZED_DATA, AsyncWriteMode::ALL>(
 #endif
         client_interface, routing_plane, src_addr, dst_mesh_id, dst_dev_id, dst_addr, size);
 
