@@ -12,8 +12,8 @@ from models.utility_functions import (
     divup,
 )
 
-from models.experimental.functional_vit.tt import ttnn_optimized_sharded_vit_wh
-from models.experimental.vit.vit_helper_funcs import get_data_loader, get_batch
+from models.demos.vit.tt import ttnn_optimized_sharded_vit_wh
+from models.demos.wormhole.vit.demo.vit_helper_funcs import get_data_loader, get_batch
 import transformers
 from transformers import AutoImageProcessor
 
