@@ -23,22 +23,37 @@ void MAIN {
     tilize_init_short(tt::CBIndex::c_0, per_core_block_tile_cnt, tt::CBIndex::c_16);
 #endif
 
-    for (uint32_t b = 0; b < per_core_block_cnt; ++b) {
-#ifndef LLK_TILIZE_PERF
-        cb_wait_front(tt::CBIndex::c_0, per_core_block_tile_cnt);
-        cb_reserve_back(tt::CBIndex::c_16, per_core_block_tile_cnt);
+// If LLK perf is measured on OP level put profiler zone around complete operation
+#ifdef LLK_PERF_OP
+    {
+        DeviceZoneScopedN("TILIZE-OP")
 #endif
-        {
-            DeviceZoneScopedN("TILIZE-BLOCK");
-
-            tilize_block(tt::CBIndex::c_0, per_core_block_tile_cnt, tt::CBIndex::c_16);
+            for (uint32_t b = 0; b < per_core_block_cnt; ++b) {
+// If LLK perf is measured disable sync with DM cores/kernels
+#ifndef LLK_TILIZE_PERF
+            cb_wait_front(tt::CBIndex::c_0, per_core_block_tile_cnt);
+            cb_reserve_back(tt::CBIndex::c_16, per_core_block_tile_cnt);
+#endif
+// If LLK perf is measured on block level put profiler zone around *_block operation
+#ifdef LLK_PERF_BLOCK
+            {
+                DeviceZoneScopedN("TILIZE-BLOCK");
+#endif
+                tilize_block(tt::CBIndex::c_0, per_core_block_tile_cnt, tt::CBIndex::c_16);
+// If LLK perf is measured on block level put profiler zone around *_block operation
+#ifdef LLK_PERF_BLOCK
+            }
+#endif
+// If LLK perf is measured disable sync with DM cores/kernels
+#ifndef LLK_TILIZE_PERF
+            cb_push_back(tt::CBIndex::c_16, per_core_block_tile_cnt);
+            cb_pop_front(tt::CBIndex::c_0, per_core_block_tile_cnt);
+#endif
         }
-
-#ifndef LLK_TILIZE_PERF
-        cb_push_back(tt::CBIndex::c_16, per_core_block_tile_cnt);
-        cb_pop_front(tt::CBIndex::c_0, per_core_block_tile_cnt);
-#endif
+// If LLK perf is measured on OP level put profiler zone around complete operation
+#ifdef LLK_PERF_OP
     }
+#endif
 
     tilize_uninit(tt::CBIndex::c_0, tt::CBIndex::c_16);
 }
