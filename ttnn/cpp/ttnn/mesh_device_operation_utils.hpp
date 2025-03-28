@@ -10,8 +10,9 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/program_cache.hpp>
+#include <tt_stl/overloaded.hpp>
 
-#include "overloaded.hpp"
+#include "ttnn/core.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation_concepts.hpp"
@@ -19,7 +20,7 @@
 namespace ttnn::device_operation::mesh_device_operation_utils {
 
 template <typename T>
-using CachedMeshWorkload = tt::tt_metal::program_cache::detail::CachedMeshWorkload<T>;
+using AdaptedCachedMeshWorkload = tt::tt_metal::program_cache::detail::AdaptedCachedMeshWorkload<T>;
 
 // Determines if the device operation and a given program factory use heterogenous dispatch (constructing a single
 // program for the entire mesh workload, or creating a program for each device within the mesh).
@@ -104,147 +105,63 @@ std::vector<ttnn::MeshCoordinate> extract_tensor_coordinates(const TensorArgs& t
     return tensor_coordinates;
 }
 
-// Apply override_runtime_arguments in a uniform way across different program factory interfaces because
+// Sets runtime ID for all programs in `workload`.
+inline void set_runtime_id(tt::tt_metal::distributed::MeshWorkload& workload, ttnn::MeshDevice* mesh_device) {
+    for (auto& [_, program] : workload.get_programs()) {
+        program.set_runtime_id(ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id());
+    }
+}
+
+// Tracks all programs in `workload` and returns true if any program was hooked.
+inline bool track_workload(tt::tt_metal::distributed::MeshWorkload& workload, ttnn::MeshDevice* mesh_device) {
+    bool hook_program = false;
+    for (auto& [_, program] : workload.get_programs()) {
+        tt::tt_metal::GraphTracker::instance().track_program(&program, mesh_device);
+        hook_program |= tt::tt_metal::GraphTracker::instance().hook_program(&program);
+    }
+    return hook_program;
+}
+
+// Applies override_runtime_arguments in a uniform way across different program factory interfaces because
 // we have many different program factory interfaces we're currently supporting.
 template <
-    ProgramFactoryConcept ConcreteProgramFactory,
+    ProgramFactoryConcept ProgramFactory,
     typename OperationAttributes,
     typename TensorArgs,
     typename TensorReturnValue>
 void apply_override_runtime_arguments(
-    const ConcreteProgramFactory& factory,
+    const ProgramFactory& factory,
     tt::tt_metal::Program& program,
-    typename ConcreteProgramFactory::shared_variables_t& shared_vars,
+    typename ProgramFactory::shared_variables_t& shared_vars,
     const OperationAttributes& attrs,
     const ttnn::MeshCoordinate& coord,
     const TensorArgs& tensor_args,
     TensorReturnValue& return_value) {
     if constexpr (
         requires {
-            typename ConcreteProgramFactory::cached_program_t;
+            typename ProgramFactory::cached_program_t;
             factory.override_runtime_arguments(
-                std::declval<typename ConcreteProgramFactory::cached_program_t&>(), attrs, tensor_args, return_value);
+                std::declval<typename ProgramFactory::cached_program_t&>(), attrs, tensor_args, return_value);
         } ||
         requires {
-            typename ConcreteProgramFactory::cached_program_t;
+            typename ProgramFactory::cached_program_t;
             factory.override_runtime_arguments_at(
-                std::declval<typename ConcreteProgramFactory::cached_program_t&>(),
-                attrs,
-                coord,
-                tensor_args,
-                return_value);
+                std::declval<typename ProgramFactory::cached_program_t&>(), attrs, coord, tensor_args, return_value);
         }) {
         // Proxy references to `program` and `shared_vars` as a `CachedProgram` object.
-        auto cached_program_proxy = ConcreteProgramFactory::cached_program_t::proxy(program, shared_vars);
-        if constexpr (requires { &ConcreteProgramFactory::override_runtime_arguments_at; }) {
+        auto cached_program_proxy = ProgramFactory::cached_program_t::proxy(program, shared_vars);
+        if constexpr (requires { &ProgramFactory::override_runtime_arguments_at; }) {
             factory.override_runtime_arguments_at(cached_program_proxy, attrs, coord, tensor_args, return_value);
         } else {
             factory.override_runtime_arguments(cached_program_proxy, attrs, tensor_args, return_value);
         }
     } else {
-        if constexpr (requires { &ConcreteProgramFactory::override_runtime_arguments_at; }) {
+        if constexpr (requires { &ProgramFactory::override_runtime_arguments_at; }) {
             factory.override_runtime_arguments_at(program, shared_vars, attrs, coord, tensor_args, return_value);
         } else {
             factory.override_runtime_arguments(program, shared_vars, attrs, tensor_args, return_value);
         }
     }
-}
-
-template <
-    ProgramFactoryConcept ConcreteProgramFactory,
-    typename OperationAttributes,
-    typename TensorArgs,
-    typename TensorReturnValue>
-CachedMeshWorkload<typename ConcreteProgramFactory::shared_variables_t> create_mesh_workload(
-    ttnn::MeshDevice* mesh_device,
-    const OperationAttributes& attrs,
-    const TensorArgs& tensor_args,
-    TensorReturnValue& tensor_return_value) {
-    ConcreteProgramFactory program_factory;
-    using shared_vars_t = typename ConcreteProgramFactory::shared_variables_t;
-
-    tt::tt_metal::distributed::MeshWorkload mesh_workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_vars_t> shared_variables;
-
-    auto make_program = [&](const ttnn::MeshCoordinate& coord) {
-        if constexpr (requires { &ConcreteProgramFactory::create; }) {
-            return program_factory.create(attrs, tensor_args, tensor_return_value);
-        } else {
-            return program_factory.create_at(attrs, coord, tensor_args, tensor_return_value);
-        }
-    };
-
-    // Fast path - create a single program for all devices.
-    // No customization and uniform tensor storage spanning all devices.
-    if (!uses_heterogenous_dispatch<ConcreteProgramFactory>(attrs) &&
-        mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
-        const ttnn::MeshCoordinateRange mesh_coordinate_range(mesh_device->shape());
-        auto cached_program = make_program(ttnn::MeshCoordinate(0, 0));
-        mesh_workload.add_program(mesh_coordinate_range, std::move(cached_program.program));
-        shared_variables[mesh_coordinate_range] = std::move(cached_program.shared_variables);
-        return CachedMeshWorkload<shared_vars_t>{std::move(mesh_workload), std::move(shared_variables)};
-    } else {
-        // Create separate programs for each device.
-        for (const auto& coord : extract_tensor_coordinates(tensor_args)) {
-            auto cached_program = make_program(coord);
-            const ttnn::MeshCoordinateRange coordinate_range(coord, coord);
-            mesh_workload.add_program(coordinate_range, std::move(cached_program.program));
-            shared_variables[coordinate_range] = std::move(cached_program.shared_variables);
-        }
-    }
-
-    return CachedMeshWorkload<shared_vars_t>{std::move(mesh_workload), std::move(shared_variables)};
-}
-
-template <
-    MeshWorkloadFactoryConcept ConcreteProgramFactory,
-    typename OperationAttributes,
-    typename TensorArgs,
-    typename TensorReturnValue>
-CachedMeshWorkload<typename ConcreteProgramFactory::shared_variables_t> create_mesh_workload(
-    ttnn::MeshDevice* mesh_device,
-    const OperationAttributes& attrs,
-    const TensorArgs& tensor_args,
-    TensorReturnValue& tensor_return_value) {
-    return ConcreteProgramFactory{}.create_mesh_workload(
-        attrs, extract_tensor_coordinates(tensor_args), tensor_args, tensor_return_value);
-}
-
-template <
-    ProgramFactoryConcept ConcreteProgramFactory,
-    typename OperationAttributes,
-    typename TensorArgs,
-    typename TensorReturnValue>
-void override_mesh_runtime_arguments(
-    CachedMeshWorkload<typename ConcreteProgramFactory::shared_variables_t>& cached_workload,
-    ttnn::MeshDevice* mesh_device,
-    const OperationAttributes& attrs,
-    const TensorArgs& tensor_args,
-    TensorReturnValue& tensor_return_value) {
-    ConcreteProgramFactory program_factory;
-
-    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        auto& shared_variables = cached_workload.shared_variables.at(coordinate_range);
-
-        for (const auto& coord : coordinate_range) {
-            apply_override_runtime_arguments(
-                program_factory, program, shared_variables, attrs, coord, tensor_args, tensor_return_value);
-        }
-    }
-}
-
-template <
-    MeshWorkloadFactoryConcept ConcreteProgramFactory,
-    typename OperationAttributes,
-    typename TensorArgs,
-    typename TensorReturnValue>
-void override_mesh_runtime_arguments(
-    CachedMeshWorkload<typename ConcreteProgramFactory::shared_variables_t>& cached_workload,
-    ttnn::MeshDevice* mesh_device,
-    const OperationAttributes& attrs,
-    const TensorArgs& tensor_args,
-    TensorReturnValue& tensor_return_value) {
-    ConcreteProgramFactory{}.override_runtime_arguments(cached_workload, attrs, tensor_args, tensor_return_value);
 }
 
 }  // namespace ttnn::device_operation::mesh_device_operation_utils

@@ -10,7 +10,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_impl.hpp>
 #include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt_stl/reflection.hpp>
+
 #include "ttnn/config.hpp"
 #include "ttnn/distributed/types.hpp"
 
@@ -45,12 +47,23 @@ struct CacheableProgram {
 };
 
 template <typename OutputTensors = Tensors>
+using OverrideRuntimeArgumentsWorkloadCallback = std::function<void(
+    const void* operation,
+    distributed::MeshWorkload&,
+    const Tensors&,
+    const OptionalConstTensors&,
+    const OutputTensors&)>;
+
+template <typename OutputTensors = Tensors>
 struct CacheableMeshWorkload {
     distributed::MeshWorkload workload;
 
-    // Callbacks will be called for each program in the workload.
-    std::optional<OverrideAddressesCallback> override_addresses_callback = std::nullopt;
-    std::optional<OverrideRuntimeArgumentsCallback<OutputTensors>> override_runtime_arguments_callback = std::nullopt;
+    // Either one of these callbacks can be set, but not both.
+    // TODO: #19569 - `per_program_callbacks` is used to assist old infra migration, which relied on per-program
+    // callbacks. This needs to be removed
+    std::optional<OverrideRuntimeArgumentsWorkloadCallback<OutputTensors>> workload_callback = std::nullopt;
+    std::unordered_map<ttnn::MeshCoordinateRange, OverrideRuntimeArgumentsCallback<OutputTensors>>
+        per_program_callbacks;
 };
 
 template <typename... Args>
@@ -561,10 +574,25 @@ public:
         const Tensors& input_tensors,
         const OptionalConstTensors& optional_input_tensors,
         OutputTensors& output_tensors) const {
-        return this->override_runtime_arguments_impl_(
+        return this->override_runtime_arguments_program_impl_(
             this->type_erased_storage,
             override_runtime_arguments_callback,
             program,
+            input_tensors,
+            optional_input_tensors,
+            output_tensors);
+    }
+
+    void override_runtime_arguments(
+        OverrideRuntimeArgumentsWorkloadCallback<OutputTensors>& override_runtime_arguments_callback,
+        distributed::MeshWorkload& workload,
+        const Tensors& input_tensors,
+        const OptionalConstTensors& optional_input_tensors,
+        OutputTensors& output_tensors) const {
+        return this->override_runtime_arguments_workload_impl_(
+            this->type_erased_storage,
+            override_runtime_arguments_callback,
+            workload,
             input_tensors,
             optional_input_tensors,
             output_tensors);
@@ -722,16 +750,28 @@ public:
                OutputTensors& output_tensors) -> CacheableProgram<OutputTensors> {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
                 if constexpr (detail::implements_create_program_at<T>()) {
-                    TT_ASSERT(optional_input_tensors.empty());
+                    TT_FATAL(
+                        optional_input_tensors.empty(),
+                        "Optional input tensors not supported by {}",
+                        tt::stl::get_type_name<T>());
                     return operation.create_program_at(mesh_coord, input_tensors, output_tensors);
                 } else if constexpr (detail::implements_create_program<T>()) {
-                    TT_ASSERT(optional_input_tensors.empty());
+                    TT_FATAL(
+                        optional_input_tensors.empty(),
+                        "Optional input tensors not supported by {}",
+                        tt::stl::get_type_name<T>());
                     return operation.create_program(input_tensors, output_tensors);
                 } else if constexpr (detail::implements_create_program_with_optional_input_tensors<T>()) {
-                    TT_ASSERT(not optional_input_tensors.empty());
+                    TT_FATAL(
+                        not optional_input_tensors.empty(),
+                        "Non-optional input tensors not supported by {}",
+                        tt::stl::get_type_name<T>());
                     return operation.create_program(input_tensors, optional_input_tensors, output_tensors);
                 } else if constexpr (detail::implements_create_program_at_with_optional_input_tensors<T>()) {
-                    TT_ASSERT(not optional_input_tensors.empty());
+                    TT_FATAL(
+                        not optional_input_tensors.empty(),
+                        "Non-optional input tensors not supported by {}",
+                        tt::stl::get_type_name<T>());
                     return operation.create_program_at(
                         mesh_coord, input_tensors, optional_input_tensors, output_tensors);
                 } else {
@@ -746,10 +786,16 @@ public:
                OutputTensors& output_tensors) -> CacheableMeshWorkload<OutputTensors> {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
                 if constexpr (detail::implements_create_mesh_workload<T>()) {
-                    TT_ASSERT(optional_input_tensors.empty());
+                    TT_FATAL(
+                        optional_input_tensors.empty(),
+                        "Optional input tensors not supported by {}",
+                        tt::stl::get_type_name<T>());
                     return operation.create_mesh_workload(mesh_coords, input_tensors, output_tensors);
                 } else if constexpr (detail::implements_create_mesh_workload_with_optional_input_tensors<T>()) {
-                    TT_ASSERT(not optional_input_tensors.empty());
+                    TT_FATAL(
+                        not optional_input_tensors.empty(),
+                        "Non-optional input tensors not supported by {}",
+                        tt::stl::get_type_name<T>());
                     return operation.create_mesh_workload(
                         mesh_coords, input_tensors, optional_input_tensors, output_tensors);
                 } else {
@@ -769,16 +815,25 @@ public:
                         input_tensors, output_tensors, 1);  // TODO: account for optional_input_tensors
                 }
             }},
-        override_runtime_arguments_impl_{
+        override_runtime_arguments_program_impl_{
             [](const storage_t& storage,
-               OverrideRuntimeArgumentsCallback<OutputTensors>& override_runtime_arguments_callback,
+               OverrideRuntimeArgumentsCallback<OutputTensors>& callback,
                Program& program,
                const Tensors& input_tensors,
                const OptionalConstTensors& optional_input_tensors,
                OutputTensors& output_tensors) -> void {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
-                override_runtime_arguments_callback(
-                    &operation, program, input_tensors, optional_input_tensors, output_tensors);
+                callback(&operation, program, input_tensors, optional_input_tensors, output_tensors);
+            }},
+        override_runtime_arguments_workload_impl_{
+            [](const storage_t& storage,
+               OverrideRuntimeArgumentsWorkloadCallback<OutputTensors>& callback,
+               distributed::MeshWorkload& workload,
+               const Tensors& input_tensors,
+               const OptionalConstTensors& optional_input_tensors,
+               OutputTensors& output_tensors) -> void {
+                const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
+                callback(&operation, workload, input_tensors, optional_input_tensors, output_tensors);
             }},
         compute_program_hash_impl_{
             [](const storage_t& storage,
@@ -790,25 +845,37 @@ public:
                     static_assert(
                         detail::implements_create_program<T>() || detail::implements_create_program_at<T>() ||
                         detail::implements_create_mesh_workload<T>());
-                    TT_ASSERT(optional_input_tensors.empty());
+                    TT_FATAL(
+                        optional_input_tensors.empty(),
+                        "Optional input tensors not supported by {}",
+                        tt::stl::get_type_name<T>());
                     return operation.compute_program_hash(input_tensors);
                 } else if constexpr (detail::implements_compute_program_hash_with_optional_input_tensors<T>()) {
                     static_assert(
                         detail::implements_create_program_with_optional_input_tensors<T>() ||
                         detail::implements_create_program_at_with_optional_input_tensors<T>() ||
                         detail::implements_create_mesh_workload_with_optional_input_tensors<T>());
-                    TT_ASSERT(not optional_input_tensors.empty());
+                    TT_FATAL(
+                        not optional_input_tensors.empty(),
+                        "Non-optional input tensors not supported by {}",
+                        tt::stl::get_type_name<T>());
                     return operation.compute_program_hash(input_tensors, optional_input_tensors);
                 } else if constexpr (
                     detail::implements_create_program<T>() || detail::implements_create_program_at<T>() ||
                     detail::implements_create_mesh_workload<T>()) {
-                    TT_ASSERT(optional_input_tensors.empty());
+                    TT_FATAL(
+                        optional_input_tensors.empty(),
+                        "Optional input tensors not supported by {}",
+                        tt::stl::get_type_name<T>());
                     return hash_operation<T>(operation, input_tensors);
                 } else if constexpr (
                     detail::implements_create_program_with_optional_input_tensors<T>() ||
                     detail::implements_create_program_at_with_optional_input_tensors<T>() ||
                     detail::implements_create_mesh_workload_with_optional_input_tensors<T>()) {
-                    TT_ASSERT(not optional_input_tensors.empty());
+                    TT_FATAL(
+                        not optional_input_tensors.empty(),
+                        "Non-optional input tensors not supported by {}",
+                        tt::stl::get_type_name<T>());
                     return hash_operation<T>(operation, input_tensors, optional_input_tensors);
                 } else {
                     static_assert(
@@ -830,6 +897,14 @@ public:
                    detail::implements_create_program_at_with_optional_input_tensors<T>();
         }},
         has_create_workload_method_impl_{[]() -> bool {
+            // Operation must implement exactly one of the `create_program` or `create_mesh_workload` methods.
+            static_assert(
+                (detail::implements_create_mesh_workload<T>() ||
+                 detail::implements_create_mesh_workload_with_optional_input_tensors<T>()) !=
+                (detail::implements_create_program<T>() ||  //
+                 detail::implements_create_program_at<T>() ||
+                 detail::implements_create_program_with_optional_input_tensors<T>() ||
+                 detail::implements_create_program_at_with_optional_input_tensors<T>()));
             return detail::implements_create_mesh_workload<T>() ||
                    detail::implements_create_mesh_workload_with_optional_input_tensors<T>();
         }},
@@ -862,7 +937,8 @@ public:
         create_program_at_impl_{other.create_program_at_impl_},
         create_mesh_workload_impl_{other.create_mesh_workload_impl_},
         create_op_performance_model_impl_{other.create_op_performance_model_impl_},
-        override_runtime_arguments_impl_{other.override_runtime_arguments_impl_},
+        override_runtime_arguments_program_impl_{other.override_runtime_arguments_program_impl_},
+        override_runtime_arguments_workload_impl_{other.override_runtime_arguments_workload_impl_},
         uses_custom_program_hash_impl_{other.uses_custom_program_hash_impl_},
         uses_heterogenous_dispatch_impl_{other.uses_heterogenous_dispatch_impl_},
         has_create_workload_method_impl_{other.has_create_workload_method_impl_},
@@ -887,7 +963,8 @@ public:
             this->create_program_at_impl_ = other.create_program_at_impl_;
             this->create_mesh_workload_impl_ = other.create_mesh_workload_impl_;
             this->create_op_performance_model_impl_ = other.create_op_performance_model_impl_;
-            this->override_runtime_arguments_impl_ = other.override_runtime_arguments_impl_;
+            this->override_runtime_arguments_program_impl_ = other.override_runtime_arguments_program_impl_;
+            this->override_runtime_arguments_workload_impl_ = other.override_runtime_arguments_workload_impl_;
             this->uses_custom_program_hash_impl_ = other.uses_custom_program_hash_impl_;
             this->uses_heterogenous_dispatch_impl_ = other.uses_heterogenous_dispatch_impl_;
             this->has_create_workload_method_impl_ = other.has_create_workload_method_impl_;
@@ -910,7 +987,8 @@ public:
         create_program_at_impl_{other.create_program_at_impl_},
         create_mesh_workload_impl_{other.create_mesh_workload_impl_},
         create_op_performance_model_impl_{other.create_op_performance_model_impl_},
-        override_runtime_arguments_impl_{other.override_runtime_arguments_impl_},
+        override_runtime_arguments_program_impl_{other.override_runtime_arguments_program_impl_},
+        override_runtime_arguments_workload_impl_{other.override_runtime_arguments_workload_impl_},
         uses_custom_program_hash_impl_{other.uses_custom_program_hash_impl_},
         uses_heterogenous_dispatch_impl_{other.uses_heterogenous_dispatch_impl_},
         has_create_workload_method_impl_{other.has_create_workload_method_impl_},
@@ -980,10 +1058,17 @@ private:
 
     OpPerformanceModelGeneral<OutputTensors> (*create_op_performance_model_impl_)(
         const storage_t& value, const Tensors&, const std::vector<std::optional<const Tensor>>&, OutputTensors&);
-    void (*override_runtime_arguments_impl_)(
+    void (*override_runtime_arguments_program_impl_)(
         const storage_t& value,
         OverrideRuntimeArgumentsCallback<OutputTensors>&,
         Program&,
+        const Tensors&,
+        const std::vector<std::optional<const Tensor>>&,
+        OutputTensors&);
+    void (*override_runtime_arguments_workload_impl_)(
+        const storage_t& value,
+        OverrideRuntimeArgumentsWorkloadCallback<OutputTensors>&,
+        distributed::MeshWorkload&,
         const Tensors&,
         const std::vector<std::optional<const Tensor>>&,
         OutputTensors&);
