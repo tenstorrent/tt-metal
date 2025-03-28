@@ -50,6 +50,9 @@ void kernel_main() {
 #else
     fvc_inbound_push_state_t fvc_inbound_state;
     fvc_outbound_push_state_t fvc_outbound_state[4];
+    volatile tt_l1_ptr fabric_push_client_queue_t* client_queue =
+        reinterpret_cast<tt_l1_ptr fabric_push_client_queue_t*>(FABRIC_ROUTER_CLIENT_QUEUE_START);
+    zero_l1_buf((tt_l1_ptr uint32_t*)client_queue, sizeof(fabric_push_client_queue_t));
 #endif
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 

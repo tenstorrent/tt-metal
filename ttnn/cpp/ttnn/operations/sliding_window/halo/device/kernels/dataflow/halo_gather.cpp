@@ -89,19 +89,19 @@ void kernel_main() {
     constexpr uint32_t padding_config_cb_id = get_compile_time_arg_val(0);  // has untilized input shard
     constexpr uint32_t local_config_cb_id = get_compile_time_arg_val(1);    // has untilized input shard
     constexpr uint32_t remote_config_cb_id = get_compile_time_arg_val(2);   // has untilized input shard
-    constexpr uint32_t src_cb_id = get_compile_time_arg_val(4);             // has untilized input shard
-    constexpr uint32_t in_cb_id = get_compile_time_arg_val(5);              // has untilized input shard
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(6);     // output shard with padding and halo goes here
-    constexpr uint32_t pad_cb_id = get_compile_time_arg_val(7);     // cb for const pad val buffer
-    constexpr uint32_t pad_val_u32 = get_compile_time_arg_val(8);   // pad value to fill pad buffer with
-    constexpr uint32_t in_nsticks = get_compile_time_arg_val(9);    // number of sticks
-    constexpr uint32_t stick_nbytes = get_compile_time_arg_val(10);  // stick size in bytes (post untilize)
-    constexpr uint32_t is_block_sharded = get_compile_time_arg_val(11);
-    constexpr uint32_t remote_read = get_compile_time_arg_val(12);
-    constexpr bool is_col_major = get_compile_time_arg_val(13) == 1;
-    constexpr uint32_t is_width_sharded = get_compile_time_arg_val(14);
-    constexpr uint32_t input_aligned_page_size = get_compile_time_arg_val(15);
-    constexpr bool is_reader = get_compile_time_arg_val(16);  // reader core fills the pad buffer and writer core waits
+    constexpr uint32_t src_cb_id = get_compile_time_arg_val(3);             // has untilized input shard
+    constexpr uint32_t in_cb_id = get_compile_time_arg_val(4);              // has untilized input shard
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(5);     // output shard with padding and halo goes here
+    constexpr uint32_t pad_cb_id = get_compile_time_arg_val(6);     // cb for const pad val buffer
+    constexpr uint32_t pad_val_u32 = get_compile_time_arg_val(7);   // pad value to fill pad buffer with
+    constexpr uint32_t in_nsticks = get_compile_time_arg_val(8);    // number of sticks
+    constexpr uint32_t stick_nbytes = get_compile_time_arg_val(9);  // stick size in bytes (post untilize)
+    constexpr uint32_t is_block_sharded = get_compile_time_arg_val(10);
+    constexpr uint32_t remote_read = get_compile_time_arg_val(11);
+    constexpr bool is_col_major = get_compile_time_arg_val(12) == 1;
+    constexpr uint32_t is_width_sharded = get_compile_time_arg_val(13);
+    constexpr uint32_t input_aligned_page_size = get_compile_time_arg_val(14);
+    constexpr bool is_reader = get_compile_time_arg_val(15);  // reader core fills the pad buffer and writer core waits
                                                               // for that buffer to be filled before copying data.
 
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
