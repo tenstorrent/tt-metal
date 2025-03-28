@@ -20,12 +20,15 @@ void test_tensor_on_device(
     const auto host_buffer_datum_size_bytes = sizeof(uint32_t);
     const auto input_buf_size = input_buf_size_bytes / host_buffer_datum_size_bytes;
 
-    auto host_data = std::make_shared<uint32_t[]>(input_buf_size);
-    auto readback_data = std::make_shared<uint32_t[]>(input_buf_size);
+    auto host_data = std::shared_ptr<void>(new uint32_t[input_buf_size], std::default_delete<uint32_t[]>());
+    auto* host_data_ptr = static_cast<uint32_t*>(host_data.get());
+
+    auto readback_data = std::shared_ptr<void>(new uint32_t[input_buf_size], std::default_delete<uint32_t[]>());
+    auto* readback_data_ptr = static_cast<uint32_t*>(readback_data.get());
 
     const auto random_prime_number = 4051;
     for (int i = 0; i < input_buf_size; i++) {
-        host_data[i] = i % random_prime_number;
+        host_data_ptr[i] = i % random_prime_number;
     }
 
     auto tensor = tt::tt_metal::create_device_tensor(TensorSpec(input_shape, layout), device);
@@ -38,8 +41,8 @@ void test_tensor_on_device(
     ttnn::queue_synchronize(device->command_queue(*io_cq));
 
     for (int i = 0; i < input_buf_size; i++) {
-        EXPECT_EQ(host_data[i], readback_data[i]);
-        if (host_data[i] != readback_data[i]) {
+        EXPECT_EQ(host_data_ptr[i], readback_data_ptr[i]);
+        if (host_data_ptr[i] != readback_data_ptr[i]) {
             break;
         }
     }
