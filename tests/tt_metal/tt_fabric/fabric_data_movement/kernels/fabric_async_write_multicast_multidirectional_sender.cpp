@@ -34,10 +34,10 @@ void kernel_main() {
     uint32_t packet_size_bytes = num_bytes + PACKET_HEADER_SIZE_BYTES;
 
     uint32_t client_interface_addr = get_write_ptr(client_interface_cb);
-    volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface =
-        reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
+    volatile fabric_pull_client_interface_t* client_interface =
+        (volatile fabric_pull_client_interface_t*)client_interface_addr;
     for (uint32_t i = 0; i < num_dirs; i++) {
-        fabric_endpoint_init(client_interface + i, 0 /* unused */);
+        fabric_endpoint_init<decltype(client_interface)>(client_interface + i, 0 /* unused */);
     }
 
     fabric_async_write_multicast<
@@ -105,7 +105,7 @@ void kernel_main() {
             0);
     }
     // Flush all pull requests
-    client_interface = reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
+    client_interface = reinterpret_cast<volatile fabric_pull_client_interface_t*>(client_interface_addr);
     for (uint32_t i = 0; i < num_dirs; i++) {
         fabric_wait_for_pull_request_flushed(client_interface);
         client_interface++;

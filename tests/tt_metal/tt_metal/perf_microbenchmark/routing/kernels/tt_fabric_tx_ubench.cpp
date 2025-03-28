@@ -64,8 +64,13 @@ constexpr uint32_t n_depth = get_compile_time_arg_val(26);
 constexpr uint32_t s_depth = get_compile_time_arg_val(27);
 constexpr uint32_t router_mode = get_compile_time_arg_val(28);
 
-using ClientInterfaceType = typename ClientInterfaceSelector<router_mode>::type;
-volatile tt_l1_ptr ClientInterfaceType client_interface = (volatile tt_l1_ptr ClientInterfaceType)client_interface_addr;
+#ifdef FVC_MODE_PULL
+volatile fabric_pull_client_interface_t* client_interface =
+    (volatile fabric_pull_client_interface_t*)client_interface_addr;
+#else
+volatile fabric_push_client_interface_t* client_interface =
+    (volatile fabric_push_client_interface_t*)client_interface_addr;
+#endif
 
 uint32_t target_address;
 uint32_t noc_offset;
@@ -185,7 +190,11 @@ void kernel_main() {
                 n_depth,
                 s_depth);
         } else {
-            fabric_async_write<(ClientDataMode)data_mode, AsyncWriteMode::SEND_PR, RoutingType::ROUTING_TABLE>(
+            fabric_async_write<
+                decltype(client_interface),
+                (ClientDataMode)data_mode,
+                AsyncWriteMode::SEND_PR,
+                RoutingType::ROUTING_TABLE>(
                 client_interface,
                 0,                       // the network plane to use for this transaction
                 data_buffer_start_addr,  // source address in sender’s memory
@@ -210,14 +219,14 @@ void kernel_main() {
         }
     }
 #else
-    fabric_client_router_reserve(client_interface, 0, dest_device >> 16, dest_device & 0xFFFF);
+    fabric_client_connect(client_interface, 0, dest_device >> 16, dest_device & 0xFFFF);
     uint64_t start_timestamp = get_timestamp();
     uint32_t* payload = (uint32_t*)data_buffer_start_addr;
     while (true) {
         packet_count++;
         payload[12] = packet_count;
-        fabric_async_write<(ClientDataMode)data_mode, AsyncWriteMode::PUSH>(
-            (fabric_push_client_interface_t*)client_interface,
+        fabric_async_write<decltype(client_interface), (ClientDataMode)data_mode, AsyncWriteMode::PUSH>(
+            client_interface,
             0,                       // the network plane to use for this transaction
             data_buffer_start_addr,  // source address in sender’s memory
             dest_device >> 16,
@@ -237,6 +246,10 @@ void kernel_main() {
 #endif
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
+
+#ifndef FVC_MODE_PULL
+    fabric_client_disconnect(client_interface);
+#endif
 
     uint64_t num_packets = packet_count;
     set_64b_result(test_results, data_words_sent, TT_FABRIC_WORD_CNT_INDEX);

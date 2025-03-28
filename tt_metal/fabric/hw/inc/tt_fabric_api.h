@@ -11,6 +11,7 @@
 #include "tt_fabric.h"
 #include "tt_fabric_interface.h"
 #include "eth_chan_noc_mapping.h"
+#include <type_traits>
 
 namespace tt::tt_fabric {
 
@@ -171,6 +172,11 @@ inline void fabric_async_write_add_header(
     uint64_t dst_addr,
     uint32_t size,  // number of bytes to write to remote destination
     uint32_t header_id = 0) {
+    static_assert(
+        std::is_same_v<T, volatile fabric_pull_client_interface_t*> ||
+            std::is_same_v<T, volatile fabric_push_client_interface_t*>,
+        "T must be either volatile fabric_pull_client_interface_t* or volatile fabric_push_client_interface_t*");
+
     packet_header_t* packet_header;
     if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
         packet_header = (packet_header_t*)(src_addr);
@@ -187,13 +193,44 @@ inline void fabric_async_write_add_header(
     tt_fabric_add_header_checksum(packet_header);
 }
 
-inline void fabric_client_router_reserve(
-    volatile tt_l1_ptr fabric_push_client_interface_t* client_interface,
+inline void fabric_client_connect(
+    volatile fabric_push_client_interface_t* client_interface,
     int32_t routing_plane,
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id) {
     uint32_t direction = get_next_hop_router_direction(client_interface, routing_plane, dst_mesh_id, dst_dev_id);
     uint32_t router_addr_h = get_next_hop_router_noc_xy(client_interface, routing_plane, dst_mesh_id, dst_dev_id);
+
+    uint64_t client_q_addr = get_noc_addr_helper(router_addr_h, FABRIC_ROUTER_CLIENT_QUEUE_START);
+    volatile fabric_push_client_queue_local_t* local_req_entry = &(client_interface->local_client_req_entry);
+
+    // get client 'id'
+    noc_fast_atomic_increment<DM_DEDICATED_NOC, true>(
+        noc_index,
+        NCRISC_AT_CMD_BUF,
+        client_q_addr + offsetof(fabric_push_client_queue_t, client_idx_counter),
+        NOC_UNICAST_WRITE_VC,
+        1,
+        31,
+        false,
+        false,
+        (uint32_t)&(local_req_entry->my_client_idx.ptr));
+    while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
+
+    uint64_t curr_client_idx_addr = client_q_addr + offsetof(fabric_push_client_queue_t, curr_client_idx);
+    // wait until the client ahead in the queue disconnects
+    while (true) {
+        noc_async_read_one_packet(curr_client_idx_addr, (uint32_t)&(local_req_entry->remote_curr_client_idx.ptr), 4);
+        noc_async_read_barrier();
+        if (local_req_entry->my_client_idx.ptr == local_req_entry->remote_curr_client_idx.ptr) {
+            break;
+        }
+    }
+
+    uint64_t router_wr_ptr_addr = client_q_addr + offsetof(fabric_push_client_queue_t, router_wr_ptr);
+    noc_async_read_one_packet(router_wr_ptr_addr, (uint32_t)&(local_req_entry->remote_router_wr_ptr.ptr), 4);
+    noc_async_read_barrier();
+
     uint64_t router_addr = get_noc_addr_helper(router_addr_h, FABRIC_ROUTER_REQ_QUEUE_START);
     router_addr += direction * sizeof(uint64_t);
     // stream register to receive router buffer space available updates.
@@ -205,7 +242,7 @@ inline void fabric_client_router_reserve(
     noc_inline_dw_write(router_addr + sizeof(uint32_t), xy_local_addr >> 32);
     client_interface->router_addr_h = router_addr_h;
     client_interface->buffer_size = FABRIC_ROUTER_OUTBOUND_BUF_SLOTS;
-    client_interface->wr_ptr = 0;
+    client_interface->wr_ptr = local_req_entry->remote_router_wr_ptr.ptr;
     client_interface->buffer_start = FABRIC_ROUTER_DATA_BUF_START + direction * FABRIC_ROUTER_OUTBOUND_BUF_SIZE;
     client_interface->router_push_addr = (STREAM_REG_ADDR(
         STREAM_ID_NOC_WORDS_RECEIVED + direction, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
@@ -215,6 +252,29 @@ inline void fabric_client_router_reserve(
         (STREAM_REG_ADDR(STREAM_ID_NOC_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
     *(uint32_t*)(STREAM_REG_ADDR(STREAM_ID_NOC_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX)) =
         client_interface->buffer_size;
+}
+
+inline void fabric_client_disconnect(volatile tt_l1_ptr fabric_push_client_interface_t* client_interface) {
+    // wait for slots to drain
+    while (*(uint32_t*)(client_interface->router_space) != FABRIC_ROUTER_OUTBOUND_BUF_SLOTS);
+
+    uint64_t client_q_addr = get_noc_addr_helper(client_interface->router_addr_h, FABRIC_ROUTER_CLIENT_QUEUE_START);
+
+    // update wr ptr for the next client
+    noc_inline_dw_write<true>(
+        client_q_addr + offsetof(fabric_push_client_queue_t, router_wr_ptr), client_interface->wr_ptr);
+
+    // update curr client index so that the next client in the queue can connect
+    noc_fast_atomic_increment<DM_DEDICATED_NOC, true>(
+        noc_index,
+        NCRISC_AT_CMD_BUF,
+        client_q_addr + offsetof(fabric_push_client_queue_t, curr_client_idx),
+        NOC_UNICAST_WRITE_VC,
+        1,
+        31,
+        false,
+        false);
+    while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
 }
 
 template <ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA>
@@ -262,13 +322,17 @@ inline void fabric_async_write(
     uint64_t dst_addr,
     uint32_t size,
     uint32_t header_id = 0) {
+    static_assert(
+        std::is_same_v<T, volatile fabric_pull_client_interface_t*> ||
+            std::is_same_v<T, volatile fabric_push_client_interface_t*>,
+        "T must be either volatile fabric_pull_client_interface_t* or volatile fabric_push_client_interface_t*");
+
     if constexpr (mode & AsyncWriteMode::ADD_HEADER) {
         fabric_async_write_add_header<T, data_mode>(
             client_interface, src_addr, dst_mesh_id, dst_dev_id, dst_addr, size, header_id);
     }
 
-    if constexpr (std::is_same_v<T, volatile tt_l1_ptr fabric_pull_client_interface_t*>) {
-        // Pull-based logic
+    if constexpr (std::is_same_v<T, volatile fabric_pull_client_interface_t*>) {
         if constexpr (mode & AsyncWriteMode::ADD_PR) {
             if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
                 fabric_setup_pull_request<data_mode>(client_interface, src_addr, size);
@@ -281,7 +345,6 @@ inline void fabric_async_write(
                 client_interface, routing, dst_mesh_id, dst_dev_id, header_id);
         }
     } else {
-        // Push-based logic
         if constexpr (mode & AsyncWriteMode::PUSH) {
             fabric_async_write_push_data<data_mode>(client_interface, src_addr, size, header_id);
         }
@@ -301,6 +364,10 @@ inline void fabric_async_write_multicast_add_header(
     uint16_t n_depth,
     uint16_t s_depth,
     uint32_t header_id = 0) {
+    static_assert(
+        std::is_same_v<T, volatile fabric_pull_client_interface_t*> ||
+            std::is_same_v<T, volatile fabric_push_client_interface_t*>,
+        "T must be either volatile fabric_pull_client_interface_t* or volatile fabric_push_client_interface_t*");
     packet_header_t* packet_header;
     if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
         packet_header = (packet_header_t*)(src_addr);
@@ -341,6 +408,11 @@ inline void fabric_async_write_multicast(
     uint16_t n_depth,
     uint16_t s_depth,
     uint32_t header_id = 0) {
+    static_assert(
+        std::is_same_v<T, volatile fabric_pull_client_interface_t*> ||
+            std::is_same_v<T, volatile fabric_push_client_interface_t*>,
+        "T must be either volatile fabric_pull_client_interface_t* or volatile fabric_push_client_interface_t*");
+
     if constexpr (mode & AsyncWriteMode::ADD_HEADER) {
         fabric_async_write_multicast_add_header<T, data_mode>(
             client_interface,
@@ -356,7 +428,7 @@ inline void fabric_async_write_multicast(
             header_id);
     }
 
-    if constexpr (std::is_same_v<T, volatile tt_l1_ptr fabric_pull_client_interface_t*>) {
+    if constexpr (std::is_same_v<T, volatile fabric_pull_client_interface_t*>) {
         if constexpr (mode & AsyncWriteMode::ADD_PR) {
             if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
                 fabric_setup_pull_request<data_mode>(client_interface, src_addr, size);
@@ -412,11 +484,16 @@ inline void fabric_atomic_inc(
     uint64_t dst_addr,
     uint32_t atomic_inc,
     uint32_t wrap_boundary) {
+    static_assert(
+        std::is_same_v<T, volatile fabric_pull_client_interface_t*> ||
+            std::is_same_v<T, volatile fabric_push_client_interface_t*>,
+        "T must be either volatile fabric_pull_client_interface_t* or volatile fabric_push_client_interface_t*");
+
     if constexpr (mode & AsyncWriteMode::ADD_HEADER) {
         fabric_atomic_inc_add_header(src_addr, dst_mesh_id, dst_dev_id, dst_addr, atomic_inc, wrap_boundary);
     }
 
-    if constexpr (std::is_same_v<T, volatile tt_l1_ptr fabric_pull_client_interface_t*>) {
+    if constexpr (std::is_same_v<T, volatile fabric_pull_client_interface_t*>) {
         if constexpr (mode & AsyncWriteMode::ADD_PR) {
             fabric_setup_pull_request(client_interface, src_addr, PACKET_HEADER_SIZE_BYTES);
         }
@@ -442,6 +519,11 @@ inline void fabric_async_write_atomic_inc_add_header(
     uint32_t size,  // number of bytes to write to remote destination
     uint32_t atomic_inc,
     uint32_t header_id = 0) {
+    static_assert(
+        std::is_same_v<T, volatile fabric_pull_client_interface_t*> ||
+            std::is_same_v<T, volatile fabric_push_client_interface_t*>,
+        "T must be either volatile fabric_pull_client_interface_t* or volatile fabric_push_client_interface_t*");
+
     packet_header_t* packet_header;
     if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
         packet_header = (packet_header_t*)(src_addr);
@@ -480,8 +562,13 @@ inline void fabric_async_write_atomic_inc(
     uint32_t size,  // number of bytes to write to remote destination
     uint32_t atomic_inc,
     uint32_t header_id = 0) {
+    static_assert(
+        std::is_same_v<T, volatile fabric_pull_client_interface_t*> ||
+            std::is_same_v<T, volatile fabric_push_client_interface_t*>,
+        "T must be either volatile fabric_pull_client_interface_t* or volatile fabric_push_client_interface_t*");
+
     if constexpr (mode & AsyncWriteMode::ADD_HEADER) {
-        fabric_async_write_atomic_inc_add_header<decltype(client_interface), data_mode>(
+        fabric_async_write_atomic_inc_add_header<T, data_mode>(
             client_interface,
             src_addr,
             dst_mesh_id,
@@ -493,7 +580,7 @@ inline void fabric_async_write_atomic_inc(
             header_id);
     }
 
-    if constexpr (std::is_same_v<T, volatile tt_l1_ptr fabric_pull_client_interface_t*>) {
+    if constexpr (std::is_same_v<T, volatile fabric_pull_client_interface_t*>) {
         if constexpr (mode & AsyncWriteMode::ADD_PR) {
             if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
                 fabric_setup_pull_request<data_mode>(client_interface, src_addr, size);
@@ -515,6 +602,11 @@ inline void fabric_async_write_atomic_inc(
 
 template <typename T = volatile fabric_pull_client_interface_t*, RoutingType routing_type = RoutingType::ROUTER_XY>
 inline void fabric_endpoint_init(T client_interface, uint32_t outbound_eth_chan) {
+    static_assert(
+        std::is_same_v<T, volatile fabric_pull_client_interface_t*> ||
+            std::is_same_v<T, volatile fabric_push_client_interface_t*>,
+        "T must be either volatile fabric_pull_client_interface_t* or volatile fabric_push_client_interface_t*");
+
     // TODO: Should not assume routing tables are immediately after the client interface
     // This should be a separate address we take in
     uint32_t routing_tables_offset = (uint32_t)client_interface + sizeof(*client_interface);
