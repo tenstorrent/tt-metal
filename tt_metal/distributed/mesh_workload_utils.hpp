@@ -16,7 +16,6 @@ void write_go_signal(
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
     bool send_mcast,
-    bool send_unicasts,
-    int num_unicast_txns = -1);
+    bool send_unicasts);
 
 }  // namespace tt::tt_metal::distributed

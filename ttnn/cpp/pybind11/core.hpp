@@ -11,6 +11,7 @@
 #include "ttnn/core.hpp"
 #include "tt-metalium/lightmetal_binary.hpp"
 #include "tt-metalium/lightmetal_replay.hpp"
+#include "tt-metalium/mesh_device.hpp"
 
 namespace py = pybind11;
 
@@ -48,7 +49,7 @@ void py_module(py::module& module) {
     py::class_<tt::tt_metal::LightMetalReplay>(module, "LightMetalReplay")
         .def_static(
             "create",
-            [](LightMetalBinary binary, IDevice* device = nullptr) {
+            [](LightMetalBinary binary, distributed::MeshDevice* device = nullptr) {
                 return std::make_unique<tt::tt_metal::LightMetalReplay>(std::move(binary), device);
             },
             py::arg("binary"),

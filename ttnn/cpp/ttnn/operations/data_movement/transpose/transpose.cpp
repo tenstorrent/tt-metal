@@ -110,7 +110,7 @@ ttnn::Tensor ExecuteTranspose::invoke(
     Tensor input_typecasted = typecast ? ttnn::typecast(input_unsqueezed, DataType::BFLOAT16) : input_unsqueezed;
 
     std::vector<Tensor> output_tensors = {Tensor(detail::get_workers_for_op_output({input_typecasted}))};
-    detail::launch_with_autoformat(
+    detail::launch_op(
         [normalized_dim1, normalized_dim2, memory_config_arg, pad_value](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,

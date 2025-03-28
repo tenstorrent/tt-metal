@@ -34,13 +34,14 @@ struct DeviceInfo {
     size_t cb_limit;
 };
 
-DeviceInfo get_device_info(const tt::tt_metal::IDevice& device) {
+DeviceInfo get_device_info(tt::tt_metal::distributed::MeshDevice* device) {
     DeviceInfo info{};
     const auto& dispatch_core_config = tt::tt_metal::get_dispatch_core_config();
-    const auto descriptor = tt::get_core_descriptor_config(device.id(), device.num_hw_cqs(), dispatch_core_config);
-    const auto& device_allocator = device.allocator();
-    info.num_y_cores = device.logical_grid_size().y;
-    info.num_x_cores = device.logical_grid_size().x;
+    const auto descriptor =
+        tt::get_core_descriptor_config(device->get_device_ids().at(0), device->num_hw_cqs(), dispatch_core_config);
+    const auto& device_allocator = device->allocator();
+    info.num_y_cores = device->logical_grid_size().y;
+    info.num_x_cores = device->logical_grid_size().x;
     info.num_y_compute_cores = descriptor.compute_grid_size.y;
     info.num_x_compute_cores = descriptor.compute_grid_size.x;
     info.worker_l1_size = device_allocator->get_config().worker_l1_size;
@@ -69,9 +70,9 @@ struct BufferInfo {
     tt::tt_metal::BufferType buffer_type;
 };
 
-std::vector<BufferInfo> get_buffers() {
+std::vector<BufferInfo> get_buffers(const std::vector<tt::tt_metal::distributed::MeshDevice*>& devices) {
     std::vector<BufferInfo> buffer_infos;
-    for (const auto& device : tt::DevicePool::instance().get_all_active_devices()) {
+    for (auto device : devices) {
         for (const auto& buffer : device->allocator()->get_allocated_buffers()) {
             auto device_id = device->id();
             auto address = buffer->address();
@@ -133,9 +134,9 @@ struct BufferPageInfo {
     tt::tt_metal::BufferType buffer_type;
 };
 
-std::vector<BufferPageInfo> get_buffer_pages() {
+std::vector<BufferPageInfo> get_buffer_pages(const std::vector<tt::tt_metal::distributed::MeshDevice*>& devices) {
     std::vector<BufferPageInfo> buffer_page_infos;
-    for (const auto& device : tt::DevicePool::instance().get_all_active_devices()) {
+    for (auto device : devices) {
         for (const auto& buffer : device->allocator()->get_allocated_buffers()) {
             if (not buffer->is_l1()) {
                 continue;
@@ -185,9 +186,5 @@ std::vector<BufferPageInfo> get_buffer_pages() {
 }
 
 }  // namespace reports
-
-using reports::get_buffer_pages;
-using reports::get_buffers;
-using reports::get_device_info;
 
 }  // namespace ttnn

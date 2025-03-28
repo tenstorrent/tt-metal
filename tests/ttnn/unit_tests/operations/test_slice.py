@@ -702,9 +702,9 @@ def test_slice_output_tensor_rm(device):
     ttnn_output = ttnn.from_torch(torch_zeros, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
     torch_output = torch_input[..., ::2, ::2]  # torch_output shape: [1, 3, 320, 320]
 
-    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
     ttnn.slice(ttnn_input, starts=(0, 0, 0, 0), ends=(1, 3, 320, 320), steps=(1, 1, 1, 1), output_tensor=ttnn_output)
-    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
 
     ttnn_output = ttnn.to_torch(ttnn_output)
 
@@ -720,9 +720,9 @@ def test_slice_output_tensor_tile(device):
     )
     torch_output = torch_input[..., ::2, ::2]  # torch_output shape: [1, 3, 320, 320]
 
-    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
     ttnn.slice(ttnn_input, starts=(0, 0, 0, 0), ends=(1, 3, 320, 320), steps=(1, 1, 1, 1), output_tensor=ttnn_output)
-    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
 
     ttnn_output = ttnn.to_torch(ttnn_output)
 

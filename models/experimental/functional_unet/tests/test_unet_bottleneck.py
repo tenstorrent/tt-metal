@@ -79,5 +79,5 @@ def test_unet_bottleneck_multi_device(
     ttnn_input = ttnn_input.to(mesh_device)
     ttnn_output = ttnn_model.bottleneck(ttnn_input)
 
-    assert len(ttnn_output.devices()) == 2, "Expected output tensor to be sharded across 2 devices"
+    assert ttnn_output.device().get_num_devices() == 2, "Expected output tensor to be sharded across 2 devices"
     check_pcc_conv(torch_output, ttnn_output, mesh_composer=output_mesh_composer, pcc=0.999)

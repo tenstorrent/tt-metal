@@ -23,6 +23,11 @@ MeshTraceId MeshTrace::next_id() {
 void MeshTraceDescriptor::assemble_dispatch_commands(
     MeshDevice* mesh_device, const std::vector<MeshTraceStagingMetadata>& mesh_trace_md) {
     auto& trace_data = this->ordered_trace_data;
+    // Track the trace region size per device range
+    // The size of the allocated trace buffer will be the max
+    // across all regions
+    std::unordered_map<MeshCoordinateRange, uint32_t> trace_sizes;
+
     for (auto& trace_md : mesh_trace_md) {
         auto& sysmem_mgr_coord = trace_md.sysmem_manager_coord;
         auto& sysmem_manager = mesh_device->get_device(sysmem_mgr_coord)->sysmem_manager();
@@ -48,13 +53,19 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
                         program.data.end(),
                         std::make_move_iterator(program_cmds_vector.begin()),
                         std::make_move_iterator(program_cmds_vector.end()));
+                    // Update size of intersection
+                    trace_sizes[intersection] += trace_md.size;
                 } else {
                     // Intersection is a subset of the originally placed program.
                     auto complement = subtract(program.device_range, intersection);
                     for (const auto& complement_range : complement.ranges()) {
                         intermed_trace_data.push_back(MeshTraceData{complement_range, program.data});
+                        // Trace region size of complement doesn't change
+                        trace_sizes[complement_range] = trace_sizes[program.device_range];
                     }
                     intermed_trace_data.push_back(MeshTraceData{intersection, program.data});
+                    // Update size of intersection
+                    trace_sizes[intersection] = trace_sizes[program.device_range] + trace_md.size;
                     auto& intersection_data = intermed_trace_data.back().data;
                     intersection_data.insert(
                         intersection_data.end(),
@@ -71,6 +82,9 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
                         device_ranges_to_invalidate.begin(), device_ranges_to_invalidate.end(), program.device_range) ==
                     device_ranges_to_invalidate.end()) {
                     intermed_trace_data.push_back(std::move(program));
+                } else {
+                    // Clear trace size of invalid range
+                    trace_sizes.erase(trace_sizes.find(program.device_range));
                 }
             }
             trace_data = intermed_trace_data;
@@ -78,9 +92,14 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
         if (not intersection_found) {
             // Intersection not found, place program on Mesh.
             trace_data.push_back(MeshTraceData{trace_md.device_range, std::move(program_cmds_vector)});
+            trace_sizes[trace_md.device_range] = trace_md.size;
         }
-        this->total_trace_size += trace_md.size;
     }
+    uint32_t max_trace_size = 0;
+    for (const auto& size_per_range : trace_sizes) {
+        max_trace_size = std::max(size_per_range.second, max_trace_size);
+    }
+    this->total_trace_size = max_trace_size;
     MeshCoordinateRange bcast_device_range(mesh_device->shape());
     std::vector<uint32_t> exec_buf_end = {};
 

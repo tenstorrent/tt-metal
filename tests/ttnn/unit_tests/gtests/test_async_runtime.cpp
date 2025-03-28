@@ -74,13 +74,11 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     ttnn::record_event(device_->command_queue(*io_cq), write_event);
     // Host stalls until write is completed, before sending workload
     ttnn::event_synchronize(write_event);
-    EXPECT_EQ(ttnn::event_query(write_event), true);
     // Dispatch workload. Preallocated output_tensor is populated by op/
     ttnn::moreh_sum(input_tensor, /*dim*/ 3, false, output_tensor, std::nullopt, std::nullopt);
     // Record completion of workload
     ttnn::record_event(device_->command_queue(*workload_dispatch_cq), workload_event);
     ttnn::event_synchronize(workload_event);
-    EXPECT_EQ(ttnn::event_query(workload_event), true);
     // Read output back, once workload is complete
     ttnn::read_buffer(io_cq, output_tensor, {readback_data});
     // Buffers are currently jointly owned by the original buffer object, the storage object and the tensor (3).
