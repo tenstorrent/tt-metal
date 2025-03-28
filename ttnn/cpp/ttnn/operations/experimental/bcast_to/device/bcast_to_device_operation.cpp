@@ -44,22 +44,39 @@ void validate(
     const auto& input = tensor_args.input;
     const auto& output = tensor_args.output;
 
-    TT_FATAL(input.get_layout() == Layout::TILE, "bcast_to: Input tensor layout must be TILE");
-    TT_FATAL(tensor_args.input.storage_type() == StorageType::DEVICE, "bcast_to: Input tensor need to be on device");
+    TT_FATAL(
+        input.get_layout() == Layout::TILE,
+        "bcast_to: Invalid tensor memory layout {}. Input tensor layout must be TILE.",
+        input.get_layout());
+    TT_FATAL(
+        tensor_args.input.storage_type() == StorageType::DEVICE,
+        "bcast_to: Invalid storage_type {}. Input tensor need to be on device",
+        tensor_args.input.storage_type());
     TT_FATAL(tensor_args.input.buffer() != nullptr, "bcast_to: Input tensor need to be allocated in buffers on device");
-    TT_FATAL(tensor_args.input.memory_config().is_sharded() == false, "bcast_to: Input tensor sharding not supported");
+    TT_FATAL(
+        tensor_args.input.memory_config().is_sharded() == false,
+        "bcast_to: Invalid input memory config {}. Input tensor sharding not supported",
+        tensor_args.input.memory_config());
     TT_FATAL(
         operation_attributes.memory_config.is_sharded() == false,
-        "bcast_to: Output memory config sharding not supported");
+        "bcast_to: Invalid output memory config {}. Output memory config sharding not supported",
+        operation_attributes.memory_config);
     if (output.has_value()) {
         TT_FATAL(
             output->get_logical_shape() == operation_attributes.output_shape,
-            "bcast_to: Output shape {} must match operation attributes {}",
+            "bcast_to: Invalid output shape {}Output shape must match operation attributes {}",
             output->get_logical_shape(),
             operation_attributes.output_shape);
-        TT_FATAL(input.get_layout() == output->get_layout(), "bcast_to: Input and output must have same layout");
-        TT_FATAL(input.get_dtype() == output->get_dtype(), "bcast_to: Input and output must have same dtype");
-        TT_FATAL(input.device() == output->device(), "bcast_to: Input and output must be on the same device");
+        TT_FATAL(
+            input.get_layout() == output->get_layout(),
+            "bcast_to: Input {} and output {} must have same layout",
+            input.get_layout(),
+            output->get_layout());
+        TT_FATAL(
+            input.get_dtype() == output->get_dtype(),
+            "bcast_to: Input {} and output {} must have same dtype",
+            input.get_dtype(),
+            output->get_dtype());
     }
 }
 
