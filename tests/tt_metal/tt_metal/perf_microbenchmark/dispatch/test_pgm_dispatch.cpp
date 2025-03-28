@@ -2,9 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <map>
+#include <string>
+
 #include "umd/device/types/cluster_descriptor_types.h"
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/command_queue.hpp>
@@ -56,7 +59,7 @@ std::tuple<uint32_t, uint32_t> get_core_count() {
     uint32_t core_x = 0;
     uint32_t core_y = 0;
 
-    std::string arch_name = tt::tt_metal::experimental::hal::get_arch_name();
+    std::string arch_name = tt::tt_metal::hal::get_arch_name();
     if (arch_name == "grayskull") {
         core_x = 11;
         core_y = 8;
@@ -192,12 +195,12 @@ bool initialize_program(
     const TestInfo& info, tt_metal::IDevice* device, tt_metal::Program& program, uint32_t run_cycles) {
     program = tt_metal::CreateProgram();
 
-    std::map<string, string> defines = {{"KERNEL_BYTES", std::to_string(info.kernel_size)}};
+    std::map<std::string, std::string> defines = {{"KERNEL_BYTES", std::to_string(info.kernel_size)}};
     if (run_cycles != 0) {
-        defines.insert(std::pair<string, string>("KERNEL_RUN_TIME", std::to_string(run_cycles)));
+        defines.insert(std::pair<std::string, std::string>("KERNEL_RUN_TIME", std::to_string(run_cycles)));
     }
     if (info.use_global) {
-        defines.insert(std::pair<string, string>("KERNEL_GLOBAL", "1"));
+        defines.insert(std::pair<std::string, std::string>("KERNEL_GLOBAL", "1"));
     }
 
     for (uint32_t i = 0; i < info.n_sems; i++) {
@@ -218,7 +221,7 @@ bool initialize_program(
     // first kernel group is possibly wide, remaining kernel groups are 1 column each
     CoreRange kg = {info.workers.start_coord, {info.workers.end_coord.x - info.n_kgs + 1, info.workers.end_coord.y}};
     for (uint32_t i = 0; i < info.n_kgs; i++) {
-        defines.insert(std::pair<string, string>(string("KG_") + std::to_string(i), ""));
+        defines.insert(std::pair<std::string, std::string>(std::string("KG_") + std::to_string(i), ""));
 
         if (info.brisc_enabled) {
             auto dm0 = tt_metal::CreateKernel(
@@ -627,7 +630,7 @@ int main(int argc, char** argv) {
             .use_all_cores = true})
         ->Apply(Max8192Args)
         ->UseManualTime();
-    std::string arch_name = tt::tt_metal::experimental::hal::get_arch_name();
+    std::string arch_name = tt::tt_metal::hal::get_arch_name();
     if (arch_name == std::string("wormhole_b0")) {
         benchmark::RegisterBenchmark(
             "BM_pgm_dispatch/eth_dispatch",

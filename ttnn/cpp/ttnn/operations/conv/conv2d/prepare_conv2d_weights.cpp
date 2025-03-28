@@ -618,7 +618,12 @@ static OptimizedConvBlockConfig get_opt_block_config(
 
     auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
         ttnn::Shape(
-            {1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, tt::constants::TILE_WIDTH)}),
+            {1,
+             1,
+             batch_size * output_height * output_width,
+             tt::round_up(
+                 out_channels,
+                 get_num_cores_channels_from_parallel_config(output_parallel_config) * tt::constants::TILE_WIDTH)}),
         output_parallel_config,
         tt::constants::TILE_HEIGHT);
     auto largest_parallel_config = output_parallel_config.grid.num_cores() > parallel_config.grid.num_cores()
@@ -1040,7 +1045,7 @@ ttnn::Tensor prepare_conv_weights(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     const bool has_bias,
     uint32_t groups,
@@ -1053,10 +1058,12 @@ ttnn::Tensor prepare_conv_weights(
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
 
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
-    const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups, conv_config);
+    std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
+    const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
 
     auto [output_height, output_width] =
-        calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding, dilation);
+        calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
+
 
     auto opt_conv_op_block_config = get_opt_block_config(
         mm_conv,
@@ -1141,7 +1148,7 @@ ttnn::Tensor prepare_conv_bias(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     T* device,
@@ -1152,9 +1159,10 @@ ttnn::Tensor prepare_conv_bias(
 
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
 
-    const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups, conv_config);
+    std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
+    const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     auto [output_height, output_width] =
-        calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding, dilation);
+        calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
 
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
 
@@ -1236,7 +1244,7 @@ template ttnn::Tensor prepare_conv_weights<IDevice>(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     const bool has_bias,
     uint32_t groups,
@@ -1256,7 +1264,7 @@ template ttnn::Tensor prepare_conv_weights<MeshDevice>(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     const bool has_bias,
     uint32_t groups,
@@ -1336,7 +1344,7 @@ template ttnn::Tensor prepare_conv_bias<IDevice>(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     IDevice* device,
@@ -1354,7 +1362,7 @@ template ttnn::Tensor prepare_conv_bias<MeshDevice>(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     MeshDevice* device,

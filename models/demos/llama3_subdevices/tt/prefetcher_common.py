@@ -21,7 +21,7 @@ def get_buffer_address(tensor):
 
 
 class TtLlamaPrefetcherSetup(LightweightModule):
-    def __init__(self, mesh_device, n_tensors, n_layers):
+    def __init__(self, mesh_device, n_tensors, n_layers, mode="decode"):
         """
         - sub devices
         - global cb
@@ -48,18 +48,6 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             self.hop_grid,
         ) = get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_test=False)
 
-        max_tile_size = 1088
-        # Global CB must be large enough to atleast double buffer weights
-        # This ensures that back to back matmuls (for eg. in MLP) can run
-        # without stalling on the weight prefetch
-        # calculated by fitting two largest tensor with extra room, ff2 has 391680B per global CB bank, ff1 has 207360B, plus 16320B gap (one block)
-        self.global_cb_size = 620000
-        self.sender_receiver_mapping = list(zip(self.all_sender_cores, self.all_receiver_cores))
-        self.global_circular_buffer = ttnn.create_global_circular_buffer(
-            self.mesh_device, self.sender_receiver_mapping, self.global_cb_size
-        )
-        logger.info(f"GlobalCB size {self.global_cb_size}")
-
         ##### Set up the input tensors #####
         self.dram_core_range_set = ttnn.CoreRangeSet(
             [ttnn.CoreRange(core_coord, core_coord) for core_coord in self.dram_cores]
@@ -68,18 +56,40 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             [ttnn.CoreRange(core_coord, core_coord) for core_coord in self.active_sender_cores]
         )
 
+        self.all_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
+
         ##### Setup up sub devices #####
-        self.prefetcher_sub_device = ttnn.SubDevice([self.sender_core_range_set])
-        self.worker_sub_device = ttnn.SubDevice([self.worker_cores_range_set])
-        mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-            mesh_device, [self.prefetcher_sub_device, self.worker_sub_device], 1, 0, True
-        )
-        # self.sub_device_manager = mesh_device.create_sub_device_manager(
-        #     [self.prefetcher_sub_device, self.worker_sub_device], 0
-        # )
-        # mesh_device.load_sub_device_manager(self.sub_device_manager)
-        self.prefetcher_sub_device_id = ttnn.SubDeviceId(0)
-        self.worker_sub_device_id = ttnn.SubDeviceId(1)
+
+        if mode == "prefill":
+            self.all_sub_device = ttnn.SubDevice([self.all_core_range_set])
+            mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
+                mesh_device, [self.all_sub_device], 0, 0, True
+            )
+            self.mesh_sub_device_manager_id = mesh_sub_device_manager_id
+            self.all_sub_device_id = ttnn.SubDeviceId(0)
+            self.worker_sub_device_id = self.all_sub_device_id
+        else:
+            ##### Set up the global circular buffer #####
+            max_tile_size = 1088
+            # Global CB must be large enough to atleast double buffer weights
+            # This ensures that back to back matmuls (for eg. in MLP) can run
+            # without stalling on the weight prefetch
+            # calculated by fitting two largest tensor with extra room, ff2 has 391680B per global CB bank, ff1 has 207360B, plus 16320B gap (one block)
+            # TODO: Above calculation is not accurate, need to find a better lower bound
+            self.global_cb_size = 600 * 1088
+            self.sender_receiver_mapping = list(zip(self.all_sender_cores, self.all_receiver_cores))
+            self.global_circular_buffer = ttnn.create_global_circular_buffer(
+                self.mesh_device, self.sender_receiver_mapping, self.global_cb_size
+            )
+            logger.info(f"GlobalCB size {self.global_cb_size}")
+
+            self.prefetcher_sub_device = ttnn.SubDevice([self.sender_core_range_set])
+            self.worker_sub_device = ttnn.SubDevice([self.worker_cores_range_set])
+            mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
+                mesh_device, [self.prefetcher_sub_device, self.worker_sub_device], 1, 0, True
+            )
+            self.prefetcher_sub_device_id = ttnn.SubDeviceId(0)
+            self.worker_sub_device_id = ttnn.SubDeviceId(1)
 
         self.tensors = []
         self.tensor_addrs = []  # List of buffer addresses

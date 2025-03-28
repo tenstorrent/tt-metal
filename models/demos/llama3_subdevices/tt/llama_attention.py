@@ -6,7 +6,6 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.llama3_subdevices.tt.llama_ccl import tt_all_reduce
 
 
 class TtLlamaAttention(LightweightModule):
@@ -53,7 +52,6 @@ class TtLlamaAttention(LightweightModule):
 
         self.prefetcher_setup = prefetcher_setup
         self.tt_ccl = tt_ccl
-        self.worker_sub_device_id = prefetcher_setup.worker_sub_device_id
 
         # TODO: Fix this once all-gather supports < tile_size
         if self.TG:
@@ -153,9 +151,6 @@ class TtLlamaAttention(LightweightModule):
             cache_file_name=cache_name("wqkv_sharded_2d_prefetcher"),  ## TODO: Fix caching
         )
 
-        if self.model_config["USE_PREFETCHER"]:
-            self.prefetcher_setup.insert_tensor(self.wqkv)
-
         # For ring topology we can use all gather matmul for wo
         self.use_fused_all_gather_matmul = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]
         pt_wo = self.state_dict[wo_str].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
@@ -181,14 +176,19 @@ class TtLlamaAttention(LightweightModule):
             if (self.use_fused_all_gather_matmul or self.TG)
             else cache_name("wo"),
         )
-        if self.model_config["USE_PREFETCHER"]:
-            self.prefetcher_setup.insert_tensor(self.wo)
-
         if not use_paged_kv_cache:
             # vLLM provides its own kv cache
             self.init_kv_cache(configuration, weight_cache_path)
 
         self.scale = self.head_dim**-0.5
+        if tt_ccl.mode == "decode":
+            self.prefetch(prefetcher_setup, tt_ccl)
+
+    def prefetch(self, prefetcher_setup, tt_ccl):
+        self.prefetcher_setup = prefetcher_setup
+        self.prefetcher_setup.insert_tensor(self.wqkv)
+        self.prefetcher_setup.insert_tensor(self.wo)
+        self.tt_ccl = tt_ccl
 
     def init_kv_cache(self, configuration, weight_cache_path):
         """
@@ -269,7 +269,7 @@ class TtLlamaAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config_hifi2,
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             dtype=ttnn.bfloat16,
-            sub_device_id=self.worker_sub_device_id,
+            sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
         ttnn.deallocate(x)
         # print("done matmul")
@@ -406,7 +406,7 @@ class TtLlamaAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config_hifi2,
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             dtype=ttnn.bfloat8_b,
-            sub_device_id=self.worker_sub_device_id,
+            sub_device_id=self.prefetcher_setup.worker_sub_device_id,
         )
         # [1, 1, 32, 2304]
         ttnn.deallocate(attn_output_cat)
@@ -450,20 +450,18 @@ class TtLlamaAttention(LightweightModule):
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
         )
 
-        xqkv_fused = tt_all_reduce(
+        xqkv_fused = self.tt_ccl.line_all_reduce(
             xqkv_fused,
-            self.mesh_device,
             cluster_axis=1,
-            num_reduce_scatter_links=self.num_reduce_scatter_links,
-            num_all_gather_links=self.num_all_gather_links,
+            num_links=3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=self.ccl_dtype,
+            buffer_key="QKV",
         )
 
         if seq_len > 2048:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
 
-        ttnn.deallocate(x_11SH)
+        # ttnn.deallocate(x_11SH)
 
         # split qkv into heads
         (
@@ -478,7 +476,7 @@ class TtLlamaAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        ttnn.deallocate(xqkv_fused)
+        # ttnn.deallocate(xqkv_fused)
 
         ###
         # Rotary embeddings
@@ -608,16 +606,6 @@ class TtLlamaAttention(LightweightModule):
         if seq_len > 1024:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
 
-        # Non fused All Gather Matmul
-        if self.use_fused_all_gather_matmul:  # is true for Ring topology
-            attn_output_11SH = ttnn.all_gather(
-                attn_output_11SH,
-                dim=3,
-                num_links=1,
-                topology=self.ccl_topology,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
@@ -632,17 +620,13 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(attn_output_11SH)
 
         # Reduce-scatter
-        if not self.use_fused_all_gather_matmul:
-            output_11SH = tt_all_reduce(
-                output_11SH,
-                self.mesh_device,
-                cluster_axis=0,
-                dim=0 if self.TG else 3,
-                num_reduce_scatter_links=self.num_reduce_scatter_links,
-                num_all_gather_links=self.num_all_gather_links,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                dtype=self.ccl_dtype,
-            )
+        output_11SH = self.tt_ccl.line_all_reduce(
+            output_11SH,
+            cluster_axis=0,
+            num_links=3,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            buffer_key="WO",
+        )
 
         return output_11SH
 

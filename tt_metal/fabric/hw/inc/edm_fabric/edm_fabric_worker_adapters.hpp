@@ -104,8 +104,8 @@ struct WorkerToFabricEdmSenderImpl {
         volatile uint32_t* const from_remote_buffer_slot_rdptr_ptr,
         volatile uint32_t* const worker_teardown_addr,
         uint32_t local_buffer_index_addr,
-        uint8_t data_noc_cmd_buf,
-        uint8_t sync_noc_cmd_buf) :
+        uint8_t data_noc_cmd_buf = write_reg_cmd_buf,
+        uint8_t sync_noc_cmd_buf = write_at_cmd_buf) :
         edm_buffer_addr(edm_buffer_base_addr),
         edm_buffer_slot_wrptr_addr(
             connected_to_persistent_fabric ? edm_l1_sem_id
@@ -227,7 +227,12 @@ struct WorkerToFabricEdmSenderImpl {
 
     static constexpr size_t edm_sender_channel_field_stride_bytes = 16;
 
-    void open() {
+    // Advanced usage API:
+    // Starts the connection opening process but doesn't wait for the process complete. This avoids waiting
+    // for the read barrier to complete before returning, saving some cycles for advanced users.
+    // !!! IMPORTANT !!!
+    // Must be called alongside (before) open_finish().
+    void open_start() {
         const auto dest_noc_addr_coord_only = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
 
         const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
@@ -256,9 +261,15 @@ struct WorkerToFabricEdmSenderImpl {
 
         const uint64_t edm_connection_handshake_noc_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
         noc_inline_dw_write(edm_connection_handshake_noc_addr, open_connection_value);
+    }
+
+    // Advanced usage API:
+    // Completes the connection opening process. Induces a read barrier
+    // !!! IMPORTANT !!!
+    // Must be called alongside (after) open_start().
+    void open_finish() {
         noc_async_read_barrier();
         this->buffer_slot_wrptr = *this->buffer_slot_wrptr_ptr;
-
         if constexpr (!USER_DEFINED_NUM_BUFFER_SLOTS) {
             this->edm_buffer_addr =
                 this->edm_buffer_base_addr +
@@ -267,7 +278,17 @@ struct WorkerToFabricEdmSenderImpl {
         ASSERT(this->buffer_slot_wrptr < 20);
     }
 
-    void close() {
+    void open() {
+        open_start();
+        open_finish();
+    }
+
+    // Advanced usage API:
+    // Starts the connection closing process but doesn't wait for the process to complete. This avoids waiting
+    // for the ack from the fabric before returning, saving some cycles for advanced users.
+    // !!! IMPORTANT !!!
+    // Must be called alongside (before) close_finish().
+    void close_start() {
         const auto dest_noc_addr_coord_only =
             get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr) &
             ~(uint64_t)NOC_COORDINATE_MASK;
@@ -278,11 +299,21 @@ struct WorkerToFabricEdmSenderImpl {
         // buffer index stored at location after handshake addr
         const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
         noc_inline_dw_write(remote_buffer_index_addr, this->buffer_slot_wrptr);
+    }
 
+    // Advanced usage API:
+    // Completes the connection closing process. Induces a write barrier
+    // !!! IMPORTANT !!!
+    // Must be called alongside (after) close_start().
+    void close_finish() {
         // Need to wait for the ack to teardown notice, from edm
         noc_semaphore_wait(this->worker_teardown_addr, 1);
-
         noc_async_write_barrier();
+    }
+
+    void close() {
+        close_start();
+        close_finish();
     }
 
     uint32_t edm_buffer_addr;

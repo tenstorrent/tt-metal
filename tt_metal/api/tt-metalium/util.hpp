@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include "assert.hpp"
 #include "math.hpp"
 #include "tt_backend_api_types.hpp"
 #include "hostdevcommon/common_values.hpp"
