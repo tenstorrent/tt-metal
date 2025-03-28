@@ -22,7 +22,7 @@ In order to add vLLM support to a new Tenstorrent model, the following requireme
       ```
     - `allocate_kv_cache`: returns the paged kv cache which will be passed to the model during inference. The `kv_cache_shape` argument has shape `(max_num_blocks, num_kv_heads, block_size, head_size)`. In vLLM, this function is used by `TTCacheEngine::_allocate_kv_cache` in [tt_worker.py](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_worker.py).
       ```python
-      allocate_kv_cache(kv_cache_shape : tuple, dtype : torch.dtype, num_layers : int, mesh_device : ttnn.MeshDevice)
+      allocate_kv_cache(kv_cache_shape : tuple, dtype : torch.dtype, num_layers : int)
       ```
     - `prefill_forward` (**text-only models**): returns the prefill output logits on host. The `tokens` argument has shape `(batch_size, max_prompt_len)` and has been zero-padded along the last dim to the length of the longest prompt in the batch. `page_table` has shape `(batch_size, num_blocks)` and has been zero-padded along the last dim to the max number of blocks in the batch. `prompt_lens` has shape `(batch_size)`. In vLLM, this function is used by `TTModelRunner::_execute_model_single_step` in [tt_model_runner.py](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_model_runner.py). In the same file, the preparation of the inputs takes place in `TTModelRunner::prepare_model_input`.
       ```python
