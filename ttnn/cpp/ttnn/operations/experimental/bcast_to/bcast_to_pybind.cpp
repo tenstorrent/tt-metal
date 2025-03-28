@@ -14,15 +14,29 @@ namespace py = pybind11;
 
 void py_bind_broadcast_to(py::module& module) {
     const auto* doc =
-        R"doc(broadcast_to(input: ttnn.Tensor, sizes: List[int], output: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-        Returns a new tensor where singleton dimensions are expanded to given sizes.
-        Unlike :func:`torch.broadcast_to`, this function is not zero-cost and perform a memory copy to create the expanded tensor. This is due to `ttnn.Tensor`'s lack of strided tensor support.
+        R"doc(broadcast_to(input: ttnn.Tensor, ttnn::Shape, memory_config: Optional[ttnn.MemoryConfig] = None, output: Optional[ttnn.Tensor] = None) -> ttnn.Tensor
+        Returns a new tensor where singleton dimensions are broadcasted to the given shape.
 
         Args:
             * :attr:`input`: The tensor to be broadcasted.
             * :attr:`output_shape`: The desired broadcasted shape.
             * :attr:`memory_config`: The memory configuration for the broadcasted tensor.
             * :attr:`output`: An optional tensor to store the broadcasted result.
+
+        Notes:
+            Currently Supports:
+            Data Type
+	            bfloat16
+	            float32
+
+            Tensor Shape
+                up to 4D
+
+            Memory Layout
+                Tile
+
+            Memory Config
+                Interleaved (DRAM / L1)
         )doc";
     using operationType = decltype(ttnn::experimental::broadcast_to);
     bind_registered_operation(

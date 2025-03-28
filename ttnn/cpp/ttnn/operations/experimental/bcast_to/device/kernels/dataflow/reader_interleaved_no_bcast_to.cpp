@@ -8,19 +8,21 @@
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t start_tile_id = get_arg_val<uint32_t>(1);
-    uint32_t num_tiles = get_arg_val<uint32_t>(2);
-    uint32_t HtWt = get_arg_val<uint32_t>(3);
-    uint32_t n_stride = get_arg_val<uint32_t>(4);
-    uint32_t c_stride = get_arg_val<uint32_t>(5);
-    uint32_t N = get_arg_val<uint32_t>(6);
-    uint32_t C = get_arg_val<uint32_t>(7);
-    uint32_t Ht = get_arg_val<uint32_t>(8);
-    uint32_t Wt = get_arg_val<uint32_t>(9);
+    uint32_t start_n = get_arg_val<uint32_t>(1);
+    uint32_t start_c = get_arg_val<uint32_t>(2);
+    uint32_t start_t = get_arg_val<uint32_t>(3);
+    uint32_t start_th = get_arg_val<uint32_t>(4);
+    uint32_t start_tw = get_arg_val<uint32_t>(5);
+    uint32_t num_tiles = get_arg_val<uint32_t>(6);
+    uint32_t n_stride = get_arg_val<uint32_t>(7);
+    uint32_t c_stride = get_arg_val<uint32_t>(8);
+    uint32_t N = get_arg_val<uint32_t>(9);
+    uint32_t C = get_arg_val<uint32_t>(10);
+    uint32_t Ht = get_arg_val<uint32_t>(11);
+    uint32_t Wt = get_arg_val<uint32_t>(12);
 
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
 
-    // TODO pass cb index as compile time arg
     constexpr auto cb_id_src = tt::CBIndex::c_0;
     constexpr uint32_t onetile = 1;
 
@@ -29,18 +31,13 @@ void kernel_main() {
     const InterleavedAddrGenFast<src_is_dram> src = {
         .bank_base_address = src_addr, .page_size = src_tile_bytes, .data_format = src_data_format};
 
-    uint32_t tiles_per_batch = HtWt * C;
-    uint32_t start_n = start_tile_id / tiles_per_batch;
-    uint32_t start_remaining = start_tile_id % tiles_per_batch;
-    uint32_t start_c = start_remaining / HtWt;
-    uint32_t start_t = start_remaining % HtWt;
+    uint32_t HtWt = Ht * Wt;
 
     // this is the INPUT tile offset
     uint32_t tile_offset = start_n * n_stride + start_c * c_stride;
     uint32_t next_batch_shift = n_stride - c_stride * C;
     uint32_t next_channel_shift = c_stride - HtWt;
 
-    // DPRINT << "broadcast_to reader, number of tile " << num_tiles << ENDL();
     uint32_t num_tiles_read = 0;
     tile_offset += start_t;
     for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {

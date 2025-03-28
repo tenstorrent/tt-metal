@@ -110,10 +110,10 @@ def test_broadcast_to_out(device, dtype_pt, dtype_tt, shape_and_broadcast_spec, 
 
 
 profile_input_bcast_shape_pairs = [
-    # ((1, 1, 32, 32), (20, 40, 32, 32)),
-    # ((1, 32, 1, 1), (1, 32, 64, 64)),
-    # ((1, 1, 64, 1), (1, 32, 64, 64)), # col
-    ((1, 1, 1, 64), (1, 32, 64, 64)),  # row
+    ((1, 1, 64, 64), (2, 16, 64, 64)),
+    ((2, 16, 1, 1), (2, 16, 64, 64)),
+    ((2, 1, 64, 1), (2, 16, 64, 64)),  # col
+    ((2, 1, 1, 64), (2, 16, 64, 64)),  # row
     # ((1, 1, 256, 256), (4, 128, 256, 256)),
     # ((4, 128, 1, 1), (4, 128, 256, 256)),
     # ((4, 1, 256, 1), (4, 128, 256, 256)), # col
@@ -161,17 +161,17 @@ def test_broadcast_to_profile(device, dtype_pt, dtype_tt, shape_and_broadcast_sp
 
 
 input_bcast_shape_pairs = [
-    # ((1, 1, 1, 1), (1, 1, 1)),
-    # ((1, 1, 1, 1), (1, 1, 1, 1, 1)),
-    # ((1, 1, 1, 1, 1), (1, 1, 1, 1, 1)),
-    # ((2,1), (3,1)),
-    ((), (1, 1))
+    ((1, 1, 1, 1), (1, 1, 1)),
+    ((1, 1, 1, 1), (1, 1, 1, 1, 1)),
+    ((1, 1, 1, 1, 1), (1, 1, 1, 1, 1)),
+    ((2, 1), (3, 1)),
+    ((), (1, 1)),
 ]
 
 
 @pytest.mark.parametrize("dtype_pt, dtype_tt", ((torch.bfloat16, ttnn.bfloat16),))
 @pytest.mark.parametrize("input, bcast", input_bcast_shape_pairs)
-def test_invalid_broadcast_to(input, bcast, dtype_pt, dtype_tt, device):
+def test_broadcast_to_invalid(input, bcast, dtype_pt, dtype_tt, device):
     torch.manual_seed(0)
 
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(input)
