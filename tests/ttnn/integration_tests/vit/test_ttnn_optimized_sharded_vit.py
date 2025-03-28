@@ -13,7 +13,7 @@ from transformers import AutoImageProcessor
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 
-from models.demos.vit.tt import ttnn_optimized_sharded_vit
+from models.demos.vit.tt import ttnn_optimized_sharded_vit_gs as ttnn_optimized_sharded_vit
 from models.demos.vit.reference import torch_functional_vit
 from models.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 

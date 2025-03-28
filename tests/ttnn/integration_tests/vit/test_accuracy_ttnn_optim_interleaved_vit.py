@@ -16,7 +16,7 @@ from transformers import AutoImageProcessor
 import ttnn
 
 from models.demos.vit.tt import ttnn_optimized_interleaved_vit
-from models.demos.vit.vit_helper_funcs import get_data_loader, get_batch
+from models.demos.wormhole.vit.demo.vit_helper_funcs import get_data_loader, get_batch
 
 from ttnn.model_preprocessing import preprocess_model_parameters
 
