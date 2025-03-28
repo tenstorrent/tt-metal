@@ -16,14 +16,13 @@ def nearest_16(x):
 
 
 def determine_num_cores_for_upsample(nhw: int, width: int, max_cores=64) -> int:
-    gcd_nhw_width = math.gcd(nhw, width)
-    cores = nhw // gcd_nhw_width
-    if cores > max_cores:
-        for divisor in range(max_cores, 0, -1):
-            if nhw % divisor == 0 and (nhw // divisor) % width == 0:
-                cores = divisor
-                break
-    return cores
+    max_nshards = min(nhw, max_cores)
+    nshards = max_nshards
+    while nshards > 0:
+        if nhw % nshards == 0:
+            break
+        nshards -= 1
+    return nshards
 
 
 def get_core_grid_from_num_cores(num_cores: int, grid_rows: int = 8, grid_cols: int = 8):
