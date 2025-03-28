@@ -4,10 +4,13 @@
 
 #include "tests/ttnn/unit_tests/gtests/ccl/test_fabric_edm_common.hpp"
 
+#include <vector>
+
 int main(int argc, char** argv) {
     std::size_t arg_idx = 1;
-    std::size_t num_mcasts = std::stoi(argv[arg_idx++]);
-    std::size_t num_unicasts = std::stoi(argv[arg_idx++]);
+    bool fabric_unicast = std::stoi(argv[arg_idx++]);
+    const std::string& message_noc_type = std::string(argv[arg_idx++]);
+    std::size_t num_messages = std::stoi(argv[arg_idx++]);
     std::size_t num_links = std::stoi(argv[arg_idx++]);
     std::size_t num_op_invocations = std::stoi(argv[arg_idx++]);
     bool line_sync = std::stoi(argv[arg_idx++]);
@@ -28,6 +31,11 @@ int main(int argc, char** argv) {
         tt::log_warning("This test with {} links can only be run on TG devices", num_links);
         return 1;
     }
+    TT_FATAL(num_messages > 0, "num_messages must be greater than 0");
+    TT_FATAL(packet_payload_size_bytes > 0, "packet_payload_size_bytes must be greater than 0");
+    TT_FATAL(num_links > 0, "num_links must be greater than 0");
+    TT_FATAL(num_op_invocations > 0, "num_op_invocations must be greater than 0");
+    TT_FATAL(line_size > 0, "line_size must be greater than 0");
 
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
@@ -35,6 +43,27 @@ int main(int argc, char** argv) {
     params.fabric_mode = static_cast<FabricTestMode>(fabric_mode);
     params.disable_sends_for_interior_workers = disable_sends_for_interior_workers;
     params.disable_end_workers_in_backward_direction = unidirectional_test;
-    RunWriteThroughputStabilityTestWithPersistentFabric(
-        num_mcasts, num_unicasts, num_links, num_op_invocations, params, packet_payload_size_bytes);
+
+    auto chip_send_type = fabric_unicast ? tt::tt_fabric::CHIP_UNICAST : tt::tt_fabric::CHIP_MULTICAST;
+
+    tt::tt_fabric::NocSendType noc_send_type;
+    if (message_noc_type == "noc_unicast_write") {
+        noc_send_type = tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE;
+    } else if (message_noc_type == "noc_multicast_write") {
+        noc_send_type = tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE;
+    } else if (message_noc_type == "noc_unicast_atomic_inc") {
+        noc_send_type = tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC;
+    } else if (message_noc_type == "noc_fused_unicast_write_atomic_inc") {
+        noc_send_type = tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC;
+    } else {
+        TT_THROW("Invalid message type: {}", message_noc_type.c_str());
+    }
+
+    std::vector<Fabric1DPacketSendTestSpec> test_specs{
+        {.chip_send_type = chip_send_type,
+         .noc_send_type = noc_send_type,
+         .num_messages = num_messages,
+         .packet_payload_size_bytes = packet_payload_size_bytes}};
+
+    Run1DFabricPacketSendTest(num_links, num_op_invocations, test_specs, params);
 }
