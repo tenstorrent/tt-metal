@@ -6,6 +6,7 @@
 
 #include "dropout_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::operations::experimental::dropout::program {
 
@@ -39,11 +40,12 @@ struct DropoutProgramFactory {
 
 struct DropoutMeshWorkloadFactory {
     using shared_variables_t = DropoutSharedVariables;
-    using cached_mesh_workload_t = ttnn::device_operation::CachedMeshWorkload<shared_variables_t>;
+    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     // Dropout generates N different programs, but they differ only in the per-device seed set as a runtime argument.
     // TODO: when heterogenous runtime arguments are supported, create a single program for all devices, and only
-    // override the runtime arguments for each device.
+    // override the runtime arguments for each device. In addition, use `CachedMeshWorkload` instead of
+    // `AdaptedCachedMeshWorkload`, as only a single `shared_variables_t` is needed.
     static cached_mesh_workload_t create_mesh_workload(
         const operation_attributes_t& operation_attributes,
         const std::vector<ttnn::MeshCoordinate>& mesh_coords,

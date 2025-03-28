@@ -60,12 +60,21 @@ public:
 template <typename shared_variables_t>
 struct CachedMeshWorkload {
     tt::tt_metal::distributed::MeshWorkload workload;
+    shared_variables_t shared_variables;
 
-    // Shared variables between create and override_runtime_arguments functions.
-    // Correspnds to ranges defined in `workload`.
+    CachedMeshWorkload(tt::tt_metal::distributed::MeshWorkload&& workload, shared_variables_t&& shared_variables) :
+        workload{std::move(workload)}, shared_variables{std::move(shared_variables)} {}
+};
+
+// Adapted cached mesh workload is used to interpop TT-distributed infra that dispatches MeshWorkloads and program
+// factories written for a single device: programs and shared variables are created by single-device program factories,
+// then stamped out to the entire mesh.
+template <typename shared_variables_t>
+struct AdaptedCachedMeshWorkload {
+    tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<distributed::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    CachedMeshWorkload(
+    AdaptedCachedMeshWorkload(
         tt::tt_metal::distributed::MeshWorkload&& workload,
         std::unordered_map<distributed::MeshCoordinateRange, shared_variables_t>&& shared_variables) :
         workload{std::move(workload)}, shared_variables{std::move(shared_variables)} {}
@@ -81,12 +90,17 @@ struct CachedProgramFactory {
     std::size_t program_factory_index = 0;
 
     template <typename shared_variables_t>
+    CachedProgramFactory(CachedProgram<shared_variables_t>&& cached_program, std::size_t program_factory_index) :
+        cached_program{std::move(cached_program)}, program_factory_index{program_factory_index} {}
+
+    template <typename shared_variables_t>
     CachedProgramFactory(CachedMeshWorkload<shared_variables_t>&& cached_workload, std::size_t program_factory_index) :
         cached_program{std::move(cached_workload)}, program_factory_index{program_factory_index} {}
 
     template <typename shared_variables_t>
-    CachedProgramFactory(CachedProgram<shared_variables_t>&& cached_program, std::size_t program_factory_index) :
-        cached_program{std::move(cached_program)}, program_factory_index{program_factory_index} {}
+    CachedProgramFactory(
+        AdaptedCachedMeshWorkload<shared_variables_t>&& cached_workload, std::size_t program_factory_index) :
+        cached_program{std::move(cached_workload)}, program_factory_index{program_factory_index} {}
 };
 
 // Generic Program Cache: This data structure is tied to a device handle and can store generic program types from

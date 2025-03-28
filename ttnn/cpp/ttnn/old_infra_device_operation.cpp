@@ -112,16 +112,15 @@ OldInfraDeviceOperation<OutputTensors>::MeshWorkloadFactory::create_mesh_workloa
     auto workload_with_callbacks = operation_attributes.create_mesh_workload(
         mesh_coords, tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_return_value);
 
-    // TODO: we copy the same callback across mesh devices.
-    // Consider if this is needed to be optimized, or if there is a need to allow different callbacks per device.
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    for (const auto& [range, _] : workload_with_callbacks.workload.get_programs()) {
-        shared_variables[range] = shared_variables_t{
-            workload_with_callbacks.override_addresses_callback,
-            workload_with_callbacks.override_runtime_arguments_callback};
-    }
+    TT_FATAL(
+        !workload_with_callbacks.workload_callback.has_value() || workload_with_callbacks.per_program_callbacks.empty(),
+        "At most one of 'workload_callback' or 'per_program_callbacks' can be specified.");
 
-    return cached_mesh_workload_t{std::move(workload_with_callbacks.workload), std::move(shared_variables)};
+    return cached_mesh_workload_t{
+        std::move(workload_with_callbacks.workload),
+        shared_variables_t{
+            std::move(workload_with_callbacks.workload_callback),
+            std::move(workload_with_callbacks.per_program_callbacks)}};
 }
 
 template <typename OutputTensors>
@@ -130,28 +129,19 @@ void OldInfraDeviceOperation<OutputTensors>::MeshWorkloadFactory::override_runti
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    for (auto& [coord, program] : cached_workload.workload.get_programs()) {
-        auto& shared_variables = cached_workload.shared_variables.at(coord);
-        auto& override_addresses_callback = shared_variables.override_addresses_callback;
-        auto& override_runtime_arguments_callback = shared_variables.override_runtime_arguments_callback;
-        if (override_addresses_callback.has_value()) {
-            // Deprecated
-            override_addresses(
-                override_addresses_callback.value(),
-                program,
-                tensor_args.input_tensors,
-                tensor_args.optional_input_tensors,
-                tensor_return_value);
-        }
+    if (cached_workload.shared_variables.workload_callback.has_value()) {
+        operation_attributes.override_runtime_arguments(
+            *cached_workload.shared_variables.workload_callback,
+            cached_workload.workload,
+            tensor_args.input_tensors,
+            tensor_args.optional_input_tensors,
+            tensor_return_value);
+    }
 
-        if (override_runtime_arguments_callback.has_value()) {
-            operation_attributes.override_runtime_arguments(
-                override_runtime_arguments_callback.value(),
-                program,
-                tensor_args.input_tensors,
-                tensor_args.optional_input_tensors,
-                tensor_return_value);
-        }
+    for (auto& [range, callback] : cached_workload.shared_variables.per_program_callbacks) {
+        auto& program = cached_workload.workload.get_programs().at(range);
+        operation_attributes.override_runtime_arguments(
+            callback, program, tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_return_value);
     }
 }
 
