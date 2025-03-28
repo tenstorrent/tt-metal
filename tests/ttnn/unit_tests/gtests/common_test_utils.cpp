@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "common_test_utils.hpp"
 
+#include <cmath>
+#include <stdexcept>
+#include <vector>
+
 namespace test_utils {
 float pcc(const std::vector<float>& x, const std::vector<float>& y) {
     if (x.size() != y.size()) {
