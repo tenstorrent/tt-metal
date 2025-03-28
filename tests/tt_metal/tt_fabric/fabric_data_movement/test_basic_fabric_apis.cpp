@@ -422,6 +422,213 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
     ValidateBuffer(atomic_inc, receiver_atomic_buffer);
 }
 
+void RunAsyncWriteMulticastTest(
+    BaseFabricFixture* fixture, fabric_mode mode, bool is_raw_write, bool multidirectional = false) {
+    CoreCoord sender_logical_core = {0, 0};
+    CoreRangeSet sender_logical_crs = {sender_logical_core};
+    CoreCoord receiver_logical_core = {1, 0};
+    CoreRangeSet receiver_logical_crs = {receiver_logical_core};
+    std::pair<mesh_id_t, chip_id_t> start_mesh_chip_id;
+    chip_id_t physical_start_device_id;
+    std::unordered_map<RoutingDirection, std::vector<std::pair<mesh_id_t, chip_id_t>>> end_mesh_chip_ids_by_dir;
+    std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;
+
+    // Configure directions and hops based on test type
+    std::unordered_map<RoutingDirection, uint32_t> mcast_hops;
+    if (multidirectional) {
+        mcast_hops[RoutingDirection::E] = 1;
+        mcast_hops[RoutingDirection::W] = 2;
+    } else {
+        mcast_hops[RoutingDirection::E] = 1;
+    }
+
+    auto control_plane = tt::Cluster::instance().get_control_plane();
+
+    // Find a device with enough neighbours in the specified directions
+    if (!fixture->find_device_with_neighbor_in_multi_direction(
+            start_mesh_chip_id,
+            end_mesh_chip_ids_by_dir,
+            physical_start_device_id,
+            physical_end_device_ids_by_dir,
+            mcast_hops)) {
+        GTEST_SKIP() << "No path found between sender and receivers";
+    }
+
+    // Log test configuration
+    std::string test_type = is_raw_write ? "Raw" : "";
+    std::string direction_type = multidirectional ? "Multidirectional" : "";
+    tt::log_info(
+        tt::LogTest,
+        "Async {} Write Mcast {} from {} to {}",
+        test_type,
+        direction_type,
+        start_mesh_chip_id.second,
+        end_mesh_chip_ids_by_dir);
+
+    auto* sender_device = DevicePool::instance().get_active_device(physical_start_device_id);
+    CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
+    // Virtual coordinate space. All devices have the same logical to virtual mapping
+    CoreCoord receiver_virtual_core = sender_device->worker_core_from_logical_core(receiver_logical_core);
+
+    uint32_t data_size = tt::constants::TILE_HW * sizeof(uint32_t);
+
+    // Reset buffer space for test validation
+    std::vector<uint32_t> receiver_buffer_data(data_size / sizeof(uint32_t), 0);
+
+    // Create receiver programs and buffers
+    std::map<string, string> defines = {};
+    if (mode == fabric_mode::PULL) {
+        defines["FVC_MODE_PULL"] = "";
+    }
+    std::vector<tt_metal::Program> receiver_programs;
+    std::vector<std::shared_ptr<tt_metal::Buffer>> receiver_buffers;
+
+    for (auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
+        for (auto physical_end_device_id : physical_end_device_ids) {
+            auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_id);
+            auto receiver_buffer =
+                PrepareBuffer(receiver_device, data_size, receiver_logical_crs, receiver_buffer_data);
+            tt::Cluster::instance().l1_barrier(physical_end_device_id);
+            // Create the receiver program for validation
+            auto receiver_program = tt_metal::CreateProgram();
+            CreateReceiverKernel(
+                receiver_program, receiver_logical_core, defines, receiver_buffer->address(), data_size);
+            fixture->RunProgramNonblocking(receiver_device, receiver_program);
+            receiver_programs.push_back(std::move(receiver_program));
+            receiver_buffers.push_back(std::move(receiver_buffer));
+        }
+    }
+
+    // Ensure all receiver buffers are at the same address
+    uint32_t receiver_buffer_addr = receiver_buffers[0]->address();
+    for (const auto& receiver_buffer : receiver_buffers) {
+        if (receiver_buffer_addr != receiver_buffer->address()) {
+            GTEST_SKIP() << "Receiver buffers are not at the same address";
+        }
+    }
+
+    // Prepare sender buffer based on whether it's raw write or not
+    std::vector<uint32_t> sender_buffer_data;
+    std::shared_ptr<tt_metal::Buffer> sender_buffer;
+
+    if (is_raw_write) {
+        // For raw write, we don't need packet header
+        sender_buffer_data.resize(data_size / sizeof(uint32_t), 0);
+        std::iota(sender_buffer_data.begin(), sender_buffer_data.end(), 0);
+        sender_buffer = PrepareBuffer(sender_device, data_size, sender_logical_crs, sender_buffer_data);
+    } else {
+        // Packet header needs to be inlined with the data being sent
+        uint32_t sender_packet_header_and_data_size = tt::tt_fabric::PACKET_HEADER_SIZE_BYTES + data_size;
+        sender_buffer_data.resize(sender_packet_header_and_data_size / sizeof(uint32_t), 0);
+        std::iota(
+            sender_buffer_data.begin() + PACKET_HEADER_SIZE_BYTES / sizeof(uint32_t), sender_buffer_data.end(), 0);
+        sender_buffer =
+            PrepareBuffer(sender_device, sender_packet_header_and_data_size, sender_logical_crs, sender_buffer_data);
+
+        // Extract the expected data to be read from the receiver
+        std::copy(
+            sender_buffer_data.begin() + tt::tt_fabric::PACKET_HEADER_SIZE_BYTES / sizeof(uint32_t),
+            sender_buffer_data.end(),
+            receiver_buffer_data.begin());
+    }
+
+    // Wait for buffer data to be written to device
+    tt::Cluster::instance().l1_barrier(physical_start_device_id);
+
+    auto receiver_noc_encoding =
+        tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
+
+    // Create the sender program
+    auto sender_program = tt_metal::CreateProgram();
+    std::vector<uint32_t> sender_compile_time_args = {(uint32_t)is_raw_write, (uint32_t)mode};
+
+    // Get router encodings for each direction
+    std::unordered_map<RoutingDirection, uint32_t> sender_router_noc_xys;
+    for (auto& [routing_direction, end_mesh_chip_ids] : end_mesh_chip_ids_by_dir) {
+        auto routers = control_plane->get_routers_to_chip(
+            start_mesh_chip_id.first,
+            start_mesh_chip_id.second,
+            end_mesh_chip_ids[0].first,
+            end_mesh_chip_ids[0].second);
+        auto& sender_virtual_router_coord = routers[0].second;
+        sender_router_noc_xys.try_emplace(
+            routing_direction,
+            tt_metal::hal_ref.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y));
+    }
+
+    // Prepare runtime args based on whether it's multidirectional or not
+    std::vector<uint32_t> sender_runtime_args;
+
+    if (multidirectional) {
+        sender_runtime_args = {
+            sender_buffer->address(),
+            receiver_noc_encoding,
+            receiver_buffer_addr,
+            data_size,
+            end_mesh_chip_ids_by_dir[RoutingDirection::E][0].first,
+            end_mesh_chip_ids_by_dir[RoutingDirection::E][0].second,
+            mcast_hops[RoutingDirection::E],
+            sender_router_noc_xys[RoutingDirection::E],
+            end_mesh_chip_ids_by_dir[RoutingDirection::W][0].first,
+            end_mesh_chip_ids_by_dir[RoutingDirection::W][0].second,
+            mcast_hops[RoutingDirection::W],
+            sender_router_noc_xys[RoutingDirection::W]};
+    } else {
+        auto routing_direction = RoutingDirection::E;
+        sender_runtime_args = {
+            sender_buffer->address(),
+            receiver_noc_encoding,
+            receiver_buffer_addr,
+            data_size,
+            end_mesh_chip_ids_by_dir[routing_direction][0].first,
+            end_mesh_chip_ids_by_dir[routing_direction][0].second,
+            mcast_hops[routing_direction],
+            sender_router_noc_xys[routing_direction]};
+    }
+
+    // Choose the appropriate kernel based on whether it's multidirectional or not
+    std::string kernel_path;
+    if (multidirectional) {
+        kernel_path =
+            "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/"
+            "fabric_async_write_multicast_multidirectional_sender.cpp";
+    } else {
+        kernel_path =
+            "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/"
+            "fabric_async_write_multicast_sender.cpp";
+    }
+
+    CreateSenderKernel(
+        sender_program,
+        kernel_path,
+        std::move(sender_compile_time_args),
+        sender_logical_core,
+        defines,
+        std::move(sender_runtime_args));
+
+    // Launch sender and receiver programs and wait for them to finish
+    fixture->RunProgramNonblocking(sender_device, sender_program);
+    fixture->WaitForSingleProgramDone(sender_device, sender_program);
+
+    for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
+        for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
+            auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_ids[i]);
+            fixture->WaitForSingleProgramDone(receiver_device, receiver_programs[i]);
+        }
+    }
+
+    // Validate the data received by the receiver
+    for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
+        for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
+            if (is_raw_write) {
+                ValidateBuffer(sender_buffer_data, receiver_buffers[i]);
+            } else {
+                ValidateBuffer(receiver_buffer_data, receiver_buffers[i]);
+            }
+        }
+    }
+}
+
 TEST_F(Fabric2DPullFixture, TestAsyncWrite) { RunAsyncWriteTest(this, fabric_mode::PULL, false); }
 
 TEST_F(Fabric2DPushFixture, TestAsyncWrite) { RunAsyncWriteTest(this, fabric_mode::PUSH, false); }
@@ -443,584 +650,19 @@ TEST_F(Fabric2DPullFixture, TestAsyncRawWriteAtomicInc) { RunAsyncWriteAtomicInc
 TEST_F(Fabric2DPushFixture, TestAsyncRawWriteAtomicInc) { RunAsyncWriteAtomicIncTest(this, fabric_mode::PUSH, true); }
 
 TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticast) {
-    CoreCoord sender_logical_core = {0, 0};
-    CoreRangeSet sender_logical_crs = {sender_logical_core};
-    CoreCoord receiver_logical_core = {1, 0};
-    CoreRangeSet receiver_logical_crs = {receiver_logical_core};
-    std::pair<mesh_id_t, chip_id_t> start_mesh_chip_id;
-    chip_id_t physical_start_device_id;
-    std::unordered_map<RoutingDirection, std::vector<std::pair<mesh_id_t, chip_id_t>>> end_mesh_chip_ids_by_dir;
-    std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;
-    std::unordered_map<RoutingDirection, uint32_t> mcast_hops;
-    auto routing_direction = RoutingDirection::E;
-    mcast_hops[routing_direction] = 1;
-
-    auto control_plane = tt::Cluster::instance().get_control_plane();
-
-    // Find a device with enough neighbours in the specified direction
-    bool connection_found = false;
-    for (auto* device : devices_) {
-        start_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
-        std::unordered_map<RoutingDirection, std::vector<std::pair<mesh_id_t, chip_id_t>>>
-            temp_end_mesh_chip_ids_by_dir;
-        std::unordered_map<RoutingDirection, std::vector<chip_id_t>> temp_physical_end_device_ids_by_dir;
-        connection_found = true;
-        for (auto [routing_direction, num_hops] : mcast_hops) {
-            bool direction_found = true;
-            auto& temp_end_mesh_chip_ids = temp_end_mesh_chip_ids_by_dir[routing_direction];
-            auto& temp_physical_end_device_ids = temp_physical_end_device_ids_by_dir[routing_direction];
-            uint32_t curr_mesh_id = start_mesh_chip_id.first;
-            uint32_t curr_chip_id = start_mesh_chip_id.second;
-            for (uint32_t i = 0; i < num_hops; i++) {
-                auto neighbors = control_plane->get_intra_chip_neighbors(curr_mesh_id, curr_chip_id, routing_direction);
-                if (neighbors.size() > 0) {
-                    temp_end_mesh_chip_ids.emplace_back(curr_mesh_id, neighbors[0]);
-                    temp_physical_end_device_ids.push_back(
-                        control_plane->get_physical_chip_id_from_mesh_chip_id(temp_end_mesh_chip_ids.back()));
-                    curr_mesh_id = temp_end_mesh_chip_ids.back().first;
-                    curr_chip_id = temp_end_mesh_chip_ids.back().second;
-                } else {
-                    direction_found = false;
-                    break;
-                }
-            }
-            if (!direction_found) {
-                connection_found = false;
-                break;
-            }
-        }
-        if (connection_found) {
-            physical_start_device_id = device->id();
-            end_mesh_chip_ids_by_dir = std::move(temp_end_mesh_chip_ids_by_dir);
-            physical_end_device_ids_by_dir = std::move(temp_physical_end_device_ids_by_dir);
-            break;
-        }
-    }
-
-    if (!connection_found) {
-        GTEST_SKIP() << "No path found between sender and receivers";
-    }
-
-    auto* sender_device = DevicePool::instance().get_active_device(physical_start_device_id);
-    CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
-    // Virtual coordinate space. All devices have the same logical to virtual mapping
-    CoreCoord receiver_virtual_core = sender_device->worker_core_from_logical_core(receiver_logical_core);
-
-    uint32_t data_size = tt::constants::TILE_HW * sizeof(uint32_t);
-
-    auto receiver_shard_parameters =
-        ShardSpecBuffer(receiver_logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-
-    // Reset buffer space for test validation
-    std::vector<uint32_t> receiver_buffer_data(data_size / sizeof(uint32_t), 0);
-
-    std::map<string, string> defines = {};
-    defines["FVC_MODE_PULL"] = "";
-    std::vector<tt_metal::Program> receiver_programs;
-    std::vector<std::shared_ptr<tt_metal::Buffer>> receiver_buffers;
-    for (auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
-        for (auto physical_end_device_id : physical_end_device_ids) {
-            auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_id);
-            auto receiver_buffer =
-                PrepareBuffer(receiver_device, data_size, receiver_logical_crs, receiver_buffer_data);
-            tt::Cluster::instance().l1_barrier(physical_end_device_id);
-            // Create the receiver program for validation
-            auto receiver_program = tt_metal::CreateProgram();
-            CreateReceiverKernel(
-                receiver_program, receiver_logical_core, defines, receiver_buffer->address(), data_size);
-            this->RunProgramNonblocking(receiver_device, receiver_program);
-            receiver_programs.push_back(std::move(receiver_program));
-            receiver_buffers.push_back(std::move(receiver_buffer));
-        }
-    }
-    // Assume all receiver buffers are at the same address
-    uint32_t receiver_buffer_addr = receiver_buffers[0]->address();
-    for (const auto& receiver_buffer : receiver_buffers) {
-        if (receiver_buffer_addr != receiver_buffer->address()) {
-            GTEST_SKIP() << "Receiver buffers are not at the same address";
-        }
-    }
-
-    // Packet header needs to be inlined with the data being sent, so this test just allocates buffer space for both
-    // together on the sender
-    uint32_t sender_packet_header_and_data_size = tt::tt_fabric::PACKET_HEADER_SIZE_BYTES + data_size;
-    std::vector<uint32_t> sender_buffer_data(sender_packet_header_and_data_size / sizeof(uint32_t), 0);
-    std::iota(sender_buffer_data.begin() + PACKET_HEADER_SIZE_BYTES / sizeof(uint32_t), sender_buffer_data.end(), 0);
-    auto sender_buffer =
-        PrepareBuffer(sender_device, sender_packet_header_and_data_size, sender_logical_crs, sender_buffer_data);
-
-    // Extract the expected data to be read from the receiver
-    std::copy(
-        sender_buffer_data.begin() + tt::tt_fabric::PACKET_HEADER_SIZE_BYTES / sizeof(uint32_t),
-        sender_buffer_data.end(),
-        receiver_buffer_data.begin());
-
-    // Wait for buffer data to be written to device
-    tt::Cluster::instance().l1_barrier(physical_start_device_id);
-
-    auto receiver_noc_encoding =
-        tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
-
-    // Create the sender program
-    auto sender_program = tt_metal::CreateProgram();
-    std::vector<uint32_t> sender_compile_time_args = {0, fabric_mode::PULL};
-    std::unordered_map<RoutingDirection, uint32_t> sender_router_noc_xys;
-    for (auto& [routing_direction, end_mesh_chip_ids] : end_mesh_chip_ids_by_dir) {
-        auto routers = control_plane->get_routers_to_chip(
-            start_mesh_chip_id.first,
-            start_mesh_chip_id.second,
-            end_mesh_chip_ids[0].first,
-            end_mesh_chip_ids[0].second);
-        auto& sender_virtual_router_coord = routers[0].second;
-        sender_router_noc_xys.try_emplace(
-            routing_direction,
-            tt_metal::hal_ref.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y));
-    }
-
-    std::vector<uint32_t> sender_runtime_args = {
-        sender_buffer->address(),
-        receiver_noc_encoding,
-        receiver_buffer_addr,
-        data_size,
-        end_mesh_chip_ids_by_dir[routing_direction][0].first,
-        end_mesh_chip_ids_by_dir[routing_direction][0].second,
-        mcast_hops[routing_direction],
-        sender_router_noc_xys[routing_direction]};
-    CreateSenderKernel(
-        sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_async_write_multicast_sender.cpp",
-        std::move(sender_compile_time_args),
-        sender_logical_core,
-        defines,
-        std::move(sender_runtime_args));
-
-    // Launch sender and receiver programs and wait for them to finish
-    this->RunProgramNonblocking(sender_device, sender_program);
-    this->WaitForSingleProgramDone(sender_device, sender_program);
-    for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
-        for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
-            auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_ids[i]);
-            this->WaitForSingleProgramDone(receiver_device, receiver_programs[i]);
-        }
-    }
-
-    // Validate the data received by the receiver
-    for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
-        for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
-            ValidateBuffer(receiver_buffer_data, receiver_buffers[i]);
-        }
-    }
+    RunAsyncWriteMulticastTest(this, fabric_mode::PULL, false, false);
 }
 
 TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticast) {
-    CoreCoord sender_logical_core = {0, 0};
-    CoreRangeSet sender_logical_crs = {sender_logical_core};
-    CoreCoord receiver_logical_core = {1, 0};
-    CoreRangeSet receiver_logical_crs = {receiver_logical_core};
-    std::pair<mesh_id_t, chip_id_t> start_mesh_chip_id;
-    chip_id_t physical_start_device_id;
-    std::unordered_map<RoutingDirection, std::vector<std::pair<mesh_id_t, chip_id_t>>> end_mesh_chip_ids_by_dir;
-    std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;
-    std::unordered_map<RoutingDirection, uint32_t> mcast_hops;
-    auto routing_direction = RoutingDirection::E;
-    mcast_hops[routing_direction] = 1;
-
-    auto control_plane = tt::Cluster::instance().get_control_plane();
-
-    // Find a device with enough neighbours in the specified direction
-    if (!find_device_with_neighbor_in_multi_direction(
-            start_mesh_chip_id,
-            end_mesh_chip_ids_by_dir,
-            physical_start_device_id,
-            physical_end_device_ids_by_dir,
-            mcast_hops)) {
-        GTEST_SKIP() << "No path found between sender and receivers";
-    }
-
-    tt::log_info(
-        tt::LogTest, "Async Raw Write Mcast from {} to {}", start_mesh_chip_id.second, end_mesh_chip_ids_by_dir);
-
-    auto* sender_device = DevicePool::instance().get_active_device(physical_start_device_id);
-    CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
-    // Virtual coordinate space. All devices have the same logical to virtual mapping
-    CoreCoord receiver_virtual_core = sender_device->worker_core_from_logical_core(receiver_logical_core);
-
-    uint32_t data_size = tt::constants::TILE_HW * sizeof(uint32_t);
-
-    auto receiver_shard_parameters =
-        ShardSpecBuffer(receiver_logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-
-    // Reset buffer space for test validation
-    std::vector<uint32_t> receiver_buffer_data(data_size / sizeof(uint32_t), 0);
-
-    std::map<string, string> defines = {};
-    defines["FVC_MODE_PULL"] = "";
-    std::vector<tt_metal::Program> receiver_programs;
-    std::vector<std::shared_ptr<tt_metal::Buffer>> receiver_buffers;
-    for (auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
-        for (auto physical_end_device_id : physical_end_device_ids) {
-            auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_id);
-            auto receiver_buffer =
-                PrepareBuffer(receiver_device, data_size, receiver_logical_crs, receiver_buffer_data);
-            tt::Cluster::instance().l1_barrier(physical_end_device_id);
-            // Create the receiver program for validation
-            auto receiver_program = tt_metal::CreateProgram();
-            CreateReceiverKernel(
-                receiver_program, receiver_logical_core, defines, receiver_buffer->address(), data_size);
-            this->RunProgramNonblocking(receiver_device, receiver_program);
-            receiver_programs.push_back(std::move(receiver_program));
-            receiver_buffers.push_back(std::move(receiver_buffer));
-        }
-    }
-    // Assume all receiver buffers are at the same address
-    uint32_t receiver_buffer_addr = receiver_buffers[0]->address();
-    for (const auto& receiver_buffer : receiver_buffers) {
-        if (receiver_buffer_addr != receiver_buffer->address()) {
-            GTEST_SKIP() << "Receiver buffers are not at the same address";
-        }
-    }
-
-    std::vector<uint32_t> sender_buffer_data(data_size / sizeof(uint32_t), 0);
-    std::iota(sender_buffer_data.begin(), sender_buffer_data.end(), 0);
-    auto sender_buffer = PrepareBuffer(sender_device, data_size, sender_logical_crs, sender_buffer_data);
-
-    // Wait for buffer data to be written to device
-    tt::Cluster::instance().l1_barrier(physical_start_device_id);
-
-    auto receiver_noc_encoding =
-        tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
-
-    // Create the sender program
-    auto sender_program = tt_metal::CreateProgram();
-    std::vector<uint32_t> sender_compile_time_args = {1, fabric_mode::PULL};
-    std::unordered_map<RoutingDirection, uint32_t> sender_router_noc_xys;
-    for (auto& [routing_direction, end_mesh_chip_ids] : end_mesh_chip_ids_by_dir) {
-        auto routers = control_plane->get_routers_to_chip(
-            start_mesh_chip_id.first,
-            start_mesh_chip_id.second,
-            end_mesh_chip_ids[0].first,
-            end_mesh_chip_ids[0].second);
-        auto& sender_virtual_router_coord = routers[0].second;
-        sender_router_noc_xys.try_emplace(
-            routing_direction,
-            tt_metal::hal_ref.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y));
-    }
-
-    std::vector<uint32_t> sender_runtime_args = {
-        sender_buffer->address(),
-        receiver_noc_encoding,
-        receiver_buffer_addr,
-        data_size,
-        end_mesh_chip_ids_by_dir[routing_direction][0].first,
-        end_mesh_chip_ids_by_dir[routing_direction][0].second,
-        mcast_hops[routing_direction],
-        sender_router_noc_xys[routing_direction]};
-    CreateSenderKernel(
-        sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_async_write_multicast_sender.cpp",
-        std::move(sender_compile_time_args),
-        sender_logical_core,
-        defines,
-        std::move(sender_runtime_args));
-
-    // Launch sender and receiver programs and wait for them to finish
-    this->RunProgramNonblocking(sender_device, sender_program);
-    this->WaitForSingleProgramDone(sender_device, sender_program);
-    for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
-        for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
-            auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_ids[i]);
-            this->WaitForSingleProgramDone(receiver_device, receiver_programs[i]);
-        }
-    }
-
-    // Validate the data received by the receiver
-    for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
-        for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
-            ValidateBuffer(sender_buffer_data, receiver_buffers[i]);
-        }
-    }
+    RunAsyncWriteMulticastTest(this, fabric_mode::PULL, true, false);
 }
 
 TEST_F(Fabric2DPullFixture, TestAsyncWriteMulticastMultidirectional) {
-    CoreCoord sender_logical_core = {0, 0};
-    CoreRangeSet sender_logical_crs = {sender_logical_core};
-    CoreCoord receiver_logical_core = {1, 0};
-    CoreRangeSet receiver_logical_crs = {receiver_logical_core};
-    std::pair<mesh_id_t, chip_id_t> start_mesh_chip_id;
-    chip_id_t physical_start_device_id;
-    std::unordered_map<RoutingDirection, std::vector<std::pair<mesh_id_t, chip_id_t>>> end_mesh_chip_ids_by_dir;
-    std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;
-    RoutingDirection routing_direction = RoutingDirection::E;
-    std::unordered_map<RoutingDirection, uint32_t> mcast_hops;
-    mcast_hops[RoutingDirection::E] = 1;
-    mcast_hops[RoutingDirection::W] = 2;
-
-    auto control_plane = tt::Cluster::instance().get_control_plane();
-
-    // Find a device with enough neighbours in the specified direction
-    if (!find_device_with_neighbor_in_multi_direction(
-            start_mesh_chip_id,
-            end_mesh_chip_ids_by_dir,
-            physical_start_device_id,
-            physical_end_device_ids_by_dir,
-            mcast_hops)) {
-        GTEST_SKIP() << "No path found between sender and receivers";
-    }
-    tt::log_info(
-        tt::LogTest,
-        "Async Write Mcast Multidirection from {} to {}",
-        start_mesh_chip_id.second,
-        end_mesh_chip_ids_by_dir);
-
-    auto* sender_device = DevicePool::instance().get_active_device(physical_start_device_id);
-    CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
-    // Virtual coordinate space. All devices have the same logical to virtual mapping
-    CoreCoord receiver_virtual_core = sender_device->worker_core_from_logical_core(receiver_logical_core);
-
-    uint32_t data_size = tt::constants::TILE_HW * sizeof(uint32_t);
-
-    auto receiver_shard_parameters =
-        ShardSpecBuffer(receiver_logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-
-    // Reset buffer space for test validation
-    std::vector<uint32_t> receiver_buffer_data(data_size / sizeof(uint32_t), 0);
-
-    std::map<string, string> defines = {};
-    defines["FVC_MODE_PULL"] = "";
-    std::vector<tt_metal::Program> receiver_programs;
-    std::vector<std::shared_ptr<tt_metal::Buffer>> receiver_buffers;
-    for (auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
-        for (auto physical_end_device_id : physical_end_device_ids) {
-            auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_id);
-            auto receiver_buffer =
-                PrepareBuffer(receiver_device, data_size, receiver_logical_crs, receiver_buffer_data);
-            tt::Cluster::instance().l1_barrier(physical_end_device_id);
-            // Create the receiver program for validation
-            auto receiver_program = tt_metal::CreateProgram();
-            CreateReceiverKernel(
-                receiver_program, receiver_logical_core, defines, receiver_buffer->address(), data_size);
-            this->RunProgramNonblocking(receiver_device, receiver_program);
-            receiver_programs.push_back(std::move(receiver_program));
-            receiver_buffers.push_back(std::move(receiver_buffer));
-        }
-    }
-    // Assume all receiver buffers are at the same address
-    uint32_t receiver_buffer_addr = receiver_buffers[0]->address();
-    for (const auto& receiver_buffer : receiver_buffers) {
-        if (receiver_buffer_addr != receiver_buffer->address()) {
-            GTEST_SKIP() << "Receiver buffers are not at the same address";
-        }
-    }
-
-    uint32_t sender_packet_header_and_data_size = tt::tt_fabric::PACKET_HEADER_SIZE_BYTES + data_size;
-    std::vector<uint32_t> sender_buffer_data(sender_packet_header_and_data_size / sizeof(uint32_t), 0);
-    std::iota(sender_buffer_data.begin() + PACKET_HEADER_SIZE_BYTES / sizeof(uint32_t), sender_buffer_data.end(), 0);
-    auto sender_buffer =
-        PrepareBuffer(sender_device, sender_packet_header_and_data_size, sender_logical_crs, sender_buffer_data);
-
-    // Extract the expected data to be read from the receiver
-    std::copy(
-        sender_buffer_data.begin() + tt::tt_fabric::PACKET_HEADER_SIZE_BYTES / sizeof(uint32_t),
-        sender_buffer_data.end(),
-        receiver_buffer_data.begin());
-
-    // Wait for buffer data to be written to device
-    tt::Cluster::instance().l1_barrier(physical_start_device_id);
-
-    auto receiver_noc_encoding =
-        tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
-
-    // Create the sender program
-    auto sender_program = tt_metal::CreateProgram();
-    std::vector<uint32_t> sender_compile_time_args = {0, fabric_mode::PULL};
-    std::unordered_map<RoutingDirection, uint32_t> sender_router_noc_xys;
-    for (auto& [routing_direction, end_mesh_chip_ids] : end_mesh_chip_ids_by_dir) {
-        auto routers = control_plane->get_routers_to_chip(
-            start_mesh_chip_id.first,
-            start_mesh_chip_id.second,
-            end_mesh_chip_ids[0].first,
-            end_mesh_chip_ids[0].second);
-        auto& sender_virtual_router_coord = routers[0].second;
-        sender_router_noc_xys.try_emplace(
-            routing_direction,
-            tt_metal::hal_ref.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y));
-    }
-
-    std::vector<uint32_t> sender_runtime_args = {
-        sender_buffer->address(),
-        receiver_noc_encoding,
-        receiver_buffer_addr,
-        data_size,
-        end_mesh_chip_ids_by_dir[RoutingDirection::E][0].first,
-        end_mesh_chip_ids_by_dir[RoutingDirection::E][0].second,
-        mcast_hops[RoutingDirection::E],
-        sender_router_noc_xys[RoutingDirection::E],
-        end_mesh_chip_ids_by_dir[RoutingDirection::W][0].first,
-        end_mesh_chip_ids_by_dir[RoutingDirection::W][0].second,
-        mcast_hops[RoutingDirection::W],
-        sender_router_noc_xys[RoutingDirection::W]};
-    CreateSenderKernel(
-        sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/"
-        "fabric_async_write_multicast_multidirectional_sender.cpp",
-        std::move(sender_compile_time_args),
-        sender_logical_core,
-        defines,
-        std::move(sender_runtime_args));
-
-    // Launch sender and receiver programs and wait for them to finish
-    this->RunProgramNonblocking(sender_device, sender_program);
-    this->WaitForSingleProgramDone(sender_device, sender_program);
-    for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
-        for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
-            auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_ids[i]);
-            this->WaitForSingleProgramDone(receiver_device, receiver_programs[i]);
-        }
-    }
-
-    // Validate the data received by the receiver
-    for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
-        for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
-            ValidateBuffer(receiver_buffer_data, receiver_buffers[i]);
-        }
-    }
+    RunAsyncWriteMulticastTest(this, fabric_mode::PULL, false, true);
 }
 
 TEST_F(Fabric2DPullFixture, TestAsyncRawWriteMulticastMultidirectional) {
-    CoreCoord sender_logical_core = {0, 0};
-    CoreRangeSet sender_logical_crs = {sender_logical_core};
-    CoreCoord receiver_logical_core = {1, 0};
-    CoreRangeSet receiver_logical_crs = {receiver_logical_core};
-    std::pair<mesh_id_t, chip_id_t> start_mesh_chip_id;
-    chip_id_t physical_start_device_id;
-    std::unordered_map<RoutingDirection, std::vector<std::pair<mesh_id_t, chip_id_t>>> end_mesh_chip_ids_by_dir;
-    std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;
-    RoutingDirection routing_direction = RoutingDirection::E;
-    std::unordered_map<RoutingDirection, uint32_t> mcast_hops;
-    mcast_hops[RoutingDirection::E] = 1;
-    mcast_hops[RoutingDirection::W] = 2;
-
-    auto control_plane = tt::Cluster::instance().get_control_plane();
-
-    // Find a device with enough neighbours in the specified direction
-    if (!find_device_with_neighbor_in_multi_direction(
-            start_mesh_chip_id,
-            end_mesh_chip_ids_by_dir,
-            physical_start_device_id,
-            physical_end_device_ids_by_dir,
-            mcast_hops)) {
-        GTEST_SKIP() << "No path found between sender and receivers";
-    }
-    tt::log_info(
-        tt::LogTest,
-        "Async Raw Write Mcast Multidirection from {} to {}",
-        start_mesh_chip_id.second,
-        end_mesh_chip_ids_by_dir);
-
-    auto* sender_device = DevicePool::instance().get_active_device(physical_start_device_id);
-    CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
-    // Virtual coordinate space. All devices have the same logical to virtual mapping
-    CoreCoord receiver_virtual_core = sender_device->worker_core_from_logical_core(receiver_logical_core);
-
-    uint32_t data_size = tt::constants::TILE_HW * sizeof(uint32_t);
-
-    auto receiver_shard_parameters =
-        ShardSpecBuffer(receiver_logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-
-    // Reset buffer space for test validation
-    std::vector<uint32_t> receiver_buffer_data(data_size / sizeof(uint32_t), 0);
-
-    std::map<string, string> defines = {};
-    defines["FVC_MODE_PULL"] = "";
-    std::vector<tt_metal::Program> receiver_programs;
-    std::vector<std::shared_ptr<tt_metal::Buffer>> receiver_buffers;
-    for (auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
-        for (auto physical_end_device_id : physical_end_device_ids) {
-            auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_id);
-            auto receiver_buffer =
-                PrepareBuffer(receiver_device, data_size, receiver_logical_crs, receiver_buffer_data);
-            tt::Cluster::instance().l1_barrier(physical_end_device_id);
-            // Create the receiver program for validation
-            auto receiver_program = tt_metal::CreateProgram();
-            CreateReceiverKernel(
-                receiver_program, receiver_logical_core, defines, receiver_buffer->address(), data_size);
-            this->RunProgramNonblocking(receiver_device, receiver_program);
-            receiver_programs.push_back(std::move(receiver_program));
-            receiver_buffers.push_back(std::move(receiver_buffer));
-        }
-    }
-    // Assume all receiver buffers are at the same address
-    uint32_t receiver_buffer_addr = receiver_buffers[0]->address();
-    for (const auto& receiver_buffer : receiver_buffers) {
-        if (receiver_buffer_addr != receiver_buffer->address()) {
-            GTEST_SKIP() << "Receiver buffers are not at the same address";
-        }
-    }
-
-    std::vector<uint32_t> sender_buffer_data(data_size / sizeof(uint32_t), 0);
-    std::iota(sender_buffer_data.begin(), sender_buffer_data.end(), 0);
-    auto sender_buffer = PrepareBuffer(sender_device, data_size, sender_logical_crs, sender_buffer_data);
-
-    // Wait for buffer data to be written to device
-    tt::Cluster::instance().l1_barrier(physical_start_device_id);
-
-    auto receiver_noc_encoding =
-        tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
-
-    // Create the sender program
-    auto sender_program = tt_metal::CreateProgram();
-    std::vector<uint32_t> sender_compile_time_args = {1, fabric_mode::PULL};
-    std::unordered_map<RoutingDirection, uint32_t> sender_router_noc_xys;
-    for (auto& [routing_direction, end_mesh_chip_ids] : end_mesh_chip_ids_by_dir) {
-        auto routers = control_plane->get_routers_to_chip(
-            start_mesh_chip_id.first,
-            start_mesh_chip_id.second,
-            end_mesh_chip_ids[0].first,
-            end_mesh_chip_ids[0].second);
-        auto& sender_virtual_router_coord = routers[0].second;
-        sender_router_noc_xys.try_emplace(
-            routing_direction,
-            tt_metal::hal_ref.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y));
-    }
-
-    std::vector<uint32_t> sender_runtime_args = {
-        sender_buffer->address(),
-        receiver_noc_encoding,
-        receiver_buffer_addr,
-        data_size,
-        end_mesh_chip_ids_by_dir[RoutingDirection::E][0].first,
-        end_mesh_chip_ids_by_dir[RoutingDirection::E][0].second,
-        mcast_hops[RoutingDirection::E],
-        sender_router_noc_xys[RoutingDirection::E],
-        end_mesh_chip_ids_by_dir[RoutingDirection::W][0].first,
-        end_mesh_chip_ids_by_dir[RoutingDirection::W][0].second,
-        mcast_hops[RoutingDirection::W],
-        sender_router_noc_xys[RoutingDirection::W]};
-    CreateSenderKernel(
-        sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/"
-        "fabric_async_write_multicast_multidirectional_sender.cpp",
-        std::move(sender_compile_time_args),
-        sender_logical_core,
-        defines,
-        std::move(sender_runtime_args));
-
-    // Launch sender and receiver programs and wait for them to finish
-    this->RunProgramNonblocking(sender_device, sender_program);
-    this->WaitForSingleProgramDone(sender_device, sender_program);
-    for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
-        for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
-            auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_ids[i]);
-            this->WaitForSingleProgramDone(receiver_device, receiver_programs[i]);
-        }
-    }
-
-    // Validate the data received by the receiver
-    for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
-        for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
-            ValidateBuffer(sender_buffer_data, receiver_buffers[i]);
-        }
-    }
+    RunAsyncWriteMulticastTest(this, fabric_mode::PULL, true, true);
 }
 
 }  // namespace fabric_router_tests
