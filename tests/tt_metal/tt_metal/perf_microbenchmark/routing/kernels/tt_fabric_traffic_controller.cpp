@@ -25,9 +25,9 @@ inline void send_packet(
     uint64_t dst_addr,
     uint32_t size) {
 #ifdef FVC_MODE_PULL
-    fabric_async_write<ClientDataMode::PACKETIZED_DATA, AsyncWriteMode::ALL, RoutingType::ROUTING_TABLE>(
+    fabric_async_write<T, ClientDataMode::PACKETIZED_DATA, AsyncWriteMode::ALL, RoutingType::ROUTING_TABLE>(
 #else
-    fabric_async_write<ClientDataMode::PACKETIZED_DATA, AsyncWriteMode::ALL>(
+    fabric_async_write<T, ClientDataMode::PACKETIZED_DATA, AsyncWriteMode::ALL>(
 #endif
         client_interface, routing_plane, src_addr, dst_mesh_id, dst_dev_id, dst_addr, size);
 
@@ -77,11 +77,11 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_notification_address);
 
 #ifdef FVC_MODE_PULL
-        volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface =
-            reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
+        volatile fabric_pull_client_interface_t* client_interface =
+            reinterpret_cast<volatile fabric_pull_client_interface_t*>(client_interface_addr);
 #else
-        fabric_push_client_interface_t* client_interface =
-            reinterpret_cast<fabric_push_client_interface_t*>(client_interface_addr);
+        volatile fabric_push_client_interface_t* client_interface =
+            reinterpret_cast<volatile fabric_push_client_interface_t*>(client_interface_addr);
 #endif
 
         fabric_endpoint_init<decltype(client_interface), RoutingType::ROUTING_TABLE>(
