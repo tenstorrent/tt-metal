@@ -215,7 +215,6 @@ void kernel_main() {
             }
         }
         if (data_words_sent >= total_data_words) {
-            DPRINT << "BREAK\n";
             break;
         }
     }
