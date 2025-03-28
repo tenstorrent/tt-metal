@@ -22,6 +22,16 @@ struct ExecuteAllGatherAsync {
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
         bool enable_persistent_fabric_mode = false);
 
+    static std::vector<ttnn::Tensor> invoke(
+        const std::vector<ttnn::Tensor>& input_tensors,
+        const int32_t dim,
+        const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+        const uint32_t num_links = 1,
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+        std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
+        bool enable_persistent_fabric_mode = false);
+
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const int32_t dim,

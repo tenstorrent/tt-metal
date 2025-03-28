@@ -30,6 +30,26 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
         enable_persistent_fabric_mode);
 }
 
+std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
+    const std::vector<ttnn::Tensor>& input_tensors,
+    const int32_t dim,
+    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const uint32_t num_links,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    bool enable_persistent_fabric_mode) {
+    return ttnn::operations::experimental::ccl::all_gather_async(
+        input_tensors,
+        dim,
+        multi_device_global_semaphore,
+        num_links,
+        memory_config,
+        topology,
+        subdevice_id,
+        enable_persistent_fabric_mode);
+}
+
 ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
