@@ -60,7 +60,11 @@ void kernel_main() {
         uint64_t dst_noc_addr = get_noc_addr_helper(remote_controller_noc_encoding, remote_notification_addr);
 
         data_buf[0] = CONTROLLER_HANDSHAKE_START;
-        fabric_async_write<AsyncWriteMode::ALL, RoutingType::ROUTING_TABLE>(
+        fabric_async_write<
+            volatile tt_l1_ptr fabric_pull_client_interface_t*,
+            ClientDataMode::PACKETIZED_DATA,
+            AsyncWriteMode::ALL,
+            RoutingType::ROUTING_TABLE>(
             client_interface,
             0,
             pkt_hdr_address,
@@ -73,7 +77,11 @@ void kernel_main() {
         while (*poll_addr != CONTROLLER_HANDSHAKE_START);
 
         data_buf[0] = CONTROLLER_HANDSHAKE_END;
-        fabric_async_write<AsyncWriteMode::ALL, RoutingType::ROUTING_TABLE>(
+        fabric_async_write<
+            volatile tt_l1_ptr fabric_pull_client_interface_t*,
+            ClientDataMode::PACKETIZED_DATA,
+            AsyncWriteMode::ALL,
+            RoutingType::ROUTING_TABLE>(
             client_interface,
             0,
             pkt_hdr_address,
