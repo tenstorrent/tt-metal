@@ -16,6 +16,7 @@ struct GQAConfig {
     uint32_t num_groups{};
     float dropout_prob{};
     std::reference_wrapper<const ops::RotaryEmbeddingParams> rope_params;
+    bool bias_linears{false};
 };
 
 class GroupedQueryAttention : public ttml::autograd::ModuleBase {
