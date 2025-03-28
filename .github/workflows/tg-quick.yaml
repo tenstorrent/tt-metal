@@ -48,7 +48,7 @@ jobs:
       - name: Run quick tests
         timeout-minutes: 20
         run: |
-          pytest models/demos/llama3_subdevices/tests/test_llama_model.py -k quick
+          pytest models/demos/llama3_subdevices/tests/test_llama_model.py -k "quick-stress"
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:

@@ -28,6 +28,23 @@ run_tg_cnn_tests() {
   fi
 }
 
+run_tg_llama_70b_model_perf_tests() {
+
+  # Llama3.1-70B
+  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
+
+  echo "LOG_METAL: Running run_tg_llama_70b_model_perf_tests"
+  FAKE_DEVICE=TG LLAMA_DIR=$llama70b pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py ; fail+=$?
+
+  # # Merge all the generated reports
+  # env python3 models/perf/merge_perf_results.py; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    echo "LOG_METAL: run_tg_llama_70b_model_perf_tests failed"
+    exit 1
+  fi
+}
+
 main() {
   # Parse the arguments
   while [[ $# -gt 0 ]]; do
@@ -67,8 +84,10 @@ main() {
     run_tg_llm_tests
   elif [[ "$pipeline_type" == "cnn_model_perf_tg_device" ]]; then
     run_tg_cnn_tests
+  elif [[ "$pipeline_type" == "tg_llama_model_perf_tg_device" ]]; then
+     run_tg_llama_70b_model_perf_tests
   else
-    echo "$pipeline_type is invalid (supported: [cnn_model_perf_tg_device, cnn_model_perf_tg_device])" 2>&1
+    echo "$pipeline_type is invalid (supported: [cnn_model_perf_tg_device, cnn_model_perf_tg_device, tg_llama_model_perf_tg_device])" 2>&1
     exit 1
   fi
 }

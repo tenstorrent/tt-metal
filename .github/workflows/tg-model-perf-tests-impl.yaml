@@ -34,6 +34,14 @@ jobs:
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type cnn_model_perf_tg_device --dispatch-mode ""'
           },  # Austin Ho
           {
+            name: "TG Llama 70B model perf tests",
+            model-type: "Llama 70B",
+            arch: wormhole_b0,
+            runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-perf"],
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type tg_llama_model_perf_tg_device --dispatch-mode ""',
+            owner_id: U044T8U8DEF # Johanna Rock
+          },
+          {
             name: "Llama TG Perf Unit Tests",
             arch: wormhole_b0,
             cmd: 'pytest models/demos/llama3_subdevices/tests/tg_perf_unit_tests',
@@ -41,7 +49,7 @@ jobs:
             tracy: true,
             runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-perf"],
             owner_id: U071CKL4AFK # Ammar Vora
-          }
+          },
         ]
     name: ${{ matrix.test-group.name }}
     env:
@@ -89,7 +97,7 @@ jobs:
           run_args: |
             ${{ matrix.test-group.cmd }}
       - name: Save environment data
-        if: ${{ (matrix.test-group.name == 'Llama TG Perf Unit Tests') && !cancelled() }}
+        if: ${{ (matrix.test-group.name == 'Llama TG Perf Unit Tests' || matrix.test-group.name == 'TG Llama 70B model perf tests') && !cancelled() }}
         uses: ./.github/actions/docker-run
         with:
           docker_image: ${{ inputs.docker-image }}
@@ -101,7 +109,7 @@ jobs:
           install_wheel: true
           run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
       - name: Upload benchmark data
-        if: ${{ (matrix.test-group.name == 'Llama TG Perf Unit Tests') && !cancelled() }}
+        if: ${{ (matrix.test-group.name == 'Llama TG Perf Unit Tests' || matrix.test-group.name == 'TG Llama 70B model perf tests') && !cancelled() }}
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -110,7 +118,7 @@ jobs:
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
       - name: Check perf report exists
         id: check-perf-report
-        if: ${{ !(matrix.test-group.name == 'Llama TG Perf Unit Tests') && !cancelled() }}
+        if: ${{ !(matrix.test-group.name == 'Llama TG Perf Unit Tests'|| matrix.test-group.name == 'TG Llama 70B model perf tests') && !cancelled() }}
         run: |
           TODAY=$(date +%Y_%m_%d)
           PERF_REPORT_FILENAME_MODELS="Models_Perf_${TODAY}.csv"
