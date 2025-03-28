@@ -79,9 +79,7 @@ class TtResnetBlock2D(nn.Module):
             conv_weights_3 = state_dict[f"{module_path}.conv_shortcut.weight"]
             conv_bias_3 = state_dict[f"{module_path}.conv_shortcut.bias"]
 
-        self.tt_conv1_weights = ttnn.from_torch(
-            conv_weights_1, ttnn.bfloat16  # , device=device#, layout=ttnn.TILE_LAYOUT
-        )
+        self.tt_conv1_weights = ttnn.from_torch(conv_weights_1, ttnn.bfloat16)
         self.tt_conv1_bias = (
             ttnn.from_torch(conv_bias_1.unsqueeze(0).unsqueeze(0).unsqueeze(0), ttnn.bfloat16)
             if conv_bias_1 is not None
@@ -116,9 +114,7 @@ class TtResnetBlock2D(nn.Module):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        self.tt_conv2_weights = ttnn.from_torch(
-            conv_weights_2, ttnn.bfloat16  # , device=device#, layout=ttnn.TILE_LAYOUT
-        )
+        self.tt_conv2_weights = ttnn.from_torch(conv_weights_2, ttnn.bfloat16)
         self.tt_conv2_bias = (
             ttnn.from_torch(conv_bias_2.unsqueeze(0).unsqueeze(0).unsqueeze(0), ttnn.bfloat16)
             if conv_bias_2 is not None
@@ -126,9 +122,7 @@ class TtResnetBlock2D(nn.Module):
         )
 
         if conv_shortcut:
-            self.tt_conv3_weights = ttnn.from_torch(
-                conv_weights_3, ttnn.bfloat16  # , device=device#, layout=ttnn.TILE_LAYOUT
-            )
+            self.tt_conv3_weights = ttnn.from_torch(conv_weights_3, ttnn.bfloat16)
             self.tt_conv3_bias = (
                 ttnn.from_torch(conv_bias_3.unsqueeze(0).unsqueeze(0).unsqueeze(0), ttnn.bfloat16)
                 if conv_bias_3 is not None
