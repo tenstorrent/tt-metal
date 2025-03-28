@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device/slice_op.hpp"
+#include "tt-metalium/logger.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/common/queue_id.hpp"
@@ -58,13 +59,13 @@ ttnn::Tensor SliceOperation::invoke(
     auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config()
                                                             : memory_config_arg.value_or(input_tensor.memory_config());
 
-    auto ret_adjustment([&](const ttnn::Tensor& input_tensor) {
-        if (input_tensor.storage_type() == StorageType::DEVICE) {
-            auto tensor = ttnn::to_memory_config(input_tensor, memory_config, std::nullopt);
+    auto ret_adjustment([&](const ttnn::Tensor& ret_input_tensor) {
+        if (ret_input_tensor.storage_type() == StorageType::DEVICE) {
+            auto tensor = ttnn::to_memory_config(ret_input_tensor, memory_config, std::nullopt);
             tensor = ttnn::to_layout(tensor, input_layout, std::nullopt, std::nullopt, (IDevice*)nullptr);
             return tensor;
         }
-        return input_tensor;
+        return ret_input_tensor;
     });
 
     // No-op check
@@ -169,6 +170,18 @@ ttnn::Tensor SliceOperation::invoke(
             {optional_output_tensor},
             queue_id)
             .at(0);
+
+    // If slice should return a sharded tensor, then the op must created the sharded tensor in the requested memory
+    // config
+    if (res.is_sharded() && memory_config.is_sharded()) {
+        TT_ASSERT(
+            res.memory_config() == memory_config,
+            "Memory config must match. Got {}, expecteed {}",
+            res.memory_config(),
+            memory_config);
+        return res;
+    }
+
     res = ttnn::experimental::view(res, actual_shape, final_padded_shape);
 
     auto dim_needs_fill = [&input_shape, &actual_shape, &final_padded_shape](int i) {
@@ -178,7 +191,6 @@ ttnn::Tensor SliceOperation::invoke(
     if (pad_value.has_value() && (dim_needs_fill(-1) || dim_needs_fill(-2))) {
         res = ttnn::fill_implicit_tile_padding(res, pad_value.value());
     }
-
     return ret_adjustment(res);
 }
 
