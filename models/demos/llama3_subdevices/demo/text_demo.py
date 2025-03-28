@@ -659,7 +659,6 @@ def test_demo_text(
 
     # Benchmark targets
     supported_models = ["Llama3.1-70B", "Deepseek-R1-Distill-70B"]
-    breakpoint()
     # model_args.base_model_name = "Llama3.1-70B"
     supported_devices = ["TG"]
 
@@ -668,13 +667,13 @@ def test_demo_text(
     # Set the target times to first token for every combination of device and model
     target_prefill_tok_s = {
         "TG_Llama3.1-70B": 1050,  # TODO Update target
-        "Deepseek-R1-Distill-70BB": 1050,  # TODO Update target
+        "TG_Deepseek-R1-Distill-70B": 1050,  # TODO Update target
     }[f"{tt_device_name}_{model_args.base_model_name}"]
 
     # Set the target decode timesfor every combination of device and model
     target_decode_tok_s_u = {
         "TG_Llama3.1-70B": 20,  # TODO Update target
-        "Deepseek-R1-Distill-70B": 20,  # TODO Update target
+        "TG_Deepseek-R1-Distill-70B": 20,  # TODO Update target
     }[f"{tt_device_name}_{model_args.base_model_name}"]
 
     target_decode_tok_s = target_decode_tok_s_u * batch_size

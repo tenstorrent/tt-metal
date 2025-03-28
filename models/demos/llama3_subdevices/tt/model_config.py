@@ -915,6 +915,16 @@ class TtModelArgs:
                 prefetch=False,
             )
 
+            self.model_config["LM_HEAD_PREFILL_PROGCFG"] = self.matmul_1d_config_from_tensor_shapes(
+                in0_shape=(1, 1, 32, 2048),
+                in1_shape=(1, 1, 2048, 16384),
+                grid=ttnn.CoreGrid(x=7, y=8),  # (7,10) leads to hangs
+                act=None,
+                is_fp32_accumulate=False,
+                # overwrite_subblock_w=None,
+                # overwrite_subblock_h=None,
+            )
+
             attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)
             attn_input_sub_core_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
                 self.start_core, 32, self.sub_core_grids, row_wise=True
