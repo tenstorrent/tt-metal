@@ -447,12 +447,7 @@ void handle_mesh_adapter_cache_hit(
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(*cq_id), workload, false);
 
     TracyOpMeshWorkload(
-        mesh_device,
-        cached_mesh_workload.workload,
-        mesh_device_operation_t{},
-        operation_attributes,
-        tensor_args,
-        tensor_return_value);
+        mesh_device, workload, mesh_device_operation_t{}, operation_attributes, tensor_args, tensor_return_value);
 }
 
 // Helper for creating and caching a mesh workload
