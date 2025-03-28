@@ -65,11 +65,6 @@ void kernel_main() {
     constexpr uint32_t chip_id_offset = chip_id * num_pages_per_packet * page_size_bytes;
 
     constexpr uint32_t other_devices = num_devices - 1;
-    constexpr uint8_t device_order[other_devices] =
-        DEVICE_ORDER;  // this is code gen'd in the program factory using the defines
-    constexpr uint8_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
-    constexpr uint8_t packet_worker_cores[num_packets_total_per_device][2] = PACKET_WORKER_CORES;
-    constexpr uint8_t schedule[num_packets_total_per_device][3] = SCHEDULE;
 
     // Runtime arguments
     uint32_t receiver_semaphore_address = get_arg_val<uint32_t>(rt_arg_idx++);
@@ -81,7 +76,13 @@ void kernel_main() {
     uint32_t sender_packet_end = get_arg_val<uint32_t>(rt_arg_idx++);
 
     if (sender_core) {
+        auto fabric_connection =
+            FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
+                rt_arg_idx);
         // Set up packet headers once
+        constexpr uint8_t device_order[other_devices] =
+            DEVICE_ORDER;  // this is code gen'd in the program factory using the defines
+        constexpr uint8_t packet_worker_cores[num_packets_total_per_device][2] = PACKET_WORKER_CORES;
         const auto packet_header_buffer_addr = get_read_ptr(packet_header_cb_id);
         auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
         auto* sem_inc_packet_header =
@@ -93,16 +94,14 @@ void kernel_main() {
             static_cast<uint16_t>(1),  // increment 1
             32});
 
-        auto fabric_connection = FabricConnectionManager::build_from_args(rt_arg_idx);
-        if (fabric_connection.is_logically_connected()) {
-            fabric_connection.open();
-        }
-
         const uint32_t base_receiver_l1_addr = get_read_ptr(fabric_receiver_cb_id);
 
         // Precompute the packet offset once
         const uint32_t packet_offset = base_receiver_l1_addr + chip_id_offset;
 
+        if (fabric_connection.is_logically_connected()) {
+            fabric_connection.open_finish();
+        }
         for (uint32_t target_device_id : device_order) {
             // Calculate device-specific constants once per device
             const uint32_t num_hops = std::abs(int(target_device_id) - int(chip_id));
@@ -148,6 +147,7 @@ void kernel_main() {
             fabric_connection.close();
         }
     } else if (worker_core) {
+        constexpr uint8_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
         uint64_t noc_addresses[num_pages_per_packet];
         uint32_t accumulator_l1_addresses[num_pages_per_packet];
         uint32_t output_tensor_base_addr = get_read_ptr(output_tensor_cb_id);
