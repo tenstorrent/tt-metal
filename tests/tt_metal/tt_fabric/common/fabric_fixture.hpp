@@ -82,6 +82,58 @@ public:
         return false;
     }
 
+    // Find a device with enough neighbours in the specified direction
+    bool find_device_with_neighbor_in_multi_direction(
+        std::pair<mesh_id_t, chip_id_t>& src_mesh_chip_id,
+        std::unordered_map<RoutingDirection, std::vector<std::pair<mesh_id_t, chip_id_t>>>& dst_mesh_chip_ids_by_dir,
+        chip_id_t& src_physical_device_id,
+        std::unordered_map<RoutingDirection, std::vector<chip_id_t>>& dst_physical_device_ids_by_dir,
+        const std::unordered_map<RoutingDirection, uint32_t>& mcast_hops) {
+        auto control_plane = tt::Cluster::instance().get_control_plane();
+
+        // Find a device with enough neighbours in the specified direction
+        bool connection_found = false;
+        for (auto* device : devices_) {
+            src_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
+            std::unordered_map<RoutingDirection, std::vector<std::pair<mesh_id_t, chip_id_t>>>
+                temp_end_mesh_chip_ids_by_dir;
+            std::unordered_map<RoutingDirection, std::vector<chip_id_t>> temp_physical_end_device_ids_by_dir;
+            connection_found = true;
+            for (auto [routing_direction, num_hops] : mcast_hops) {
+                bool direction_found = true;
+                auto& temp_end_mesh_chip_ids = temp_end_mesh_chip_ids_by_dir[routing_direction];
+                auto& temp_physical_end_device_ids = temp_physical_end_device_ids_by_dir[routing_direction];
+                uint32_t curr_mesh_id = src_mesh_chip_id.first;
+                uint32_t curr_chip_id = src_mesh_chip_id.second;
+                for (uint32_t i = 0; i < num_hops; i++) {
+                    auto neighbors =
+                        control_plane->get_intra_chip_neighbors(curr_mesh_id, curr_chip_id, routing_direction);
+                    if (neighbors.size() > 0) {
+                        temp_end_mesh_chip_ids.emplace_back(curr_mesh_id, neighbors[0]);
+                        temp_physical_end_device_ids.push_back(
+                            control_plane->get_physical_chip_id_from_mesh_chip_id(temp_end_mesh_chip_ids.back()));
+                        curr_mesh_id = temp_end_mesh_chip_ids.back().first;
+                        curr_chip_id = temp_end_mesh_chip_ids.back().second;
+                    } else {
+                        direction_found = false;
+                        break;
+                    }
+                }
+                if (!direction_found) {
+                    connection_found = false;
+                    break;
+                }
+            }
+            if (connection_found) {
+                src_physical_device_id = device->id();
+                dst_mesh_chip_ids_by_dir = std::move(temp_end_mesh_chip_ids_by_dir);
+                dst_physical_device_ids_by_dir = std::move(temp_physical_end_device_ids_by_dir);
+                break;
+            }
+        }
+        return true;
+    }
+
     void RunProgramNonblocking(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::LaunchProgram(device, program, false);
