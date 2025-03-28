@@ -4,14 +4,14 @@
 import torch
 import pytest
 import ttnn
-from models.experimental.stable_diffusion_xl_base_1_0.ttnn_impl.tt_embedding import TtTimestepEmbedding
+from models.experimental.stable_diffusion_xl_base.ttnn_impl.tt_embedding import TtTimestepEmbedding
 from diffusers import DiffusionPipeline
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
 
 
 @pytest.mark.parametrize("input_shape, module_path", [((1, 320), "time_embedding"), ((1, 2816), "add_embedding")])
-def test_geglu(device, input_shape, module_path, use_program_cache):
+def test_embedding(device, input_shape, module_path, use_program_cache):
     pipe = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, variant="fp16"
     )

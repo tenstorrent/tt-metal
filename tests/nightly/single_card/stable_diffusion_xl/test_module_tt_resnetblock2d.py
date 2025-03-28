@@ -1,1 +1,0 @@
-models/experimental/stable_diffusion_xl_base_1_0/tests/pcc/test_module_tt_resnetblock2d.py
