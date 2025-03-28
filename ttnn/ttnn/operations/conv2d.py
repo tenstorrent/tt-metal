@@ -2,17 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
-
-from typing import Tuple, Union, Dict, Optional
+from typing import Tuple, Union
 import torch
-import warnings
 import math
 import ttnn
-from ttnn.device import (
-    is_grayskull,
-    is_wormhole_b0,
-)
+import ttnn._ttnn
 
 
 def _nearest_32(x):

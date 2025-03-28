@@ -19,6 +19,7 @@ logger.disable("ttnn.torch_tracer")
 import ttnn.torch_tracer
 
 import ttnn
+import ttnn._ttnn
 
 TracedTensor = ttnn.torch_tracer.TracedTensor
 TracedTorchTensor = ttnn.torch_tracer.TracedTorchTensor

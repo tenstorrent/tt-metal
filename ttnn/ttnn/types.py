@@ -5,7 +5,7 @@
 import dataclasses
 from enum import Enum
 
-import ttnn
+import ttnn._ttnn
 
 DataType = ttnn._ttnn.tensor.DataType
 uint8 = DataType.UINT8

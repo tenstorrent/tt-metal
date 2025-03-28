@@ -2,10 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import contextlib
-import os
-
-import ttnn
+import ttnn._ttnn
 
 
 def start_tracy_zone(source: str, functName: str, lineNum: int, color: int = 0):

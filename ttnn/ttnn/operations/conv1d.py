@@ -2,11 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Tuple, Union, Dict, Optional
-import torch
-import warnings
-import math
+from typing import Tuple
 import ttnn
+import ttnn._ttnn
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
