@@ -68,7 +68,8 @@ class Generator:
                 page_table, torch.Tensor
             ), "page_table must be a torch.Tensor when passing into prefill_forward"
 
-        for user_id in range(batch):
+        # only run 1 user prefill for now
+        for user_id in range(1):
             logger.info(f"Prefilling User {user_id + 1}")
             seq_len = prompt_lens[user_id]
             last_token_idx = seq_len - 1
@@ -90,6 +91,7 @@ class Generator:
             except Exception as e:
                 logger.error(f"Error prefilling user {user_id}: {e}")
 
+        for user_id in range(batch):
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
             output_logits[user_id] = logits
 
