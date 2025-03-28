@@ -35,13 +35,13 @@ DistributedGroupedQueryAttention::DistributedGroupedQueryAttention(const GQAConf
 
     // create layers
     m_q_linear = std::make_shared<ColumnParallelLinear>(
-        m_embedding_dim, m_embedding_dim, /* has_bias */ true, /* gather_output */ false);
+        m_embedding_dim, m_embedding_dim, /* has_bias */ false, /* gather_output */ false);
     auto concat_kv_dim = 2U * m_num_groups * (m_embedding_dim / m_num_heads);
     m_kv_linear = std::make_shared<ColumnParallelLinear>(
-        m_embedding_dim, concat_kv_dim, /* has_bias */ true, /* gather_output */ false);
+        m_embedding_dim, concat_kv_dim, /* has_bias */ false, /* gather_output */ false);
     m_dropout = std::make_shared<ttml::modules::DropoutLayer>(config.dropout_prob, /* use_per_device_seed */ false);
     m_out_linear = std::make_shared<RowParallelLinear>(
-        m_embedding_dim, m_embedding_dim, /* has_bias */ true, /* input_is_parallel */ true);
+        m_embedding_dim, m_embedding_dim, /* has_bias */ false, /* input_is_parallel */ true);
     m_embedding = std::make_shared<ttml::modules::RotaryEmbedding>(config.rope_params);
 
     // register modules
