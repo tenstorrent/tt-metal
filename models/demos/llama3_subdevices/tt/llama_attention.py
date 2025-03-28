@@ -186,8 +186,9 @@ class TtLlamaAttention(LightweightModule):
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
-        self.prefetcher_setup.insert_tensor(self.wqkv)
-        self.prefetcher_setup.insert_tensor(self.wo)
+        if tt_ccl.mode == "decode":
+            self.prefetcher_setup.insert_tensor(self.wqkv)
+            self.prefetcher_setup.insert_tensor(self.wo)
         self.tt_ccl = tt_ccl
 
     def init_kv_cache(self, configuration, weight_cache_path):
