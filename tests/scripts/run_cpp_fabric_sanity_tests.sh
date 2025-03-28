@@ -17,14 +17,6 @@ export TT_METAL_CLEAR_L1=1
 cd $TT_METAL_HOME
 
 #############################################
-# FABRIC UNIT TESTS                         #
-#############################################
-echo "Running fabric unit tests now...";
-
-TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2DFixture.*"
-./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2DFixture.*"
-
-#############################################
 # FABRIC SANITY TESTS                       #
 #############################################
 echo "Running fabric sanity tests now...";

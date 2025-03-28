@@ -105,7 +105,7 @@ jobs:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
   # Fabric Unit Tests
-  fabric-unit-tests:
+  fabric-tests:
     needs: build-artifact
     secrets: inherit
     strategy:
@@ -114,7 +114,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
+    uses: ./.github/workflows/ufabric-build-and-tests.yaml
     with:
       os: ubuntu-22.04
       arch: ${{ matrix.test-group.arch }}

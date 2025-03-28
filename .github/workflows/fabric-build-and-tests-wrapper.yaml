@@ -19,7 +19,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n300-large-stable },
         ]
-    uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
+    uses: ./.github/workflows/fabric-build-and-tests.yaml
     with:
       arch: ${{ matrix.test-group.arch}}
       runner-label: ${{ matrix.test-group.runner-label}}
