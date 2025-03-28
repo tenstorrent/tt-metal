@@ -198,8 +198,8 @@ models/demos/yolov4 @dvartaniansTT @mbahnasTT @tenstorrent/metalium-developers-c
 models/demos/wormhole/yolov4 @dvartaniansTT @mbahnasTT @tenstorrent/metalium-developers-convolutions
 models/demos/**/*resnet*  @tt-aho @tenstorrent/metalium-developers-convolutions
 models/experimental/functional_unet @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions
-models/demos/wormhole/vit @mbahnasTT @dvartaniansTT
-models/demos/vit  @mbahnasTT @dvartaniansTT
+models/demos/wormhole/vit @mbahnasTT @dvartaniansTT @uaydonat
+models/demos/vit  @mbahnasTT @dvartaniansTT @uaydonat
 models/demos/segformer @mbahnasTT @uaydonat @tenstorrent/metalium-developers-convolutions
 models/perf/ @uaydonat
 models/perf/perf_report.py @yieldthought @uaydonat
