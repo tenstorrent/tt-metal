@@ -69,8 +69,8 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
         timeout-minutes: 10
         with:
-          build-artifact-name: ${{ inputs.build-artifact-name }}
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ (github.event_name == 'schedule' && 120) || fromJSON(inputs.timeout) }}
         run: ${{ matrix.test-group.cmd }}
