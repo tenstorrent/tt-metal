@@ -529,7 +529,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
         packet_start_worker_core.at(0).y,
         packet_end_worker_core.at(0).x,
         packet_end_worker_core.at(0).y,
-    };
+        sender_cores.size()};
 
     reader_defines["INPUT_CORE_XY"] = detail::cores_to_string(to_worker_cores(input_cores));
     reader_defines["OUTPUT_CORE_XY"] = detail::cores_to_string(to_worker_cores(output_cores));
@@ -538,8 +538,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
 
     // create local semaphore
     auto local_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores_grid, INVALID);
-    auto sender_ready_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores_grid, INVALID);
-    auto sender_next_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores_grid, INVALID);
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -621,28 +619,19 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create(
     uint32_t reader_sender_packet_start_idx = 6;
     uint32_t reader_sender_packet_end_idx = 7;
 
-    uint32_t is_writer_sender_core_idx = 3;
-    uint32_t is_writer_worker_core_idx = 4;
-    uint32_t is_linear_output_page_start_idx = 5;
-    uint32_t is_atomic_inc_core_idx = 6;
-    uint32_t writer_sender_packet_start_idx = 7;
-    uint32_t writer_sender_packet_end_idx = 8;
+    uint32_t is_writer_sender_core_idx = 2;
+    uint32_t is_writer_worker_core_idx = 3;
+    uint32_t is_linear_output_page_start_idx = 4;
+    uint32_t is_atomic_inc_core_idx = 5;
+    uint32_t writer_sender_packet_start_idx = 6;
+    uint32_t writer_sender_packet_end_idx = 7;
 
     uint32_t sender_packet_start = 0;
     uint32_t sender_core_idx = 0;
 
     for (auto core : all_cores) {
         std::vector<uint32_t> writer_runtime_args = {
-            cross_device_semaphore->address(),
-            local_semaphore,
-            sender_ready_semaphore,
-            false,
-            false,
-            0,
-            false,
-            0,
-            0,
-            sender_next_semaphore};
+            cross_device_semaphore->address(), local_semaphore, false, false, 0, false, 0, 0};
 
         if (sender_core_grid.contains(core)) {
             reader_runtime_args[is_reader_sender_core_idx] = true;

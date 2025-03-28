@@ -250,7 +250,7 @@ def run_reduce_scatter_test(
                 mesh_device, mesh_shape=[num_devices_fracture, num_devices_scatter], dims=(0, 1)
             ),
         )
-        eq, output_results = comp_pcc(tt_torch_tensor, output_tensor_goldens_list[tensor_index])
+        eq, output_results = comp_pcc(tt_torch_tensor, output_tensor_goldens_list[tensor_index], 0.999)
         logger.info(f"Output tensor {tensor_index} has result {output_results}")
         if not eq:
             passed = False
@@ -322,7 +322,7 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode):
     num_devices_scatter = 4
     num_devices_fracture = 8
     num_cores = 24
-    num_iters = 1
+    num_iters = 30
     trace_mode = trace_mode
 
     run_reduce_scatter_test(

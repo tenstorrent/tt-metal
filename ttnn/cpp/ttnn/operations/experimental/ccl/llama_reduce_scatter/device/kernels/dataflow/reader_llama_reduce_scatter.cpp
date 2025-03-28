@@ -48,6 +48,7 @@ void kernel_main() {
     constexpr uint32_t packet_worker_start_y = get_compile_time_arg_val(15);
     constexpr uint32_t packet_worker_end_x = get_compile_time_arg_val(16);
     constexpr uint32_t packet_worker_end_y = get_compile_time_arg_val(17);
+    constexpr uint32_t num_sender_cores = get_compile_time_arg_val(18);
 
     // Derived compile-time constants
     constexpr uint32_t input_tensor_cores = input_shard_cores_per_device * num_devices;
@@ -66,6 +67,7 @@ void kernel_main() {
     constexpr uint8_t input_core_xy[input_tensor_cores][2] = INPUT_CORE_XY;
     constexpr uint8_t output_core_xy[output_cores_per_device][2] = OUTPUT_CORE_XY;
     constexpr uint8_t schedule[num_packets_total_per_device][3] = SCHEDULE;
+    constexpr uint32_t total_senders = num_sender_cores * other_devices;
 
     // Runtime arguments
     uint32_t receiver_semaphore_address = get_arg_val<uint32_t>(rt_arg_idx++);
@@ -122,7 +124,6 @@ void kernel_main() {
 
             noc_async_read(output_noc_address, receiver_l1_address, page_size_bytes);
         }
-        // noc_semaphore_wait((uint32_t*)receiver_semaphore_address, other_devices*3);
         if (receiver_core) {
             // Precompute multicast semaphore address once
             const uint64_t multicast_semaphore_addr = static_noc_multicast_addr(
@@ -132,16 +133,7 @@ void kernel_main() {
                 packet_worker_end_y,
                 local_semaphore_address);
 
-            // while (*(uint32_t*)receiver_semaphore_address != other_devices*3) {
-            //     DPRINT << "waiting for semaphore value: " << *(uint32_t*)receiver_semaphore_address << ENDL();
-            // }
-
-            noc_semaphore_wait((uint32_t*)receiver_semaphore_address, other_devices * 3);
-            // uint32_t start_time = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
-            // uint32_t end_time = start_time;
-            // while (end_time - start_time < 1000000) {
-            //     end_time = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
-            // }
+            noc_semaphore_wait((uint32_t*)receiver_semaphore_address, total_senders);
             noc_semaphore_set_multicast(
                 receiver_semaphore_address,
                 multicast_semaphore_addr,
@@ -149,7 +141,7 @@ void kernel_main() {
 
             noc_async_atomic_barrier();
         } else {
-            noc_semaphore_wait((uint32_t*)local_semaphore_address, other_devices * 3);
+            noc_semaphore_wait((uint32_t*)local_semaphore_address, total_senders);
         }
 
         noc_async_read_barrier();

@@ -87,32 +87,30 @@ void kernel_main() {
     // Runtime arguments
     uint32_t receiver_semaphore_address = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t local_semaphore_address = get_semaphore(get_arg_val<uint32_t>(rt_arg_idx++));
-    uint32_t sender_ready_semaphore_address = get_semaphore(get_arg_val<uint32_t>(rt_arg_idx++));
     bool sender_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     bool worker_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t linear_output_page_start_idx = get_arg_val<uint32_t>(rt_arg_idx++);
     bool is_atomic_inc_core = (bool)get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_packet_start = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_packet_end = get_arg_val<uint32_t>(rt_arg_idx++);
-    uint32_t sender_next_semaphore = get_semaphore(get_arg_val<uint32_t>(rt_arg_idx++));
 
     if (sender_core) {
-        const uint64_t sem_noc_addr =
-            get_noc_addr(packet_receiver_core_x, packet_receiver_core_y, receiver_semaphore_address);
-        if (is_atomic_inc_core) {
-            noc_semaphore_set((uint32_t*)sender_next_semaphore, VALID);
-        }
         // Set up packet headers once
         const auto packet_header_buffer_addr = get_read_ptr(packet_header_cb_id);
         auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
         auto* sem_inc_packet_header =
             reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr + packet_header_size);
+        const uint64_t sem_noc_addr =
+            get_noc_addr(packet_receiver_core_x, packet_receiver_core_y, receiver_semaphore_address);
+        sem_inc_packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+            sem_noc_addr,
+            static_cast<uint16_t>(1),  // increment 1
+            32});
+
         auto fabric_connection = FabricConnectionManager::build_from_args(rt_arg_idx);
         if (fabric_connection.is_logically_connected()) {
             fabric_connection.open();
         }
-        uint64_t sender_next_multicast_semaphore_addr = static_noc_multicast_addr(
-            sender_noc_start_x, sender_noc_start_y, sender_noc_end_x, sender_noc_end_y, sender_next_semaphore);
 
         const uint32_t base_receiver_l1_addr = get_read_ptr(fabric_receiver_cb_id);
 
@@ -152,38 +150,14 @@ void kernel_main() {
 
                 cb_pop_front(fabric_sender_cb_id, curr_packet_num_pages);
             }
-            // if (is_atomic_inc_core) {
-            // noc_semaphore_wait((uint32_t*)sender_ready_semaphore_address, num_sender_cores - 1);
-            // noc_semaphore_set((uint32_t*)sender_ready_semaphore_address, INVALID);
-
-            // noc_semaphore_set_multicast(sender_next_semaphore, sender_next_multicast_semaphore_addr, num_dests);
-            // noc_async_atomic_barrier();
-            const uint64_t sem_noc_addr =
-                get_noc_addr(packet_receiver_core_x, packet_receiver_core_y, receiver_semaphore_address);
-            sem_inc_packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                sem_noc_addr,
-                static_cast<uint16_t>(1),  // increment 1
-                32});
 
             // Write the mcast packet (forward)
             sem_inc_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
             fabric_conn.wait_for_empty_write_slot();
 
             fabric_conn.send_payload_flush_blocking_from_address((uint32_t)sem_inc_packet_header, packet_header_size);
-
-            // } else {
-            //     const uint64_t sender_noc_addr =
-            //         get_noc_addr(sender_atomic_inc_core_x, sender_atomic_inc_core_y, sender_ready_semaphore_address);
-            //     noc_semaphore_inc(sender_noc_addr, 1);
-            //     noc_async_atomic_barrier();
-            //     noc_semaphore_wait((uint32_t*)sender_next_semaphore, VALID);
-            //     noc_semaphore_set((uint32_t*)sender_next_semaphore, INVALID);
-            // }
         }
 
-        if (is_atomic_inc_core) {
-            noc_semaphore_set((uint32_t*)sender_next_semaphore, INVALID);
-        }
         if (fabric_connection.is_logically_connected()) {
             fabric_connection.close();
         }
@@ -218,6 +192,4 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(accumulator_cb_id, num_pages_per_packet);
     }
-    noc_semaphore_set((uint32_t*)sender_next_semaphore, INVALID);
-    noc_semaphore_set((uint32_t*)sender_ready_semaphore_address, INVALID);
 }
