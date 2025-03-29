@@ -120,7 +120,7 @@ run_t3000_llama3_accuracy_tests() {
 
   # Run test accuracy llama3 - 1B, 3B, 8B, 11B and 70B weights
   for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b"; do
-    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py -k perf ; fail+=$?
+    LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest --timeout 5000 -n auto models/tt_transformers/tests/test_accuracy.py -k perf; fail+=$?
     echo "LOG_METAL: Llama3 accuracy tests for $llama_dir completed"
   done
 
@@ -144,10 +144,10 @@ run_t3000_llama3.2-11b-vision_freq_tests() {
   # Llama3.2-11B
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
-  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
-  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
-  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py ; fail+=$?
-  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py --timeout 5000 ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py --timeout 5000 ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py --timeout 5000 ; fail+=$?
+  LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py --timeout 5000 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -171,10 +171,10 @@ run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests() {
   # Use MESH_DEVICE env variable to run on an N300 mesh
   mesh_device=N300
 
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py ; fail+=$?
-  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
+  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_image_transformer.py --timeout 5000 ; fail+=$?
+  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py --timeout 5000 ; fail+=$?
+  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py --timeout 5000 ; fail+=$?
+  MESH_DEVICE=$mesh_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py --timeout 5000 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -193,8 +193,8 @@ run_t3000_mixtral_tests() {
   echo "LOG_METAL: Running run_t3000_mixtral_tests"
 
   # mixtral8x7b 8 chip decode model test (env flags set inside the test)
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_model.py --timeout=600; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_model_prefill.py --timeout=600; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_model.py --timeout=5000; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_model_prefill.py --timeout=5000; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

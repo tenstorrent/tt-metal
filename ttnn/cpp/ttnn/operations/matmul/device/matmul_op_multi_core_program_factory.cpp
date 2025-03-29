@@ -174,13 +174,15 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
 
     auto override_runtime_args_callback =
         [reader_kernel_id = reader_id, writer_kernel_id = writer_id, num_cores, num_cores_y](
-            const Program& program,
-            const std::vector<tt_metal::Buffer*>& input_buffers,
-            const std::vector<tt_metal::Buffer*>& output_buffers) {
-            auto src_dram_buffer_a = input_buffers.at(0);
-            auto src_dram_buffer_b = input_buffers.at(1);
+            const void* operation,
+            tt::tt_metal::Program& program,
+            const std::vector<tt::tt_metal::Tensor>& input_tensors,
+            const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
+            const std::vector<tt::tt_metal::Tensor>& output_tensors) {
+            auto src_dram_buffer_a = input_tensors.at(0).buffer();
+            auto src_dram_buffer_b = input_tensors.at(1).buffer();
 
-            auto dst_dram_buffer = output_buffers.at(0);
+            auto dst_dram_buffer = output_tensors.at(0).buffer();
 
             for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -198,7 +200,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
             }
         };
 
-    return {std::move(program), override_runtime_args_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 }  // namespace matmul

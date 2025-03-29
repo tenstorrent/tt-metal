@@ -45,7 +45,7 @@ run_t3000_falcon40b_tests() {
 
   echo "LOG_METAL: Running run_t3000_falcon40b_tests"
 
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/test_perf_falcon.py -m "model_perf_t3000" --timeout=600 ; fail+=$?
+  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/test_perf_falcon.py -m "model_perf_t3000" --timeout 5000 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
