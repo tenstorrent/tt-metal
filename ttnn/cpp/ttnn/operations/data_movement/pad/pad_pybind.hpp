@@ -19,6 +19,7 @@ void bind_pad(py::module& module) {
         R"doc(
 
             Returns a padded tensor, with a specified value at the specified location. If the input tensor is on host, the pad will be performed on host, and if its on device it will be performed on device.
+            Any rank of tensor is supported, however tensors with rank > 4 can only apply padding to the lower 3 dimensions.
 
             Equivalent pytorch code:
 
