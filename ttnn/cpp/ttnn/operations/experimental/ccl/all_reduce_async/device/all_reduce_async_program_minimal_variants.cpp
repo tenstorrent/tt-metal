@@ -83,9 +83,8 @@ CoreCoord wh_glx_logical_worker_core_from_physical_core(CoreCoord physical_core)
     return CoreCoord(logical_x, logical_y);
 }
 
-std::tuple<bool, CoreRangeSet, std::vector<CoreCoord>> get_optimal_worker_core_placement(
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> get_optimal_worker_core_placement(
     std::vector<CoreCoord> ethernet_cores_virtual, const CoreRangeSet& available_corerangeset, uint32_t num_links) {
-    bool success = true;
     std::vector<CoreCoord> sender_worker_cores;
 
     // Get all available ranges from the CoreRangeSet
@@ -162,7 +161,7 @@ std::tuple<bool, CoreRangeSet, std::vector<CoreCoord>> get_optimal_worker_core_p
     }
     CoreRangeSet sender_worker_corerangeset = CoreRangeSet(sender_worker_cores_set);
 
-    return {success, sender_worker_corerangeset, sender_worker_cores};
+    return {sender_worker_corerangeset, sender_worker_cores};
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers(
@@ -241,16 +240,22 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
 
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
+    bool optimal_placement = true;
     auto sub_device_cores = device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value_or(device->get_sub_device_ids().at(0)));
-    // const auto [sender_worker_core_range, sender_worker_cores] =
-    //     choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, sub_device_cores);
 
     std::vector<CoreCoord> ethernet_cores_virtual =
         compute_top_row_ethernet_cores(device, forward_device, backward_device);
 
-    auto [success, sender_worker_core_range, sender_worker_cores] =
-        get_optimal_worker_core_placement(ethernet_cores_virtual, sub_device_cores, num_links);
+    CoreRangeSet sender_worker_core_range;
+    std::vector<CoreCoord> sender_worker_cores;
+    if (optimal_placement) {
+        std::tie(sender_worker_core_range, sender_worker_cores) =
+            get_optimal_worker_core_placement(ethernet_cores_virtual, sub_device_cores, num_links);
+    } else {
+        std::tie(sender_worker_core_range, sender_worker_cores) =
+            choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, sub_device_cores);
+    }
 
     if (device->id() == 4) {
         tt::log_info("dev {} ethernet_cores: {}", device->id(), ethernet_cores_virtual);
