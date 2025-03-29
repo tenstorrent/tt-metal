@@ -462,6 +462,10 @@ typedef struct test_board {
         return control_plane->get_routing_plane_id(eth_chan);
     }
 
+    inline eth_chan_directions get_eth_chan_direction(mesh_id_t mesh_id, chip_id_t chip_id, chan_id_t eth_chan) {
+        return control_plane->get_eth_chan_direction(mesh_id, chip_id, eth_chan);
+    }
+
     inline void close_devices() { tt::tt_metal::detail::CloseDevices(device_handle_map); }
 
 } test_board_t;
@@ -551,6 +555,10 @@ typedef struct test_device {
             } else {
                 router_compile_args.push_back(0);
             }
+
+            uint32_t direction = board_handle->get_eth_chan_direction(
+                mesh_id, logical_chip_id, soc_desc.logical_eth_core_to_chan_map.at(router_logical_cores[i]));
+            router_compile_args.push_back(direction);
 
             // initialize the semaphore
             tt::llrt::write_hex_vec_to_core(
@@ -921,7 +929,9 @@ typedef struct test_traffic {
                 traffic_controller_src,
                 {controller_logical_core},
                 tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .defines = defines});
 
             tt_metal::SetRuntimeArgs(tx_device->program_handle, kernel, controller_logical_core, runtime_args);
         }
