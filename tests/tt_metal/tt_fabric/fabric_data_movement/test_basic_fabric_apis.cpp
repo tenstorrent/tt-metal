@@ -297,6 +297,7 @@ TEST_F(Fabric2DPushFixture, TestAsyncWrite) {
     auto sender_router_noc_xy =
         tt_metal::hal_ref.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y);
 
+    auto outbound_eth_channels = tt::Cluster::instance().get_fabric_ethernet_channels(start_mesh_chip_id.second);
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -304,7 +305,8 @@ TEST_F(Fabric2DPushFixture, TestAsyncWrite) {
         data_size,
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
-        sender_router_noc_xy};
+        sender_router_noc_xy,
+        *outbound_eth_channels.begin()};
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
     // Create the receiver program for validation
@@ -601,7 +603,7 @@ TEST_F(Fabric2DPushFixture, TestAsyncRawWrite) {
     auto& sender_virtual_router_coord = routers[0].second;
     auto sender_router_noc_xy =
         tt_metal::hal_ref.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y);
-
+    auto outbound_eth_channels = tt::Cluster::instance().get_fabric_ethernet_channels(start_mesh_chip_id.second);
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -609,7 +611,8 @@ TEST_F(Fabric2DPushFixture, TestAsyncRawWrite) {
         data_size,
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
-        sender_router_noc_xy};
+        sender_router_noc_xy,
+        *outbound_eth_channels.begin()};
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
     // Create the receiver program for validation
@@ -920,7 +923,7 @@ TEST_F(Fabric2DPushFixture, TestAtomicInc) {
     auto& sender_virtual_router_coord = routers[0].second;
     auto sender_router_noc_xy =
         tt_metal::hal_ref.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y);
-
+    auto outbound_eth_channels = tt::Cluster::instance().get_fabric_ethernet_channels(start_mesh_chip_id.second);
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -929,7 +932,8 @@ TEST_F(Fabric2DPushFixture, TestAtomicInc) {
         wrap_boundary,
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
-        sender_router_noc_xy};
+        sender_router_noc_xy,
+        *outbound_eth_channels.begin()};
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
     // Create the receiver program for validation
@@ -1275,7 +1279,7 @@ TEST_F(Fabric2DPushFixture, TestAsyncWriteAtomicInc) {
     auto& sender_virtual_router_coord = routers[0].second;
     auto sender_router_noc_xy =
         tt_metal::hal_ref.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y);
-
+    auto outbound_eth_channels = tt::Cluster::instance().get_fabric_ethernet_channels(start_mesh_chip_id.second);
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -1285,7 +1289,8 @@ TEST_F(Fabric2DPushFixture, TestAsyncWriteAtomicInc) {
         atomic_inc,
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
-        sender_router_noc_xy};
+        sender_router_noc_xy,
+        *outbound_eth_channels.begin()};
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
     // Create the receiver program for validation
@@ -1616,7 +1621,7 @@ TEST_F(Fabric2DPushFixture, TestAsyncRawWriteAtomicInc) {
     auto& sender_virtual_router_coord = routers[0].second;
     auto sender_router_noc_xy =
         tt_metal::hal_ref.noc_xy_encoding(sender_virtual_router_coord.x, sender_virtual_router_coord.y);
-
+    auto outbound_eth_channels = tt::Cluster::instance().get_fabric_ethernet_channels(start_mesh_chip_id.second);
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -1626,7 +1631,8 @@ TEST_F(Fabric2DPushFixture, TestAsyncRawWriteAtomicInc) {
         atomic_inc,
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
-        sender_router_noc_xy};
+        sender_router_noc_xy,
+        *outbound_eth_channels.begin()};
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
     // Create the receiver program for validation
