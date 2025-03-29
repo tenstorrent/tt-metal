@@ -846,7 +846,9 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
 
     std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
                                                       (std::uint32_t)src0_cb_index,
-                                                      (std::uint32_t)dst_is_dram};
+                                                      (std::uint32_t)dst_is_dram,
+                                                      0,
+                                                      0};
 
     // Tilized reader
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
