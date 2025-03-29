@@ -48,6 +48,9 @@ public:
     bool operator==(const bfloat16 rhs) const { return uint16_data == rhs.uint16_data; }
     bool operator!=(const bfloat16 rhs) const { return not(*this == rhs); }
     bfloat16 operator*(const bfloat16 rhs) const { return bfloat16(this->to_float() * rhs.to_float()); }
+    bfloat16 operator+(const bfloat16 rhs) const { return bfloat16(this->to_float() + rhs.to_float()); }
+
+    bfloat16 operator/(int64_t rhs) const { return bfloat16(this->to_float() / static_cast<float>(rhs)); }
 };
 
 std::ostream& operator<<(std::ostream& os, const bfloat16& bfp16);
