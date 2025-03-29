@@ -136,6 +136,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
                 cb_config_host_buffer[receiver_idx++] = sender_physical_coord.y;
             }
         }
+        log_debug(tt::LogOp, "[mpise]: {} {} {}", __FILE__, __LINE__, __FUNCTION__);
         if (auto mesh_buffer = cb_config_buffer.get_mesh_buffer()) {
             distributed::EnqueueWriteMeshBuffer(
                 mesh_buffer->device()->mesh_command_queue(), mesh_buffer, cb_config_host_buffer, false);

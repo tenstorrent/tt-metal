@@ -289,6 +289,7 @@ inline void SetRuntimeArgsImpl(
 namespace detail {
 
 bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::vector<uint32_t>& host_buffer) {
+    // log_debug(tt::LogOp, "[mpise]: {}", __FUNCTION__);
     bool pass = true;
     TT_FATAL(
         address >= device->allocator()->get_base_allocator_addr(HalMemType::DRAM),
@@ -313,6 +314,7 @@ bool WriteToDeviceL1(
     std::vector<uint32_t>& host_buffer,
     CoreType core_type) {
     ZoneScoped;
+    // log_debug(tt::LogOp, "[mpise]: {}", __FUNCTION__);
     auto worker_core = device->virtual_core_from_logical_core(logical_core, core_type);
     llrt::write_hex_vec_to_core(device->id(), worker_core, host_buffer, address);
     return true;
@@ -419,6 +421,7 @@ void print_page(
 }
 
 void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+    // log_debug(tt::LogOp, "[mpise]: {}", __FUNCTION__);
     TT_FATAL(
         host_buffer.size() <= buffer.size(),
         "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer",
@@ -445,6 +448,19 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
         if (buffer.is_l1()) {
             auto core_coordinates =
                 device->worker_core_from_logical_core(buffer.allocator()->get_logical_core_from_bank_id(bank_id));
+            log_debug(
+                tt::LogOp,
+                "[mpise]: {}, buffer type:{} host,device page ids:({},{}), bank id:{}, "
+                "core coords:({},{}), absolute address:0x{:X}, page_size:{}",
+                __FUNCTION__,
+                buffer.buffer_type(),
+                host_page_id,
+                dev_page_id,
+                bank_id,
+                core_coordinates.x,
+                core_coordinates.y,
+                absolute_address,
+                page_size);
             llrt::write_hex_vec_to_core(device->id(), core_coordinates, page, absolute_address);
         } else {
             WriteToDeviceDRAMChannel(device, bank_id, bank_local_address, page);
@@ -465,6 +481,7 @@ DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uin
 }
 
 void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+    log_debug(tt::LogOp, "[mpise]: {}", __FUNCTION__);
     uint32_t host_buffer_size_bytes = host_buffer.size();
     TT_FATAL(
         host_buffer_size_bytes <= buffer.size(),
@@ -483,6 +500,14 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
     page.resize(page_size / sizeof(uint32_t));
     for (int page_index = 0; page_index < num_pages; page_index++) {
         const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
+        log_debug(
+            tt::LogOp,
+            "[mpise]: {}, buffer type:{} page#:{}, bank id:{}, address:0x{:X}",
+            __FUNCTION__,
+            buffer.buffer_type(),
+            page_index,
+            bank_index,
+            address);
         std::memcpy(page.data(), host_buffer.data() + data_index, page_size);
         switch (buffer.buffer_type()) {
             case BufferType::DRAM: WriteToDeviceDRAMChannel(device, bank_index, address, page); break;
@@ -500,6 +525,7 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
 }
 
 void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+    // log_debug(tt::LogOp, "[mpise]: {}", __FUNCTION__);
     ZoneScoped;
     if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED ||
         buffer.buffer_layout() == TensorMemoryLayout::SINGLE_BANK) {

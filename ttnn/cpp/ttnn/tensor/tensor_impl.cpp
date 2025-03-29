@@ -671,6 +671,7 @@ std::shared_ptr<Buffer> initialize_data_on_device(
     auto device_buffer = allocate_buffer_on_device(device, tensor_spec);
 
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+    log_debug(tt::LogOp, "[mpise]: {} {} {}", __FILE__, __LINE__, __FUNCTION__);
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         write_data_to_device_buffer<T>(device->command_queue(*cq_id), data_to_write, device_buffer);
     } else {

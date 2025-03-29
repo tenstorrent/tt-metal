@@ -15,7 +15,7 @@
 
 namespace tt::tt_metal {
 
-class DeviceFixture : public DispatchFixture {
+class DeviceFixture : public virtual DispatchFixture {
 protected:
     void SetUp() override {
         this->validate_dispatch_mode();
@@ -48,13 +48,19 @@ protected:
 
     void create_devices(const std::vector<chip_id_t>& device_ids) {
         const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
-        tt::DevicePool::initialize(
-            device_ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
+        tt::DevicePool::initialize(device_ids, 1, l1_small_size_, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
         this->devices_ = tt::DevicePool::instance().get_all_active_devices();
         this->num_devices_ = this->devices_.size();
     }
 
     size_t num_devices_;
+};
+
+class DeviceFixtureL1_L1Small : public DeviceFixture {
+    DeviceFixtureL1_L1Small() : DispatchFixture(24 * 1024) {
+        // L1 small size is set to 24KB for the tests
+        // This is the default value for the device
+    }
 };
 
 class DeviceSingleCardFixture : public DispatchFixture {

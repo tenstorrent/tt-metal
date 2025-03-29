@@ -65,6 +65,13 @@ protected:
     tt::ARCH arch_;
     std::vector<tt::tt_metal::IDevice*> devices_;
     bool slow_dispatch_;
+    const size_t l1_small_size_{DEFAULT_L1_SMALL_SIZE};
+
+    DispatchFixture() = default;
+    DispatchFixture(size_t l1_small_size) :
+        l1_small_size_(l1_small_size) {
+            // Constructor
+        };
 
     void SetUp() override {
         this->DetectDispatchMode();

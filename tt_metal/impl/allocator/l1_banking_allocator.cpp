@@ -60,11 +60,19 @@ num_banks_t compute_total_and_storage_only_num_l1_banks(const AllocatorConfig& a
     // L1 small region carve out is only for compute cores
     uint32_t num_l1_small_banks = (alloc_config.l1_small_size > 0) ? num_compute_and_storage_cores : 0;
     uint32_t num_l1_banks = num_compute_and_storage_cores + (num_banks_per_storage_core * num_storage_only_cores);
+    // Note from above: # l1 small banks and # L1 storage banks can be different. Finally, # L1 banks = # c+s cores + #
+    // L1 storage >= # L1 small
     return num_banks_t{
-        .total = num_l1_banks + num_l1_small_banks,
+        .total = num_l1_banks +
+                 num_l1_small_banks,  // !<--- 2x counted #L1 small: # L1 banks already counted # L1 small banks
         .num_l1_banks = num_l1_banks,
         .num_l1_small_banks = num_l1_small_banks,
         .per_storage_core = num_banks_per_storage_core,
+        // Note from above: if num_l1_banks == num_l1_small_banks ==> (at least one of the following)
+        // 1) num_storage_only_cores == 0
+        // 2) alloc_config.worker_l1_size == 0)
+        // 3) num_compute_and_storage_cores == 0 and alloc_config.worker_l1_size
+        // 4) num_compute_and_storage_cores == 0 and num_storage_only_cores == 0
     };
 }
 
@@ -119,6 +127,11 @@ void Allocator::init_compute_and_storage_l1_bank_manager() {
     // and the regular L1 region is offset just below it
     uint32_t bank_id = 0;
     const auto& cores = corerange_to_cores(config_.worker_grid, std::nullopt, true);
+    log_debug(
+        tt::LogOp,
+        "[mpise]: # cores from config_.worker_grid:{}, returned vector from corerange_to_cores:{}",
+        config_.worker_grid.num_cores(),
+        cores.size());
     for (const auto& logical_core : cores) {
         CoreCoord noc_core = logical_to_noc_coord(logical_core);
 
@@ -171,6 +184,27 @@ void Allocator::init_compute_and_storage_l1_bank_manager() {
             bank_id++;
         }
     }
+    int mp_idx{0};
+    for (const auto& logical_core : cores) {
+        CoreCoord noc_core = logical_to_noc_coord(logical_core);
+        log_debug(
+            tt::LogOp,
+            "[mpise]: [{}] Core type:{}, logical_core_to_bank_ids_[L1][{}] = bank_id:{}",
+            mp_idx++,
+            config_.core_type_from_noc_coord_table.at(noc_core),
+            logical_core,
+            logical_core_to_bank_ids_[BufferType::L1][logical_core]);
+    }
+    for (const auto& logical_core : cores) {
+        CoreCoord noc_core = logical_to_noc_coord(logical_core);
+        log_debug(
+            tt::LogOp,
+            "[mpise]: [{}] Core type:{}, logical_core_to_bank_ids_[L1_SMALL][{}] = bank_id:{}",
+            mp_idx++,
+            config_.core_type_from_noc_coord_table.at(noc_core),
+            logical_core,
+            logical_core_to_bank_ids_[BufferType::L1_SMALL][logical_core]);
+    }
 
     TT_ASSERT(bank_id_to_bank_offset.size() == num_banks.num_l1_banks);
     TT_ASSERT(small_bank_id_to_bank_offset.size() == num_banks.num_l1_small_banks);
@@ -204,9 +238,30 @@ void Allocator::init_compute_and_storage_l1_bank_manager() {
         config_.l1_alignment,
         config_.l1_unreserved_base,
         config_.disable_interleaved);
+    log_debug(
+        tt::LogOp,
+        "[mpise]: _configs: mem_mailbox_base:0x{:X}, storage_core_bank_size:0x{:X}, worker_l1_size:0x{:X}, "
+        "l1_unreserved_base:0x{:X}, l1_small_size:0x{:X}, disable_interleaved:{}, l1_alignment:{}",
+        mem_mailbox_base,
+        config_.storage_core_bank_size.has_value() ? config_.storage_core_bank_size.value() : 0,
+        config_.worker_l1_size,
+        config_.l1_unreserved_base,
+        config_.l1_small_size,
+        config_.disable_interleaved,
+        config_.l1_alignment);
 
     uint64_t small_interleaved_address_limit = config_.worker_l1_size - config_.l1_small_size;
     uint64_t small_alloc_offset = config_.l1_unreserved_base + allocatable_l1_size;
+    log_debug(
+        tt::LogOp,
+        "[mpise]: derived: storage_core_unreserved_base:0x{:X}, l1_bank_size:0x{:X}, interleaved_address_limit:0x{:X}, "
+        "allocatable_l1_size:0x{:X}, small_interleaved_address_limit:0x{:X}, small_alloc_offset:0x{:X}",
+        storage_core_unreserved_base,
+        l1_bank_size,
+        interleaved_address_limit,
+        allocatable_l1_size,
+        small_interleaved_address_limit,
+        small_alloc_offset);
     TT_ASSERT(
         (config_.l1_unreserved_base + config_.l1_small_size) <= config_.worker_l1_size,
         "L1 small region extends past L1 size");
