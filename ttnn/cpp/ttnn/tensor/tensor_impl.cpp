@@ -375,7 +375,9 @@ void to_string_row_major(
     if (dim > 0 and outer_index > 0) {
         ss << spaces;
     }
-    ss << "[";
+    if (rank != 0) {
+        ss << "[";
+    }
     auto dimension_shortener = get_dimension_shortener(rank != 0 ? shape[-rank] : 1);
     for (std::size_t index = 0;
          dimension_shortener.print_parenthesis_and_advance_index_if_reached_half_of_max_and_check_if_loop_is_done(
@@ -398,7 +400,9 @@ void to_string_row_major(
         }
         print_trailing_comma(ss, index, rank != 0 ? shape[-rank] : 1, after_comma);
     }
-    ss << "]";
+    if (rank != 0) {
+        ss << "]";
+    }
 }
 
 template <typename BufferType>
