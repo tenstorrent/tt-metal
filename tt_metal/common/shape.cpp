@@ -4,11 +4,14 @@
 
 #include "shape.hpp"
 
-#include <numeric>
-#include <ostream>
-
+#include <__utility/move.h>
+#include <boost/container/vector.hpp>
+#include <boost/move/utility_core.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/small_vector.hpp>
+#include <functional>
+#include <numeric>
+#include <ostream>
 
 namespace tt::tt_metal {
 

@@ -3,10 +3,36 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "core_descriptor.hpp"
-#include "rtoptions.hpp"
-#include "tt_cluster.hpp"
 
-#include "yaml-cpp/yaml.h"
+#include <__utility/move.h>
+#include <yaml-cpp/node/detail/impl.h>
+#include <yaml-cpp/node/detail/iterator.h>
+#include <yaml-cpp/node/impl.h>
+#include <yaml-cpp/node/iterator.h>
+#include <yaml-cpp/node/node.h>
+#include <yaml-cpp/node/parse.h>
+#include <__hash_table>
+#include <algorithm>
+#include <bitset>
+#include <cstdlib>
+#include <functional>
+#include <iterator>
+#include <stdexcept>
+#include <unordered_map>
+#include <unordered_set>
+
+#include "assert.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "metal_soc_descriptor.h"
+#include "rtoptions.hpp"
+#include "tt_backend_api_types.hpp"
+#include "tt_cluster.hpp"
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/cluster_descriptor_types.h"
+#include "umd/device/types/xy_pair.h"
+#include "utils.hpp"
 
 namespace tt {
 

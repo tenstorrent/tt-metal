@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <__utility/move.h>
 #include <kernel_types.hpp>
+#include <stdint.h>
 #include <tt_cluster.hpp>
 
-#include <utility>
+#include "util.hpp"
 
 namespace tt::tt_metal {
 

@@ -4,21 +4,26 @@
 
 #include "tt_elffile.hpp"
 
-#include <algorithm>
-#include <array>
-
+#include <__algorithm/ranges_any_of.h>
+#include <__algorithm/ranges_for_each.h>
 #include <assert.hpp>
-// C++
-#include <map>
-// C
-#include <errno.h>
+#include <bits/mman-linux.h>
 // OS
 #include <elf.h>
+// C
+#include <errno.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <algorithm>
+#include <cstring>
+#include <iterator>
+// C++
+#include <map>
+
+#include "logger.hpp"
 
 // Verify some knowledge of, and compatibilty with, RiscV
 #ifndef EM_RISCV

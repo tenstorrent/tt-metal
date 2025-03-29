@@ -4,10 +4,25 @@
 
 #include "mesh_graph.hpp"
 
+#include <magic_enum/magic_enum.hpp>
+#include <yaml-cpp/node/detail/impl.h>
+#include <yaml-cpp/node/detail/iterator.h>
+#include <yaml-cpp/node/impl.h>
+#include <yaml-cpp/node/iterator.h>
+#include <yaml-cpp/node/node.h>
+#include <yaml-cpp/node/parse.h>
+#include <array>
 #include <fstream>
-#include <iostream>
+#include <iomanip>
+#include <optional>
 
-#include "yaml-cpp/yaml.h"
+#include "assert.hpp"
+#include "logger.hpp"
+#include "umd/device/types/cluster_descriptor_types.h"
+
+namespace tt {
+enum class ARCH;
+}  // namespace tt
 
 namespace tt::tt_fabric {
 

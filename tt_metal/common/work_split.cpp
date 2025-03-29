@@ -6,14 +6,16 @@
 // Contains utility functions for partitioning work between multiple cores.
 //
 
+#include <__utility/move.h>
+#include <assert.hpp>
+#include <core_coord.hpp>
+#include <algorithm>
 #include <cstdint>
 #include <tuple>
 #include <vector>
 
-#include <assert.hpp>
-#include <core_coord.hpp>
-#include <math.hpp>
 #include "tracy/Tracy.hpp"
+#include "umd/device/types/xy_pair.h"
 
 namespace tt {
 namespace tt_metal {

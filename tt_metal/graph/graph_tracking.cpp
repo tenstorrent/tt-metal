@@ -2,7 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <__memory/shared_ptr.h>
 #include <graph_tracking.hpp>
+
+#include "assert.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Buffer;
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

@@ -4,11 +4,13 @@
 
 #pragma once
 
+#include <__utility/move.h>
 // C++
 #include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -82,6 +84,7 @@ public:
 
 private:
     class Impl;
+
     // We can't use unique_ptr here, because the above move semantics
     // would require Impl be complete at this point, which is what
     // we're trying to avoid.

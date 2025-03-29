@@ -2,9 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/core/span.hpp>
+#include <tracy/Tracy.hpp>
 #include <tt-metalium/tilize_utils.hpp>
+#include <cstddef>
+#include <type_traits>
 
-#include <tt-metalium/bfloat16.hpp>
+#include "assert.hpp"
+#include "constants.hpp"
+#include "span.hpp"
+
+class bfloat16;
 
 TensAddr::TensAddr(const std::vector<std::uint32_t>& shape) : sh(shape) {}
 

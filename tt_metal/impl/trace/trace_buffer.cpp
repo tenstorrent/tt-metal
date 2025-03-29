@@ -4,10 +4,13 @@
 
 #include "trace_buffer.hpp"
 
-#include <utility>
+#include <__utility/move.h>
 #include <device.hpp>
 #include <tt_metal.hpp>
+
+#include "base.h"
 #include "buffer.hpp"
+#include "logger.hpp"
 
 namespace tt::tt_metal {
 

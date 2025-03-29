@@ -2,22 +2,44 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <stdlib.h>
 // this programing example is based on the vecadd single core example in the
 // contributed folder it illustarted using multiple cores to perform vector
 // addition the program will use 4 cores to perform the vector addition
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/work_split.hpp>
-
-#include <cstddef>
+#include <algorithm>
+#include <array>
 #include <cstdint>
+#include <iostream>
+#include <map>
 #include <memory>
 #include <random>
+#include <string>
 #include <string_view>
+#include <utility>
+#include <variant>
 #include <vector>
-#include <algorithm>
+
+#include "hostdevcommon/kernel_structs.h"
+#include "span.hpp"
+#include "tt-metalium/buffer.hpp"
+#include "tt-metalium/buffer_constants.hpp"
+#include "tt-metalium/circular_buffer_types.hpp"
+#include "tt-metalium/constants.hpp"
+#include "tt-metalium/data_types.hpp"
+#include "tt-metalium/device.hpp"
+#include "tt-metalium/kernel_types.hpp"
+#include "tt-metalium/program_impl.hpp"
+#include "tt-metalium/tt_backend_api_types.hpp"
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 using namespace tt;
 using namespace tt::tt_metal;

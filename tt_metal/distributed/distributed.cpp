@@ -2,7 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <__utility/move.h>
 #include <tt-metalium/distributed.hpp>
+
+#include "device.hpp"
+#include "mesh_device.hpp"
+#include "mesh_trace.hpp"
+#include "program_impl.hpp"
+#include "system_memory_manager.hpp"
 
 namespace tt::tt_metal::distributed {
 

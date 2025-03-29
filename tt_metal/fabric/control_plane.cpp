@@ -2,11 +2,45 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "llrt/hal.hpp"
-#include "control_plane.hpp"
+#include <magic_enum/magic_enum.hpp>
+#include <__hash_table>
+#include <__tree>
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <initializer_list>
+#include <iomanip>
+#include <limits>
+#include <map>
+#include <memory>
+#include <ostream>
 #include <queue>
+#include <set>
+#include <string>
+#include <tuple>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
+#include "assert.hpp"
+#include "base.h"
+#include "control_plane.hpp"
+#include "core_coord.hpp"
+#include "fabric_host_interface.h"
+#include "hal_types.hpp"
+#include "llrt/hal.hpp"
+#include "logger.hpp"
+#include "mesh_coord.hpp"
+#include "mesh_graph.hpp"
+#include "metal_soc_descriptor.h"
+#include "routing_table_generator.hpp"
 #include "tt_cluster.hpp"
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/tt_xy_pair.h"
+#include "umd/device/types/cluster_descriptor_types.h"
+#include "umd/device/types/xy_pair.h"
 
 namespace tt::tt_fabric {
 

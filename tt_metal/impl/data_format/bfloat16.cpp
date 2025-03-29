@@ -2,16 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <__functional/bind.h>
 #include <tt-metalium/bfloat16.hpp>
-
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <iostream>
 #include <random>
 #include <vector>
 
 #include "assert.hpp"
-
 #include "tracy/Tracy.hpp"
 
 std::ostream& operator<<(std::ostream& os, const bfloat16& bfp16) {

@@ -4,25 +4,27 @@
 
 #include "l1_banking_allocator.hpp"
 
+#include <__iterator/access.h>
+#include <allocator.hpp>
+#include <allocator_types.hpp>
+#include <assert.hpp>
+#include <buffer_constants.hpp>
+#include <core_coord.hpp>
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <iterator>
+#include <memory>
 #include <optional>
 #include <random>
 #include <unordered_map>
 #include <vector>
 
-#include <allocator.hpp>
-#include <allocator_types.hpp>
-#include <buffer_constants.hpp>
 #include "bank_manager.hpp"
-#include <assert.hpp>
-#include <core_coord.hpp>
-#include "umd/device/types/xy_pair.h"
-#include <fmt/base.h>
-
+#include "hal_types.hpp"
 #include "llrt/hal.hpp"
+#include "umd/device/types/xy_pair.h"
 
 namespace tt {
 
