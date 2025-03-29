@@ -29,7 +29,7 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
     uint32_t HtWt = Ht * Wt;
-    scaler = sqrt(scaler);
+    scaler = std::sqrt(scaler);
 
     uint32_t num_tensor_tiles = NC * H * W / TILE_HW;
 
