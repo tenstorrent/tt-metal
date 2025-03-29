@@ -254,7 +254,7 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardPow::invoke(
         return grad_tensor;
     }
 
-    Tensor power_input = ttnn::power(queue_id, input, fabs(exponent - 1.0f), output_mem_config);
+    Tensor power_input = ttnn::power(queue_id, input, std::fabs(exponent - 1.0f), output_mem_config);
     if (exponent < 1.0f) {
         power_input = ttnn::reciprocal(queue_id, power_input, output_mem_config);
     }

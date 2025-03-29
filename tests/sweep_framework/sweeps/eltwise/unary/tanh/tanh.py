@@ -27,6 +27,7 @@ parameters = {
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "accuracy": [True, False],
     },
 }
 
@@ -37,6 +38,8 @@ parameters = {
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
         return True, "ROW_MAJOR_LAYOUT is not supported"
+    elif test_vector["accuracy"] == True and test_vector["input_dtype"] == ttnn.bfloat8_b:
+        return True, "accuracy mode is not supported in bfloat8_b"
     return False, None
 
 
@@ -50,6 +53,7 @@ def run(
     input_layout,
     input_memory_config,
     output_memory_config,
+    accuracy,
     *,
     device,
 ) -> list:
@@ -71,7 +75,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.tanh(input_tensor, memory_config=output_memory_config)
+    result = ttnn.tanh(input_tensor, memory_config=output_memory_config, accuracy=accuracy)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
