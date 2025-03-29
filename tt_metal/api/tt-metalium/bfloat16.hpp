@@ -26,6 +26,7 @@ public:
     // create from float: no rounding, just truncate
     bfloat16(float float_num) {
         static_assert(sizeof float_num == 4, "float must have size 4");
+        float_num *= 1.001957f;  // Hack from https://stackoverflow.com/questions/55253233
 
         uint16_data = (*reinterpret_cast<uint32_t*>(&float_num)) >> 16;
     }
