@@ -98,17 +98,23 @@ void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE>(
     setup_packet_header(pkt_hdr_fwd, params.num_fwd_hops, params.chip_send_type);
     setup_packet_header(pkt_hdr_bwd, params.num_bwd_hops, params.chip_send_type);
 
+    auto noc0_dest_addr_fwd = safe_get_noc_addr(
+        static_cast<uint8_t>(params.dest_noc_x_fwd),
+        static_cast<uint8_t>(params.dest_noc_y_fwd),
+        params.dest_bank_addr_fwd,
+        0);
+
+    pkt_hdr_fwd->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr_fwd}, params.payload_size_bytes);
+    auto noc0_dest_addr_bwd = safe_get_noc_addr(
+        static_cast<uint8_t>(params.dest_noc_x_bwd),
+        static_cast<uint8_t>(params.dest_noc_y_bwd),
+        params.dest_bank_addr_bwd,
+        0);
+
+    pkt_hdr_bwd->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr_bwd}, params.payload_size_bytes);
     for (size_t i = 0; i < params.send_count; i++) {
         // Forward direction
         if (params.num_fwd_hops > 0) {
-            auto noc0_dest_addr_fwd = safe_get_noc_addr(
-                static_cast<uint8_t>(params.dest_noc_x_fwd),
-                static_cast<uint8_t>(params.dest_noc_y_fwd),
-                params.dest_bank_addr_fwd,
-                0);
-
-            pkt_hdr_fwd->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr_fwd}, params.payload_size_bytes);
-
             fabric_connection.get_forward_connection().wait_for_empty_write_slot();
             fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
                 source_buffer_address, params.payload_size_bytes);
@@ -118,14 +124,6 @@ void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE>(
 
         // Backward direction
         if (params.num_bwd_hops > 0) {
-            auto noc0_dest_addr_bwd = safe_get_noc_addr(
-                static_cast<uint8_t>(params.dest_noc_x_bwd),
-                static_cast<uint8_t>(params.dest_noc_y_bwd),
-                params.dest_bank_addr_bwd,
-                0);
-
-            pkt_hdr_bwd->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr_bwd}, params.payload_size_bytes);
-
             fabric_connection.get_backward_connection().wait_for_empty_write_slot();
             fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
                 source_buffer_address, params.payload_size_bytes);
@@ -252,7 +250,7 @@ void kernel_main() {
     size_t arg_idx = 0;
 
     const size_t dest_bank_addr = get_arg_val<uint32_t>(arg_idx++);
-    const size_t packet_payload_size_bytes = get_arg_val<uint32_t>(arg_idx++);
+    // const size_t packet_payload_size_bytes = get_arg_val<uint32_t>(arg_idx++);
     const size_t dest_noc_x_fwd = get_arg_val<uint32_t>(arg_idx++);
     const size_t dest_noc_y_fwd = get_arg_val<uint32_t>(arg_idx++);
     const size_t dest_noc_x_bwd = get_arg_val<uint32_t>(arg_idx++);

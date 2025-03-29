@@ -2197,13 +2197,18 @@ struct WriteThroughputStabilityTestWithPersistentFabricParams {
     bool disable_end_workers_in_backward_direction = false;
 };
 
-void RunWriteThroughputStabilityTestWithPersistentFabric(
-    size_t num_mcasts,
-    size_t num_unicasts,
+struct Fabric1DPacketSendTestSpec {
+    tt::tt_fabric::ChipSendType chip_send_type = tt::tt_fabric::CHIP_UNICAST;
+    tt::tt_fabric::NocSendType noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
+    size_t num_messages = 0;
+    size_t packet_payload_size_bytes = 0;
+};
+
+void Run1DFabricPacketSendTest(
     size_t num_links,
     size_t num_op_invocations,
-    const WriteThroughputStabilityTestWithPersistentFabricParams& params = {},
-    size_t packet_payload_size_bytes = tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes) {
+    const std::vector<Fabric1DPacketSendTestSpec>& test_specs,
+    const WriteThroughputStabilityTestWithPersistentFabricParams& params = {}) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     TT_FATAL(
@@ -2248,7 +2253,11 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
     static constexpr uint32_t source_payload_cb_index = tt::CB::c_in1;
     static constexpr size_t packet_header_cb_size_in_headers = 5;
     static constexpr bool enable_persistent_fabric_mode = true;
-    size_t dest_buffer_size = packet_payload_size_bytes * 4;
+    auto max_packet_payload_size_bytes =
+        std::max_element(test_specs.begin(), test_specs.end(), [](const auto& a, const auto& b) {
+            return a.packet_payload_size_bytes < b.packet_payload_size_bytes;
+        })->packet_payload_size_bytes;
+    size_t dest_buffer_size = max_packet_payload_size_bytes * 4;
     static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;
 
     T3000TestDevice test_fixture;
@@ -2515,8 +2524,8 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
         CBHandle sender_workers_cb = CreateCircularBuffer(program, worker_cores, cb_src0_config);
 
         tt_metal::CircularBufferConfig cb_src1_config =
-            tt_metal::CircularBufferConfig(packet_payload_size_bytes, {{source_payload_cb_index, cb_df}})
-                .set_page_size(source_payload_cb_index, packet_payload_size_bytes);
+            tt_metal::CircularBufferConfig(max_packet_payload_size_bytes, {{source_payload_cb_index, cb_df}})
+                .set_page_size(source_payload_cb_index, max_packet_payload_size_bytes);
         CBHandle sender_workers_payload_cb = CreateCircularBuffer(program, worker_cores, cb_src1_config);
 
         TT_FATAL(
@@ -2568,7 +2577,7 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
             const size_t dest_noc_y_bwd = device->worker_core_from_logical_core(dest_core_coord[l]).y;
 
             // New format for send types
-            size_t num_send_types = 0;
+            size_t num_send_types = test_specs.size();
             std::vector<size_t> send_types;
             std::vector<size_t> chip_send_types;
             std::vector<size_t> send_counts_per_type;
@@ -2576,29 +2585,17 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
             std::vector<size_t> num_bwd_hops_per_type;
             std::vector<size_t> send_type_payload_sizes;
 
-            if (!disable_sends_for_worker && num_mcasts > 0) {
-                send_types.push_back(static_cast<size_t>(tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE));
-                chip_send_types.push_back(static_cast<size_t>(tt::tt_fabric::CHIP_MULTICAST));
-                send_counts_per_type.push_back(num_mcasts);
+            for (const auto& test_spec : test_specs) {
+                send_types.push_back(static_cast<size_t>(test_spec.noc_send_type));
+                chip_send_types.push_back(static_cast<size_t>(test_spec.chip_send_type));
+                send_counts_per_type.push_back(test_spec.num_messages);
                 num_fwd_hops_per_type.push_back(mcast_fwd_hops);
                 num_bwd_hops_per_type.push_back(mcast_bwd_hops);
-                send_type_payload_sizes.push_back(packet_payload_size_bytes);
-                num_send_types++;
-            }
-
-            if (!disable_sends_for_worker && num_unicasts > 0) {
-                send_types.push_back(static_cast<size_t>(tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE));
-                chip_send_types.push_back(static_cast<size_t>(tt::tt_fabric::CHIP_UNICAST));
-                send_counts_per_type.push_back(num_unicasts);
-                num_fwd_hops_per_type.push_back(unicast_forward ? unicast_hops : 0);
-                num_bwd_hops_per_type.push_back(unicast_forward ? 0 : unicast_hops);
-                send_type_payload_sizes.push_back(packet_payload_size_bytes);
-                num_send_types++;
+                send_type_payload_sizes.push_back(test_spec.packet_payload_size_bytes);
             }
 
             std::vector<uint32_t> rt_args = {
                 dest_bank_addr,
-                packet_payload_size_bytes,
                 dest_noc_x_fwd,
                 dest_noc_y_fwd,
                 dest_noc_x_bwd,
@@ -2681,6 +2678,31 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
         detail::DumpDeviceProfileResults(d);
     }
     log_info(tt::LogTest, "Finished");
+}
+
+void RunWriteThroughputStabilityTestWithPersistentFabric(
+    size_t num_mcasts,
+    size_t num_unicasts,
+    size_t num_links,
+    size_t num_op_invocations,
+    const WriteThroughputStabilityTestWithPersistentFabricParams& params = {},
+    size_t packet_payload_size_bytes = tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes) {
+    std::vector<Fabric1DPacketSendTestSpec> test_specs;
+    if (num_mcasts > 0) {
+        test_specs.push_back(
+            {.chip_send_type = tt::tt_fabric::ChipSendType::CHIP_MULTICAST,
+             .noc_send_type = tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE,
+             .num_messages = num_mcasts,
+             .packet_payload_size_bytes = packet_payload_size_bytes});
+    }
+    if (num_unicasts > 0) {
+        test_specs.push_back(
+            {.chip_send_type = tt::tt_fabric::ChipSendType::CHIP_UNICAST,
+             .noc_send_type = tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE,
+             .num_messages = num_unicasts,
+             .packet_payload_size_bytes = packet_payload_size_bytes});
+    }
+    Run1DFabricPacketSendTest(num_links, num_op_invocations, test_specs, params);
 }
 
 void RunRingDeadlockStabilityTestWithPersistentFabric(
