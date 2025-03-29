@@ -116,8 +116,8 @@ void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE>(
         // Forward direction
         if (params.num_fwd_hops > 0) {
             fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-            fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
-                source_buffer_address, params.payload_size_bytes);
+            // fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
+            //     source_buffer_address, params.payload_size_bytes);
             fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
                 (uint32_t)pkt_hdr_fwd, sizeof(PACKET_HEADER_TYPE));
         }
@@ -125,8 +125,8 @@ void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE>(
         // Backward direction
         if (params.num_bwd_hops > 0) {
             fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-            fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
-                source_buffer_address, params.payload_size_bytes);
+            // fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
+            //     source_buffer_address, params.payload_size_bytes);
             fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
                 (uint32_t)pkt_hdr_bwd, sizeof(PACKET_HEADER_TYPE));
         }
@@ -148,17 +148,23 @@ void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC>(
     setup_packet_header(pkt_hdr_fwd, params.num_fwd_hops, params.chip_send_type);
     setup_packet_header(pkt_hdr_bwd, params.num_bwd_hops, params.chip_send_type);
 
+    auto noc0_dest_addr_fwd = safe_get_noc_addr(
+        static_cast<uint8_t>(params.dest_noc_x_fwd),
+        static_cast<uint8_t>(params.dest_noc_y_fwd),
+        params.dest_bank_addr_fwd,
+        0);
+
+    pkt_hdr_fwd->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc0_dest_addr_fwd, 1, 128});
+    auto noc0_dest_addr_bwd = safe_get_noc_addr(
+        static_cast<uint8_t>(params.dest_noc_x_bwd),
+        static_cast<uint8_t>(params.dest_noc_y_bwd),
+        params.dest_bank_addr_bwd,
+        0);
+
+    pkt_hdr_bwd->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc0_dest_addr_bwd, 1, 128});
     for (size_t i = 0; i < params.send_count; i++) {
         // Forward direction
         if (params.num_fwd_hops > 0) {
-            auto noc0_dest_addr_fwd = safe_get_noc_addr(
-                static_cast<uint8_t>(params.dest_noc_x_fwd),
-                static_cast<uint8_t>(params.dest_noc_y_fwd),
-                params.dest_bank_addr_fwd,
-                0);
-
-            pkt_hdr_fwd->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc0_dest_addr_fwd, 1, 128});
-
             fabric_connection.get_forward_connection().wait_for_empty_write_slot();
             fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
                 (uint32_t)pkt_hdr_fwd, sizeof(PACKET_HEADER_TYPE));
@@ -166,14 +172,6 @@ void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC>(
 
         // Backward direction
         if (params.num_bwd_hops > 0) {
-            auto noc0_dest_addr_bwd = safe_get_noc_addr(
-                static_cast<uint8_t>(params.dest_noc_x_bwd),
-                static_cast<uint8_t>(params.dest_noc_y_bwd),
-                params.dest_bank_addr_bwd,
-                0);
-
-            pkt_hdr_bwd->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc0_dest_addr_bwd, 1, 128});
-
             fabric_connection.get_backward_connection().wait_for_empty_write_slot();
             fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
                 (uint32_t)pkt_hdr_bwd, sizeof(PACKET_HEADER_TYPE));
@@ -196,46 +194,46 @@ void send_packets<tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC>(
     setup_packet_header(pkt_hdr_fwd, params.num_fwd_hops, params.chip_send_type);
     setup_packet_header(pkt_hdr_bwd, params.num_bwd_hops, params.chip_send_type);
 
+    auto noc0_dest_addr_fwd = safe_get_noc_addr(
+        static_cast<uint8_t>(params.dest_noc_x_fwd),
+        static_cast<uint8_t>(params.dest_noc_y_fwd),
+        params.dest_bank_addr_fwd,
+        0);
+
+    auto sem_noc0_dest_addr_fwd = safe_get_noc_addr(
+        static_cast<uint8_t>(params.dest_noc_x_fwd),
+        static_cast<uint8_t>(params.dest_noc_y_fwd),
+        params.dest_bank_addr_fwd + 4,
+        0);
+    pkt_hdr_fwd->to_noc_fused_unicast_write_atomic_inc(
+        NocUnicastAtomicIncFusedCommandHeader{noc0_dest_addr_fwd, sem_noc0_dest_addr_fwd, 1, 128},
+        params.payload_size_bytes);
+    auto noc0_dest_addr_bwd = safe_get_noc_addr(
+        static_cast<uint8_t>(params.dest_noc_x_bwd),
+        static_cast<uint8_t>(params.dest_noc_y_bwd),
+        params.dest_bank_addr_bwd,
+        0);
+
+    auto sem_noc0_dest_addr_bwd = safe_get_noc_addr(
+        static_cast<uint8_t>(params.dest_noc_x_bwd),
+        static_cast<uint8_t>(params.dest_noc_y_bwd),
+        params.dest_bank_addr_bwd + 4,
+        0);
+
+    pkt_hdr_bwd->to_noc_fused_unicast_write_atomic_inc(
+        NocUnicastAtomicIncFusedCommandHeader{noc0_dest_addr_bwd, sem_noc0_dest_addr_bwd, 1, 128},
+        params.payload_size_bytes);
     for (size_t i = 0; i < params.send_count; i++) {
         // Forward direction
         if (params.num_fwd_hops > 0) {
-            auto noc0_dest_addr_fwd = safe_get_noc_addr(
-                static_cast<uint8_t>(params.dest_noc_x_fwd),
-                static_cast<uint8_t>(params.dest_noc_y_fwd),
-                params.dest_bank_addr_fwd,
-                0);
-
-            auto sem_noc0_dest_addr_fwd = safe_get_noc_addr(
-                static_cast<uint8_t>(params.dest_noc_x_fwd),
-                static_cast<uint8_t>(params.dest_noc_y_fwd),
-                params.dest_bank_addr_fwd + 4,
-                0);
-
-            pkt_hdr_fwd->to_noc_fused_unicast_write_atomic_inc(
-                NocUnicastAtomicIncFusedCommandHeader{noc0_dest_addr_fwd, sem_noc0_dest_addr_fwd, 1, 128});
-
             fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+            // Don't send payload from worker since we only want to test fabric, not worker
             fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
                 (uint32_t)pkt_hdr_fwd, sizeof(PACKET_HEADER_TYPE));
         }
 
         // Backward direction
         if (params.num_bwd_hops > 0) {
-            auto noc0_dest_addr_bwd = safe_get_noc_addr(
-                static_cast<uint8_t>(params.dest_noc_x_bwd),
-                static_cast<uint8_t>(params.dest_noc_y_bwd),
-                params.dest_bank_addr_bwd,
-                0);
-
-            auto sem_noc0_dest_addr_bwd = safe_get_noc_addr(
-                static_cast<uint8_t>(params.dest_noc_x_bwd),
-                static_cast<uint8_t>(params.dest_noc_y_bwd),
-                params.dest_bank_addr_bwd + 4,
-                0);
-
-            pkt_hdr_bwd->to_noc_fused_unicast_write_atomic_inc(
-                NocUnicastAtomicIncFusedCommandHeader{noc0_dest_addr_bwd, sem_noc0_dest_addr_bwd, 1, 128});
-
             fabric_connection.get_backward_connection().wait_for_empty_write_slot();
             fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
                 (uint32_t)pkt_hdr_bwd, sizeof(PACKET_HEADER_TYPE));

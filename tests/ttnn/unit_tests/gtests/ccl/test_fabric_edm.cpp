@@ -26,6 +26,12 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    TT_FATAL(num_messages > 0, "num_messages must be greater than 0");
+    TT_FATAL(packet_payload_size_bytes > 0, "packet_payload_size_bytes must be greater than 0");
+    TT_FATAL(num_links > 0, "num_links must be greater than 0");
+    TT_FATAL(num_op_invocations > 0, "num_op_invocations must be greater than 0");
+    TT_FATAL(line_size > 0, "line_size must be greater than 0");
+
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
     params.line_size = line_size;

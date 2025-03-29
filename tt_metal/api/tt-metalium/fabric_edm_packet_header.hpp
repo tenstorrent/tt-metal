@@ -51,9 +51,9 @@ enum NocSendType : uint8_t {
     NOC_UNICAST_INLINE_WRITE = 1,
     NOC_MULTICAST_WRITE = 2,
     NOC_UNICAST_ATOMIC_INC = 3,
-    NOC_MULTICAST_ATOMIC_INC = 4,
-    NOC_FUSED_UNICAST_ATOMIC_INC = 5,
-    NOC_SEND_TYPE_LAST = NOC_FUSED_UNICAST_ATOMIC_INC
+    NOC_FUSED_UNICAST_ATOMIC_INC = 4,
+    NOC_MULTICAST_ATOMIC_INC = 5,
+    NOC_SEND_TYPE_LAST = NOC_MULTICAST_ATOMIC_INC
 };
 // How to send the payload across the cluster
 // 1 bit
@@ -321,7 +321,8 @@ struct PacketHeaderBase {
     }
 
     inline volatile Derived* to_noc_fused_unicast_write_atomic_inc(
-        const NocUnicastAtomicIncFusedCommandHeader& noc_fused_unicast_write_atomic_inc_command_header) volatile {
+        const NocUnicastAtomicIncFusedCommandHeader& noc_fused_unicast_write_atomic_inc_command_header,
+        size_t payload_size_bytes) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_FUSED_UNICAST_ATOMIC_INC;
         auto noc_address_components =
@@ -346,7 +347,7 @@ struct PacketHeaderBase {
         this->command_fields.unicast_seminc_fused.wrap = noc_fused_unicast_write_atomic_inc_command_header.wrap;
         this->command_fields.unicast_seminc_fused.flush = noc_fused_unicast_write_atomic_inc_command_header.flush;
 
-        this->payload_size_bytes = 0;
+        this->payload_size_bytes = payload_size_bytes;
 #else
         TT_THROW("Calling to_noc_unicast_atomic_inc from host is unsupported");
 #endif
