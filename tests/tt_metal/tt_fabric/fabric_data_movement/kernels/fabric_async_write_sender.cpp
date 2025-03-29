@@ -24,6 +24,7 @@ void kernel_main() {
     uint32_t dst_mesh_id = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t dst_device_id = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t router_noc_xy = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+    uint32_t outbound_eth_chan = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
 
     uint64_t dst_noc_addr = get_noc_addr_helper(dst_noc_offset, dst_addr);
     uint32_t packet_size_bytes = num_bytes + PACKET_HEADER_SIZE_BYTES;
@@ -51,7 +52,8 @@ void kernel_main() {
         volatile fabric_push_client_interface_t* client_interface =
             (volatile fabric_push_client_interface_t*)client_interface_addr;
 
-        fabric_endpoint_init<decltype(client_interface), RoutingType::ROUTING_TABLE>(client_interface, 0 /* unused */);
+        fabric_endpoint_init<decltype(client_interface), RoutingType::ROUTING_TABLE>(
+            client_interface, outbound_eth_chan);
         fabric_client_connect(client_interface, 0, dst_mesh_id, dst_device_id);
         fabric_async_write<
             decltype(client_interface),
