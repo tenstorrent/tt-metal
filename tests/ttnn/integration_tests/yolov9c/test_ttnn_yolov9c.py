@@ -26,27 +26,26 @@ from models.experimental.functional_yolov9c.demo.demo_utils import attempt_load
     "use_pretrained_weight",
     [
         False,
+        True,
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_yolov9c(use_pretrained_weight, device, use_program_cache, reset_seeds):
     torch_input, ttnn_input = create_yolov9c_input_tensors(device, model=True)
     state_dict = None
+    torch_model = yolov9c.YoloV9()
 
     if use_pretrained_weight:
-        torch_model = attempt_load("yolov9c.pt", map_location="cpu")
-        state_dict = torch_model.state_dict()
+        pretrained_model = attempt_load("yolov9c.pt", map_location="cpu")
+        torch_model.load_state_dict(pretrained_model.state_dict(), strict=False)
 
-    torch_model = yolov9c.YoloV9()
-    state_dict = torch_model.state_dict() if state_dict is None else state_dict
-    ds_state_dict = {k: v for k, v in state_dict.items()}
-    new_state_dict = {}
-    for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
-        if isinstance(parameter2, torch.FloatTensor):
-            new_state_dict[name1] = parameter2
+    new_state_dict = {
+        name: param for name, param in torch_model.state_dict().items() if isinstance(param, torch.FloatTensor)
+    }
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
     torch_output = torch_model(torch_input)
+
     parameters = create_yolov9c_model_parameters(torch_model, torch_input, device)
     ttnn_model = ttnn_yolov9c.YoloV9(device, parameters)
     ttnn_output = ttnn_model(ttnn_input)
