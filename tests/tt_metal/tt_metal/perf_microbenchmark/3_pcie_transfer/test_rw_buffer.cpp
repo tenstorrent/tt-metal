@@ -136,7 +136,7 @@ int main(int argc, char** argv) {
                 auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
                 float write_bw = transfer_size / (elapsed_us * 1000.0);
                 h2d_bandwidth.push_back(write_bw);
-                best_write_bw = fmax(best_write_bw, write_bw);
+                best_write_bw = std::fmax(best_write_bw, write_bw);
                 log_info(
                     LogTest,
                     "EnqueueWriteBuffer to {} (H2D): {:.3f}ms, {:.3f}GB/s",
@@ -152,7 +152,7 @@ int main(int argc, char** argv) {
                 auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
                 float read_bw = transfer_size / (elapsed_us * 1000.0);
                 d2h_bandwidth.push_back(read_bw);
-                best_read_bw = fmax(best_read_bw, read_bw);
+                best_read_bw = std::fmax(best_read_bw, read_bw);
                 log_info(
                     LogTest,
                     "EnqueueReadBuffer from {} (D2H): {:.3f}ms, {:.3f}GB/s",
