@@ -220,13 +220,15 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(
         tt::tt_metal::ComputeConfig{.compile_args = compute_args});
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
+                                              const void* operation,
                                               const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto input_buffer = input_buffers.at(0);
-        auto topk_mask_buffer = input_buffers.at(2);
-        auto expert_mask_buffer = input_buffers.at(1);
-        auto output_buffer = output_buffers.at(0);
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto input_buffer = input_tensors.at(0).buffer();
+        auto topk_mask_buffer = input_tensors.at(2).buffer();
+        auto expert_mask_buffer = input_tensors.at(1).buffer();
+        auto output_buffer = output_tensors.at(0).buffer();
 
         CoreCoord core = {0, 0};
 

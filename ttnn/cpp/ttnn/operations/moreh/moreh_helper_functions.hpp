@@ -259,20 +259,22 @@ auto create_override_runtime_arguments_callback(
 // To use this function, the arguments in the reader kernel must always be sorted in the order of input followed by
 // optional_input. Furthermore, input and output tensors must always start from the 0th argument.
 template <typename OutputTensors = Tensors>
-auto create_override_addresses_callback(
+auto override_runtime_arguments_callback(
     KernelHandle reader_kernel_id, KernelHandle writer_kernel_id, uint32_t num_cores, uint32_t core_h) {
     return [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id, num_cores, core_h](
-               const Program& program,
-               const std::vector<Buffer*>& input_buffers,
-               const std::vector<Buffer*>& output_buffers) -> void {
+               const void* operation,
+               Program& program,
+               const std::vector<Tensor>& input_tensors,
+               const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+               const std::vector<Tensor>& output_tensors) -> void {
         for (uint32_t icore = 0; icore < num_cores; icore++) {
             CoreCoord core = {icore / core_h, icore % core_h};
 
             // readers
             {
                 auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                for (uint32_t idx = 0; idx < input_buffers.size(); idx++) {
-                    auto buffer = input_buffers.at(idx);
+                for (uint32_t idx = 0; idx < input_tensors.size(); idx++) {
+                    auto* buffer = input_tensors.at(idx).buffer();
                     if (buffer != nullptr) {
                         runtime_args[idx] = buffer->address();
                     }
@@ -282,8 +284,8 @@ auto create_override_addresses_callback(
             // writer
             {
                 auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                for (uint32_t idx = 0; idx < output_buffers.size(); idx++) {
-                    auto buffer = output_buffers.at(idx);
+                for (uint32_t idx = 0; idx < output_tensors.size(); idx++) {
+                    auto* buffer = output_tensors.at(idx).buffer();
                     if (buffer != nullptr) {
                         runtime_args[idx] = buffer->address();
                     }
