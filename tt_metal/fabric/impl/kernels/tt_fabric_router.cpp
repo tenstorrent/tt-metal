@@ -7,6 +7,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
+#include <fabric_host_interface.h>
 // clang-format on
 
 using namespace tt::tt_fabric;
@@ -33,7 +34,6 @@ uint32_t sync_val;
 uint32_t router_mask;
 uint32_t master_router_chan;
 uint64_t xy_local_addr;
-bool terminated_slave_routers = false;
 
 // careful, may be null
 tt_l1_ptr uint32_t* const kernel_status = reinterpret_cast<tt_l1_ptr uint32_t*>(kernel_status_buf_addr_arg);
@@ -62,6 +62,13 @@ void kernel_main() {
     router_mask = get_arg_val<uint32_t>(rt_args_idx++);
     master_router_chan = get_arg_val<uint32_t>(rt_args_idx++);
 
+    volatile tt_l1_ptr uint32_t* router_sync_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(FABRIC_ROUTER_SYNC_SEM);
+    tt_l1_ptr uint32_t* router_status_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(FABRIC_ROUTER_STATUS_PTR);
+    volatile tt_l1_ptr uint32_t* host_signal_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(FABRIC_ROUTER_HOST_SIGNAL_PTR);
+
+    router_status_ptr[0] = static_cast<uint32_t>(fabric_router_status::Started);
     write_kernel_status(kernel_status, TT_FABRIC_STATUS_INDEX, TT_FABRIC_STATUS_STARTED);
 
     router_state.sync_in = 0;
@@ -119,13 +126,14 @@ void kernel_main() {
         // sync_val is equal to number of tt-fabric routers running on a device.
         wait_for_notification(FABRIC_ROUTER_SYNC_SEM, sync_val - 1);
         notify_slave_routers(router_mask, master_router_chan, FABRIC_ROUTER_SYNC_SEM, sync_val);
-        // increment the sync sem to signal host that handshake is complete
-        *((volatile uint32_t*)FABRIC_ROUTER_SYNC_SEM) += 1;
     } else {
         notify_master_router(master_router_chan, FABRIC_ROUTER_SYNC_SEM);
         // wait for the signal from the master router
         wait_for_notification(FABRIC_ROUTER_SYNC_SEM, sync_val);
     }
+
+    // clear out sync ptr for future handshakes
+    router_sync_ptr[0] = 0;
 
 #ifndef FVC_MODE_PULL
     fvc_inbound_state.register_with_routers<FVC_MODE_ROUTER>(routing_table->my_device_id);
@@ -133,6 +141,18 @@ void kernel_main() {
     uint32_t next_outbound_buffer = 1;
     uint32_t eth_outbound_wrptr = 0;
 #endif
+
+    router_status_ptr[0] = static_cast<uint32_t>(fabric_router_status::Ready);
+    wait_for_notification(
+        FABRIC_ROUTER_HOST_SIGNAL_PTR, static_cast<uint32_t>(fabric_router_host_signal::Process_Traffic));
+    if constexpr (is_master) {
+        notify_slave_routers(
+            router_mask,
+            master_router_chan,
+            FABRIC_ROUTER_HOST_SIGNAL_PTR,
+            static_cast<uint32_t>(fabric_router_host_signal::Process_Traffic));
+    }
+
     uint64_t start_timestamp = get_timestamp();
 
     write_kernel_status(kernel_status, TT_FABRIC_MISC_INDEX, 0xff000001);
@@ -140,6 +160,9 @@ void kernel_main() {
 
     uint32_t launch_msg_rd_ptr = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
     tt_l1_ptr launch_msg_t* const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_msg_rd_ptr]);
+
+    router_status_ptr[0] = static_cast<uint32_t>(fabric_router_status::Processing_Traffic);
+
     while (1) {
         // Handle Ethernet Outbound Data
 #ifdef FVC_MODE_PULL
@@ -220,13 +243,22 @@ void kernel_main() {
         if ((loop_count & SWITCH_THRESHOLD) == SWITCH_THRESHOLD) {
             internal_::risc_context_switch();
 
-            if (*(volatile uint32_t*)FABRIC_ROUTER_SYNC_SEM == 0) {
+            if (host_signal_ptr[0] == static_cast<uint32_t>(fabric_router_host_signal::Terminate)) {
                 // terminate signal from host sw.
-                if constexpr (is_master) {
-                    if (!terminated_slave_routers) {
-                        notify_slave_routers(router_mask, master_router_chan, FABRIC_ROUTER_SYNC_SEM, 0);
-                        terminated_slave_routers = true;
+                if (router_status_ptr[0] != static_cast<uint32_t>(fabric_router_status::Terminating)) {
+                    if constexpr (is_master) {
+                        notify_slave_routers(
+                            router_mask,
+                            master_router_chan,
+                            FABRIC_ROUTER_HOST_SIGNAL_PTR,
+                            static_cast<uint32_t>(fabric_router_host_signal::Terminate));
+
+                        // wait for the slave routers until they receive the termination signal
+                        wait_for_notification(FABRIC_ROUTER_SYNC_SEM, sync_val - 1);
+                    } else {
+                        notify_master_router(master_router_chan, FABRIC_ROUTER_SYNC_SEM);
                     }
+                    router_status_ptr[0] = static_cast<uint32_t>(fabric_router_status::Terminating);
                 }
                 if (loop_count >= 0x1000) {
                     break;
@@ -242,4 +274,6 @@ void kernel_main() {
 
     write_kernel_status(kernel_status, TT_FABRIC_STATUS_INDEX, TT_FABRIC_STATUS_PASS);
     write_kernel_status(kernel_status, TT_FABRIC_MISC_INDEX, 0xff00005);
+
+    router_status_ptr[0] = static_cast<uint32_t>(fabric_router_status::Terminated);
 }

@@ -563,6 +563,10 @@ typedef struct test_device {
             // initialize the semaphore
             tt::llrt::write_hex_vec_to_core(
                 device_handle->id(), router_virtual_cores[i], zero_buf, FABRIC_ROUTER_SYNC_SEM);
+            tt::llrt::write_hex_vec_to_core(
+                device_handle->id(), router_virtual_cores[i], zero_buf, FABRIC_ROUTER_STATUS_PTR);
+            tt::llrt::write_hex_vec_to_core(
+                device_handle->id(), router_virtual_cores[i], zero_buf, FABRIC_ROUTER_HOST_SIGNAL_PTR);
 
             auto kernel = tt_metal::CreateKernel(
                 program_handle,
@@ -577,17 +581,31 @@ typedef struct test_device {
 
     void wait_for_router_sync() {
         uint32_t master_router_status = 0;
-        uint32_t expected_val = router_logical_cores.size();
-        while (expected_val != master_router_status) {
+        while (static_cast<uint32_t>(tt::tt_fabric::fabric_router_status::Ready) != master_router_status) {
             master_router_status = tt::llrt::read_hex_vec_from_core(
-                device_handle->id(), router_virtual_cores[master_router_idx], FABRIC_ROUTER_SYNC_SEM, 4)[0];
+                device_handle->id(), router_virtual_cores[master_router_idx], FABRIC_ROUTER_STATUS_PTR, 4)[0];
         }
+
+        std::vector<uint32_t> signal(
+            1, static_cast<uint32_t>(tt::tt_fabric::fabric_router_host_signal::Process_Traffic));
+        tt::llrt::write_hex_vec_to_core(
+            device_handle->id(), router_virtual_cores[master_router_idx], signal, FABRIC_ROUTER_HOST_SIGNAL_PTR);
     }
 
     void terminate_router_kernels() {
-        std::vector<uint32_t> zero_buf(1, 0);
+        std::vector<uint32_t> signal(1, static_cast<uint32_t>(tt::tt_fabric::fabric_router_host_signal::Terminate));
         tt::llrt::write_hex_vec_to_core(
-            device_handle->id(), router_virtual_cores[master_router_idx], zero_buf, FABRIC_ROUTER_SYNC_SEM);
+            device_handle->id(), router_virtual_cores[master_router_idx], signal, FABRIC_ROUTER_HOST_SIGNAL_PTR);
+
+        uint32_t master_router_status = 0;
+        while (true) {
+            master_router_status = tt::llrt::read_hex_vec_from_core(
+                device_handle->id(), router_virtual_cores[master_router_idx], FABRIC_ROUTER_STATUS_PTR, 4)[0];
+            if ((static_cast<uint32_t>(tt::tt_fabric::fabric_router_status::Terminating) == master_router_status) ||
+                (static_cast<uint32_t>(tt::tt_fabric::fabric_router_status::Terminated) == master_router_status)) {
+                break;
+            }
+        }
     }
 
     std::vector<CoreCoord> select_random_worker_cores(uint32_t count) {
