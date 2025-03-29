@@ -58,8 +58,8 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
     constexpr size_t test_expected_num_devices = 4;
 
     MeshDevice* mesh_device = this->mesh_device_.get();
-    //mesh_device->enable_async(true);
-    //mesh_device->enable_program_cache();
+    mesh_device->enable_async(true);
+    mesh_device->enable_program_cache();
 
     auto view = mesh_device->get_view();
 
@@ -107,8 +107,6 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
     const ttnn::Shape input_shape = ttnn::Shape{1, batch_size, sequence_length, embedding_dim};
     const MemoryConfig in_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     const auto num_elems = input_shape.volume();
-    auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
-    auto readback_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
 
     uint8_t op_cq_id = 0;  // operation command queue id
     boost::asio::thread_pool pool(devices.size());
@@ -117,15 +115,15 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
         log_info(LogTest, "Running outer loop {}", outer_loop);
         std::vector<Tensor> device_tensors(devices.size());
 
-        int dev_idx = 0;
         log_info(LogTest, "Enqueue Operations before AllGather", outer_loop);
         std::vector<std::future<void>> futures;
-        for (size_t i = 0; i < devices.size(); ++i) {
-            auto device = devices[i];
+        for (size_t dev_idx = 0; dev_idx < devices.size(); ++dev_idx) {
+            auto device = devices[dev_idx];
             auto promise = std::make_shared<std::promise<void>>();
             futures.push_back(promise->get_future());
             boost::asio::post(pool, [&, dev_idx, device, promise]() mutable {
                 // Generate input data for each device
+                auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
                 for (int j = 0; j < num_elems; j++) {
                     host_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
@@ -145,9 +143,6 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
 
                 promise->set_value();
             });
-            // If you remove below comment (perform sleep), the final output value will be correct.
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-            dev_idx++;
         }
 
         // Wait for all tasks to complete
@@ -263,8 +258,6 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
     const ttnn::Shape input_shape = ttnn::Shape{1, batch_size, sequence_length, embedding_dim};
     const MemoryConfig in_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     const auto num_elems = input_shape.volume();
-    auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
-    auto readback_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
 
     uint8_t ccl_cq_id = 0;  // ccl operation command queue id
     uint8_t op_cq_id = 1;   // device operation, read/write command queue id
@@ -284,6 +277,7 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
             futures.push_back(promise->get_future());
             boost::asio::post(pool, [&, dev_idx, device, promise]() mutable {
                 // Generate input data for each device
+                auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
                 for (int j = 0; j < num_elems; j++) {
                     host_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
