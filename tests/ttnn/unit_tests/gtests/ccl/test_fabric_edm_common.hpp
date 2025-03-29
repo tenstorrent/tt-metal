@@ -2681,14 +2681,15 @@ void Run1DFabricPacketSendTest(
             std::vector<size_t> num_fwd_hops_per_type;
             std::vector<size_t> num_bwd_hops_per_type;
             std::vector<size_t> send_type_payload_sizes;
-
-            for (const auto& test_spec : test_specs) {
-                send_types.push_back(static_cast<size_t>(test_spec.noc_send_type));
-                chip_send_types.push_back(static_cast<size_t>(test_spec.chip_send_type));
-                send_counts_per_type.push_back(test_spec.num_messages);
-                num_fwd_hops_per_type.push_back(mcast_fwd_hops);
-                num_bwd_hops_per_type.push_back(mcast_bwd_hops);
-                send_type_payload_sizes.push_back(test_spec.packet_payload_size_bytes);
+            if (!disable_sends_for_worker) {
+                for (const auto& test_spec : test_specs) {
+                    send_types.push_back(static_cast<size_t>(test_spec.noc_send_type));
+                    chip_send_types.push_back(static_cast<size_t>(test_spec.chip_send_type));
+                    send_counts_per_type.push_back(test_spec.num_messages);
+                    num_fwd_hops_per_type.push_back(mcast_fwd_hops);
+                    num_bwd_hops_per_type.push_back(mcast_bwd_hops);
+                    send_type_payload_sizes.push_back(test_spec.packet_payload_size_bytes);
+                }
             }
 
             std::vector<uint32_t> rt_args = {
@@ -2697,7 +2698,7 @@ void Run1DFabricPacketSendTest(
                 dest_noc_y_fwd,
                 dest_noc_x_bwd,
                 dest_noc_y_bwd,
-                num_send_types,
+                disable_sends_for_worker ? 0 : num_send_types,
             };
 
             // Reserve space for all arrays upfront
