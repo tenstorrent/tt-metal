@@ -51,6 +51,15 @@ struct MeshDeviceOperationAdapter {
         return DeviceOperation::invoke(std::forward<Args>(args)...);
     }
 
+    static std::string get_type_name(const operation_attributes_t& attribute) {
+        if constexpr (requires { device_operation_t::get_type_name(attribute); }) {
+            // OldInfraDeviceOperation path.
+            return device_operation_t::get_type_name(attribute);
+        } else {
+            return std::string(tt::stl::get_type_name<device_operation_t>());
+        }
+    }
+
     static void validate_on_program_cache_hit(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
         DeviceOperation::validate_on_program_cache_hit(attrs, tensor_args);
     }
