@@ -3,12 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gmock/gmock.h>
+#include <type_traits>
 
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/old_infra_device_operation.hpp"
 #include "ttnn/operation_concepts.hpp"
+#include "ttnn/operations/examples/example/device/example_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -170,6 +172,21 @@ TEST(LaunchOperationTest, NewInfraUsesHeterogeneousDispatch) {
     EXPECT_FALSE(uses_heterogenous_dispatch<NewInfraProgramFactoryWithCreate>(OperationAttributes{}));
 
     EXPECT_TRUE(uses_heterogenous_dispatch<NewInfraProgramFactoryWithCreateAt>(OperationAttributes{}));
+}
+
+TEST(LaunchOperationTest, MeshDeviceOperationAdapterGetName) {
+    auto old_infra_attrs = tt::tt_metal::operation::DeviceOperation(OldInfraDeviceOpWithCreate{});
+
+    EXPECT_EQ(
+        device_operation::MeshDeviceOperationAdapter<
+            tt::tt_metal::operation::OldInfraDeviceOperation<Tensors>>::get_type_name(old_infra_attrs),
+        "OldInfraDeviceOpWithCreate");
+
+    using ::ttnn::operations::examples::ExampleDeviceOperation;
+    EXPECT_EQ(
+        device_operation::MeshDeviceOperationAdapter<ExampleDeviceOperation>::get_type_name(
+            ExampleDeviceOperation::operation_attributes_t{.attribute = true, .some_other_attribute = 42}),
+        "ExampleDeviceOperation");
 }
 
 using LaunchOperationT3000Test = tt::tt_metal::T3000MeshDeviceFixture;
