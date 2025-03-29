@@ -103,8 +103,7 @@ FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
 
 // Since we unicast to local, we must omit the packet header
 // This function only does reads, and within scope there are no modifications to the packet header
-// __attribute__((optimize("jump-tables")))
-FORCE_INLINE void execute_chip_unicast_to_local_chip(
+__attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_chip_unicast_to_local_chip(
     tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
     uint16_t payload_size_bytes,
     uint32_t transaction_id,
@@ -113,9 +112,9 @@ FORCE_INLINE void execute_chip_unicast_to_local_chip(
     uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) + sizeof(PACKET_HEADER_TYPE);
 
     tt::tt_fabric::NocSendType noc_send_type = header.noc_send_type;
-    // if (noc_send_type >= tt::tt_fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC) {
-    //     __builtin_unreachable();
-    // }
+    if (noc_send_type >= tt::tt_fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC) {
+        __builtin_unreachable();
+    }
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
             const auto dest_address = header.command_fields.unicast_write.noc_address;
@@ -179,7 +178,6 @@ FORCE_INLINE void execute_chip_unicast_to_local_chip(
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC:
         default: {
             ASSERT(false);
-            __builtin_unreachable();
         } break;
     };
 }
