@@ -51,8 +51,6 @@ librosa==0.10.0
 timm==0.6.13
 ultralytics==8.2
 opencv-python-headless==4.8.1.78
-opencv-contrib-python==4.11.0.86
-opencv-contrib-python-headless==4.11.0.86
 diffusers==0.12.1
 accelerate==0.27.2
 ftfy==6.1.1
