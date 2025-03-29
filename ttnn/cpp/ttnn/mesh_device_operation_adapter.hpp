@@ -51,6 +51,8 @@ struct MeshDeviceOperationAdapter {
         return DeviceOperation::invoke(std::forward<Args>(args)...);
     }
 
+    // Returns type name of the underlying device operation.
+    // Used for logging and debugging; in particular, Tracy profiler uses this to identify operations.
     static std::string get_type_name(const operation_attributes_t& attribute) {
         if constexpr (requires { device_operation_t::get_type_name(attribute); }) {
             // OldInfraDeviceOperation path.
