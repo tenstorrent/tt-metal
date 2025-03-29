@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,9 +18,16 @@ inline void llk_math_eltwise_unary_sfpu_fill_init() {
 }
 
 template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_fill(uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
+inline void llk_math_eltwise_unary_sfpu_fill(uint dst_index, float param0, int vector_mode = (int)VectorMode::RC) {
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
         ckernel::sfpu::calculate_fill<APPROXIMATE>, dst_index, vector_mode, param0);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_fill_bitcast(
+    uint dst_index, uint32_t param0, int vector_mode = (int)VectorMode::RC) {
+    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+        ckernel::sfpu::calculate_fill_bitcast<APPROXIMATE>, dst_index, vector_mode, param0);
 }
 
 }  // namespace ckernel
