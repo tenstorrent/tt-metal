@@ -370,8 +370,14 @@ static int pgm_dispatch(T& state, TestInfo info) {
     try {
         const chip_id_t device_id = 0;
         DispatchCoreType dispatch_core_type = info.dispatch_from_eth ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
+        size_t trace_region_size = 900'000'000;
+        std::string arch_name = tt::tt_metal::hal::get_arch_name();
+        if (arch_name == std::string("blackhole")) {
+            // Blackhole has more cores, so we need more room to store RTAs.
+            trace_region_size = 2'500'000'000;
+        }
         tt_metal::IDevice* device = tt_metal::CreateDevice(
-            device_id, 1, DEFAULT_L1_SMALL_SIZE, 900000000, DispatchCoreConfig{dispatch_core_type});
+            device_id, 1, DEFAULT_L1_SMALL_SIZE, trace_region_size, DispatchCoreConfig{dispatch_core_type});
         CommandQueue& cq = device->command_queue();
 
         tt_metal::Program program[2];
