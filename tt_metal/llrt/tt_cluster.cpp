@@ -187,13 +187,9 @@ void Cluster::generate_cluster_descriptor() {
                 } else if (this->cluster_desc_->get_all_chips().size() == 4) {
                     this->cluster_type_ = ClusterType::P150_X4;
                 }
+            } else if (board_type == BoardType::UBB) {
+                this->cluster_type_ = ClusterType::GALAXY;
             }
-        }
-
-        if ((this->cluster_desc_->get_all_chips().size() == this->cluster_desc_->get_chips_with_mmio().size()) and
-            (this->cluster_desc_->get_all_chips().size() == 32)) {
-            //TODO: need to get this from umd, for now UBB has null set as board type
-            this->cluster_type_ = ClusterType::GALAXY;
         }
     }
 
