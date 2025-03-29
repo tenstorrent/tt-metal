@@ -184,6 +184,15 @@ struct Mish {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Tanh {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        bool accuracy = false);
+};
+
 }  // namespace unary
 }  // namespace operations
 
@@ -246,7 +255,6 @@ REGISTER_UNARY_OPERATION(sin, SIN);
 REGISTER_UNARY_OPERATION(sqrt, SQRT);
 REGISTER_UNARY_OPERATION(square, SQUARE);
 REGISTER_UNARY_OPERATION(tan, TAN);
-REGISTER_UNARY_OPERATION(tanh, TANH);
 REGISTER_UNARY_OPERATION(tiled_prod, TILED_PROD);
 REGISTER_UNARY_OPERATION(bitwise_not, BITWISE_NOT);
 
@@ -289,6 +297,7 @@ constexpr auto ceil = ttnn::register_operation_with_auto_launch_op<"ttnn::ceil",
 constexpr auto mish = ttnn::register_operation_with_auto_launch_op<"ttnn::mish", ttnn::operations::unary::Mish>();
 constexpr auto softplus =
     ttnn::register_operation_with_auto_launch_op<"ttnn::softplus", ttnn::operations::unary::Softplus>();
+constexpr auto tanh = ttnn::register_operation_with_auto_launch_op<"ttnn::tanh", ttnn::operations::unary::Tanh>();
 constexpr auto prelu_sfpu =
     ttnn::register_operation_with_auto_launch_op<"ttnn::prelu_sfpu", ttnn::operations::unary::Prelu>();
 
