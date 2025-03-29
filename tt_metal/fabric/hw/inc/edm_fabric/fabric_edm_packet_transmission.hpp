@@ -131,7 +131,7 @@ FORCE_INLINE void execute_chip_unicast_to_local_chip(
                 if constexpr (enable_ring_support) {
                     auto start_trid = RX_CH_TRID_STARTS[rx_channel_id];
                     auto end_trid = start_trid + NUM_TRANSACTION_IDS;
-                    for (size_t i = start_trid; i < end_trid; i++) {
+                    for (int i = start_trid; i < end_trid; i++) {
                         while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(
                             tt::tt_fabric::edm_to_local_chip_noc, i));
                     }
