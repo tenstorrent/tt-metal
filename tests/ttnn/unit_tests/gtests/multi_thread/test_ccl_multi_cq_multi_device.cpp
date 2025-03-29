@@ -144,8 +144,6 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
 
                 promise->set_value();
             });
-            // If you remove below comment (perform sleep), the final output value will be correct.
-            // std::this_thread::sleep_for(std::chrono::seconds(1));
             dev_idx++;
         }
 
