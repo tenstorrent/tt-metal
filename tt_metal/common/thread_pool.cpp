@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/asio>
+#include <boost/asio.hpp>
 #include <cstddef>
 #include <future>
 #include <memory>
