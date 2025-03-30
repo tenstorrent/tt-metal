@@ -5,7 +5,6 @@
 import pytest
 import ttnn
 import time
-from loguru import logger
 
 import ttnn.torch_tracer
 from models.perf.perf_utils import prep_perf_report
@@ -101,25 +100,20 @@ def test_perf_segformer_trace_2cq(
 
     test_infra.validate()
 
-    # test_infra.input_tensor = ttnn.allocate_tensor_on_device(input_spec, device)
-    # assert input_trace_addr == test_infra.input_tensor.buffer_address()
-    # logger.info(f"Expected addr:{input_trace_addr}, Real addr:{test_infra.input_tensor.buffer_address()}")
-
     ## EXECUTE TRACE
-    avg_inference_time = 0
     num_iterations = 10
     tt_outputs_host = []
+
+    start = time.time()
 
     ttnn.wait_for_event(1, first_op_event)
     ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_inputs_dram, cq_id=1)
     write_event = ttnn.record_event(device, 1)
 
     for iter in range(0, num_iterations):
-        start = time.time()
         ttnn.wait_for_event(0, write_event)
         tt_inputs_dram_padded = ttnn.pad(tt_inputs_dram, padded_shape, [0, 0, 0, 0], 0)
         test_infra.input_tensor = ttnn.to_memory_config(tt_inputs_dram_padded, l1_config_input)
-        logger.info(f"Expected addr:{input_trace_addr}, Real addr:{test_infra.input_tensor.buffer_address()}")
         first_op_event = ttnn.record_event(device, 0)
 
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
@@ -136,12 +130,12 @@ def test_perf_segformer_trace_2cq(
         ttnn.wait_for_event(0, last_op_event)
         tt_outputs_host.append(tt_outputs_dram.cpu(blocking=False, cq_id=1))
         read_event = ttnn.record_event(device, 1)
-        end = time.time()
-
-        avg_inference_time += end - start
 
     ttnn.synchronize_device(device)
-    avg_inference_time /= num_iterations
+
+    end = time.time()
+
+    avg_inference_time = (end - start) / num_iterations
 
     for iter in range(0, len(tt_outputs_host)):
         test_infra.validate(tt_outputs_host[iter])
@@ -150,7 +144,7 @@ def test_perf_segformer_trace_2cq(
         model_name="segformer_e2e",
         batch_size=batch_size,
         inference_and_compile_time=jit_end - jit_start,
-        inference_time=end - start,
+        inference_time=avg_inference_time,
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
         comments="trace_2cq",
