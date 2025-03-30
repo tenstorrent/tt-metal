@@ -2283,6 +2283,7 @@ struct Fabric1DPacketSendTestSpec {
     tt::tt_fabric::NocSendType noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
     size_t num_messages = 0;
     size_t packet_payload_size_bytes = 0;
+    bool flush = true;
 };
 
 void Run1DFabricPacketSendTest(
@@ -2681,6 +2682,7 @@ void Run1DFabricPacketSendTest(
             std::vector<size_t> num_fwd_hops_per_type;
             std::vector<size_t> num_bwd_hops_per_type;
             std::vector<size_t> send_type_payload_sizes;
+            std::vector<bool> flush_send;
             if (!disable_sends_for_worker) {
                 for (const auto& test_spec : test_specs) {
                     send_types.push_back(static_cast<size_t>(test_spec.noc_send_type));
@@ -2689,6 +2691,7 @@ void Run1DFabricPacketSendTest(
                     num_fwd_hops_per_type.push_back(mcast_fwd_hops);
                     num_bwd_hops_per_type.push_back(mcast_bwd_hops);
                     send_type_payload_sizes.push_back(test_spec.packet_payload_size_bytes);
+                    flush_send.push_back(test_spec.flush);
                 }
             }
 
@@ -2716,6 +2719,7 @@ void Run1DFabricPacketSendTest(
             std::copy(num_fwd_hops_per_type.begin(), num_fwd_hops_per_type.end(), std::back_inserter(rt_args));
             std::copy(num_bwd_hops_per_type.begin(), num_bwd_hops_per_type.end(), std::back_inserter(rt_args));
             std::copy(send_type_payload_sizes.begin(), send_type_payload_sizes.end(), std::back_inserter(rt_args));
+            std::copy(flush_send.begin(), flush_send.end(), std::back_inserter(rt_args));
 
             rt_args.push_back(source_payload_cb_index);
             rt_args.push_back(packet_header_cb_index);
@@ -3013,16 +3017,18 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
             };
 
             // Define the send type parameters
+            // There is no atomic in
+            bool flush_writes_before_atomic_inc = false;
             const size_t num_send_types = 1;
             std::vector<uint32_t> send_types = {static_cast<uint32_t>(tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE)};
-            std::vector<uint32_t> chip_send_types = {static_cast<uint32_t>(tt::tt_fabric::CHIP_UNICAST)};
+            std::vector<uint32_t> chip_send_types = {static_cast<uint32_t>(tt::tt_fabric::CHIP_MULTICAST)};
             std::vector<uint32_t> send_counts_per_type = {static_cast<uint32_t>(num_op_invocations)};
             std::vector<uint32_t> num_fwd_hops_per_type = {
                 static_cast<uint32_t>(has_forward_connection ? mcast_fwd_hops : 0)};
             std::vector<uint32_t> num_bwd_hops_per_type = {
                 static_cast<uint32_t>(has_backward_connection ? mcast_bwd_hops : 0)};
             std::vector<uint32_t> send_type_payload_sizes = {static_cast<uint32_t>(packet_payload_size_bytes)};
-
+            std::vector<uint32_t> flush_send = {static_cast<uint32_t>(flush_writes_before_atomic_inc)};
             // Initialize the base runtime args
             // RT ARGS
             std::vector<uint32_t> rt_args = {
@@ -3051,6 +3057,7 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
             std::copy(num_fwd_hops_per_type.begin(), num_fwd_hops_per_type.end(), std::back_inserter(rt_args));
             std::copy(num_bwd_hops_per_type.begin(), num_bwd_hops_per_type.end(), std::back_inserter(rt_args));
             std::copy(send_type_payload_sizes.begin(), send_type_payload_sizes.end(), std::back_inserter(rt_args));
+            std::copy(flush_send.begin(), flush_send.end(), std::back_inserter(rt_args));
 
             // Add CB indices
             rt_args.push_back(source_payload_cb_index);

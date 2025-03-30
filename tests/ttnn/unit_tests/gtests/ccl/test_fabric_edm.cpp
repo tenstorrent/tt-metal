@@ -46,6 +46,7 @@ int main(int argc, char** argv) {
 
     auto chip_send_type = fabric_unicast ? tt::tt_fabric::CHIP_UNICAST : tt::tt_fabric::CHIP_MULTICAST;
 
+    bool flush = true;
     tt::tt_fabric::NocSendType noc_send_type;
     if (message_noc_type == "noc_unicast_write") {
         noc_send_type = tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE;
@@ -53,8 +54,12 @@ int main(int argc, char** argv) {
         noc_send_type = tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE;
     } else if (message_noc_type == "noc_unicast_atomic_inc") {
         noc_send_type = tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC;
-    } else if (message_noc_type == "noc_fused_unicast_write_atomic_inc") {
+    } else if (message_noc_type == "noc_fused_unicast_write_flush_atomic_inc") {
         noc_send_type = tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC;
+        flush = true;
+    } else if (message_noc_type == "noc_fused_unicast_write_no_flush_atomic_inc") {
+        noc_send_type = tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC;
+        flush = false;
     } else {
         TT_THROW("Invalid message type: {}", message_noc_type.c_str());
     }
@@ -63,7 +68,8 @@ int main(int argc, char** argv) {
         {.chip_send_type = chip_send_type,
          .noc_send_type = noc_send_type,
          .num_messages = num_messages,
-         .packet_payload_size_bytes = packet_payload_size_bytes}};
+         .packet_payload_size_bytes = packet_payload_size_bytes,
+         .flush = flush}};
 
     Run1DFabricPacketSendTest(num_links, num_op_invocations, test_specs, params);
 }

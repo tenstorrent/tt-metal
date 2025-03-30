@@ -606,6 +606,35 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_bw(
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+def test_fabric_one_link_forwarding_unicast_unidirectional_single_producer_multihop_bw(
+    num_messages,
+    num_links,
+    num_op_invocations,
+    line_sync,
+    line_size,
+    packet_size,
+):
+    run_fabric_edm(
+        is_unicast=True,
+        num_messages=num_messages,
+        num_links=num_links,
+        noc_message_type="noc_unicast_write",
+        num_op_invocations=num_op_invocations,
+        line_sync=line_sync,
+        line_size=line_size,
+        packet_size=packet_size,
+        fabric_mode=FabricTestMode.Linear,
+        disable_sends_for_interior_workers=True,
+        unidirectional=True,
+    )
+
+
+@pytest.mark.parametrize("num_messages", [200000])
+@pytest.mark.parametrize("num_op_invocations", [1])
+@pytest.mark.parametrize("line_sync", [True])
+@pytest.mark.parametrize("line_size", [4])
+@pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16])
 def test_fabric_one_link_forwarding_unicast_single_producer_multihop_atomic_inc_bw(
     num_messages,
@@ -634,6 +663,9 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_atomic_inc_
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize(
+    "noc_message_type", ["noc_fused_unicast_write_flush_atomic_inc", "noc_fused_unicast_write_no_flush_atomic_inc"]
+)
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 def test_fabric_one_link_forwarding_unicast_single_producer_multihop_fused_write_atomic_inc_bw(
     num_messages,
@@ -642,12 +674,13 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_fused_write
     line_sync,
     line_size,
     packet_size,
+    noc_message_type,
 ):
     run_fabric_edm(
         is_unicast=True,
         num_messages=num_messages,
         num_links=num_links,
-        noc_message_type="noc_fused_unicast_write_atomic_inc",
+        noc_message_type=noc_message_type,
         num_op_invocations=num_op_invocations,
         line_sync=line_sync,
         line_size=line_size,
@@ -663,6 +696,9 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_fused_write
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize(
+    "noc_message_type", ["noc_fused_unicast_write_flush_atomic_inc", "noc_fused_unicast_write_no_flush_atomic_inc"]
+)
 def test_fabric_one_link_single_producer_multicast_multihop_fused_write_atomic_inc_bw(
     num_messages,
     num_links,
@@ -670,12 +706,13 @@ def test_fabric_one_link_single_producer_multicast_multihop_fused_write_atomic_i
     line_sync,
     line_size,
     packet_size,
+    noc_message_type,
 ):
     run_fabric_edm(
         is_unicast=False,
         num_messages=num_messages,
         num_links=num_links,
-        noc_message_type="noc_fused_unicast_write_atomic_inc",
+        noc_message_type=noc_message_type,
         num_op_invocations=num_op_invocations,
         line_sync=line_sync,
         line_size=line_size,

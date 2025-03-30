@@ -58,7 +58,7 @@ struct TestParams {
     size_t dest_noc_y_bwd = 0;
     size_t dest_bank_addr_bwd = 0;
     size_t payload_size_bytes = 0;
-    tt::tt_fabric::ChipSendType chip_send_type = tt::tt_fabric::CHIP_UNICAST;
+    tt::tt_fabric::ChipSendType chip_send_type = tt::tt_fabric::CHIP_UNICAST bool flush = true;
 };
 
 static FORCE_INLINE void setup_packet_header(
@@ -154,14 +154,14 @@ void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC>(
         params.dest_bank_addr_fwd,
         0);
 
-    pkt_hdr_fwd->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc0_dest_addr_fwd, 1, 128});
+    pkt_hdr_fwd->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc0_dest_addr_fwd, 1, 128, params.flush});
     auto noc0_dest_addr_bwd = safe_get_noc_addr(
         static_cast<uint8_t>(params.dest_noc_x_bwd),
         static_cast<uint8_t>(params.dest_noc_y_bwd),
         params.dest_bank_addr_bwd,
         0);
 
-    pkt_hdr_bwd->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc0_dest_addr_bwd, 1, 128});
+    pkt_hdr_bwd->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc0_dest_addr_bwd, 1, 128, params.flush});
     for (size_t i = 0; i < params.send_count; i++) {
         // Forward direction
         if (params.num_fwd_hops > 0) {
@@ -206,7 +206,7 @@ void send_packets<tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC>(
         params.dest_bank_addr_fwd + 4,
         0);
     pkt_hdr_fwd->to_noc_fused_unicast_write_atomic_inc(
-        NocUnicastAtomicIncFusedCommandHeader{noc0_dest_addr_fwd, sem_noc0_dest_addr_fwd, 1, 128},
+        NocUnicastAtomicIncFusedCommandHeader{noc0_dest_addr_fwd, sem_noc0_dest_addr_fwd, 1, 128, params.flush},
         params.payload_size_bytes);
     auto noc0_dest_addr_bwd = safe_get_noc_addr(
         static_cast<uint8_t>(params.dest_noc_x_bwd),
@@ -221,7 +221,7 @@ void send_packets<tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC>(
         0);
 
     pkt_hdr_bwd->to_noc_fused_unicast_write_atomic_inc(
-        NocUnicastAtomicIncFusedCommandHeader{noc0_dest_addr_bwd, sem_noc0_dest_addr_bwd, 1, 128},
+        NocUnicastAtomicIncFusedCommandHeader{noc0_dest_addr_bwd, sem_noc0_dest_addr_bwd, 1, 128, params.flush},
         params.payload_size_bytes);
     for (size_t i = 0; i < params.send_count; i++) {
         // Forward direction
@@ -266,6 +266,8 @@ void kernel_main() {
     size_t* num_bwd_hops_per_type = reinterpret_cast<size_t*>(get_arg_addr(arg_idx));
     arg_idx += num_send_types;
     size_t* send_type_payload_sizes = reinterpret_cast<size_t*>(get_arg_addr(arg_idx));
+    arg_idx += num_send_types;
+    size_t* flush_send = reinterpret_cast<size_t*>(get_arg_addr(arg_idx));
     arg_idx += num_send_types;
 
     const size_t source_l1_cb_index = get_arg_val<uint32_t>(arg_idx++);
@@ -367,6 +369,7 @@ void kernel_main() {
                 params.dest_bank_addr_bwd = dest_bank_addr;
                 params.payload_size_bytes = send_type_payload_sizes[i];
                 params.chip_send_type = chip_send_type;
+                params.flush = flush_send[i];
 
                 switch (send_type) {
                     case NocSendType::NOC_UNICAST_WRITE:
