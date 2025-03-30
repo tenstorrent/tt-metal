@@ -13,8 +13,6 @@
 #include <tracy/Tracy.hpp>
 #include <tt_metal.hpp>
 #include <unistd.h>  // Warning Linux Only, needed for _SC_NPROCESSORS_ONLN
-#include <__hash_table>
-#include <__tree>
 #include <algorithm>
 #include <cstdlib>
 #include <set>

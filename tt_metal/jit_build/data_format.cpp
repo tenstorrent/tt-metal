@@ -7,7 +7,6 @@
 #include <assert.hpp>      // for tt_throw, TT_FATAL
 #include <base_types.hpp>  // for UnpackToDestMode
 #include <circular_buffer_constants.h>
-#include <__tree>
 #include <functional>
 #include <iostream>       // for basic_ostream
 #include <set>            // for set

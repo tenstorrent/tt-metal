@@ -4,7 +4,6 @@
 
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <__tree>
 #include <array>
 #include <cstddef>
 #include <map>

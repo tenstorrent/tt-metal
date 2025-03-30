@@ -18,7 +18,6 @@
 #include <sub_device_types.hpp>
 #include <trace.hpp>
 #include <tt_metal.hpp>
-#include <__hash_table>
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>

@@ -7,7 +7,6 @@
 #include <utility>
 #include <magic_enum/magic_enum.hpp>
 #include <util.hpp>
-#include <__hash_table>
 #include <limits>
 #include <string>
 #include <string_view>

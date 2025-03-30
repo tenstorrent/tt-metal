@@ -4,7 +4,6 @@
 
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
-#include <__hash_table>
 #include <initializer_list>
 #include <optional>
 #include <unordered_set>

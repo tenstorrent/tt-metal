@@ -10,7 +10,6 @@
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
-#include <__hash_table>
 #include <algorithm>
 #include <array>
 #include <cstring>

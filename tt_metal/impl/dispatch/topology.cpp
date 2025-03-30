@@ -10,8 +10,6 @@
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt_metal.hpp>
-#include <__hash_table>
-#include <__tree>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>

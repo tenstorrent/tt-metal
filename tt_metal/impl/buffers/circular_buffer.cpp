@@ -5,7 +5,6 @@
 #include <buffer.hpp>
 #include <circular_buffer.hpp>
 #include <global_circular_buffer_impl.hpp>
-#include <__hash_table>
 #include <array>
 #include <string>
 

@@ -4,8 +4,6 @@
 
 #include "circular_buffer_types.hpp"
 
-#include <__hash_table>
-
 #include "assert.hpp"
 #include "base.h"
 #include "buffer.hpp"

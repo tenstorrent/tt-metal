@@ -12,8 +12,6 @@
 #include <metal_soc_descriptor.h>
 #include <rtoptions.hpp>
 #include <tt_cluster.hpp>
-#include <__hash_table>
-#include <__tree>
 #include <algorithm>
 #include <cstddef>
 #include <functional>

@@ -4,7 +4,6 @@
 
 #include "dispatch_core_manager.hpp"
 
-#include <__hash_table>
 #include <algorithm>
 #include <functional>
 #include <list>

@@ -13,7 +13,6 @@
 #include <trace.hpp>
 #include <tt_align.hpp>
 #include <tt_stl/span.hpp>
-#include <__hash_table>
 #include <functional>
 #include <limits>
 #include <unordered_set>

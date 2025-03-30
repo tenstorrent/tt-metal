@@ -12,7 +12,6 @@
 #include <logger.hpp>
 #include <rtoptions.hpp>
 #include <unistd.h>
-#include <__hash_table>
 #include <cassert>
 #include <chrono>
 #include <condition_variable>

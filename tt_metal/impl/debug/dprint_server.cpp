@@ -10,7 +10,6 @@
 #include <pthread.h>
 #include <rtoptions.hpp>
 #include <tt-metalium/blockfloat_common.hpp>
-#include <__tree>
 #include <algorithm>
 #include <atomic>
 #include <chrono>

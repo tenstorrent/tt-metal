@@ -6,7 +6,6 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <__hash_table>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>

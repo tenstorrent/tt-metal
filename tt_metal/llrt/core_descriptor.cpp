@@ -11,7 +11,6 @@
 #include <yaml-cpp/node/iterator.h>
 #include <yaml-cpp/node/node.h>
 #include <yaml-cpp/node/parse.h>
-#include <__hash_table>
 #include <algorithm>
 #include <bitset>
 #include <cstdlib>

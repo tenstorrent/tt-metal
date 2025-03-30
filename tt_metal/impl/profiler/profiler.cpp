@@ -11,8 +11,6 @@
 #include <nlohmann/detail/json_ref.hpp>
 #include <nlohmann/json.hpp>
 #include <rtoptions.hpp>
-#include <__hash_table>
-#include <__tree>
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>

@@ -11,8 +11,6 @@
 #include <logger.hpp>
 #include <metal_soc_descriptor.h>
 #include <rtoptions.hpp>
-#include <__hash_table>
-#include <__tree>
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>

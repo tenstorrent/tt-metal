@@ -14,8 +14,6 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
 #include <tt_align.hpp>
-#include <__hash_table>
-#include <__tree>
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
