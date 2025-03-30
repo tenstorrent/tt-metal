@@ -4,16 +4,9 @@
 
 #include "metal_soc_descriptor.h"
 
-#include <assert.hpp>
-#include <yaml-cpp/node/detail/impl.h>
-#include <yaml-cpp/node/detail/iterator.h>
-#include <yaml-cpp/node/impl.h>
-#include <yaml-cpp/node/iterator.h>
-#include <yaml-cpp/node/node.h>
-#include <yaml-cpp/node/parse.h>
 #include <string>
-
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.h>
+#include "yaml-cpp/yaml.h"
 
 enum BoardType : uint32_t;
 
