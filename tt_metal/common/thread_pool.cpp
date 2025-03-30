@@ -2,15 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <__type_traits/remove_reference.h>
-#include <__utility/move.h>
-#include <boost/asio/impl/thread_pool.hpp>
-#include <boost/asio/impl/thread_pool.ipp>
-#include <boost/asio/post.hpp>
-#include <boost/asio/thread_pool.hpp>
+#include <boost/asio>
 #include <cstddef>
 #include <future>
-#include <new>
+#include <memory>
 #include <vector>
 
 #include "tt_metal/common/thread_pool.hpp"
