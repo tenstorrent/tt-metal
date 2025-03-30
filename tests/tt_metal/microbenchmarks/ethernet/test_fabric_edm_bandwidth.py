@@ -44,6 +44,8 @@ def summarize_to_csv(
     unidirectional,
     bandwidth,
     packets_per_second,
+    *,
+    noc_message_type,
 ):
     """Write test results to a CSV file organized by packet size"""
     csv_path = os.path.join(os.environ["TT_METAL_HOME"], "generated/profiler/.logs/bandwidth_summary.csv")
@@ -55,6 +57,7 @@ def summarize_to_csv(
             writer.writerow(
                 [
                     "Test Name",
+                    "Noc Message Type",
                     "Packet Size",
                     "Line Size",
                     "Num Links",
@@ -71,6 +74,7 @@ def summarize_to_csv(
         writer.writerow(
             [
                 test_name,
+                noc_message_type,
                 packet_size,
                 line_size,
                 num_links,
@@ -83,7 +87,14 @@ def summarize_to_csv(
 
 
 def read_golden_results(
-    test_name, packet_size, line_size, num_links, disable_sends_for_interior_workers, unidirectional
+    test_name,
+    packet_size,
+    line_size,
+    num_links,
+    disable_sends_for_interior_workers,
+    unidirectional,
+    *,
+    noc_message_type,
 ):
     """Print a summary table of all test results by packet size"""
     csv_path = os.path.join(
@@ -98,6 +109,7 @@ def read_golden_results(
     df = df.replace({float("nan"): None})
     results = df[
         (df["Test Name"] == test_name)
+        & (df["Noc Message Type"] == noc_message_type)
         & (df["Packet Size"] == packet_size)
         & (df["Line Size"] == line_size)
         & (df["Num Links"] == num_links)
@@ -231,9 +243,16 @@ def run_fabric_edm(
         unidirectional,
         bandwidth,
         packets_per_second,
+        noc_message_type=noc_message_type,
     )
     expected_bw, expected_pps = read_golden_results(
-        test_name, packet_size, line_size, num_links, disable_sends_for_interior_workers, unidirectional
+        test_name,
+        packet_size,
+        line_size,
+        num_links,
+        disable_sends_for_interior_workers,
+        unidirectional,
+        noc_message_type=noc_message_type,
     )
     expected_Mpps = expected_pps / 1000000 if expected_pps is not None else None
     bw_threshold = 0.07
@@ -279,6 +298,7 @@ def test_fabric_edm_mcast_half_ring_bw(
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [4])
+@pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 def test_fabric_4chip_one_link_mcast_full_ring_bw(
     num_messages,
