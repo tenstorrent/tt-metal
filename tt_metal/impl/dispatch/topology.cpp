@@ -878,6 +878,7 @@ void configure_dispatch_cores(IDevice* device) {
 std::unique_ptr<Program> create_and_compile_2d_fabric_program(IDevice* device, FabricConfig fabric_config) {
     std::unique_ptr<Program> fabric_program_ptr;
     std::uint32_t router_mask = 0;
+    auto control_plane = tt::Cluster::instance().get_control_plane();
 
     auto router_chans = tt::Cluster::instance().get_fabric_ethernet_channels(device->id());
     if (router_chans.empty()) {
@@ -903,6 +904,7 @@ std::unique_ptr<Program> create_and_compile_2d_fabric_program(IDevice* device, F
         0,                                                         // 2: test_results_size
         0,  // 3: timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
         0,  // 4: is_master_router
+        0,  // 5: router direction
     };
 
     std::map<string, string> router_defines = {};
@@ -922,6 +924,9 @@ std::unique_ptr<Program> create_and_compile_2d_fabric_program(IDevice* device, F
         } else {
             router_compile_args[4] = 0;
         }
+        auto [mesh_id, chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
+        uint32_t direction = control_plane->get_eth_chan_direction(mesh_id, chip_id, router_chan);
+        router_compile_args[5] = direction;
         auto kernel = tt_metal::CreateKernel(
             *fabric_program_ptr,
             "tt_metal/fabric/impl/kernels/tt_fabric_router.cpp",
