@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <__chrono/duration.h>
+#include <chrono>
 #include <__chrono/time_point.h>
 #include <__compare/ordering.h>
 #include <assert.hpp>

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include <__chrono/duration.h>
+#include <chrono>
 #include <__compare/ordering.h>
 #include <__filesystem/path.h>
 #include <common/TracyTTDeviceData.hpp>

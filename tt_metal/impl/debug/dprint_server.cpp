@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <__atomic/atomic_base.h>
-#include <__chrono/duration.h>
+#include <chrono>
 #include <__compare/ordering.h>
 #include <logger.hpp>
 #include <math.h>
