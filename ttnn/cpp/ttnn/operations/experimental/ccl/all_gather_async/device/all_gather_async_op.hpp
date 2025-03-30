@@ -167,9 +167,22 @@ Tensor all_gather_async(
     const Tensor& input_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
-    const MeshDevice& mesh_device,
+    MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     const GlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<ttnn::Tensor>& persistent_output_tensor = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<size_t> num_preferred_links = std::nullopt,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+    bool enable_persistent_fabric_mode = false);
+
+std::vector<Tensor> all_gather_async(
+    const std::vector<Tensor>& input_tensors,
+    const int32_t dim,
+    const uint32_t cluster_axis,
+    MeshDevice& mesh_device,
+    const ttnn::ccl::Topology topology,
+    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const std::optional<ttnn::Tensor>& persistent_output_tensor = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> num_preferred_links = std::nullopt,

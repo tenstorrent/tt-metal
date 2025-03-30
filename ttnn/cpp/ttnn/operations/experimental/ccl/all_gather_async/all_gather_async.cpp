@@ -54,7 +54,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
-    const MeshDevice& mesh_device,
+    MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     const GlobalSemaphore& multi_device_global_semaphore,
     const std::optional<ttnn::Tensor>& persistent_output_tensor,
@@ -64,6 +64,32 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     bool enable_persistent_fabric_mode) {
     return ttnn::operations::experimental::ccl::all_gather_async(
         input_tensor,
+        dim,
+        cluster_axis,
+        mesh_device,
+        topology,
+        multi_device_global_semaphore,
+        persistent_output_tensor,
+        memory_config,
+        num_preferred_links,
+        subdevice_id,
+        enable_persistent_fabric_mode);
+}
+
+std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
+    const std::vector<ttnn::Tensor>& input_tensors,
+    const int32_t dim,
+    const uint32_t cluster_axis,
+    MeshDevice& mesh_device,
+    const ttnn::ccl::Topology topology,
+    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<ttnn::Tensor>& persistent_output_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<size_t> num_preferred_links,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    bool enable_persistent_fabric_mode) {
+    return ttnn::operations::experimental::ccl::all_gather_async(
+        input_tensors,
         dim,
         cluster_axis,
         mesh_device,

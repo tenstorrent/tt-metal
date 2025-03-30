@@ -60,7 +60,7 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                const ttnn::Tensor& input_tensor,
                const int32_t dim,
                const uint32_t cluster_axis,
-               const MeshDevice& mesh_device,
+               MeshDevice& mesh_device,
                const ttnn::ccl::Topology topology,
                const GlobalSemaphore& multi_device_global_semaphore,
                const std::optional<ttnn::Tensor>& persistent_output_tensor,
