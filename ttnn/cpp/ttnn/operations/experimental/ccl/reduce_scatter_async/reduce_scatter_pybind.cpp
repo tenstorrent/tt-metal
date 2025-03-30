@@ -62,7 +62,7 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
                const ttnn::Tensor& input_tensor,
                const int32_t dim,
                const uint32_t cluster_axis,
-               const MeshDevice& mesh_device,
+               MeshDevice& mesh_device,
                const GlobalSemaphore& from_remote_multi_device_global_semaphore,
                const GlobalSemaphore& to_remote_multi_device_global_semaphore,
                const std::optional<std::vector<ttnn::Tensor>>& persistent_output_tensors,

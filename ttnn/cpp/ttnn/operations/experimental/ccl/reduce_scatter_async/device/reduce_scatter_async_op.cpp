@@ -137,16 +137,18 @@ operation::ProgramWithCallbacks ReduceScatterAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     std::vector<IDevice*> devices;
     if (this->cluster_axis.has_value()) {
-        const auto& mesh_view = input_tensors[0].mesh_device()->get_view();
+        const auto& mesh_view = mesh_device->get_view();
         devices =
             (cluster_axis == 0) ? mesh_view.get_devices_on_column(coord[1]) : mesh_view.get_devices_on_row(coord[0]);
     } else {
-        devices = input_tensors[0].mesh_device()->get_devices();
+        devices = this->devices;
     }
     uint32_t num_devices = devices.size();
 
-    auto [device_index, sender_device_id, receiver_device_id] = ccl::get_device_index_and_sender_receiver_ids(
-        input_tensors[0].mesh_device()->get_device(coord), devices, topology);
+    auto target_device =
+        input_tensors[0].mesh_device() ? input_tensors[0].mesh_device()->get_device(coord) : input_tensors[0].device();
+    auto [device_index, sender_device_id, receiver_device_id] =
+        ccl::get_device_index_and_sender_receiver_ids(target_device, devices, topology);
 
     TT_FATAL(
         receiver_device_id != std::nullopt || sender_device_id != std::nullopt,
@@ -228,7 +230,9 @@ ttnn::operations::binary::BinaryOpType convert_reduce_type_to_eltwise_type(
 namespace operations {
 namespace experimental {
 namespace ccl {
-Tensor reduce_scatter(
+
+namespace {
+Tensor reduce_scatter_impl(
     const Tensor& input_tensor,
     const int32_t dim,
     const GlobalSemaphore& from_remote_multi_device_global_semaphore,
@@ -238,14 +242,14 @@ Tensor reduce_scatter(
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_links_preferred,
     std::optional<SubDeviceId> worker_subdevice_id_opt,
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle) {
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle,
+    const std::vector<IDevice*>& devices) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     ttnn::operations::binary::BinaryOpType binary_op_type = convert_reduce_type_to_eltwise_type(math_op);
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "reduce_scatter op is only supported for Fast Dispatch");
 
     ttnn::ccl::Topology ccl_topology = topology;
-    auto devices = input_tensor.mesh_device()->get_devices();
     uint32_t num_devices = devices.size();
     TT_FATAL(num_devices > 1, "reduce_scatter op will only work for num_devices > 1, but has {}", num_devices);
     if (num_devices == 2) {
@@ -262,11 +266,11 @@ Tensor reduce_scatter(
         dim);
 
     std::vector<Tensor> output_tensors = {
-        Tensor(input_tensor.mesh_device()),
-        Tensor(input_tensor.mesh_device()),
-        Tensor(input_tensor.mesh_device()),
-        Tensor(input_tensor.mesh_device()),
-        Tensor(input_tensor.mesh_device())};
+        input_tensor.mesh_device() ? Tensor(input_tensor.mesh_device()) : Tensor({input_tensor.device()}),
+        input_tensor.mesh_device() ? Tensor(input_tensor.mesh_device()) : Tensor({input_tensor.device()}),
+        input_tensor.mesh_device() ? Tensor(input_tensor.mesh_device()) : Tensor({input_tensor.device()}),
+        input_tensor.mesh_device() ? Tensor(input_tensor.mesh_device()) : Tensor({input_tensor.device()}),
+        input_tensor.mesh_device() ? Tensor(input_tensor.mesh_device()) : Tensor({input_tensor.device()})};
     TT_FATAL(
         output_tensors.size() == 5,
         "Reduce scatter requires 5 output tensors. 1 is real and the others are temporaries");
@@ -277,6 +281,7 @@ Tensor reduce_scatter(
          scatter_dim,
          output_mem_config,
          ccl_topology,
+         devices,
          num_devices,
          num_links_preferred,
          output_tensors,
@@ -289,6 +294,8 @@ Tensor reduce_scatter(
 
             return operation::run(
                 ttnn::ReduceScatterAsync(
+                    devices,
+                    /*mesh_device=*/nullptr,
                     binary_op_type,
                     scatter_dim,
                     num_devices,
@@ -308,12 +315,11 @@ Tensor reduce_scatter(
         output_tensors);
     return output_tensors.at(0);
 }
-
-Tensor reduce_scatter(
+Tensor reduce_scatter_impl(
     const Tensor& input_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
-    const MeshDevice& mesh_device,
+    MeshDevice& mesh_device,
     const GlobalSemaphore& from_remote_multi_device_global_semaphore,
     const GlobalSemaphore& to_remote_multi_device_global_semaphore,
     const std::optional<std::vector<ttnn::Tensor>>& persistent_output_tensors,
@@ -335,11 +341,11 @@ Tensor reduce_scatter(
     const uint32_t num_devices = cluster_axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
 
     std::vector<Tensor> output_tensors = {
-        Tensor(input_tensor.mesh_device()),
-        Tensor(input_tensor.mesh_device()),
-        Tensor(input_tensor.mesh_device()),
-        Tensor(input_tensor.mesh_device()),
-        Tensor(input_tensor.mesh_device())};
+        input_tensor.mesh_device() ? Tensor(input_tensor.mesh_device()) : Tensor({input_tensor.device()}),
+        input_tensor.mesh_device() ? Tensor(input_tensor.mesh_device()) : Tensor({input_tensor.device()}),
+        input_tensor.mesh_device() ? Tensor(input_tensor.mesh_device()) : Tensor({input_tensor.device()}),
+        input_tensor.mesh_device() ? Tensor(input_tensor.mesh_device()) : Tensor({input_tensor.device()}),
+        input_tensor.mesh_device() ? Tensor(input_tensor.mesh_device()) : Tensor({input_tensor.device()})};
     std::vector<std::optional<Tensor>> optional_output_tensors =
         persistent_output_tensors
             ? std::vector<std::optional<Tensor>>(persistent_output_tensors->begin(), persistent_output_tensors->end())
@@ -359,7 +365,8 @@ Tensor reduce_scatter(
          num_links_preferred,
          output_tensors,
          worker_subdevice_id_opt,
-         fabric_handle](
+         fabric_handle,
+         mesh_device = &mesh_device](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -367,6 +374,8 @@ Tensor reduce_scatter(
 
             return operation::run(
                 ttnn::ReduceScatterAsync(
+                    /*devices=*/{},
+                    mesh_device,
                     binary_op_type,
                     scatter_dim,
                     num_devices,
@@ -387,6 +396,133 @@ Tensor reduce_scatter(
         {},
         optional_output_tensors);
     return output_tensors.at(0);
+}
+}  // namespace
+
+Tensor reduce_scatter(
+    const Tensor& input_tensor,
+    const int32_t dim,
+    const GlobalSemaphore& from_remote_multi_device_global_semaphore,
+    const GlobalSemaphore& to_remote_multi_device_global_semaphore,
+    ttnn::operations::reduction::ReduceType math_op,
+    const MemoryConfig& output_mem_config,
+    ttnn::ccl::Topology topology,
+    const std::optional<size_t> num_links_preferred,
+    std::optional<SubDeviceId> worker_subdevice_id_opt,
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle) {
+    auto devices = input_tensor.mesh_device()->get_devices();
+    return reduce_scatter_impl(
+        input_tensor,
+        dim,
+        from_remote_multi_device_global_semaphore,
+        to_remote_multi_device_global_semaphore,
+        math_op,
+        output_mem_config,
+        topology,
+        num_links_preferred,
+        worker_subdevice_id_opt,
+        fabric_handle,
+        devices);
+}
+
+std::vector<Tensor> reduce_scatter(
+    const std::vector<Tensor>& input_tensors,
+    const int32_t dim,
+    const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
+    const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
+    ttnn::operations::reduction::ReduceType math_op,
+    const MemoryConfig& output_mem_config,
+    ttnn::ccl::Topology topology,
+    const std::optional<size_t> num_links_preferred,
+    std::optional<SubDeviceId> worker_subdevice_id_opt,
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle) {
+    std::vector<IDevice*> devices;
+    devices.reserve(input_tensors.size());
+    for (auto& input_tensor : input_tensors) {
+        devices.push_back(input_tensor.device());
+    }
+    std::vector<Tensor> output_tensors;
+    output_tensors.reserve(input_tensors.size());
+    for (size_t i = 0; i < input_tensors.size(); ++i) {
+        output_tensors.push_back(reduce_scatter_impl(
+            input_tensors[i],
+            dim,
+            from_remote_multi_device_global_semaphore.global_semaphores[i],
+            to_remote_multi_device_global_semaphore.global_semaphores[i],
+            math_op,
+            output_mem_config,
+            topology,
+            num_links_preferred,
+            worker_subdevice_id_opt,
+            fabric_handle,
+            devices));
+    }
+    return output_tensors;
+}
+
+Tensor reduce_scatter(
+    const Tensor& input_tensor,
+    const int32_t dim,
+    const uint32_t cluster_axis,
+    MeshDevice& mesh_device,
+    const GlobalSemaphore& from_remote_multi_device_global_semaphore,
+    const GlobalSemaphore& to_remote_multi_device_global_semaphore,
+    const std::optional<std::vector<ttnn::Tensor>>& persistent_output_tensors,
+    ttnn::operations::reduction::ReduceType reduce_op,
+    const MemoryConfig& output_mem_config,
+    ttnn::ccl::Topology topology,
+    const std::optional<size_t> num_links_preferred,
+    std::optional<SubDeviceId> worker_subdevice_id_opt,  // TODO make reference
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle) {
+    return reduce_scatter_impl(
+        input_tensor,
+        dim,
+        cluster_axis,
+        mesh_device,
+        from_remote_multi_device_global_semaphore,
+        to_remote_multi_device_global_semaphore,
+        persistent_output_tensors,
+        reduce_op,
+        output_mem_config,
+        topology,
+        num_links_preferred,
+        worker_subdevice_id_opt,
+        fabric_handle);
+}
+
+std::vector<Tensor> reduce_scatter(
+    const std::vector<Tensor>& input_tensors,
+    const int32_t dim,
+    const uint32_t cluster_axis,
+    MeshDevice& mesh_device,
+    const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
+    const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
+    const std::optional<std::vector<ttnn::Tensor>>& persistent_output_tensors,
+    ttnn::operations::reduction::ReduceType reduce_op,
+    const MemoryConfig& output_mem_config,
+    ttnn::ccl::Topology topology,
+    const std::optional<size_t> num_links_preferred,
+    std::optional<SubDeviceId> worker_subdevice_id_opt,  // TODO make reference
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle) {
+    std::vector<Tensor> output_tensors;
+    output_tensors.reserve(input_tensors.size());
+    for (size_t i = 0; i < input_tensors.size(); ++i) {
+        output_tensors.push_back(reduce_scatter_impl(
+            input_tensors[i],
+            dim,
+            cluster_axis,
+            mesh_device,
+            from_remote_multi_device_global_semaphore.global_semaphores[i],
+            to_remote_multi_device_global_semaphore.global_semaphores[i],
+            persistent_output_tensors,
+            reduce_op,
+            output_mem_config,
+            topology,
+            num_links_preferred,
+            worker_subdevice_id_opt,
+            fabric_handle));
+    }
+    return output_tensors;
 }
 
 }  // namespace ccl
