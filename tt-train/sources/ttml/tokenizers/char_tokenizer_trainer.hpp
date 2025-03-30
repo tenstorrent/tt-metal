@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <memory>
+#include <string>
+
 #include "char_tokenizer.hpp"
 
 namespace ttml::tokenizers {

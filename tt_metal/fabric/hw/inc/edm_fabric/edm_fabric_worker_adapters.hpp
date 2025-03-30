@@ -227,7 +227,13 @@ struct WorkerToFabricEdmSenderImpl {
 
     static constexpr size_t edm_sender_channel_field_stride_bytes = 16;
 
-    void open() {
+    // Advanced usage API:
+    // Starts the connection opening process but doesn't wait for the process complete. This avoids waiting
+    // for the read barrier to complete before returning, saving some cycles for advanced users.
+    // !!! IMPORTANT !!!
+    // Must be called alongside (before) open_finish().
+    template <bool posted = false>
+    void open_start() {
         const auto dest_noc_addr_coord_only = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
 
         const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
@@ -250,15 +256,23 @@ struct WorkerToFabricEdmSenderImpl {
             reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_teardown_semaphore_address));
         const uint64_t connection_worker_xy_address =
             dest_noc_addr_coord_only | reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_xy));
-        noc_inline_dw_write(dest_edm_location_info_addr, reinterpret_cast<size_t>(from_remote_buffer_slot_rdptr_ptr));
-        noc_inline_dw_write(edm_teardown_semaphore_address_address, reinterpret_cast<size_t>(worker_teardown_addr));
-        noc_inline_dw_write(connection_worker_xy_address, WorkerXY(my_x[0], my_y[0]).to_uint32());
+        noc_inline_dw_write<false, posted>(
+            dest_edm_location_info_addr, reinterpret_cast<size_t>(from_remote_buffer_slot_rdptr_ptr));
+        noc_inline_dw_write<false, posted>(
+            edm_teardown_semaphore_address_address, reinterpret_cast<size_t>(worker_teardown_addr));
+        noc_inline_dw_write<false, posted>(connection_worker_xy_address, WorkerXY(my_x[0], my_y[0]).to_uint32());
 
         const uint64_t edm_connection_handshake_noc_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
-        noc_inline_dw_write(edm_connection_handshake_noc_addr, open_connection_value);
+        noc_inline_dw_write<false, posted>(edm_connection_handshake_noc_addr, open_connection_value);
+    }
+
+    // Advanced usage API:
+    // Completes the connection opening process. Induces a read barrier
+    // !!! IMPORTANT !!!
+    // Must be called alongside (after) open_start().
+    void open_finish() {
         noc_async_read_barrier();
         this->buffer_slot_wrptr = *this->buffer_slot_wrptr_ptr;
-
         if constexpr (!USER_DEFINED_NUM_BUFFER_SLOTS) {
             this->edm_buffer_addr =
                 this->edm_buffer_base_addr +
@@ -267,7 +281,18 @@ struct WorkerToFabricEdmSenderImpl {
         ASSERT(this->buffer_slot_wrptr < 20);
     }
 
-    void close() {
+    template <bool posted = false>
+    void open() {
+        open_start<posted>();
+        open_finish();
+    }
+
+    // Advanced usage API:
+    // Starts the connection closing process but doesn't wait for the process to complete. This avoids waiting
+    // for the ack from the fabric before returning, saving some cycles for advanced users.
+    // !!! IMPORTANT !!!
+    // Must be called alongside (before) close_finish().
+    void close_start() {
         const auto dest_noc_addr_coord_only =
             get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr) &
             ~(uint64_t)NOC_COORDINATE_MASK;
@@ -278,11 +303,21 @@ struct WorkerToFabricEdmSenderImpl {
         // buffer index stored at location after handshake addr
         const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
         noc_inline_dw_write(remote_buffer_index_addr, this->buffer_slot_wrptr);
+    }
 
+    // Advanced usage API:
+    // Completes the connection closing process. Induces a write barrier
+    // !!! IMPORTANT !!!
+    // Must be called alongside (after) close_start().
+    void close_finish() {
         // Need to wait for the ack to teardown notice, from edm
         noc_semaphore_wait(this->worker_teardown_addr, 1);
-
         noc_async_write_barrier();
+    }
+
+    void close() {
+        close_start();
+        close_finish();
     }
 
     uint32_t edm_buffer_addr;
@@ -327,10 +362,10 @@ private:
     FORCE_INLINE void update_edm_buffer_slot_wrptr(uint8_t noc = noc_index) {
         if constexpr (stateful_api) {
             if constexpr (enable_ring_support) {
-                noc_inline_dw_write_with_state<true, false, false>(
+                noc_inline_dw_write_with_state<true, false, true>(
                     this->buffer_slot_wrptr, this->edm_buffer_slot_wrptr_addr, this->sync_noc_cmd_buf, noc);
             } else {
-                noc_inline_dw_write_with_state<false, false, false>(
+                noc_inline_dw_write_with_state<false, false, true>(
                     this->buffer_slot_wrptr, 0, this->sync_noc_cmd_buf, noc);
             }
         } else {

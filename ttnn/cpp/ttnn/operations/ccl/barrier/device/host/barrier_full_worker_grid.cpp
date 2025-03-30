@@ -12,14 +12,13 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/circular_buffer_types.hpp>
 
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::ccl::barrier::detail {
 
@@ -93,6 +92,7 @@ operation::ProgramWithCallbacks barrier_with_workers(
     const bool is_starting_core,
     const uint32_t ring_size,
     const uint32_t ring_index,
+    chip_id_t target_device_id,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     ttnn::ccl::Topology topology) {
@@ -106,7 +106,7 @@ operation::ProgramWithCallbacks barrier_with_workers(
     auto const& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
 
     // Get the device from the tensor
-    const auto& device = input_tensor.device();
+    const auto& device = input_tensor.mesh_device()->get_device(target_device_id);
     // Get a representation of the topology
 
     // Create the program

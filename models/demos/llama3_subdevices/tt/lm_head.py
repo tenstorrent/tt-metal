@@ -126,6 +126,8 @@ class LMHead(LightweightModule):
                 for split_size in split_sizes
             ]
 
+        self.prefill_pc = args.model_config["LM_HEAD_PREFILL_PROGCFG"]
+
     def forward_on_host(self, x: ttnn.Tensor):
         x_torch = ttnn.to_torch(
             x,
@@ -170,10 +172,6 @@ class LMHead(LightweightModule):
             weight_l1 = weight  # ttnn.to_memory_config(weight, self.args.model_config["LM_HEAD_RING_MEMCFG"])
             if mode == "decode":
                 x = ttnn.to_memory_config(x, self.args.model_config["SHARDED_LM_HEAD_INPUT_32_RING_MEMCFG"])
-                # Pre-allocated output of AllReduce to avoid memory cloberring
-                self.tt_ccl.tt_lm_head_buffer_l1 = ttnn.to_memory_config(
-                    self.tt_ccl.tt_lm_head_buffer, self.tt_ccl.lm_head_buffer_mem_cfg
-                )
                 output = ttnn.linear(
                     x,
                     weight_l1,
@@ -188,11 +186,10 @@ class LMHead(LightweightModule):
                     x,
                     weight_l1,
                     compute_kernel_config=self.compute_kernel_config,
-                    core_grid=ttnn.CoreGrid(y=10, x=7),
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    program_config=self.prefill_pc,
                     dtype=ttnn.bfloat8_b,
                 )
-
             # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.tt_ccl.worker_sub_device_id])
 
             outputs.append(output)

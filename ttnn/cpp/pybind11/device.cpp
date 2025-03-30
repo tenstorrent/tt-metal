@@ -15,10 +15,10 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/trace.hpp>
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 #include "tools/profiler/op_profiler.hpp"
 
 using namespace tt::tt_metal;
@@ -298,15 +298,15 @@ void device_module(py::module& m_device) {
             )doc")
             .def(
                 "sfpu_eps",
-                [](IDevice* device) { return tt::tt_metal::experimental::hal::get_eps(); },
+                [](IDevice* device) { return tt::tt_metal::hal::get_eps(); },
                 R"doc(Returns machine epsilon value for current architecture.)doc")
             .def(
                 "sfpu_nan",
-                [](IDevice* device) { return tt::tt_metal::experimental::hal::get_nan(); },
+                [](IDevice* device) { return tt::tt_metal::hal::get_nan(); },
                 R"doc(Returns NaN value for current architecture.)doc")
             .def(
                 "sfpu_inf",
-                [](IDevice* device) { return tt::tt_metal::experimental::hal::get_inf(); },
+                [](IDevice* device) { return tt::tt_metal::hal::get_inf(); },
                 R"doc(Returns Infinity value for current architecture.)doc");
 
     auto pyDevice = static_cast<py::class_<tt::tt_metal::Device, IDevice, std::unique_ptr<tt::tt_metal::Device, py::nodelete>>>(m_device.attr("Device"));
@@ -682,10 +682,7 @@ void device_module(py::module& m_device) {
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
 
-    m_device.def(
-        "get_arch_name",
-        &tt::tt_metal::experimental::hal::get_arch_name,
-        "Return the name of the architecture present.");
+    m_device.def("get_arch_name", &tt::tt_metal::hal::get_arch_name, "Return the name of the architecture present.");
 
     m_device.attr("DEFAULT_L1_SMALL_SIZE") = py::int_(DEFAULT_L1_SMALL_SIZE);
     m_device.attr("DEFAULT_TRACE_REGION_SIZE") = py::int_(DEFAULT_TRACE_REGION_SIZE);

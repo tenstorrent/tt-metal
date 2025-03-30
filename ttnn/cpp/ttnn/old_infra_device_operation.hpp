@@ -7,6 +7,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/operation_concepts.hpp"
 
 namespace tt::tt_metal::operation {
 
@@ -48,7 +49,37 @@ struct OldInfraDeviceOperation {
         static bool uses_heterogenous_dispatch(const operation_attributes_t& attributes);
     };
 
-    using program_factory_t = std::variant<ProgramFactory>;
+    struct MeshWorkloadFactory {
+        struct shared_variables_t {
+            std::optional<operation::OverrideRuntimeArgumentsWorkloadCallback<OutputTensors>> workload_callback;
+            std::unordered_map<ttnn::MeshCoordinateRange, operation::OverrideRuntimeArgumentsCallback<OutputTensors>>
+                per_program_callbacks;
+        };
+        using cached_mesh_workload_t = ttnn::device_operation::CachedMeshWorkload<shared_variables_t>;
+
+        static cached_mesh_workload_t create_mesh_workload(
+            const operation_attributes_t& operation_attributes,
+            const std::vector<ttnn::MeshCoordinate>& mesh_coords,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+
+        static void override_runtime_arguments(
+            cached_mesh_workload_t& cached_workload,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    // When the wrapped operation has `create_mesh_workload` method, `OldInfraDeviceOperation` adapter will select
+    // `MeshWorkloadFactory` as the program factory.
+    static_assert(
+        !ttnn::device_operation::ProgramFactoryConcept<MeshWorkloadFactory> &&
+        ttnn::device_operation::MeshWorkloadFactoryConcept<MeshWorkloadFactory>);
+    static_assert(
+        ttnn::device_operation::ProgramFactoryConcept<ProgramFactory> &&
+        !ttnn::device_operation::MeshWorkloadFactoryConcept<ProgramFactory>);
+
+    using program_factory_t = std::variant<ProgramFactory, MeshWorkloadFactory>;
 
     // Mandatory methods
 

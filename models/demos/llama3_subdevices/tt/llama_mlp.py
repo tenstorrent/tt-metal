@@ -89,9 +89,10 @@ class TtLlamaMLP(LightweightModule):
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
-        self.prefetcher_setup.insert_tensor(self.w1)
-        self.prefetcher_setup.insert_tensor(self.w3)
-        self.prefetcher_setup.insert_tensor(self.w2)
+        if tt_ccl.mode == "decode":
+            self.prefetcher_setup.insert_tensor(self.w1)
+            self.prefetcher_setup.insert_tensor(self.w3)
+            self.prefetcher_setup.insert_tensor(self.w2)
         self.tt_ccl = tt_ccl
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:

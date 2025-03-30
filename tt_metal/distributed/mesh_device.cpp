@@ -26,7 +26,7 @@
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/distributed/sd_mesh_command_queue.hpp"
 
-#include <hal.hpp>
+#include "llrt/hal.hpp"
 #include <mesh_coord.hpp>
 #include <small_vector.hpp>
 #include <env_lib.hpp>
