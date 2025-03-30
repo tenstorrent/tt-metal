@@ -3,10 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from loguru import logger
-import os
-import pytest
+
 import torch
-import torchvision
 from PIL import Image
 import requests
 import math
@@ -27,11 +25,9 @@ from tests.ttnn.integration_tests.segformer.test_segformer_model import (
 from tests.ttnn.integration_tests.segformer.test_segformer_decode_head import (
     create_custom_preprocessor as create_custom_preprocessor_deocde_head,
 )
-from models.utility_functions import skip_for_grayskull
 
 from models.utility_functions import (
     is_wormhole_b0,
-    is_grayskull,
     divup,
 )
 

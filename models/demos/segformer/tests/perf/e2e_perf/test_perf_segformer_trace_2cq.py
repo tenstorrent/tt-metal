@@ -5,8 +5,6 @@
 import pytest
 import ttnn
 import time
-import pdb
-import torch
 from loguru import logger
 
 import ttnn.torch_tracer

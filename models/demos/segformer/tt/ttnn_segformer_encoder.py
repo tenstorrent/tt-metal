@@ -10,7 +10,6 @@ from models.demos.segformer.tt.ttnn_segformer_layer import TtSegformerLayer
 from typing import Optional, Tuple, Union
 
 from dataclasses import dataclass
-import math
 
 
 @dataclass

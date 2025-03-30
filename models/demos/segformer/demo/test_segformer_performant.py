@@ -11,7 +11,6 @@ from models.utility_functions import run_for_wormhole_b0
 from models.demos.segformer.tests.segformer_perfomant import (
     run_segformer_inference,
     run_segformer_trace_inference,
-    run_segformer_trace_2cqs_inference,
     SegformerTrace2CQ,
 )
 

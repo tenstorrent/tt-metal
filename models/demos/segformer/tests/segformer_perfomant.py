@@ -2,12 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-import torch
+
 import ttnn
-from models.utility_functions import (
-    is_wormhole_b0,
-)
 from models.demos.segformer.tests.segformer_test_infra import create_test_infra
 
 try:
