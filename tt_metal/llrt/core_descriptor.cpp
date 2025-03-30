@@ -5,12 +5,7 @@
 #include "core_descriptor.hpp"
 
 #include <utility>
-#include <yaml-cpp/node/detail/impl.h>
-#include <yaml-cpp/node/detail/iterator.h>
-#include <yaml-cpp/node/impl.h>
-#include <yaml-cpp/node/iterator.h>
-#include <yaml-cpp/node/node.h>
-#include <yaml-cpp/node/parse.h>
+#include <yaml-cpp/yaml.h>
 #include <algorithm>
 #include <bitset>
 #include <cstdlib>

@@ -4,6 +4,7 @@
 
 #include "metal_soc_descriptor.h"
 
+#include <assert.hpp>
 #include <string>
 #include <umd/device/types/arch.h>
 #include "yaml-cpp/yaml.h"
