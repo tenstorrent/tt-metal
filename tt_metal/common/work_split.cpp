@@ -6,7 +6,7 @@
 // Contains utility functions for partitioning work between multiple cores.
 //
 
-#include <__utility/move.h>
+#include <utility>
 #include <assert.hpp>
 #include <core_coord.hpp>
 #include <algorithm>

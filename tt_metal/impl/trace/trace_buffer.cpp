@@ -4,7 +4,7 @@
 
 #include "trace_buffer.hpp"
 
-#include <__utility/move.h>
+#include <utility>
 #include <device.hpp>
 #include <tt_metal.hpp>
 

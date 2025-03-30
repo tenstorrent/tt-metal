@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <__atomic/atomic_base.h>
-#include <__utility/move.h>
+#include <utility>
 #include <allocator.hpp>
 #include <assert.hpp>
 #include <device.hpp>
