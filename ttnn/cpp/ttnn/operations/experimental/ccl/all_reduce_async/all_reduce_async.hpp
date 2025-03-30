@@ -28,6 +28,16 @@ struct ExecuteAllReduceAsync {
         ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
         const std::optional<size_t> num_links = std::nullopt,
         std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt = std::nullopt);
+    static std::vector<ttnn::Tensor> invoke(
+        const std::vector<ttnn::Tensor>& input_tensors,
+        const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
+        const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
+        const global_semaphore::MultiDeviceGlobalSemaphore& gather_multi_device_global_semaphore,
+        ttnn::operations::reduction::ReduceType math_op,
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+        ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
+        const std::optional<size_t> num_links = std::nullopt,
+        std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt = std::nullopt);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
@@ -41,6 +51,18 @@ struct ExecuteAllReduceAsync {
         ttnn::ccl::Topology topology,
         const std::optional<size_t> num_preferred_links,
         std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt);
+    static std::vector<ttnn::Tensor> invoke(
+        const std::vector<ttnn::Tensor>& input_tensors,
+        const uint32_t cluster_axis,
+        MeshDevice& mesh_device,
+        const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
+        const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
+        const global_semaphore::MultiDeviceGlobalSemaphore& gather_multi_device_global_semaphore,
+        ttnn::operations::reduction::ReduceType math_op,
+        const std::optional<ttnn::MemoryConfig>& memory_config,
+        ttnn::ccl::Topology topology,
+        const std::optional<size_t> num_preferred_links,
+        std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
@@ -48,6 +70,16 @@ struct ExecuteAllReduceAsync {
         const uint32_t cluster_axis,
         MeshDevice& mesh_device,
         const GlobalSemaphore& multi_device_global_semaphore,
+        const std::optional<ttnn::MemoryConfig>& memory_config,
+        ttnn::ccl::Topology topology,
+        const std::optional<size_t> num_preferred_links,
+        std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt);
+    static std::vector<ttnn::Tensor> invoke(
+        const std::vector<ttnn::Tensor>& input_tensors,
+        ttnn::Tensor& buffer_tensor,
+        const uint32_t cluster_axis,
+        MeshDevice& mesh_device,
+        const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
         const std::optional<ttnn::MemoryConfig>& memory_config,
         ttnn::ccl::Topology topology,
         const std::optional<size_t> num_preferred_links,
