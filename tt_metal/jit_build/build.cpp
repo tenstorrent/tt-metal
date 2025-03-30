@@ -4,7 +4,7 @@
 
 #include "build.hpp"
 
-#include <__algorithm/ranges_for_each.h>
+#include <algorithm>
 #include <__filesystem/directory_iterator.h>
 #include <taskflow/core/async.hpp>
 #include <algorithm>

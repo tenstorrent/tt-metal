@@ -5,7 +5,7 @@
 #include "tt_elffile.hpp"
 
 #include <algorithm>
-#include <__algorithm/ranges_for_each.h>
+#include <algorithm>
 #include <assert.hpp>
 #include <bits/mman-linux.h>
 // OS
