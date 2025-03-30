@@ -159,18 +159,18 @@ Now, let's have a look at the device-side kernels.
 
 ---
 
-## **3. Coordinator Core Workflow in `coordinator_kernel.cpp`**  
+## **3. Coordinator Core Workflow in `coordinator_kernel.cpp`**
 The **coordinator kernel** is responsible for orchestrating the movement of a single **32×32 tile** from **DRAM to L1 memory** and then multicasting it to the designated **receiver cores**. It ensures synchronization using semaphores and provides logging via **DPRINT** for user verification. In this section we'll dissect the *hows* and *whys* of the the multicast flow.
 
-### **3.1 Parsing Runtime Arguments**  
-Upon launch, the kernel extracts **runtime arguments** passed from the host, which define:  
-- **Multicast range**: `start_x, start_y, end_x, end_y` → Defines the bounding box of receiving cores.  
-- **Semaphores**: `sender_addr, receiver_addr` → Control when receivers are ready.  
-- **DRAM source tile**: `dram_bank_id, src0_dram` → Specifies which DRAM bank and address hold the tile.  
-- **Tile size**: `single_tile_size` → The total size (in bytes) of a single **32×32** tile.  
+### **3.1 Parsing Runtime Arguments**
+Upon launch, the kernel extracts **runtime arguments** passed from the host, which define:
+- **Multicast range**: `start_x, start_y, end_x, end_y` → Defines the bounding box of receiving cores.
+- **Semaphores**: `sender_addr, receiver_addr` → Control when receivers are ready.
+- **DRAM source tile**: `dram_bank_id, src0_dram` → Specifies which DRAM bank and address hold the tile.
+- **Tile size**: `single_tile_size` → The total size (in bytes) of a single **32×32** tile.
 - **Destinations**: `num_dests` → Used as our sender semaphore's atomic counter, which is reached via enumeration per each receiver core's response (eg. tile aknowledgement).
 
-These arguments are extracted as follows:  
+These arguments are extracted as follows:
 ```cpp
 uint32_t start_x = get_arg_val<uint32_t>(0);
 uint32_t start_y = get_arg_val<uint32_t>(1);
@@ -184,11 +184,11 @@ uint32_t single_tile_size = get_arg_val<uint32_t>(8);
 uint32_t num_dests = get_arg_val<uint32_t>(9);
 ```
 
-### **3.2 Buffer Setup and Tile Read from DRAM**  
-You are likely already familiar with setting up **Circular Buffers (CBs)** for data movement. Here we do the following:  
-1. **Translate the DRAM tile address** into a NoC-accessible address.  
-2. **Define the L1 buffer location** for storing the tile.  
-3. **Asynchronously read** the tile from DRAM to L1.  
+### **3.2 Buffer Setup and Tile Read from DRAM**
+You are likely already familiar with setting up **Circular Buffers (CBs)** for data movement. Here we do the following:
+1. **Translate the DRAM tile address** into a NoC-accessible address.
+2. **Define the L1 buffer location** for storing the tile.
+3. **Asynchronously read** the tile from DRAM to L1.
 
 Namely, for the first step we perform the DRAM addressing using our passed-in `dram_bank_id`:
 ```cpp
@@ -204,9 +204,9 @@ uint32_t tile_l1_addr = get_write_ptr(cb_id_in0);
 
 noc_async_read(src0_dram_noc_addr, tile_l1_addr, single_tile_size);
 noc_async_read_barrier();
-``` 
+```
 
-### **3.3 DPRINTing a Tile Slice** 
+### **3.3 DPRINTing a Tile Slice**
 To confirm the correctness of the tile read, the coordinator prints a slice of the tile using DPRINT.  Let's break down its usage.
 
 First, let's define a tile "slice" object of the full 32x32 tile.
@@ -229,20 +229,22 @@ This results in an **4×4 sampled preview** of the 32×32 tile.  Pretty efficien
 To print your slice, call the TileSlice function like so:
 
 ```cpp
-DPRINT << TileSlice(0, 0, sr, cb_id_in0, tile_l1_addr, true, false) << ENDL();
+DPRINT << TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR, true, false);
 ```
-
-- **Tile Index, Batch Index**: `0, 0` → Since we are working with a single tile, both remain zero. However, in a scenario involving multiple tiles, these indices would help you identify the specific tile being printed.
-
-- **SliceRange Object**: `sr` → References the SliceRange object we defined earlier.
 
 - **Circular Buffer ID**: `cb_id_in0` → The circular buffer ID where the tile data is stored. NOTE: it is important the circular buffer is not pushed backed yet, otherwise tile DPRINTing will fail, so make sure TileSlice is placed before a `cb_push_back()` call.
 
-- **Tile's L1 Address**: `tile_l1_addr` → The L1 memory address where the tile is located.
+- **Tile Index**: `0` → Since we are working with a single tile, both remain zero. However, in a scenario involving multiple tiles, these indices would help you identify the specific tile being printed.
+
+- **SliceRange Object**: `sr` → References the SliceRange object we defined earlier.
+
+- **Circular Buffer Type**: `TSLICE_INPUT_CB` → Indicates which type the CB is. Under the hood, CBs reference a metadata table `unpack_*` or `pack_*`. Our CB here was configured using `unpack_*` settings.
+
+- **Pointer Type**: `TSLICE_WR_PTR` → Samples from the CB’s write pointer. We use this when inspecting our tile that, at this point, was just written into the CB but hasn't been popped yet.
 
 - **Row-Wise Formatting**: `true` → Ensures that DPRINTed output maintains a structured row format. If set to `false`, your tile’s elements will be printed sequentially rather than structured neatly for your eyes. You may want to visualize data in this stream-like format instead of a grid, but in this case we just want to do a quick glance.
 
-- **Untilized Printing**: `false` → Disables untilized printing, meaning the tile is displayed in its standard matrix order rather than being grouped into a face-based format.  
+- **Untilized Printing**: `false` → Disables untilized printing, meaning the tile is displayed in its standard matrix order rather than being grouped into a face-based format.
 
 > *For the curious: what is a face-based format*?  Basically it's a grouping of elements that respects how the tile was originally packed (e.g., in BlockFP format). Each "face" holds part of the full precision (e.g., one face for the exponent, another for mantissa), and they're shown together in what's called a *facewise view*. This is great for inspecting how tilized data maps to compute layout, but can look less like a traditional 2D matrix.
 
@@ -415,7 +417,7 @@ To verify correctness, receivers can use DPRINT to log a sample of the tile data
 ```cpp
 for (uint8_t r = 0; r < 32; ++r) {
     SliceRange sr = SliceRange{.h0 = static_cast<uint8_t>(r), .h1 = static_cast<uint8_t>(r+1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-    DPRINT_DATA0({ DPRINT << TileSlice(0, 0, sr, cb_id_in0, l1_addr, true, false) << ENDL(); });
+    DPRINT_DATA0({ DPRINT << TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR, true, false); });
 }
 ```
 

@@ -33,7 +33,7 @@ void kernel_main() {
 
     ////////// PRINT TILE SLICE //////////
     SliceRange sr = SliceRange{.h0 = static_cast<uint8_t>(0), .h1 = static_cast<uint8_t>(32), .hs = 8, .w0 = 0, .w1 = 32, .ws = 8};
-    DPRINT << TileSlice(0, 0, sr, cb_id_in0, tile_l1_addr, true, false) << ENDL();
+    DPRINT << TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR, true, false);
 
     cb_push_back(cb_id_in0, 1);
 
