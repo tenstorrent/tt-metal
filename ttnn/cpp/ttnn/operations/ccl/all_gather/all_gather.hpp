@@ -34,7 +34,18 @@ struct ExecuteAllGather {
         const ttnn::Tensor& input_tensor,
         const int32_t dim,
         const uint32_t cluster_axis,
-        const MeshDevice& mesh_device,
+        MeshDevice& mesh_device,
+        const uint32_t num_links = 1,
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<size_t> num_workers = std::nullopt,
+        const std::optional<size_t> num_buffers_per_channel = std::nullopt,
+        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring);
+
+    static std::vector<ttnn::Tensor> invoke(
+        const std::vector<ttnn::Tensor>& input_tensors,
+        const int32_t dim,
+        const uint32_t cluster_axis,
+        MeshDevice& mesh_device,
         const uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<size_t> num_workers = std::nullopt,

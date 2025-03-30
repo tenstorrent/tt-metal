@@ -32,8 +32,9 @@ tt::tt_metal::operation::ProgramWithCallbacks Barrier::create_program_at(
     const ttnn::MeshCoordinate& mesh_coord,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    const auto* target_device = input_tensors.at(0).mesh_device()->get_device(mesh_coord);
-    const auto devices = input_tensors.at(0).mesh_device()->get_devices();
+    const auto& input_tensor = input_tensors.at(0);
+    const auto* target_device =
+        input_tensor.mesh_device() ? input_tensor.mesh_device()->get_device(mesh_coord) : input_tensor.device();
     const bool is_linear = (topology == ttnn::ccl::Topology::Linear);
     const uint32_t num_devices = devices.size();
     uint32_t device_index = 0;
@@ -55,7 +56,7 @@ tt::tt_metal::operation::ProgramWithCallbacks Barrier::create_program_at(
     }
 
     return ccl::barrier::detail::barrier_with_workers(
-        input_tensors.at(0),
+        input_tensor,
         output_tensors.at(0),
         /*is_starting_core*/ (device_index == 0),
         num_devices,
@@ -81,6 +82,26 @@ Tensor barrier_function(const Tensor& input_tensor, const ttnn::Barrier& barrier
         {input_tensor},
         output_tensors);
     return output_tensors.at(0);
+}
+
+std::vector<Tensor> barrier_function(const std::vector<Tensor>& input_tensors, const ttnn::Barrier& barrier_struct) {
+    std::vector<Tensor> output_tensors;
+    output_tensors.reserve(input_tensors.size());
+    for (const auto& input_tensor : input_tensors) {
+        std::vector<Tensor> cur_output_tensors = {Tensor({input_tensor.device()})};
+        tt::tt_metal::operation::launch_op(
+            [barrier_struct](
+                const std::vector<Tensor>& input_tensors,
+                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+                const Tensor& input_tensor = input_tensors.at(0);
+                return tt::tt_metal::operation::run(barrier_struct, {input_tensor});
+            },
+            {input_tensor},
+            cur_output_tensors);
+        output_tensors.push_back(cur_output_tensors.at(0));
+    }
+    return output_tensors;
 }
 
 }  // namespace operations::ccl

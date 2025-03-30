@@ -15,6 +15,7 @@ namespace ttnn {
 struct Barrier {
     const MemoryConfig output_mem_config;
     const ttnn::ccl::Topology topology;
+    std::vector<IDevice*> devices;
 
     // Required functions to all tensor op functions
     void validate(const std::vector<Tensor>& input_tensors) const;
@@ -46,6 +47,7 @@ tt::tt_metal::operation::ProgramWithCallbacks barrier_with_workers(
 namespace operations::ccl {
 // Template for the barrier tensor found in device/barrier_op.cpp
 Tensor barrier_function(const Tensor& input_tensor, const ttnn::Barrier& barrier_struct);
+std::vector<Tensor> barrier_function(const std::vector<Tensor>& input_tensors, const ttnn::Barrier& barrier_struct);
 }  // namespace operations::ccl
 
 }  // namespace ttnn
