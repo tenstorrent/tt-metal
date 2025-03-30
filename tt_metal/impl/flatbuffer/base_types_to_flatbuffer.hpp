@@ -4,13 +4,29 @@
 
 #pragma once
 
-#include "base_types_generated.h"
 #include <buffer_constants.hpp>
-#include <kernel_types.hpp>
-#include <data_types.hpp>
-#include <tt_backend_api_types.hpp>
-#include <tile.hpp>
 #include <circular_buffer_constants.h>
+#include <data_types.hpp>
+#include <flatbuffers/buffer.h>
+#include <flatbuffers/flatbuffer_builder.h>
+#include <flatbuffers/vector.h>
+#include <kernel_types.hpp>
+#include <tile.hpp>
+#include <tt_backend_api_types.hpp>
+#include <array>
+#include <optional>
+
+#include "base_types_generated.h"
+
+enum class MathFidelity : uint8_t;
+namespace tt {
+enum class DataFormat : uint8_t;
+namespace tt_metal {
+enum Eth : uint8_t;
+enum class DataMovementProcessor;
+struct Tile;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

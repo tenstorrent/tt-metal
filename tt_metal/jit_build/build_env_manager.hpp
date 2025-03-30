@@ -4,6 +4,12 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <mutex>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
 #include "build.hpp"
 #include "umd/device/types/cluster_descriptor_types.h"
 

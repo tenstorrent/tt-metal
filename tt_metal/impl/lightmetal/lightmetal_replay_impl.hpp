@@ -4,14 +4,30 @@
 
 #pragma once
 
+#include <flatbuffers/buffer.h>
 #include <flatbuffers/flatbuffers.h>
-#include <string>
-#include <vector>
-#include <optional>
-#include <tt-metalium/lightmetal_binary.hpp>
-
-#include <tt-metalium/program_impl.hpp>
+#include <flatbuffers/vector.h>
+#include <stdint.h>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/lightmetal_binary.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <memory>
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <variant>
+#include <vector>
+
+#include "buffer.hpp"
+#include "circular_buffer_types.hpp"
+#include "kernel_types.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+class Kernel;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 class TraceDescriptor;
@@ -19,30 +35,29 @@ class TraceDescriptor;
 
 // Forward decl for command_generated.h / light_metal_binary_generated.h
 namespace tt::tt_metal::flatbuffer {
-struct Command;
-struct ReplayTraceCommand;
-struct EnqueueTraceCommand;
-struct LoadTraceCommand;
-struct ReleaseTraceCommand;
 struct BufferCreateCommand;
 struct BufferDeallocateCommand;
 struct BufferDeleteCommand;
-struct EnqueueWriteBufferCommand;
-struct EnqueueReadBufferCommand;
-struct FinishCommand;
-struct ProgramConstructorCommand;
-struct EnqueueProgramCommand;
+struct Command;
+struct CreateCircularBufferCommand;
 struct CreateKernelCommand;
+struct EnqueueProgramCommand;
+struct EnqueueReadBufferCommand;
+struct EnqueueTraceCommand;
+struct EnqueueWriteBufferCommand;
+struct FinishCommand;
+struct LightMetalBinary;
+struct LightMetalCompareCommand;
+struct LoadTraceCommand;
+struct ProgramConstructorCommand;
+struct ReleaseTraceCommand;
+struct ReplayTraceCommand;
+struct RuntimeArg;
+struct SetRuntimeArgsCommand;
 struct SetRuntimeArgsUint32Command;
 struct SetRuntimeArgsUint32VecPerCoreCommand;
-struct SetRuntimeArgsCommand;
-struct CreateCircularBufferCommand;
-struct LightMetalCompareCommand;
-struct RuntimeArg;
-
 struct TraceDescriptor;
 struct TraceDescriptorByTraceId;
-struct LightMetalBinary;
 }  // namespace tt::tt_metal::flatbuffer
 
 using FlatbufferRuntimeArgVector =

@@ -5,9 +5,11 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <fstream>
 #include <functional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 

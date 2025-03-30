@@ -4,10 +4,17 @@
 
 #pragma once
 
-#include "program_types_generated.h"
 #include <core_coord.hpp>
+#include <flatbuffers/buffer.h>
+#include <flatbuffers/vector.h>
 #include <kernel_types.hpp>
+#include <stdint.h>
 #include <sub_device_types.hpp>
+#include <variant>
+#include <vector>
+
+#include "assert.hpp"
+#include "program_types_generated.h"
 
 namespace tt::tt_metal {
 

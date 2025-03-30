@@ -2,9 +2,31 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
+#include <stdint.h>
+#include <stdlib.h>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <exception>
+#include <map>
+#include <memory>
+#include <variant>
+#include <vector>
+
+#include "span.hpp"
+#include "tt-metalium/assert.hpp"
+#include "tt-metalium/buffer.hpp"
+#include "tt-metalium/buffer_constants.hpp"
+#include "tt-metalium/core_coord.hpp"
+#include "tt-metalium/data_types.hpp"
+#include "tt-metalium/kernel_types.hpp"
+#include "tt-metalium/logger.hpp"
+#include "tt-metalium/program_impl.hpp"
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 using namespace tt::tt_metal;
 

@@ -1,34 +1,62 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include <chrono>
-#include <thread>
-#include <cmath>
-
-#include "llrt/hal.hpp"
-#include <host_api.hpp>
-#include <dispatch_core_common.hpp>
-#include <core_descriptor.hpp>
-
-#include <profiler.hpp>
-#include "hostdevcommon/profiler_common.h"
-
-#include <tt_metal.hpp>
-
-#include "tracy/Tracy.hpp"
-#include "tracy/TracyTTDevice.hpp"
 #include <device.hpp>
 #include <device_pool.hpp>
+#include <host_api.hpp>
+#include <profiler.hpp>
 #include <tt_cluster.hpp>
+#include <tt_metal.hpp>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <exception>
+#include <filesystem>
+#include <functional>
+#include <limits>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <ostream>
+#include <set>
+#include <string>
+#include <thread>
+#include <tuple>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include "assert.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "dev_msgs.h"
+#include "hal_types.hpp"
+#include "hostdevcommon/profiler_common.h"
+#include "kernel_types.hpp"
 #include "llrt.hpp"
-
-#include "dprint_server.hpp"
+#include "logger.hpp"
+#include "metal_soc_descriptor.h"
+#include "profiler_paths.hpp"
+#include "program_impl.hpp"
 #include "rtoptions.hpp"
+#include "system_memory_manager.hpp"
+#include "tracy/Tracy.hpp"
+#include "tracy/TracyTTDevice.hpp"
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/tt_xy_pair.h"
+#include "umd/device/types/xy_pair.h"
+#include "utils.hpp"
+
+class ProfilerOptionalMetadata;
 
 namespace tt {
 
 namespace tt_metal {
+enum class ProfilerDumpState;
+enum class ProfilerSyncState;
 
 void DumpDeviceProfileResults(IDevice* device, const Program& program) {
 #if defined(TRACY_ENABLE)

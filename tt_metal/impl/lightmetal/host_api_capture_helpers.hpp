@@ -4,24 +4,44 @@
 
 #pragma once
 
-#include "flatbuffers/flatbuffers.h"
-#include "lightmetal/lightmetal_capture.hpp"
+#include <kernel_types.hpp>
+#include <stdint.h>
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/logger.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <kernel_types.hpp>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <string>
+#include <variant>
+#include <vector>
+
+#include "command_queue.hpp"
+#include "core_coord.hpp"
+#include "flatbuffers/flatbuffers.h"
+#include "hal_types.hpp"
+#include "lightmetal/lightmetal_capture.hpp"
+#include "sub_device_types.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Program;
+enum class BufferType;
+enum class TensorMemoryLayout;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
 // Many forward decls and aliases to reduce includes.
 class CommandQueue;
-struct DataMovementConfig;
-struct ComputeConfig;
-struct EthernetConfig;
-
 class IDevice;
 struct BufferConfig;
 struct CircularBufferConfig;
+struct ComputeConfig;
+struct DataMovementConfig;
+struct EthernetConfig;
+
 using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
 
 //////////////////////////////////////////////////////////////

@@ -2,16 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/logger.hpp>
-#include <tt-metalium/assert.hpp>
-#include "lightmetal/lightmetal_capture.hpp"
-#include "flatbuffers/flatbuffers.h"
-#include "command_generated.h"
-#include "light_metal_binary_generated.h"
 #include <trace_buffer.hpp>
+#include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/program_impl.hpp>
 #include <tt-metalium/kernel.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <cstddef>
+#include <functional>
+#include <utility>
+
+#include "circular_buffer_types.hpp"
+#include "light_metal_binary_generated.h"
+#include "lightmetal/lightmetal_capture.hpp"
+#include "lightmetal_binary.hpp"
+#include "strong_type.hpp"
 
 namespace tt::tt_metal {
 

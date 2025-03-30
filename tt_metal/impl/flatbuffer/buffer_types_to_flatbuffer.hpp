@@ -4,9 +4,24 @@
 
 #pragma once
 
+#include <circular_buffer_types.hpp>
+#include <flatbuffers/buffer.h>
+#include <flatbuffers/flatbuffer_builder.h>
+#include <optional>
+
 #include "buffer_types_generated.h"
 #include "flatbuffer/base_types_to_flatbuffer.hpp"
-#include <circular_buffer_types.hpp>
+
+namespace tt {
+namespace tt_metal {
+enum class BufferType;
+enum class ShardMode;
+enum class ShardOrientation;
+enum class TensorMemoryLayout;
+struct ShardSpec;
+struct ShardSpecBuffer;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

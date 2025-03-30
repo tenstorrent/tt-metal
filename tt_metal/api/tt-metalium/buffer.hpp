@@ -4,36 +4,48 @@
 
 #pragma once
 
+// #include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
+#include <tt_stl/concepts.hpp>
 #include <array>
 #include <atomic>
-#include <cstdint>
 #include <condition_variable>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <ostream>
 #include <tuple>
 #include <unordered_map>
 #include <variant>
 #include <vector>
 
+#include "assert.hpp"
 #include "bfloat16.hpp"
-#include "core_coord.hpp"
 #include "buffer_constants.hpp"
+#include "core_coord.hpp"
+#include "hal_types.hpp"
 #include "sub_device_types.hpp"
+#include "umd/device/tt_core_coordinates.h"
 #include "umd/device/tt_soc_descriptor.h"
 #include "umd/device/types/xy_pair.h"
-#include <tt_stl/concepts.hpp>
-#include "assert.hpp"
-#include <nlohmann/json.hpp>
 
-#include "hal_types.hpp"
+namespace tt {
+namespace stl {
+namespace json {
+template <typename T>
+struct from_json_t;
+}  // namespace json
+}  // namespace stl
+}  // namespace tt
 
 namespace tt::tt_metal {
 
-class IDevice;
-
 class Allocator;
+class IDevice;
 
 struct ShardSpec {
     /* The individual cores the shard grid is mapped to */

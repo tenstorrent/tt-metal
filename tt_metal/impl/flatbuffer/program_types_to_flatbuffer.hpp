@@ -4,13 +4,34 @@
 
 #pragma once
 
+#include <buffer.hpp>
+#include <core_coord.hpp>
+#include <flatbuffers/buffer.h>
+#include <flatbuffers/flatbuffer_builder.h>
+#include <flatbuffers/vector.h>
+#include <kernel_types.hpp>
+#include <stdint.h>
+#include <sub_device_types.hpp>
+#include <memory>
+#include <utility>
+#include <variant>
+#include <vector>
+
 #include "flatbuffer/base_types_to_flatbuffer.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "program_types_generated.h"
-#include <core_coord.hpp>
-#include <kernel_types.hpp>
-#include <sub_device_types.hpp>
-#include <buffer.hpp>
+#include "span.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Buffer;
+struct ComputeConfig;
+struct DataMovementConfig;
+struct EthernetConfig;
+struct ReaderDataMovementConfig;
+struct WriterDataMovementConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

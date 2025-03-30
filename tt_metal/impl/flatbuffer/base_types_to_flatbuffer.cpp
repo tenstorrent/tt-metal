@@ -4,6 +4,15 @@
 
 #include "flatbuffer/base_types_to_flatbuffer.hpp"
 
+#include <flatbuffers/stl_emulation.h>
+#include <stdint.h>
+
+#include "assert.hpp"
+#include "base_types.hpp"
+#include "data_types.hpp"
+#include "tile.hpp"
+#include "tt_backend_api_types.hpp"
+
 namespace tt::tt_metal {
 
 // Original types defined in data_types.hpp

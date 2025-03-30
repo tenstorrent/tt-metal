@@ -2,19 +2,37 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/overloaded.hpp>
-#include <circular_buffer_types.hpp>
+#include <assert.h>
+#include <flatbuffers/buffer.h>
+#include <flatbuffers/vector.h>
+#include <kernel_types.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program_impl.hpp>
+#include <tt_stl/overloaded.hpp>
+#include <cstddef>
 
-#include <kernel_types.hpp>
-#include "lightmetal/host_api_capture_helpers.hpp"
+#include "assert.hpp"
+#include "base_types_generated.h"
+#include "buffer.hpp"
 #include "command_generated.h"
-#include "lightmetal/lightmetal_capture.hpp"
-#include "flatbuffer/base_types_to_flatbuffer.hpp"
-#include "flatbuffer/program_types_to_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_to_flatbuffer.hpp"
+#include "flatbuffer/program_types_to_flatbuffer.hpp"
+#include "lightmetal/host_api_capture_helpers.hpp"
+#include "lightmetal/lightmetal_capture.hpp"
+#include "logger.hpp"
+#include "span.hpp"
+#include "strong_type.hpp"
+#include "system_memory_manager.hpp"
+
+class bfloat16;
+namespace tt {
+namespace tt_metal {
+class Kernel;
+enum class BufferType;
+enum class TensorMemoryLayout;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

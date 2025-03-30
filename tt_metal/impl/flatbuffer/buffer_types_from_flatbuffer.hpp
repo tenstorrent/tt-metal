@@ -4,9 +4,25 @@
 
 #pragma once
 
-#include "buffer_types_generated.h"
 #include <circular_buffer_types.hpp>
+#include <optional>
+
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "buffer_types_generated.h"
 #include "flatbuffer/base_types_from_flatbuffer.hpp"
+
+namespace tt {
+namespace tt_metal {
+namespace flatbuffer {
+enum class BufferType : uint16_t;
+enum class ShardMode : uint8_t;
+struct CircularBufferConfig;
+struct ShardSpec;
+struct ShardSpecBuffer;
+}  // namespace flatbuffer
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

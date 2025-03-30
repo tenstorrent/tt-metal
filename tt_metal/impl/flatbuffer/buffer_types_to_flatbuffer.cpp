@@ -3,6 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "flatbuffer/buffer_types_to_flatbuffer.hpp"
+
+#include <stdint.h>
+#include <array>
+#include <cstddef>
+#include <unordered_map>
+#include <vector>
+
+#include "assert.hpp"
+#include "base_types_generated.h"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "circular_buffer_types.hpp"
+#include "flatbuffer/base_types_to_flatbuffer.hpp"
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
 #include "lightmetal/lightmetal_capture.hpp"  // For LightMetalCaptureContext
 

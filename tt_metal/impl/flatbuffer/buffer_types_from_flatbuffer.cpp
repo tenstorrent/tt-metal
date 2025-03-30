@@ -3,7 +3,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "flatbuffer/buffer_types_from_flatbuffer.hpp"
+
+#include <flatbuffers/vector.h>
+#include <stdint.h>
+#include <array>
+#include <unordered_set>
+
+#include "assert.hpp"
+#include "base_types_generated.h"
+#include "buffer_types_generated.h"
+#include "circular_buffer_constants.h"
+#include "circular_buffer_types.hpp"
+#include "core_coord.hpp"
+#include "flatbuffer/base_types_from_flatbuffer.hpp"
 #include "flatbuffer/program_types_from_flatbuffer.hpp"
+#include "tile.hpp"
+
+namespace tt {
+enum class DataFormat : uint8_t;
+}  // namespace tt
 
 namespace tt::tt_metal {
 

@@ -4,21 +4,45 @@
 
 #include "lightmetal_replay_impl.hpp"
 
-#include <iostream>
-#include "light_metal_binary_generated.h"
-#include "command_generated.h"
-#include <trace_buffer.hpp>
-#include <tt-metalium/logger.hpp>
-
+#include <flatbuffers/string.h>
+#include <flatbuffers/verifier.h>
 #include <host_api.hpp>
-#include "env_lib.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/logger.hpp>
 #include <tt-metalium/trace_buffer.hpp>
-#include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/device_impl.hpp>
-#include "flatbuffer/base_types_from_flatbuffer.hpp"
-#include "flatbuffer/program_types_from_flatbuffer.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <cstddef>
+#include <exception>
+#include <functional>
+#include <iostream>
+#include <map>
+#include <string>
+#include <utility>
+
+#include "assert.hpp"
+#include "base_types_generated.h"
+#include "buffer_types_generated.h"
+#include "command_generated.h"
+#include "device.hpp"
+#include "dispatch_core_common.hpp"
+#include "env_lib.hpp"
 #include "flatbuffer/buffer_types_from_flatbuffer.hpp"
+#include "flatbuffer/program_types_from_flatbuffer.hpp"
+#include "hostdevcommon/common_values.hpp"
+#include "light_metal_binary_generated.h"
+#include "lightmetal_binary.hpp"
+#include "program_impl.hpp"
+#include "program_types_generated.h"
+#include "span.hpp"
+#include "sub_device_types.hpp"
+#include "system_memory_manager.hpp"
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+class Kernel;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

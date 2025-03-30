@@ -4,10 +4,14 @@
 
 #pragma once
 
-#include <vector>
-#include <memory>
+#include <flatbuffers/buffer.h>
+#include <flatbuffers/flatbuffer_builder.h>
 #include <flatbuffers/flatbuffers.h>
 #include <lightmetal_binary.hpp>
+#include <stdint.h>
+#include <memory>
+#include <unordered_map>
+#include <vector>
 
 // Forward decl for command_generated.h
 namespace tt::tt_metal::flatbuffer {
@@ -28,8 +32,9 @@ class TraceDescriptor;
 namespace tt::tt_metal {
 
 class Buffer;
-class Program;
 class Kernel;
+class Program;
+
 using CBHandle = uintptr_t;
 using TraceDescriptorByTraceIdOffset = flatbuffers::Offset<tt::tt_metal::flatbuffer::TraceDescriptorByTraceId>;
 
