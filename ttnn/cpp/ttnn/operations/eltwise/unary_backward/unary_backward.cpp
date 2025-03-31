@@ -25,6 +25,7 @@
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include <tt-metalium/hal.hpp>
 
 namespace ttnn::operations::unary_backward {
 

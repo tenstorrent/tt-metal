@@ -12,6 +12,7 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
 )
 
 
+# Test added for issue #6583
 @pytest.mark.parametrize(
     "in_val, grad_val",
     [
