@@ -23,7 +23,7 @@ struct ReduceScatter {
     const std::optional<size_t> user_defined_num_workers;
     const std::optional<size_t> user_defined_num_buffers_per_channel;
     const std::optional<uint32_t> cluster_axis;
-
+    const std::vector<IDevice*> devices;
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
@@ -43,6 +43,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_with_workers(
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
+    chip_id_t target_device_id,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     ttnn::ccl::Topology topology,

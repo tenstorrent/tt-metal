@@ -7,7 +7,7 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
@@ -17,7 +17,6 @@
 static const uint32_t max_read_size = 2048;  // max read size in bytes for reader and writer kernels
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -515,7 +514,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
     // uint32_t cb_npages = 1; // multibuffering for perf
     uint32_t cb_page_alignment = std::max(tt::constants::TILE_WIDTH, src0_buffer->alignment());
     uint32_t cb_pagesize =
-        static_cast<uint32_t>(ceil((float)dst_nbytes_per_core_w / cb_page_alignment)) * cb_page_alignment;
+        static_cast<uint32_t>(std::ceil((float)dst_nbytes_per_core_w / cb_page_alignment)) * cb_page_alignment;
     tt::DataFormat in_df = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::tt_metal::CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(cb_npages * cb_pagesize, {{cb_id, in_df}}).set_page_size(cb_id, cb_pagesize);

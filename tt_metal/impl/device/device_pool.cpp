@@ -205,7 +205,10 @@ void DevicePool::initialize(
     size_t trace_region_size,
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
-    bool init_profiler) noexcept {
+    bool init_profiler,
+    bool use_max_eth_core_count_on_all_devices) noexcept {
+    // Issue #19729: use_max_eth_core_count_on_all_devices is a workaround
+    // to allow TT-Mesh Workload dispatch to target active ethernet cores.
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool initialize");
     // Initialize the dispatch core manager, responsible for assigning dispatch cores
@@ -251,7 +254,7 @@ void DevicePool::initialize(
     }
 
     _inst->skip_remote_devices = skip;
-
+    _inst->use_max_eth_core_count_on_all_devices_ = use_max_eth_core_count_on_all_devices;
     _inst->add_devices_to_pool(device_ids);
     _inst->init_firmware_on_active_devices();
 
@@ -426,6 +429,26 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
             this->activate_device(device_id);
         }
     }
+    // Issue #19729: Workaround to allow TT-Mesh Workload dispatch to target active ethernet cores.
+    // Record the maximum number of active ethernet cores across all devices.
+    // TT-Mesh dispatch assumes that all physical devices in the Mesh have the maximum number of active
+    // ethernet cores (uniformity assumption)
+    // Dispatch firmware running on each physical device knows how many ethernet cores are actually
+    // available and will dispatch to/wait on the correct number of cores (effectively ignoring the
+    // value host dispatch provides, if its incorrect).
+    if (use_max_eth_core_count_on_all_devices_) {
+        std::size_t max_eth_core_count = 0;
+        for (const auto& device : this->devices) {
+            max_eth_core_count = std::max(
+                tt::Cluster::instance()
+                    .get_active_ethernet_cores(device->id(), /*skip_reserved_tunnel_cores*/ true)
+                    .size(),
+                max_eth_core_count);
+        }
+        for (auto& device : this->devices) {
+            dynamic_cast<Device*>(device.get())->set_ethernet_core_count_on_dispatcher(max_eth_core_count);
+        }
+    }
 
     FabricConfig fabric_config = tt::Cluster::instance().get_fabric_config();
     // Only can launch Fabric if all devices are active
@@ -499,7 +522,7 @@ void DevicePool::wait_for_fabric_router_sync() const {
         }
     } else if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
         auto fabric_router_sync_sem_addr =
-            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+            hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
         std::vector<std::uint32_t> master_router_status{0};
         for (const auto& dev : this->get_all_active_devices()) {
@@ -740,7 +763,7 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     } else if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
         std::vector<uint32_t> master_router_terminate(1, 0);
         auto fabric_router_sync_sem_addr =
-            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+            hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
         for (const auto& dev : this->get_all_active_devices()) {
             auto fabric_ethernet_channels = tt::Cluster::instance().get_fabric_ethernet_channels(dev->id());
             if (fabric_ethernet_channels.empty()) {

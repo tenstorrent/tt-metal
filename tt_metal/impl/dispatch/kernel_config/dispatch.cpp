@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "dispatch.hpp"
 #include "assert.hpp"
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 #include "prefetch.hpp"
 #include "dispatch_s.hpp"
 #include "demux.hpp"
@@ -56,10 +56,10 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
         static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
         static_config_.mcast_go_signal_addr =
-            hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
+            hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
         static_config_.unicast_go_signal_addr =
-            (hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1)
-                ? hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
+            (hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1)
+                ? hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
                 : 0;
         static_config_.distributed_dispatcher = DispatchQueryManager::instance().distributed_dispatcher();
         static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
@@ -154,10 +154,10 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
         static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
         static_config_.mcast_go_signal_addr =
-            hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
+            hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
         static_config_.unicast_go_signal_addr =
-            (hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1)
-                ? hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
+            (hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1)
+                ? hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
                 : 0;
         static_config_.distributed_dispatcher = DispatchQueryManager::instance().distributed_dispatcher();
         static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
@@ -190,7 +190,7 @@ void DispatchKernel::GenerateDependentConfigs() {
             dependent_config_.prefetch_h_local_downstream_sem_addr = 0;
         } else {
             dependent_config_.split_prefetch = true;
-            dependent_config_.prefetch_h_noc_xy = tt::tt_metal::hal.noc_xy_encoding(
+            dependent_config_.prefetch_h_noc_xy = tt::tt_metal::hal_ref.noc_xy_encoding(
                 prefetch_kernel->GetVirtualCore().x, prefetch_kernel->GetVirtualCore().y);
             dependent_config_.prefetch_h_local_downstream_sem_addr =
                 prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id.value();
@@ -238,7 +238,7 @@ void DispatchKernel::GenerateDependentConfigs() {
         dependent_config_.downstream_logical_core = UNUSED_LOGICAL_CORE;
         dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
         dependent_config_.split_prefetch = true;
-        dependent_config_.prefetch_h_noc_xy = tt::tt_metal::hal.noc_xy_encoding(
+        dependent_config_.prefetch_h_noc_xy = tt::tt_metal::hal_ref.noc_xy_encoding(
             prefetch_h_kernel->GetVirtualCore().x, prefetch_h_kernel->GetVirtualCore().y);
         dependent_config_.prefetch_h_local_downstream_sem_addr =
             prefetch_h_kernel->GetStaticConfig().my_downstream_cb_sem_id;
@@ -261,7 +261,7 @@ void DispatchKernel::GenerateDependentConfigs() {
             dependent_config_.prefetch_h_local_downstream_sem_addr = 0;
         } else {
             dependent_config_.split_prefetch = true;
-            dependent_config_.prefetch_h_noc_xy = tt::tt_metal::hal.noc_xy_encoding(
+            dependent_config_.prefetch_h_noc_xy = tt::tt_metal::hal_ref.noc_xy_encoding(
                 prefetch_kernel->GetVirtualCore().x, prefetch_kernel->GetVirtualCore().y);
             dependent_config_.prefetch_h_local_downstream_sem_addr =
                 prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id.value();
@@ -323,6 +323,18 @@ void DispatchKernel::GenerateDependentConfigs() {
 }
 
 void DispatchKernel::CreateKernel() {
+    // Issue #19729: Workaround to allow TT-Mesh Workload dispatch to target active ethernet cores.
+    // Num num_virtual_active_eth_cores is set if the user application requested virtualizing the
+    // number of ethernet cores across devices (to essentially fake uniformity). This value is the
+    // max number of ethernet cores acorss all chip in the cluster.
+    // num_physical_ethernet_cores is the number of actual available ethernet cores on the current device.
+    // virtualize_num_eth_cores is set if the number of virtual cores is greater than the number of actual
+    // ethernet cores in the chip.
+    uint32_t num_virtual_active_eth_cores = dynamic_cast<Device*>(device_)->get_ethernet_core_count_on_dispatcher();
+    uint32_t num_physical_active_eth_cores =
+        tt::Cluster::instance().get_active_ethernet_cores(device_->id(), /*skip_reserved_tunnel_cores*/ true).size();
+    bool virtualize_num_eth_cores = num_virtual_active_eth_cores > num_physical_active_eth_cores;
+
     std::vector<uint32_t> compile_args = {
         static_config_.dispatch_cb_base.value(),
         static_config_.dispatch_cb_log_page_size.value(),
@@ -368,10 +380,14 @@ void DispatchKernel::CreateKernel() {
 
         static_config_.first_stream_used.value(),
 
+        virtualize_num_eth_cores,
+        num_virtual_active_eth_cores,
+        num_physical_active_eth_cores,
+
         static_config_.is_d_variant.value(),
         static_config_.is_h_variant.value(),
     };
-    TT_ASSERT(compile_args.size() == 38);
+    TT_ASSERT(compile_args.size() == 41);
     auto my_virtual_core = device_->virtual_core_from_logical_core(logical_core_, GetCoreType());
     auto upstream_virtual_core =
         device_->virtual_core_from_logical_core(dependent_config_.upstream_logical_core.value(), GetCoreType());
@@ -431,7 +447,7 @@ void DispatchKernel::UpdateArgsForFabric(
     tt::tt_fabric::mesh_id_t downstream_mesh_id,
     chip_id_t downstream_chip_id) {
     dependent_config_.fabric_router_noc_xy =
-        tt::tt_metal::hal.noc_xy_encoding(fabric_router_virtual.x, fabric_router_virtual.y);
+        tt::tt_metal::hal_ref.noc_xy_encoding(fabric_router_virtual.x, fabric_router_virtual.y);
     dependent_config_.upstream_mesh_id = upstream_mesh_id;
     dependent_config_.upstream_chip_id = upstream_chip_id;
     dependent_config_.downstream_mesh_id = downstream_mesh_id;

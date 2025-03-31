@@ -75,7 +75,8 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             # This ensures that back to back matmuls (for eg. in MLP) can run
             # without stalling on the weight prefetch
             # calculated by fitting two largest tensor with extra room, ff2 has 391680B per global CB bank, ff1 has 207360B, plus 16320B gap (one block)
-            self.global_cb_size = 620000
+            # TODO: Above calculation is not accurate, need to find a better lower bound
+            self.global_cb_size = 600 * 1088
             self.sender_receiver_mapping = list(zip(self.all_sender_cores, self.all_receiver_cores))
             self.global_circular_buffer = ttnn.create_global_circular_buffer(
                 self.mesh_device, self.sender_receiver_mapping, self.global_cb_size
@@ -87,6 +88,7 @@ class TtLlamaPrefetcherSetup(LightweightModule):
             mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
                 mesh_device, [self.prefetcher_sub_device, self.worker_sub_device], 1, 0, True
             )
+            self.mesh_sub_device_manager_id = mesh_sub_device_manager_id
             self.prefetcher_sub_device_id = ttnn.SubDeviceId(0)
             self.worker_sub_device_id = ttnn.SubDeviceId(1)
 

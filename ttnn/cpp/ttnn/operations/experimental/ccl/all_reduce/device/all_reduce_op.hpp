@@ -26,6 +26,7 @@ struct AllReduce {
     const ttnn::ccl::Topology topology;
     const std::optional<size_t> user_defined_num_workers;
     const std::optional<size_t> user_defined_num_buffers_per_channel;
+    const std::vector<IDevice*> devices;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;

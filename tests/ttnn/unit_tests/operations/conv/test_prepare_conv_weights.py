@@ -58,6 +58,8 @@ import ttnn
         (20, 2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0, False, None),  # r50 fourth bottleneck downsample shape
         # (20, 2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0, True, None), - doesnt fit
         # (20, 128, 256, 56, 56, 1, 1, 2, 2, 0, 0, True, None),  ## L2M1 DS: doesn't fit
+        # formerly failing test case in segformer when ntiles_channels not evenly divisible with num_cores_c
+        (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False, None),
     ),
 )
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
@@ -191,6 +193,8 @@ def test_prepare_conv_weights(
         (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),
         (16, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),
         (20, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, True, None),
+        # formerly failing test case in segformer when ntiles_channels not evenly divisible with num_cores_c
+        (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False, None),
     ),
 )
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])

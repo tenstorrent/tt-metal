@@ -13,7 +13,7 @@
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "memcpy.hpp"
 #include <tt_stl/aligned_allocator.hpp>
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 #include "tt_align.hpp"
 
 namespace tt::tt_metal {
@@ -42,7 +42,7 @@ public:
 
     uint32_t write_offset_bytes() const;
 
-    vector_memcpy_aligned<uint32_t> cmd_vector() const;
+    vector_aligned<uint32_t> cmd_vector() const;
 
     void add_dispatch_wait(
         uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t dispatcher_type = 0);
@@ -103,7 +103,7 @@ public:
     void add_dispatch_set_num_worker_sems(const uint32_t num_worker_sems, DispatcherSelect dispatcher_type);
 
     void add_dispatch_set_go_signal_noc_data(
-        const vector_memcpy_aligned<uint32_t>& noc_mcast_unicast_data, DispatcherSelect dispatcher_type);
+        const vector_aligned<uint32_t>& noc_mcast_unicast_data, DispatcherSelect dispatcher_type);
 
     void add_dispatch_set_write_offsets(uint32_t write_offset0, uint32_t write_offset1, uint32_t write_offset2);
 
@@ -204,7 +204,7 @@ private:
     template <typename Command>
     void zero(Command* cmd) {
         if constexpr (hugepage_write) {
-            vector_memcpy_aligned<char> zero_cmd(sizeof(Command), 0);
+            vector_aligned<char> zero_cmd(sizeof(Command), 0);
             this->memcpy(cmd, zero_cmd.data(), sizeof(Command));
         } else {
             std::fill((uint8_t*)cmd, (uint8_t*)cmd + sizeof(Command), 0);
@@ -214,10 +214,10 @@ private:
     uint32_t cmd_sequence_sizeB = 0;
     void* cmd_region = nullptr;
     uint32_t cmd_write_offsetB = 0;
-    uint32_t pcie_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST);
-    uint32_t l1_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1);
+    uint32_t pcie_alignment = tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::HOST);
+    uint32_t l1_alignment = tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::L1);
 
-    vector_memcpy_aligned<uint32_t> cmd_region_vector;
+    vector_aligned<uint32_t> cmd_region_vector;
 };
 
 template <bool hugepage_write>

@@ -12,6 +12,8 @@
 #include "mesh_trace.hpp"
 #include "mesh_trace_id.hpp"
 
+#include "vector_aligned.hpp"
+
 namespace tt::tt_metal::distributed {
 
 class MeshEvent;
@@ -76,9 +78,7 @@ public:
     virtual void enqueue_wait_for_event(const MeshEvent& sync_event) = 0;
     virtual void finish(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
     virtual void reset_worker_state(
-        bool reset_launch_msg_state,
-        uint32_t num_sub_devices,
-        const vector_memcpy_aligned<uint32_t>& go_signal_noc_data) = 0;
+        bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_aligned<uint32_t>& go_signal_noc_data) = 0;
     virtual void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) = 0;
     virtual void record_end() = 0;
     virtual void enqueue_trace(const MeshTraceId& trace_id, bool blocking) = 0;

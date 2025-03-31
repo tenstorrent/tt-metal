@@ -710,9 +710,14 @@ def as_tensor(
         else:
             storage_type = ""
 
-        cache_file_name = f"tt-mesh/{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}.bin"
+        cache_file_name = f"{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}.bin"
 
         cache_path = pathlib.Path(cache_file_name)
+
+        # Prepend "tt-mesh" to differentiate file store for new weights format
+        cache_path = cache_path.parent / "tt-mesh" / cache_path.name
+        cache_file_name = str(cache_path)
+
         if not cache_path.exists() or not cache_path.is_file():
             return from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
 

@@ -5,15 +5,13 @@
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/operations/math.hpp"
 
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include "cpp/ttnn/operations/data_movement/pad/pad.hpp"
 #include "cpp/ttnn/operations/copy.hpp"
-
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn {
 
@@ -22,7 +20,7 @@ AllGatherBidirectionalMode AllGatherConfig::choose_bidirectional_mode(const Tens
         return AllGatherBidirectionalMode::FULL_TENSOR;
     }
 
-    std::size_t eth_l1_capacity = hal::get_erisc_l1_unreserved_size();
+    std::size_t eth_l1_capacity = tt::tt_metal::hal::get_erisc_l1_unreserved_size();
     std::size_t tensor_size_bytes = input_tensor.volume() * input_tensor.element_size();
     // This is currently a guestimate. We need a lot more hard data to identify where this dividing line is.
     bool perf_degradation_from_full_tensor_mode = tensor_size_bytes > (2 * eth_l1_capacity);
@@ -46,7 +44,7 @@ AllGatherConfig::AllGatherConfig(
     semaphore_size(32),
     ring_size(ring_size),
 
-    erisc_handshake_address(tt::round_up(hal::get_erisc_l1_unreserved_base(), 16)),
+    erisc_handshake_address(tt::round_up(tt::tt_metal::hal::get_erisc_l1_unreserved_base(), 16)),
     topology(topology),
     enable_bidirectional(topology == ttnn::ccl::Topology::Ring),
 
@@ -57,8 +55,8 @@ AllGatherConfig::AllGatherConfig(
     enable_merged_payload_and_channel_sync(true),
     num_edm_buffers_per_channel(num_edm_buffers_per_channel) {
     TT_FATAL(num_edm_buffers_per_channel > 0, "num_edm_buffers_per_channel must be > 0");
-    TT_ASSERT(erisc_handshake_address >= hal::get_erisc_l1_unreserved_base());
-    TT_ASSERT(erisc_handshake_address < hal::get_erisc_l1_unreserved_base() + 16);
+    TT_ASSERT(erisc_handshake_address >= tt::tt_metal::hal::get_erisc_l1_unreserved_base());
+    TT_ASSERT(erisc_handshake_address < tt::tt_metal::hal::get_erisc_l1_unreserved_base() + 16);
     TT_ASSERT((erisc_handshake_address & (16 - 1)) == 0);
     if (input_tensor.get_layout() == Layout::TILE && dim != 3) {
         // See issue #6448
@@ -77,7 +75,7 @@ AllGatherConfig::AllGatherConfig(
         (topology == ttnn::ccl::Topology::Ring && bidirectional_mode != AllGatherBidirectionalMode::FULL_TENSOR) ? 1
                                                                                                                  : 2;
 
-    uint32_t total_l1_buffer_space = hal::get_erisc_l1_unreserved_size();
+    uint32_t total_l1_buffer_space = tt::tt_metal::hal::get_erisc_l1_unreserved_size();
 
     this->is_sharded = input_tensor.is_sharded();
     if (user_defined_num_workers.has_value()) {
@@ -182,8 +180,9 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGather::create_program_at(
     uint32_t device_index = 0;
     std::optional<chip_id_t> receiver_device_id;
     std::optional<chip_id_t> sender_device_id;
+    const auto& mesh_device = input_tensors[0].mesh_device();
     if (this->cluster_axis.has_value()) {
-        const auto& mesh_view = input_tensors[0].mesh_device()->get_view();
+        const auto& mesh_view = mesh_device->get_view();
         TT_FATAL(
             mesh_view.is_mesh_2d(),
             "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
@@ -194,24 +193,25 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGather::create_program_at(
             auto new_row = mesh_coord[0];
             auto new_col = mesh_coord[1];
             if (cluster_axis == 0) {
-                new_row = line_index % num_links;
+                new_row = line_index % this->ring_size;
             } else {
-                new_col = line_index % num_links;
+                new_col = line_index % this->ring_size;
             }
             return mesh_view.find_device_id(MeshCoordinate(new_row, new_col));
         };
 
-        bool is_last_chip_in_clockwise_direction = device_index == (num_links - 1);
+        bool is_last_chip_in_clockwise_direction = device_index == (this->ring_size - 1);
         bool is_last_chip_in_counter_clockwise_direction = device_index == 0;
         receiver_device_id = is_last_chip_in_clockwise_direction ? std::nullopt : get_chip_id(device_index + 1);
-        sender_device_id =
-            is_last_chip_in_counter_clockwise_direction ? std::nullopt : get_chip_id(device_index + num_links - 1);
+        sender_device_id = is_last_chip_in_counter_clockwise_direction
+                               ? std::nullopt
+                               : get_chip_id(device_index + this->ring_size - 1);
     } else {
-        std::tie(device_index, sender_device_id, receiver_device_id) = ccl::get_device_index_and_sender_receiver_ids(
-            input_tensors[0].mesh_device()->get_device(mesh_coord),
-            input_tensors[0].mesh_device()->get_devices(),
-            topology);
+        std::tie(device_index, sender_device_id, receiver_device_id) =
+            ccl::get_device_index_and_sender_receiver_ids(mesh_device->get_device(mesh_coord), this->devices, topology);
     }
+
+    chip_id_t target_device_id = mesh_device->get_device(mesh_coord)->id();
 
     return all_gather_multi_core_with_workers(
         input_tensors[0],
@@ -220,6 +220,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGather::create_program_at(
         this->num_links,
         this->ring_size,
         device_index,
+        target_device_id,
         receiver_device_id,
         sender_device_id,
         this->topology,
@@ -240,7 +241,7 @@ Tensor all_gather(
     const ttnn::ccl::Topology topology) {
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr, "all_gather op is only supported for Fast Dispatch");
-    auto devices = input_tensor.mesh_device()->get_devices();
+    std::vector<IDevice*> devices = input_tensor.active_physical_devices();
     uint32_t num_devices = devices.size();
     TT_FATAL(num_devices > 1, "all_gather op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology;
@@ -260,71 +261,53 @@ Tensor all_gather(
         rank - 1,
         dim);
 
-    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
-    tt::tt_metal::operation::launch_op(
-        [gather_dim,
-         num_links,
-         dim,
-         num_devices,
-         memory_config,
-         user_defined_num_workers,
-         user_defined_num_buffers_per_channel,
-         devices,
-         ccl_topology](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            auto input_tensor = input_tensors.at(0);
+    ttnn::SmallVector<uint32_t> unpad_elements = {
+        input_tensor.get_logical_shape()[-4],
+        input_tensor.get_logical_shape()[-3],
+        input_tensor.get_logical_shape()[-2],
+        input_tensor.get_logical_shape()[-1]};
+    bool needs_padding = input_tensor.get_layout() == Layout::TILE &&
+                         (input_tensor.get_logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
+                          input_tensor.get_logical_shape()[-1] % tt::constants::TILE_WIDTH != 0);
 
-            ttnn::SmallVector<uint32_t> unpad_elements = {
-                input_tensor.get_logical_shape()[-4],
-                input_tensor.get_logical_shape()[-3],
-                input_tensor.get_logical_shape()[-2],
-                input_tensor.get_logical_shape()[-1]};
-            bool needs_padding = input_tensor.get_layout() == Layout::TILE &&
-                                 (input_tensor.get_logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
-                                  input_tensor.get_logical_shape()[-1] % tt::constants::TILE_WIDTH != 0);
-            if (needs_padding) {
-                ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
-                DataType original_dtype = input_tensor.get_dtype();
-                if (input_tensor.get_dtype() != DataType::BFLOAT16 && input_tensor.get_dtype() != DataType::FLOAT32) {
-                    input_tensor = ttnn::typecast(input_tensor, DataType::BFLOAT16);
-                }
-                input_tensor = ttnn::pad(input_tensor, padding, 0, false, std::nullopt);
-                if (original_dtype != input_tensor.get_dtype()) {
-                    input_tensor = ttnn::typecast(input_tensor, original_dtype);
-                }
-            }
+    Tensor input_tensor_padded = input_tensor;
+    if (needs_padding) {
+        ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
+        DataType original_dtype = input_tensor.get_dtype();
+        if (input_tensor.get_dtype() != DataType::BFLOAT16 && input_tensor.get_dtype() != DataType::FLOAT32) {
+            input_tensor_padded = ttnn::typecast(input_tensor, DataType::BFLOAT16);
+        }
+        input_tensor_padded = ttnn::pad(input_tensor, padding, 0, false, std::nullopt);
+        if (original_dtype != input_tensor.get_dtype()) {
+            input_tensor_padded = ttnn::typecast(input_tensor, original_dtype);
+        }
+    }
 
-            auto output_tensor = tt::tt_metal::operation::run(
-                ttnn::AllGather{
-                    .dim = gather_dim,
-                    .num_links = num_links,
-                    .ring_size = num_devices,
-                    .user_defined_num_workers = user_defined_num_workers,
-                    .user_defined_num_buffers_per_channel = user_defined_num_buffers_per_channel,
-                    .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
-                    .topology = ccl_topology,
-                    .cluster_axis = std::nullopt},
-                {input_tensor});
+    auto output_tensor = tt::tt_metal::operation::run(
+        ttnn::AllGather{
+            .dim = gather_dim,
+            .num_links = num_links,
+            .ring_size = num_devices,
+            .user_defined_num_workers = user_defined_num_workers,
+            .user_defined_num_buffers_per_channel = user_defined_num_buffers_per_channel,
+            .output_mem_config = memory_config.value_or(input_tensor_padded.memory_config()),
+            .topology = ccl_topology,
+            .cluster_axis = std::nullopt,
+            .devices = std::move(devices)},
+        {input_tensor_padded});
 
-            if (needs_padding) {
-                return ttnn::ccl::unpad_output_tensor(output_tensor, num_devices, unpad_elements, dim);
-            } else {
-                return output_tensor;
-            }
-        },
-        {input_tensor},
-        output_tensors);
-
-    return output_tensors.at(0);
+    if (needs_padding) {
+        return ttnn::ccl::unpad_output_tensor(output_tensor, num_devices, unpad_elements, dim).at(0);
+    } else {
+        return output_tensor.at(0);
+    }
 }
 
 Tensor all_gather(
     const Tensor& input_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
-    const MeshDevice& mesh_device,
+    const MeshDevice& mesh_device, /* TODO: This needs to be removed, since the input_tensor has a mesh_device */
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> user_defined_num_workers,
@@ -347,36 +330,19 @@ Tensor all_gather(
         rank - 1,
         dim);
 
-    std::vector<Tensor> output_tensors = {Tensor(input_tensor.mesh_device())};
-
-    tt::tt_metal::operation::launch_op(
-        [gather_dim,
-         num_links,
-         memory_config,
-         cluster_axis,
-         user_defined_num_workers,
-         user_defined_num_buffers_per_channel,
-         num_devices,
-         topology](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            const auto& input_device_tensor = input_tensors.at(0);
-            return tt::tt_metal::operation::run(
-                ttnn::AllGather{
-                    .dim = gather_dim,
-                    .num_links = num_links,
-                    .ring_size = num_devices,
-                    .user_defined_num_workers = user_defined_num_workers,
-                    .user_defined_num_buffers_per_channel = user_defined_num_buffers_per_channel,
-                    .output_mem_config = memory_config.value_or(input_device_tensor.memory_config()),
-                    .topology = topology,
-                    .cluster_axis = cluster_axis},
-                {input_device_tensor});
-        },
-        {input_tensor},
-        output_tensors);
-    return output_tensors.at(0);
+    return tt::tt_metal::operation::run(
+               ttnn::AllGather{
+                   .dim = gather_dim,
+                   .num_links = num_links,
+                   .ring_size = num_devices,
+                   .user_defined_num_workers = user_defined_num_workers,
+                   .user_defined_num_buffers_per_channel = user_defined_num_buffers_per_channel,
+                   .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
+                   .topology = topology,
+                   .cluster_axis = cluster_axis,
+                   .devices = {}},
+               {input_tensor})
+        .at(0);
 }
 
 }  // namespace ccl

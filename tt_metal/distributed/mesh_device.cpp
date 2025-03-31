@@ -26,7 +26,7 @@
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/distributed/sd_mesh_command_queue.hpp"
 
-#include <hal.hpp>
+#include "llrt/hal.hpp"
 #include <mesh_coord.hpp>
 #include <small_vector.hpp>
 #include <env_lib.hpp>
@@ -111,7 +111,8 @@ MeshDevice::ScopedDevices::ScopedDevices(
         trace_region_size,
         dispatch_core_config,
         {},
-        /*init_profiler*/ false);
+        /*init_profiler*/ false,
+        /*use_max_eth_core_count_on_all_devices*/ true);
 
     for (auto device_id : device_ids) {
         devices_.push_back(opened_devices_.at(device_id));
@@ -579,6 +580,20 @@ std::vector<CoreCoord> MeshDevice::get_ethernet_sockets(chip_id_t connected_chip
     TT_THROW("get_ethernet_sockets() is not supported on MeshDevice - use individual devices instead");
 }
 
+uint32_t MeshDevice::num_virtual_eth_cores(SubDeviceId sub_device_id) {
+    // Issue #19729: Return the maximum number of active ethernet cores across physical devices in the Mesh.
+    TT_FATAL(
+        *(sub_device_manager_tracker_->get_active_sub_device_manager()->id()) ==
+            *(this->get_default_sub_device_manager_id()),
+        "Virtualizing Ethernet Cores across a MeshDevice is not supported when a custom SubDeviceManager is loaded.");
+    if (not max_num_eth_cores_) {
+        for (auto device : this->get_devices()) {
+            max_num_eth_cores_ = std::max(device->num_virtual_eth_cores(SubDeviceId{0}), max_num_eth_cores_);
+        }
+    }
+    return max_num_eth_cores_;
+}
+
 // Core and worker management methods (These are OK)
 CoreRangeSet MeshDevice::worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->sub_device(sub_device_id).cores(core_type);
@@ -588,7 +603,7 @@ uint32_t MeshDevice::num_worker_cores(HalProgrammableCoreType core_type, SubDevi
 }
 
 // Bank and memory management methods
-int MeshDevice::num_dram_channels() const { return reference_device()->num_dram_channels() * this->num_devices(); }
+int MeshDevice::num_dram_channels() const { return reference_device()->num_dram_channels(); }
 
 CoreCoord MeshDevice::logical_core_from_dram_channel(uint32_t dram_channel) const {
     return validate_and_get_reference_value(scoped_devices_->root_devices(), [dram_channel](const auto& device) {

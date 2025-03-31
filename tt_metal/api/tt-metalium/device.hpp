@@ -6,7 +6,13 @@
 
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <set>
+#include <string>
 #include <utility>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 #include "hostdevcommon/common_values.hpp"
 #include "hostdevcommon/kernel_structs.h"  // Not used here, but leaked to programming examples
@@ -211,6 +217,7 @@ public:
     virtual void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) = 0;
     virtual void reset_sub_device_stall_group() = 0;
     virtual uint32_t num_sub_devices() const = 0;
+    virtual uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) = 0;
 
     // TODO #15944: Temporary api until migration to actual fabric is complete
     virtual std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(

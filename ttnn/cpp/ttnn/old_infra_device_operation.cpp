@@ -103,10 +103,54 @@ void OldInfraDeviceOperation<OutputTensors>::ProgramFactory::override_runtime_ar
 }
 
 template <typename OutputTensors>
+typename OldInfraDeviceOperation<OutputTensors>::MeshWorkloadFactory::cached_mesh_workload_t
+OldInfraDeviceOperation<OutputTensors>::MeshWorkloadFactory::create_mesh_workload(
+    const operation_attributes_t& operation_attributes,
+    const std::vector<ttnn::MeshCoordinate>& mesh_coords,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    auto workload_with_callbacks = operation_attributes.create_mesh_workload(
+        mesh_coords, tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_return_value);
+
+    TT_FATAL(
+        !workload_with_callbacks.workload_callback.has_value() || workload_with_callbacks.per_program_callbacks.empty(),
+        "At most one of 'workload_callback' or 'per_program_callbacks' can be specified.");
+
+    return cached_mesh_workload_t{
+        std::move(workload_with_callbacks.workload),
+        shared_variables_t{
+            std::move(workload_with_callbacks.workload_callback),
+            std::move(workload_with_callbacks.per_program_callbacks)}};
+}
+
+template <typename OutputTensors>
+void OldInfraDeviceOperation<OutputTensors>::MeshWorkloadFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    if (cached_workload.shared_variables.workload_callback.has_value()) {
+        operation_attributes.override_runtime_arguments(
+            *cached_workload.shared_variables.workload_callback,
+            cached_workload.workload,
+            tensor_args.input_tensors,
+            tensor_args.optional_input_tensors,
+            tensor_return_value);
+    }
+
+    for (auto& [range, callback] : cached_workload.shared_variables.per_program_callbacks) {
+        auto& program = cached_workload.workload.get_programs().at(range);
+        operation_attributes.override_runtime_arguments(
+            callback, program, tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_return_value);
+    }
+}
+
+template <typename OutputTensors>
 typename OldInfraDeviceOperation<OutputTensors>::program_factory_t
 OldInfraDeviceOperation<OutputTensors>::select_program_factory(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    return ProgramFactory{};
+    return attributes.has_create_workload_method() ? program_factory_t{MeshWorkloadFactory{}}
+                                                   : program_factory_t{ProgramFactory{}};
 }
 
 template <typename OutputTensors>

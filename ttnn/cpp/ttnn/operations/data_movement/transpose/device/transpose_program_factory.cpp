@@ -5,14 +5,17 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include "ttnn/operation.hpp"
 
+#include <cstdint>
+#include <math.h>
+#include <vector>
+
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement::detail {
 

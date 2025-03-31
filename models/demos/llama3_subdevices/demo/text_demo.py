@@ -22,7 +22,6 @@ from models.tt_transformers.tt.common import (
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.demos.utils.llm_demo_utils import create_benchmark_data
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -149,7 +148,7 @@ def create_tt_model(
     if use_paged_kv_cache:
         tt_kv_cache = [l.attention.layer_past for l in model.layers]
 
-    return tt_model_args, model, page_table, tt_kv_cache
+    return tt_model_args, model, page_table, [tt_kv_cache]
 
 
 # List of supported Parameters for demo.py
@@ -190,7 +189,7 @@ def create_tt_model(
             1024,  # max_seq_len
             32,  # batch_size
             200,  # max_generated_tokens
-            False,  # paged_attention
+            True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
@@ -373,7 +372,7 @@ def test_demo_text(
         use_paged_kv_cache=paged_attention,
     )
 
-    model_args.tokenizer = Tokenizer(model_args.tokenizer_path)
+    # model_args.tokenizer = Tokenizer(model_args.tokenizer_path)
     tokenizer = model_args.tokenizer
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
@@ -500,7 +499,6 @@ def test_demo_text(
                 # TODO Fix use case with temperature > 0
                 _, out_tok = sample_host(
                     logits,
-                    None,
                     temperature=sampling_params["temperature"],
                     top_p=sampling_params["top_p"],
                     on_host=True,
@@ -660,8 +658,8 @@ def test_demo_text(
     )
 
     # Benchmark targets
-    supported_models = ["Llama3.1-70B"]
-    model_args.base_model_name = "Llama3.1-70B"
+    supported_models = ["Llama3.1-70B", "Deepseek-R1-Distill-70B"]
+    # model_args.base_model_name = "Llama3.1-70B"
     supported_devices = ["TG"]
 
     tt_device_name = model_args.device_name
@@ -669,11 +667,13 @@ def test_demo_text(
     # Set the target times to first token for every combination of device and model
     target_prefill_tok_s = {
         "TG_Llama3.1-70B": 1050,  # TODO Update target
+        "TG_Deepseek-R1-Distill-70B": 1050,  # TODO Update target
     }[f"{tt_device_name}_{model_args.base_model_name}"]
 
     # Set the target decode timesfor every combination of device and model
     target_decode_tok_s_u = {
         "TG_Llama3.1-70B": 20,  # TODO Update target
+        "TG_Deepseek-R1-Distill-70B": 20,  # TODO Update target
     }[f"{tt_device_name}_{model_args.base_model_name}"]
 
     target_decode_tok_s = target_decode_tok_s_u * batch_size

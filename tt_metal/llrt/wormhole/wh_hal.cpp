@@ -13,7 +13,7 @@
 #include "noc/noc_overlay_parameters.h"
 #include "tensix.h"
 
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 #include "wormhole/wh_hal.hpp"
 #include "hw/inc/wormhole/eth_l1_address_map.h"
 

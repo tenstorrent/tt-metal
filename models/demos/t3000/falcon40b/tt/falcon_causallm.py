@@ -54,9 +54,7 @@ class TtFalconCausalLM(TtFalconModelShared):
             cache_file_name=lm_head_path,
             preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
         )
-        self.perf_e2e_test_tile_tensor = ttnn.from_torch(
-            torch.zeros((1, 1, 32, 32)), device=mesh_device.get_devices()[0]
-        )
+        self.perf_e2e_test_tile_tensor = ttnn.from_torch(torch.zeros((1, 1, 32, 32)), device=mesh_device)
 
     def __call__(
         self,

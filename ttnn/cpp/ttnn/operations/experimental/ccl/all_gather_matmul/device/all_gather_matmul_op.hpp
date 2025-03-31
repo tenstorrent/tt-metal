@@ -39,6 +39,9 @@ struct AllGatherMatmul {
     /* Fusion Params */
     const CoreCoord all_gather_core_grid_offset;
 
+    /* Physical Devices this op runs on*/
+    std::vector<IDevice*> devices;
+
     /* General */
     void validate(
         const std::vector<Tensor>& input_tensors,
@@ -71,6 +74,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_multi_core_with_
     const uint32_t ring_index,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
+    chip_id_t target_device_id,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     ttnn::ccl::Topology topology,

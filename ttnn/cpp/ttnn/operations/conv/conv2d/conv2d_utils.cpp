@@ -11,7 +11,7 @@
 #include "conv2d_utils.hpp"
 #include <tt-metalium/buffer_constants.hpp>
 #include "tt-metalium/constants.hpp"
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -26,7 +26,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 
 using namespace tt;
-using namespace tt::tt_metal::experimental;
+
 namespace ttnn {
 namespace operations::conv {
 using sliding_window::ParallelConfig;
@@ -272,7 +272,7 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
         nhw_padded = round_up(nhw_shape, num_cores_nhw * tile_size);
     }
     uint32_t nhw_shard = nhw_padded / num_cores_nhw;
-    TT_ASSERT(channels % num_cores_channels == 0, "Channels: {}, num core channels: {}", channels, num_cores_channels);
+    TT_FATAL(channels % num_cores_channels == 0, "Channels: {}, num core channels: {}", channels, num_cores_channels);
     uint32_t channel_shard = channels / num_cores_channels;
     auto shard_spec = tt::tt_metal::ShardSpec{parallel_config.grid, {nhw_shard, channel_shard}, shard_orientation};
     log_debug("Calculated Shard Spec = {}", shard_spec);
@@ -956,7 +956,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     uint32_t output_tile_size = tt::tile_size(datatype_to_dataformat_converter(conv_config.dtype));
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(hal::get_arch(), compute_kernel_config);
+        get_compute_kernel_config_args(tt::tt_metal::hal::get_arch(), compute_kernel_config);
 
     uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
     uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
@@ -1146,7 +1146,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
             } else if (conv_config.dtype == DataType::FLOAT32) {
                 per_core_out_width_aligned *= 4;
             }
-            output_size = round_up(per_core_out_width_aligned, hal::get_l1_alignment()) *
+            output_size = tt::round_up(per_core_out_width_aligned, tt::tt_metal::hal::get_l1_alignment()) *
                           pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT;
         } else {
             output_size = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * output_tile_size;

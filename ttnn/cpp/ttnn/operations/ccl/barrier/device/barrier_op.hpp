@@ -36,6 +36,7 @@ tt::tt_metal::operation::ProgramWithCallbacks barrier_with_workers(
     const bool is_starting_core,
     const uint32_t ring_size,
     const uint32_t ring_index,
+    chip_id_t target_device_id,
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     ttnn::ccl::Topology topology);

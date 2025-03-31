@@ -24,7 +24,7 @@ on:
       version:
         required: false
         type: string
-        default: "20.04"
+        default: "22.04"
       architecture:
         required: false
         type: string
@@ -32,7 +32,7 @@ on:
       toolchain:
         required: false
         type: string
-        default: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+        default: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
         description: "Toolchain file to use for build"
       publish-artifact:
         required: false
@@ -103,7 +103,7 @@ on:
       toolchain:
         required: false
         type: string
-        default: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+        default: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
         description: "Toolchain file to use for build"
       profile:
         required: false

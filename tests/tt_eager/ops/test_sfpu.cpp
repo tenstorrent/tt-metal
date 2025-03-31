@@ -3,10 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <functional>
 #include <random>
-#include <cmath>
+#include <map>
 #include <sstream>
+#include <string>
+#include <vector>
 
 #include <magic_enum/magic_enum.hpp>
 
@@ -60,7 +64,7 @@ void update_sfpu_op_to_hlk_op() {
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
 
-bool run_sfpu_test(const string& sfpu_name, int tile_factor = 1, bool use_DRAM = true) {
+bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_DRAM = true) {
     bool multibank = true;
     bool pass = true;
     try {
@@ -134,15 +138,15 @@ bool run_sfpu_test(const string& sfpu_name, int tile_factor = 1, bool use_DRAM =
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-        vector<uint32_t> compute_kernel_args = {
+        std::vector<uint32_t> compute_kernel_args = {
             (uint)num_tiles,
             1,
             (uint)tile_factor,
         };
-        string hlk_kernel_name = "tests/tt_eager/ops/kernel/eltwise_sfpu.cpp";
+        std::string hlk_kernel_name = "tests/tt_eager/ops/kernel/eltwise_sfpu.cpp";
 
         // defines macro expands per SFPU ops
-        std::map<string, string> hlk_op_name = sfpu_op_to_hlk_op_name.at(sfpu_name);
+        std::map<std::string, std::string> hlk_op_name = sfpu_op_to_hlk_op_name.at(sfpu_name);
         auto eltwise_unary_kernel = tt_metal::CreateKernel(
             program,
             hlk_kernel_name,

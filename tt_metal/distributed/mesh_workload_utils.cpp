@@ -23,11 +23,10 @@ void write_go_signal(
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
     bool send_mcast,
-    bool send_unicasts,
-    int num_unicast_txns) {
-    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
+    bool send_unicasts) {
+    uint32_t pcie_alignment = hal_ref.get_alignment(HalMemType::HOST);
     uint32_t cmd_sequence_sizeB =
-        align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) + hal.get_alignment(HalMemType::HOST);
+        align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) + hal_ref.get_alignment(HalMemType::HOST);
 
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
 
@@ -63,7 +62,7 @@ void write_go_signal(
         *reinterpret_cast<uint32_t*>(&run_program_go_signal),
         DispatchMemMap::get(dispatch_core_type).get_dispatch_stream_index(sub_device_index),
         send_mcast ? device->num_noc_mcast_txns(sub_device_id) : 0,
-        send_unicasts ? ((num_unicast_txns > 0) ? num_unicast_txns : device->num_noc_unicast_txns(sub_device_id)) : 0,
+        send_unicasts ? device->num_virtual_eth_cores(sub_device_id) : 0,
         device->noc_data_start_index(sub_device_id, send_mcast, send_unicasts), /* noc_data_start_idx */
         dispatcher_for_go_signal);
 
