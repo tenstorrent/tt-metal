@@ -194,6 +194,7 @@ class ResNet50TestInfra:
         self.pcc_passed = False
         self.pcc_message = "Did you forget to call validate()?"
         self.device = device
+        self.num_devices = 1 if isinstance(device, ttnn.Device) else device.get_num_devices()
         self.batch_size = batch_size
         self.act_dtype = act_dtype
         self.weight_dtype = weight_dtype
@@ -224,8 +225,7 @@ class ResNet50TestInfra:
             "ACTIVATIONS_DTYPE": act_dtype,
         }
 
-        num_devices = 1 if isinstance(device, ttnn.Device) else device.get_num_devices()
-        input_shape = (batch_size * num_devices, 3, 224, 224)
+        input_shape = (batch_size * self.num_devices, 3, 224, 224)
 
         self.torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
 
@@ -279,14 +279,12 @@ class ResNet50TestInfra:
                 core_grid = ttnn.CoreGrid(y=5, x=6)  # untested due to unsupported batch20 on WH
         elif self.batch_size == 32:
             core_grid = ttnn.CoreGrid(y=10, x=13)
-        num_devices = 1 if isinstance(device, ttnn.Device) else device.get_num_devices()
         # torch tensor
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
-        if num_devices > 1:
-            n, c, h, w = torch_input_tensor.shape
-            n = n // num_devices
-        else:
-            n, c, h, w = torch_input_tensor.shape
+
+        n, c, h, w = torch_input_tensor.shape
+        n = n // self.num_devices
+
         # sharded mem config for fold input
         num_cores = core_grid.x * core_grid.y
         shard_h = (n * c * h + num_cores - 1) // num_cores
@@ -298,7 +296,10 @@ class ResNet50TestInfra:
             ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
         tt_inputs_host = ttnn.from_torch(
-            torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.inputs_mesh_mapper
+            torch_input_tensor,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self.inputs_mesh_mapper,
         )
         return tt_inputs_host, input_mem_config
 
