@@ -23,6 +23,12 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    uint32_t tg_num_devices = 32;
+    if (num_links > 2 && tt::tt_metal::GetNumAvailableDevices() < tg_num_devices) {
+        tt::log_warning("This test with {} links can only be run on TG devices", num_links);
+        return 1;
+    }
+
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
     params.line_size = line_size;

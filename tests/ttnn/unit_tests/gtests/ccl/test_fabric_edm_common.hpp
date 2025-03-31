@@ -2197,6 +2197,87 @@ struct WriteThroughputStabilityTestWithPersistentFabricParams {
     bool disable_end_workers_in_backward_direction = false;
 };
 
+std::vector<CoreCoord> compute_top_row_ethernet_cores(
+    IDevice* device,
+    bool has_fwd_connection,
+    bool has_bwd_connection,
+    IDevice* forward_device,
+    IDevice* backward_device) {
+    std::vector<CoreCoord> reordered_ethernet_cores;
+    if (has_fwd_connection) {
+        for (auto core : device->get_ethernet_sockets(forward_device->id())) {
+            auto core_virtual = device->virtual_core_from_logical_core(core, CoreType::ETH);
+            reordered_ethernet_cores.push_back(core_virtual);
+        }
+        std::sort(reordered_ethernet_cores.begin(), reordered_ethernet_cores.end(), [](auto& a, auto& b) {
+            return a.x < b.x;
+        });
+    } else if (has_bwd_connection) {
+        for (auto core : device->get_ethernet_sockets(backward_device->id())) {
+            auto core_virtual = device->virtual_core_from_logical_core(core, CoreType::ETH);
+            reordered_ethernet_cores.push_back(core_virtual);
+        }
+        std::sort(reordered_ethernet_cores.begin(), reordered_ethernet_cores.end(), [](auto& a, auto& b) {
+            return a.x < b.x;
+        });
+    }
+    for (auto& eth_core : reordered_ethernet_cores) {
+        eth_core.y = 16;
+    }
+    return reordered_ethernet_cores;
+}
+
+CoreCoord wh_glx_physical_worker_core_from_logical_core(CoreCoord logical_core) {
+    auto physical_x = logical_core.x <= 3 ? logical_core.x + 1 : logical_core.x + 2;
+    auto physical_y = logical_core.y <= 4 ? logical_core.y + 1 : logical_core.y + 2;
+    return CoreCoord(physical_x, physical_y);
+}
+
+CoreRangeSet get_optimal_worker_core_placement(
+    IDevice* device, std::vector<CoreCoord> ethernet_cores_virtual, uint32_t num_links) {
+    std::vector<CoreCoord> sender_worker_cores;
+    std::vector<CoreCoord> sender_worker_cores_physical;
+
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    // Get all logical cores in the worker grid
+    std::vector<CoreCoord> compute_cores_logical;
+    for (int i = 0; i < num_cores_x; ++i) {
+        for (int j = 0; j < num_cores_y; ++j) {
+            compute_cores_logical.push_back(CoreCoord(i, j));
+        }
+    }
+
+    for (uint32_t link = 0; link < num_links; link++) {
+        auto core_virtual = ethernet_cores_virtual[link];
+        CoreCoord eth_core_physical;
+        eth_core_physical.x = core_virtual.x >= 22 ? (core_virtual.x - 16) : (core_virtual.x - 17);
+        eth_core_physical.y = (core_virtual.y - 16) * 6;
+        // shift down the worker core
+        auto worker_core_physical = CoreCoord(eth_core_physical.x, eth_core_physical.y + 1);
+        sender_worker_cores_physical.push_back(worker_core_physical);
+    }
+
+    // Convert to physical worker coordinates to logical.
+    for (int i = 0; i < sender_worker_cores_physical.size(); ++i) {
+        for (int j = 0; j < compute_cores_logical.size(); ++j) {
+            auto core = wh_glx_physical_worker_core_from_logical_core(compute_cores_logical[j]);
+            if (sender_worker_cores_physical[i] == core) {
+                sender_worker_cores.push_back(compute_cores_logical[j]);
+            }
+        }
+    }
+
+    std::set<CoreRange> sender_worker_cores_set;
+    for (int i = 0; i < sender_worker_cores.size(); ++i) {
+        sender_worker_cores_set.insert(CoreRange(sender_worker_cores[i]));
+    }
+    CoreRangeSet sender_worker_corerangeset = CoreRangeSet(sender_worker_cores_set);
+
+    return sender_worker_corerangeset;
+}
+
 void RunWriteThroughputStabilityTestWithPersistentFabric(
     size_t num_mcasts,
     size_t num_unicasts,
@@ -2339,8 +2420,7 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
         topology);
 
     // Other boiler plate setup
-    CoreRangeSet worker_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_links - 1, 0)));
-    auto worker_cores_vec = corerange_to_cores(worker_cores, std::nullopt, false);
+    std::vector<std::vector<CoreCoord>> worker_cores_vec_per_device;
     std::vector<CoreCoord> dest_core_coord;
     dest_core_coord.reserve(num_links);
     for (size_t l = 0; l < num_links; l++) {
@@ -2399,8 +2479,6 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
         const size_t line_index = i;
         auto& program = programs[i];
         auto* device = devices[i];
-        const size_t sync_core_noc_x = device->worker_core_from_logical_core(sync_core_coord).x;
-        const size_t sync_core_noc_y = device->worker_core_from_logical_core(sync_core_coord).y;
 
         IDevice* backward_device;
         IDevice* forward_device;
@@ -2502,6 +2580,22 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
             sync_count_per_link = num_devices_with_workers;
         }
 
+        // compute worker based on ethernet cores
+        CoreRangeSet worker_cores = {};
+        if (use_tg and topology == ttnn::ccl::Topology::Linear) {
+            std::vector<CoreCoord> ethernet_cores_virtual = compute_top_row_ethernet_cores(
+                device, has_forward_connection, has_backward_connection, forward_device, backward_device);
+            worker_cores = get_optimal_worker_core_placement(device, ethernet_cores_virtual, num_links);
+        } else {
+            worker_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_links - 1, 0)));
+        }
+        auto worker_cores_vec = corerange_to_cores(worker_cores, std::nullopt, false);
+        worker_cores_vec_per_device.push_back(worker_cores_vec);
+
+        // sync core
+        const size_t sync_core_noc_x = device->worker_core_from_logical_core(worker_cores_vec[0]).x;
+        const size_t sync_core_noc_y = device->worker_core_from_logical_core(worker_cores_vec[0]).y;
+
         auto local_device_fabric_handle =
             ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
                 device, forward_device, backward_device, &program, enable_persistent_fabric_mode, num_links, topology);
@@ -2531,7 +2625,10 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
             program,
             "tests/ttnn/unit_tests/gtests/ccl/kernels/edm_fabric_writer.cpp",
             worker_cores,
-            tt_metal::WriterDataMovementConfig(worker_ct_args));
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt_metal::NOC::NOC_0,
+                .compile_args = worker_ct_args});
         worker_kernel_ids.push_back(worker_kernel_id);
         for (size_t l = 0; l < num_links; l++) {
             auto worker_core = worker_cores_vec[l];
@@ -2607,7 +2704,8 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
                 auto& worker_rt_args_by_core = GetRuntimeArgs(programs[k], worker_kernel_ids[k]);
                 auto global_sem_addr_rt_arg_idx = per_device_global_sem_addr_rt_arg[k];
                 for (size_t l = 0; l < num_links; l++) {
-                    auto& worker_rt_args = worker_rt_args_by_core[worker_cores_vec[l].x][worker_cores_vec[l].y];
+                    auto& worker_rt_args = worker_rt_args_by_core[worker_cores_vec_per_device[k][l].x]
+                                                                 [worker_cores_vec_per_device[k][l].y];
                     worker_rt_args.at(global_sem_addr_rt_arg_idx) =
                         global_semaphore_addrs[i % global_semaphore_addrs.size()];
                 }
