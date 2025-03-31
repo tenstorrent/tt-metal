@@ -22,4 +22,5 @@ jobs:
     uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
     with:
       arch: ${{ matrix.test-group.arch}}
+      os: ubuntu-22.04
       runner-label: ${{ matrix.test-group.runner-label}}
