@@ -28,6 +28,7 @@ constexpr uint32_t kernel_status_buf_addr_arg = get_compile_time_arg_val(1);
 constexpr uint32_t kernel_status_buf_size_bytes = get_compile_time_arg_val(2);
 constexpr uint32_t timeout_cycles = get_compile_time_arg_val(3);
 constexpr bool is_master = get_compile_time_arg_val(4);
+constexpr uint32_t router_direction = get_compile_time_arg_val(5);
 uint32_t sync_val;
 uint32_t router_mask;
 uint32_t master_router_chan;
@@ -50,6 +51,9 @@ void kernel_main() {
 #else
     fvc_inbound_push_state_t fvc_inbound_state;
     fvc_outbound_push_state_t fvc_outbound_state[4];
+    volatile tt_l1_ptr fabric_push_client_queue_t* client_queue =
+        reinterpret_cast<tt_l1_ptr fabric_push_client_queue_t*>(FABRIC_ROUTER_CLIENT_QUEUE_START);
+    zero_l1_buf((tt_l1_ptr uint32_t*)client_queue, sizeof(fabric_push_client_queue_t));
 #endif
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
@@ -194,7 +198,7 @@ void kernel_main() {
 
         // Handle Ethernet Inbound Data
         if (fvc_inbound_state.get_curr_packet_valid<FVC_MODE_ROUTER>()) {
-            fvc_inbound_state.process_inbound_packet<FVC_MODE_ROUTER>();
+            fvc_inbound_state.process_inbound_packet<FVC_MODE_ROUTER, router_direction>();
             loop_count = 0;
         }
 #ifdef TT_FABRIC_DEBUG

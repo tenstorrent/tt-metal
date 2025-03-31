@@ -139,6 +139,25 @@ void kernel_main() {
             dst_addr,                   // destination write address
             max_packet_size_words * 16  // number of bytes to write to remote destination
         );
+#ifndef FVC_MODE_PULL
+#ifdef LOW_LATENCY_ROUTING
+        uint32_t outgoing_direction =
+            get_next_hop_router_direction(client_interface, 0, dest_device >> 16, dest_device & 0xFFFF);
+        if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
+            fabric_set_unicast_route(
+                client_interface,
+                (low_latency_packet_header_t*)(data_buffer_start_addr),
+                outgoing_direction,
+                dest_device & 0xFFFF);
+        } else {
+            fabric_set_unicast_route(
+                client_interface,
+                (low_latency_packet_header_t*)&client_interface->header_buffer[0],
+                outgoing_direction,
+                dest_device & 0xFFFF);
+        }
+#endif
+#endif
     }
 
     // notify the controller kernel that this worker is ready to proceed
@@ -210,7 +229,7 @@ void kernel_main() {
         }
     }
 #else
-    fabric_client_router_reserve(client_interface, 0, dest_device >> 16, dest_device & 0xFFFF);
+    fabric_client_connect(client_interface, 0, dest_device >> 16, dest_device & 0xFFFF);
     uint64_t start_timestamp = get_timestamp();
     uint32_t* payload = (uint32_t*)data_buffer_start_addr;
     while (true) {
@@ -237,6 +256,10 @@ void kernel_main() {
 #endif
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
+
+#ifndef FVC_MODE_PULL
+    fabric_client_disconnect(client_interface);
+#endif
 
     uint64_t num_packets = packet_count;
     set_64b_result(test_results, data_words_sent, TT_FABRIC_WORD_CNT_INDEX);

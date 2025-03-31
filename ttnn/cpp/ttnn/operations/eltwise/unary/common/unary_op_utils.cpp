@@ -76,8 +76,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     float param0 = params[0];
     switch (op_type) {
         case UnaryOpType::FILL:
+            // Note: bit casted to int float is used to properly pass nan/+-inf
             op_init_and_name = {
-                "fill_tile_init();", fmt::format("fill_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+                "fill_tile_init();",
+                fmt::format("fill_tile_bitcast({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             break;
         case UnaryOpType::ROUND:
             op_init_and_name = {"round_tile_init();", fmt::format("round_tile({}, {});", idst, (int)param0)};
@@ -141,7 +143,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             break;
         case UnaryOpType::REMAINDER:
             op_init_and_name = {
-                "remainder_tile_init();",
+                fmt::format(
+                    "remainder_tile_init({:#x}u, {:#x}u);",
+                    std::bit_cast<uint32_t>(param0),
+                    std::bit_cast<uint32_t>(1.0f / param0)),
                 fmt::format(
                     "remainder_tile({}, {:#x}u, {:#x}u);",
                     idst,

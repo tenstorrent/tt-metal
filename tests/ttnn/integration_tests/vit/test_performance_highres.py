@@ -15,8 +15,8 @@ from transformers import AutoImageProcessor
 
 import ttnn
 
-from models.experimental.functional_vit.tt import ttnn_functional_vit_highres
-from models.experimental.functional_vit.tt import ttnn_optimized_vit_highres
+from models.demos.vit.tt import ttnn_functional_vit_highres
+from models.demos.vit.tt import ttnn_optimized_vit_highres_gs as ttnn_optimized_vit_highres
 
 from ttnn.model_preprocessing import preprocess_model_parameters
 

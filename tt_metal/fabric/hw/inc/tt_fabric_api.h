@@ -173,6 +173,7 @@ inline void fabric_async_write_add_header(
     uint64_t dst_addr,
     uint32_t size,  // number of bytes to write to remote destination
     uint32_t header_id = 0) {
+#ifdef FVC_MODE_PULL
     packet_header_t* packet_header;
     if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
         packet_header = (packet_header_t*)(src_addr);
@@ -187,6 +188,35 @@ inline void fabric_async_write_add_header(
     packet_header->session.target_offset_l = (uint32_t)dst_addr;
     packet_header->session.target_offset_h = dst_addr >> 32;
     tt_fabric_add_header_checksum(packet_header);
+#else
+#ifdef LOW_LATENCY_ROUTING
+    low_latency_packet_header_t* packet_header;
+    if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
+        packet_header = (low_latency_packet_header_t*)(src_addr);
+    } else {
+        packet_header = (low_latency_packet_header_t*)&client_interface->header_buffer[header_id];
+    }
+    packet_header->routing.packet_size_bytes = size;
+    packet_header->routing.target_offset_l = (uint32_t)dst_addr;
+    packet_header->routing.target_offset_h = dst_addr >> 32;
+    packet_header->routing.command = ASYNC_WR;
+#else
+    packet_header_t* packet_header;
+    if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
+        packet_header = (packet_header_t*)(src_addr);
+    } else {
+        packet_header = (packet_header_t*)&client_interface->header_buffer[header_id];
+    }
+    packet_header->routing.flags = FORWARD;
+    packet_header->routing.packet_size_bytes = size;
+    packet_header->routing.dst_mesh_id = dst_mesh_id;
+    packet_header->routing.dst_dev_id = dst_dev_id;
+    packet_header->session.command = ASYNC_WR;
+    packet_header->session.target_offset_l = (uint32_t)dst_addr;
+    packet_header->session.target_offset_h = dst_addr >> 32;
+    tt_fabric_add_header_checksum(packet_header);
+#endif
+#endif
 }
 
 #ifdef FVC_MODE_PULL
@@ -225,13 +255,137 @@ inline void fabric_async_write(
     }
 }
 #else
-inline void fabric_client_router_reserve(
+template <bool mcast = false>
+void fabric_set_route(
+    low_latency_packet_header_t* packet_header,
+    eth_chan_directions direction,
+    uint32_t start_hop,
+    uint32_t num_hops,
+    bool terminate = false) {
+    uint32_t local_packet = 0;
+    uint32_t forward_packet = 0;
+    uint32_t value = 0;
+    switch (direction) {
+        case eth_chan_directions::EAST:
+            local_packet = tt_low_latency_routing_vector::FORWARD_WEST;
+            forward_packet = tt_low_latency_routing_vector::FORWARD_EAST;
+            break;
+        case eth_chan_directions::WEST:
+            local_packet = tt_low_latency_routing_vector::FORWARD_EAST;
+            forward_packet = tt_low_latency_routing_vector::FORWARD_WEST;
+            break;
+        case eth_chan_directions::NORTH:
+            local_packet = tt_low_latency_routing_vector::FORWARD_SOUTH;
+            forward_packet = tt_low_latency_routing_vector::FORWARD_NORTH;
+            break;
+        case eth_chan_directions::SOUTH:
+            local_packet = tt_low_latency_routing_vector::FORWARD_NORTH;
+            forward_packet = tt_low_latency_routing_vector::FORWARD_SOUTH;
+            break;
+        default: ASSERT(false);
+    }
+
+    uint8_t* route_vector = (uint8_t*)packet_header->routing.route_vector.value;
+    uint32_t local_val;
+    uint32_t forward_val;
+    uint32_t end_hop = start_hop + num_hops;
+    for (uint32_t i = start_hop; i < end_hop; i++) {
+        if constexpr (mcast) {
+            forward_val = i == end_hop - 1 ? 0 : forward_packet;
+            local_val = local_packet;
+        } else {
+            forward_val = terminate ? (i == end_hop - 1 ? 0 : forward_packet) : forward_packet;
+            local_val = terminate ? (i == end_hop - 1 ? local_packet : 0) : 0;
+        }
+        route_vector[i] = local_val | forward_val;
+    }
+    packet_header->routing.route_vector.hop_index = 0;
+}
+
+void fabric_set_unicast_route(
+    fabric_push_client_interface_t* client_interface,
+    low_latency_packet_header_t* packet_header,
+    uint32_t outgoing_direction,
+    uint16_t dst_dev_id) {
+    fabric_router_l1_config_t* routing_table = (fabric_router_l1_config_t*)client_interface->routing_tables_l1_offset;
+    uint32_t my_dev_id = routing_table->my_device_id;
+    uint32_t ew_dim = routing_table->east_dim;
+    if (outgoing_direction == eth_chan_directions::EAST || outgoing_direction == eth_chan_directions::WEST) {
+        uint32_t ew_hops = my_dev_id < dst_dev_id ? dst_dev_id - my_dev_id : my_dev_id - dst_dev_id;
+        fabric_set_route(packet_header, (eth_chan_directions)outgoing_direction, 0, ew_hops, true);
+    } else {
+        // First hop is north/south. Calculate the number of required hops before turning east/west
+        uint32_t ns_hops = 0;
+        uint32_t target_dev = dst_dev_id;
+        uint32_t target_col = 0;
+
+        while (target_dev >= ew_dim) {
+            target_dev -= ew_dim;
+            target_col++;
+        }
+        uint32_t my_col = 0;
+        uint32_t my_dev = my_dev_id;
+        while (my_dev >= ew_dim) {
+            my_dev -= ew_dim;
+            my_col++;
+        }
+        ns_hops = target_col > my_col ? target_col - my_col : my_col - target_col;
+        // determine the east/west hops
+        uint32_t turn_direction = my_dev < target_dev ? eth_chan_directions::EAST : eth_chan_directions::WEST;
+        uint32_t ew_hops = (my_dev < target_dev) ? target_dev - my_dev : my_dev - target_dev;
+        if (ew_hops) {
+            ns_hops--;
+            ew_hops++;
+        }
+        fabric_set_route(packet_header, (eth_chan_directions)outgoing_direction, 0, ns_hops, ew_hops == 0);
+        if (ew_hops) {
+            fabric_set_route(packet_header, (eth_chan_directions)turn_direction, ns_hops, ew_hops, true);
+        }
+    }
+}
+
+void fabric_set_mcast_route(low_latency_packet_header_t* packet_header, eth_chan_directions direction, uint32_t hops) {
+    fabric_set_route<true>(packet_header, (eth_chan_directions)direction, 0, hops);
+}
+
+inline void fabric_client_connect(
     volatile tt_l1_ptr fabric_push_client_interface_t* client_interface,
     int32_t routing_plane,
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id) {
     uint32_t direction = get_next_hop_router_direction(client_interface, routing_plane, dst_mesh_id, dst_dev_id);
     uint32_t router_addr_h = get_next_hop_router_noc_xy(client_interface, routing_plane, dst_mesh_id, dst_dev_id);
+
+    uint64_t client_q_addr = get_noc_addr_helper(router_addr_h, FABRIC_ROUTER_CLIENT_QUEUE_START);
+    volatile fabric_push_client_queue_local_t* local_req_entry = &(client_interface->local_client_req_entry);
+
+    // get client 'id'
+    noc_fast_atomic_increment<DM_DEDICATED_NOC, true>(
+        noc_index,
+        NCRISC_AT_CMD_BUF,
+        client_q_addr + offsetof(fabric_push_client_queue_t, client_idx_counter),
+        NOC_UNICAST_WRITE_VC,
+        1,
+        31,
+        false,
+        false,
+        (uint32_t)&(local_req_entry->my_client_idx.ptr));
+    while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
+
+    uint64_t curr_client_idx_addr = client_q_addr + offsetof(fabric_push_client_queue_t, curr_client_idx);
+    // wait until the client ahead in the queue disconnects
+    while (true) {
+        noc_async_read_one_packet(curr_client_idx_addr, (uint32_t)&(local_req_entry->remote_curr_client_idx.ptr), 4);
+        noc_async_read_barrier();
+        if (local_req_entry->my_client_idx.ptr == local_req_entry->remote_curr_client_idx.ptr) {
+            break;
+        }
+    }
+
+    uint64_t router_wr_ptr_addr = client_q_addr + offsetof(fabric_push_client_queue_t, router_wr_ptr);
+    noc_async_read_one_packet(router_wr_ptr_addr, (uint32_t)&(local_req_entry->remote_router_wr_ptr.ptr), 4);
+    noc_async_read_barrier();
+
     uint64_t router_addr = get_noc_addr_helper(router_addr_h, FABRIC_ROUTER_REQ_QUEUE_START);
     router_addr += direction * sizeof(uint64_t);
     // stream register to receive router buffer space available updates.
@@ -243,7 +397,7 @@ inline void fabric_client_router_reserve(
     noc_inline_dw_write(router_addr + sizeof(uint32_t), xy_local_addr >> 32);
     client_interface->router_addr_h = router_addr_h;
     client_interface->buffer_size = FABRIC_ROUTER_OUTBOUND_BUF_SLOTS;
-    client_interface->wr_ptr = 0;
+    client_interface->wr_ptr = local_req_entry->remote_router_wr_ptr.ptr;
     client_interface->buffer_start = FABRIC_ROUTER_DATA_BUF_START + direction * FABRIC_ROUTER_OUTBOUND_BUF_SIZE;
     client_interface->router_push_addr = (STREAM_REG_ADDR(
         STREAM_ID_NOC_WORDS_RECEIVED + direction, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
@@ -253,6 +407,29 @@ inline void fabric_client_router_reserve(
         (STREAM_REG_ADDR(STREAM_ID_NOC_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
     *(uint32_t*)(STREAM_REG_ADDR(STREAM_ID_NOC_RECEIVER_BUFFER_SPACE, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX)) =
         client_interface->buffer_size;
+}
+
+inline void fabric_client_disconnect(volatile tt_l1_ptr fabric_push_client_interface_t* client_interface) {
+    // wait for slots to drain
+    while (*(uint32_t*)(client_interface->router_space) != FABRIC_ROUTER_OUTBOUND_BUF_SLOTS);
+
+    uint64_t client_q_addr = get_noc_addr_helper(client_interface->router_addr_h, FABRIC_ROUTER_CLIENT_QUEUE_START);
+
+    // update wr ptr for the next client
+    noc_inline_dw_write<true>(
+        client_q_addr + offsetof(fabric_push_client_queue_t, router_wr_ptr), client_interface->wr_ptr);
+
+    // update curr client index so that the next client in the queue can connect
+    noc_fast_atomic_increment<DM_DEDICATED_NOC, true>(
+        noc_index,
+        NCRISC_AT_CMD_BUF,
+        client_q_addr + offsetof(fabric_push_client_queue_t, curr_client_idx),
+        NOC_UNICAST_WRITE_VC,
+        1,
+        31,
+        false,
+        false);
+    while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
 }
 
 template <ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA>
@@ -299,6 +476,20 @@ inline void fabric_async_write(
     if constexpr (mode & AsyncWriteMode::ADD_HEADER) {
         fabric_async_write_add_header<decltype(client_interface), data_mode>(
             client_interface, src_addr, dst_mesh_id, dst_dev_id, dst_addr, size, header_id);
+#ifdef LOW_LATENCY_ROUTING
+        uint32_t outgoing_direction =
+            get_next_hop_router_direction(client_interface, routing_plane, dst_mesh_id, dst_dev_id);
+        if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
+            fabric_set_unicast_route(
+                client_interface, (low_latency_packet_header_t*)(src_addr), outgoing_direction, dst_dev_id);
+        } else {
+            fabric_set_unicast_route(
+                client_interface,
+                (low_latency_packet_header_t*)&client_interface->header_buffer[header_id],
+                outgoing_direction,
+                dst_dev_id);
+        }
+#endif
     }
     if constexpr (mode & AsyncWriteMode::PUSH) {
         fabric_async_write_push_data<data_mode>(client_interface, src_addr, size, header_id);
@@ -319,6 +510,7 @@ inline void fabric_async_write_multicast_add_header(
     uint16_t n_depth,
     uint16_t s_depth,
     uint32_t header_id = 0) {
+#ifdef FVC_MODE_PULL
     packet_header_t* packet_header;
     if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
         packet_header = (packet_header_t*)(src_addr);
@@ -337,7 +529,29 @@ inline void fabric_async_write_multicast_add_header(
     packet_header->packet_parameters.mcast_parameters.north = n_depth;
     packet_header->packet_parameters.mcast_parameters.south = s_depth;
     tt_fabric_add_header_checksum(packet_header);
+#else
+    low_latency_packet_header_t* packet_header;
+    if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
+        packet_header = (low_latency_packet_header_t*)(src_addr);
+    } else {
+        packet_header = (low_latency_packet_header_t*)&client_interface->header_buffer[header_id];
+    }
+    packet_header->routing.packet_size_bytes = size;
+    packet_header->routing.command = ASYNC_WR;
+    packet_header->routing.target_offset_l = (uint32_t)dst_addr;
+    packet_header->routing.target_offset_h = dst_addr >> 32;
+    if (e_depth) {
+        fabric_set_mcast_route(packet_header, eth_chan_directions::EAST, e_depth);
+    } else if (w_depth) {
+        fabric_set_mcast_route(packet_header, eth_chan_directions::WEST, w_depth);
+    } else if (n_depth) {
+        fabric_set_mcast_route(packet_header, eth_chan_directions::NORTH, n_depth);
+    } else if (s_depth) {
+        fabric_set_mcast_route(packet_header, eth_chan_directions::SOUTH, s_depth);
+    }
+#endif
 }
+
 // Write packetized data over fabric to dst_mesh, dst_dev.
 // Packet is at src_addr in sender L1.
 template <

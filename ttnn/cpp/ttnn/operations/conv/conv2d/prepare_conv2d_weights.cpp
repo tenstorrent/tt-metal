@@ -13,6 +13,7 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 namespace ttnn {
 namespace operations::conv {
 using namespace tt;
@@ -679,8 +680,14 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t original_weights_window_h = original_weights_shape[2];
     uint32_t original_weights_window_w = original_weights_shape[3];
 
-    bool is_conv1d = original_weights_window_w == 1 && input_width == 1;
-    bool is_depthwise_conv = groups == original_weights_out_channels && original_weights_in_channels == 1;
+    const bool is_conv1d = is_1d_conv(original_weights_window_w, input_width);
+    const bool is_conv_1d_depthwise_conv = is_1d_deptwise_conv(
+        groups,
+        original_weights_in_channels * groups,
+        original_weights_out_channels,
+        original_weights_window_w,
+        input_width,
+        bias_tensor.has_value());
 
     weight_tensor_ = weight_tensor;
     // Convert weight tensor to 0 padded shape if groups > 1
@@ -691,7 +698,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     if (!is_conv1d and groups > 1) {
         weight_tensor_ = convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, groups, weights_bias_dtype);
     } else if (is_conv1d and groups > 1) {
-        if (is_depthwise_conv) {
+        if (is_conv_1d_depthwise_conv) {
             weight_tensor_ =
                 convert_conv_weight_tensor_to_depthwise_layout(weight_tensor_, act_block_h_ntiles, weights_bias_dtype);
             weight_block_h_ntiles = act_block_h_ntiles;
@@ -942,8 +949,14 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t original_weights_window_h = original_weights_shape[2];
     uint32_t original_weights_window_w = original_weights_shape[3];
 
-    bool is_conv1d = original_weights_window_w == 1 && input_width == 1;
-    bool is_depthwise_conv = groups == original_weights_out_channels && original_weights_in_channels == 1;
+    const bool is_conv1d = is_1d_conv(original_weights_window_w, input_width);
+    const bool is_conv_1d_depthwise_conv = is_1d_deptwise_conv(
+        groups,
+        original_weights_in_channels * groups,
+        original_weights_out_channels,
+        original_weights_window_w,
+        input_width,
+        bias_tensor.has_value());
 
     weight_tensor_ = weight_tensor;
 
@@ -951,7 +964,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     if (!is_conv1d and groups > 1) {
         weight_tensor_ = convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, groups, weights_bias_dtype);
     } else if (is_conv1d and groups > 1) {
-        if (is_depthwise_conv) {
+        if (is_conv_1d_depthwise_conv) {
             weight_tensor_ =
                 convert_conv_weight_tensor_to_depthwise_layout(weight_tensor_, act_block_h_ntiles, weights_bias_dtype);
             weight_block_h_ntiles = act_block_h_ntiles;
