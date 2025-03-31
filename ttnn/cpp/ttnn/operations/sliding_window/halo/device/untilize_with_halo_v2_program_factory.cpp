@@ -52,11 +52,7 @@ static inline CBHandle create_circular_buffer(
     uint32_t npages,
     uint32_t pagesize,
     Buffer* buffer = nullptr) {
-    auto config = CircularBufferConfig(npages * pagesize, {{cb_id, df}}).set_page_size(cb_id, pagesize);
-    if (buffer) {
-        config.set_globally_allocated_address(*buffer);
-    }
-    return CreateCircularBuffer(program, cores, config);
+    return std::get<1>(tt::tt_metal::create_cb(cb_id, program, cores, pagesize, npages, df, buffer));
 }
 
 operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
