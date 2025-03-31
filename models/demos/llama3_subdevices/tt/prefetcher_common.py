@@ -21,7 +21,15 @@ def get_buffer_address(tensor):
 
 
 class TtLlamaPrefetcherSetup(LightweightModule):
-    def __init__(self, mesh_device, n_tensors, n_layers, mode="decode"):
+    def __init__(
+        self,
+        mesh_device,
+        n_tensors,
+        n_layers,
+        mode="decode",
+        mesh_sub_device_manager_id_prefill=None,
+        mesh_sub_device_manager_id_decode=None,
+    ):
         """
         - sub devices
         - global cb
@@ -62,10 +70,14 @@ class TtLlamaPrefetcherSetup(LightweightModule):
 
         if mode == "prefill":
             self.all_sub_device = ttnn.SubDevice([self.all_core_range_set])
-            mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-                mesh_device, [self.all_sub_device], 0, 0, True
-            )
-            self.mesh_sub_device_manager_id = mesh_sub_device_manager_id
+            if mesh_sub_device_manager_id_prefill is None:
+                mesh_sub_device_manager_id_prefill = create_and_load_sub_device_manager_with_fabric_interface(
+                    mesh_device, [self.all_sub_device], 0, 0, True
+                )
+            else:
+                mesh_device.load_sub_device_manager(mesh_sub_device_manager_id_prefill)
+            self.mesh_sub_device_manager_id_prefill = mesh_sub_device_manager_id_prefill
+
             self.all_sub_device_id = ttnn.SubDeviceId(0)
             self.worker_sub_device_id = self.all_sub_device_id
         else:
@@ -85,10 +97,14 @@ class TtLlamaPrefetcherSetup(LightweightModule):
 
             self.prefetcher_sub_device = ttnn.SubDevice([self.sender_core_range_set])
             self.worker_sub_device = ttnn.SubDevice([self.worker_cores_range_set])
-            mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-                mesh_device, [self.prefetcher_sub_device, self.worker_sub_device], 1, 0, True
-            )
-            self.mesh_sub_device_manager_id = mesh_sub_device_manager_id
+            if mesh_sub_device_manager_id_decode is None:
+                mesh_sub_device_manager_id_decode = create_and_load_sub_device_manager_with_fabric_interface(
+                    mesh_device, [self.prefetcher_sub_device, self.worker_sub_device], 1, 0, True
+                )
+            else:
+                mesh_device.load_sub_device_manager(mesh_sub_device_manager_id_decode)
+            print("done loading")
+            self.mesh_sub_device_manager_id_decode = mesh_sub_device_manager_id_decode
             self.prefetcher_sub_device_id = ttnn.SubDeviceId(0)
             self.worker_sub_device_id = ttnn.SubDeviceId(1)
 

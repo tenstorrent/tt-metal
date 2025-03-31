@@ -60,6 +60,7 @@ def initialize_vllm_text_transformer(
     optimizations=LlamaOptimizations.performance,
 ):
     submesh_devices = generate_submeshes(mesh_device, tt_data_parallel)
+    n_layers = 1
     # Load model args, weights
     model_args = []
     for submesh in submesh_devices:

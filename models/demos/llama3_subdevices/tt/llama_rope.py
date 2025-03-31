@@ -30,6 +30,7 @@ class TtLlamaRotarySetup(LightweightModule):
         super().__init__()
 
         self.batch_size = batch_size
+        self.batch_size = 32
         self.head_dim = head_dim
         self.device = device
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
