@@ -114,19 +114,22 @@ std::vector<PixelMetadata> generate_tensor_metadata(
     uint32_t reshard_num_cores_nhw = 0,
     bool is_in_tiled = true);
 uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& shard_boundaries);
-std::vector<std::vector<std::vector<uint16_t>>> generate_halo_kernel_config_tensors(
+std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_halo_kernel_config_tensors(
     const std::vector<PixelMetadata>& tensor_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
     bool is_block_sharded,
     bool transpose_mcast,
     bool remote_read,
-    tt::tt_metal::IDevice* device);
+    tt::tt_metal::IDevice* device,
+    uint32_t max_out_nsticks_per_core = INT_MAX,
+    uint32_t in_nsticks_per_core = 0,
+    bool in_place = false);
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     const std::vector<uint32_t>& op_trace_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
     bool pad_tile = false,
     bool pad_cores = false);
-std::vector<uint16_t> flatten(const std::vector<std::vector<uint16_t>>& input);
+std::vector<uint16_t> flatten(const std::vector<std::vector<uint16_t>>& input, uint32_t extend_with_zeroes = 0);
 Tensor construct_on_host_config_tensor(
     const std::vector<std::vector<uint16_t>>& config,
     const SlidingWindowConfig& sw_config,

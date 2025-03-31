@@ -340,6 +340,7 @@ void py_bind_conv2d(py::module& module) {
             bool,
             bool,
             bool,
+            bool,
             bool>(),
         py::kw_only(),
         py::arg("dtype") = DataType::BFLOAT16,
@@ -361,7 +362,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("enable_act_double_buffer") = false,
         py::arg("enable_weights_double_buffer") = false,
         py::arg("enable_split_reader") = false,
-        py::arg("enable_subblock_padding") = false);
+        py::arg("enable_subblock_padding") = false,
+        py::arg("in_place") = false);
     py_conv_config.def_readwrite("dtype", &Conv2dConfig::dtype);
     py_conv_config.def_readwrite("weights_dtype", &Conv2dConfig::weights_dtype);
     py_conv_config.def_readwrite("activation", &Conv2dConfig::activation);
@@ -382,6 +384,7 @@ void py_bind_conv2d(py::module& module) {
     py_conv_config.def_readwrite("enable_weights_double_buffer", &Conv2dConfig::enable_weights_double_buffer);
     py_conv_config.def_readwrite("enable_split_reader", &Conv2dConfig::enable_split_reader);
     py_conv_config.def_readwrite("enable_subblock_padding", &Conv2dConfig::enable_subblock_padding);
+    py_conv_config.def_readwrite("in_place", &Conv2dConfig::in_place);
 
     py_conv_config.def("__repr__", [](const Conv2dConfig& config) { return fmt::format("{}", config); });
 
