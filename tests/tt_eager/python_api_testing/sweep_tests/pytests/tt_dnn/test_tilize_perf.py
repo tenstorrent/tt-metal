@@ -74,22 +74,29 @@ def test_tilize_test(input_shapes, tilize_args, device, function_level_defaults)
         generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
     ]
 
-    # Compare only shape in case of performance testing, compare equal otherwise
-    perf_test = os.getenv("TT_ENABLE_LLK_PERF") == "1"
-    comparison_func = comparison_funcs.comp_shape if perf_test else comparison_funcs.comp_equal
+    # Enable llk perf testing
+    os.environ["TT_ENABLE_LLK_PERF"] = "1"
+
+    # Compare only shape in case of performance testing,
+    comparison_func = comparison_funcs.comp_shape
 
     perf_scope = "op"  # can be on 'block' level
     if perf_scope == "block":
         os.environ["TT_LLK_PERF_BLOCK"] = "1"
 
-    for perf in ["unpack", "math", "pack"]:
+    for perf in ["op", "op_no_dm", "unpack", "math", "pack"]:
         # Set log csv file name, file will be used to store perf data
         ENVS = dict(os.environ)
         TT_METAL_HOME = Path(ENVS["TT_METAL_HOME"])
         log_file = TT_METAL_HOME / "generated" / f"tilize_llk_perf_{perf}.csv"
 
         # Set env variable used to select perf measurement thread target(unpack, math, pack)
-        os.environ[f"TT_LLK_PERF_{perf.upper()}"] = "1"
+        if perf in ["unpack", "pack", "math"]:
+            os.environ[f"TT_LLK_PERF_{perf.upper()}"] = "1"
+
+        # Set env variable to disable DM
+        if perf != "op":
+            os.environ[f"TT_LLK_PERF_NO_DM"] = "1"
 
         with open(log_file, mode="w", newline="") as file:
             writer = csv.writer(file)
@@ -142,4 +149,9 @@ def test_tilize_test(input_shapes, tilize_args, device, function_level_defaults)
             #         input_shapes = [[1, 1, rt_dim*32, ct_dim*32]]
 
         # Unset env variable used to select perf measurement thread target(unpack, math, pack)
-        os.environ.pop(f"TT_LLK_PERF_{perf.upper()}", None)
+        if perf in ["unpack", "pack", "math"]:
+            os.environ.pop(f"TT_LLK_PERF_{perf.upper()}", None)
+
+        # Unset env variable to disable DM
+        if perf != "op":
+            os.environ.pop(f"TT_LLK_PERF_NO_DM")

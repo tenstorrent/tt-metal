@@ -46,7 +46,7 @@ void kernel_main() {
         cb_push_back(cb_id_in0, num_tiles);
     };
 
-#ifndef LLK_TILIZE_PERF
+#ifndef LLK_TILIZE_PERF_NO_DM
     uint32_t stick_id = start_stick_id;
     for (uint32_t i = 0; i < num_sticks / tile_height; i++) {
         // Get Base Addresses
