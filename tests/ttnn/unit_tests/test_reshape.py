@@ -363,22 +363,24 @@ def test_reshape_tile_layout_only_change_shape(device):
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
-        #         ((1, 8, 8), (1, 16, 4)),
-        #         ((1, 17,1), (1, 1, 17)),
-        #         ((1, 32,17), (1, 17, 32)),
-        #         ((2, 32,17), (2, 17, 32)),
-        #         ((2, 2,1), (1, 4, 1)),
-        #         ((16, 1, 5), (4, 2, 10)),
-        #         ((1, 256, 16), (16, 256)),
-        ((1, 13, 1), (1, 13, 1, 1)),
-        #        ((1, 256, 1024), (1, 256, 16, 64)),
-        # ((1, 1445, 192), (1445, 192)),
-        #  ((1, 256), (1, 1, 256)),
-        #         ((16, 1, 32), (16, 1, 32)),
-        #         ((1, 32, 4608), (1, 32, 16, 3, 96)),  # issue 13889
-        #        #((2888, 49, 96), (8, 19, 19, 7, 7, 96)),  # issue 12153
-        #         ((128, 1, 1, 128), (128, 128)),  # issue 14676
-        #         ((5, 4, 208, 156), (3, 13, 8, 2080)),  # issue 14513
+        ((1, 8, 8), (1, 16, 4)),
+        ((1, 17, 1), (1, 1, 17)),
+        ((1, 32, 17), (1, 17, 32)),
+        ((2, 32, 17), (2, 17, 32)),
+        ((2, 2, 1), (1, 4, 1)),
+        ((16, 1, 5), (4, 2, 10)),
+        ((1, 256, 1), (1, 256)),
+        ((1, 256, 1), (1, 256, 1, 1)),
+        ((1, 180, 1), (1, 180, 1, 1)),
+        ((1, 256, 1024), (1, 256, 16, 64)),
+        ((1, 1445, 192), (1445, 192)),
+        ((1, 256), (1, 1, 256)),
+        ((16, 1, 32), (16, 1, 32)),
+        ((1, 32, 4608), (1, 32, 16, 3, 96)),  # issue 13889
+        ((128, 1, 1, 128), (128, 128)),  # issue 14676
+        ((16, 33, 1), (176, 3, 1)),
+        ((2888, 49, 96), (8, 19, 19, 7, 7, 96)),  # issue 12153
+        ((5, 4, 208, 156), (3, 13, 8, 2080)),  # issue 14513
     ],
 )
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
@@ -394,13 +396,21 @@ def test_reshape_tile_with_padding(input_shape, output_shape, layout, device):
     ).reshape(input_shape)
     # torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
     torch_result = torch_input_tensor.reshape(output_shape)
-    print(f"{torch_input_tensor=}")
+    # print(f"{torch_input_tensor=}")
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, dtype=ttnn.bfloat16, device=device)
     ttnn_output = ttnn.reshape(input_tensor, output_shape)
     assert layout == ttnn_output.layout
     output = ttnn.to_torch(ttnn_output)
-    print(f"{torch_result=}")
-    print(f"{output=}")
+    # print(f"{torch_result=}")
+    # print(f"{output=}")
+
+    #     for i in range(torch_result.shape[0]):
+    #         if not (output[i,:,:] == torch_result[i,:,:]).all():
+    #             print(f"---{i}---")
+    #             print(f"{output[i,:,:]=}")
+    #             print(f"{torch_result[i,:,:]=}")
+    #             print("----")
+
     assert_with_pcc(torch_result, output, 0.9999)
 
 

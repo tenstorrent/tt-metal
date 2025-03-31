@@ -271,10 +271,8 @@ Tensor compute_reshape_mapping_host_tensor(
             return a.size() < b.size();
         })->size();
 
-    // TODO trying to fix alignment
-    std::cout << "UNALIGEND: " << max_input_segments << std::endl;
+    // Ensure that map data is always aligned
     max_input_segments += max_input_segments % 2;
-    std::cout << "ALIGNED: " << max_input_segments << std::endl;
 
     // initialize to 0 because that will be checked by the kernel as a stopping condition
     std::vector<uint32_t> flat_mapping_vector(SegmentMapData::size * num_output_pages * max_input_segments, 0);
@@ -286,7 +284,6 @@ Tensor compute_reshape_mapping_host_tensor(
         it += max_input_segments * SegmentMapData::size;
     }
 
-    // TODO ensure the ordering of these pages corresponds to the ordering of the output tensor pages
     const std::array<uint32_t, 2> mapping_shape_vector = {num_output_pages, SegmentMapData::size * max_input_segments};
     const Shape mapping_shape(mapping_shape_vector);
     const TensorLayout mapping_layout(
@@ -327,17 +324,21 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
             .to_device(device);
 
     // DEBUG
-    mapping_tensor.print();
+    // mapping_tensor.print();
 
     tt::tt_metal::Buffer* mapping_buffer = mapping_tensor.buffer();
 
     const auto grid = device->compute_with_storage_grid_size();
+
+    // DEBUG
+    // const CoreCoord grid{1,1};
+
     uint32_t num_cores_x = grid.x;
     uint32_t num_cores_y = grid.y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
     // set up CB for mapping metadata
-    constexpr auto reader_cb_len = 4;  // shrugs
+    constexpr auto reader_cb_len = 1;  // shrugs
 
     auto mapping_page_size = mapping_tensor.get_logical_shape()[-1];
     auto mapping_dataformat = tt::tt_metal::datatype_to_dataformat_converter(mapping_tensor.get_dtype());
@@ -393,12 +394,12 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         "writer_reshape_tiled.cpp",
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
-    uint32_t page_idx_start = 0, page_idx_end = 0;
+    uint32_t page_idx_start = 0, page_idx_end = 0, total_pages = 0;
     for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
         uint32_t increment = 0;
         if (core_group_1.contains(c)) {
             increment = num_tiles_per_core_group_1;
-        } else if (core_group_1.contains(c)) {
+        } else if (core_group_2.contains(c)) {
             increment = num_tiles_per_core_group_2;
         } else {
             continue;
@@ -413,11 +414,14 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, c, reader_runtime_args);
 
         const std::vector<uint32_t> writer_runtime_args = {output_buffer->address(), page_idx_start, page_idx_end};
+        total_pages += (page_idx_end - page_idx_start);
 
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, c, writer_runtime_args);
 
         page_idx_start += increment;
     }
+
+    TT_ASSERT(total_pages = num_output_pages, "total_pages: {}", total_pages);
 
     return {.program = std::move(program)};
 }
