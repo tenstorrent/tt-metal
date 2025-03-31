@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "convert_to_chw_program_factory.hpp"
+#include "tt-metalium/tt_backend_api_types.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::experimental::cnn::detail {
 
@@ -63,12 +65,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_chw(
     const uint32_t cb_in_page_size = input_tile_size;
     const auto cb_in = create_circular_buffer(cb_in_id, cb_in_total_size, cb_in_page_size, input_format, a.buffer());
 
+    const tt::DataFormat output_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     const uint32_t cb_out_id = tt::CBIndex::c_1;
-    const uint32_t element_size = tt::datum_size(input_format);
+    const uint32_t element_size = tt::datum_size(output_format);
     const uint32_t cb_out_total_size = tt::div_up(C * HW * element_size, input_cores.size());
     const uint32_t cb_out_page_size = tt::div_up(HW * element_size, input_cores.size());
     const auto cb_out =
-        create_circular_buffer(cb_out_id, cb_out_total_size, cb_out_page_size, input_format, output.buffer());
+        create_circular_buffer(cb_out_id, cb_out_total_size, cb_out_page_size, output_format, output.buffer());
 
     const uint32_t cb_in_transpose_id = tt::CBIndex::c_2;
     const uint32_t cb_in_transpose_total_size = intermediary_tile_size;
