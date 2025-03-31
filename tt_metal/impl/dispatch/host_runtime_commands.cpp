@@ -147,7 +147,8 @@ void EnqueueProgramCommand::process() {
     RecordProgramRun(program);
 
     // Access the program dispatch-command cache
-    auto& cached_program_command_sequence = program.get_cached_program_command_sequences().begin()->second;
+    uint64_t command_hash = *device->get_active_sub_device_manager_id();
+    auto& cached_program_command_sequence = program.get_cached_program_command_sequences().at(command_hash);
     // Update the generated dispatch commands based on the state of the CQ and the ring buffer
     program_dispatch::update_program_dispatch_commands(
         program,
