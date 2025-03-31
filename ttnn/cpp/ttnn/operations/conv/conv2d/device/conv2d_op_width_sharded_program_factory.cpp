@@ -574,10 +574,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     compute_defines["WIDTH_SHARDED"] = "1";
 
-    if (output.memory_config().is_sharded()) {
-        writer_defines["SHARDED_OUT"] = "1";
-        writer_mcast_sender_defines["SHARDED_OUT"] = "1";
-    }
     if (output_num_cores == 1) {
         writer_mcast_sender_defines["SKIP_MCAST"] = "1";
     }
@@ -797,7 +793,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     };
 
     activation_kernel_compile_args = {
-        (uint32_t)0,  // Never in DRAM
         (uint32_t)stride_h,
         (uint32_t)stride_w,
         (uint32_t)dilation_h,
