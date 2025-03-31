@@ -46,6 +46,7 @@ def summarize_to_csv(
     packets_per_second,
     *,
     noc_message_type,
+    senders_are_unidirectional,
 ):
     """Write test results to a CSV file organized by packet size"""
     csv_path = os.path.join(os.environ["TT_METAL_HOME"], "generated/profiler/.logs/bandwidth_summary.csv")
@@ -63,6 +64,7 @@ def summarize_to_csv(
                     "Num Links",
                     "Disable Interior Workers",
                     "Unidirectional",
+                    "Senders Are Unidirectional",
                     "Bandwidth (B/c)",
                     "Packets/Second",
                 ]
@@ -80,6 +82,7 @@ def summarize_to_csv(
                 num_links,
                 disable_sends_for_interior_workers,
                 unidirectional,
+                senders_are_unidirectional,
                 bandwidth,
                 packets_per_second,
             ]
@@ -92,9 +95,10 @@ def read_golden_results(
     line_size,
     num_links,
     disable_sends_for_interior_workers,
-    unidirectional,
+    unidirectional,  # traffic at fabric level
     *,
     noc_message_type,
+    senders_are_unidirectional=False,  # coming out of any given worker
 ):
     """Print a summary table of all test results by packet size"""
     csv_path = os.path.join(
@@ -115,8 +119,18 @@ def read_golden_results(
         & (df["Num Links"] == num_links)
         & (df["Disable Interior Workers"] == disable_sends_for_interior_workers)
         & (df["Unidirectional"] == unidirectional)
+        & (df["Senders Are Unidirectional"] == senders_are_unidirectional)
     ]
 
+    if len(results["Bandwidth (B/c)"]) == 0:
+        logger.error(
+            f"No golden data found for tests_name={test_name} noc_message_type={noc_message_type} packet_size={packet_size} line_size={line_size} num_links={num_links} disable_sends_for_interior_workers={disable_sends_for_interior_workers} unidirectional={unidirectional}"
+        )
+        return 0, 0
+    if len(results["Packets/Second"]) == 0:
+        logger.error(
+            f"No golden data found for tests_name={test_name} noc_message_type={noc_message_type} packet_size={packet_size} line_size={line_size} num_links={num_links} disable_sends_for_interior_workers={disable_sends_for_interior_workers} unidirectional={unidirectional}"
+        )
     return results["Bandwidth (B/c)"].values[0], results["Packets/Second"].values[0]
 
 
@@ -180,6 +194,7 @@ def run_fabric_edm(
     fabric_mode,
     disable_sends_for_interior_workers,
     unidirectional=False,
+    senders_are_unidirectional=False,
 ):
     logger.warning("removing file profile_log_device.csv")
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
@@ -196,7 +211,8 @@ def run_fabric_edm(
                 {packet_size} \
                 {fabric_mode.value} \
                 {int(disable_sends_for_interior_workers)} \
-                {int(unidirectional)}"
+                {int(unidirectional)} \
+                {int(senders_are_unidirectional)}"
     rc = os.system(cmd)
     if rc != 0:
         if os.WEXITSTATUS(rc) == 1:
@@ -244,6 +260,7 @@ def run_fabric_edm(
         bandwidth,
         packets_per_second,
         noc_message_type=noc_message_type,
+        senders_are_unidirectional=senders_are_unidirectional,
     )
     expected_bw, expected_pps = read_golden_results(
         test_name,
@@ -253,6 +270,7 @@ def run_fabric_edm(
         disable_sends_for_interior_workers,
         unidirectional,
         noc_message_type=noc_message_type,
+        senders_are_unidirectional=senders_are_unidirectional,
     )
     expected_Mpps = expected_pps / 1000000 if expected_pps is not None else None
     bw_threshold = 0.07
@@ -627,6 +645,7 @@ def test_fabric_one_link_forwarding_unicast_unidirectional_single_producer_multi
         fabric_mode=FabricTestMode.Linear,
         disable_sends_for_interior_workers=True,
         unidirectional=True,
+        senders_are_unidirectional=True,
     )
 
 
@@ -663,21 +682,27 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_atomic_inc_
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("is_unicast", [False, True])
+@pytest.mark.parametrize("disable_sends_for_interior_workers", [False, True])
+@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize("unidirectional", [False, True])
 @pytest.mark.parametrize(
     "noc_message_type", ["noc_fused_unicast_write_flush_atomic_inc", "noc_fused_unicast_write_no_flush_atomic_inc"]
 )
-@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
-def test_fabric_one_link_forwarding_unicast_single_producer_multihop_fused_write_atomic_inc_bw(
+def test_fabric_one_link_multihop_fused_write_atomic_inc_bw(
+    is_unicast,
     num_messages,
     num_links,
     num_op_invocations,
     line_sync,
     line_size,
     packet_size,
+    disable_sends_for_interior_workers,
     noc_message_type,
+    unidirectional,
 ):
     run_fabric_edm(
-        is_unicast=True,
+        is_unicast=is_unicast,
         num_messages=num_messages,
         num_links=num_links,
         noc_message_type=noc_message_type,
@@ -686,39 +711,8 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_fused_write
         line_size=line_size,
         packet_size=packet_size,
         fabric_mode=FabricTestMode.Linear,
-        disable_sends_for_interior_workers=True,
-    )
-
-
-@pytest.mark.parametrize("num_messages", [200000])
-@pytest.mark.parametrize("num_op_invocations", [1])
-@pytest.mark.parametrize("line_sync", [True])
-@pytest.mark.parametrize("line_size", [4])
-@pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("packet_size", [16, 2048, 4096])
-@pytest.mark.parametrize(
-    "noc_message_type", ["noc_fused_unicast_write_flush_atomic_inc", "noc_fused_unicast_write_no_flush_atomic_inc"]
-)
-def test_fabric_one_link_single_producer_multicast_multihop_fused_write_atomic_inc_bw(
-    num_messages,
-    num_links,
-    num_op_invocations,
-    line_sync,
-    line_size,
-    packet_size,
-    noc_message_type,
-):
-    run_fabric_edm(
-        is_unicast=False,
-        num_messages=num_messages,
-        num_links=num_links,
-        noc_message_type=noc_message_type,
-        num_op_invocations=num_op_invocations,
-        line_sync=line_sync,
-        line_size=line_size,
-        packet_size=packet_size,
-        fabric_mode=FabricTestMode.Linear,
-        disable_sends_for_interior_workers=True,
+        disable_sends_for_interior_workers=disable_sends_for_interior_workers,
+        unidirectional=unidirectional,
     )
 
 
@@ -734,7 +728,16 @@ def print_bandwidth_summary():
 
     # Sort by test name and packet size
     df = df.sort_values(
-        ["Test Name", "Packet Size", "Line Size", "Num Links", "Disable Interior Workers", "Unidirectional"]
+        [
+            "Test Name",
+            "Noc Message Type",
+            "Packet Size",
+            "Line Size",
+            "Num Links",
+            "Disable Interior Workers",
+            "Unidirectional",
+            "Senders Are Unidirectional",
+        ]
     )
 
     # Format table with raw values
@@ -742,11 +745,13 @@ def print_bandwidth_summary():
         df,
         headers=[
             "Test Name",
+            "Noc Message Type",
             "Packet Size",
             "Line Size",
             "Num Links",
             "Disable Interior Workers",
             "Unidirectional",
+            "Senders Are Unidirectional",
             "Bandwidth (B/c)",
             "Packets/Second",
         ],

@@ -2195,6 +2195,7 @@ struct WriteThroughputStabilityTestWithPersistentFabricParams {
     bool disable_sends_for_interior_workers = false;
 
     bool disable_end_workers_in_backward_direction = false;
+    bool senders_are_unidirectional = false;
 };
 
 std::vector<CoreCoord> compute_top_row_ethernet_cores(
@@ -2495,11 +2496,11 @@ void Run1DFabricPacketSendTest(
         bool has_forward_connection;
         bool has_backward_connection;
         bool unicast_forward;
-        size_t mcast_fwd_hops;
-        size_t mcast_bwd_hops;
+        size_t num_fwd_hops;
+        size_t num_bwd_hops;
         size_t unicast_hops;
-        size_t sync_mcast_fwd_hops;
-        size_t sync_mcast_bwd_hops;
+        size_t sync_num_fwd_hops;
+        size_t sync_num_bwd_hops;
         size_t sync_count_per_link;
         if (topology == ttnn::ccl::Topology::Ring) {
             backward_device = i == 0 ? devices.back() : devices[i - 1];
@@ -2510,26 +2511,26 @@ void Run1DFabricPacketSendTest(
             has_backward_connection = true;
             unicast_forward = true;
             // Have the sync for ring always use the same algorithm as HalfRing
-            sync_mcast_fwd_hops = tt::div_up(line_size - 1, 2);
-            sync_mcast_bwd_hops = line_size - 1 - sync_mcast_fwd_hops;
+            sync_num_fwd_hops = tt::div_up(line_size - 1, 2);
+            sync_num_bwd_hops = line_size - 1 - sync_num_fwd_hops;
             if (i % 2 == 0) {
-                std::swap(sync_mcast_fwd_hops, sync_mcast_bwd_hops);
+                std::swap(sync_num_fwd_hops, sync_num_bwd_hops);
             }
             if (fabric_mode == FabricTestMode::HalfRing) {
-                mcast_fwd_hops = tt::div_up(line_size - 1, 2);
-                mcast_bwd_hops = line_size - 1 - mcast_fwd_hops;
+                num_fwd_hops = tt::div_up(line_size - 1, 2);
+                num_bwd_hops = line_size - 1 - num_fwd_hops;
                 if (i % 2 == 0) {
-                    std::swap(mcast_fwd_hops, mcast_bwd_hops);
+                    std::swap(num_fwd_hops, num_bwd_hops);
                 }
-                sync_mcast_fwd_hops = mcast_fwd_hops;
-                sync_mcast_bwd_hops = mcast_bwd_hops;
+                sync_num_fwd_hops = num_fwd_hops;
+                sync_num_bwd_hops = num_bwd_hops;
                 // We will get 1 inc per remote chip + 1 local
                 sync_count_per_link = num_devices_with_workers;
             } else if (fabric_mode == FabricTestMode::FullRing) {
-                mcast_fwd_hops = line_size - 1;
-                mcast_bwd_hops = line_size - 1;
-                sync_mcast_fwd_hops = mcast_fwd_hops;
-                sync_mcast_bwd_hops = mcast_bwd_hops;
+                num_fwd_hops = line_size - 1;
+                num_bwd_hops = line_size - 1;
+                sync_num_fwd_hops = num_fwd_hops;
+                sync_num_bwd_hops = num_bwd_hops;
                 // We will get 2 inc per remote chip + 1 local
                 sync_count_per_link = 2 * (num_devices_with_workers - 1) + 1;
             } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
@@ -2539,37 +2540,39 @@ void Run1DFabricPacketSendTest(
                 // Mcast 3 hops from chip 0 F and chip 3 B, which is S1 -> R0
                 // Mcast 4 hops from Chip 3 F and chip 0 B, which is S2 -> R1
                 if (line_index == line_size - 1) {
-                    mcast_fwd_hops = line_size - 1;
+                    num_fwd_hops = line_size - 1;
                 } else {
-                    mcast_fwd_hops = line_size - 2 - line_index;
+                    num_fwd_hops = line_size - 2 - line_index;
                 }
                 if (line_index == 0) {
-                    mcast_bwd_hops = line_size - 1;
+                    num_bwd_hops = line_size - 1;
                 } else {
-                    mcast_bwd_hops = line_index - 1;
+                    num_bwd_hops = line_index - 1;
                 }
                 // The above calculations calculates the number of hops to land on the dest chip
                 // Extend by one so we mcast through them
-                if (mcast_fwd_hops != 0) {
-                    mcast_fwd_hops++;
+                if (num_fwd_hops != 0) {
+                    num_fwd_hops++;
                 }
-                if (mcast_bwd_hops != 0) {
-                    mcast_bwd_hops++;
+                if (num_bwd_hops != 0) {
+                    num_bwd_hops++;
                 }
                 // Flush all the way around the ring
-                sync_mcast_fwd_hops = line_size;
-                sync_mcast_bwd_hops = line_size;
+                sync_num_fwd_hops = line_size;
+                sync_num_bwd_hops = line_size;
                 // We will get 2 inc for all chips + 1 local
                 sync_count_per_link = 2 * num_devices_with_workers + 1;
             } else {
                 TT_THROW("Invalid fabric mode");
             }
-            if (mcast_fwd_hops >= mcast_bwd_hops) {
+            if (num_fwd_hops >= num_bwd_hops) {
                 unicast_forward = true;
-                unicast_hops = mcast_fwd_hops;
+                unicast_hops = num_fwd_hops;
+                num_bwd_hops = 0;
             } else {
                 unicast_forward = false;
-                unicast_hops = mcast_bwd_hops;
+                unicast_hops = num_bwd_hops;
+                num_fwd_hops = 0;
             }
         } else {
             backward_device = i == 0 ? nullptr : devices[i - 1];
@@ -2581,11 +2584,21 @@ void Run1DFabricPacketSendTest(
             has_forward_connection = !end_of_line;
             has_backward_connection = !start_of_line;
             unicast_forward = line_index < (line_size / 2);
-            mcast_fwd_hops = line_size - line_index - 1;
-            mcast_bwd_hops = line_index;
-            unicast_hops = unicast_forward ? mcast_fwd_hops : mcast_bwd_hops;
-            sync_mcast_fwd_hops = mcast_fwd_hops;
-            sync_mcast_bwd_hops = mcast_bwd_hops;
+            num_fwd_hops = line_size - line_index - 1;
+            num_bwd_hops = line_index;
+            sync_num_fwd_hops = num_fwd_hops;
+            sync_num_bwd_hops = num_bwd_hops;
+
+            // Do this AFTER sync_num_fwd_hops and sync_num_bwd_hops are set
+            // otherwise sync hops will be misconfigured - you'll get a hang because
+            // setup/teardown will be done incorrectly
+            if (params.senders_are_unidirectional) {
+                if (unicast_forward) {
+                    num_bwd_hops = 0;
+                } else {
+                    num_fwd_hops = 0;
+                }
+            }
             // We will get 1 inc per remote chip + 1 local
             sync_count_per_link = num_devices_with_workers;
         }
@@ -2688,8 +2701,8 @@ void Run1DFabricPacketSendTest(
                     send_types.push_back(static_cast<size_t>(test_spec.noc_send_type));
                     chip_send_types.push_back(static_cast<size_t>(test_spec.chip_send_type));
                     send_counts_per_type.push_back(test_spec.num_messages);
-                    num_fwd_hops_per_type.push_back(mcast_fwd_hops);
-                    num_bwd_hops_per_type.push_back(mcast_bwd_hops);
+                    num_fwd_hops_per_type.push_back(num_fwd_hops);
+                    num_bwd_hops_per_type.push_back(num_bwd_hops);
                     send_type_payload_sizes.push_back(test_spec.packet_payload_size_bytes);
                     flush_send.push_back(test_spec.flush);
                 }
@@ -2737,8 +2750,8 @@ void Run1DFabricPacketSendTest(
                 TT_FATAL(global_semaphore_addrs.at(0) != -1, "Invalid test setup. Global semaphore address is -1");
                 rt_args.push_back(global_semaphore_addrs.at(0));
                 rt_args.push_back(num_links * sync_count_per_link);
-                rt_args.push_back(sync_mcast_fwd_hops);
-                rt_args.push_back(sync_mcast_bwd_hops);
+                rt_args.push_back(sync_num_fwd_hops);
+                rt_args.push_back(sync_num_bwd_hops);
             }
 
             tt_metal::SetRuntimeArgs(program, worker_kernel_id, worker_core, rt_args);

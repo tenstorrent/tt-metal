@@ -58,7 +58,8 @@ struct TestParams {
     size_t dest_noc_y_bwd = 0;
     size_t dest_bank_addr_bwd = 0;
     size_t payload_size_bytes = 0;
-    tt::tt_fabric::ChipSendType chip_send_type = tt::tt_fabric::CHIP_UNICAST bool flush = true;
+    tt::tt_fabric::ChipSendType chip_send_type = tt::tt_fabric::CHIP_UNICAST;
+    bool flush = true;
 };
 
 static FORCE_INLINE void setup_packet_header(
@@ -162,6 +163,41 @@ void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC>(
         0);
 
     pkt_hdr_bwd->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc0_dest_addr_bwd, 1, 128, params.flush});
+
+    if (params.num_fwd_hops > 0 && params.num_bwd_hops > 0) {
+        for (size_t i = 0; i < params.send_count; i++) {
+            fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+            fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
+                (uint32_t)pkt_hdr_fwd, sizeof(PACKET_HEADER_TYPE));
+
+            fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+            fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
+                (uint32_t)pkt_hdr_bwd, sizeof(PACKET_HEADER_TYPE));
+
+            noc_async_writes_flushed();
+        }
+
+    } else if (params.num_fwd_hops > 0) {
+        for (size_t i = 0; i < params.send_count; i++) {
+            fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+            fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
+                (uint32_t)pkt_hdr_fwd, sizeof(PACKET_HEADER_TYPE));
+
+            noc_async_writes_flushed();
+        }
+
+    } else if (params.num_bwd_hops > 0) {
+        for (size_t i = 0; i < params.send_count; i++) {
+            fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+            fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
+                (uint32_t)pkt_hdr_bwd, sizeof(PACKET_HEADER_TYPE));
+            noc_async_writes_flushed();
+        }
+
+    } else {
+        while (1);
+    }
+
     for (size_t i = 0; i < params.send_count; i++) {
         // Forward direction
         if (params.num_fwd_hops > 0) {

@@ -19,6 +19,7 @@ int main(int argc, char** argv) {
     uint32_t fabric_mode = std::stoi(argv[arg_idx++]);
     bool disable_sends_for_interior_workers = std::stoi(argv[arg_idx++]);
     bool unidirectional_test = std::stoi(argv[arg_idx++]);
+    bool senders_are_unidirectional = std::stoi(argv[arg_idx++]);
 
     uint32_t min_test_num_devices = 8;
     if (tt::tt_metal::GetNumAvailableDevices() < min_test_num_devices) {
@@ -43,6 +44,7 @@ int main(int argc, char** argv) {
     params.fabric_mode = static_cast<FabricTestMode>(fabric_mode);
     params.disable_sends_for_interior_workers = disable_sends_for_interior_workers;
     params.disable_end_workers_in_backward_direction = unidirectional_test;
+    params.senders_are_unidirectional = senders_are_unidirectional;
 
     auto chip_send_type = fabric_unicast ? tt::tt_fabric::CHIP_UNICAST : tt::tt_fabric::CHIP_MULTICAST;
 
