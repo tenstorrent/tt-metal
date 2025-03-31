@@ -27,12 +27,8 @@ void kernel_main() {
     constexpr uint32_t num_batches_per_core = get_compile_time_arg_val(11);
     constexpr uint32_t block_w = get_compile_time_arg_val(12);
 
-#define stick_size_is_pow2 get_compile_time_arg_val(13) == 1
-#if (stick_size_is_pow2)
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(14);
-#else
-    constexpr uint32_t page_size = get_compile_time_arg_val(14);
-#endif
+    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(13) == 1;
+    constexpr uint32_t size = get_compile_time_arg_val(14);
 
     const uint32_t gamma_addr = get_arg_val<uint32_t>(3);
     const uint32_t beta_addr = get_arg_val<uint32_t>(4);
@@ -87,13 +83,7 @@ void kernel_main() {
 
                 if constexpr (fuse_gamma) {
                     const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
-#if (stick_size_is_pow2)
-                    const InterleavedPow2AddrGen<gamma_is_dram> gamma = {
-                        .bank_base_address = gamma_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
-#else
-                    const InterleavedAddrGen<gamma_is_dram> gamma = {
-                        .bank_base_address = gamma_addr, .page_size = page_size};
-#endif
+                    const auto gamma = get_interleaved_addr_gen<gamma_is_dram, stick_size_is_pow2>(gamma_addr, size);
 
                     cb_reserve_back(cb_gamma, num_cols_tile_gamma_beta);
                     uint32_t l1_write_addr_gamma = get_write_ptr(cb_gamma);
@@ -117,13 +107,7 @@ void kernel_main() {
 
                 if constexpr (fuse_beta) {
                     const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
-#if (stick_size_is_pow2)
-                    const InterleavedPow2AddrGen<beta_is_dram> beta = {
-                        .bank_base_address = beta_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
-#else
-                    const InterleavedAddrGen<beta_is_dram> beta = {
-                        .bank_base_address = beta_addr, .page_size = page_size};
-#endif
+                    const auto beta = get_interleaved_addr_gen<beta_is_dram, stick_size_is_pow2>(beta_addr, size);
 
                     uint32_t l1_write_addr_beta = get_write_ptr(cb_beta);
                     cb_reserve_back(cb_beta, num_cols_tile_gamma_beta);
