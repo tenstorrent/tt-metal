@@ -3052,18 +3052,18 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
             const size_t num_send_types = 1;
             std::vector<uint32_t> send_types = {static_cast<uint32_t>(tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE)};
             std::vector<uint32_t> chip_send_types = {static_cast<uint32_t>(tt::tt_fabric::CHIP_MULTICAST)};
-            std::vector<uint32_t> send_counts_per_type = {static_cast<uint32_t>(num_op_invocations)};
+            std::vector<uint32_t> send_counts_per_type = {static_cast<uint32_t>(num_mcasts)};
             std::vector<uint32_t> num_fwd_hops_per_type = {
                 static_cast<uint32_t>(has_forward_connection ? mcast_fwd_hops : 0)};
             std::vector<uint32_t> num_bwd_hops_per_type = {
                 static_cast<uint32_t>(has_backward_connection ? mcast_bwd_hops : 0)};
             std::vector<uint32_t> send_type_payload_sizes = {static_cast<uint32_t>(packet_payload_size_bytes)};
             std::vector<uint32_t> flush_send = {static_cast<uint32_t>(flush_writes_before_atomic_inc)};
+
             // Initialize the base runtime args
             // RT ARGS
             std::vector<uint32_t> rt_args = {
                 dest_bank_addr,
-                packet_payload_size_bytes,
                 dest_noc_x,
                 dest_noc_y,
                 dest_noc_x,
