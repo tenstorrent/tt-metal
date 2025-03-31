@@ -334,5 +334,5 @@ class TtTransformerBlock:
 
 
 def chunk_time(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
-    size = t.shape[2] // count
-    return [t[:, :, i * size : (i + 1) * size] for i in range(count)]
+    size = t.shape[-1] // count
+    return [t[:, :, :, i * size : (i + 1) * size] for i in range(count)]

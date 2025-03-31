@@ -86,7 +86,7 @@ class TtAttentionPart:
     def qkv(self, x: ttnn.Tensor, *, num_heads: int, deallocate: bool) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         # tracy.signpost("enter TtAttentionPart")
 
-        _, _batch_size, sequence_length, _embedding_dim = x.shape
+        _batch_size, _, sequence_length, _embedding_dim = x.shape
 
         # Input sharding
         if sequence_length > 1024:
