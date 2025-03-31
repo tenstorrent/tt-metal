@@ -15,7 +15,7 @@ Quick Start Guide
 
 Metalium lets developers run models effortlessly out of the box, engage in
 lightweight optimizations, and progress to more sophisticated, heavyweight
-optimizations. The following steps showcase the available tools for 
+optimizations. The following steps showcase the available tools for
 optimizing performance on Tenstorrent hardware.
 
 1. Install and Build
