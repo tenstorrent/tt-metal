@@ -11,6 +11,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
@@ -2203,30 +2204,24 @@ std::vector<Tensor> Matmul::create_output_tensors(
 
 using MatmulCallback = tt::tt_metal::operation::OverrideRuntimeArgumentsCallback<std::vector<Tensor>>;
 
-MeshCoordinateRange get_range_from_mesh_coords(const std::vector<ttnn::MeshCoordinate>& mesh_coords) {
-    tt::tt_metal::distributed::MeshCoordinateRangeSet workload_device_ranges;
-    for (const auto& coord : mesh_coords) {
-        ttnn::MeshCoordinateRange coord_range{coord, coord};
-        workload_device_ranges.merge(coord_range);
-    }
-    TT_FATAL(workload_device_ranges.size() == 1, "Cannot support dispatching TTNN Ops to different device ranges.");
-    return *(workload_device_ranges.ranges().begin());
+MeshCoordinateRange get_range_from_mesh_coords(const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    TT_FATAL(tensor_coords.size() == 1, "Cannot support dispatching TTNN Ops to different device ranges.");
+    return tensor_coords.ranges().front();
 }
 
 operation::CacheableMeshWorkload<std::vector<Tensor>> create_homogenous_mesh_workload(
-    tt::tt_metal::operation::ProgramWithCallbacks& matmul_program,
-    const std::vector<ttnn::MeshCoordinate>& mesh_coords) {
-    auto workload_device_range = get_range_from_mesh_coords(mesh_coords);
+    tt::tt_metal::operation::ProgramWithCallbacks& matmul_program, const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     tt::tt_metal::distributed::MeshWorkload matmul_workload = tt::tt_metal::distributed::CreateMeshWorkload();
     std::unordered_map<MeshCoordinateRange, MatmulCallback> callbacks = {};
 
+    auto workload_device_range = get_range_from_mesh_coords(tensor_coords);
     AddProgramToMeshWorkload(matmul_workload, std::move(matmul_program.program), workload_device_range);
     callbacks[workload_device_range] = std::move(matmul_program.override_runtime_arguments_callback.value());
     return {.workload = std::move(matmul_workload), .per_program_callbacks = std::move(callbacks)};
 }
 
 operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_workload(
-    const std::vector<ttnn::MeshCoordinate>& mesh_coords,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
@@ -2279,7 +2274,7 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
                     /*fuse_batch=*/false,
                     this->untilize_out);
 
-                return create_homogenous_mesh_workload(bmm_program, mesh_coords);
+                return create_homogenous_mesh_workload(bmm_program, tensor_coords);
 
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig>) {
                 auto mcast_mm_program = matmul_multi_core_reuse_mcast_2d_optimized(
@@ -2302,7 +2297,7 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
                     program_config.fused_activation,
                     this->untilize_out);
 
-                return create_homogenous_mesh_workload(mcast_mm_program, mesh_coords);
+                return create_homogenous_mesh_workload(mcast_mm_program, tensor_coords);
 
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
                 auto mcast_mm_program = matmul_multi_core_reuse_mcast_1d_optimized(
@@ -2330,17 +2325,16 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
                     program_config.num_global_cb_receivers,
                     this->sub_device_id);
 
-                return create_homogenous_mesh_workload(mcast_mm_program, mesh_coords);
+                return create_homogenous_mesh_workload(mcast_mm_program, tensor_coords);
 
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
                 // DRAM Sharded Matmul generates different programs across devices, since it depends on harvesting.
                 // Account for this by creating a heterogenous MeshWorkload.
-                auto workload_device_range = get_range_from_mesh_coords(mesh_coords);
-                tt::tt_metal::distributed::MeshWorkload dram_sharded_mm_workload =
-                    tt::tt_metal::distributed::CreateMeshWorkload();
-                std::unordered_map<MeshCoordinateRange, MatmulCallback> callbacks = {};
+                auto workload_device_range = get_range_from_mesh_coords(tensor_coords);
+                tt::tt_metal::distributed::MeshWorkload dram_sharded_mm_workload;
+                std::unordered_map<MeshCoordinateRange, MatmulCallback> callbacks;
 
                 for (const auto& coord : workload_device_range) {
                     auto dram_sharded_mm_program = matmul_multi_core_reuse_dram_sharded_optimized(
@@ -2374,13 +2368,13 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
                     "reuse");
                 auto multicore_mm_program =
                     matmul_multi_core_reuse(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
-                return create_homogenous_mesh_workload(multicore_mm_program, mesh_coords);
+                return create_homogenous_mesh_workload(multicore_mm_program, tensor_coords);
 
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreProgramConfig>) {
                 TT_FATAL(!bias.has_value(), "Bias is not supported for matmul multi core");
                 auto multicore_mm_program =
                     matmul_multi_core(input_tensor_a, input_tensor_b, output_tensor, broadcast_batch);
-                return create_homogenous_mesh_workload(multicore_mm_program, mesh_coords);
+                return create_homogenous_mesh_workload(multicore_mm_program, tensor_coords);
             } else {
                 TT_THROW("Unrecognized Config");
             }
