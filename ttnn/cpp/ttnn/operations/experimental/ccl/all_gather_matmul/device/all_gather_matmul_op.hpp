@@ -110,6 +110,24 @@ std::vector<Tensor> all_gather_matmul(
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);
 
+std::vector<Tensor> all_gather_matmul(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<Tensor>& weight_tensors,
+    const uint32_t dim,
+    const CoreCoord all_gather_core_grid_offset,
+    const uint32_t num_links = 1,
+    const std::optional<MemoryConfig>& memory_config_ag = std::nullopt,
+    const std::optional<size_t> user_defined_num_workers = std::nullopt,
+    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config_mm = std::nullopt,
+    const bool transpose_a = false,
+    const bool transpose_b = false,
+    const std::optional<const DataType> dtype = std::nullopt,
+    const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
+    const std::optional<const std::string>& activation = std::nullopt,
+    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);
+
 }  // namespace ccl
 }  // namespace experimental
 }  // namespace operations
