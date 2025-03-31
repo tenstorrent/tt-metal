@@ -87,7 +87,7 @@ static void send_packets(
 }
 
 template <>
-void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE>(
+FORCE_INLINE void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE>(
     FabricConnectionManager& fabric_connection,
     volatile PACKET_HEADER_TYPE* pkt_hdr_fwd,
     volatile PACKET_HEADER_TYPE* pkt_hdr_bwd,

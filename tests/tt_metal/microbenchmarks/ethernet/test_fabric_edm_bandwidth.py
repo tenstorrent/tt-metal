@@ -177,6 +177,10 @@ def profile_results(
     total_byte_sent = total_packets_sent * packet_size
     bandwidth = total_byte_sent / max(main_loop_cycles)
     packets_per_second = total_packets_sent / max(main_loop_cycles) * freq_hz
+    bytes_per_GB = 1000000000
+    bandwidth_GB_s = (bandwidth * freq_hz) / bytes_per_GB
+    logger.info("main_loop_cycles: {} ", max(main_loop_cycles))
+    logger.info("bandwidth: {} GB/s", bandwidth)
 
     return bandwidth, packets_per_second
 
@@ -532,6 +536,7 @@ def test_fabric_one_link_non_forwarding_unicast_bw(
         packet_size=packet_size,
         fabric_mode=FabricTestMode.Linear,
         disable_sends_for_interior_workers=False,
+        senders_are_unidirectional=True,
     )
 
 
@@ -560,6 +565,7 @@ def test_fabric_two_link_non_forwarding_unicast_bw(
         packet_size=packet_size,
         fabric_mode=FabricTestMode.Linear,
         disable_sends_for_interior_workers=False,
+        senders_are_unidirectional=True,
     )
 
 
@@ -588,6 +594,7 @@ def test_fabric_one_link_forwarding_unicast_multiproducer_multihop_bw(
         packet_size=packet_size,
         fabric_mode=FabricTestMode.Linear,
         disable_sends_for_interior_workers=False,
+        senders_are_unidirectional=True,
     )
 
 
@@ -616,6 +623,8 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_bw(
         packet_size=packet_size,
         fabric_mode=FabricTestMode.Linear,
         disable_sends_for_interior_workers=True,
+        unidirectional=False,
+        senders_are_unidirectional=True,
     )
 
 
@@ -674,6 +683,7 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_atomic_inc_
         packet_size=packet_size,
         fabric_mode=FabricTestMode.Linear,
         disable_sends_for_interior_workers=True,
+        senders_are_unidirectional=True,
     )
 
 
@@ -713,6 +723,7 @@ def test_fabric_one_link_multihop_fused_write_atomic_inc_bw(
         fabric_mode=FabricTestMode.Linear,
         disable_sends_for_interior_workers=disable_sends_for_interior_workers,
         unidirectional=unidirectional,
+        senders_are_unidirectional=is_unicast,
     )
 
 

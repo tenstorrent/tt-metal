@@ -20,6 +20,7 @@ int main(int argc, char** argv) {
     bool disable_sends_for_interior_workers = std::stoi(argv[arg_idx++]);
     bool unidirectional_test = std::stoi(argv[arg_idx++]);
     bool senders_are_unidirectional = std::stoi(argv[arg_idx++]);
+    TT_FATAL(arg_idx == argc, "Missing args");
 
     uint32_t min_test_num_devices = 8;
     if (tt::tt_metal::GetNumAvailableDevices() < min_test_num_devices) {
