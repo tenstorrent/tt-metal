@@ -117,7 +117,7 @@ void MAIN {
         //         -----------
         //              n
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            pack_reconfig_data_format(cb_xmm);
+            // pack_reconfig_data_format(cb_xmm);
             tile_regs_acquire();
             tile_regs_wait();
             cb_wait_front(cb_in, blk);
@@ -167,7 +167,7 @@ void MAIN {
                 cb_pop_front(cb_ex2, onetile);
             }
             reconfig_data_format(cb_xmm, cb_scaler);
-            pack_reconfig_data_format(cb_ex2);
+            // pack_reconfig_data_format(cb_ex2);
             cb_wait_front(cb_xmm, blk);
             reduce_init_delta<false>(cb_xmm, cb_scaler, cb_ex2);
             // accumulates squared residual
@@ -222,7 +222,7 @@ void MAIN {
         tile_regs_acquire();
         tile_regs_wait();
         reconfig_data_format_srca(cb_ex2pe);
-        pack_reconfig_data_format(cb_ex2pe);
+        // pack_reconfig_data_format(cb_ex2pe);
         unary_bcast_init<BroadcastType::COL>(cb_ex2pe, cb_ex2pe);
         unary_bcast<BroadcastType::COL>(cb_ex2pe, 0, dst0);
         cb_pop_front(cb_ex2pe, onetile);

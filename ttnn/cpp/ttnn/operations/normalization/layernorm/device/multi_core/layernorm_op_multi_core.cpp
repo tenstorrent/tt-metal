@@ -91,8 +91,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     float eps,
     DeviceComputeKernelConfig compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    const uint32_t no_weights_max_size = 200;
-    const uint32_t with_weights_max_size = 120;
+    const uint32_t no_weights_max_size = 120;
+    const uint32_t with_weights_max_size = 60;
     bool rms_norm = norm_type == LayerNormType::RMSNORM;
     const auto shape = a.get_padded_shape();
     uint32_t W = shape[-1], H = shape[-2];
@@ -234,6 +234,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         in6_t = WtB;  // buffer for beta
         if (b) {
             im6_t = WtB;
+            in0_t = 2 * block_size;
         }
     }
 
