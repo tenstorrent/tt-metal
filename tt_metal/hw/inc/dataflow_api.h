@@ -1660,29 +1660,6 @@ FORCE_INLINE void noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_id
     WAYPOINT("NSID");
 }
 
-// clang-format off
-/**
- * Performs an atomic increment operation to multiple destination semaphores simultaneously.
- * This is the multicast version of noc_semaphore_inc.
- *
- * | Argument  | Description                            | Type     | Valid Range        | Required |
- * |-----------|----------------------------------------|----------|--------------------|----------|
- * | addr      | Semaphore address in local L1 memory   | uint32_t | 0..1MB             | True     |
- * | val       | The target value of the semaphore      | uint32_t | Any uint32_t value | True     |
- * | num_dests | Number of destinations that the multicast operation targets | uint32_t | Any uint32_t value | True     |
- * | linked    | Whether to use VC linking, defaults to false | bool | Any bool value | False     |
- * | noc_id    | The NOC to use, defaults to noc_index | uint8_t | Any uint8_t value | False     |
- */
-// clang-format on
-FORCE_INLINE
-void noc_multicast_semaphore_inc(
-    uint64_t addr, uint32_t incr, uint32_t num_dests, bool linked = false, uint8_t noc_id = noc_index) {
-    WAYPOINT("NMSW");
-    noc_multicast_fast_atomic_increment<noc_mode>(
-        noc_id, write_at_cmd_buf, addr, NOC_MULTICAST_WRITE_VC, incr, 31 /*wrap*/, linked, num_dests, false /*posted*/);
-    WAYPOINT("NMSD");
-}
-
 inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
     invalidate_l1_cache();
     volatile uint32_t* ptr = (volatile uint32_t*)(0x1C);
