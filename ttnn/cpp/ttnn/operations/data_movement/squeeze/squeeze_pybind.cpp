@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,6 @@
 
 #include "cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
-#include "ttnn/types.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -22,11 +21,22 @@ void bind_squeeze(pybind11::module& module, const data_movement_operation_t& ope
         operation,
         doc,
         ttnn::pybind_overload_t{
-            [](const data_movement_operation_t& self, const ttnn::Tensor& input_tensor, const int dim) -> ttnn::Tensor {
-                return self(input_tensor, dim);
+            [](const data_movement_operation_t& self, const ttnn::Tensor& input_tensor, const pybind11::object& dim)
+                -> ttnn::Tensor {
+                if (dim.is_none()) {  // None
+                    return self(input_tensor);
+                } else if (pybind11::isinstance<pybind11::int_>(dim)) {  // int
+                    return self(input_tensor, dim.cast<int>());
+                } else if (pybind11::isinstance<pybind11::list>(dim)) {  // List[int]
+                    auto dims = dim.cast<ttnn::SmallVector<int>>();
+                    return self(input_tensor, dims);
+                } else {
+                    throw std::invalid_argument("dim must be an int, a list of ints, or None");
+                }
             },
             py::arg("input_tensor"),
-            py::arg("dim")});
+            py::arg("dim") = pybind11::none()  // Default value is None
+        });
 }
 
 }  // namespace detail
@@ -37,7 +47,9 @@ void py_bind_squeeze(pybind11::module& module) {
         ttnn::squeeze,
         R"doc(squeeze(input_tensor: ttnn.Tensor,  dim: int) -> ttnn.Tensor
 
-        Returns a tensor squeezed at the specified dimension. Pytorch supports a tuple as well as a single scalar value for dim, currently our version only supports scalar values. We will address this in the future. If input_tensor.shape()[dim] is not 1, squeeze will be ignored for that shape.
+        Returns a tensor with the specified dimensions squeezed. If `dim` is not provided, all dimensions of size 1 will be squeezed. If `dim` is an integer, only the specified dimension will be squeezed. If `dim` is a list of integers, all specified dimensions will be squeezed.
+
+        If a specified dimension in `dim` does not have size 1, it will be ignored.
 
         Equivalent pytorch code:
 
