@@ -9,6 +9,8 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
+    with:
+      build-wheel: true
 
   fabric-unit-tests:
     needs: build-artifact
@@ -22,5 +24,7 @@ jobs:
     uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
     with:
       arch: ${{ matrix.test-group.arch}}
-      os: ubuntu-22.04
       runner-label: ${{ matrix.test-group.runner-label}}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
