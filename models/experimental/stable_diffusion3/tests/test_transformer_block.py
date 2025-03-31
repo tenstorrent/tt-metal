@@ -29,8 +29,8 @@ if TYPE_CHECKING:
 @pytest.mark.parametrize(
     ("model_name", "block_index", "batch_size", "spatial_sequence_length", "prompt_sequence_length"),
     [
-        ("large", 0, 1, 4096, 333),
-        #        ("large", 23, 1, 4096, 333),
+        ("large", 0, 2, 4096, 333),
+        #        ("large", 23, 2, 4096, 333),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 716800}], indirect=True)
@@ -87,7 +87,7 @@ def test_transformer_block(
     else:
         spatial_padding = 0
     spatial_padded_4D = torch.nn.functional.pad(
-        spatial.unsqueeze(0), pad=(0, 0, 0, spatial_padding), mode="constant", value=0
+        spatial.unsqueeze(1), pad=(0, 0, 0, spatial_padding), mode="constant", value=0
     )
     if pad_40_heads:
         spatial_padded_4D = torch.nn.functional.pad(
@@ -105,7 +105,7 @@ def test_transformer_block(
     else:
         prompt_padding = 0
     prompt_padded_4D = torch.nn.functional.pad(
-        prompt.unsqueeze(0), pad=(0, 0, 0, prompt_padding), mode="constant", value=0
+        prompt.unsqueeze(1), pad=(0, 0, 0, prompt_padding), mode="constant", value=0
     )
     if pad_40_heads:
         prompt_padded_4D = torch.nn.functional.pad(
@@ -120,10 +120,12 @@ def test_transformer_block(
     if pad_40_heads:
         time_padded_2D = torch.nn.functional.pad(time, pad=(0, embedding_dim_padding), mode="constant", value=0)
         tt_time = from_torch(
-            time_padded_2D.unsqueeze(1), dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT
+            time_padded_2D.unsqueeze(1).unsqueeze(1), dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT
         )
     else:
-        tt_time = from_torch(time.unsqueeze(1), dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT)
+        tt_time = from_torch(
+            time.unsqueeze(1).unsqueeze(1), dtype=ttnn_dtype, mesh_device=mesh_device, layout=ttnn.TILE_LAYOUT
+        )
 
     with torch.no_grad():
         spatial_output, prompt_output = torch_model(spatial=spatial, prompt=prompt, time_embed=time)
