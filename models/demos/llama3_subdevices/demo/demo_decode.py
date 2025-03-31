@@ -103,7 +103,7 @@ def run_llama3_demo(
     weights,
     layers,
     stress_test,
-    start_iter,
+    start_pos,
 ):
     # Creat batch output file
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -232,7 +232,7 @@ def run_llama3_demo(
 
     logger.info("Starting decode...")
     # Initial positions
-    decoding_pos = [0] * batch_size
+    decoding_pos = [start_pos] * batch_size
     current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
 
     current_pos_tensor = ttnn.from_torch(
@@ -377,7 +377,7 @@ def run_llama3_demo(
     ttnn.synchronize_device(mesh_device)
 
     # Start decoding
-    iteration = start_iter
+    iteration = 0
     users_decoding = True  # reset to handle next batch
     total_decoding_time = 0  # Track total decoding time
     total_tokens_generated = 0  # Track total tokens generated
@@ -489,7 +489,7 @@ def run_llama3_demo(
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 # FAKE_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export FAKE_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
-    "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_iter",
+    "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos",
     [
         (  # full demo, batch 32
             "instruct",
@@ -504,7 +504,7 @@ def run_llama3_demo(
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
-            0,  # start_iter
+            0,  # start_pos
         ),
         (  # quick 1L demo
             "random",
@@ -519,7 +519,7 @@ def run_llama3_demo(
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
-            0,  # start_iter
+            0,  # start_pos
         ),
         (  # Stress test: batch-32 very long generations but at same token index
             "instruct",
@@ -534,7 +534,7 @@ def run_llama3_demo(
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
-            0,  # start_iter
+            0,  # start_pos
         ),
         (  # 10 layers for devive perf measurements
             "random",
@@ -549,7 +549,7 @@ def run_llama3_demo(
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
-            127,  # start_iter
+            127,  # start_pos
         ),
     ],
     ids=[
@@ -589,7 +589,7 @@ def test_llama_demo(
     page_params,
     sampling_params,
     stress_test,
-    start_iter,
+    start_pos,
     optimizations,
     mesh_device,
     use_program_cache,
@@ -630,5 +630,5 @@ def test_llama_demo(
         weights=weights,
         layers=layers,
         stress_test=stress_test,
-        start_iter=start_iter,
+        start_pos=start_pos,
     )
