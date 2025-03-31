@@ -23,10 +23,8 @@
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write.hpp"
-#include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/types.hpp"
 namespace ttnn {
 namespace operations::conv {
@@ -134,7 +132,7 @@ Result conv2d_DRAM(
 
     ttnn::Tensor input_tensor_on_device;
     if (!is_tensor_on_device_or_multidevice(input_tensor)) {
-        input_tensor_on_device = ttnn::operations::core::to_device(input_tensor, device, std::nullopt);
+        input_tensor_on_device = ttnn::operations::core::to_device(input_tensor, device, ttnn::DRAM_MEMORY_CONFIG);
     } else {
         input_tensor_on_device = input_tensor;
     }
