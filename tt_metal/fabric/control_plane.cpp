@@ -593,6 +593,8 @@ void ControlPlane::write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chi
 
             fabric_router_config.my_mesh_id = mesh_id;
             fabric_router_config.my_device_id = chip_id;
+            fabric_router_config.north_dim = this->routing_table_generator_->get_mesh_ns_size(mesh_id);
+            fabric_router_config.east_dim = this->routing_table_generator_->get_mesh_ew_size(mesh_id);
 
             // Write data to physical eth core
             CoreCoord virtual_eth_core =
@@ -669,6 +671,30 @@ std::vector<chan_id_t> ControlPlane::get_valid_eth_chans_on_routing_plane(
         }
     }
     return valid_eth_chans;
+}
+
+eth_chan_directions ControlPlane::routing_direction_to_eth_direction(RoutingDirection direction) const {
+    eth_chan_directions dir;
+    switch (direction) {
+        case RoutingDirection::N: dir = eth_chan_directions::NORTH; break;
+        case RoutingDirection::S: dir = eth_chan_directions::SOUTH; break;
+        case RoutingDirection::E: dir = eth_chan_directions::EAST; break;
+        case RoutingDirection::W: dir = eth_chan_directions::WEST; break;
+        default: TT_FATAL(false, "Invalid Routing Direction");
+    }
+    return dir;
+}
+
+eth_chan_directions ControlPlane::get_eth_chan_direction(mesh_id_t mesh_id, chip_id_t chip_id, int chan) const {
+    for (const auto& [direction, eth_chans] :
+         this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id]) {
+        for (const auto& eth_chan : eth_chans) {
+            if (chan == eth_chan) {
+                return this->routing_direction_to_eth_direction(direction);
+            }
+        }
+    }
+    TT_THROW("Cannot Find Ethernet Channel Direction");
 }
 
 std::vector<std::pair<chip_id_t, chan_id_t>> ControlPlane::get_fabric_route(
