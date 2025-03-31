@@ -271,7 +271,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
     auto& output_tensor = output_tensors.at(0);
     tt::tt_metal::IDevice* device = input_tensor_a.device();
 
-    const auto has_bias = input_tensor_bias.has_value();
+    const bool has_bias = input_tensor_bias.has_value();
 
     const auto weights_shape = input_tensor_b.get_padded_shape();
 
@@ -329,7 +329,8 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             input_tensor_shape[3],
             output_channels,
             kernel_dims[1],
-            sliding_window_config.get_output_shape()[2]));
+            sliding_window_config.get_output_shape()[2],
+            has_bias));
 
     TT_FATAL(
         actual_cb_size == l1_usage.CB_allocation_size,
