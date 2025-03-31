@@ -517,7 +517,7 @@ def run_llama3_demo(
             1,  # repeat_batches
             1024,  # max_seq_len
             32,  # batch_size
-            4*128*1024,  # max_generated_tokens (same index for stress test)
+            4 * 128 * 1024,  # max_generated_tokens (same index for stress test)
             False,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
@@ -535,8 +535,9 @@ def run_llama3_demo(
     [
         ("random", 1),
         ("instruct", 80),
+        ("instruct", 10),
     ],
-    ids=["quick", "full"],
+    ids=["quick", "full", "measure"],
 )
 @pytest.mark.parametrize(
     "optimizations",

@@ -465,7 +465,7 @@ class TT_CCL:
             cluster_axis=cluster_axis,
             mesh_device=self.mesh_device,
             topology=ttnn.Topology.Linear,
-            multi_device_global_semaphore=semaphore,
+            multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
             persistent_output_tensor=persistent_buffer,
             num_links=num_links,
             memory_config=memory_config,
@@ -606,7 +606,6 @@ def tt_sharded_distributed_rmsnorm(
         strategy=ttnn.ShardStrategy.WIDTH,
         use_height_and_width_as_shard_shape=True,
     )
-    persistent_output_tensor = tt_ccl.all_gather_buffers.get("LAYERNORM", None)
     tt_stats = ttnn.fused_rms_1_1_32_8192(
         inp,
         ln_sharded_progcfg,
@@ -614,7 +613,6 @@ def tt_sharded_distributed_rmsnorm(
         tt_ccl.mesh_device,
         semaphore,
         residual_input_tensor=res,
-        persistent_output_tensor=persistent_output_tensor,
         num_links=1,
         memory_config=tt_stats_sharded_config,
         is_pre=True,
