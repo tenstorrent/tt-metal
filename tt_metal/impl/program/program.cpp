@@ -2,35 +2,99 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <range/v3/view/filter.hpp>
-#include <range/v3/view/transform.hpp>
-
-#include <circular_buffer_types.hpp>
-#include "common/executor.hpp"
-#include <profiler.hpp>
-#include "tt_metal/detail/kernel_cache.hpp"
-#include <persistent_kernel_cache.hpp>
-#include <memory_reporter.hpp>
-#include <tt_metal.hpp>
-#include <graph_tracking.hpp>
-#include <host_api.hpp>
 #include <allocator.hpp>
 #include <circular_buffer.hpp>
-#include <semaphore.hpp>
-#include "dprint_server.hpp"
+#include <circular_buffer_types.hpp>
 #include <device.hpp>
-#include <command_queue.hpp>
+#include <graph_tracking.hpp>
+#include <magic_enum/magic_enum.hpp>
+#include <memory_reporter.hpp>
+#include <persistent_kernel_cache.hpp>
+#include <semaphore.hpp>
+#include <tt_align.hpp>
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <bitset>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <functional>
+#include <future>
+#include <initializer_list>
+#include <limits>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <set>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "assert.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "circular_buffer_constants.h"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "dev_msgs.h"
+#include "dispatch/dispatch_core_manager.hpp"
+#include "dispatch_core_common.hpp"
+#include "dprint_server.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "jit_build/build.hpp"
+#include "jit_build_options.hpp"
+#include "kernel.hpp"
+#include "kernel_types.hpp"
+#include "lightmetal/host_api_capture_helpers.hpp"
+#include "lightmetal/lightmetal_capture.hpp"
+#include "llrt.hpp"
+#include "logger.hpp"
+#include "profiler_state.hpp"
+#include "program_command_sequence.hpp"
+#include "program_device_map.hpp"
+#include "program_impl.hpp"
+#include "rtoptions.hpp"
+#include "span.hpp"
+#include "strong_type.hpp"
+#include "sub_device_types.hpp"
+#include "system_memory_manager.hpp"
+#include "tile.hpp"
+#include "tt_backend_api_types.hpp"
+#include "tt_memory.h"
+#include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
-#include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
-#include "llrt.hpp"
-#include "program_command_sequence.hpp"
-#include "tracy/Tracy.hpp"
-#include <tt_align.hpp>
-#include <tuple>
-#include "lightmetal/host_api_capture_helpers.hpp"
+#include "tt_metal/jit_build/genfiles.hpp"
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/xy_pair.h"
+#include "util.hpp"
+#include "utils.hpp"
+
+namespace tt {
+class tt_hlk_desc;
+enum CBIndex : std::uint8_t;
+namespace tt_metal {
+class CommandQueue;
+class EnqueueProgramCommand;
+namespace detail {
+class Internal_;
+}  // namespace detail
+namespace experimental {
+class GlobalCircularBuffer;
+}  // namespace experimental
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

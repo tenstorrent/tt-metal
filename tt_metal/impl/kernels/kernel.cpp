@@ -2,25 +2,36 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <kernel.hpp>
-#include <kernel_types.hpp>
-
-#include <fmt/core.h>
-#include <fmt/ranges.h>
-
-#include <magic_enum/magic_enum.hpp>
-#include <set>
-
-#include "llrt.hpp"
-#include <string_view>
-#include <tt_metal.hpp>
-#include "tt_metal/impl/debug/watcher_server.hpp"
-#include <utils.hpp>
 #include <core_coord.hpp>
 #include <device.hpp>
-#include "tt_metal/jit_build/genfiles.hpp"
+#include <fmt/ranges.h>
+#include <kernel.hpp>
+#include <kernel_types.hpp>
+#include <magic_enum/magic_enum.hpp>
+#include <utils.hpp>
+#include <algorithm>
+#include <cstring>
+#include <filesystem>
+#include <memory>
+#include <set>
+#include <string_view>
+#include <type_traits>
+#include <utility>
+
+#include "assert.hpp"
+#include "data_types.hpp"
+#include "hal.hpp"
+#include "jit_build/build.hpp"
+#include "jit_build_options.hpp"
+#include "llrt.hpp"
+#include "logger.hpp"
+#include "rtoptions.hpp"
+#include "span.hpp"
+#include "tt_memory.h"
+#include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
-#include "hw/inc/wormhole/eth_l1_address_map.h"
+#include "tt_metal/jit_build/genfiles.hpp"
+#include "umd/device/types/arch.h"
 
 namespace tt {
 

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <tt-metalium/dispatch_settings.hpp>
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
@@ -14,15 +16,27 @@
 #include <utility>
 #include <vector>
 
-#include "env_lib.hpp"
 #include "command_queue_interface.hpp"
-#include <tt-metalium/dispatch_settings.hpp>
+#include "core_coord.hpp"
 #include "device_command.hpp"
+#include "env_lib.hpp"
 #include "multi_producer_single_consumer_queue.hpp"
+#include "program_impl.hpp"
+#include "sub_device_types.hpp"
+#include "trace_buffer.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "worker_config_buffer.hpp"
-#include "program_impl.hpp"
-#include "trace_buffer.hpp"
+
+enum class CoreType;
+namespace tt {
+namespace tt_metal {
+class IDevice;
+class Program;
+class SystemMemoryManager;
+class WorkerConfigBufferMgr;
+enum NOC : uint8_t;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
