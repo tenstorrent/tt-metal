@@ -335,6 +335,7 @@ void MAIN {
 #endif
     uint32_t Wt_blocks = Wt / blocks;
     Wt_blocks += Wt % blocks == 0 ? 0 : 1;
+    // First loop is to parse and find the sum
     for (uint32_t wt_block = 0; wt_block < Wt_blocks; wt_block += blocks) {
         // iterates through block and makes sure it doesnt overextend
         for (uint_32t b = 0; b < block and wt_block + b < Wt; b += ndst) {
@@ -361,6 +362,7 @@ void MAIN {
 #endif
         }
 
+        // second loop for calculating the final value
         for (uint_32t b = 0; b < block and wt_block + b < Wt; b += ndst) {
             for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
                 if (wt == (Wt - ndst) && (wt8 == ndst - 1)) {
