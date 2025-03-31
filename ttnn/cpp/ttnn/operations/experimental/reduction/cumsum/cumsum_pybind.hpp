@@ -12,6 +12,5 @@ namespace py = pybind11;
 
 namespace ttnn::operations::experimental::reduction {
 
-void bind_example_operation(py::module& module);
-
+void bind_cumsum_operation(py::module& module);
 }

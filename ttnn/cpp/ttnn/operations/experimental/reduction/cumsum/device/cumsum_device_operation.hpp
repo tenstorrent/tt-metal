@@ -16,8 +16,8 @@ namespace ttnn::operations::experimental::reduction {
 
 struct CumSumDeviceOperation {
     struct operation_attributes_t {
-        const tt::tt_metal::DataType dtype = tt::tt_metal::DataType::INVALID;
         const int dim;  // axis to perform cumsum on (must be `-tensor.dim <= dim < tensor.dim`)
+        const tt::tt_metal::DataType dtype = tt::tt_metal::DataType::INVALID;
     };
 
     struct tensor_args_t {
@@ -26,13 +26,10 @@ struct CumSumDeviceOperation {
     };
 
     using spec_return_value_t = ttnn::TensorSpec;
-
     using tensor_return_value_t = Tensor;
 
     struct SingleCore {
         struct shared_variables_t {};
-        // [?] What does 'cached' refer to ? What is the difference between this
-        // and a regular program
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
         static cached_program_t create(
@@ -55,7 +52,7 @@ struct CumSumDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
-    static tensor_return_value_t create_output_tensor(const operation_attributes_t&, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
