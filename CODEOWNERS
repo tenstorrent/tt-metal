@@ -184,7 +184,6 @@ models/*/squeezebert/ @cfjchu @uaydonat
 models/demos/ttnn_falcon7b @cfjchu @uaydonat
 models/*/vgg/ @bbradelTT @uaydonat
 models/demos/wormhole @uaydonat
-models/demos/wormhole/vit @mbahnasTT @uaydonat
 models/demos/t3000 @uaydonat
 models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat
 models/demos/llama3_subdevices @johanna-rock-tt @kpaigwar @avoraTT @sraizada-tt @djordje-tt
