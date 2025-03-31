@@ -17,6 +17,7 @@
 #include "dispatch/kernels/cq_commands.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
+#include "host_api.hpp"
 #include "hostdevcommon/profiler_common.h"
 #include "llrt.hpp"
 #include "logger.hpp"
@@ -28,6 +29,7 @@
 #include "tracy/Tracy.hpp"
 #include "tt_backend_api_types.hpp"
 #include "tt_cluster.hpp"
+#include <tt_metal.hpp>
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"

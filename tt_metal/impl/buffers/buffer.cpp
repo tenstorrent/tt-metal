@@ -22,10 +22,23 @@
 #include "tt_align.hpp"
 #include "util.hpp"
 
+// Needed if profiler is enabled
+#include <tt_metal.hpp>
+#include "fmt/base.h"
+#include "llrt/hal.hpp"
+#include "rtoptions.hpp"
+#include "tracy/Tracy.hpp"
+#include "umd/device/tt_soc_descriptor.h"
+
 namespace tt::tt_metal {
 namespace {
 
 #if defined(TRACY_ENABLE)
+
+#include <unordered_map>
+#include <mutex>
+#include <fmt/format.h>
+#include <magic_enum/magic_enum.hpp>
 
 std::unordered_map<int, std::string> global_mempool_names;
 std::mutex global_mempool_names_mutex;

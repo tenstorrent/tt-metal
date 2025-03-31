@@ -50,6 +50,12 @@
 #include "umd/device/types/xy_pair.h"
 #include "utils.hpp"
 
+// Needed if profiler is enabled
+#include <core_descriptor.hpp>
+#include <dispatch_core_common.hpp>
+#include "dprint_server.hpp"
+#include "llrt/hal.hpp"
+
 class ProfilerOptionalMetadata;
 
 namespace tt {
