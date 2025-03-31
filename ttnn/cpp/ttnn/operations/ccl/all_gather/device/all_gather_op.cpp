@@ -180,7 +180,8 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGather::create_program_at(
     uint32_t device_index = 0;
     std::optional<chip_id_t> receiver_device_id;
     std::optional<chip_id_t> sender_device_id;
-    auto target_device = mesh_device ? mesh_device->get_device(mesh_coord) : input_tensors.at(0).device();
+    auto target_device = input_tensors.at(0).mesh_device() ? input_tensors.at(0).mesh_device()->get_device(mesh_coord)
+                                                           : input_tensors.at(0).device();
     if (this->cluster_axis.has_value()) {
         const auto& mesh_view = mesh_device->get_view();
         TT_FATAL(
