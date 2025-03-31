@@ -20,6 +20,13 @@ jobs:
       matrix:
         test-group: [
           { name: "TG CCL tests", arch: wormhole_b0, cmd: "pytest tests/nightly/tg/ccl", timeout: 70, owner_id: ULMEPM2MA}, # Sean Nijjar
+          {
+            name: "Llama TG Accuracy Test",
+            arch: wormhole_b0,
+            cmd: "LLAMA_DIR=llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/ FAKE_DEVICE=TG pytest models/demos/llama3_subdevices/tests/test_llama_accuracy.py",
+            timeout: 20,
+            owner_id: U071CKL4AFK
+          }, # Ammar Vora
         ]
     name: ${{ matrix.test-group.name }}
     runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "pipeline-functional"]
