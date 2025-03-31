@@ -598,6 +598,7 @@ inline void fabric_atomic_inc_add_header(
     uint64_t dst_addr,
     uint32_t atomic_inc,
     uint32_t wrap_boundary) {
+#if defined(FVC_MODE_PULL) || !defined(LOW_LATENCY_ROUTING)
     packet_header_t* packet_header = (packet_header_t*)(src_addr);
     packet_header->routing.flags = INLINE_FORWARD;
     packet_header->routing.packet_size_bytes = PACKET_HEADER_SIZE_BYTES;
@@ -609,6 +610,15 @@ inline void fabric_atomic_inc_add_header(
     packet_header->packet_parameters.atomic_parameters.wrap_boundary = wrap_boundary;
     packet_header->packet_parameters.atomic_parameters.increment = atomic_inc;
     tt_fabric_add_header_checksum(packet_header);
+#else
+    low_latency_packet_header_t* packet_header = (low_latency_packet_header_t*)(src_addr);
+    packet_header->routing.packet_size_bytes = PACKET_HEADER_SIZE_BYTES;
+    packet_header->routing.atomic_offset_l = (uint32_t)dst_addr;
+    packet_header->routing.atomic_offset_h = dst_addr >> 32;
+    packet_header->routing.atomic_increment = atomic_inc;
+    packet_header->routing.atomic_wrap = wrap_boundary;
+    packet_header->routing.command = ATOMIC_INC;
+#endif
 }
 
 // Write packetized data over fabric to dst_mesh, dst_dev.
@@ -635,6 +645,11 @@ inline void fabric_atomic_inc(
 
     if constexpr (mode & AsyncWriteMode::ADD_HEADER) {
         fabric_atomic_inc_add_header(src_addr, dst_mesh_id, dst_dev_id, dst_addr, atomic_inc, wrap_boundary);
+#if !defined(FVC_MODE_PULL) && defined(LOW_LATENCY_ROUTING)
+        uint32_t outgoing_direction = get_next_hop_router_direction(client_interface, routing, dst_mesh_id, dst_dev_id);
+        fabric_set_unicast_route(
+            client_interface, (low_latency_packet_header_t*)(src_addr), outgoing_direction, dst_dev_id);
+#endif
     }
 
     if constexpr (std::is_same_v<T, volatile fabric_pull_client_interface_t*>) {
@@ -668,6 +683,7 @@ inline void fabric_async_write_atomic_inc_add_header(
             std::is_same_v<T, volatile fabric_push_client_interface_t*>,
         "T must be either volatile fabric_pull_client_interface_t* or volatile fabric_push_client_interface_t*");
 
+#if defined(FVC_MODE_PULL) || !defined(LOW_LATENCY_ROUTING)
     packet_header_t* packet_header;
     if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
         packet_header = (packet_header_t*)(src_addr);
@@ -685,6 +701,21 @@ inline void fabric_async_write_atomic_inc_add_header(
     packet_header->packet_parameters.async_wr_atomic_parameters.l1_offset = (uint32_t)dst_atomic_addr;
     packet_header->packet_parameters.async_wr_atomic_parameters.increment = atomic_inc;
     tt_fabric_add_header_checksum(packet_header);
+#else
+    low_latency_packet_header_t* packet_header;
+    if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
+        packet_header = (low_latency_packet_header_t*)(src_addr);
+    } else {
+        packet_header = (low_latency_packet_header_t*)&client_interface->header_buffer[header_id];
+    }
+    packet_header->routing.packet_size_bytes = size;
+    packet_header->routing.target_offset_l = (uint32_t)dst_write_addr;
+    packet_header->routing.target_offset_h = dst_write_addr >> 32;
+    packet_header->routing.atomic_offset_l = (uint32_t)dst_atomic_addr;
+    packet_header->routing.atomic_offset_h = dst_atomic_addr >> 32;
+    packet_header->routing.atomic_increment = atomic_inc;
+    packet_header->routing.command = ASYNC_WR | ATOMIC_INC;
+#endif
 }
 
 // Write packetized data over fabric to dst_mesh, dst_dev.
@@ -722,6 +753,19 @@ inline void fabric_async_write_atomic_inc(
             size,
             atomic_inc,
             header_id);
+#if !defined(FVC_MODE_PULL) && defined(LOW_LATENCY_ROUTING)
+        uint32_t outgoing_direction = get_next_hop_router_direction(client_interface, routing, dst_mesh_id, dst_dev_id);
+        if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
+            fabric_set_unicast_route(
+                client_interface, (low_latency_packet_header_t*)(src_addr), outgoing_direction, dst_dev_id);
+        } else {
+            fabric_set_unicast_route(
+                client_interface,
+                (low_latency_packet_header_t*)&client_interface->header_buffer[header_id],
+                outgoing_direction,
+                dst_dev_id);
+        }
+#endif
     }
 
     if constexpr (std::is_same_v<T, volatile fabric_pull_client_interface_t*>) {
