@@ -104,7 +104,7 @@ def run_all_reduce_impl(
         wrap_mesh = False
     else:
         all_reduce_topology = ttnn.Topology.Ring
-        wrap_mesh = True
+        wrap_mesh = False
 
     worker_sub_device = ttnn.SubDevice([SUB_DEVICE_CRS])
 
