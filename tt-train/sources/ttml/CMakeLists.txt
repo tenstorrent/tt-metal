@@ -1,5 +1,6 @@
 project(ttml)
 
+# TODO: remove glob
 set(SOURCE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd
     ${CMAKE_CURRENT_SOURCE_DIR}/core
