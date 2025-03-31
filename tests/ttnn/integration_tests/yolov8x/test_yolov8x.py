@@ -19,17 +19,16 @@ from models.experimental.functional_yolov8x.tt.ttnn_yolov8x_utils import (
     custom_preprocessor,
 )
 from models.experimental.functional_yolov8x.reference import yolov8x
-from ultralytics import YOLO
 
-# try:
-#    sys.modules["ultralytics"] = yolov8x_utils
-#    sys.modules["ultralytics.nn.tasks"] = yolov8x_utils
-#    sys.modules["ultralytics.nn.modules.conv"] = yolov8x_utils
-#    sys.modules["ultralytics.nn.modules.block"] = yolov8x_utils
-#    sys.modules["ultralytics.nn.modules.head"] = yolov8x_utils
-#
-# except KeyError:
-#    logger.info("models.experimental.functional_yolov8x.reference.yolov8x_utils not found.")
+try:
+    sys.modules["ultralytics"] = yolov8x_utils
+    sys.modules["ultralytics.nn.tasks"] = yolov8x_utils
+    sys.modules["ultralytics.nn.modules.conv"] = yolov8x_utils
+    sys.modules["ultralytics.nn.modules.block"] = yolov8x_utils
+    sys.modules["ultralytics.nn.modules.head"] = yolov8x_utils
+
+except KeyError:
+    logger.info("models.experimental.functional_yolov8x.reference.yolov8x_utils not found.")
 
 
 # For testing reference
@@ -152,14 +151,11 @@ def test_yolov8x_640(device, input_tensor, use_pretrained_weight):
 
     inp_h, inp_w = input_tensor.shape[2], input_tensor.shape[3]
     if use_pretrained_weight:
-        torch_model = YOLO("yolov8x.pt")
-        # torch_model = attempt_load("yolov8x.pt", map_location="cpu")
+        torch_model = attempt_load("yolov8x.pt", map_location="cpu")
         state_dict = torch_model.state_dict()
-        # print(state_dict)
     else:
         torch_model = yolov8x.DetectionModel()
         state_dict = torch_model.state_dict()
-    print(state_dict.keys())
     parameters = custom_preprocessor(device, state_dict, inp_h, inp_w)
     ttnn_model = YOLOv8xModel(device=device, parameters=parameters)
     parameters = custom_preprocessor(device, state_dict, inp_h=inp_h, inp_w=inp_w)
