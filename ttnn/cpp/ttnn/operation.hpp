@@ -395,13 +395,13 @@ constexpr bool implements_create_mesh_workload() {
     return std::experimental::is_detected_v<
                has_create_mesh_workload_t,
                T,
-               const std::vector<ttnn::MeshCoordinate>&,
+               const ttnn::MeshCoordinateRangeSet&,
                const Tensors&,
                Tensors&> or
            std::experimental::is_detected_v<
                has_create_mesh_workload_t,
                T,
-               const std::vector<ttnn::MeshCoordinate>&,
+               const ttnn::MeshCoordinateRangeSet&,
                const Tensors&,
                OptionalTensors&>;
 }
@@ -411,14 +411,14 @@ constexpr bool implements_create_mesh_workload_with_optional_input_tensors() {
     return std::experimental::is_detected_v<
                has_create_mesh_workload_t,
                T,
-               const std::vector<ttnn::MeshCoordinate>&,
+               const ttnn::MeshCoordinateRangeSet&,
                const Tensors&,
                const std::vector<std::optional<const Tensor>>&,
                Tensors&> or
            std::experimental::is_detected_v<
                has_create_mesh_workload_t,
                T,
-               const std::vector<ttnn::MeshCoordinate>&,
+               const ttnn::MeshCoordinateRangeSet&,
                const Tensors&,
                const std::vector<std::optional<const Tensor>>&,
                OptionalTensors&>;
@@ -550,12 +550,12 @@ public:
     }
 
     CacheableMeshWorkload<OutputTensors> create_mesh_workload(
-        const std::vector<ttnn::MeshCoordinate>& mesh_coords,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const Tensors& input_tensors,
         const OptionalConstTensors& optional_input_tensors,
         OutputTensors& output_tensors) const {
         return this->create_mesh_workload_impl_(
-            this->type_erased_storage, mesh_coords, input_tensors, optional_input_tensors, output_tensors);
+            this->type_erased_storage, tensor_coords, input_tensors, optional_input_tensors, output_tensors);
     }
 
     bool uses_heterogenous_dispatch() const { return this->uses_heterogenous_dispatch_impl_(); }
@@ -781,7 +781,7 @@ public:
             }},
         create_mesh_workload_impl_{
             [](const storage_t& storage,
-               const std::vector<ttnn::MeshCoordinate>& mesh_coords,
+               const ttnn::MeshCoordinateRangeSet& tensor_coords,
                const Tensors& input_tensors,
                const OptionalConstTensors& optional_input_tensors,
                OutputTensors& output_tensors) -> CacheableMeshWorkload<OutputTensors> {
@@ -791,14 +791,14 @@ public:
                         optional_input_tensors.empty(),
                         "Optional input tensors not supported by {}",
                         tt::stl::get_type_name<T>());
-                    return operation.create_mesh_workload(mesh_coords, input_tensors, output_tensors);
+                    return operation.create_mesh_workload(tensor_coords, input_tensors, output_tensors);
                 } else if constexpr (detail::implements_create_mesh_workload_with_optional_input_tensors<T>()) {
                     TT_FATAL(
                         not optional_input_tensors.empty(),
                         "Non-optional input tensors not supported by {}",
                         tt::stl::get_type_name<T>());
                     return operation.create_mesh_workload(
-                        mesh_coords, input_tensors, optional_input_tensors, output_tensors);
+                        tensor_coords, input_tensors, optional_input_tensors, output_tensors);
                 } else {
                     TT_THROW("Operation doesn't implement create_mesh_workload");
                 }
@@ -1052,7 +1052,7 @@ private:
 
     CacheableMeshWorkload<OutputTensors> (*create_mesh_workload_impl_)(
         const storage_t& value,
-        const std::vector<ttnn::MeshCoordinate>&,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const Tensors&,
         const std::vector<std::optional<const Tensor>>&,
         OutputTensors&);

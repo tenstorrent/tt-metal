@@ -55,9 +55,12 @@ template <typename T>
 concept MeshWorkloadFactoryConcept = requires {
     typename T::cached_mesh_workload_t;
 
-    [](const auto& operation_attributes, const auto& tensor_args, auto& tensor_return_value) {
-        auto cached_workload = T::create_mesh_workload(
-            operation_attributes, std::vector<ttnn::MeshCoordinate>{}, tensor_args, tensor_return_value);
+    [](const auto& operation_attributes,
+       const ttnn::MeshCoordinateRangeSet& tensor_coords,
+       const auto& tensor_args,
+       auto& tensor_return_value) {
+        auto cached_workload =
+            T::create_mesh_workload(operation_attributes, tensor_coords, tensor_args, tensor_return_value);
 
         T::override_runtime_arguments(cached_workload, operation_attributes, tensor_args, tensor_return_value);
     };

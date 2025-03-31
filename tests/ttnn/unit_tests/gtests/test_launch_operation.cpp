@@ -122,7 +122,7 @@ struct OldInfraDeviceOpWithCreateMeshWorkload {
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const { return {}; }
 
     auto create_mesh_workload(
-        const std::vector<ttnn::MeshCoordinate>& mesh_coords,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const std::vector<Tensor>& input_tensors,
         std::vector<Tensor>& output_tensors) const {
         return tt::tt_metal::operation::MeshWorkloadWithCallbacks();
