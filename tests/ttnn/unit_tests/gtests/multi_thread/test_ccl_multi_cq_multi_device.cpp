@@ -115,10 +115,11 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
         log_info(LogTest, "Running outer loop {}", outer_loop);
         std::vector<Tensor> device_tensors(devices.size());
 
+        int dev_idx = 0;
         log_info(LogTest, "Enqueue Operations before AllGather", outer_loop);
         std::vector<std::future<void>> futures;
-        for (size_t dev_idx = 0; dev_idx < devices.size(); ++dev_idx) {
-            auto device = devices[dev_idx];
+        for (size_t i = 0; i < devices.size(); ++i) {
+            auto device = devices[i];
             auto promise = std::make_shared<std::promise<void>>();
             futures.push_back(promise->get_future());
             boost::asio::post(pool, [&, dev_idx, device, promise]() mutable {
@@ -143,15 +144,12 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
 
                 promise->set_value();
             });
+            dev_idx++;
         }
 
         // Wait for all tasks to complete
         for (auto& future : futures) {
             future.wait();
-        }
-
-        for (auto device : devices) {
-            ttnn::queue_synchronize(device->command_queue(op_cq_id));
         }
 
         log_info(LogTest, "Enqueue AllGather", outer_loop);
