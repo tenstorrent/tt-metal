@@ -174,6 +174,8 @@ static ttnn::Tensor pad_impl(
     const std::optional<MemoryConfig>& memory_config_arg) {
     const int original_rank = input_tensor.get_logical_shape().rank();
 
+    TT_FATAL(padding.size() == original_rank, "ttnn.pad: padding must be the same length as the input tensor rank");
+
     // Unsqueeze Tensor to 4D if it is not already
     ttnn::Tensor input_tensor_4D;
     if (input_tensor.get_logical_shape().rank() < 4) {
@@ -226,6 +228,10 @@ static ttnn::Tensor pad_impl(
 
 std::tuple<ttnn::Shape, ttnn::Shape> compute_requested_shape(
     const ttnn::Shape& input_logical_shape, const ttnn::SmallVector<std::pair<uint32_t, uint32_t>>& pad_spec) {
+    if (std::all_of(pad_spec.begin(), pad_spec.end(), [](auto& p) { return p.first == 0 && p.second == 0; })) {
+        return std::make_tuple(compute_padded_shape(input_logical_shape), compute_padded_shape(input_logical_shape));
+    }
+
     const auto rank = input_logical_shape.rank();
     ttnn::SmallVector<uint32_t> requested_logical_shape_vec(rank, 0);
 
@@ -285,12 +291,15 @@ ttnn::Tensor invoke_tile(
         compute_requested_shape(input_logical_shape, padding_vec);
     const auto requested_rank = requested_logical_shape.rank();
 
+    const bool pad_upper_dims =
+        requested_logical_shape[0] != input_logical_shape[0] || requested_logical_shape[1] != input_logical_shape[1];
+
     auto pad_current_tile_dim = [&requested_padded_shape, &input_logical_shape](const int i) {
         return requested_padded_shape[i] / input_logical_shape[i] == 1;
     };
 
     ttnn::Tensor output_tensor = ttnn::fill_implicit_tile_padding(input_tensor, value, memory_config_arg);
-    if (requested_rank == 1 || (pad_current_tile_dim(-1) && pad_current_tile_dim(-2))) {
+    if (requested_rank == 1 || (!pad_upper_dims && pad_current_tile_dim(-1) && pad_current_tile_dim(-2))) {
         output_tensor = ttnn::experimental::view(output_tensor, requested_logical_shape, requested_padded_shape);
     } else {
         // need to align the requested padding to tile size. Note that begin padding is not supported so now just
@@ -330,7 +339,16 @@ ttnn::Tensor ExecutePad::invoke(
     const int original_rank = input_tensor.get_logical_shape().rank();
     ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding_vec(padding.begin(), padding.end());
 
-    TT_FATAL(padding.size() == original_rank, "ttnn.pad: padding must be the same length as the input tensor rank");
+    if (int diff = original_rank - padding.size(); diff != 0) {
+        TT_FATAL(diff > 0, "ttnn.pad: padding len can't be larger than input tensor rank");
+
+        padding_vec.insert(padding_vec.begin(), diff, {0, 0});
+    }
+
+    if (std::all_of(padding.begin(), padding.end(), [](auto& p) { return p.first == 0 && p.second == 0; })) {
+        return input_tensor;
+    }
+
     if (original_rank > 4) {
         const auto first_pad_idx =
             std::find_if(padding.begin(), padding.end(), [](auto& p) { return p.second != 0; }) - padding.begin();
