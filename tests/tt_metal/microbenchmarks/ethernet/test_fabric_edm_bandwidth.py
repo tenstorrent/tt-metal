@@ -317,6 +317,8 @@ def test_fabric_edm_mcast_half_ring_bw(
         packet_size=packet_size,
         fabric_mode=FabricTestMode.HalfRing,
         disable_sends_for_interior_workers=False,
+        unidirectional=False,
+        senders_are_unidirectional=False,
     )
 
 

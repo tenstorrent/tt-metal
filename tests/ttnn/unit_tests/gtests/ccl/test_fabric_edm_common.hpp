@@ -2571,11 +2571,9 @@ void Run1DFabricPacketSendTest(
             if (num_fwd_hops >= num_bwd_hops) {
                 unicast_forward = true;
                 unicast_hops = num_fwd_hops;
-                num_bwd_hops = 0;
             } else {
                 unicast_forward = false;
                 unicast_hops = num_bwd_hops;
-                num_fwd_hops = 0;
             }
         } else {
             backward_device = i == 0 ? nullptr : devices[i - 1];
