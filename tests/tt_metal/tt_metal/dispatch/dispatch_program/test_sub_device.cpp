@@ -189,6 +189,47 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceBasicPrograms) {
     detail::DumpDeviceProfileResults(device);
 }
 
+TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
+    constexpr uint32_t k_num_iters = 5;
+    auto* device = devices_[0];
+    SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
+    SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
+    // sub-device 3 and 4 are supersets of sub-device 1 and 2 respectively
+    SubDevice sub_device_3(std::array{CoreRangeSet(std::vector{CoreRange({0, 0}, {2, 2}), CoreRange({5, 5}, {5, 5})})});
+    SubDevice sub_device_4(std::array{
+        CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4}), CoreRange({6, 6}, {6, 6})})});
+    auto sub_device_manager_1 = device->create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
+    auto sub_device_manager_2 = device->create_sub_device_manager({sub_device_4, sub_device_3}, k_local_l1_size);
+    device->load_sub_device_manager(sub_device_manager_1);
+
+    auto [waiter_program, syncer_program, incrementer_program, global_sem] =
+        create_basic_sync_program(device, sub_device_1, sub_device_2);
+
+    // Run programs on sub-device manager 1
+    for (uint32_t i = 0; i < k_num_iters; i++) {
+        EnqueueProgram(device->command_queue(), waiter_program, false);
+        device->set_sub_device_stall_group({SubDeviceId{0}});
+        // Test blocking on one sub-device
+        EnqueueProgram(device->command_queue(), syncer_program, true);
+        EnqueueProgram(device->command_queue(), incrementer_program, false);
+        device->reset_sub_device_stall_group();
+    }
+    Synchronize(device);
+
+    // Rerun programs on sub-device manager 2
+    device->load_sub_device_manager(sub_device_manager_2);
+    for (uint32_t i = 0; i < k_num_iters; i++) {
+        EnqueueProgram(device->command_queue(), waiter_program, false);
+        device->set_sub_device_stall_group({SubDeviceId{1}});
+        // Test blocking on one sub-device
+        EnqueueProgram(device->command_queue(), syncer_program, true);
+        EnqueueProgram(device->command_queue(), incrementer_program, false);
+        device->reset_sub_device_stall_group();
+    }
+    Synchronize(device);
+    detail::DumpDeviceProfileResults(device);
+}
+
 TEST_F(CommandQueueSingleCardFixture, TensixActiveEthTestSubDeviceBasicEthPrograms) {
     auto* device = devices_[0];
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
@@ -374,6 +415,53 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordin
         // Check coordinates
         tt::tt_metal::verify_kernel_coordinates(
             tt::BRISC, sub_device_cores, device, tt::tt_metal::SubDeviceId{i}, cb_addr);
+    }
+}
+
+// Test that RTAs will be correctly updated when using the same program on multiple subdevice managers.
+TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceProgramReuseRtas) {
+    constexpr uint32_t k_num_iters = 5;
+    auto* device = devices_[0];
+    SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
+    SubDevice sub_device_2(std::array{CoreRangeSet(CoreRange({3, 3}, {3, 3}))});
+    // Sub device IDs are swapped between the two sub device managers.
+    auto sub_device_manager_1 = device->create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
+    auto sub_device_manager_2 = device->create_sub_device_manager({sub_device_2, sub_device_1}, k_local_l1_size);
+
+    uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+
+    tt_metal::Program program = tt_metal::CreateProgram();
+    CoreCoord core = {3, 3};
+    std::array<uint32_t, 1> unique_runtime_args = {101};
+    std::array<uint32_t, 1> common_runtime_args = {201};
+
+    tt_metal::KernelHandle add_two_ints_kernel = tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/add_common_and_unique_rta.cpp",
+        core,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = {l1_unreserved_base}});
+
+    tt_metal::SetCommonRuntimeArgs(program, add_two_ints_kernel, common_runtime_args);
+
+    for (size_t i = 0; i < k_num_iters; i++) {
+        for (auto& sub_device_manager : {sub_device_manager_1, sub_device_manager_2}) {
+            device->load_sub_device_manager(sub_device_manager);
+            unique_runtime_args[0] += 1;
+            common_runtime_args[0] += 2;
+            tt_metal::SetRuntimeArgs(program, add_two_ints_kernel, core, unique_runtime_args);
+            tt_metal::GetCommonRuntimeArgs(program, add_two_ints_kernel)[0] = common_runtime_args[0];
+
+            // Enqueue twice to ensure waits are correct.
+            EnqueueProgram(device->command_queue(), program, false);
+            EnqueueProgram(device->command_queue(), program, false);
+            Synchronize(device);
+            std::vector<uint32_t> kernel_result;
+            tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, sizeof(int), kernel_result);
+            EXPECT_EQ(kernel_result[0], unique_runtime_args[0] + common_runtime_args[0]);
+        }
     }
 }
 

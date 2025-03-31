@@ -293,10 +293,6 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixTestSubDeviceIllegalOperations)
     EnqueueProgram(device->command_queue(), incrementer_program_2, false);
     EndTraceCapture(device, device->command_queue().id(), tid_2);
 
-    // Regular program execution
-    // Can not run a program on a different sub-device manager
-    EXPECT_THROW(EnqueueProgram(device->command_queue(), waiter_program_1, false), std::exception);
-
     // Full trace execution
     ReplayTrace(device, device->command_queue().id(), tid_2, false);
 
