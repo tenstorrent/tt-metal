@@ -19,7 +19,7 @@ struct ExecuteReduceScatter {
         const Tensor& input_tensor,
         const int32_t dim,
         const uint32_t cluster_axis,
-        MeshDevice& mesh_device,
+        const MeshDevice& mesh_device,
         ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
         const uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& output_mem_config =
@@ -32,7 +32,7 @@ struct ExecuteReduceScatter {
         const std::vector<ttnn::Tensor>& input_tensors,
         const int32_t dim,
         const uint32_t cluster_axis,
-        MeshDevice& mesh_device,
+        const MeshDevice& mesh_device,
         ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
         const uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& output_mem_config =

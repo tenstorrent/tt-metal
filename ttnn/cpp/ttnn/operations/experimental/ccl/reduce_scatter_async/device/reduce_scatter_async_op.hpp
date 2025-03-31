@@ -14,7 +14,7 @@ namespace ttnn {
 struct ReduceScatterAsync {
     ReduceScatterAsync(
         std::vector<IDevice*> devices,
-        distributed::MeshDevice* mesh_device,
+        const distributed::MeshDevice* mesh_device,
         const ttnn::operations::binary::BinaryOpType binary_op_type,
         const uint32_t scatter_dim,
         const uint32_t ring_size,
@@ -40,7 +40,7 @@ struct ReduceScatterAsync {
         sub_device_id(sub_device_id) {}
 
     std::vector<IDevice*> devices;
-    distributed::MeshDevice* mesh_device;
+    const distributed::MeshDevice* mesh_device;
     const ttnn::operations::binary::BinaryOpType binary_op_type;
     const uint32_t scatter_dim;
     const uint32_t ring_size;
@@ -133,7 +133,7 @@ Tensor reduce_scatter(
     const Tensor& input_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
-    MeshDevice& mesh_device,
+    const MeshDevice& mesh_device,
     const GlobalSemaphore& from_remote_multi_device_global_semaphore,
     const GlobalSemaphore& to_remote_multi_device_global_semaphore,
     const std::optional<std::vector<ttnn::Tensor>>& persistent_output_tensors = {},
@@ -147,7 +147,7 @@ std::vector<Tensor> reduce_scatter(
     const std::vector<Tensor>& input_tensors,
     const int32_t dim,
     const uint32_t cluster_axis,
-    MeshDevice& mesh_device,
+    const MeshDevice& mesh_device,
     const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
     const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
     const std::optional<std::vector<ttnn::Tensor>>& persistent_output_tensors = {},

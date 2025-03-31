@@ -34,7 +34,7 @@ struct AllReduceAsync {
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     bool enable_persistent_fabric_mode;
     uint32_t cluster_axis;
-    distributed::MeshDevice* mesh_device;
+    const distributed::MeshDevice* mesh_device;
 
     AllReduceAsync(
         uint32_t num_links,
@@ -45,7 +45,7 @@ struct AllReduceAsync {
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         bool enable_persistent_fabric_mode,
         uint32_t cluster_axis,
-        distributed::MeshDevice* mesh_device) :
+        const distributed::MeshDevice* mesh_device) :
         num_links(num_links),
         ring_size(ring_size),
         output_mem_config(output_mem_config),
@@ -104,7 +104,7 @@ Tensor all_reduce_async(
     const Tensor& input_tensor,
     Tensor& buffer_tensor,
     const uint32_t cluster_axis,
-    MeshDevice& mesh_device,
+    const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     const GlobalSemaphore& multi_device_global_semaphore,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -116,7 +116,7 @@ std::vector<Tensor> all_reduce_async(
     const std::vector<Tensor>& input_tensors,
     Tensor& buffer_tensor,
     const uint32_t cluster_axis,
-    MeshDevice& mesh_device,
+    const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,

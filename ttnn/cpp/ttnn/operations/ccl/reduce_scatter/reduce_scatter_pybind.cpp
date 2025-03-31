@@ -58,7 +58,7 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
                const ttnn::Tensor& input_tensor,
                const int32_t dim,
                const uint32_t cluster_axis,
-               MeshDevice& mesh_device,
+               const MeshDevice& mesh_device,
                ttnn::operations::reduction::ReduceType math_op,
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& output_mem_config,
