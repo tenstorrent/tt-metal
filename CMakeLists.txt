@@ -156,6 +156,12 @@ endif()
 
 if(WITH_PYTHON_BINDINGS)
     set(Python3_FIND_STRATEGY LOCATION)
+    set(Python3_FIND_VIRTUALENV FIRST)
+
+    if(DEFINED Python_EXECUTABLE)
+        set(Python3_EXECUTABLE ${Python_EXECUTABLE})
+    endif()
+
     find_package(
         Python3
         COMPONENTS
@@ -163,6 +169,7 @@ if(WITH_PYTHON_BINDINGS)
             Development
     )
     message(STATUS "Python3 include dirs: ${Python3_INCLUDE_DIRS}")
+    message(STATUS "Python3 executable: ${Python3_EXECUTABLE}")
 endif()
 
 find_library(NUMA_LIBRARY NAMES numa)
