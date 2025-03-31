@@ -111,24 +111,7 @@ class VisionTransformer(LightweightModule):
                 page_table=page_table,
             )
 
-        # Merge patches - first we need to remove any sequence length padding
+        # Merge patches - first remove any sequence length padding
         x = x[:, :, :unpadded_seq_len, :]
-        print(f"pre-merge x.shape: {x.shape}")
-
-        tt_out = ttnn.to_torch(
-            x,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=self.args.cluster_shape),
-        )
-        tt_output_torch = tt_out[:, 0:1, :, : self.args.hf_config.vision_config.out_hidden_size].squeeze(0).squeeze(0)
-        torch.save(torch.Tensor(tt_output_torch), "our_pre_merge.pt")
-
         x = self.patch_merger(x)
-        print(f"post-merge x.shape: {x.shape}")
-
-        tt_out = ttnn.to_torch(
-            x,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=self.args.cluster_shape),
-        )
-        tt_output_torch = tt_out[:, 0:1, :, : self.args.hf_config.vision_config.out_hidden_size].squeeze(0).squeeze(0)
-        torch.save(torch.Tensor(tt_output_torch), "our_post_merge.pt")
         return x

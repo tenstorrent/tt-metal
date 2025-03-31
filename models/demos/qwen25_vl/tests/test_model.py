@@ -162,7 +162,7 @@ def test_vision_model_inference(
     )
     transformation_mats = {"prefill": transformation_mats_prefill}
 
-    # Create a simulated output from patch embeddings for the TT model
+    # Preprocess patch embeddings for the TT model in torch for now
     patch_input = reference_model.patch_embed(pt_pixel_values)
     patch_seq_len, _ = patch_input.shape
     spatial_merge_unit = model_args.hf_config.vision_config.spatial_merge_size**2
@@ -209,7 +209,7 @@ def test_vision_model_inference(
     tt_output_torch = tt_out[:, 0:1, :, : model_args.hf_config.vision_config.out_hidden_size].squeeze(0).squeeze(0)
 
     # Post-process in torch
-    # tt_output_torch = tt_output_torch[torch.argsort(window_index), :]
+    tt_output_torch = tt_output_torch[torch.argsort(window_index), :]
 
     # Compare outputs
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)

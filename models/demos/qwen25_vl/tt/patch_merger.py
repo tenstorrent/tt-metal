@@ -70,46 +70,25 @@ class PatchMerger(LightweightModule):
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        def save_tensor(x, name):
-            from os import getenv
-
-            x_torch = ttnn.to_torch(
-                x,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    self.mesh_device, dims=(1, 3), mesh_shape=self.args.cluster_shape
-                ),
-            )
-            x_torch = torch.Tensor(x_torch[:, 0:1, :, : x.shape[-1]].squeeze())
-            prefix = getenv("MPREFIX") or ""
-            torch.save(x_torch, prefix + name)
-
         # Apply RMSNorm
         x = self.norm(x, mode="prefill")
-        save_tensor(x, "1_post_norm.pt")
 
         # Reshape to merge spatial dimensions
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        save_tensor(x, "1a_untilized.pt")
-        x = ttnn.reshape(x, (x.shape[0], x.shape[1], -1, self.mlp_size))
-        save_tensor(x, "1b_reshaped.pt")
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        save_tensor(x, "2_tilized.pt")
-
-        # Reshape to merge spatial dimensions
-        # x = ttnn.to_torch(x)
-        # x = torch.reshape(x, (x.shape[0], x.shape[1], -1, self.mlp_size))
-        # x = ttnn.from_torch(
-        #     x,
-        #     device=self.mesh_device,
-        #     mesh_mapper=ttnn.ShardTensor2dMesh(
-        #         self.mesh_device,
-        #         dims=(None, 3) if self.args.is_galaxy else (None, None),
-        #         mesh_shape=self.args.cluster_shape,
-        #     ),
-        #     dtype=ttnn.bfloat16,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        #     layout=ttnn.TILE_LAYOUT,
-        # )
+        # FIXME: work around ttnn.reshape pcc bug (see yieldthought/debug-reshape-pcc-error)
+        x = ttnn.to_torch(x)
+        x = torch.reshape(x, (x.shape[0], x.shape[1], -1, self.mlp_size))
+        x = ttnn.from_torch(
+            x,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                dims=(None, 3) if self.args.is_galaxy else (None, None),
+                mesh_shape=self.args.cluster_shape,
+            ),
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+        )
 
         # First linear + GELU
         x = ttnn.linear(
@@ -119,9 +98,7 @@ class PatchMerger(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        save_tensor(x, "3_post_linear.pt")
         x = ttnn.gelu(x)
-        save_tensor(x, "4_post_gelu.pt")
 
         # Second linear
         x = ttnn.linear(
@@ -131,5 +108,4 @@ class PatchMerger(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        save_tensor(x, "5_post_linear.pt")
         return x
