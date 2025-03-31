@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device.hpp>
+#include "tt-metalium/kernel_types.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -13,7 +14,7 @@ int main(int argc, char** argv) {
 
     constexpr CoreCoord core = {0, 0};
     int device_id = 0;
-    Device* device = CreateDevice(device_id);
+    IDevice* device = CreateDevice(device_id);
     CommandQueue& cq = device->command_queue();
     Program program = CreateProgram();
 
@@ -28,7 +29,8 @@ int main(int argc, char** argv) {
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = false,
             .math_approx_mode = false,
-            .compile_args = compute_kernel_args});
+            .compile_args = compute_kernel_args,
+            .opt_level = KernelBuildOptLevel::O3});
 
     // Configure Program and Start Program Execution on Device
 

@@ -8,24 +8,25 @@
 #include "multi_command_queue_fixture.hpp"
 #include "random_program_fixture.hpp"
 #include "dispatch_test_utils.hpp"
-#include "detail/tt_metal.hpp"
-#include "tt_metal/common/env_lib.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include "env_lib.hpp"
 #include "gtest/gtest.h"
-#include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/impl/program/program.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/logger.hpp>
 #include "tt_metal/common/scoped_timer.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
+
+namespace tt::tt_metal {
 
 using std::vector;
 using namespace tt;
-using namespace tt::tt_metal;
 
 Program create_simple_unary_program(Buffer& input, Buffer& output) {
     Program program = CreateProgram();
-    Device* device = input.device();
+    IDevice* device = input.device();
     CoreCoord worker = {0, 0};
     auto reader_kernel = CreateKernel(
         program,
@@ -275,7 +276,7 @@ TEST_F(CommandQueueTraceFixture, TensixInstantiateTraceSanity) {
     vector<uint32_t> data_fd, data_bd;
 
     // Backdoor read the trace buffer
-    ::detail::ReadFromBuffer(trace_inst->buffer, data_bd);
+    detail::ReadFromBuffer(trace_inst->buffer, data_bd);
 
     // Frontdoor reaad the trace buffer
     data_fd.resize(trace_inst->buffer->size() / sizeof(uint32_t));
@@ -678,6 +679,7 @@ TEST_F(RandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
             kernel_properties.max_num_sems = MAX_NUM_SEMS / 2;
             this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
         }
+        program.set_runtime_id(i);
 
         EnqueueProgram(this->device_->command_queue(), program, false);
     }
@@ -910,3 +912,5 @@ TEST_F(RandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoTrace) {
         ReleaseTrace(this->device_, trace_id);
     }
 }
+
+}  // namespace tt::tt_metal

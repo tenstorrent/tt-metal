@@ -21,9 +21,11 @@ ttnn::Tensor ExecuteLayerNorm::invoke(
     auto arch = input_tensor.storage_type() == StorageType::DEVICE
                     ? input_tensor.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    bool approx_mode = false;
+    bool fp32_acc = true;
     auto kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
-    return operation::run(
+        init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, approx_mode, fp32_acc);
+    return tt::tt_metal::operation::run(
                LayerNorm{
                    .norm_type = LayerNormType::LAYERNORM,
                    .distributed_norm_stage = DistributedLayerNormStage::NOT_DISTRIBUTED,

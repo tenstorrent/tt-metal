@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/device/device_pool.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/device_pool.hpp>
+#include "rtoptions.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include <chrono>
 
 /*
@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
             /*
             * Silicon accelerator setup
             */
-            Device *device = devices[device_id];
+            IDevice* device = devices[device_id];
 
             /*
             * Setup program and command queue to execute along with its buffers and kernels to use

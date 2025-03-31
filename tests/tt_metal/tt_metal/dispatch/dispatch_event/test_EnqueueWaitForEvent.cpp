@@ -5,15 +5,18 @@
 #include <memory>
 
 #include "multi_command_queue_fixture.hpp"
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/logger.hpp>
 #include "gtest/gtest.h"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "dispatch_test_utils.hpp"
-#include "tt_metal/impl/event/event.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include <tt-metalium/event.hpp>
+#include <tt-metalium/device.hpp>
+
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+
+namespace tt::tt_metal {
 
 using std::vector;
-using namespace tt::tt_metal;
 
 namespace local_test_functions {
 
@@ -29,7 +32,7 @@ namespace basic_tests {
 // Simplest test to record Event per CQ and wait from host, and verify populated Event struct is correct (many events,
 // wrap issue queue)
 TEST_F(MultiCommandQueueMultiDeviceEventFixture, TestEventsEventSynchronizeSanity) {
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         tt::log_info("Running On Device {}", device->id());
         vector<std::reference_wrapper<CommandQueue>> cqs = {device->command_queue(0), device->command_queue(1)};
         vector<uint32_t> cmds_issued_per_cq = {0, 0};
@@ -193,7 +196,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsEnqueueWaitForEventC
     for (uint cq_id = 0; cq_id < cqs.size(); cq_id++) {
         for (size_t i = 0; i < num_cmds_per_cq * num_events_per_cq; i++) {
             uint32_t host_addr =
-                completion_queue_base[cq_id] + i * dispatch_constants::TRANSFER_PAGE_SIZE + sizeof(CQDispatchCmd);
+                completion_queue_base[cq_id] + i * DispatchSettings::TRANSFER_PAGE_SIZE + sizeof(CQDispatchCmd);
             tt::Cluster::instance().read_sysmem(&event, 4, host_addr, mmio_device_id, channel);
             log_debug(
                 tt::LogTest,
@@ -465,3 +468,5 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitFor
 }
 
 }  // end namespace basic_tests
+
+}  // namespace tt::tt_metal

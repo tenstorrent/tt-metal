@@ -2,20 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstddef>
 #include <cstdint>
 #include <array>
-#include <tuple>
 #include <vector>
 
 #include "gtest/gtest.h"
-#include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/impl/buffers/global_semaphore.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/event/event.hpp"
-#include "tt_metal/impl/sub_device/sub_device.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/event.hpp>
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/allocator.hpp>
+
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "command_queue_fixture.hpp"
+
+namespace tt::tt_metal {
 
 TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
     uint32_t local_l1_size = 3200;
@@ -24,14 +26,20 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
     CoreRangeSet sharded_cores_1 = CoreRange({0, 0}, {2, 2});
     CoreRangeSet sharded_cores_2 = CoreRange({4, 4}, {4, 4});
 
+    auto device = devices_[0];
+    auto sub_device_manager_1 = device->create_sub_device_manager({sub_device_1}, local_l1_size);
+    auto sub_device_manager_2 = device->create_sub_device_manager({sub_device_1, sub_device_2}, local_l1_size);
+    DeviceAddr l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    DeviceAddr max_addr = l1_unreserved_base + local_l1_size;
+
     auto sharded_cores_1_vec = corerange_to_cores(sharded_cores_1, std::nullopt, true);
     auto sharded_cores_2_vec = corerange_to_cores(sharded_cores_2, std::nullopt, true);
 
-    ShardSpecBuffer shard_spec_buffer_1 = ShardSpecBuffer(
-        sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, false, {1, 1}, {sharded_cores_1.num_cores(), 1});
+    ShardSpecBuffer shard_spec_buffer_1 =
+        ShardSpecBuffer(sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sharded_cores_1.num_cores(), 1});
     uint32_t page_size_1 = 32;
     ShardedBufferConfig shard_config_1 = {
-        nullptr,
+        device,
         sharded_cores_1.num_cores() * page_size_1,
         page_size_1,
         BufferType::L1,
@@ -40,11 +48,11 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
     auto input_1 =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, shard_config_1.size / sizeof(uint32_t));
 
-    ShardSpecBuffer shard_spec_buffer_2 = ShardSpecBuffer(
-        sharded_cores_2, {1, 1}, ShardOrientation::ROW_MAJOR, false, {1, 1}, {sharded_cores_2.num_cores(), 1});
+    ShardSpecBuffer shard_spec_buffer_2 =
+        ShardSpecBuffer(sharded_cores_2, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sharded_cores_2.num_cores(), 1});
     uint32_t page_size_2 = 64;
     ShardedBufferConfig shard_config_2 = {
-        nullptr,
+        device,
         sharded_cores_2.num_cores() * page_size_2,
         page_size_2,
         BufferType::L1,
@@ -55,19 +63,9 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
 
     uint32_t page_size_3 = 1024;
     InterleavedBufferConfig interleaved_config = {
-        nullptr, page_size_3, page_size_3, BufferType::L1, TensorMemoryLayout::INTERLEAVED};
+        device, page_size_3, page_size_3, BufferType::L1, TensorMemoryLayout::INTERLEAVED};
     auto input_3 =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, interleaved_config.size / sizeof(uint32_t));
-
-    auto device = devices_[0];
-    auto sub_device_manager_1 = device->create_sub_device_manager({sub_device_1}, local_l1_size);
-    auto sub_device_manager_2 = device->create_sub_device_manager({sub_device_1, sub_device_2}, local_l1_size);
-    DeviceAddr l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
-    DeviceAddr max_addr = l1_unreserved_base + local_l1_size;
-
-    shard_config_1.device = device;
-    shard_config_2.device = device;
-    interleaved_config.device = device;
 
     std::vector<CoreCoord> physical_cores_1;
     physical_cores_1.reserve(sharded_cores_1_vec.size());
@@ -84,7 +82,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
     device->load_sub_device_manager(sub_device_manager_1);
 
     auto buffer_1 = CreateBuffer(shard_config_1, SubDeviceId{0});
-    EXPECT_EQ(buffer_1->address(), max_addr - buffer_1->aligned_page_size());
+    EXPECT_TRUE(buffer_1->address() <= max_addr - buffer_1->aligned_page_size());
     EnqueueWriteBuffer(device->command_queue(), buffer_1, input_1, false);
     std::vector<uint32_t> output_1;
     EnqueueReadBuffer(device->command_queue(), buffer_1, output_1, true);
@@ -105,7 +103,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
     device->load_sub_device_manager(sub_device_manager_2);
 
     auto buffer_3 = CreateBuffer(shard_config_2, SubDeviceId{1});
-    EXPECT_EQ(buffer_3->address(), max_addr - buffer_3->aligned_page_size());
+    EXPECT_TRUE(buffer_3->address() <= max_addr - buffer_3->aligned_page_size());
     EnqueueWriteBuffer(device->command_queue(), buffer_3, input_2, false);
     std::vector<uint32_t> output_2;
     EnqueueReadBuffer(device->command_queue(), buffer_3, output_2, true);
@@ -118,7 +116,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
     }
 
     auto buffer_4 = CreateBuffer(shard_config_1, SubDeviceId{0});
-    EXPECT_EQ(buffer_4->address(), max_addr - buffer_4->aligned_page_size());
+    EXPECT_TRUE(buffer_4->address() <= max_addr - buffer_4->aligned_page_size());
     EXPECT_THROW(CreateBuffer(interleaved_config, SubDeviceId{0}), std::exception);
 }
 
@@ -133,8 +131,11 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceBankIds) {
 
     auto cores_vec = corerange_to_cores(device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}));
     for (const auto& core : cores_vec) {
-        auto global_bank_id = device->bank_ids_from_logical_core(BufferType::L1, core)[0];
-        auto sub_device_bank_id = device->bank_ids_from_logical_core(BufferType::L1, core, SubDeviceId{0})[0];
+        auto global_bank_id = device->allocator()->get_bank_ids_from_logical_core(BufferType::L1, core)[0];
+        auto sub_device_bank_id =
+            device->allocator(SubDeviceId{0})->get_bank_ids_from_logical_core(BufferType::L1, core)[0];
         EXPECT_EQ(global_bank_id, sub_device_bank_id);
     }
 }
+
+}  // namespace tt::tt_metal

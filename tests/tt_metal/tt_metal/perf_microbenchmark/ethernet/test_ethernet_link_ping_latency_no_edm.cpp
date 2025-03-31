@@ -11,21 +11,22 @@
 #include <map>
 
 #include "umd/device/types/arch.h"
-#include "impl/device/device.hpp"
-#include "impl/kernels/kernel_types.hpp"
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "tt_backend_api_types.hpp"
-#include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
-#include "tt_metal/detail/persistent_kernel_cache.hpp"
+#include <tt-metalium/persistent_kernel_cache.hpp>
+#include <thread>
 
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
@@ -64,7 +65,7 @@ public:
         }
     }
 
-    std::map<chip_id_t, Device*> devices_;
+    std::map<chip_id_t, tt_metal::IDevice*> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -77,18 +78,18 @@ struct ChipSenderReceiverEthCore {
     CoreCoord receiver_core;
 };
 
-std::tuple<Program, Program> build(
-    Device* device0,
-    Device* device1,
+std::tuple<tt_metal::Program, tt_metal::Program> build(
+    tt_metal::IDevice* device0,
+    tt_metal::IDevice* device1,
     CoreCoord eth_sender_core,
     CoreCoord eth_receiver_core,
     std::size_t num_samples,
     std::size_t sample_page_size,
     std::size_t num_channels,
-    KernelHandle& local_kernel,
-    KernelHandle& remote_kernel) {
-    Program program0;
-    Program program1;
+    tt_metal::KernelHandle& local_kernel,
+    tt_metal::KernelHandle& remote_kernel) {
+    tt_metal::Program program0;
+    tt_metal::Program program1;
 
     std::vector<uint32_t> const& ct_args = {num_channels};
 
@@ -124,16 +125,16 @@ std::tuple<Program, Program> build(
         throw e;
     }
 
-    return std::tuple<Program, Program>{std::move(program0), std::move(program1)};
+    return std::tuple<tt_metal::Program, tt_metal::Program>{std::move(program0), std::move(program1)};
 }
 
 void run(
-    Device* device0,
-    Device* device1,
-    Program& program0,
-    Program& program1,
-    KernelHandle local_kernel,
-    KernelHandle remote_kernel,
+    tt_metal::IDevice* device0,
+    tt_metal::IDevice* device1,
+    tt_metal::Program& program0,
+    tt_metal::Program& program1,
+    tt_metal::KernelHandle local_kernel,
+    tt_metal::KernelHandle remote_kernel,
 
     CoreCoord eth_sender_core,
     CoreCoord eth_receiver_core,
@@ -254,8 +255,8 @@ int main(int argc, char** argv) {
                         num_samples,
                         sample_page_size,
                         max_channels_per_direction);
-                    KernelHandle local_kernel;
-                    KernelHandle remote_kernel;
+                    tt_metal::KernelHandle local_kernel;
+                    tt_metal::KernelHandle remote_kernel;
                     try {
                         auto [program0, program1] = build(
                             device_0,

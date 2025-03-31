@@ -6,8 +6,9 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/allocator.hpp>
 
 ////////////////////////////////////////////////////////////////////////////
 // Runs the add_two_ints kernel on BRISC to add two ints in L1
@@ -26,8 +27,8 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
-        uint32_t l1_unreserved_base = device->get_base_allocator_addr(tt_metal::HalMemType::L1);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup

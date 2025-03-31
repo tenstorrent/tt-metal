@@ -10,16 +10,13 @@ on:
           - Release
           - Debug
           - RelWithDebInfo
-          - CI
+          - ASan
+          - TSan
         default: "Release"
       extra-tag:
         required: true
         type: string
         default: "in-service"
-      build-with-tracy:
-        required: false
-        type: boolean
-        default: false
       t3000-unit:
         required: false
         type: boolean
@@ -41,7 +38,11 @@ on:
         type: boolean
         default: false
       t3000-profiler:
-        description: "T3000 profiler tests (requires tracy build)"
+        description: "T3000 profiler tests"
+        required: false
+        type: boolean
+        default: false
+      t3000-perplexity:
         required: false
         type: boolean
         default: false
@@ -52,7 +53,14 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     with:
       build-type: ${{ inputs.build-type }}
-      tracy: ${{ inputs.build-with-tracy }}
+      build-wheel: true
+    secrets: inherit
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      build-type: ${{ inputs.build-type }}
+      tracy: true
+      build-wheel: true
     secrets: inherit
   t3000-unit-tests:
     needs: build-artifact
@@ -60,6 +68,9 @@ jobs:
     uses: ./.github/workflows/t3000-unit-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     if: ${{ inputs.t3000-unit }}
   t3000-demo-tests:
     needs: build-artifact
@@ -67,6 +78,9 @@ jobs:
     uses: ./.github/workflows/t3000-demo-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     if: ${{ inputs.t3000-demo }}
   t3000-frequent-tests:
     needs: build-artifact
@@ -74,6 +88,9 @@ jobs:
     uses: ./.github/workflows/t3000-frequent-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     if: ${{ inputs.t3000-frequent }}
   t3000-nightly-tests:
     needs: build-artifact
@@ -81,18 +98,39 @@ jobs:
     uses: ./.github/workflows/t3000-nightly-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     if: ${{ inputs.t3000-nightly }}
   t3000-model-perf-tests:
-    needs: build-artifact
+    needs: [build-artifact, build-artifact-profiler]
     secrets: inherit
     uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
     if: ${{ inputs.t3000-model-perf }}
   t3000-profiler-tests:
-    needs: build-artifact
+    needs: build-artifact-profiler
     secrets: inherit
     uses: ./.github/workflows/t3000-profiler-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
     if: ${{ inputs.t3000-profiler }}
+  t3000-perplexity-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/t3000-perplexity-tests-impl.yaml
+    with:
+      extra-tag: ${{ inputs.extra-tag }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+    if: ${{ inputs.t3000-perplexity }}

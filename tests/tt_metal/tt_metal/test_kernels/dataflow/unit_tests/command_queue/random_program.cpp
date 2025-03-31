@@ -18,7 +18,7 @@
 
 #include "debug/dprint.h"
 
-#ifdef DATA_MOVEMENT
+#if defined DATA_MOVEMENT or ERISC
 namespace {
 void kernel_main() {
 #endif

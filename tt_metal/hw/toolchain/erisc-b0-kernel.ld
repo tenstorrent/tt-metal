@@ -6,8 +6,11 @@
 
 INCLUDE "erisc-b0-memory.ld"
 
-REGION_ALIAS("REGION_APP_IRAM_CODE", ERISC_APP_IRAM_CODE)
+#if defined(ENABLE_IRAM)
+REGION_ALIAS("REGION_APP_KERNEL_CODE", ERISC_APP_IRAM_CODE)
+#else
 REGION_ALIAS("REGION_APP_KERNEL_CODE", ERISC_APP_KERNEL_CODE)
+#endif
 REGION_ALIAS("REGION_APP_KERNEL_DATA", ERISC_APP_KERNEL_DATA)
 REGION_ALIAS("REGION_LDM", LOCAL_DATA_MEM)
 
@@ -39,11 +42,11 @@ SECTIONS
     /* .gnu.warning sections are handled specially by elf32.em.  */
     *(.gnu.warning)
   } > REGION_APP_KERNEL_CODE :text
-  .init.fini :
+  .empty.init.fini :
   {
-    /* We don't use .init/.fini (this isn't the '90s), make sure there aren't any.  */
+    /* Out elf loader checks that .empty* sections are empty, and
+       can give a helpful error, rather than an ASSERT here.  */
     KEEP (*(.init .fini))
-    ASSERT(SIZEOF(.init.fini) == 0, ".init/.fini sections present");
   } > REGION_APP_KERNEL_CODE :text
 
   .data : ALIGN(16) {
@@ -63,13 +66,12 @@ SECTIONS
     *(.got.plt) *(.igot.plt) *(.got) *(.igot)
     . = ALIGN(4);
   } > REGION_APP_KERNEL_DATA :data
-  .ctors.dtors :
+  .empty.ctors.dtors :
   {
     /* We don't use .ctors/.dtors either (this still isn't the '90s), make sure there aren't any.  */
     KEEP (*(.ctors .ctors.* .dtors .dtors.*))
-    ASSERT(SIZEOF(.ctors.dtors) == 0, ".ctors/.dtors sections have contents");
   } > REGION_APP_KERNEL_DATA :data
-  .init_array.fini_array :
+  .empty.init_array.fini_array :
   {
     /* We don't support global static constructors or destructors. make sure there aren't any.  */
     KEEP (*(.preinit_array))
@@ -77,7 +79,6 @@ SECTIONS
     KEEP (*(.init_array))
     KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*)))
     KEEP (*(.fini_array))
-    ASSERT(SIZEOF(.init_array.fini_array) == 0, ".{preinit,init,fini}_array sections have contents");
   } > REGION_APP_KERNEL_DATA :data
   .bss : ALIGN(4) {
     __ldm_bss_start = .;

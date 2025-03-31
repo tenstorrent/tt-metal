@@ -4,8 +4,10 @@
 
 #include <variant>
 #include "device_fixture.hpp"
-#include "tt_metal/common/bfloat8.hpp"
+#include <tt-metalium/bfloat8.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
+
+namespace tt::tt_metal {
 
 using std::vector;
 using namespace tt;
@@ -42,7 +44,7 @@ using VariantVectorType = std::variant<std::vector<float>, std::vector<bfloat16>
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_config) {
+bool single_core_reconfig(tt_metal::IDevice* device, const ReconfigConfig& test_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -376,3 +378,5 @@ TEST_F(DeviceFixture, TensixTileCopyReconfigL1Acc) {
         }
     }
 }
+
+}  // namespace tt::tt_metal

@@ -19,7 +19,7 @@ def Linear(
 
     ``weight`` must be tt_tensor.
     """
-    assert weight.shape.with_tile_padding() == [
+    assert weight.padded_shape == [
         1,
         1,
         out_features,
@@ -27,7 +27,7 @@ def Linear(
     ], "weight does not have the expected shape"
 
     if bias is not None:
-        assert bias.shape.with_tile_padding()[-1] == out_features, "bias does not have the expected shape"
+        assert bias.padded_shape[-1] == out_features, "bias does not have the expected shape"
 
     weight = weight
     bias = bias
@@ -35,9 +35,7 @@ def Linear(
 
     def linear_(activation):
         nonlocal bias
-        assert (
-            activation.shape.with_tile_padding()[-1] == in_features
-        ), "activation tensor do not have the expected shape"
+        assert activation.padded_shape[-1] == in_features, "activation tensor do not have the expected shape"
         if bias is not None and bias.get_layout() != ttnn.TILE_LAYOUT:
             bias = ttnn.to_layout(bias, ttnn.TILE_LAYOUT)
         return ttnn.linear(activation, weight_T, bias=bias, memory_config=output_mem_config)

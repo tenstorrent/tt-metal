@@ -4,12 +4,14 @@
 
 #include "moreh_softmax_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::moreh::moreh_softmax {
 
 #define L1_512KB (512 * 1024)
 
 bool is_moreh_softmax_w_small_available(const Tensor& tensor, const DeviceComputeKernelConfig& compute_kernel_config) {
-    auto w = tensor.get_shape()[-1];
+    auto w = tensor.get_logical_shape()[-1];
     int32_t Wt = (w + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
 
     auto arch = tensor.device()->arch();
@@ -35,11 +37,11 @@ bool is_moreh_softmax_w_small_available(const Tensor& tensor, const DeviceComput
     cb_usage += Wt * intermed_tile_size;  // x - max;
     cb_usage += 1 * intermed_tile_size;   // tmp;
 
-    return (tensor.device()->get_base_allocator_addr(HalMemType::L1) + cb_usage <= L1_512KB);
+    return (tensor.device()->allocator()->get_base_allocator_addr(HalMemType::L1) + cb_usage <= L1_512KB);
 }
 
 bool is_moreh_softmax_h_small_available(const Tensor& tensor, const DeviceComputeKernelConfig& compute_kernel_config) {
-    auto h = tensor.get_shape()[-2];
+    auto h = tensor.get_logical_shape()[-2];
     int32_t Ht = (h + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
 
     auto arch = tensor.device()->arch();
@@ -65,7 +67,7 @@ bool is_moreh_softmax_h_small_available(const Tensor& tensor, const DeviceComput
     cb_usage += Ht * intermed_tile_size;  // x - max;
     cb_usage += 1 * intermed_tile_size;   // tmp;
 
-    return (tensor.device()->get_base_allocator_addr(HalMemType::L1) + cb_usage <= L1_512KB);
+    return (tensor.device()->allocator()->get_base_allocator_addr(HalMemType::L1) + cb_usage <= L1_512KB);
 }
 
 MorehSoftmaxOperation::program_factory_t MorehSoftmaxOperation::select_program_factory(
@@ -91,7 +93,7 @@ void MorehSoftmaxOperation::validate_inputs(
         input.get_dtype() == DataType::BFLOAT16 || input.get_dtype() == DataType::BFLOAT8_B,
         "Inputs must be of bfloat16 or bfloat8_b type");
 
-    const auto rank = input.get_shape().rank();
+    const auto rank = input.get_logical_shape().rank();
     const auto dim = operation_attributes.dim;
     TT_FATAL(dim >= 0 && dim < rank, "dim {} should be less than output tensor rank {}", dim, rank);
 }
@@ -106,9 +108,18 @@ void MorehSoftmaxOperation::validate_on_program_cache_hit(
     validate_inputs(operation_attributes, tensor_args);
 }
 
-MorehSoftmaxOperation::shape_return_value_t MorehSoftmaxOperation::compute_output_shapes(
+MorehSoftmaxOperation::spec_return_value_t MorehSoftmaxOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return tensor_args.input.get_shape();
+    if (tensor_args.output.has_value()) {
+        return tensor_args.output->get_tensor_spec();
+    }
+
+    return TensorSpec(
+        tensor_args.input.get_logical_shape(),
+        TensorLayout(
+            tensor_args.input.get_dtype(),
+            PageConfig(tensor_args.input.get_layout()),
+            operation_attributes.memory_config));
 }
 
 MorehSoftmaxOperation::tensor_return_value_t MorehSoftmaxOperation::create_output_tensors(
@@ -118,10 +129,7 @@ MorehSoftmaxOperation::tensor_return_value_t MorehSoftmaxOperation::create_outpu
         return output.value();
     }
 
-    const auto& input = tensor_args.input;
-    const auto& output_shape = input.get_shape();
-    return create_device_tensor(
-        output_shape, input.get_dtype(), input.get_layout(), input.device(), operation_attributes.memory_config);
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
 std::tuple<MorehSoftmaxOperation::operation_attributes_t, MorehSoftmaxOperation::tensor_args_t>
@@ -150,7 +158,7 @@ MorehSoftmaxOpParallelizationStrategy MorehSoftmaxOperation::get_parallelization
     const auto dim = operation_attributes.dim;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    auto rank = input.get_shape().rank();
+    auto rank = input.get_logical_shape().rank();
     if (strategy == MorehSoftmaxOpParallelizationStrategy::NONE) {
         if (rank - 1 == dim) {
             if (is_moreh_softmax_w_small_available(input, compute_kernel_config)) {

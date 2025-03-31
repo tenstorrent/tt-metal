@@ -24,11 +24,11 @@ void kernel_main() {
 #define transpose_hw_bool get_compile_time_arg_val(2) == 1
     constexpr bool fp32_acc_en = get_compile_time_arg_val(3) == 1;
 
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in1 = 1;
-    constexpr uint32_t cb_id_intermed0 = 24;
-    constexpr uint32_t cb_id_intermed1 = 25;
-    constexpr uint32_t cb_id_intermed2 = 26;
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
+    constexpr uint32_t cb_id_intermed0 = tt::CBIndex::c_2;
+    constexpr uint32_t cb_id_intermed1 = tt::CBIndex::c_3;
+    constexpr uint32_t cb_id_intermed2 = tt::CBIndex::c_4;
 
     constexpr uint32_t onetile = 1;
     const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);

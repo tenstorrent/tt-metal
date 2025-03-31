@@ -34,7 +34,7 @@ parameters = {
             [1, 256, 75, 75, 2, 2, 2, 2, 0, 0, 1, 1, True],
             [1, 32, 256, 256, 2, 2, 2, 2, 0, 0, 1, 1, False],
             [1, 320, 28, 28, 2, 2, 2, 2, 0, 0, 1, 1, False],
-            [1, 4, 14, 14, 2, 2, 2, 2, 0, 0, 1, 1, False],
+            [1, 4, 14, 14, 2, 2, 2, 2, 0, 0, 1, 1, False],  # requires padding along C
             [1, 480, 14, 14, 3, 3, 1, 1, 1, 1, 1, 1, True],
             [1, 480, 28, 28, 3, 3, 2, 2, 0, 0, 1, 1, True],
             [1, 512, 14, 14, 2, 2, 2, 2, 0, 0, 1, 1, False],
@@ -42,7 +42,7 @@ parameters = {
             [1, 512, 19, 19, 3, 3, 1, 1, 1, 1, 1, 1, False],
             [1, 512, 28, 28, 2, 2, 2, 2, 0, 0, 1, 1, False],
             [1, 512, 38, 38, 2, 2, 2, 2, 0, 0, 1, 1, False],
-            [1, 528, 14, 14, 3, 3, 1, 1, 1, 1, 1, 1, True],
+            [1, 528, 14, 14, 3, 3, 1, 1, 1, 1, 1, 1, True],  # required padding along C
             [1, 64, 112, 112, 3, 3, 2, 2, 0, 0, 1, 1, True],
             [1, 64, 112, 112, 3, 3, 2, 2, 1, 1, 1, 1, False],
             [1, 64, 128, 128, 2, 2, 2, 2, 0, 0, 1, 1, False],
@@ -103,4 +103,46 @@ def run(
         device,
         sharding,
         ceil_mode,
+    )
+
+
+import pytest
+
+
+@pytest.mark.parametrize("input_spec", parameters["max_pool2d_short_sweep_suite"]["input_specs"])
+@pytest.mark.parametrize("dtype", parameters["max_pool2d_short_sweep_suite"]["dtype"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_max_pool2d_localrun(device, dtype, input_spec):
+    (
+        batch_size,
+        input_channels,
+        input_height,
+        input_width,
+        kernel_height,
+        kernel_width,
+        stride_h,
+        strid_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        ceil_mode,
+    ) = input_spec
+    run_max_pool2d(
+        batch_size,
+        input_channels,
+        input_height,
+        input_width,
+        kernel_height,
+        kernel_width,
+        stride_h,
+        strid_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        dtype,
+        device,
+        sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ceil_mode=ceil_mode,
     )

@@ -25,9 +25,10 @@ void MAIN {
     constexpr uint32_t num_rows_in_one_tile = 32;
 
 #ifdef REPEAT_INTERLEAVE_IN1
-    binary_op_init_common(cb_in0_transposed, cb_in1_bcast_row);  // TODO: Is there a specific one for bcast mul?
+    binary_op_init_common(
+        cb_in0_transposed, cb_in1_bcast_row, cb_id_out);  // TODO: Is there a specific one for bcast mul?
 #else
-    binary_op_init_common(cb_id_in0, cb_id_in1);
+    binary_op_init_common(cb_id_in0, cb_id_in1, cb_id_out);
 #endif
 
     for (uint32_t block_h_id = 0; block_h_id < in1_num_blocks_h; block_h_id++) {

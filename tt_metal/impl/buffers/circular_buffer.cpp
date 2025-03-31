@@ -2,23 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
+#include <circular_buffer.hpp>
 
-#include "host_api.hpp"
-#include "llrt/llrt.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <host_api.hpp>
+#include "llrt.hpp"
+#include <buffer.hpp>
+#include <global_circular_buffer_impl.hpp>
+#include <tt_metal.hpp>
+#include <device.hpp>
+#include <command_queue.hpp>
 
-namespace {
-
-inline void GetBufferAddress(const tt::tt_metal::Buffer* buffer, uint32_t* address_on_host) {
-    EnqueueGetBufferAddr(buffer->device()->command_queue(), address_on_host, buffer, false);
-}
-
-}  // namespace
 namespace tt {
 
 namespace tt_metal {
@@ -42,7 +35,7 @@ CircularBuffer::CircularBuffer(const CoreRangeSet& core_ranges, const CircularBu
 CircularBuffer::CircularBuffer(
     const CoreRangeSet& core_ranges,
     const CircularBufferConfig& config,
-    const v1::experimental::GlobalCircularBuffer& global_circular_buffer) :
+    const experimental::GlobalCircularBuffer& global_circular_buffer) :
     id_(reinterpret_cast<uintptr_t>(this)),
     core_ranges_(core_ranges),
     config_(config),
@@ -129,11 +122,9 @@ uint32_t CircularBuffer::address() const {
     return this->globally_allocated() ? globally_allocated_address_ : locally_allocated_address_.value();
 }
 
-void CircularBuffer::assign_global_address() {
-    GetBufferAddress(config_.shadow_global_buffer, &globally_allocated_address_);
-}
+void CircularBuffer::assign_global_address() { globally_allocated_address_ = config_.shadow_global_buffer->address(); }
 
-void CircularBuffer::set_global_circular_buffer(const v1::experimental::GlobalCircularBuffer& global_circular_buffer) {
+void CircularBuffer::set_global_circular_buffer(const experimental::GlobalCircularBuffer& global_circular_buffer) {
     TT_FATAL(
         global_circular_buffer.all_cores().contains(this->core_ranges_),
         "Specified cores are not contained in associated GlobalCircularBuffer");

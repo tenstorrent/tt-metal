@@ -16,14 +16,7 @@ namespace data_movement {
 struct ConcatOperation {
     // Wrapper for TTDNN
     static ttnn::Tensor invoke(
-        uint8_t queue_id,
-        const std::vector<ttnn::Tensor>& input_tensors,
-        int dim,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
-        unsigned int groups = 1);
-
-    static ttnn::Tensor invoke(
+        QueueId queue_id,
         const std::vector<ttnn::Tensor>& input_tensors,
         int dim,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,

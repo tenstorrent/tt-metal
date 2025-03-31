@@ -23,7 +23,7 @@ using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
 Tensor loss_function(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& ref,
     const Tensor& prediction,
     const LossFunction loss_kind,
@@ -56,7 +56,7 @@ Tensor loss_function(
 }  // namespace loss_utils
 
 Tensor MseLossOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& ref,
     const Tensor& prediction,
     const LossReductionMode mode,
@@ -67,7 +67,7 @@ Tensor MseLossOperation::invoke(
 }
 
 Tensor MaeLossOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& ref,
     const Tensor& prediction,
     const LossReductionMode mode,

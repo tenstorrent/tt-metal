@@ -10,8 +10,8 @@
 #include <utility>
 
 #include "pybind11/decorators.hpp"
-#include "tt_metal/common/core_coord.hpp"
-#include "ttnn/cpp/pybind11/json_class.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include "cpp/pybind11/json_class.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/types.hpp"
 
@@ -130,7 +130,9 @@ void py_module(py::module& module) {
                         bool fuse_batch,
                         std::optional<UnaryWithParam> fused_activation,
                         bool mcast_in0,
-                        bool gather_in0) {
+                        bool gather_in0,
+                        CoreRangeSet hop_cores,
+                        std::size_t num_global_cb_receivers) {
                 // Set out_block_h and out_block_w to defaults if they are not provided
                 std::size_t actual_out_block_h = out_block_h.value_or(per_core_M);
                 std::size_t actual_out_block_w = out_block_w.value_or(per_core_N);
@@ -147,7 +149,9 @@ void py_module(py::module& module) {
                     fuse_batch,
                     std::move(fused_activation),
                     mcast_in0,
-                    gather_in0);
+                    gather_in0,
+                    std::move(hop_cores),
+                    num_global_cb_receivers);
             }),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
@@ -161,7 +165,9 @@ void py_module(py::module& module) {
             py::arg("fuse_batch").noconvert(),
             py::arg("fused_activation"),
             py::arg("mcast_in0").noconvert(),
-            py::arg("gather_in0").noconvert() = false)
+            py::arg("gather_in0").noconvert() = false,
+            py::arg("hop_cores").noconvert() = CoreRangeSet(),
+            py::arg("num_global_cb_receivers").noconvert() = 1)
         .def_readwrite(
             "compute_with_storage_grid_size",
             &MatmulMultiCoreReuseMultiCast1DProgramConfig::compute_with_storage_grid_size)
@@ -175,7 +181,10 @@ void py_module(py::module& module) {
         .def_readwrite("fuse_batch", &MatmulMultiCoreReuseMultiCast1DProgramConfig::fuse_batch)
         .def_readwrite("fused_activation", &MatmulMultiCoreReuseMultiCast1DProgramConfig::fused_activation)
         .def_readwrite("mcast_in0", &MatmulMultiCoreReuseMultiCast1DProgramConfig::mcast_in0)
-        .def_readwrite("gather_in0", &MatmulMultiCoreReuseMultiCast1DProgramConfig::gather_in0);
+        .def_readwrite("gather_in0", &MatmulMultiCoreReuseMultiCast1DProgramConfig::gather_in0)
+        .def_readwrite("hop_cores", &MatmulMultiCoreReuseMultiCast1DProgramConfig::hop_cores)
+        .def_readwrite(
+            "num_global_cb_receivers", &MatmulMultiCoreReuseMultiCast1DProgramConfig::num_global_cb_receivers);
 
     auto matmul_multi_core_reuse_multicast_dram_sharded_program_config =
         tt_serializable_class<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(
@@ -261,6 +270,9 @@ void py_module(py::module& module) {
         - Note: there are various additional constraints related to specific program
           configs chosen. Please look at the error messages carefully and fix
           problems appropriately.
+        - Note: If optional output tensor is specified, then dtype and memory config need to be checked as follows:
+          - if they are default then they should be set based on optional output tensor
+          - if the are not default then they should be compared and if there is a difference an error is reported
 
         Args:
             input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.
@@ -276,6 +288,8 @@ void py_module(py::module& module) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig): the compute kernel configuration for the matmul operation. Defaults to `None`.
             core_grid (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
+            optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
+
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -330,7 +344,10 @@ void py_module(py::module& module) {
                const std::optional<const std::string>& activation,
                const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<const ttnn::CoreGrid> core_grid,
-               const std::optional<const Tile>& output_tile) -> ttnn::Tensor {
+               const std::optional<const tt::tt_metal::Tile>& output_tile,
+               std::optional<Tensor>& optional_output_tensor,
+               const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer>& global_cb,
+               const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) -> ttnn::Tensor {
                 return self(
                     input_tensor_a,
                     input_tensor_b,
@@ -342,7 +359,10 @@ void py_module(py::module& module) {
                     activation,
                     compute_kernel_config,
                     core_grid,
-                    output_tile);
+                    output_tile,
+                    optional_output_tensor,
+                    global_cb,
+                    sub_device_id);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
@@ -356,6 +376,9 @@ void py_module(py::module& module) {
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("core_grid") = std::nullopt,
             py::arg("output_tile") = std::nullopt,
+            py::arg("optional_output_tensor") = std::nullopt,
+            py::arg("global_cb") = std::nullopt,
+            py::arg("sub_device_id") = std::nullopt,
         });
 
     bind_registered_operation(
@@ -381,6 +404,7 @@ void py_module(py::module& module) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration for the matmul operation. Defaults to `None`.
             core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
+            optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of linear is to be written. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -407,7 +431,10 @@ void py_module(py::module& module) {
                const std::optional<const std::string>& activation,
                const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<const ttnn::CoreGrid> core_grid,
-               const std::optional<const Tile>& output_tile) -> ttnn::Tensor {
+               const std::optional<const tt::tt_metal::Tile>& output_tile,
+               std::optional<Tensor>& optional_output_tensor,
+               const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer>& global_cb,
+               const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) -> ttnn::Tensor {
                 return self(
                     input_tensor_a,
                     input_tensor_b,
@@ -420,7 +447,10 @@ void py_module(py::module& module) {
                     activation,
                     compute_kernel_config,
                     core_grid,
-                    output_tile);
+                    output_tile,
+                    optional_output_tensor,
+                    global_cb,
+                    sub_device_id);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
@@ -435,6 +465,9 @@ void py_module(py::module& module) {
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("core_grid") = std::nullopt,
             py::arg("output_tile") = std::nullopt,
+            py::arg("optional_output_tensor") = std::nullopt,
+            py::arg("global_cb") = std::nullopt,
+            py::arg("sub_device_id") = std::nullopt,
         });
 }
 

@@ -17,7 +17,6 @@ void MorehBiasAddBackwardOperation::validate_inputs(
     auto& bias_grad = tensor_args.bias_grad;
 
     if (bias_grad.has_value()) {
-        auto bias_grad_shape = bias_grad->get_shape();
         auto bias_grad_tensor = bias_grad.value();
         TT_FATAL(
             is_scalar(bias_grad_tensor) || is_1d_tensor(bias_grad_tensor), "bias_grad tensor should be 1d or scalar");
@@ -43,9 +42,16 @@ void MorehBiasAddBackwardOperation::validate_on_program_cache_hit(
     validate_inputs(operation_attributes, tensor_args);
 };
 
-MorehBiasAddBackwardOperation::shape_return_value_t MorehBiasAddBackwardOperation::compute_output_shapes(
+MorehBiasAddBackwardOperation::spec_return_value_t MorehBiasAddBackwardOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return tensor_args.bias.value().get_shape();
+    if (tensor_args.bias_grad.has_value()) {
+        return tensor_args.bias_grad->get_tensor_spec();
+    }
+    TT_FATAL(tensor_args.bias.has_value(), "bias tensor should not be std::nullopt");
+    auto dtype = tensor_args.bias.value().get_dtype();
+    return TensorSpec(
+        tensor_args.bias->get_logical_shape(),
+        TensorLayout(dtype, PageConfig(Layout::TILE), operation_attributes.bias_grad_memory_config));
 };
 
 MorehBiasAddBackwardOperation::tensor_return_value_t MorehBiasAddBackwardOperation::create_output_tensors(
@@ -54,15 +60,8 @@ MorehBiasAddBackwardOperation::tensor_return_value_t MorehBiasAddBackwardOperati
         return tensor_args.bias_grad.value();
     }
 
-    TT_FATAL(tensor_args.bias.has_value(), "bias tensor should not be std::nullopt");
-    const auto& output_shape = compute_output_shapes(operation_attributes, tensor_args);
-    auto dtype = tensor_args.bias.value().get_dtype();
-    Layout layout{Layout::TILE};
-    auto device = tensor_args.bias.value().device();
-
-    auto bias_grad_memory_config = operation_attributes.bias_grad_memory_config;
-
-    return create_device_tensor(output_shape, dtype, layout, device, bias_grad_memory_config);
+    const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    return create_device_tensor(output_spec, tensor_args.bias->device());
 }
 
 std::tuple<MorehBiasAddBackwardOperation::operation_attributes_t, MorehBiasAddBackwardOperation::tensor_args_t>

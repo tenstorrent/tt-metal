@@ -11,7 +11,7 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
+from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
 
 
 #######
@@ -55,11 +55,10 @@ def test_multi_device_open_close_full_mesh_device_fixture(mesh_device):
 
 def test_multi_device_open_close_using_context_manager(silicon_arch_name, silicon_arch_wormhole_b0):
     """Using context manager to open and close multi-device"""
-    pytest.skip("Issue #6983")
-    mesh_shape, device_ids = ttnn.MeshShape(2, 2), ttnn.get_device_ids()
-    if len(device_ids) <= 1:
+    if ttnn.get_num_devices() < 4:
         pytest.skip()
-    with ttnn.create_mesh_device(mesh_shape, device_ids) as mesh_device:
+    mesh_shape = ttnn.MeshShape(2, 2)
+    with ttnn.create_mesh_device(mesh_shape) as mesh_device:
         # Do something with multi_device
         pass
 
@@ -184,7 +183,7 @@ def test_multi_device_check_per_device_shard(mesh_device, layout, memory_config,
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 def test_multi_device_replicate(mesh_device, shape, layout, memory_config):
     """Test ReplicateTensorToMesh to broadcast a tensor across multiple devices"""
-    from ttnn import ReplicateTensorToMesh, ListMeshToTensor
+    from ttnn import ReplicateTensorToMesh
 
     full_tensor = torch.rand(shape, dtype=torch.bfloat16)
 
@@ -197,7 +196,9 @@ def test_multi_device_replicate(mesh_device, shape, layout, memory_config):
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
     ttnn_loop_back_tensor = ttnn.from_device(ttnn_tensor)
-    loopback_replicated_tensors = ttnn.to_torch(ttnn_loop_back_tensor, mesh_composer=ListMeshToTensor(mesh_device))
+    loopback_replicated_tensors = [
+        ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(ttnn_loop_back_tensor.cpu())
+    ]
     for loopback_replicated_tensor in loopback_replicated_tensors:
         assert torch.all(full_tensor == loopback_replicated_tensor)
 
@@ -511,11 +512,16 @@ def test_sharded_matmul(t3k_mesh_device):
     q_heads_1B4D = ttnn.to_device(q_heads_1B4D, t3k_mesh_device)
     keys_1BDP = ttnn.to_device(keys_1BDP, t3k_mesh_device)
 
+    core_grid = ttnn.CoreGrid(y=4, x=8)
+    compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
+    if (compute_grid_size.x < core_grid.x) or (compute_grid_size.y < core_grid.y):
+        pytest.skip("Test requires larger grid size")
+
     q_heads_1B4D = ttnn.to_memory_config(
         q_heads_1B4D,
         ttnn.create_sharded_memory_config(
             shape=(32, 128),
-            core_grid=ttnn.CoreGrid(y=4, x=8),
+            core_grid=core_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
@@ -526,7 +532,7 @@ def test_sharded_matmul(t3k_mesh_device):
         keys_1BDP,
         ttnn.create_sharded_memory_config(
             shape=(128, 32),
-            core_grid=ttnn.CoreGrid(y=4, x=8),
+            core_grid=core_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
@@ -542,7 +548,7 @@ def test_sharded_matmul(t3k_mesh_device):
         q_heads_1B4D,
         keys_1BDP,
         dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=4, x=8),
+        core_grid=core_grid,
         compute_kernel_config=compute_kernel_attn,
     )
 
@@ -668,10 +674,15 @@ def test_visualize_mesh_device(t3k_mesh_device):
     ttnn.visualize_mesh_device(t3k_mesh_device)
 
 
-def test_all_gather_multiple_submeshes(t3k_mesh_device):
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x2_grid")], indirect=True)
+def test_all_gather_multiple_submeshes(mesh_device):
     """Test all_gather with multiple submeshes"""
+    if mesh_device.get_num_devices() < 8:
+        pytest.skip()
 
     def model(submesh):
+        # Reshape to a 1x4 mesh to enforce ring connected topological order.
+        submesh.reshape(ttnn.MeshShape(1, 4))
         full_tensor = torch.ones((1, 1, 32, 32 * submesh.get_num_devices()), dtype=torch.bfloat16)
         for i in range(submesh.get_num_devices()):
             full_tensor[..., i * 32 : (i + 1) * 32] = i
@@ -684,6 +695,69 @@ def test_all_gather_multiple_submeshes(t3k_mesh_device):
             device_tensor_torch = ttnn.to_torch(device_tensor)
             assert torch.all(device_tensor_torch == full_tensor)
 
-    submesh_devices = t3k_mesh_device.create_submeshes(ttnn.MeshShape(2, 2), ttnn.MeshType.Ring)
+    submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape(2, 2))
     for submesh in submesh_devices:
         model(submesh)
+
+
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 8), id="1x8_line")], indirect=True)
+def test_line_all_gather_after_reshape(mesh_device):
+    if mesh_device.get_num_devices() < 8:
+        pytest.skip()
+    mesh_device.reshape(ttnn.MeshShape(2, 4))
+    torch_input_tensor = torch.rand((1, 1, 64, 128), dtype=torch.bfloat16)
+
+    mesh_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=list(mesh_device.shape), dims=(2, 3)),
+    )
+    output_tensor = ttnn.all_gather(
+        mesh_tensor,
+        dim=2,
+        cluster_axis=0,
+        mesh_device=mesh_device,
+        topology=ttnn.Topology.Linear,
+    )
+
+
+def test_distribute_api(mesh_device):
+    torch_hidden_states = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
+    with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
+        hidden_states = ttnn.from_torch(
+            torch_hidden_states,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+        )
+
+
+def test_heterogenous_operation_dispatch():
+    if ttnn.get_num_devices() < 8:
+        pytest.skip()
+
+    a = torch.rand((1, 1, 32, 128), dtype=torch.bfloat16)
+    torch_gelu = torch.nn.functional.gelu(a)
+    torch_silu = torch.nn.functional.silu(a)
+
+    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
+    submesh_0 = mesh_device.create_submesh(ttnn.MeshShape(1, 4))
+    submesh_1 = mesh_device.create_submesh(ttnn.MeshShape(1, 1), offset=ttnn.MeshCoordinate(1, 1))
+
+    ttnn_input_0 = ttnn.from_torch(
+        a, device=submesh_0, mesh_mapper=ttnn.ShardTensorToMesh(submesh_0, dim=-1), layout=ttnn.TILE_LAYOUT
+    )
+    ttnn_input_1 = ttnn.from_torch(
+        a, device=submesh_1, mesh_mapper=ttnn.ShardTensorToMesh(submesh_1, dim=-1), layout=ttnn.TILE_LAYOUT
+    )
+
+    ttnn_gelu = ttnn.gelu(ttnn_input_0)
+    ttnn_silu = ttnn.silu(ttnn_input_1)
+
+    assert_with_pcc(
+        ttnn.to_torch(ttnn_gelu, mesh_composer=ttnn.ConcatMeshToTensor(submesh_0, dim=-1)), torch_gelu, pcc=0.9999
+    )
+    assert_with_pcc(
+        ttnn.to_torch(ttnn_silu, mesh_composer=ttnn.ConcatMeshToTensor(submesh_1, dim=-1)), torch_silu, pcc=0.9999
+    )

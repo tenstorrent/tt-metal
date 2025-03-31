@@ -12,16 +12,21 @@
 #include <vector>
 #include <ranges>
 
-#include "common/bfloat4.hpp"
-#include "common/bfloat8.hpp"
-#include "common/bfloat16.hpp"
-#include "common/tt_backend_api_types.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/allocator.hpp>
+
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include "get_platform_architecture.hpp"
+#include <tt-metalium/work_split.hpp>
 #include <yaml-cpp/yaml.h>
+
+#include "test_common.hpp"
 
 using namespace tt;
 using std::chrono::duration_cast;
@@ -84,7 +89,7 @@ void get_max_page_size_and_num_pages(
 }
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     const CoreRangeSet& all_dram_reader_cores,
     const CoreRangeSet& all_l1_receiver_cores,
     const uint32_t& single_tile_size,
@@ -121,7 +126,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
         num_pages,
         num_pages_w_per_receiver);
 
-    uint32_t reader_cb_addr = device->get_base_allocator_addr(HalMemType::L1);
+    uint32_t reader_cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     tt_metal::CircularBufferConfig reader_cb_config =
         tt_metal::CircularBufferConfig(reader_cb_size, {{reader_cb_index, tile_format}})
             .set_page_size(reader_cb_index, single_tile_size);
@@ -241,7 +246,7 @@ bool validate_data(
 }
 
 bool validation(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt_metal::Buffer& input_buffer,
     std::vector<uint32_t>& input_vec,
     uint32_t num_cores,
@@ -337,7 +342,7 @@ uint32_t get_dram_bandwidth(tt::ARCH arch) {
 }
 
 void get_optimal_dram_bank_to_reader_assignment(
-    Device* device, std::vector<CoreCoord>& all_worker_cores_ordered, CoreRangeSet& all_worker_cores) {
+    IDevice* device, std::vector<CoreCoord>& all_worker_cores_ordered, CoreRangeSet& all_worker_cores) {
     all_worker_cores_ordered = device->get_optimal_dram_bank_to_logical_worker_assignment();
     std::set<CoreRange> all_cores_set;
     for (const auto& worker_core : all_worker_cores_ordered) {
@@ -508,7 +513,7 @@ int main(int argc, char** argv) {
             dispatch_core_config =
                 tt_metal::DispatchCoreConfig{tt_metal::DispatchCoreType::WORKER, tt_metal::DispatchCoreAxis::ROW};
         }
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id, 1, 0, 0, dispatch_core_config);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id, 1, 0, 0, dispatch_core_config);
         dram_bandwidth_spec = get_dram_bandwidth(device->arch());
 
         auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();

@@ -4,8 +4,8 @@
 
 #include <cstdint>
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
+#include "cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
 
 void kernel_main() {
     constexpr uint32_t page_size = get_compile_time_arg_val(0);
@@ -53,4 +53,6 @@ void kernel_main() {
     }
 
     reader.close();
+
+    noc_async_full_barrier();
 }

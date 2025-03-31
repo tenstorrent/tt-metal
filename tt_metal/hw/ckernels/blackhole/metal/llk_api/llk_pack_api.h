@@ -75,6 +75,46 @@ inline void llk_pack_hw_configure_disaggregated(std::uint32_t pack_output) {
     llk_pack_hw_configure<untilize, is_fp32_dest_acc_en, tilize>(&llk_pack_params);
 }
 
+template <bool untilize = false, bool is_fp32_dest_acc_en = false, bool tilize = false>
+inline void llk_pack_untilize_hw_configure(
+    const llk_pack_params_t* pack_params, const std::uint32_t face_r_dim, const std::uint32_t num_faces) {
+    const std::uint32_t output_id = get_output_id(pack_params->pack_output);
+    const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
+    const bool partial_face = get_output_partial_face(output_id);
+    const bool narrow_tile = get_output_narrow_tile(output_id);
+
+    const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
+
+    _llk_pack_hw_configure_<untilize, is_fp32_dest_acc_en, tilize>(
+        pack_src_format[output_id],
+        pack_dst_format[output_id],
+        tile_size,
+        face_r_dim,
+        tile_c_dim,
+        num_faces,
+        partial_face,
+        narrow_tile,
+        pack_params->relu_config.val);
+}
+
+template <
+    bool untilize = false,
+    bool is_fp32_dest_acc_en = false,
+    ReluType relu_type = ReluType::NO_RELU,
+    std::uint32_t relu_threshold = 0,
+    bool tilize = false>
+inline void llk_pack_untilize_hw_configure_disaggregated(
+    std::uint32_t pack_output, std::uint32_t face_r_dim = 16, std::uint32_t num_faces = 4) {
+    llk_pack_params_t llk_pack_params = {
+        .pack_output = pack_output,
+        .relu_config = {
+            .f = {
+                .ApplyRelu = (std::uint32_t)relu_type,
+                .Threshold = relu_threshold,
+            }}};
+    llk_pack_untilize_hw_configure<untilize, is_fp32_dest_acc_en, tilize>(&llk_pack_params, face_r_dim, num_faces);
+}
+
 template <bool untilize = false, PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en = false>
 inline void llk_pack_reduce_hw_configure(const llk_pack_params_t* pack_params) {
     const std::uint32_t output_id = get_output_id(pack_params->pack_output);
@@ -114,6 +154,7 @@ inline void llk_pack_reduce_hw_configure_disaggregated(std::uint32_t pack_output
 
 template <bool untilize = false, bool zero_output = false, bool tilize = false>
 inline void llk_pack_init(const std::uint32_t pack_output = 16) {
+    // TODO (https://github.com/tenstorrent/tt-metal/issues/18948): Revisit for narrow_tile
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
@@ -126,13 +167,8 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16) {
 
     set_packer_strides<untilize, tilize>(pack_src_format[output_id], pack_dst_format[output_id], tile_c_dim);
 
-    // TODO: RT is this needed?
-    //  // To untilize narrow tile (32x16) we just pack 2 faces back to back
-    //  // Number of datums to pack per row
-    //  const uint face_dim = face_r_dim * FACE_C_DIM;
-    //  const uint pack_x_dim = (narrow_tile || !untilize) ? face_dim : FACE_R_DIM;
-
-    // TT_SETADCXX(p_setadc::PAC, pack_x_dim - 1, 0x0);
+    // Program packer to pack out 16 datums per row
+    TT_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
 }
 
 template <bool out_of_order_output, bool untilize>
@@ -178,14 +214,18 @@ inline void llk_pack_untilize_init(
     static_assert(diagonal == false && "Diagonal packing is not supported for BH!");
     const std::uint32_t output_id = get_output_id(output);
 
-    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal>(
+    _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
         pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces);
 
+    if constexpr (narrow_row) {
+        TT_SETADCXX(p_setadc::PAC, row_num_datums - 1, 0x0);
+    } else {
+        TT_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+    }
     // Pack row by row
     // if constexpr (diagonal) {
     //     TT_SETADCXX(p_setadc::PAC, 1-1, 0x0);
     // } else {
-    TT_SETADCXX(p_setadc::PAC, FACE_R_DIM - 1, 0x0);
     // }
 }
 
@@ -221,7 +261,7 @@ inline void llk_pack_untilize(
             16;
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
-        _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal>(
+        _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
             pack_tile_addr, pack_dst_format[output_id], face_r_dim, num_faces, block_rt * block_ct_dim);
 
         pack_tile_addr += full_ct_dim * get_local_cb_interface(output_id).fifo_page_size;

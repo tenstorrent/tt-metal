@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_cumsum_device_operation.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_cumsum {
@@ -32,8 +32,8 @@ MorehCumsumDeviceOperation::ProgramFactory::cached_program_t MorehCumsumDeviceOp
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
 
-    const auto& input_shape = input.get_legacy_shape();
-    const auto& input_shape_without_padding = input_shape.without_padding();
+    const auto& input_shape = input.get_padded_shape();
+    const auto& input_shape_without_padding = input.get_logical_shape();
 
     const auto N = input_shape[0];
     const auto C = input_shape[1];

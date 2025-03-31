@@ -39,8 +39,12 @@ run_t3000_falcon40b_perplexity_tests() {
 }
 
 run_t3000_llama70b_perplexity_tests() {
-  # Record the start time
+
+  echo "LOG_METAL: Checking number of devices"
+  python3 -c "import ttnn; print('Number of devices:', ttnn.get_num_devices())"
+
   fail=0
+  # Record the start time
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_llama70b_perplexity_tests"
@@ -78,6 +82,10 @@ run_t3000_mixtral8x7b_perplexity_tests() {
 }
 
 run_t3000_llama3_perplexity_tests_single_card() {
+
+  echo "LOG_METAL: Checking number of devices"
+  python3 -c "import ttnn; print('Number of devices:', ttnn.get_num_devices())"
+
   # Split long set of tests into two groups
   # This one runs all the N150 and N300 tests spoofed on a T3k
   fail=0
@@ -90,11 +98,14 @@ run_t3000_llama3_perplexity_tests_single_card() {
   llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
-  for FAKE_DEVICE in N150 N300; do
-    for LLAMA_DIR in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-      FAKE_DEVICE=FAKE_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/tests/test_llama_accuracy.py --timeout=3600 ; fail+=$?
+  for MESH_DEVICE in N150 N300; do
+    for LLAMA_DIR in "$llama1b" "$llama3b" "$llama8b"; do
+      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout=3600 ; fail+=$?
     done
   done
+
+  # 11B test does not run on N150
+  MESH_DEVICE=N300 LLAMA_DIR="$llama11b" WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout=3600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -106,6 +117,10 @@ run_t3000_llama3_perplexity_tests_single_card() {
 }
 
 run_t3000_llama3_perplexity_tests_t3000() {
+
+  echo "LOG_METAL: Checking number of devices"
+  python3 -c "import ttnn; print('Number of devices:', ttnn.get_num_devices())"
+
   # Split long set of tests into two groups
   # This one runs all the T3K tests
   fail=0
@@ -119,9 +134,9 @@ run_t3000_llama3_perplexity_tests_t3000() {
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
   llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
 
-  for FAKE_DEVICE in T3K; do
+  for MESH_DEVICE in T3K; do
     for LLAMA_DIR in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b"; do
-      FAKE_DEVICE=FAKE_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/tests/test_llama_accuracy.py --timeout=3600 ; fail+=$?
+      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout=3600 ; fail+=$?
     done
   done
 

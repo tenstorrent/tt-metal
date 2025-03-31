@@ -9,7 +9,7 @@
 namespace NAMESPACE {
 void MAIN {
     uint32_t NHtWt = get_compile_time_arg_val(0);
-    transpose_wh_init(tt::CBIndex::c_0);
+    transpose_wh_init(tt::CBIndex::c_0, tt::CBIndex::c_16);
 
     // transpose a row-major block:
     // - assumes the tiles come in in column major order from reader

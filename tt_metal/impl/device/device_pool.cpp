@@ -2,14 +2,33 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/device/device_pool.hpp"
+#include <device_pool.hpp>
+#include <device_impl.hpp>
 
 #include <numa.h>
 
-#include "tt_metal/detail/tt_metal.hpp"
+#include <algorithm>
+#include <cstdlib>
+#include <set>
+#include <utility>
+
+#include "env_lib.hpp"
+
+#include "dispatch_settings.hpp"
+#include "dprint_server.hpp"
+#include "host_api.hpp"
+#include "erisc_datamover_builder.hpp"
+#include <tt_metal.hpp>
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
-#include "tt_metal/impl/device/device_handle.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include "tt_metal/jit_build/build_env_manager.hpp"
+
+#include "tt_cluster.hpp"
+
+#include <unistd.h>  // Warning Linux Only, needed for _SC_NPROCESSORS_ONLN
 
 using namespace tt::tt_metal;
 
@@ -148,8 +167,6 @@ void bind_current_thread_to_free_cores(const std::unordered_set<uint32_t>& free_
 }  // namespace device_cpu_allocator
 
 DevicePool* DevicePool::_inst = nullptr;
-// Should probably add a dispatch_core_manager.cpp and move this there
-tt_metal::dispatch_core_manager* tt_metal::dispatch_core_manager::_inst = nullptr;
 
 void DevicePool::init_profiler_devices() const {
 #if defined(TRACY_ENABLE)
@@ -167,15 +184,17 @@ void DevicePool::init_profiler_devices() const {
                 // Need to create devices from farthest to the closest.
                 for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
                     uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
+                    auto mmio_device = get_device(mmio_controlled_device_id);
+                    detail::InitDeviceProfiler(mmio_device);
                     log_info(
                         tt::LogMetal,
-                        "Starting profiler on device {}",
-                        this->devices[mmio_controlled_device_id].get()->id());
-                    detail::InitDeviceProfiler(this->devices[mmio_controlled_device_id].get());
+                        "Profiler started on remote device {}",
+                        mmio_device->id());
                 }
             }
         }
     }
+    detail::ProfilerSync(ProfilerSyncState::INIT);
 #endif
 }
 
@@ -188,7 +207,12 @@ void DevicePool::initialize(
     tt::stl::Span<const std::uint32_t> l1_bank_remap) noexcept {
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool initialize");
+    // Initialize the dispatch core manager, responsible for assigning dispatch cores
     tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_config, num_hw_cqs);
+    // Initialize the dispatch query layer, used by runtime command generation
+    tt_metal::DispatchQueryManager::initialize(num_hw_cqs);
+    // Initialize DispatchSettings with defaults
+    tt_metal::DispatchSettings::initialize(tt::Cluster::instance());
 
     if (_inst == nullptr) {
         static DevicePool device_pool{};
@@ -205,6 +229,7 @@ void DevicePool::initialize(
 
     // Never skip for TG Cluster
     bool skip = not tt::Cluster::instance().is_galaxy_cluster();
+    std::vector<chip_id_t> target_mmio_ids;
     for (const auto& device_id : device_ids) {
         TT_FATAL(
             device_id < tt::Cluster::instance().number_of_devices(),
@@ -212,35 +237,44 @@ void DevicePool::initialize(
             device_id,
             tt::Cluster::instance().number_of_devices());
         const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
+        if (std::find(target_mmio_ids.begin(), target_mmio_ids.end(), mmio_device_id) == target_mmio_ids.end()) {
+            target_mmio_ids.push_back(mmio_device_id);
+        }
         skip &= (device_id == mmio_device_id);
     }
+    if (target_mmio_ids.size() != tt::Cluster::instance().number_of_pci_devices()) {
+        log_warning(
+            tt::LogMetal,
+            "Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, "
+            "consider using CreateDevices API.");
+    }
+
     _inst->skip_remote_devices = skip;
 
     _inst->add_devices_to_pool(device_ids);
     _inst->init_firmware_on_active_devices();
-    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
+
+    tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true, target_mmio_ids);
+    _inst->wait_for_fabric_router_sync();
     _inst->init_profiler_devices();
 }
 
-void DevicePool::initialize_device(v1::DeviceHandle handle) const {
-    const auto dev = devices[handle.key.index()].get();
+void DevicePool::initialize_host(IDevice* dev) const {
     detail::ClearProfilerControlBuffer(dev);
 
     // Create system memory writer for this device to have an associated interface to hardware command queue (i.e.
     // hugepage). Need to do this before FW init so we know what dispatch cores to reset.
-    bool using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
-    if (using_fast_dispatch) {
+    if (this->using_fast_dispatch) {
         detail::DispatchStateCheck(true);
         dev->init_command_queue_host();
     } else {
         detail::DispatchStateCheck(false);
-        dev->initialize_synchronous_sw_cmd_queue();
         TT_ASSERT(dev->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
     }
 
-    ClearNocData(dev);
-    DprintServerAttach(dev);
-    watcher_init(dev);
+    ClearNocData(dev->id());
+    DprintServerAttach(dev->id());
+    watcher_init(dev->id());
 
     // TODO: as optimization, investigate removing all this call for already initialized devivces
     if (!llrt::RunTimeOptions::get_instance().get_skip_reset_cores_on_init()) {
@@ -248,11 +282,54 @@ void DevicePool::initialize_device(v1::DeviceHandle handle) const {
     }
     dev->initialize_and_launch_firmware();
 
-    watcher_attach(dev);
+    watcher_attach(dev->id());
+}
 
-    // Set up HW command queues on device for FD
-    if (using_fast_dispatch) {
+void DevicePool::initialize_active_devices() const {
+    const auto& active_devices = this->get_all_active_devices();
+
+    // Activate fabric (must be before FD)
+    FabricConfig fabric_config = tt::Cluster::instance().get_fabric_config();
+    if (fabric_config == FabricConfig::FABRIC_1D || fabric_config == FabricConfig::FABRIC_2D ||
+        fabric_config == FabricConfig::FABRIC_2D_PUSH) {
+        if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
+            // write routing tables to all ethernet cores
+            tt::Cluster::instance().get_control_plane()->write_routing_tables_to_all_chips();
+        }
+
+        // Initialize fabric on mmio device
+        for (const auto& dev : active_devices) {
+            dev->init_fabric();
+        }
+    }
+
+    // Activate FD kernels
+    // Remaining steps are for setting up FD
+    if (!this->using_fast_dispatch) {
+        return;
+    }
+
+    for (auto dev : active_devices) {
+        // For Galaxy init, we only need to loop over mmio devices
+        const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(dev->id());
+        if (mmio_device_id != dev->id()) {
+            continue;
+        }
+
+        auto tunnels_from_mmio = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id);
+        populate_cq_static_args(dev);
         dev->init_command_queue_device();
+        if (not this->skip_remote_devices) {
+            for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
+                // Need to create devices from farthest to the closest.
+                for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
+                    uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
+                    auto device = get_device(mmio_controlled_device_id);
+                    populate_cq_static_args(device);
+                    device->init_command_queue_device();
+                }
+            }
+        }
     }
 }
 
@@ -264,13 +341,14 @@ void DevicePool::activate_device(chip_id_t id) {
         tt::Cluster::instance().number_of_devices());
     const std::lock_guard<std::mutex> lock(this->lock);
     if (this->devices.size() < id + 1) {
-        this->devices.resize(id + 1);
+        this->devices.reserve(id + 1);
     }
-    if (this->devices[id] == nullptr) {
+    auto device = get_device(id);
+    if (!device) {
         log_debug(tt::LogMetal, "DevicePool new device {}", id);
         int worker_core_thread_core = this->worker_thread_to_cpu_core_map.at(id);
         int completion_queue_reader_core = this->completion_queue_reader_to_cpu_core_map.at(id);
-        auto dev = new Device(
+        device = new Device(
             id,
             this->num_hw_cqs,
             this->l1_small_size,
@@ -279,25 +357,22 @@ void DevicePool::activate_device(chip_id_t id) {
             false,
             worker_core_thread_core,
             completion_queue_reader_core);
-        dev->update_dispatch_cores_for_multi_cq_eth_dispatch();
-        if (!this->firmware_built_keys.contains(dev->build_key())) {
-            dev->build_firmware();
-            this->firmware_built_keys.insert(dev->build_key());
+        if (!this->firmware_built_keys.contains(
+                BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)) {
+            BuildEnvManager::get_instance().build_firmware(device->build_id());
+            this->firmware_built_keys.insert(
+                BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
         }
-        this->devices[id] = std::unique_ptr<Device>(dev);
+        this->devices.emplace_back(std::unique_ptr<IDevice>(device));
     } else {
-        const auto& dev = this->devices[id];
         log_debug(tt::LogMetal, "DevicePool re-initialize device {}", id);
-        if (not dev->is_initialized()) {
-            if (dev->num_hw_cqs() != num_hw_cqs) {
-                // The dispatch core manager was reset, since the number of CQs was toggled.
-                // Account for chip specific idle eth dispatch cores.
-                dev->update_dispatch_cores_for_multi_cq_eth_dispatch();
-            }
-            dev->initialize(num_hw_cqs, this->l1_small_size, this->trace_region_size, this->l1_bank_remap);
-            if (!this->firmware_built_keys.contains(dev->build_key())) {
-                dev->build_firmware();
-                this->firmware_built_keys.insert(dev->build_key());
+        if (not device->is_initialized()) {
+            device->initialize(num_hw_cqs, this->l1_small_size, this->trace_region_size, this->l1_bank_remap);
+            if (!this->firmware_built_keys.contains(
+                    BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)) {
+                BuildEnvManager::get_instance().build_firmware(device->build_id());
+                this->firmware_built_keys.insert(
+                    BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
             }
         } else {
             TT_THROW("Cannot re-initialize device {}, must first call close()", id);
@@ -306,21 +381,30 @@ void DevicePool::activate_device(chip_id_t id) {
 }
 
 bool DevicePool::is_device_active(chip_id_t id) const {
-    if (this->devices.size() < id + 1 || this->devices[id] == nullptr) {
+    auto device = get_device(id);
+    if (!device) {
         return false;
-    } else {
-        return this->devices[id]->is_initialized();
     }
+
+    return device->is_initialized();
+}
+
+IDevice* DevicePool::get_device(chip_id_t id) const {
+    auto it = std::find_if(devices.begin(), devices.end(), [&id](const auto& device) { return device->id() == id; });
+    if (it == devices.end()) {
+        return nullptr;
+    }
+
+    return it->get();
 }
 
 void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
+    std::set<chip_id_t> devices_to_activate;
     if (this->skip_remote_devices) {
         for (const auto& device_id : device_ids) {
             const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
             TT_ASSERT(device_id == mmio_device_id, "Skipping remote devices is only available for mmio devices");
-            if (not this->is_device_active(device_id)) {
-                this->activate_device(device_id);
-            }
+            devices_to_activate.insert(device_id);
         }
     } else {
         std::vector<chip_id_t> all_device_ids = {};
@@ -329,15 +413,121 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
             const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
             for (const auto& mmio_controlled_device_id :
                  tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
-                if (not this->is_device_active(mmio_controlled_device_id)) {
-                    this->activate_device(mmio_controlled_device_id);
+                devices_to_activate.insert(mmio_controlled_device_id);
+            }
+        }
+    }
+
+    for (const auto& device_id : devices_to_activate) {
+        if (not this->is_device_active(device_id)) {
+            this->activate_device(device_id);
+        }
+    }
+
+    FabricConfig fabric_config = tt::Cluster::instance().get_fabric_config();
+    // Only can launch Fabric if all devices are active
+    if (fabric_config == FabricConfig::FABRIC_1D || fabric_config == FabricConfig::FABRIC_2D ||
+        fabric_config == FabricConfig::FABRIC_2D_PUSH) {
+        for (int i = 0; i < tt::Cluster::instance().number_of_devices(); i++) {
+            if (not _inst->is_device_active(i)) {
+                // Fabric currently requires all devices to be active
+                log_fatal(tt::LogMetal, "Fabric is being used but {} is not active", i);
+            }
+        }
+    }
+
+    this->using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
+    if (this->using_fast_dispatch) {
+        populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
+    }
+}
+
+void DevicePool::wait_for_fabric_router_sync() const {
+    FabricConfig fabric_config = tt::Cluster::instance().get_fabric_config();
+    if (fabric_config == FabricConfig::FABRIC_1D) {
+        static constexpr std::size_t edm_buffer_size =
+            tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
+            sizeof(tt::tt_fabric::PacketHeader);
+        const auto edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+        std::vector<uint32_t> signal(1, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
+
+        auto wait_for_handshake = [&](IDevice* dev) {
+            std::vector<std::uint32_t> master_router_status{0};
+            auto fabric_ethernet_channels = tt::Cluster::instance().get_fabric_ethernet_channels(dev->id());
+            if (fabric_ethernet_channels.empty()) {
+                return;
+            }
+
+            tt_fabric::chan_id_t fabric_master_router_chan = *(fabric_ethernet_channels.begin());
+            CoreCoord virtual_eth_core =
+                tt::Cluster::instance().get_virtual_eth_core_from_channel(dev->id(), fabric_master_router_chan);
+            auto fabric_master_router_core = dev->logical_core_from_ethernet_core(virtual_eth_core);
+            while (master_router_status[0] != tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE) {
+                tt_metal::detail::ReadFromDeviceL1(
+                    dev,
+                    fabric_master_router_core,
+                    edm_config.edm_status_address,
+                    4,
+                    master_router_status,
+                    CoreType::ETH);
+            }
+
+            tt_metal::detail::WriteToDeviceL1(
+                dev, fabric_master_router_core, edm_config.edm_status_address, signal, CoreType::ETH);
+        };
+
+        for (const auto& dev : this->get_all_active_devices()) {
+            if (tt::Cluster::instance().get_associated_mmio_device(dev->id()) != dev->id()) {
+                continue;
+            }
+
+            auto tunnels_from_mmio = tt::Cluster::instance().get_tunnels_from_mmio_device(dev->id());
+            for (auto i = 0; i < tunnels_from_mmio.size(); i++) {
+                // Need to poll on devices from farthest to the closest.
+                for (auto j = tunnels_from_mmio[i].size() - 1; j > 0; j--) {
+                    wait_for_handshake(get_device(tunnels_from_mmio[i][j]));
                 }
+            }
+
+            if (tt::Cluster::instance().get_cluster_type() != tt::ClusterType::TG) {
+                // 1d fabric is not launched on TG gateways
+                wait_for_handshake(dev);
+            }
+        }
+    } else if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
+        auto fabric_router_sync_sem_addr =
+            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+
+        std::vector<std::uint32_t> master_router_status{0};
+        for (const auto& dev : this->get_all_active_devices()) {
+            auto fabric_ethernet_channels = tt::Cluster::instance().get_fabric_ethernet_channels(dev->id());
+            if (fabric_ethernet_channels.empty()) {
+                continue;
+            }
+
+            tt_fabric::chan_id_t fabric_master_router_chan = *(fabric_ethernet_channels.begin());
+            CoreCoord virtual_eth_core =
+                tt::Cluster::instance().get_virtual_eth_core_from_channel(dev->id(), fabric_master_router_chan);
+            auto fabric_master_router_core = dev->logical_core_from_ethernet_core(virtual_eth_core);
+
+            auto [mesh_id, chip_id] =
+                tt::Cluster::instance().get_control_plane()->get_mesh_chip_id_from_physical_chip_id(dev->id());
+            auto num_routers =
+                tt::Cluster::instance().get_control_plane()->get_num_active_fabric_routers(mesh_id, chip_id);
+            while (master_router_status[0] != num_routers) {
+                tt_metal::detail::ReadFromDeviceL1(
+                    dev,
+                    fabric_master_router_core,
+                    fabric_router_sync_sem_addr,
+                    4,
+                    master_router_status,
+                    CoreType::ETH);
             }
         }
     }
 }
 
-void DevicePool::register_worker_thread_for_device(v1::DeviceHandle device, std::thread::id worker_thread_id) {
+void DevicePool::register_worker_thread_for_device(IDevice* device, std::thread::id worker_thread_id) {
     TT_FATAL(
         std::this_thread::get_id() == this->device_pool_creation_thread_id,
         "Worker threads can only be registered in the thread where the Device(s) were created");
@@ -357,7 +547,7 @@ void DevicePool::register_worker_thread_for_device(v1::DeviceHandle device, std:
     this->worker_thread_ids.insert(worker_thread_id);
 }
 
-void DevicePool::unregister_worker_thread_for_device(v1::DeviceHandle device) {
+void DevicePool::unregister_worker_thread_for_device(IDevice* device) {
     TT_FATAL(
         std::this_thread::get_id() == this->device_pool_creation_thread_id,
         "Worker threads can only be unregistered in the thread where the Device(s) were created");
@@ -371,8 +561,8 @@ void DevicePool::unregister_worker_thread_for_device(v1::DeviceHandle device) {
 const std::unordered_set<std::thread::id>& DevicePool::get_worker_thread_ids() const { return this->worker_thread_ids; }
 
 void DevicePool::init_firmware_on_active_devices() const {
-    for (const auto& handle : this->get_all_active_devices()) {
-        const auto dev = this->devices[handle.key.index()].get();
+    const auto& active_devices = this->get_all_active_devices();
+    for (const auto& dev : active_devices) {
         // For Galaxy init, we only need to loop over mmio devices
         const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(dev->id());
         if (mmio_device_id != dev->id()) {
@@ -395,18 +585,21 @@ void DevicePool::init_firmware_on_active_devices() const {
             tt::Cluster::instance().get_device_tunnel_depth(mmio_device_id));
 
         auto tunnels_from_mmio = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id);
-        this->initialize_device(handle);
+        this->initialize_host(dev);
         if (not this->skip_remote_devices) {
             for (uint32_t t = 0; t < tunnels_from_mmio.size(); t++) {
                 // Need to create devices from farthest to the closest.
                 for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
                     uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
                     log_debug(tt::LogMetal, "Tunnel {} Device {} Tunnel Stop: {}", t, mmio_controlled_device_id, ts);
-                    this->initialize_device({{mmio_controlled_device_id, 0}});
+                    auto device = get_device(mmio_controlled_device_id);
+                    this->initialize_host(device);
                 }
             }
         }
     }
+
+    this->initialize_active_devices();
 }
 
 DevicePool::DevicePool() {
@@ -430,16 +623,18 @@ DevicePool::DevicePool() {
     }
 }
 
-v1::DeviceHandle DevicePool::get_active_device(chip_id_t device_id) const {
-    TT_ASSERT(this->is_device_active(device_id), "DevicePool does not contain active device {}", device_id);
-    return {{device_id, 0}};
+IDevice* DevicePool::get_active_device(chip_id_t device_id) const {
+    auto device = get_device(device_id);
+    TT_ASSERT(device != nullptr, "DevicePool does not contain device {}", device_id);
+    TT_ASSERT(device->is_initialized(), "Device {} is not initialized", device_id);
+    return device;
 }
 
-std::vector<v1::DeviceHandle> DevicePool::get_all_active_devices() const {
-    std::vector<v1::DeviceHandle> user_devices;
-    for (int id = 0; id < this->devices.size(); id++) {
-        if (this->is_device_active(id)) {
-            user_devices.push_back({{id, 0}});
+std::vector<IDevice* > DevicePool::get_all_active_devices() const {
+    std::vector<IDevice*> user_devices;
+    for (const auto& device : this->devices) {
+        if (device->is_initialized()) {
+            user_devices.push_back(device.get());
         }
     }
     return user_devices;
@@ -449,25 +644,28 @@ bool DevicePool::close_device(chip_id_t device_id) {
     // Sync and close one device
     // Currently can only call this on mmio chips, once we split dispatch kernel shutdown
     // from device close, we can call this on remote devices too
+    ZoneScoped;
+    detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
     bool pass = true;
     const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
     for (const auto& mmio_controlled_device_id :
          tt::Cluster::instance().get_devices_controlled_by_mmio_device(mmio_device_id)) {
-        if (this->is_device_active(mmio_controlled_device_id)) {
-            pass &= this->devices[mmio_controlled_device_id]->close();
-            // When a device is closed, its worker thread is joined. Stop tracking this
-            // worker thread.
-            this->unregister_worker_thread_for_device({{mmio_controlled_device_id, 0}});
+        auto device = get_device(mmio_controlled_device_id);
+        if (device && device->is_initialized()) {
+            pass &= device->close();
+            this->unregister_worker_thread_for_device(device);
         }
     }
     return pass;
 }
 
-void DevicePool::close_devices(const std::vector<Device*>& devices) {
+void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
     // Ordered, because we need to shutdown tunnels from the farthest to the closest.
     std::vector<chip_id_t> devices_to_close;
 
+    ZoneScoped;
+    detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
     // Loop over all devices and add remote devices to devices_to_close
     // For Galaxy if an mmio device's tunnels are being closed, close the mmio device as well
     std::unordered_set<chip_id_t> mmio_devices_to_close;
@@ -477,7 +675,7 @@ void DevicePool::close_devices(const std::vector<Device*>& devices) {
             continue;
         }
         auto mmio_dev_handle = tt::DevicePool::instance().get_active_device(mmio_device_id);
-        auto tunnels_from_mmio = mmio_dev_handle->tunnels_from_mmio_;
+        auto tunnels_from_mmio = tt::Cluster::instance().get_tunnels_from_mmio_device(mmio_device_id);
         // iterate over all tunnels origination from this mmio device
         for (auto t : tunnels_from_mmio) {
             // iterate over all tunneled devices (tunnel stops) in this tunnel
@@ -496,10 +694,62 @@ void DevicePool::close_devices(const std::vector<Device*>& devices) {
     // before closing any device + modifying routing info.
     // If this is not done, non-blocking CCLs followed by a close will hang, since
     // the main thread will modify device state while the CCL is running on device.
+    // On TG - this should not be done on MMIO mapped devices, since we don't run
+    // any workloads on them
     for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
+        if (tt::Cluster::instance().is_galaxy_cluster() and dev->is_mmio_capable()) {
+            continue;
+        }
         dev->synchronize();  // Synchronize worker queue
         Synchronize(dev);    // Synchronize device
+    }
+
+    // Terminate fabric routers
+    FabricConfig fabric_config = tt::Cluster::instance().get_fabric_config();
+    if (fabric_config == FabricConfig::FABRIC_1D) {
+        std::vector<uint32_t> signal(1, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+        static constexpr std::size_t edm_buffer_size =
+            tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
+            sizeof(tt::tt_fabric::PacketHeader);
+        const auto edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+
+        auto fabric_router_sync_sem_addr = edm_config.termination_signal_address;
+        for (const auto& dev : this->get_all_active_devices()) {
+            if (dev->is_mmio_capable() && (tt::Cluster::instance().get_cluster_type() == tt::ClusterType::TG)) {
+                // 1d fabric is not launched on TG gateways
+                continue;
+            }
+
+            auto fabric_ethernet_channels = tt::Cluster::instance().get_fabric_ethernet_channels(dev->id());
+            if (fabric_ethernet_channels.empty()) {
+                continue;
+            }
+
+            tt_fabric::chan_id_t fabric_master_router_chan = *(fabric_ethernet_channels.begin());
+            CoreCoord virtual_eth_core =
+                tt::Cluster::instance().get_virtual_eth_core_from_channel(dev->id(), fabric_master_router_chan);
+            auto fabric_master_router_core = dev->logical_core_from_ethernet_core(virtual_eth_core);
+            tt_metal::detail::WriteToDeviceL1(
+                dev, fabric_master_router_core, fabric_router_sync_sem_addr, signal, CoreType::ETH);
+        }
+    } else if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
+        std::vector<uint32_t> master_router_terminate(1, 0);
+        auto fabric_router_sync_sem_addr =
+            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        for (const auto& dev : this->get_all_active_devices()) {
+            auto fabric_ethernet_channels = tt::Cluster::instance().get_fabric_ethernet_channels(dev->id());
+            if (fabric_ethernet_channels.empty()) {
+                continue;
+            }
+
+            tt_fabric::chan_id_t fabric_master_router_chan = *(fabric_ethernet_channels.begin());
+            CoreCoord virtual_eth_core =
+                tt::Cluster::instance().get_virtual_eth_core_from_channel(dev->id(), fabric_master_router_chan);
+            auto fabric_master_router_core = dev->logical_core_from_ethernet_core(virtual_eth_core);
+            tt_metal::detail::WriteToDeviceL1(
+                dev, fabric_master_router_core, fabric_router_sync_sem_addr, master_router_terminate, CoreType::ETH);
+        }
     }
 
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
@@ -508,7 +758,7 @@ void DevicePool::close_devices(const std::vector<Device*>& devices) {
         dev->close();
         // When a device is closed, its worker thread is joined. Stop tracking this
         // worker thread.
-        this->unregister_worker_thread_for_device(this->get_handle(dev));
+        this->unregister_worker_thread_for_device(dev);
     }
 }
 
@@ -516,22 +766,13 @@ DevicePool::~DevicePool() {
     log_debug(tt::LogMetal, "DevicePool destructor");
     for (const auto& dev : this->devices) {
         if (dev != nullptr and dev->is_initialized()) {
-            // TODO: #13876, Was encountering issues with the dispatch_constants being destroyed before the DevicePool
+            // TODO: #13876, Was encountering issues with the DispatchMemMap being destroyed before the DevicePool
             // destructor, which leads to device->close() hitting asserts. We need to move the ownership of
-            // dispatch_constants to the device, so it doesn't go out of scope before the device is closed.
+            // DispatchMemMap to the device, so it doesn't go out of scope before the device is closed.
             dev->close();
         }
     }
     this->devices.clear();
-}
-
-v1::DeviceHandle DevicePool::get_handle(Device* device) const {
-    for (size_t index = 0; index < this->devices.size(); ++index) {
-        if (this->devices[index].get() == device) {
-            return {{index, 0}};
-        }
-    }
-    return {};
 }
 
 }  // namespace tt

@@ -10,6 +10,7 @@ constexpr auto kNodeType = "node_type";
 constexpr auto kCounter = "counter";
 constexpr auto kConnections = "connections";
 constexpr auto kParams = "params";
+constexpr auto kArguments = "arguments";
 // params keys
 constexpr auto kName = "name";
 constexpr auto kInputs = "inputs";
@@ -23,6 +24,7 @@ constexpr auto kNumCores = "num_cores";
 constexpr auto kPageSize = "page_size";
 constexpr auto kCoreRangeSet = "core_range_set";
 constexpr auto kGloballyAllocated = "globally_allocated";
+constexpr auto kDeviceId = "device_id";
 
 // node names
 constexpr auto kNodeBuffer = "buffer";

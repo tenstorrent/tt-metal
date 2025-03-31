@@ -1,44 +1,6 @@
 #!/bin/bash
 set -eo pipefail
 
-run_tg_llama3-small_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_tg_llama3-small_tests"
-
-  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
-  # Llama3.2-1B
-  llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
-  # Llama3.2-3B
-  llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
-  # Llama3.1-8B
-  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
-  # Llama3.2-11B
-  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
-
-  # Run all Llama3 tests for 1B, 3B and 8B weights
-  for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3/tests/test_llama_attention.py ; fail+=$?
-    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3/tests/test_llama_attention_prefill.py ; fail+=$?
-    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3/tests/test_llama_embedding.py ; fail+=$?
-    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3/tests/test_llama_mlp.py ; fail+=$?
-    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3/tests/test_llama_rms_norm.py ; fail+=$?
-    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3/tests/test_llama_decoder.py ; fail+=$?
-    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3/tests/test_llama_decoder_prefill.py ; fail+=$?
-    echo "LOG_METAL: Llama3 small-tests for $llama_dir completed"
-  done
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_tg_llama3-small_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_tg_llama3.1-70b_tests() {
   # Record the start time
   fail=0
@@ -49,18 +11,48 @@ run_tg_llama3.1-70b_tests() {
   # Llama3.1-70B weights
   llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
 
-  LLAMA_DIR=$llama70b FAKE_DEVICE=TG pytest -n auto models/demos/llama3/tests/test_llama_attention.py ; fail+=$?
-  LLAMA_DIR=$llama70b FAKE_DEVICE=TG pytest -n auto models/demos/llama3/tests/test_llama_attention_prefill.py ; fail+=$?
-  LLAMA_DIR=$llama70b FAKE_DEVICE=TG pytest -n auto models/demos/llama3/tests/test_llama_embedding.py ; fail+=$?
-  LLAMA_DIR=$llama70b FAKE_DEVICE=TG pytest -n auto models/demos/llama3/tests/test_llama_mlp.py ; fail+=$?
-  LLAMA_DIR=$llama70b FAKE_DEVICE=TG pytest -n auto models/demos/llama3/tests/test_llama_rms_norm.py ; fail+=$?
-  LLAMA_DIR=$llama70b FAKE_DEVICE=TG pytest -n auto models/demos/llama3/tests/test_llama_decoder.py ; fail+=$?
-  LLAMA_DIR=$llama70b FAKE_DEVICE=TG pytest -n auto models/demos/llama3/tests/test_llama_decoder_prefill.py ; fail+=$?
+  LLAMA_DIR=$llama70b FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/tests/unit_tests ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_tg_llama3.1-70b_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_tg_distributed_op_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_tg_distributed_op_tests"
+
+  pytest tests/ttnn/distributed/test_distributed_layernorm_TG.py ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_tg_distributed_op_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_tg_prefetcher_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_tg_prefetcher_tests"
+
+  pytest tests/ttnn/unit_tests/operations/test_prefetcher_TG.py --timeout 600; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_tg_prefetcher_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -75,11 +67,48 @@ run_tg_tests() {
     ./build/test/tt_metal/unit_tests_device --gtest_filter="GalaxyFixture.*:TGFixture.*"
     TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MultiCommandQueueMultiDevice*Fixture.*"
 
+  elif [[ "$1" == "fabric" ]]; then
+    echo "LOG_FABRIC: running run_tg_fabric_tests"
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*TG*
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2DFixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2DFixture.*"
+    TESTS=(
+        # Unicast tests
+        "1 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16"
+        "2 --fabric_command 64 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16"
+        "3 --fabric_command 65 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16"
+        "4 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --metal_fabric_init_level 1"
+        # Unicast tests for push router
+        "5 --fabric_command 1 --board_type glx32 --data_kb_per_tx 100 --push_router"
+        "6 --fabric_command 64 --board_type glx32 --data_kb_per_tx 100 --push_router"
+        "7 --fabric_command 65 --board_type glx32 --data_kb_per_tx 100 --push_router"
+        "8 --fabric_command 1 --board_type glx32 --data_kb_per_tx 100 --push_router --metal_fabric_init_level 1"
+        # Line Mcast tests
+        "9 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --e_depth 7"
+        "10 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --w_depth 7"
+        "11 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --n_depth 3"
+        "12 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --s_depth 3"
+        "13 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --n_depth 3 --metal_fabric_init_level 1"
+    )
+    for TEST in "${TESTS[@]}"; do
+        # Extract test name and arguments
+        read -r TEST_NUMBER TEST_ARGS <<< "$TEST"
+        echo "LOG_FABRIC: Test $TEST_NUMBER: $TEST_ARGS"
+        # Execute the test command with extracted arguments
+        TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_sanity_wormhole_b0 $TEST_ARGS
+    done
+
   elif [[ "$1" == "llama3-70b" ]]; then
     run_tg_llama3.1-70b_tests
 
-  elif [[ "$1" == "llama3-small" ]]; then
-    run_tg_llama3-small_tests
+  elif [[ "$1" == "prefetcher" ]]; then
+    run_tg_prefetcher_tests
+
+  elif [[ "$1" == "distributed-ops" ]]; then
+    run_tg_distributed_op_tests
+
+  elif [[ "$1" == "distributed-runtime" ]]; then
+    ./build/test/tt_metal/distributed/distributed_unit_tests_wormhole_b0
 
   else
     echo "LOG_METAL: Unknown model type: $1"

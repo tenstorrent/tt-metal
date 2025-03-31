@@ -11,17 +11,7 @@
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
-
-inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
-    for (uint32_t page = 0; page < npages; ++page) {
-        DPRINT << start + page << ": ";
-        for (uint32_t j = 0; j < pagelen; ++j, ++ptr) {
-            DPRINT << BF16(*ptr) << " ";
-        }
-        DPRINT << ENDL();
-    }
-}
+#include "debug/dprint_pages.h"
 #endif
 
 constexpr uint32_t weight_size_h = get_compile_time_arg_val(7);
@@ -65,15 +55,23 @@ void kernel_main() {
     constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(9);
     constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(10);
     constexpr uint32_t num_input_cores = get_compile_time_arg_val(11);
-    constexpr uint32_t act_num_blocks_w = get_compile_time_arg_val(12);
-    const uint32_t act_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(13));
-    const uint32_t act_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
-    constexpr uint32_t act_mcast_dest_noc_start_x = get_compile_time_arg_val(15);
-    constexpr uint32_t act_mcast_dest_noc_start_y = get_compile_time_arg_val(16);
-    constexpr uint32_t act_mcast_dest_noc_end_x = get_compile_time_arg_val(17);
-    constexpr uint32_t act_mcast_dest_noc_end_y = get_compile_time_arg_val(18);
-    constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(19);
-    constexpr uint32_t num_output_cores = get_compile_time_arg_val(20);
+    constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(12);
+    constexpr uint32_t act_num_blocks_w = get_compile_time_arg_val(13);
+    const uint32_t act_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
+    const uint32_t act_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
+    constexpr uint32_t act_mcast_dest_noc_start_x = get_compile_time_arg_val(16);
+    constexpr uint32_t act_mcast_dest_noc_start_y = get_compile_time_arg_val(17);
+    constexpr uint32_t act_mcast_dest_noc_end_x = get_compile_time_arg_val(18);
+    constexpr uint32_t act_mcast_dest_noc_end_y = get_compile_time_arg_val(19);
+    constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(20);
+    constexpr uint32_t num_output_cores = get_compile_time_arg_val(21);
+    constexpr uint32_t cb_id_act = get_compile_time_arg_val(22);
+    constexpr uint32_t cb_id_weight = get_compile_time_arg_val(23);
+    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(24);
+    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(25);
+    constexpr uint32_t cb_l1_array = get_compile_time_arg_val(26);
+    constexpr uint32_t cb_id_act_row_major_bfloat16 = get_compile_time_arg_val(27);
+    constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(28);
 
     constexpr uint32_t num_mcast_cores = MAX(num_input_cores, num_output_cores);
     uint32_t i = 0;  // Runtime arg index
@@ -97,19 +95,10 @@ void kernel_main() {
     // Equivalent to Core Index.
     uint32_t this_core_id = this_core_x + (num_cores_x * this_core_y);
 
-    constexpr uint32_t cb_id_act = tt::CBIndex::c_0;
-    constexpr uint32_t cb_id_weight = tt::CBIndex::c_1;
-
-    constexpr uint32_t tilized_in0_cb_id = tt::CBIndex::c_25;
-    constexpr uint32_t cb_id_sharded_act = tt::CBIndex::c_3;
-    constexpr uint32_t cb_id_act_row_major_bfloat16 = tt::CBIndex::c_6;
-
-    constexpr uint32_t cb_reader_indices = tt::CBIndex::c_4;
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
 
     // L1 array
-    constexpr uint32_t cb_l1_array = tt::CBIndex::c_5;
     volatile tt_l1_ptr uint32_t* act_mcast_sender_semaphore_valid_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_l1_array));
 
@@ -151,125 +140,126 @@ void kernel_main() {
     noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), conv_act_c_read_bytes);
 
     // Reset reader_idx to finish act_block_h_datums
+    for (uint32_t block_h_index = 0; block_h_index < act_num_blocks_h; block_h_index++) {
+        act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
+        for (uint32_t block_w_index = 0; block_w_index < act_num_blocks_w; block_w_index++) {
+            uint32_t reader_idx = block_h_index * (act_block_h_datums / 2);
+            cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
+            if (this_core_id < num_input_cores) {
+                uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
+                for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {
+                    uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
+                    read_channels<weight_size_h, weight_size_w>(
+                        l1_write_addr_act,
+                        act_l1_read_addr,
+                        two_reader_indices & 0xffff,
+                        conv_act_c_bytes,
+                        conv_act_c_read_bytes,
+                        stride_h_bytes,
+                        stride_w_bytes);
+                    read_channels<weight_size_h, weight_size_w>(
+                        l1_write_addr_act,
+                        act_l1_read_addr,
+                        two_reader_indices >> 16,
+                        conv_act_c_bytes,
+                        conv_act_c_read_bytes,
+                        stride_h_bytes,
+                        stride_w_bytes);
 
-    for (uint32_t block_w_index = 0; block_w_index < act_num_blocks_w; block_w_index++) {
-        uint32_t reader_idx = 0;
-        cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
-        if (this_core_id < num_input_cores) {
-            uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
+                    reader_idx++;
+                }
 
-            for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {
-                uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
-                read_channels<weight_size_h, weight_size_w>(
-                    l1_write_addr_act,
-                    act_l1_read_addr,
-                    two_reader_indices & 0xffff,
-                    conv_act_c_bytes,
-                    conv_act_c_read_bytes,
-                    stride_h_bytes,
-                    stride_w_bytes);
-                read_channels<weight_size_h, weight_size_w>(
-                    l1_write_addr_act,
-                    act_l1_read_addr,
-                    two_reader_indices >> 16,
-                    conv_act_c_bytes,
-                    conv_act_c_read_bytes,
-                    stride_h_bytes,
-                    stride_w_bytes);
+                // After reading one block, increment the starting read pointer by the width of the block.
+                // Next read uses the next set of channels.
+                act_l1_read_addr += conv_act_c_read_bytes;
 
-                reader_idx++;
+                noc_async_read_barrier();
             }
+            cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
 
-            // After reading one block, increment the starting read pointer by the width of the block.
-            // Next read uses the next set of channels.
-            act_l1_read_addr += conv_act_c_read_bytes;
+            // Round robin self-mcast and receive tilized act matrix in cb_id_act
+            // Compute should function like regular mm
 
-            noc_async_read_barrier();
-        }
-        cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
+            uint32_t act_w_outer_i = 0;
 
-        // Round robin self-mcast and receive tilized act matrix in cb_id_act
-        // Compute should function like regular mm
+            uint32_t sender_noc_x = 0;
+            uint32_t sender_noc_y = 0;
 
-        uint32_t act_w_outer_i = 0;
+            for (uint32_t act_w_outer_i = 0; act_w_outer_i < num_input_cores; act_w_outer_i++) {
+                cb_reserve_back(cb_id_act, act_block_num_tiles);
+                if (act_w_outer_i == this_core_id) {
+                    // MCAST SENDER: send entire tilized input to other cores in column
+                    // wait until all act mcast destinations have atomically incremented the act semaphore_addr (i.e.
+                    // its value should be act_mcast_num_dests), then reset the semaphore_addr value back to zero for
+                    // the next block
 
-        uint32_t sender_noc_x = 0;
-        uint32_t sender_noc_y = 0;
+                    noc_semaphore_wait_min(act_mcast_sender_semaphore_addr_ptr, num_mcast_cores - 1);
+                    noc_semaphore_set(act_mcast_sender_semaphore_addr_ptr, 0);
 
-        for (uint32_t act_w_outer_i = 0; act_w_outer_i < num_input_cores; act_w_outer_i++) {
-            cb_reserve_back(cb_id_act, act_block_num_tiles);
-            if (act_w_outer_i == this_core_id) {
-                // MCAST SENDER: send entire tilized input to other cores in column
-                // wait until all act mcast destinations have atomically incremented the act semaphore_addr (i.e. its
-                // value should be act_mcast_num_dests), then reset the semaphore_addr value back to zero for the next
-                // block
+                    noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
 
-                noc_semaphore_wait_min(act_mcast_sender_semaphore_addr_ptr, num_mcast_cores - 1);
-                noc_semaphore_set(act_mcast_sender_semaphore_addr_ptr, 0);
+                    // // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
+                    cb_wait_front(tilized_in0_cb_id, act_block_num_tiles);
 
-                noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
+                    // // Now we have the block in the CB address, we can mcast to dests!
+                    uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id);
 
-                // // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
-                cb_wait_front(tilized_in0_cb_id, act_block_num_tiles);
+                    // // num_dests will source, since we are copying to a different local CB as well
+                    uint64_t act_multicast_data_addr = act_multicast_noc_addr | get_write_ptr(cb_id_act);
 
-                // // Now we have the block in the CB address, we can mcast to dests!
-                uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id);
+                    noc_async_write_multicast_loopback_src(
+                        tilized_act_start_address,
+                        act_multicast_data_addr,
+                        act_mcast_sender_size_bytes,
+                        num_mcast_cores,
+                        false,
+                        false);
 
-                // // num_dests will source, since we are copying to a different local CB as well
-                uint64_t act_multicast_data_addr = act_multicast_noc_addr | get_write_ptr(cb_id_act);
-
-                noc_async_write_multicast_loopback_src(
-                    tilized_act_start_address,
-                    act_multicast_data_addr,
-                    act_mcast_sender_size_bytes,
-                    num_mcast_cores,
-                    false,
-                    false);
-
-                // Note: no need for write barrier, since these two multicasts are done on the same noc id and same vc
-                // even though cmd bufs are different Also, this only works because we are setting VCs statically (using
-                // NOC_CMD_STATIC_VC).
+                    // Note: no need for write barrier, since these two multicasts are done on the same noc id and same
+                    // vc even though cmd bufs are different Also, this only works because we are setting VCs statically
+                    // (using NOC_CMD_STATIC_VC).
 #ifdef ARCH_BLACKHOLE
-                // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and may not
-                // be sent in order they are issued
-                noc_async_writes_flushed();
+                    // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and may
+                    // not be sent in order they are issued
+                    noc_async_writes_flushed();
 #endif
-                // // We should also multicast VALID flag to destinations for receiver semaphore
-                noc_semaphore_set_multicast_loopback_src(
-                    act_mcast_sender_semaphore_valid_addr,
-                    act_mcast_receiver_semaphore_noc_addr,
-                    num_mcast_cores,
-                    false,
-                    false);
+                    // // We should also multicast VALID flag to destinations for receiver semaphore
+                    noc_semaphore_set_multicast_loopback_src(
+                        act_mcast_sender_semaphore_valid_addr,
+                        act_mcast_receiver_semaphore_noc_addr,
+                        num_mcast_cores,
+                        false,
+                        false);
 
-                noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+                    noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
 
-            } else {
-                // MCAST RECEIVER: receive entire tilized input from sender core
-                // Set act semaphore value to INVALID
-                noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
+                } else {
+                    // MCAST RECEIVER: receive entire tilized input from sender core
+                    // Set act semaphore value to INVALID
+                    noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
 
-                uint32_t sender_x = act_mcast_x_lookup[sender_noc_x];
-                uint32_t sender_y = act_mcast_y_lookup[sender_noc_y];
+                    uint32_t sender_x = act_mcast_x_lookup[sender_noc_x];
+                    uint32_t sender_y = act_mcast_y_lookup[sender_noc_y];
 
-                // Atomic increment source core counter
-                uint64_t act_mcast_sender_semaphore_noc_addr =
-                    get_noc_addr(sender_x, sender_y, act_mcast_sender_semaphore_addr);
-                noc_semaphore_inc(act_mcast_sender_semaphore_noc_addr, 1);
+                    // Atomic increment source core counter
+                    uint64_t act_mcast_sender_semaphore_noc_addr =
+                        get_noc_addr(sender_x, sender_y, act_mcast_sender_semaphore_addr);
+                    noc_semaphore_inc(act_mcast_sender_semaphore_noc_addr, 1);
 
-                // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
-                noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
-            }
+                    // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
+                    noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+                }
 
-            cb_push_back(cb_id_act, act_block_num_tiles);
+                cb_push_back(cb_id_act, act_block_num_tiles);
 
-            sender_noc_x++;
-            if (sender_noc_x >= num_cores_x) {
-                sender_noc_x = 0;
-                sender_noc_y++;
-            }
+                sender_noc_x++;
+                if (sender_noc_x >= num_cores_x) {
+                    sender_noc_x = 0;
+                    sender_noc_y++;
+                }
 
-        }  // num_input_cores
-        cb_pop_front(tilized_in0_cb_id, act_block_num_tiles);
+            }  // num_input_cores
+            cb_pop_front(tilized_in0_cb_id, act_block_num_tiles);
+        }
     }
 }

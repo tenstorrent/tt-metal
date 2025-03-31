@@ -6,7 +6,7 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
-from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
+from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import (
     FalconForCausalLM,
 )
@@ -172,8 +172,7 @@ def run_test_FalconModel_inference(
         tt_cache_path,
         use_global_cos_sin_cache=use_global_cos_sin_cache,
     )
-    for device in mesh_device.get_devices():
-        ttnn.synchronize_device(device)
+    ttnn.synchronize_device(mesh_device)
 
     # TODO: Generate embeddings and attention_mask on device
     if llm_mode == "prefill":
@@ -196,7 +195,7 @@ def run_test_FalconModel_inference(
                 use_cache=use_cache,
             )
             # output of model is replicated
-            tensors = ttnn.to_torch(tt_out, device=mesh_device, mesh_composer=ListMeshToTensor(mesh_device))
+            tensors = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(tt_out.cpu())]
             tt_outs.append(tensors[0].squeeze(1))
 
         tt_out = torch.vstack(tt_outs)
@@ -213,7 +212,7 @@ def run_test_FalconModel_inference(
             use_cache=use_cache,
         )
         # Output of model is replicated
-        tensors = ttnn.to_torch(tt_out, device=mesh_device, mesh_composer=ListMeshToTensor(mesh_device))
+        tensors = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(tt_out.cpu())]
         tt_out = tensors[0].squeeze(1).transpose(0, 1)
 
     # check outputs ----------------------------------------------------------------------

@@ -10,6 +10,8 @@
 #include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
 
+#include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
+
 #include <vector>
 #include <cstdint>
 
@@ -19,6 +21,7 @@ using ttnn::ccl::cmd::CclCommandArgCode;
 using ttnn::ccl::cmd::CclCommandCode;
 using ttnn::ccl::cmd::CclCommandHeader;
 using shape4d = ttnn::ccl::Shape4D<uint32_t>;
+
 TEST(LineReduceScatter, EmitCclSendSliceSequenceCommands_8Slices_1x1x32x2048Tensor_Dim3_Slice0to7) {
     const std::size_t num_slices = 8;
     const std::int64_t start_slice_index = 0;
@@ -38,7 +41,7 @@ TEST(LineReduceScatter, EmitCclSendSliceSequenceCommands_8Slices_1x1x32x2048Tens
 
     std::vector<uint32_t> args;
     ASSERT_EQ(slices.size(), 8);
-    ttnn::ccl::reduce_scatter_detail::emit_ccl_send_slice_sequence_commands(slices, args);
+    ttnn::ccl::worker_detail::emit_ccl_send_slice_sequence_commands(slices, args);
 
     const std::size_t args_per_command_header = 1;
     const std::size_t args_per_command_arg_header = 1;

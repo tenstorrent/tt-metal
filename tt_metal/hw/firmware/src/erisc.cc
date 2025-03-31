@@ -7,6 +7,7 @@
 #include "firmware_common.h"
 #include "noc_parameters.h"
 #include "risc_attribs.h"
+#include "dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "debug/watcher_common.h"
 
@@ -20,8 +21,13 @@ namespace kernel_profiler {
 #endif
 
 uint8_t noc_index = 0;  // TODO: remove hardcoding
+
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
+uint8_t my_logical_x_ __attribute__((used));
+uint8_t my_logical_y_ __attribute__((used));
+uint8_t my_relative_x_ __attribute__((used));
+uint8_t my_relative_y_ __attribute__((used));
 
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
@@ -40,6 +46,34 @@ uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
+#if defined(ARCH_WORMHOLE) && defined(ENABLE_IRAM)
+void l1_to_erisc_iram_copy(volatile uint32_t* iram_load_reg) {
+    // Trigger copy of code from L1 to IRAM.
+    *iram_load_reg = eth_l1_mem::address_map::KERNEL_BASE >> 4;
+    RISC_POST_STATUS(0x10000000);
+}
+
+void l1_to_erisc_iram_copy_wait(volatile uint32_t* iram_load_reg) {
+    // Wait for copy to complete.
+    while (*iram_load_reg & 0x1);
+}
+
+void iram_setup() {
+    // Copy code from L1 to IRAM.
+    volatile uint32_t* iram_load_reg = (volatile uint32_t*)(ETH_CTRL_REGS_START + ETH_CORE_IRAM_LOAD);
+
+    *(volatile uint32_t*)0xFFBA0000 = 0x30000000;
+    *(volatile uint32_t*)0xFFBA0004 = 0x6;
+
+    l1_to_erisc_iram_copy(iram_load_reg);
+    l1_to_erisc_iram_copy_wait(iram_load_reg);
+
+    *(volatile uint32_t*)0xFFBA0000 = 0x30000001;
+    *(volatile uint32_t*)0xFFBA0004 = 0x7;
+}
+
+#endif
+
 void __attribute__((noinline)) Application(void) {
     WAYPOINT("I");
 
@@ -48,6 +82,9 @@ void __attribute__((noinline)) Application(void) {
     // TODO: need to find free space that routing FW is not using
 
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
+
+    my_logical_x_ = mailboxes->core_info.absolute_logical_x;
+    my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
     noc_bank_table_init(eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SCRATCH);
 
@@ -81,10 +118,16 @@ void __attribute__((noinline)) Application(void) {
             DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
             // Note that a core may get "GO" w/ enable false to keep its launch_msg's in sync
-            enum dispatch_core_processor_masks enables = (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
+            enum dispatch_core_processor_masks enables =
+                (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
+            my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
+            my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
                 WAYPOINT("R");
                 firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
+#if defined(ARCH_WORMHOLE) && defined(ENABLE_IRAM)
+                iram_setup();
+#endif
                 kernel_init(0);
                 WAYPOINT("D");
             }
@@ -92,10 +135,7 @@ void __attribute__((noinline)) Application(void) {
 
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
                 launch_msg_address->kernel_config.enables = 0;
-                uint64_t dispatch_addr = NOC_XY_ADDR(
-                    NOC_X(mailboxes->go_message.master_x),
-                    NOC_Y(mailboxes->go_message.master_y),
-                    DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
+                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
                 internal_::notify_dispatch_core_done(dispatch_addr);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
@@ -106,10 +146,7 @@ void __attribute__((noinline)) Application(void) {
         } else if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
             // Reset the launch message buffer read ptr
             mailboxes->launch_msg_rd_ptr = 0;
-            uint64_t dispatch_addr = NOC_XY_ADDR(
-                NOC_X(mailboxes->go_message.master_x),
-                NOC_Y(mailboxes->go_message.master_y),
-                DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
+            uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
             mailboxes->go_message.signal = RUN_MSG_DONE;
             internal_::notify_dispatch_core_done(dispatch_addr);
         } else {

@@ -5,12 +5,13 @@
 #include <algorithm>
 #include <functional>
 #include <random>
+#include <string>
 
-#include "common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "test_gold_impls.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/device.hpp>
 
 using std::vector;
 using namespace tt;
@@ -35,7 +36,7 @@ int main(int argc, char** argv) {
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     int device_id = 0;
-    tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+    tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
     CommandQueue& cq = device->command_queue();
 
@@ -120,7 +121,7 @@ int main(int argc, char** argv) {
 
             bool fp32_dest_acc_en = false;
             bool math_approx_mode = false;
-            std::map<string, string> binary_defines = {
+            std::map<std::string, std::string> binary_defines = {
                 {"ELTWISE_OP", op_id_to_op_define[eltwise_op]},
                 {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op]}};
             auto eltwise_binary_kernel = tt_metal::CreateKernel(

@@ -10,19 +10,20 @@
 #include <random>
 
 #include "device_fixture.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+
+namespace tt::tt_metal {
 
 using std::map;
 using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
-using namespace tt::tt_metal;
 
 namespace unit_tests::sfpu_util {
 
@@ -36,6 +37,7 @@ const map<string, std::map<string, string>> sfpu_op_to_op_name = {
     {"sigmoid", {{"SFPU_OP_CHAIN_0", "sigmoid_tile_init(); sigmoid_tile(0);"}}},
     {"log", {{"SFPU_OP_CHAIN_0", "log_tile_init(); log_tile(0);"}}},
     {"tanh", {{"SFPU_OP_CHAIN_0", "tanh_tile_init(); tanh_tile(0);"}}},
+    {"sign", {{"SFPU_OP_CHAIN_0", "sign_tile_init(); sign_tile(0);"}}},
 };
 
 bfloat16 sfpu_function(const string& op_name, const bfloat16& input) {
@@ -61,6 +63,8 @@ bfloat16 sfpu_function(const string& op_name, const bfloat16& input) {
         return bfloat16(logf(input.to_float()));
     } else if (op_name == "tanh") {
         return bfloat16(std::tanh(input.to_float()));
+    } else if (op_name == "sign") {
+        return bfloat16((0.0f < input.to_float()) ? 1.0f : ((input.to_float() < 0.0f) ? -1.0f : 0.0f));
     } else {
         TT_THROW("Unsupported op_name in test");
         return bfloat16(0.0f);
@@ -116,7 +120,7 @@ struct SfpuConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_config) {
+bool run_sfpu_all_same_buffer(tt_metal::IDevice* device, const SfpuConfig& test_config) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     tt_metal::Program program = tt_metal::CreateProgram();
     tt::tt_metal::InterleavedBufferConfig dram_config{
@@ -253,6 +257,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "sigmoid"),
         std::make_tuple(1, "log"),
         std::make_tuple(1, "tanh"),
+        std::make_tuple(1, "sign"),
         std::make_tuple(4, "relu"),
         std::make_tuple(4, "exponential"),
         std::make_tuple(4, "reciprocal"),
@@ -260,7 +265,8 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "sqrt"),
         std::make_tuple(4, "sigmoid"),
         std::make_tuple(4, "log"),
-        std::make_tuple(4, "tanh")));
+        std::make_tuple(4, "tanh"),
+        std::make_tuple(4, "sign")));
 class SingleCoreSingleDeviceSfpuParameterizedApproxFixture
     : public DeviceFixture,
       public testing::WithParamInterface<std::tuple<size_t, string>> {};
@@ -302,6 +308,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "sigmoid"),
         std::make_tuple(1, "log"),
         std::make_tuple(1, "tanh"),
+        std::make_tuple(1, "sign"),
         std::make_tuple(4, "relu"),
         std::make_tuple(4, "exponential"),
         std::make_tuple(4, "reciprocal"),
@@ -309,7 +316,8 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "sqrt"),
         std::make_tuple(4, "sigmoid"),
         std::make_tuple(4, "log"),
-        std::make_tuple(4, "tanh")));
+        std::make_tuple(4, "tanh"),
+        std::make_tuple(4, "sign")));
 
 TEST_F(DeviceFixture, DISABLED_TensixMultiContinguousCoreSingleTileSfpuApproxCompute) {
     CoreRange core_range({0, 0}, {1, 0});
@@ -464,3 +472,5 @@ TEST_F(DeviceFixture, DISABLED_TensixAllCoreMultiTileSfpuApproxCompute) {
     test_config.sfpu_op = "tanh";
     EXPECT_TRUE(run_sfpu_all_same_buffer(devices_.at(0), test_config));
 }
+
+}  // namespace tt::tt_metal

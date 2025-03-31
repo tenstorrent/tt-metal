@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gtest/gtest.h"
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/logger.hpp>
 #include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -52,9 +52,9 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
 
     {
         const auto input_tensor_a =
-            ttnn::zeros(params.a_Shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, this->getDevice(), params.memory_config);
+            ttnn::zeros(params.a_Shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_, params.memory_config);
         const auto input_tensor_b =
-            ttnn::zeros(params.b_Shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, this->getDevice(), params.memory_config);
+            ttnn::zeros(params.b_Shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_, params.memory_config);
 
         auto call = [&] {
             const auto output_tensor = ttnn::add(input_tensor_a, input_tensor_b);
@@ -82,7 +82,7 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
             auto cb_peak_size_per_core = graph::extract_circular_buffers_peak_size_per_core(json_trace);
             EXPECT_EQ(cb_peak_size_per_core, params.expected_cb_peak_per_core);
 
-            auto compute_with_storage_grid_size = this->getDevice().compute_with_storage_grid_size();
+            auto compute_with_storage_grid_size = device_->compute_with_storage_grid_size();
             size_t interleaved_storage_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
             auto l1_output_per_core =
@@ -155,8 +155,24 @@ INSTANTIATE_TEST_SUITE_P(
                 .expected_calltrace =
                     {"ttnn::add",
                      "ttnn::repeat",
+                     "ttnn::to_layout",
+                     "ttnn::untilize",
+                     "ttnn::prim::old_infra_device_operation",
+                     "Untilize",
+                     "tt::tt_metal::create_device_tensor",
+                     "ttnn::view",
+                     "ttnn::experimental::view",
+                     "Tensor::reshape",
                      "ttnn::prim::old_infra_device_operation",
                      "RepeatDeviceOperation",
+                     "tt::tt_metal::create_device_tensor",
+                     "ttnn::view",
+                     "ttnn::experimental::view",
+                     "Tensor::reshape",
+                     "ttnn::to_layout",
+                     "ttnn::tilize",
+                     "ttnn::prim::old_infra_device_operation",
+                     "Tilize",
                      "tt::tt_metal::create_device_tensor",
                      "ttnn::prim::binary",
                      "BinaryDeviceOperation",

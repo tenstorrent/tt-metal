@@ -5,12 +5,12 @@
 #include <ostream>
 #include "gtest/gtest.h"
 
-#include "tt_metal/common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/device.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/logger.hpp>
 
 #include "common_tensor_test_utils.hpp"
 
@@ -18,13 +18,13 @@
 
 namespace {
 
-void run_create_tensor_test(tt::tt_metal::Device* device, const ttnn::SimpleShape& input_shape) {
+void run_create_tensor_test(tt::tt_metal::IDevice* device, const ttnn::Shape& input_shape) {
     MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-        .buffer_type = BufferType::DRAM,
+        .buffer_type = tt::tt_metal::BufferType::DRAM,
         .shard_spec = std::nullopt};
 
-    const uint32_t io_cq = 0;
+    const ttnn::QueueId io_cq = ttnn::DefaultQueueId;
     constexpr DataType dtype = DataType::BFLOAT16;
     constexpr uint32_t datum_size_bytes = 2;
 
@@ -57,7 +57,7 @@ void run_create_tensor_test(tt::tt_metal::Device* device, const ttnn::SimpleShap
 }
 
 struct CreateTensorParams {
-    ttnn::SimpleShape shape;
+    ttnn::Shape shape;
 };
 
 }  // namespace
@@ -74,11 +74,11 @@ INSTANTIATE_TEST_SUITE_P(
     CreateTensorTestWithShape,
     CreateTensorTest,
     ::testing::Values(
-        CreateTensorParams{.shape = ttnn::SimpleShape({1, 1, 32, 32})},
-        CreateTensorParams{.shape = ttnn::SimpleShape({2, 1, 32, 32})},
-        CreateTensorParams{.shape = ttnn::SimpleShape({0, 0, 0, 0})},
-        CreateTensorParams{.shape = ttnn::SimpleShape({0, 1, 32, 32})},
-        CreateTensorParams{.shape = ttnn::SimpleShape({0})}));
+        CreateTensorParams{.shape = ttnn::Shape({1, 1, 32, 32})},
+        CreateTensorParams{.shape = ttnn::Shape({2, 1, 32, 32})},
+        CreateTensorParams{.shape = ttnn::Shape({0, 0, 0, 0})},
+        CreateTensorParams{.shape = ttnn::Shape({0, 1, 32, 32})},
+        CreateTensorParams{.shape = ttnn::Shape({0})}));
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& value) {
     os << magic_enum::enum_name(value);
@@ -100,23 +100,23 @@ TEST_P(EmptyTensorTest, Combinations) {
         "Running test with shape={}, dtype={}, layout={}, memory_config={}", shape, dtype, layout, memory_config);
 
     if (layout == tt::tt_metal::Layout::ROW_MAJOR && dtype == tt::tt_metal::DataType::BFLOAT8_B) {
-        return;
+        GTEST_SKIP() << "Skipping test with ROW_MAJOR layout and BFLOAT8_B dtype!";
     }
 
-    auto tensor_layout =
-        tt::tt_metal::TensorLayout::fromLegacyPaddedShape(dtype, PageConfig(layout), memory_config, shape);
+    auto tensor_layout = tt::tt_metal::TensorLayout::fromPaddedShape(
+        dtype, PageConfig(layout), memory_config, /* logical */ shape, /* padded */ shape);
 
     // Ignoring too large single bank allocations
     if (memory_config.memory_layout == TensorMemoryLayout::SINGLE_BANK) {
-        if (tensor_layout.compute_page_size_bytes(shape.logical_shape()) >= 650 * 1024) {
-            return;
+        if (tensor_layout.compute_page_size_bytes(shape) >= 500 * 1024) {
+            GTEST_SKIP() << "Skipping test with page size exceeding single bank size of 500 kB!";
         }
     }
 
     auto tensor = tt::tt_metal::create_device_tensor(shape, dtype, layout, device_, memory_config);
-    EXPECT_EQ(tensor.get_logical_shape(), shape.logical_shape());
+    EXPECT_EQ(tensor.get_logical_shape(), shape);
 
-    test_utils::test_tensor_on_device(shape.logical_shape(), tensor_layout, device_);
+    test_utils::test_tensor_on_device(shape, tensor_layout, device_);
 }
 
 INSTANTIATE_TEST_SUITE_P(

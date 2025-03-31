@@ -2,19 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <future>
+
 #include "command_queue_fixture.hpp"
 #include "gtest/gtest.h"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "impl/debug/watcher_server.hpp"
-#include "tt_metal/impl/event/event.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <tt-metalium/event.hpp>
+#include <tt-metalium/command_queue.hpp>
+
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+
+namespace tt::tt_metal {
 
 using std::vector;
-using namespace tt::tt_metal;
 
 constexpr uint32_t completion_queue_event_offset = sizeof(CQDispatchCmd);
-constexpr uint32_t completion_queue_page_size = dispatch_constants::TRANSFER_PAGE_SIZE;
+constexpr uint32_t completion_queue_page_size = DispatchSettings::TRANSFER_PAGE_SIZE;
 
 enum class DataMovementMode : uint8_t { WRITE = 0, READ = 1 };
 
@@ -297,3 +302,5 @@ TEST_F(CommandQueueEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize
     std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
     tt::log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
 }
+
+}  // namespace tt::tt_metal

@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <iostream>
 #include <filesystem>
-#include "tt_metal/host_api.hpp"
+#include <host_api.hpp>
 #include "impl/debug/watcher_server.hpp"
 #include "impl/debug/noc_logging.hpp"
 #include "impl/dispatch/debug_tools.hpp"
+#include "rtoptions.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -18,7 +19,7 @@ string output_dir_name = "generated/watcher/";
 string logfile_name = "cq_dump.txt";
 
 void dump_data(
-    vector<unsigned>& device_ids,
+    vector<chip_id_t>& device_ids,
     bool dump_watcher,
     bool dump_cqs,
     bool dump_cqs_raw_data,
@@ -44,14 +45,14 @@ void dump_data(
     }
 
     // Only look at user-specified devices
-    vector<Device*> devices;
-    for (unsigned id : device_ids) {
+    vector<IDevice*> devices;
+    for (chip_id_t id : device_ids) {
         string cq_fname = cq_dir.string() + fmt::format("device_{}_completion_q.txt", id);
         std::ofstream cq_file = std::ofstream(cq_fname);
         string iq_fname = cq_dir.string() + fmt::format("device_{}_issue_q.txt", id);
         std::ofstream iq_file = std::ofstream(iq_fname);
         // Minimal setup, since we'll be attaching to a potentially hanging chip.
-        Device* device = tt::tt_metal::CreateDeviceMinimal(
+        IDevice* device = tt::tt_metal::CreateDeviceMinimal(
             id, num_hw_cqs, DispatchCoreConfig{eth_dispatch ? DispatchCoreType::ETH : DispatchCoreType::WORKER});
         devices.push_back(device);
         if (dump_cqs) {
@@ -60,7 +61,7 @@ void dump_data(
         }
         // Watcher attach wthout watcher init - to avoid clearing mailboxes.
         if (dump_watcher) {
-            watcher_attach(device);
+            watcher_attach(device->id());
         }
     }
 
@@ -72,7 +73,7 @@ void dump_data(
 
     // Dump noc data if requested
     if (dump_noc_xfers) {
-        DumpNocData(devices);
+        DumpNocData(device_ids);
     }
 }
 
@@ -97,9 +98,9 @@ void print_usage(const char* exec_name) {
 int main(int argc, char* argv[]) {
     cout << "Running watcher dump tool..." << endl;
     // Default devices is all of them.
-    vector<unsigned> device_ids;
+    vector<chip_id_t> device_ids;
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
-    for (unsigned id = 0; id < num_devices; id++) {
+    for (chip_id_t id = 0; id < num_devices; id++) {
         device_ids.push_back(id);
     }
 

@@ -14,6 +14,7 @@ void add_linear_layer(Layers& layers, Args&&... args) {
 }
 
 MultiLayerPerceptron::MultiLayerPerceptron(const MultiLayerPerceptronParameters& params) {
+    m_layers.reserve(params.hidden_features.size() + 1UL);
     uint32_t current_input_features = params.input_features;
     for (auto hidden_features : params.hidden_features) {
         add_linear_layer(m_layers, current_input_features, hidden_features);
@@ -27,15 +28,16 @@ MultiLayerPerceptron::MultiLayerPerceptron(const MultiLayerPerceptronParameters&
         register_module(m_layers[idx], "layer_" + std::to_string(idx));
     }
 }
-autograd::TensorPtr MultiLayerPerceptron::operator()(autograd::TensorPtr tensor) {
+autograd::TensorPtr MultiLayerPerceptron::operator()(const autograd::TensorPtr& tensor) {
+    auto x = tensor;
     for (size_t index = 0; index < m_layers.size(); ++index) {
-        tensor = (*m_layers[index])(tensor);
+        x = (*m_layers[index])(x);
         if (index + 1 != m_layers.size()) {
-            tensor = ops::relu(tensor);
+            x = ops::relu(x);
         }
     }
 
-    return tensor;
+    return x;
 }
 
 }  // namespace ttml::modules

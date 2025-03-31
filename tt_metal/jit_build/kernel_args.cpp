@@ -6,9 +6,9 @@
 #include <map>
 #include <mutex>
 #include <fstream>
-#include "common/utils.hpp"
+#include <utils.hpp>
 
-#include "tt_metal/common/assert.hpp"
+#include <assert.hpp>
 
 using namespace std;
 

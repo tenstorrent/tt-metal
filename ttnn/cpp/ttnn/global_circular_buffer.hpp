@@ -5,30 +5,31 @@
 #pragma once
 
 #include <memory>
-#include "tt_metal/include/tt_metal/global_circular_buffer.hpp"
+#include <tt-metalium/global_circular_buffer.hpp>
 #include "ttnn/types.hpp"
 
 namespace ttnn::global_circular_buffer {
 
 struct MultiDeviceGlobalCircularBuffer {
     MultiDeviceGlobalCircularBuffer(MeshDevice* mesh_device);
-    std::vector<std::shared_ptr<GlobalCircularBuffer>> global_circular_buffers;
+    std::vector<GlobalCircularBuffer> global_circular_buffers;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("global_circular_buffers");
+    const auto attribute_values() const { return std::forward_as_tuple(this->global_circular_buffers); }
 };
 
 // Single Device APIs
-std::shared_ptr<GlobalCircularBuffer> create_global_circular_buffer(
-    Device* device,
-    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+GlobalCircularBuffer create_global_circular_buffer(
+    IDevice* device,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
-    BufferType buffer_type = BufferType::L1,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    BufferType buffer_type = BufferType::L1);
 
 // Multi Device APIs
 MultiDeviceGlobalCircularBuffer create_global_circular_buffer(
     MeshDevice* mesh_device,
-    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
-    BufferType buffer_type = BufferType::L1,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    BufferType buffer_type = BufferType::L1);
 
 }  // namespace ttnn::global_circular_buffer

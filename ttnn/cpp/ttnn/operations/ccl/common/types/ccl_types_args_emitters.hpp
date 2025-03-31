@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include "cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
 
 #include <vector>
 #include <string>
@@ -11,10 +12,10 @@
 namespace tt {
 namespace tt_metal {
 class Tensor;
+class ShardSpec;
 
-inline namespace v0 {
-class Device;
-}  // namespace v0
+class IDevice;
+
 }  // namespace tt_metal
 }  // namespace tt
 
@@ -46,13 +47,18 @@ args_list_t emit_compile_time(Shape4D<T> const& shape) {
 }
 
 args_list_t emit_address_generator_runtime_args(
-    tt::tt_metal::Device const* const d, tt::tt_metal::Tensor const& tensor);
-args_list_t emit_address_generator_compile_time_args(tt::tt_metal::Tensor const& tensor);
+    tt::tt_metal::IDevice const* const d, tt::tt_metal::Tensor const& tensor);
+args_list_t legacy_emit_address_generator_runtime_args(
+    const tt::tt_metal::IDevice* const d, const tt::tt_metal::Tensor& tensor);
+args_list_t emit_address_generator_compile_time_args(const tt::tt_metal::Tensor& t);
+args_list_t legacy_emit_address_generator_compile_time_args(const tt::tt_metal::Tensor& tensor);
+
+std::pair<CoreCoord, CoreCoord> shard_grid_from_shard_spec(const tt::tt_metal::ShardSpec& shard_spec);
 
 struct ShardedAddrGenArgBuilder {
     static bool shard_grid_is_transposed(tt::tt_metal::Tensor const& t);
     static std::vector<uint32_t> emit_ct_args(tt::tt_metal::Tensor const& t);
-    static std::vector<uint32_t> emit_rt_args(tt::tt_metal::Device const* d, tt::tt_metal::Tensor const& t);
+    static std::vector<uint32_t> emit_rt_args(tt::tt_metal::IDevice const* d, tt::tt_metal::Tensor const& t);
     static void log_sharded_tensor_kernel_args(tt::tt_metal::Tensor const& t, std::string const& prefix);
 };
 

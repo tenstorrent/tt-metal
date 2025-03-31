@@ -6,11 +6,11 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "test_tiles.hpp"
+#include <tt-metalium/tilize_utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -18,6 +18,7 @@
 using std::vector;
 using namespace tt;
 
+namespace test {
 // Given a tensor that is row-major datums, make it tilized
 // so that its row major within a tile, and each tile's data
 // is contiguous
@@ -67,6 +68,7 @@ std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
 
     return result;
 }
+}  // namespace test
 
 void print_faces(std::vector<bfloat16> data, string name) {
     std::cout << name << ": " << std::endl;
@@ -94,7 +96,7 @@ void print_faces(std::vector<bfloat16> data, string name) {
 
 void create_CBs_for_fused_matmul(
     tt_metal::Program& program,
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     CoreCoord core,
     bool activations_rm,
     bool output_rm,
@@ -226,7 +228,7 @@ void create_CBs_for_fused_matmul(
     }
 }
 
-bool test_matmul_large_block(tt_metal::Device* device, bool activations_rm, bool output_rm) {
+bool test_matmul_large_block(tt_metal::IDevice* device, bool activations_rm, bool output_rm) {
     bool pass = true;
 
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -389,15 +391,15 @@ bool test_matmul_large_block(tt_metal::Device* device, bool activations_rm, bool
         if (activations_rm) {
             activations = pack_bfloat16_vec_into_uint32_vec(tensor.get_values());
         } else {
-            auto activations_tilized = tilize(tensor.get_values(), M * 32, K * 32);
-            auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
+            auto activations_tilized = test::tilize(tensor.get_values(), M * 32, K * 32);
+            auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
             activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         }
         tt_metal::detail::WriteToBuffer(src0_dram_buffer, activations);
 
         auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bflaot16 32x32 identity
-        auto identity_tilized = tilize(identity, K * 32, N * 32);
-        auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
+        auto identity_tilized = test::tilize(identity, K * 32, N * 32);
+        auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
         tt_metal::detail::WriteToBuffer(src1_dram_buffer, weights);
 
@@ -421,8 +423,8 @@ bool test_matmul_large_block(tt_metal::Device* device, bool activations_rm, bool
                 print_faces(result_bfp16, "Result");
             }
         } else {
-            auto result_flat_layout = convert_to_flat_layout(result_bfp16);
-            auto result_untilized = untilize(result_flat_layout, M * 32, N * 32);
+            auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
+            auto result_untilized = test::untilize(result_flat_layout, M * 32, N * 32);
             pass &= (tensor.get_values() == result_untilized);
             if (not pass) {
                 print_faces(result_untilized, "Result");
@@ -455,7 +457,7 @@ int main(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
 
     int device_id = 0;
-    tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+    tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
     // Tilized input, Tilized output
     pass &= test_matmul_large_block(device, false, false);

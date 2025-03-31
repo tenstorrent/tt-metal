@@ -23,17 +23,18 @@ jobs:
             runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-perf"],
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type cnn_model_perf_tg_device --dispatch-mode ""'
           },
-          { name: "TG CCL perf tests",
+          {
+            name: "Llama TG Perf Unit Tests",
             arch: wormhole_b0,
-            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type ccl_perf_tg_device --dispatch-mode ""',
-            timeout: 75,
+            cmd: 'pytest models/demos/llama3_subdevices/tests/tg_perf_unit_tests',
+            timeout: 100,
             tracy: true,
             runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-perf"],
-            owner_id: ULMEPM2MA}, # Sean Nijjar
+            owner_id: U071CKL4AFK # Ammar Vora
+          }
         ]
     name: ${{ matrix.test-group.name }}
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
@@ -51,9 +52,9 @@ jobs:
       - name: Download profiler build artifact
         uses: actions/download-artifact@v4
         with:
-          name: TTMetal_build_${{ matrix.test-group.arch }}_profiler
+          name: TTMetal_build_any_profiler
       - name: Extract files
-        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
+        run: tar -xvf ttm_any.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run model perf regression tests
         timeout-minutes: 60
@@ -62,9 +63,24 @@ jobs:
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ${{ matrix.test-group.cmd }}
+      - name: Save environment data
+        if: ${{ (matrix.test-group.name == 'Llama TG Perf Unit Tests') && !cancelled() }}
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+      - name: Upload benchmark data
+        if: ${{ (matrix.test-group.name == 'Llama TG Perf Unit Tests') && !cancelled() }}
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
       - name: Check perf report exists
         id: check-perf-report
-        if: ${{ !cancelled() }}
+        if: ${{ !(matrix.test-group.name == 'Llama TG Perf Unit Tests') && !cancelled() }}
         run: |
           TODAY=$(date +%Y_%m_%d)
           PERF_REPORT_FILENAME_MODELS="Models_Perf_${TODAY}.csv"
@@ -98,16 +114,25 @@ jobs:
       - name: Upload Models perf report
         if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' && !matrix.test-group.tracy}}
         uses: actions/upload-artifact@v4
+        timeout-minutes: 10
         with:
           name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.machine-type }}
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
       - name: Upload CCL perf report
         if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' && matrix.test-group.tracy}}
         uses: actions/upload-artifact@v4
+        timeout-minutes: 10
         with:
           name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.model }}-bare-metal
           path:
             ${{ steps.check-perf-report.outputs.perf_report_filename_all_gather }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            generated/test_reports/
+          prefix: "test_reports_"
       - name: Disable performance mode
         if: always()
         run: |

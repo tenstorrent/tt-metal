@@ -7,13 +7,15 @@
 #include <random>
 #include <math.h>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
-#include "llrt/llrt.hpp"
+#include "llrt.hpp"
 
-#include "impl/debug/dprint_server.hpp"
+#include "dprint_server.hpp"
+
+#include "test_common.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -33,7 +35,7 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(const tt::AR
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         int num_sticks = 256;
         int num_elements_in_stick = 1024;
@@ -79,7 +81,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -249,7 +251,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -395,7 +397,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
     bool pass = true;
 
     int device_id = 0;
-    tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+    tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
     tt_metal::Program program = tt_metal::CreateProgram();
     CoreCoord core = {0, 0};

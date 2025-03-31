@@ -2,16 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/run_operation.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 
 namespace ttnn::operations::experimental::reduction::detail {
 
-operation::ProgramWithCallbacks reduce_nc_factory(
+tt::tt_metal::operation::ProgramWithCallbacks reduce_nc_factory(
     const ttnn::Tensor& input,
     const ttnn::Tensor& output,
     int64_t dim,

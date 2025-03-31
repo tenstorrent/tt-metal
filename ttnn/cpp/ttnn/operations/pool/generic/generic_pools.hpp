@@ -18,7 +18,7 @@ namespace operations::pool {
 template <Pool2DType pool_type>
 struct Pool2DOp {
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& input_tensor,
         uint32_t batch_size,
         uint32_t input_h,
@@ -28,8 +28,9 @@ struct Pool2DOp {
         std::array<uint32_t, 2> stride,
         std::array<uint32_t, 2> padding,
         std::array<uint32_t, 2> dilation,
-        const std::optional<const MemoryConfig>& memory_config,
-        const std::optional<const TensorMemoryLayout> applied_shard_scheme);
+        const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
+        bool ceil_mode = false);
 };
 
 }  // namespace operations::pool

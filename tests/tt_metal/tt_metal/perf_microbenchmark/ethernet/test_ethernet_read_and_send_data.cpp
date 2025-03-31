@@ -7,19 +7,22 @@
 #include <functional>
 #include <limits>
 #include <random>
+#include <thread>
 
-#include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/device.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
+
+#include "tt_cluster.hpp"
 
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
@@ -65,7 +68,7 @@ public:
         }
     }
 
-    std::vector<tt::tt_metal::Device*> devices_;
+    std::vector<tt::tt_metal::IDevice*> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -85,8 +88,8 @@ struct BankedConfig {
 bool RunWriteBWTest(
     std::string const& sender_kernel_path,
     std::string const& receiver_kernel_path,
-    tt_metal::Device* sender_device,
-    tt_metal::Device* receiver_device,
+    tt_metal::IDevice* sender_device,
+    tt_metal::IDevice* receiver_device,
 
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,
@@ -146,7 +149,7 @@ bool RunWriteBWTest(
         .input_buffer_type = source_is_dram ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1,
         .output_buffer_type = dest_is_dram ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1,
         .l1_data_format = tt::DataFormat::Float16_b};
-    auto input_buffer = CreateBuffer(InterleavedBufferConfig{
+    auto input_buffer = CreateBuffer(tt_metal::InterleavedBufferConfig{
         sender_device, test_config.size_bytes, test_config.page_size_bytes, test_config.input_buffer_type});
 
     bool input_is_dram = test_config.input_buffer_type == tt_metal::BufferType::DRAM;
@@ -160,7 +163,7 @@ bool RunWriteBWTest(
     // Clear expected value at ethernet L1 address
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
 
-    auto output_buffer = CreateBuffer(InterleavedBufferConfig{
+    auto output_buffer = CreateBuffer(tt_metal::InterleavedBufferConfig{
         receiver_device, test_config.size_bytes, test_config.page_size_bytes, test_config.output_buffer_type});
 
     bool output_is_dram = test_config.output_buffer_type == tt_metal::BufferType::DRAM;

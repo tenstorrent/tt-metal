@@ -10,7 +10,7 @@
 #include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api/eltwise_unary/sqrt.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -61,7 +61,7 @@ void MAIN {
     cb_wait_front(cb_beta1_exponent, onetile);
     cb_wait_front(cb_beta2_exponent, onetile);
 
-    binary_op_init_common(cb_param_in, cb_scalar_args);
+    binary_op_init_common(cb_param_in, cb_scalar_args, cb_param_out);
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         cb_wait_front(cb_param_in, onetile);

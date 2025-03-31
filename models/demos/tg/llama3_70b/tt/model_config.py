@@ -151,7 +151,6 @@ def set_attention_config(model_config, max_batch_size):
                 32,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
 
@@ -186,7 +185,6 @@ def set_attention_config(model_config, max_batch_size):
             ttnn.CoreRangeSet({num_to_corerange(batch_size_per_device_group)}),
             (padded_local_heads, head_dim),
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
 
@@ -304,7 +302,6 @@ def set_mlp_config(model_config, cluster_shape):
             setup_weight_grid(mesh_device),
             (K, nearest_32(N // 12)),
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
 
@@ -315,7 +312,6 @@ def set_mlp_config(model_config, cluster_shape):
             setup_weight_grid(mesh_device),
             (N, nearest_32(K // 12)),
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
 
@@ -351,7 +347,6 @@ def set_mlp_config(model_config, cluster_shape):
                 nearest_32(56),
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
     decode_config["FF2_ACT_MEMCFG"] = ttnn.create_sharded_memory_config(

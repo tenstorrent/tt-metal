@@ -8,8 +8,16 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
-
 from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
+from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
+    create_and_load_sub_device_manager_with_fabric_interface,
+    teardown_fabric_interface,
+    create_global_semaphore_with_same_address,
+)
+from models.perf.benchmarking_utils import BenchmarkProfiler
+from tracy import signpost
+
+NUM_BUFFERS = 8
 
 
 def report_mismatches(golden, actual, max_printable=None):
@@ -50,31 +58,39 @@ def run_with_trace(
     all_gather_topology,
     input_tensor,
     dim,
+    persistent_output_tensor,
     num_links,
     cluster_axis,
     output_mem_config,
+    ccl_semaphore_handles,
+    worker_sub_device_id,
+    enable_persistent_fabric,
     n_worker=None,
     n_buffer=None,
     num_iter=20,
+    warmup_iters=0,
+    use_all_gather_async=False,
+    profiler=BenchmarkProfiler(),
 ):
     # Compile Run
     logger.info("Compiling model")
-    tt_out_tensor = ttnn.all_gather(
-        input_tensor,
-        dim=dim,
-        cluster_axis=cluster_axis,
-        mesh_device=mesh_device,
-        num_links=num_links,
-        memory_config=output_mem_config,
-        topology=all_gather_topology,
-    )
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
-
-    # Capture trace
-    logger.info("Capturing trace")
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    for i in range(num_iter):
+    if use_all_gather_async:
+        tt_out_tensor = ttnn.experimental.all_gather_async(
+            input_tensor,
+            dim,
+            cluster_axis=cluster_axis,
+            mesh_device=mesh_device,
+            topology=all_gather_topology,
+            multi_device_global_semaphore=ccl_semaphore_handles[0]
+            if type(ccl_semaphore_handles) == list
+            else ccl_semaphore_handles,
+            persistent_output_tensor=persistent_output_tensor,
+            num_links=num_links,
+            memory_config=output_mem_config,
+            subdevice_id=worker_sub_device_id,
+            enable_persistent_fabric_mode=enable_persistent_fabric,
+        )
+    else:
         tt_out_tensor = ttnn.all_gather(
             input_tensor,
             dim=dim,
@@ -84,16 +100,71 @@ def run_with_trace(
             memory_config=output_mem_config,
             topology=all_gather_topology,
         )
-    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
+
+    # Capture trace
+    logger.info("Capturing trace")
+
+    def capture_trace(n_iters):
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        for i in range(n_iters):
+            if use_all_gather_async:
+                tt_out_tensor = ttnn.experimental.all_gather_async(
+                    input_tensor,
+                    dim,
+                    cluster_axis=cluster_axis,
+                    mesh_device=mesh_device,
+                    topology=all_gather_topology,
+                    multi_device_global_semaphore=ccl_semaphore_handles[i % NUM_BUFFERS]
+                    if type(ccl_semaphore_handles) == list
+                    else ccl_semaphore_handles,
+                    persistent_output_tensor=persistent_output_tensor,
+                    num_links=num_links,
+                    memory_config=output_mem_config,
+                    subdevice_id=worker_sub_device_id,
+                    enable_persistent_fabric_mode=enable_persistent_fabric,
+                )
+            else:
+                tt_out_tensor = ttnn.all_gather(
+                    input_tensor,
+                    dim=dim,
+                    cluster_axis=cluster_axis,
+                    mesh_device=mesh_device,
+                    num_links=num_links,
+                    memory_config=output_mem_config,
+                    topology=all_gather_topology,
+                )
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        return trace_id
+
+    if warmup_iters > 0:
+        trace_id_warmup = capture_trace(warmup_iters)
+    trace_id = capture_trace(num_iter)
 
     # Run the op
     logger.info("Starting Trace perf test...")
+    profiler.start("all-gather-async-trace-warmup")
+    if warmup_iters > 0:
+        ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
+        ttnn.release_trace(mesh_device, trace_id_warmup)
+        ttnn.synchronize_device(mesh_device)
+    profiler.end("all-gather-async-trace-warmup")
+
+    profiler.start("all-gather-async-trace")
+    signpost("start")
     ttnn.execute_trace(mesh_device, trace_id, blocking=False)
     ttnn.release_trace(mesh_device, trace_id)
-    for d in mesh_device.get_devices():
-        ttnn.synchronize_device(d)
+    ttnn.synchronize_device(mesh_device)
+    signpost("stop")
+    profiler.end("all-gather-async-trace")
+    time_taken = profiler.get_duration("all-gather-async-trace") - profiler.get_duration(
+        "all-gather-async-trace-warmup"
+    )
+    effective_iter = num_iter - warmup_iters
+    logger.info(f"Time taken e2e: {time_taken} s")
+    logger.info(f"Time per iter e2e: {time_taken / effective_iter} s")
+    logger.info(f"Time per iter e2e: {time_taken / effective_iter * 1e6} us")
 
     return tt_out_tensor
 
@@ -112,15 +183,36 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     function_level_defaults,
     enable_async,
     input_shard_spec: ttnn.ShardSpec = None,
+    output_shard_spec: ttnn.ShardSpec = None,
     num_all_gather_instances: int = 1,
     num_iters: int = 1,
+    warmup_iters: int = 0,
     cluster_axis: int = 0,
     tile=(32, 32),
     trace_mode=False,
     debug=False,
+    profiler=BenchmarkProfiler(),
+    # New all-gather-async and persistent fabric params
+    use_all_gather_async=False,
+    enable_persistent_fabric=False,
+    create_persistent_fabric=False,
+    teardown_persistent_fabric=False,
+    use_persistent_output=False,
 ):
-    if len(mesh_device.get_devices()) != 32:
-        pytest.skip("Not TG!")
+    if create_persistent_fabric:
+        assert use_all_gather_async
+        assert enable_persistent_fabric
+    if teardown_persistent_fabric:
+        assert use_all_gather_async
+        assert enable_persistent_fabric
+    if not use_all_gather_async:
+        assert not create_persistent_fabric
+        assert not teardown_persistent_fabric
+        assert not enable_persistent_fabric
+
+    if use_persistent_output and not use_all_gather_async:
+        pytest.skip("Persistent output tensor requires all-gather-async")
+
     mesh_device.enable_async(enable_async)
 
     input_shape_per_chip = list(per_chip_output_shape)
@@ -149,10 +241,9 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         else (num_all_gather_instances, num_devices_per_line)
     )
 
-    output_shard_spec = None
-    if input_shard_spec is not None:
+    if input_shard_spec is not None and output_shard_spec is None:
         output_shard_shape = list(input_shard_spec.shape)
-        if dim == 3:
+        if dim == len(per_chip_output_shape) - 1:
             output_shard_shape[1] *= num_devices_per_line
         else:
             output_shard_shape[0] *= num_devices_per_line
@@ -160,7 +251,6 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
             input_shard_spec.grid,
             output_shard_shape,
             input_shard_spec.orientation,
-            False,
         )
     output_mem_config = ttnn.MemoryConfig(tensor_memory_layout, buffer_type=buffer_type, shard_spec=output_shard_spec)
     ttnn_tensor = ttnn.from_torch(
@@ -173,30 +263,119 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dims),
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-
-    # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
-    if trace_mode:
-        ttnn_tensor_out = run_with_trace(
-            input_tensor=ttnn_tensor,
-            dim=dim,
-            cluster_axis=cluster_axis,
-            mesh_device=mesh_device,
-            num_links=num_links,
-            output_mem_config=output_mem_config,
-            all_gather_topology=ttnn.Topology.Linear,
-            num_iter=num_iters,
-        )
+    ttnn_tensor = ttnn.to_memory_config(ttnn_tensor, input_mem_config)
+    # TODO: Take as an arg
+    linear = True
+    if linear:
+        all_gather_topology = ttnn.Topology.Linear
+        wrap_mesh = False
     else:
-        for _ in range(num_iters):
-            ttnn_tensor_out = ttnn.all_gather(
-                ttnn_tensor,
+        all_gather_topology = ttnn.Topology.Ring
+        wrap_mesh = True
+
+    ttnn_persistent_output_tensor = None
+    if use_persistent_output:
+        ttnn_persistent_output_tensor = ttnn.from_torch(
+            torch.zeros(per_chip_output_shape),
+            tile=ttnn.Tile(tile),
+            dtype=input_dtype,
+            device=mesh_device,
+            layout=layout,
+            memory_config=output_mem_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    sub_device_stall_group = []
+    if use_all_gather_async:
+        compute_grid_size = mesh_device.compute_with_storage_grid_size()
+        ccl_sub_device_crs = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+        )
+        worker_sub_device = ttnn.SubDevice(
+            [
+                ccl_sub_device_crs,
+            ]
+        )
+        worker_sub_device_id = ttnn.SubDeviceId(0)
+        sub_device_stall_group = [worker_sub_device_id]
+        if create_persistent_fabric:
+            logger.info("Create persistent fabric interface")
+            mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
+                mesh_device,
+                [worker_sub_device],
+                0,
+                0,
+                enable_persistent_fabric,
+                wrap_fabric_around_mesh=wrap_mesh,
+                topology=all_gather_topology,
+            )
+            logger.info("Done Create persistent fabric interface")
+            mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+
+        # create global semaphore handles
+        ccl_semaphore_handles = [
+            create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(NUM_BUFFERS)
+        ]
+    try:
+        # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
+        if trace_mode:
+            ttnn_tensor_out = run_with_trace(
+                input_tensor=ttnn_tensor,
                 dim=dim,
                 cluster_axis=cluster_axis,
                 mesh_device=mesh_device,
+                persistent_output_tensor=ttnn_persistent_output_tensor,
                 num_links=num_links,
-                memory_config=output_mem_config,
-                topology=ttnn.Topology.Linear,
+                output_mem_config=output_mem_config,
+                ccl_semaphore_handles=ccl_semaphore_handles,
+                worker_sub_device_id=worker_sub_device_id,
+                enable_persistent_fabric=enable_persistent_fabric,
+                all_gather_topology=all_gather_topology,
+                num_iter=num_iters,
+                warmup_iters=warmup_iters,
+                use_all_gather_async=use_all_gather_async,
+                profiler=profiler,
             )
+
+        else:
+            signpost("start")
+            for i in range(num_iters):
+                if use_all_gather_async:
+                    logger.info("Running all-gather async")
+                    ttnn_tensor_out = ttnn.experimental.all_gather_async(
+                        ttnn_tensor,
+                        dim,
+                        cluster_axis=cluster_axis,
+                        mesh_device=mesh_device,
+                        topology=all_gather_topology,
+                        multi_device_global_semaphore=ccl_semaphore_handles[i % NUM_BUFFERS],
+                        persistent_output_tensor=ttnn_persistent_output_tensor,
+                        num_links=num_links,
+                        memory_config=output_mem_config,
+                        subdevice_id=worker_sub_device_id,
+                        enable_persistent_fabric_mode=enable_persistent_fabric,
+                    )
+                else:
+                    ttnn_tensor_out = ttnn.all_gather(
+                        ttnn_tensor,
+                        dim=dim,
+                        cluster_axis=cluster_axis,
+                        mesh_device=mesh_device,
+                        num_links=num_links,
+                        memory_config=output_mem_config,
+                        topology=all_gather_topology,
+                    )
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
+            signpost("stop")
+    except Exception as e:
+        logger.error(f"Exception: {e}")
+        raise e
+    finally:
+        if enable_persistent_fabric and teardown_persistent_fabric:
+            logger.info("Tearing down persistent fabric interface")
+            mesh_device.reset_sub_device_stall_group()
+            teardown_fabric_interface(mesh_device, wrap_fabric_around_mesh=wrap_mesh, topology=all_gather_topology)
+            logger.info("Done tearing down persistent fabric interface")
 
     # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor_out)
     tt_output_tensor = ttnn.to_torch(
@@ -204,6 +383,16 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     )
     output_tensors_list = torch.chunk(tt_output_tensor, num_all_gather_instances, dim=all_gather_instances_concat_dim)
     output_golden = torch.zeros(tt_output_tensor.shape)
+
+    # Check the tensor addresses
+    if use_persistent_output:
+        persistent_output_tensors = ttnn.get_device_tensors(ttnn_persistent_output_tensor)
+        output_tensors = ttnn.get_device_tensors(ttnn_tensor_out)
+
+        for persistent_tensor, output_tensor in zip(persistent_output_tensors, output_tensors):
+            assert (
+                persistent_tensor.buffer_address() == output_tensor.buffer_address()
+            ), "Persistent tensor address mismatch"
 
     # Repeat the input tensor to represent the fact that the full concatenated input tensor lives across every
     # device in the line
@@ -270,6 +459,8 @@ def test_line_all_gather_on_TG_rows_post_commit(
     replication_factor,
     num_iters=1,
 ):
+    if len(mesh_device.get_devices()) != 32:
+        pytest.skip("Not TG!")
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
         num_devices,
@@ -330,6 +521,8 @@ def test_line_all_gather_on_TG_cols_post_commit(
     replication_factor,
     num_iters=1,
 ):
+    if len(mesh_device.get_devices()) != 32:
+        pytest.skip("Not TG!")
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
         num_devices,

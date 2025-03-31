@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16..3.30)
+cmake_minimum_required(VERSION 3.24...3.30)
 
 # Sanity check, forgetting to clone submodules is a common omission and results in a poor error message
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.txt")
@@ -8,20 +8,11 @@ endif()
 ############################################
 # Project setup
 ############################################
-include(cmake/compilers.cmake)
 
-if(DEFINED ENV{CMAKE_C_COMPILER} AND DEFINED ENV{CMAKE_CXX_COMPILER})
-    message(STATUS "Setting C and C++ compiler from environment variables")
-    set(CMAKE_C_COMPILER $ENV{CMAKE_C_COMPILER})
-    set(CMAKE_CXX_COMPILER $ENV{CMAKE_CXX_COMPILER})
-endif()
-
-if(CMAKE_CXX_COMPILER AND CMAKE_C_COMPILER)
-    message(STATUS "Using specifed C++ compiler: ${CMAKE_CXX_COMPILER}")
-    message(STATUS "Using specifed C compiler: ${CMAKE_C_COMPILER}")
-else()
-    message(STATUS "No C or C++ compiler specified, defaulting to Clang-17")
-    FIND_AND_SET_CLANG17()
+# For single-config generators, default to RelWithDebInfo if unspecified
+get_property(isMultiConfig GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(NOT isMultiConfig)
+    set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type")
 endif()
 
 list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
@@ -33,15 +24,28 @@ project(
     DESCRIPTION "Tenstorrent Metalium"
     HOMEPAGE_URL "https://github.com/tenstorrent/tt-metal"
     LANGUAGES
+        C # Some of the jit-build files are plain C
         CXX
 )
 message(STATUS "Metalium version: ${PROJECT_VERSION}")
+message(STATUS "Building Unified Library for all architectures, thanks to blozano-tt")
+
+# Defining build types is the pervue of the top-level project
+if(PROJECT_IS_TOP_LEVEL)
+    include(sanitizers)
+endif()
 
 if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
     message(
         FATAL_ERROR
         "CMake generation is not allowed within source directory!! Please set a build folder with '-B'!!"
     )
+endif()
+
+if(DEFINED CMAKE_TOOLCHAIN_FILE AND CMAKE_TOOLCHAIN_FILE)
+    message(STATUS "CMAKE_TOOLCHAIN_FILE: ${CMAKE_TOOLCHAIN_FILE}")
+else()
+    message(STATUS "CMAKE_TOOLCHAIN_FILE is not set.")
 endif()
 
 include(project_options)
@@ -51,22 +55,11 @@ include(clang-tidy)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 
-if(ENABLE_LIBCXX)
-    add_compile_options($<$<COMPILE_LANG_AND_ID:CXX,Clang>:-stdlib=libc++>)
-    #add_link_options(
-    #    $<$<LINK_LANG_AND_ID:CXX,Clang>:-lc++>
-    #    $<$<LINK_LANG_AND_ID:CXX,Clang>:-lc++abi>
-    #)
-else()
+if(NOT ENABLE_LIBCXX)
     # required when linking with libstdc++ with clang and gcc
-    add_compile_options(-fsized-deallocation)
-endif()
-
-# Using below until we can move to CMake >= 3.18 for LINK_LANG_AND_ID
-if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND ENABLE_LIBCXX)
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -lc++ -lc++abi")
-    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -lc++ -lc++abi")
+    add_compile_options($<$<COMPILE_LANG_AND_ID:CXX,Clang>:-fsized-deallocation>)
 endif()
 
 include(CTest)
@@ -74,35 +67,21 @@ include(CTest)
 get_property(isMultiConfig GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 
 # Global settings if we're the top-level project
-if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
-    set(CMAKE_CONFIGURATION_TYPES
-        Release
-        RelWithDebInfo
-        Debug
-        CI
-    )
-    if(NOT CMAKE_BUILD_TYPE AND NOT isMultiConfig)
-        message(STATUS "Setting build type to 'Release' as none was specified.")
-        set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Release build is the default" FORCE)
-    endif()
-
+if(PROJECT_IS_TOP_LEVEL)
     set_property(
         GLOBAL
         PROPERTY
             GLOBAL_DEPENDS_NO_CYCLES
-                FALSE #FIXME(14541): We've got work to do :(
+                TRUE
     )
 
     if(ENABLE_CCACHE)
-        include(cmake/ccache.cmake)
+        include(ccache)
     endif()
 endif()
 
+include(compilers)
 CHECK_COMPILERS()
-
-if(NOT isMultiConfig AND NOT CMAKE_BUILD_TYPE IN_LIST CMAKE_CONFIGURATION_TYPES)
-    message(FATAL_ERROR "Invalid build type: ${CMAKE_BUILD_TYPE}. Valid options are: ${CMAKE_CONFIGURATION_TYPES}")
-endif()
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
@@ -110,10 +89,17 @@ set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG")
 set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG")
 
+# We're not currently using C++20 modules, so don't bother scanning for them
+set(CMAKE_CXX_SCAN_FOR_MODULES FALSE)
+
+# Promote all IMPORTED targets discovered by find_package() to a GLOBAL scope
+set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
+
 ############################################################################################################################
 # Project Options
 #   The following options and their defaults impact what artifacts get built
 ############################################################################################################################
+message(STATUS "ENABLE_LIBCXX: ${ENABLE_LIBCXX}")
 message(STATUS "Build shared libs: ${BUILD_SHARED_LIBS}")
 message(STATUS "Build with ASAN: ${ENABLE_ASAN}")
 message(STATUS "Build with MSAN: ${ENABLE_MSAN}")
@@ -124,6 +110,9 @@ message(STATUS "Build Programming Examples: ${BUILD_PROGRAMMING_EXAMPLES}")
 message(STATUS "Build TT METAL Tests: ${TT_METAL_BUILD_TESTS}")
 message(STATUS "Build TTNN Tests: ${TTNN_BUILD_TESTS}")
 message(STATUS "Build with Unity builds: ${TT_UNITY_BUILDS}")
+message(STATUS "Build with Shared TTNN Sublibraries: ${ENABLE_TTNN_SHARED_SUBLIBS}")
+message(STATUS "Build with LightMetal Trace Enabled: ${TT_ENABLE_LIGHT_METAL_TRACE}")
+
 ############################################################################################################################
 
 if(ENABLE_BUILD_TIME_TRACE)
@@ -157,7 +146,6 @@ unset(SANITIZER_ENABLED)
 ############################################################################################################################
 # Find all required libraries to build
 ############################################################################################################################
-set(ENV{CPM_SOURCE_CACHE} "${PROJECT_SOURCE_DIR}/.cpmcache")
 include(CPM)
 if(CMAKE_VERSION VERSION_LESS 3.25)
     # FIXME(14681): `SYSTEM` was introduced in v3.25; remove this when we can require v3.25
@@ -195,18 +183,12 @@ target_link_libraries(
     metal_common_libs
     INTERFACE
         dl
-        z
         pthread
         atomic
         hwloc
         numa
 )
 
-if(NOT DEFINED ENV{ARCH_NAME})
-    message(FATAL_ERROR "Please set ARCH_NAME to grayskull, wormhole_b0, or blackhole")
-endif(NOT DEFINED ENV{ARCH_NAME})
-string(TOUPPER "$ENV{ARCH_NAME}" ARCH_NAME_DEF)
-add_compile_definitions(ARCH_${ARCH_NAME_DEF})
 add_compile_options(
     -Werror
     -Wno-deprecated-declarations
@@ -250,22 +232,28 @@ add_link_options(
     "$<$<BOOL:${ENABLE_UBSAN}>:-fsanitize=undefined>"
 )
 
+# Planned to be temporary, remove later.
+if(TT_ENABLE_LIGHT_METAL_TRACE)
+    add_compile_definitions(TT_ENABLE_LIGHT_METAL_TRACE=1)
+else()
+    add_compile_definitions(TT_ENABLE_LIGHT_METAL_TRACE=0)
+endif()
+
+include(GNUInstallDirs)
+# GNUInstallDirs takes PROJECT_DIR verbatim, but directories should always be lowercase
+string(TOLOWER ${PROJECT_NAME} PROJECT_NAME_LOWER)
+string(REPLACE ${PROJECT_NAME} ${PROJECT_NAME_LOWER} CMAKE_INSTALL_DOCDIR ${CMAKE_INSTALL_DOCDIR})
+
 if(ENABLE_CODE_TIMERS)
     add_compile_definitions(TT_ENABLE_CODE_TIMERS)
 endif()
-if(ENABLE_TRACY)
-    add_compile_definitions(TRACY_ENABLE)
-    add_compile_options(-fno-omit-frame-pointer)
-    add_link_options(-rdynamic)
-endif()
+include(tracy)
 
 ############################################################################################################################
 # Build subdirectories
 ############################################################################################################################
-if(ENABLE_TRACY)
-    include(tracy)
-endif()
 
+add_subdirectory(tt_stl)
 add_subdirectory(tt_metal)
 add_subdirectory(ttnn)
 
@@ -279,8 +267,6 @@ endif()
 # For top level install: cmake --build build --target install  or  make/ninja install -C build
 ############################################################################################################################
 # Install for build artifacts that will upload build/lib
-include(GNUInstallDirs)
-
 install(
     TARGETS
         tt_metal
@@ -288,19 +274,20 @@ install(
         DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY
         DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT dev
-)
-install(
-    TARGETS
-        ttnn
-    ARCHIVE
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    LIBRARY
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT dev
+        COMPONENT tar
 )
 if(WITH_PYTHON_BINDINGS)
     # Install .so into src files for pybinds implementation
+    install(
+        TARGETS
+            ttnn
+        ARCHIVE
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            COMPONENT tar
+    )
+
     install(
         TARGETS
             ttnn
@@ -309,7 +296,27 @@ if(WITH_PYTHON_BINDINGS)
             COMPONENT
             tt_pybinds
     )
+else()
+    #when we don't build python bindings, we generate a dynamic library ttnncpp
+    install(
+        TARGETS
+            ttnncpp
+        ARCHIVE
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            COMPONENT tar
+    )
 endif()
+
+# FIXME(17578): figure out what bits we actually need to ship and omit the rest
+install(
+    DIRECTORY
+        runtime
+    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium
+    USE_SOURCE_PERMISSIONS
+    COMPONENT jit-build
+)
 
 # Custom clean target for `built` folder for when new kernel changes are pulled
 add_custom_target(
@@ -319,8 +326,8 @@ add_custom_target(
     COMMENT "Cleaning `built` directory"
 )
 
-include(packaging)
-
 if(BUILD_TT_TRAIN)
     add_subdirectory(tt-train)
 endif()
+
+include(packaging)

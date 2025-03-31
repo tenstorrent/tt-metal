@@ -2,23 +2,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/work_split.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/move/device/move_device_operation.hpp"
+#include <tt-metalium/work_split.hpp>
+#include "cpp/ttnn/operations/data_movement/move/device/move_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
+#include "cpp/ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <algorithm>
+
+#include <tt-metalium/hal_exp.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement {
 
 std::vector<CoreRange> get_multicast_regions(
-    const Device* device, const CoreRangeSet& all_cores, const CoreCoord& logical_controller) {
+    const IDevice* device, const CoreRangeSet& all_cores, const CoreCoord& logical_controller) {
     TT_ASSERT(0 < all_cores.ranges().size() and all_cores.ranges().size() <= 2);
     CoreCoord logical_zero = {0, 0};
     TT_ASSERT(logical_controller == logical_zero);
@@ -68,18 +72,18 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
 
     uint32_t page_size = input.buffer()->page_size();
 
-    uint32_t num_pages = tilized ? output.volume() / TILE_HW : output.volume() / output.get_legacy_shape()[-1];
-    tt::tt_metal::Device* device = output.device();
+    uint32_t num_pages = tilized ? output.volume() / TILE_HW : output.volume() / output.get_padded_shape()[-1];
+    tt::tt_metal::IDevice* device = output.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages);
 
-    const auto num_dram_banks = device->num_banks(BufferType::DRAM);
+    const auto num_dram_banks = device->allocator()->get_num_banks(BufferType::DRAM);
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
     uint32_t size_per_l1_bank = tt::tt_metal::detail::SizeBytesPerBank(
-        output.buffer()->size(), output.buffer()->page_size(), num_l1_banks, hal.get_alignment(HalMemType::L1));
+        output.buffer()->size(), output.buffer()->page_size(), num_l1_banks, hal::get_l1_alignment());
 
     // CB is being used as temp L1 buffer to copy src data into before writing to dst
     uint32_t cb_index = 0;
@@ -206,28 +210,19 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Ten
     auto shard_spec = input.shard_spec().value();
     auto shard_shape = shard_spec.shape;
     auto shard_grid = shard_spec.grid;
-    auto input_shape = input.get_legacy_shape();
+    auto input_shape = input.get_logical_shape();
     auto input_dtype = input.get_dtype();
     auto input_layout = input.get_layout();
     TT_FATAL(
         input_layout == output.get_layout() && input_dtype == output.get_dtype() &&
-            shard_shape == output.shard_spec().value().shape && input_shape == output.get_legacy_shape(),
+            shard_shape == output.shard_spec().value().shape && input_shape == output.get_logical_shape(),
         "Error");
     const uint32_t src_cb_sharded = tt::CBIndex::c_0;
     const uint32_t dst_cb_sharded = tt::CBIndex::c_1;
-    uint32_t tile_size_bytes = tile_size(cb_data_format);
-    uint32_t shard_shape_num_tiles = tt::div_up(shard_shape[0] * shard_shape[1], TILE_HEIGHT * TILE_WIDTH);
-    uint32_t total_size_bytes = 0;
-    uint32_t page_size_bytes = 0;
-    if ((shard_shape[0] * shard_shape[1]) % (TILE_HEIGHT * TILE_WIDTH) == 0) {
-        uint32_t tile_size_bytes = tile_size(cb_data_format);
-        total_size_bytes = shard_shape_num_tiles * tile_size_bytes;
-        page_size_bytes = tile_size_bytes;
-    } else {
-        uint32_t datum_size_bytes = datum_size(cb_data_format);
-        total_size_bytes = shard_shape[0] * shard_shape[1] * datum_size_bytes;
-        page_size_bytes = shard_shape[1] * datum_size_bytes;
-    }
+
+    uint32_t total_size_bytes = input.buffer()->aligned_size_per_bank();
+    uint32_t page_size_bytes = input.buffer()->aligned_page_size();
+
     CircularBufferConfig src_cb_sharded_config =
         CircularBufferConfig(total_size_bytes, {{src_cb_sharded, cb_data_format}})
             .set_page_size(src_cb_sharded, page_size_bytes);
@@ -242,6 +237,7 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Ten
 
     auto input_buffer_address = input.buffer()->address();
     auto output_buffer_address = output.buffer()->address();
+
     TT_FATAL(
         output_buffer_address > input_buffer_address,
         "Expected output buffer to be allocated at a higher address than input buffer");

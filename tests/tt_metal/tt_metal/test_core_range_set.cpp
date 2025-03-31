@@ -7,12 +7,13 @@
 #include <random>
 #include <optional>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
-#include "tt_metal/impl/buffers/semaphore.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/semaphore.hpp>
+#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/allocator.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -50,7 +51,7 @@ void check_program_is_mapped_to_correct_cores(
 }
 
 void check_semaphores_are_initialized(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt_metal::Program& program,
     const CoreRangeSet& core_range_set,
     const std::vector<uint32_t>& golden_sem_values) {
@@ -79,7 +80,7 @@ void check_semaphores_are_initialized(
 }
 
 bool test_program_specified_with_core_range_set(
-    tt_metal::Device* device, tt_metal::Program& program, const CoreRangeSet& core_range_set) {
+    tt_metal::IDevice* device, tt_metal::Program& program, const CoreRangeSet& core_range_set) {
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
     TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
 
@@ -176,8 +177,8 @@ bool test_program_specified_with_core_range_set(
         tt_metal::SetRuntimeArgs(program, unary_reader_kernel, core, reader_rt_args);
 
         auto bank_id = 0;
-        auto l1_dst_noc_xy =
-            device->virtual_core_from_logical_core(dst_l1_buffer->logical_core_from_bank_id(0), CoreType::WORKER);
+        auto l1_dst_noc_xy = device->virtual_core_from_logical_core(
+            dst_l1_buffer->allocator()->get_logical_core_from_bank_id(0), CoreType::WORKER);
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -212,7 +213,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         tt_metal::Program program = tt_metal::CreateProgram();
         CoreRange core_range_one({0, 0}, {1, 1});

@@ -7,11 +7,15 @@
 #include <random>
 #include <string>
 
-#include "common/bfloat16.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/allocator.hpp>
+
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
+
+#include "test_common.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -134,7 +138,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         int clock_freq_mhz = get_tt_npu_clock(device);
         auto grid_coord = device->compute_with_storage_grid_size();
@@ -154,7 +158,7 @@ int main(int argc, char** argv) {
         uint32_t single_tile_size = 2 * 1024;
 
         uint32_t cb_src0_index = 0;
-        uint32_t cb_src0_addr = device->get_base_allocator_addr(HalMemType::L1);
+        uint32_t cb_src0_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         tt_metal::CircularBufferConfig cb_src0_config =
             tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{cb_src0_index, tt::DataFormat::Float16_b}})
                 .set_page_size(cb_src0_index, single_tile_size);

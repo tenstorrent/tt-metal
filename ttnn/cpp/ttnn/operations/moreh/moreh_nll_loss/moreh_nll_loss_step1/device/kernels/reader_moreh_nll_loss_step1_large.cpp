@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -11,7 +11,6 @@ void kernel_main() {
     auto ignore_index = static_cast<int32_t>(get_arg_val<uint32_t>(i++));
     auto num_units_per_core = get_arg_val<uint32_t>(i++);
     auto start_id = get_arg_val<uint32_t>(i++);
-    auto N = get_arg_val<uint32_t>(i++);
     auto C = get_arg_val<uint32_t>(i++);
     auto weight_num_tile = get_arg_val<uint32_t>(i++);
     auto element_size = get_arg_val<uint32_t>(i++);

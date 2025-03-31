@@ -9,7 +9,7 @@
 #include "compute_kernel_api/mask.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -26,7 +26,7 @@ void MAIN {
     constexpr auto cb_out = tt::CBIndex::c_16;
     constexpr bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
 
-    binary_op_init_common(cb_input, cb_input);
+    binary_op_init_common(cb_input, cb_input, cb_out);
 
     cb_wait_front(cb_scaler, 1);  // scaler tile from the reader
 

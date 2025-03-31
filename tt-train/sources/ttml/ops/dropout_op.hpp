@@ -7,6 +7,6 @@
 
 namespace ttml::ops {
 
-autograd::TensorPtr dropout(const autograd::TensorPtr& tensor, float probability);
+autograd::TensorPtr dropout(const autograd::TensorPtr& tensor, float probability, bool use_per_device_seed = true);
 
 }  // namespace ttml::ops

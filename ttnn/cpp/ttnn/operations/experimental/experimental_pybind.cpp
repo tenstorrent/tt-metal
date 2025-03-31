@@ -8,6 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_pybind.hpp"
+#include "ttnn/operations/experimental/conv3d/conv3d_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/argmax/argmax_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_pybind.hpp"
 #include "ttnn/operations/experimental/ssm/hc_sum_reduce/hc_sum_reduce_pybind.hpp"
@@ -30,12 +31,15 @@
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/rotate_half/rotate_half_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_pybind.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/copy/typecast/typecast_pybind.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_pybind.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_pybind.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_matmul/all_gather_matmul_pybind.hpp"
-#include "ttnn/operations/experimental/ccl/all_reduce/all_reduce_pybind.hpp"
+#include "cpp/ttnn/operations/experimental/copy/typecast/typecast_pybind.hpp"
+#include "cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_pybind.hpp"
+#include "cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_pybind.hpp"
+#include "ttnn/operations/experimental/ccl/ccl_experimental_pybind.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_pybind.hpp"
+#include "ttnn/operations/experimental/dropout/dropout_pybind.hpp"
+#include "ttnn/operations/experimental/reshape/view_pybind.hpp"
+#include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_pybind.hpp"
+
 namespace ttnn::operations::experimental {
 
 void py_module(py::module& module) {
@@ -67,6 +71,8 @@ void py_module(py::module& module) {
 
     cnn::detail::bind_convert_to_chw(module);
 
+    ttnn::operations::experimental::conv3d::detail::py_bind_conv3d(module);
+
     copy::detail::py_bind_typecast(module);
 
     paged_cache::detail::bind_experimental_paged_cache_operations(module);
@@ -75,11 +81,15 @@ void py_module(py::module& module) {
     matmul::detail::bind_group_attn_matmul(module);
 
     plusone::detail::bind_experimental_plusone_operation(module);
+    dropout::detail::bind_experimental_dropout_operation(module);
+    reshape::detail::py_bind_view(module);
+
+    gelu_backward::detail::bind_experimental_gelu_backward_operation(module);
 
     // CCL ops
-    auto m_experimental_ccl = module.def_submodule("ccl", "experiemental collective communication operations");
-    ccl::py_bind_all_gather_matmul(m_experimental_ccl);
-    ccl::py_bind_all_reduce(m_experimental_ccl);
+    auto m_experimental_ccl =
+        module.def_submodule("ccl_experimental", "experimental collective communication operations");
+    ccl::py_module(m_experimental_ccl);
 }
 
 }  // namespace ttnn::operations::experimental

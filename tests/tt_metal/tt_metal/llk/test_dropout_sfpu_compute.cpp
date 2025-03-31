@@ -5,12 +5,13 @@
 #include <gtest/gtest.h>
 
 #include "device_fixture.hpp"
-#include "tt_metal/host_api.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/bfloat16.hpp>
+
+namespace tt::tt_metal {
 
 using std::vector;
 using namespace tt;
-using namespace tt::tt_metal;
 
 /*
  * 1. Host creates one vector of data with constant non-zero values.
@@ -63,7 +64,7 @@ bool check_dropout(
 }
 
 bool test_dropout_standalone(
-    tt_metal::Device* device, float probability, uint32_t seed, float const_bias, std::vector<bfloat16>& res_vec) {
+    tt_metal::IDevice* device, float probability, uint32_t seed, float const_bias, std::vector<bfloat16>& res_vec) {
     bool pass = true;
     uint32_t int_probability = probability * (double)INT_MAX;
     float scale_factor_f = 1.0f / (1.0f - probability);
@@ -199,7 +200,7 @@ bool test_dropout_standalone(
     return pass;
 }
 
-void test_dropout(tt_metal::Device* device, const DropoutConfig& test_config) {
+void test_dropout(tt_metal::IDevice* device, const DropoutConfig& test_config) {
     bool pass = true;
     float probability = test_config.probability;
     float fill_constant = test_config.fill_constant;
@@ -256,3 +257,5 @@ TEST_F(DeviceFixture, TensixComputeDropout) {
         unit_tests::compute::sfpu::dropout::test_dropout(this->devices_.at(0), test_config);
     }
 }
+
+}  // namespace tt::tt_metal

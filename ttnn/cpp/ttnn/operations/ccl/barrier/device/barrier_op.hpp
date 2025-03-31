@@ -13,7 +13,7 @@ namespace ttnn {
 struct Barrier {
     const MemoryConfig output_mem_config;
     const ttnn::ccl::Topology topology;
-    std::vector<Device*> devices;
+    std::vector<IDevice*> devices;
     bool is_starting_core = false;
     uint32_t ring_size = devices.size();
     uint32_t ring_index = 0;
@@ -23,16 +23,16 @@ struct Barrier {
     // Required functions to all tensor op functions
     void update_structure(const Tensor& input_tensor);
     void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<SimpleShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
+    std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
+    tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 };
 
 namespace ccl::barrier::detail {
 // Template for the barrier_with_workers function
 // Found in device/host/barrier_full_worker_grid.cpp
-operation::ProgramWithCallbacks barrier_with_workers(
+tt::tt_metal::operation::ProgramWithCallbacks barrier_with_workers(
     const Tensor& input_tensors,
     const Tensor& output_tensors,
     const bool is_starting_core,

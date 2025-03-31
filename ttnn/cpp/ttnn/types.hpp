@@ -4,11 +4,13 @@
 
 #pragma once
 
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
-#include "tt_metal/impl/buffers/global_semaphore.hpp"
-#include "tt_metal/impl/sub_device/sub_device.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/global_circular_buffer_impl.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -16,13 +18,16 @@
 namespace ttnn {
 namespace types {
 
-using Device = tt::tt_metal::Device;
+using IDevice = tt::tt_metal::IDevice;
+using Program = tt::tt_metal::Program;
 
 constexpr auto TILE_SIZE = 32;
 
 using tt::tt_metal::BufferType;
 using tt::tt_metal::DataType;
 using tt::tt_metal::MemoryConfig;
+using tt::tt_metal::ShardMode;
+using tt::tt_metal::ShardOrientation;
 using tt::tt_metal::TensorMemoryLayout;
 
 static const auto DRAM_MEMORY_CONFIG = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
@@ -61,7 +66,7 @@ static std::ostream& operator<<(std::ostream& os, const CoreGrid& core_grid) {
 using tt::tt_metal::GlobalSemaphore;
 using tt::tt_metal::SubDevice;
 using tt::tt_metal::SubDeviceManagerId;
-using tt::tt_metal::v1::experimental::GlobalCircularBuffer;
+using tt::tt_metal::experimental::GlobalCircularBuffer;
 
 }  // namespace types
 

@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "fold_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_fold {
@@ -52,7 +52,7 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     Program program{};
-    Device* device = input.device();
+    IDevice* device = input.device();
 
     uint32_t num_units = output.get_logical_volume() / output.get_logical_shape()[-1];
 

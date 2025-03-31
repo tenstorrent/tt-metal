@@ -8,11 +8,9 @@ import random
 import os
 import numpy as np
 from functools import partial
-from itertools import chain
 from operator import contains, eq, getitem
 from pathlib import Path
 import json
-import copy
 import multiprocess
 import signal
 import time
@@ -22,6 +20,7 @@ from datetime import datetime
 from loguru import logger
 
 from tests.scripts.common import run_process_and_get_result
+from tests.scripts.common import get_updated_device_params
 
 
 @pytest.fixture(scope="function")
@@ -82,37 +81,18 @@ def get_tt_cache_path():
         internal_cache_path = Path("/opt/tt-metal-models") / model_folder / model_version
         has_internal_cache = internal_cache_path.exists()
         if has_internal_weka:
+            logger.debug(f"Using internal weka path: {internal_weka_path}")
             return internal_weka_path
         elif has_internal_cache:
+            logger.debug(f"Using internal cache path: {internal_cache_path}")
             return internal_cache_path
         else:
             default_path = Path(default_dir) / model_folder / model_version
             default_path.mkdir(parents=True, exist_ok=True)
+            logger.debug(f"Using default cache path: {default_path}")
             return default_path
 
     return get_tt_cache_path_
-
-
-def get_dispatch_core_type():
-    import ttnn
-
-    # TODO: 11059 move dispatch_core_type to device_params when all tests are updated to not use WH_ARCH_YAML env flag
-    dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
-    if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
-        dispatch_core_type = ttnn.device.DispatchCoreType.ETH
-    return dispatch_core_type
-
-
-def get_dispatch_core_config(device_params):
-    import ttnn
-
-    dispatch_core_type = get_dispatch_core_type()
-    dispatch_core_axis = device_params.pop(
-        "dispatch_core_axis",
-        ttnn.DispatchCoreAxis.COL if os.environ["ARCH_NAME"] == "blackhole" else ttnn.DispatchCoreAxis.ROW,
-    )
-    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
-    return dispatch_core_config
 
 
 @pytest.fixture(scope="function")
@@ -129,15 +109,13 @@ def device(request, device_params):
 
     num_devices = ttnn.GetNumPCIeDevices()
     assert device_id < num_devices, "CreateDevice not supported for non-mmio device"
-    dispatch_core_config = get_dispatch_core_config(device_params)
-    device = ttnn.CreateDevice(device_id=device_id, dispatch_core_config=dispatch_core_config, **device_params)
+    updated_device_params = get_updated_device_params(device_params)
+    device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
     ttnn.SetDefaultDevice(device)
 
     yield device
 
     ttnn.DumpDeviceProfiler(device)
-
-    ttnn.synchronize_device(device)
     ttnn.close_device(device)
 
 
@@ -150,8 +128,8 @@ def pcie_devices(request, device_params):
     request.node.pci_ids = device_ids
 
     # Get only physical devices
-    dispatch_core_config = get_dispatch_core_config(device_params)
-    devices = ttnn.CreateDevices(device_ids, dispatch_core_config=dispatch_core_config, **device_params)
+    updated_device_params = get_updated_device_params(device_params)
+    devices = ttnn.CreateDevices(device_ids, **updated_device_params)
 
     yield [devices[i] for i in range(num_devices)]
 
@@ -170,8 +148,8 @@ def all_devices(request, device_params):
     request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids]
 
     # Get only physical devices
-    dispatch_core_config = get_dispatch_core_config(device_params)
-    devices = ttnn.CreateDevices(device_ids, dispatch_core_config=dispatch_core_config, **device_params)
+    updated_device_params = get_updated_device_params(device_params)
+    devices = ttnn.CreateDevices(device_ids, **updated_device_params)
 
     yield [devices[i] for i in range(num_devices)]
 
@@ -181,8 +159,29 @@ def all_devices(request, device_params):
     ttnn.CloseDevices(devices)
 
 
+# Reset fabric config to DISABLED if not None, and do nothing otherwise
+# Temporarily require previous state to be passed in as even setting it to DISABLED might be unstable
+# This is to ensure that we don't propagate the instability to the rest of CI
+def reset_fabric(fabric_config):
+    import ttnn
+
+    if fabric_config:
+        ttnn.initialize_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
+# Set fabric config to passed in value
+# Do nothing if not set
+# Must be called before creating the mesh device
+def set_fabric(fabric_config):
+    import ttnn
+
+    # If fabric_config is not None, set it to fabric_config
+    if fabric_config:
+        ttnn.initialize_fabric_config(fabric_config)
+
+
 @pytest.fixture(scope="function")
-def mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
+def mesh_device(request, silicon_arch_name, device_params):
     """
     Pytest fixture to set up a device mesh for tests.
 
@@ -193,7 +192,6 @@ def mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
     Args:
         request: Pytest request object.
         silicon_arch_name: Name of the silicon architecture.
-        silicon_arch_wormhole_b0: Silicon architecture parameter.
         device_params: Additional device configuration parameters.
 
     Yields:
@@ -222,10 +220,10 @@ def mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
 
     request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
 
-    dispatch_core_config = get_dispatch_core_config(device_params)
-    mesh_device = ttnn.open_mesh_device(
-        mesh_shape=mesh_shape, dispatch_core_config=dispatch_core_config, **device_params
-    )
+    updated_device_params = get_updated_device_params(device_params)
+    fabric_config = updated_device_params.pop("fabric_config", None)
+    set_fabric(fabric_config)
+    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
@@ -234,6 +232,7 @@ def mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
         ttnn.DumpDeviceProfiler(device)
 
     ttnn.close_mesh_device(mesh_device)
+    reset_fabric(fabric_config)
     del mesh_device
 
 
@@ -252,14 +251,15 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
 
     request.node.pci_ids = device_ids[:num_pcie_devices_requested]
 
-    dispatch_core_config = get_dispatch_core_config(device_params)
+    updated_device_params = get_updated_device_params(device_params)
+    fabric_config = updated_device_params.pop("fabric_config", None)
+    set_fabric(fabric_config)
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(2, 2),
-        dispatch_core_config=dispatch_core_config,
-        **device_params,
-        offset=ttnn.MeshOffset(0, 1),
-        mesh_type=ttnn.MeshType.Ring,
+        **updated_device_params,
+        offset=ttnn.MeshCoordinate(0, 1),
     )
+    mesh_device.reshape(ttnn.MeshShape(1, 4))
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
@@ -268,6 +268,7 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
         ttnn.DumpDeviceProfiler(device)
 
     ttnn.close_mesh_device(mesh_device)
+    reset_fabric(fabric_config)
     del mesh_device
 
 
@@ -278,11 +279,12 @@ def n300_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
     if ttnn.get_num_devices() < 2:
         pytest.skip()
 
-    dispatch_core_config = get_dispatch_core_config(device_params)
+    updated_device_params = get_updated_device_params(device_params)
+    fabric_config = updated_device_params.pop("fabric_config", None)
+    set_fabric(fabric_config)
     mesh_device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(1, 2),
-        dispatch_core_config=dispatch_core_config,
-        **device_params,
+        **updated_device_params,
     )
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
@@ -292,6 +294,7 @@ def n300_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
         ttnn.DumpDeviceProfiler(device)
 
     ttnn.close_mesh_device(mesh_device)
+    reset_fabric(fabric_config)
     del mesh_device
 
 
@@ -303,12 +306,12 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
         pytest.skip()
 
     request.node.pci_ids = ttnn.get_pcie_device_ids()
-    dispatch_core_config = get_dispatch_core_config(device_params)
+    updated_device_params = get_updated_device_params(device_params)
+    fabric_config = updated_device_params.pop("fabric_config", None)
+    set_fabric(fabric_config)
     mesh_device = ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(2, 4),
-        dispatch_core_config=dispatch_core_config,
-        **device_params,
-        mesh_type=ttnn.MeshType.Ring,
+        mesh_shape=ttnn.MeshShape(1, 8),
+        **updated_device_params,
     )
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
@@ -318,6 +321,7 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
         ttnn.DumpDeviceProfiler(device)
 
     ttnn.close_mesh_device(mesh_device)
+    reset_fabric(fabric_config)
     del mesh_device
 
 
@@ -346,13 +350,13 @@ def get_devices(request):
     elif "pcie_devices" in request.fixturenames:
         devices = request.getfixturevalue("pcie_devices")
     elif "mesh_device" in request.fixturenames:
-        devices = request.getfixturevalue("mesh_device").get_devices()
+        devices = [request.getfixturevalue("mesh_device")]
     elif "n300_mesh_device" in request.fixturenames:
-        devices = request.getfixturevalue("n300_mesh_device").get_devices()
+        devices = [request.getfixturevalue("n300_mesh_device")]
     elif "t3k_mesh_device" in request.fixturenames:
-        devices = request.getfixturevalue("t3k_mesh_device").get_devices()
+        devices = [request.getfixturevalue("t3k_mesh_device")]
     elif "pcie_mesh_device" in request.fixturenames:
-        devices = request.getfixturevalue("pcie_mesh_device").get_devices()
+        devices = [request.getfixturevalue("pcie_mesh_device")]
     else:
         devices = []
     return devices
@@ -401,16 +405,19 @@ ALL_ARCHS = set(
     [
         "grayskull",
         "wormhole_b0",
+        "blackhole",
     ]
 )
 
 
 def pytest_addoption(parser):
+    import ttnn
+
     parser.addoption(
         "--tt-arch",
         choices=[*ALL_ARCHS],
-        default=os.environ.get("ARCH_NAME", "grayskull"),
-        help="Target arch, ex. grayskull, wormhole_b0",
+        default=ttnn.get_arch_name(),
+        help="Target arch, ex. grayskull, wormhole_b0, blackhole",
     )
     parser.addoption(
         "--pipeline-type",
@@ -513,6 +520,11 @@ def pytest_generate_tests(metafunc):
         "silicon_arch_wormhole_b0": set(
             [
                 "wormhole_b0",
+            ]
+        ),
+        "silicon_arch_blackhole": set(
+            [
+                "blackhole",
             ]
         ),
     }
@@ -646,8 +658,9 @@ def pytest_handlecrashitem(crashitem, report, sched):
 
 
 def reset_tensix(tt_open_devices=None):
-    metal_env = copy.deepcopy(os.environ)
-    arch = metal_env.get("ARCH_NAME")
+    import ttnn
+
+    arch = ttnn.get_arch_name()
     if arch != "grayskull" and arch != "wormhole_b0":
         raise Exception(f"Unrecognized arch for tensix-reset: {arch}")
 
@@ -678,3 +691,20 @@ def record_test_timestamp(record_property):
     yield
     end_timestamp = datetime.strftime(datetime.now(), "%Y-%m-%dT%H:%M:%S%z")
     record_property("end_timestamp", end_timestamp)
+
+
+def pytest_configure(config):
+    xmlpath = config.option.xmlpath
+    # https://github.com/tenstorrent/tt-metal/pull/18372
+    # Only override the xmlpath if it's set, and we're in a CI env (GHA)
+    # Problem: t3k unit tests run pytest multiple times overwriting the junit xml file each time, so the generated xml artifact only contains test case info from the last running testsuite.
+    # Fix: when running in CI env, override config.option.xmlpath to rename the xml filepath to include timestamp, so that serial pytest invocations running in scripts do not clobber the junit xml test report
+    if xmlpath and os.getenv("CI") == "true":
+        # Get the dir and filename for the generated xml
+        directory, filename = os.path.split(xmlpath)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Append timestamp to the end of the xml filename
+        # This avoids clobbering the xml file when pytest is invoked multiple times during a test script
+        new_filename = f"{os.path.splitext(filename)[0]}_{timestamp}{os.path.splitext(filename)[1]}"
+        new_xmlpath = os.path.join(directory, new_filename)
+        config.option.xmlpath = new_xmlpath

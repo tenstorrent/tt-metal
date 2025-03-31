@@ -9,8 +9,8 @@
 #include "debug/dprint.h"
 #include "eth_l1_address_map.h"
 
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_async_datamover.hpp"
+#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "cpp/ttnn/operations/ccl/kernels/edm/erisc_async_datamover.hpp"
 
 // Args Schema:
 // 1) handshake addr
@@ -359,5 +359,8 @@ void kernel_main() {
         }
     }
 
+    for (uint32_t i = 0; i < eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS; i++) {
+        ASSERT(erisc_info->channels[i].bytes_sent == 0);
+    }
     WAYPOINT("DONE");
 }

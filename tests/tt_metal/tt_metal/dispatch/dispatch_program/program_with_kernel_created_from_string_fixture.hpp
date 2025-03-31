@@ -7,11 +7,13 @@
 #include <gtest/gtest.h>
 #include "dispatch_fixture.hpp"
 
+using namespace tt::tt_metal;
+
 class ProgramWithKernelCreatedFromStringFixture : public DispatchFixture {
 protected:
     void SetUp() override {
         DispatchFixture::SetUp();
-        for (Device* device : this->devices_) {
+        for (IDevice* device : this->devices_) {
             const chip_id_t device_id = device->id();
             this->device_ids_to_devices_[device_id] = device;
         }
@@ -20,5 +22,5 @@ protected:
     void TearDown() override { detail::CloseDevices(this->device_ids_to_devices_); }
 
 private:
-    std::map<chip_id_t, Device*> device_ids_to_devices_;
+    std::map<chip_id_t, IDevice*> device_ids_to_devices_;
 };

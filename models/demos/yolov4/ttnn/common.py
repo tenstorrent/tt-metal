@@ -30,6 +30,7 @@ def fold_bn_to_conv_weights_bias(model, path):
 class Conv:
     def __init__(
         self,
+        device,
         model,
         path,
         input_params,
@@ -51,9 +52,17 @@ class Conv:
         else:
             weight = model[path + ".conv.0.weight"]
             bias = model[path + ".conv.0.bias"]
+            # padding the channel dim in the last conv in the head module from 255 to 256
+            # to avoid additional padding in the model graph
+            if weight.shape[0] == 255:
+                weight = torch.nn.functional.pad(weight, (0, 0, 0, 0, 0, 0, 0, 1))
             self.weights = ttnn.from_torch(weight)
             bias = bias.reshape(1, 1, 1, -1)
+            # padding the channel dim in the last conv in the head module from 255 to 256
+            if bias.shape[-1] == 255:
+                bias = torch.nn.functional.pad(bias, (0, 1, 0, 0, 0, 0, 0, 0))
             self.bias = ttnn.from_torch(bias)
+
         self.input_params = input_params
         self.kernel_size = (self.weights.shape[2], self.weights.shape[3])
         self.conv_params = conv_params
@@ -63,6 +72,7 @@ class Conv:
         self.output_layout = output_layout
         self.enable_split_reader = enable_split_reader
         self.enable_act_double_buffer = enable_act_double_buffer
+        self.device = device
 
         if width_sharding:
             self.shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
@@ -70,13 +80,9 @@ class Conv:
             self.shard_layout = (
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
             )
+
         self.deallocate = deallocate
         self.activation = activation
-
-    def __str__(self) -> str:
-        return f"Conv: {self.weights.shape} {self.bias.shape} {self.kernel_size}"
-
-    def __call__(self, device, input_tensor):
         conv_config = ttnn.Conv2dConfig(
             dtype=ttnn.bfloat16,
             weights_dtype=ttnn.bfloat8_b,
@@ -92,32 +98,68 @@ class Conv:
             enable_act_double_buffer=self.enable_act_double_buffer,
             output_layout=self.output_layout,
         )
+
+        if self.act_block_h is not None:
+            conv_config.act_block_h_override = self.act_block_h
+
+        self.conv_kwargs = {
+            "in_channels": self.input_params[3],
+            "out_channels": self.out_channels,
+            "batch_size": self.input_params[0],
+            "input_height": self.input_params[1],
+            "input_width": self.input_params[2],
+            "kernel_size": self.kernel_size,
+            "stride": (self.conv_params[0], self.conv_params[1]),
+            "padding": (self.conv_params[2], self.conv_params[3]),
+            "dilation": (1, 1),
+            "groups": 1,
+            "device": device,
+            "conv_config": conv_config,
+        }
+        self.input_memory_config = (
+            ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+            if height_sharding and not width_sharding
+            else ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+        )
+
+        if not ttnn.is_tensor_storage_on_device(self.weights):
+            self.weights = ttnn.prepare_conv_weights(
+                weight_tensor=self.weights,
+                weights_format="OIHW",
+                input_memory_config=self.input_memory_config,
+                input_layout=ttnn.TILE_LAYOUT,
+                has_bias=True,
+                **self.conv_kwargs,
+            )
+
+            self.bias = ttnn.prepare_conv_bias(
+                bias_tensor=self.bias,
+                input_memory_config=self.input_memory_config,
+                input_layout=ttnn.TILE_LAYOUT,
+                **self.conv_kwargs,
+            )
+            self.weights = ttnn.to_device(self.weights, device)
+            self.bias = ttnn.to_device(self.bias, device)
+
+    def __str__(self) -> str:
+        return f"Conv: {self.weights.shape} {self.bias.shape} {self.kernel_size}"
+
+    def __call__(self, input_tensor):
         compute_config = ttnn.init_device_compute_kernel_config(
-            device.arch(),
+            self.device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
         )
-        if self.act_block_h is not None:
-            conv_config.act_block_h_override = self.act_block_h
 
-        output_tensor, [self.weights, self.bias] = ttnn.conv2d(
+        output_tensor = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.weights,
             bias_tensor=self.bias,
-            in_channels=self.input_params[3],
-            out_channels=self.out_channels,
-            device=device,
-            kernel_size=self.kernel_size,
-            stride=(self.conv_params[0], self.conv_params[1]),
-            padding=(self.conv_params[2], self.conv_params[3]),
-            batch_size=self.input_params[0],
-            input_height=self.input_params[1],
-            input_width=self.input_params[2],
-            conv_config=conv_config,
+            **self.conv_kwargs,
             compute_config=compute_config,
             return_output_dim=False,
-            return_weights_and_bias=True,
+            return_weights_and_bias=False,
         )
         return output_tensor

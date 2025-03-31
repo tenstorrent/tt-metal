@@ -8,18 +8,19 @@
 #include <algorithm>
 
 #include "command_queue_fixture.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/command_queue.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include <tt-metalium/device.hpp>
+
+namespace tt::tt_metal {
 
 using std::map;
 using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
-using namespace tt::tt_metal;
 
 namespace unit_tests::sfpu_util {
 
@@ -223,7 +224,7 @@ bool run_sfpu_all_same_buffer(CommandQueue& cq, const SfpuConfig& test_config) {
 class SingleCoreSingleCardSfpuParameterizedFixture : public CommandQueueSingleCardFixture,
                                                      public testing::WithParamInterface<std::tuple<size_t, string>> {};
 TEST_P(SingleCoreSingleCardSfpuParameterizedFixture, TensixSfpuCompute) {
-    for (Device* device_ : devices_) {
+    for (IDevice* device_ : devices_) {
         size_t num_tiles = std::get<0>(GetParam());
         string sfpu_op = std::get<1>(GetParam());
 
@@ -271,7 +272,7 @@ class SingleCoreSingleCardSfpuParameterizedApproxFixture
       public testing::WithParamInterface<std::tuple<size_t, string>> {};
 
 TEST_P(SingleCoreSingleCardSfpuParameterizedApproxFixture, TensixSfpuCompute) {
-    for (Device* device_ : devices_) {
+    for (IDevice* device_ : devices_) {
         size_t num_tiles = std::get<0>(GetParam());
         string sfpu_op = std::get<1>(GetParam());
 
@@ -319,7 +320,7 @@ class MultiCoreSingleCardSfpuParameterizedApproxFixture
       public testing::WithParamInterface<std::tuple<size_t, string>> {};
 
 TEST_P(MultiCoreSingleCardSfpuParameterizedApproxFixture, TensixAllCoreMultiTileSfpuApproxCompute) {
-    for (Device* device_ : devices_) {
+    for (IDevice* device_ : devices_) {
         size_t num_tiles = std::get<0>(GetParam());
         string sfpu_op = std::get<1>(GetParam());
 
@@ -356,3 +357,5 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(20, "sigmoid"),
         std::make_tuple(20, "log"),
         std::make_tuple(20, "tanh")));
+
+}  // namespace tt::tt_metal

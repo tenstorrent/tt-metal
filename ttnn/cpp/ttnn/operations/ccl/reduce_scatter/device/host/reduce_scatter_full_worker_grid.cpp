@@ -3,20 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 
-#include "common/core_coord.hpp"
-#include "impl/buffers/buffer.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/buffer.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/buffers/circular_buffer_types.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
 
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.hpp"
+#include "cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.hpp"
 
 // Includes that need to be moved to CCL datastructures header
 #include <vector>
@@ -67,7 +67,7 @@ struct EdmInterfaceAddresses {
 // 2) Compute the semaphore and buffer addresses (for each EDM channel and worker)
 // For now - the mapping between workers and EDM channels is 1:1
 static void add_worker_config_to_edm_builders(
-    Device* device,
+    IDevice* device,
     RingReduceScatterWrappedTensorSlicer&
         tensor_slicer,  // TODO: Update to Generic ReduceScatterSlicer when it is implemented
     std::vector<WorkerAttributes> const& all_worker_attributes,
@@ -271,7 +271,7 @@ static std::tuple<KernelHandle, KernelHandle, KernelHandle, std::optional<Kernel
 
 static void set_reduce_scatter_worker_rt(
     tt::tt_metal::Program& program,
-    Device const* device,
+    IDevice const* device,
     KernelHandle worker_receiver_kernel_id,
     KernelHandle worker_sender_kernel_id,
     KernelHandle worker_reduce_kernel_id,
@@ -327,7 +327,6 @@ static void set_reduce_scatter_worker_rt(
             edm_noc_coord = ttnn::ccl::WorkerXY(
                 device->ethernet_core_from_logical_core(sender_edm).x,
                 device->ethernet_core_from_logical_core(sender_edm).y);
-            TT_ASSERT(edm_noc_coord.y == 0 || edm_noc_coord.y == 6);
             edm_core_semaphore_address =
                 edm_interface_addresses.worker_sender_edm_semaphore_addresses.at(global_worker_index);
             edm_core_buffer_address =
@@ -640,8 +639,8 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     const std::optional<size_t> user_defined_num_buffers_per_channel) {
     log_trace(tt::LogOp, "reduce_scatter_with_workers entry");
     TT_ASSERT(
-        input_tensor.get_legacy_shape()[scatter_split_dim] ==
-            output_tensor.get_legacy_shape()[scatter_split_dim] * ring_size,
+        input_tensor.get_padded_shape()[scatter_split_dim] ==
+            output_tensor.get_padded_shape()[scatter_split_dim] * ring_size,
         "Input and output tensor shapes must match");
     TT_ASSERT(
         input_tensor.buffer()->num_pages() % ring_size == 0,

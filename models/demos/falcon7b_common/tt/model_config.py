@@ -120,7 +120,6 @@ def get_ln_block_sharded_config(height_dim, hidden_dim):
                 ln_shard_width_hidden_dim,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
 
@@ -255,7 +254,6 @@ def get_model_config(model_config_str, prefill_seq_len=0, decode_batch_size=32):
                     shard_width,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
 

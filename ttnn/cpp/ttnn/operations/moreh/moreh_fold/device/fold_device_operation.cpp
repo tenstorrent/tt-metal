@@ -65,22 +65,31 @@ void MorehFoldOperation::validate_on_program_cache_hit(
     validate_inputs(operation_attributes, tensor_args);
 };
 
-MorehFoldOperation::shape_return_value_t MorehFoldOperation::compute_output_shapes(
+MorehFoldOperation::spec_return_value_t MorehFoldOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.output.has_value()) {
+        return tensor_args.output->get_tensor_spec();
+    }
+
     auto input_tensor_shape = tensor_args.input.get_logical_shape();
     auto input_tensor_rank = tensor_args.input.get_logical_shape().rank();
     uint32_t kernel_size_product = operation_attributes.kernel_size[0] * operation_attributes.kernel_size[1];
-    if (input_tensor_rank == 3) {
-        uint32_t N = input_tensor_shape[0];
-        uint32_t C = input_tensor_shape[1] / kernel_size_product;
-        auto output_shape =
-            ttnn::SimpleShape{N, C, operation_attributes.output_size[0], operation_attributes.output_size[1]};
-        return output_shape;
-    }
-    // If input_tensor_rank == 2
-    uint32_t C = input_tensor_shape[0] / kernel_size_product;
-    auto output_shape = ttnn::SimpleShape{C, operation_attributes.output_size[0], operation_attributes.output_size[1]};
-    return output_shape;
+    auto output_shape = [&] {
+        if (input_tensor_rank == 3) {
+            uint32_t N = input_tensor_shape[0];
+            uint32_t C = input_tensor_shape[1] / kernel_size_product;
+            return ttnn::Shape{N, C, operation_attributes.output_size[0], operation_attributes.output_size[1]};
+        }
+        // If input_tensor_rank == 2
+        uint32_t C = input_tensor_shape[0] / kernel_size_product;
+        return ttnn::Shape{C, operation_attributes.output_size[0], operation_attributes.output_size[1]};
+    }();
+    return TensorSpec(
+        output_shape,
+        tt::tt_metal::TensorLayout(
+            tensor_args.input.get_dtype(),
+            tt::tt_metal::PageConfig(tensor_args.input.get_layout()),
+            operation_attributes.memory_config));
 };
 
 MorehFoldOperation::tensor_return_value_t MorehFoldOperation::create_output_tensors(
@@ -89,14 +98,7 @@ MorehFoldOperation::tensor_return_value_t MorehFoldOperation::create_output_tens
         return tensor_args.output.value();
     }
 
-    const auto& output_shape = compute_output_shapes(operation_attributes, tensor_args);
-
-    return create_device_tensor(
-        output_shape,
-        tensor_args.input.get_dtype(),
-        tensor_args.input.get_layout(),
-        tensor_args.input.device(),
-        operation_attributes.memory_config);
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
 std::tuple<MorehFoldOperation::operation_attributes_t, MorehFoldOperation::tensor_args_t> MorehFoldOperation::invoke(

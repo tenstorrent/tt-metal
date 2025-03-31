@@ -5,10 +5,12 @@
 from typing import Optional, Tuple
 from loguru import logger
 
+import pytest
 import torch
 
 import ttnn
 
+from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
@@ -33,7 +35,8 @@ parameters = {
 }
 
 
-def run(
+def run_matmul(
+    device,
     batch_sizes,
     m_size,
     k_size,
@@ -47,8 +50,6 @@ def run(
     output_dtype,
     input_layout,
     compute_kernel_config,
-    *,
-    device,
 ) -> list:
     input_shape_a = (*batch_sizes, m_size, k_size)
     input_shape_b = (k_size, n_size)
@@ -90,3 +91,73 @@ def run(
 
     expected_pcc = 0.99
     return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]
+
+
+@pytest.mark.parametrize(**gen_pytest_parametrize_args(parameters))
+def test_matmul(
+    device,
+    batch_sizes,
+    m_size,
+    k_size,
+    n_size,
+    batch_matrix_multiply,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+    compute_kernel_config,
+):
+    run_matmul(
+        device,
+        batch_sizes,
+        m_size,
+        k_size,
+        n_size,
+        batch_matrix_multiply,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+        compute_kernel_config,
+    )
+
+
+def run(
+    batch_sizes,
+    m_size,
+    k_size,
+    n_size,
+    batch_matrix_multiply,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+    compute_kernel_config,
+    *,
+    device,
+) -> list:
+    return run_matmul(
+        device,
+        batch_sizes,
+        m_size,
+        k_size,
+        n_size,
+        batch_matrix_multiply,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+        compute_kernel_config,
+    )

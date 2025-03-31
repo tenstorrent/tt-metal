@@ -4,7 +4,7 @@
 
 #include "matmul.hpp"
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
@@ -18,7 +18,7 @@ namespace matmul {
 
 namespace detail {
 
-bool is_input_batched(const ttnn::SimpleShape& shape) {
+bool is_input_batched(const ttnn::Shape& shape) {
     auto is_batched = false;
     for (auto i = 0; i < shape.rank() - 2; ++i) {
         if (shape[i] > 1) {
@@ -43,7 +43,8 @@ ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
     const struct Matmul& parameters,
-    const uint8_t& queue_id) {
+    const uint8_t& queue_id,
+    std::optional<ttnn::Tensor>& optional_output_tensor) {
     const auto& input_tensor_a_adjusted = parameters.transpose_a
                                               ? ttnn::transpose(input_tensor_a, -1, -2, input_tensor_a.memory_config())
                                               : input_tensor_a;
@@ -51,8 +52,8 @@ ttnn::Tensor bound_matmul(
                                               ? ttnn::transpose(input_tensor_b, -1, -2, input_tensor_b.memory_config())
                                               : input_tensor_b;
 
-    const auto input_tensor_a_shape = input_tensor_a_adjusted.get_shape();
-    const auto input_tensor_b_shape = input_tensor_b_adjusted.get_shape();
+    const auto input_tensor_a_shape = input_tensor_a_adjusted.get_logical_shape();
+    const auto input_tensor_b_shape = input_tensor_b_adjusted.get_logical_shape();
 
     const auto width_a = input_tensor_a_shape[-1];
     const auto height_b = input_tensor_b_shape[-2];
@@ -76,8 +77,13 @@ ttnn::Tensor bound_matmul(
         }
     }
 
-    auto output_tensor =
-        matmul(input_tensor_a_adjusted, input_tensor_b_adjusted, post_process_bias ? std::nullopt : bias, parameters);
+    auto output_tensor = matmul(
+        input_tensor_a_adjusted,
+        input_tensor_b_adjusted,
+        post_process_bias ? std::nullopt : bias,
+        parameters,
+        DefaultQueueId,
+        optional_output_tensor = optional_output_tensor);
 
     if (post_process_bias) {
         output_tensor = ttnn::add(output_tensor, bias.value(), std::nullopt, parameters.output_mem_config);
@@ -110,7 +116,10 @@ Tensor MatmulOperation::invoke(
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreGrid> core_grid,
-    const std::optional<const tt::tt_metal::Tile>& output_tile) {
+    const std::optional<const tt::tt_metal::Tile>& output_tile,
+    std::optional<Tensor> optional_output_tensor,
+    const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer>& global_cb,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -132,8 +141,11 @@ Tensor MatmulOperation::invoke(
             user_run_batched,
             transpose_a,
             transpose_b,
-            output_tile},
-        /*queue_id=*/0);
+            output_tile,
+            global_cb,
+            sub_device_id},
+        /*queue_id=*/0,
+        optional_output_tensor);
 }
 
 Tensor LinearOperation::invoke(
@@ -148,7 +160,10 @@ Tensor LinearOperation::invoke(
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreGrid> core_grid,
-    const std::optional<const tt::tt_metal::Tile>& output_tile) {
+    const std::optional<const tt::tt_metal::Tile>& output_tile,
+    std::optional<ttnn::Tensor> optional_output_tensor,
+    const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer>& global_cb,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -172,8 +187,11 @@ Tensor LinearOperation::invoke(
             /*user_run_batched=*/false,
             transpose_a,
             transpose_b,
-            output_tile},
-        /*queue_id=*/0);
+            output_tile,
+            global_cb,
+            sub_device_id},
+        /*queue_id=*/0,
+        optional_output_tensor);
 }
 
 }  // namespace matmul

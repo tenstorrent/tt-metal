@@ -6,8 +6,8 @@
 
 #include <memory>
 #include <random>
+#include <tt_stl/indestructible.hpp>
 
-#include "core/indestructible.hpp"
 #include "core/mesh_device.hpp"
 #include "graph.hpp"
 
@@ -26,6 +26,7 @@ public:
     static AutoContext& get_instance();
 
     std::mt19937& get_generator();
+    void set_generator(const std::mt19937& generator);
 
     void set_seed(uint32_t seed);
 
@@ -58,10 +59,10 @@ private:
     GradMode m_grads_mode = GradMode::ENABLED;
 
     Graph m_graph;
-    tt::tt_metal::distributed::MeshShape m_mesh_shape = {1, 1};
+    tt::tt_metal::distributed::MeshShape m_mesh_shape = tt::tt_metal::distributed::MeshShape(1, 1);
     std::unique_ptr<core::MeshDevice> m_device;
 
-    friend class core::Indestructible<AutoContext>;
+    friend class tt::stl::Indestructible<AutoContext>;
 };
 
 inline auto& ctx() {

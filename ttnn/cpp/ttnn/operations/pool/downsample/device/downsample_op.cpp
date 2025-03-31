@@ -8,7 +8,7 @@
 #include <math.h>
 
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -32,14 +32,14 @@ void Downsample::validate(const std::vector<Tensor>& input_tensors) const {
 
 std::vector<TensorSpec> Downsample::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    TT_ASSERT(input_tensor.get_legacy_shape()[0] == 1 && input_tensor.get_legacy_shape()[1] == 1);
-    uint32_t input_height = input_tensor.get_legacy_shape()[2];
+    TT_ASSERT(input_tensor.get_padded_shape()[0] == 1 && input_tensor.get_padded_shape()[1] == 1);
+    uint32_t input_height = input_tensor.get_padded_shape()[2];
     auto [img_batch_size, img_height, img_width, img_stride_h, img_stride_w] = this->downsample_params;
     TT_ASSERT(input_height >= img_batch_size * img_height * img_width);
     uint32_t output_height = img_batch_size * ceil((double)img_height / (double)img_stride_h) *
                              ceil((double)img_width / (double)img_stride_w);
-    uint32_t output_width = input_tensor.get_legacy_shape()[3];
-    auto output_shape = SimpleShape({1, 1, output_height, output_width});
+    uint32_t output_width = input_tensor.get_padded_shape()[3];
+    auto output_shape = Shape({1, 1, output_height, output_width});
 
     auto [num_cores_height_sliced, num_cores_width_sliced] = detail::get_num_cores_height_width_sliced(
         input_tensor.shard_spec().value().grid,

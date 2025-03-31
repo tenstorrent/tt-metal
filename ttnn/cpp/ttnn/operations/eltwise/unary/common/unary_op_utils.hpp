@@ -62,13 +62,17 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::RIGHT_SHIFT:
         case UnaryOpType::LEFT_SHIFT:
         case UnaryOpType::REMAINDER:
-        case UnaryOpType::DROPOUT:
         case UnaryOpType::FILL:
+        case UnaryOpType::ROUND:
         case UnaryOpType::PRELU_SFPU:
         case UnaryOpType::FMOD: return true;
         default: return false;
     }
     return false;
 }
+
+void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines);
+
+std::string get_compute_kernel_path(UnaryOpType op_type, const std::string& compute_root);
 
 }  // namespace ttnn::operations::unary::utils

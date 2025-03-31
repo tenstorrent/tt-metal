@@ -5,12 +5,11 @@
 #pragma once
 
 #include <cstdint>
-#include "common/core_coord.hpp"
-#include "impl/buffers/buffer.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/buffer.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
@@ -134,7 +133,7 @@ struct AllGather {
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor> &input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
-    operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
+    tt::tt_metal::operation::ProgramWithCallbacks create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const;
 };
 
 namespace ccl{
@@ -146,14 +145,14 @@ AllGather create_all_gather_struct(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> user_defined_num_workersm,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
-    const std::vector<Device*>& devices,
+    const std::vector<IDevice*>& devices,
     const ccl::Topology topology
 );
 } // namespace all_gather_detail
 } // namespace ccl
 
 // All Gather Variants
-operation::ProgramWithCallbacks all_gather_full_shard_grid(
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_full_shard_grid(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const uint32_t dim,
@@ -165,7 +164,7 @@ operation::ProgramWithCallbacks all_gather_full_shard_grid(
     const std::optional<chip_id_t> receiver_device_id,
     const std::optional<chip_id_t> sender_device_id,
     ccl::Topology topology);
-operation::ProgramWithCallbacks all_gather_multi_core_with_workers(
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const uint32_t dim,
@@ -177,7 +176,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(
     ccl::Topology topology,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel);
-operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
+tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     Tensor& output_tensor,

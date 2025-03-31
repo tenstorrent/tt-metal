@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/types.hpp"
 
@@ -29,7 +29,7 @@ void bind_reshape(pybind11::module& module, const data_movement_operation_t& ope
                int Y,
                int X,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               uint8_t queue_id) -> ttnn::Tensor {
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(queue_id, input_tensor, ttnn::SmallVector<int32_t>{W, Z, Y, X}, memory_config);
             },
             py::arg("input_tensor"),
@@ -39,7 +39,7 @@ void bind_reshape(pybind11::module& module, const data_movement_operation_t& ope
             py::arg("X"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace detail

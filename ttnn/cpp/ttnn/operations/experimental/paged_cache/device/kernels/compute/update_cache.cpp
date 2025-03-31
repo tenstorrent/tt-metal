@@ -46,7 +46,7 @@ void MAIN {
         reconfig_data_format_srca(cache_cb, untilized_cache2_cb);
         pack_reconfig_data_format(untilized_cache_cb, out_cb);
 
-        tilize_init_short(untilized_cache2_cb, Wt);
+        tilize_init_short(untilized_cache2_cb, Wt, out_cb);
 
         // Wait on writer to update block. Tilize.
         cb_wait_front(untilized_cache2_cb, Wt);
@@ -57,7 +57,7 @@ void MAIN {
 
         cb_push_back(out_cb, Wt);
         cb_pop_front(untilized_cache2_cb, Wt);
-        tilize_uninit_with_dt(untilized_cache2_cb, cache_cb);
+        tilize_uninit_with_dt(untilized_cache2_cb, cache_cb, out_cb);
         pack_reconfig_data_format(out_cb, untilized_cache_cb);
     }
 }

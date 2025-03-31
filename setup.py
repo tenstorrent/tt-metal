@@ -3,10 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import re
-import sys
-import sysconfig
-import platform
 import subprocess
 from dataclasses import dataclass
 from functools import partial
@@ -35,12 +31,10 @@ def get_is_srcdir_build():
 
 
 def get_arch_name():
-    return attempt_get_env_var("ARCH_NAME")
+    return "any"
 
 
 def get_metal_local_version_scheme(metal_build_config, version):
-    from setuptools_scm.version import ScmVersion, guess_next_version
-
     arch_name = metal_build_config.arch_name
 
     if version.dirty:
@@ -50,8 +44,6 @@ def get_metal_local_version_scheme(metal_build_config, version):
 
 
 def get_metal_main_version_scheme(metal_build_config, version):
-    from setuptools_scm.version import ScmVersion, guess_next_version
-
     is_release_version = version.distance is None or version.distance == 0
     is_dirty = version.dirty
     is_clean_prod_build = (not is_dirty) and is_release_version
@@ -171,9 +163,12 @@ class CMakeBuild(build_ext):
         return self.inplace
 
 
-# Include tt_metal_C for kernels and src/ and tools
-# And any kernels inside `tt_eager/tt_dnn. We must keep all ops kernels inside tt_dnn
-packages = ["tt_lib", "tt_metal", "tt_lib.models", "ttnn", "ttnn.cpp", "tracy"]
+packages = find_namespace_packages(where="ttnn")
+packages = [item for item in packages if not item.startswith("cpp")]
+packages.append("tt_metal")
+packages.append("ttnn.cpp")
+
+print(("packaging: ", packages))
 
 # Empty sources in order to force extension executions
 ttnn_lib_C = Extension("ttnn._ttnn", sources=[])
@@ -192,10 +187,12 @@ setup(
     packages=packages,
     package_dir={
         "": "ttnn",  # only this is relevant in case of editable install mode
-        "tracy": "ttnn/tracy",
         "tt_metal": "tt_metal",  # kernels depend on headers here
         "ttnn.cpp": "ttnn/cpp",
         "tt_lib.models": "models",  # make sure ttnn does not depend on model and remove!!!
+    },
+    package_data={
+        "ttnn.cpp": ["*.cpp", "*.hpp", "*.cc", "*.h"],
     },
     include_package_data=True,
     long_description_content_type="text/markdown",

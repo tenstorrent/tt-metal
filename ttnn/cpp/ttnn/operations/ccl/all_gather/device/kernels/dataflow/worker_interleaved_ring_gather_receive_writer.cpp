@@ -4,9 +4,9 @@
 
 #include <cstdint>
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#include "cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
+#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
 void kernel_main() {
     uint32_t arg_idx = 0;
@@ -142,7 +142,7 @@ void kernel_main() {
                     output_page_idx < output_tensor_shard_pages_per_shard_y * output_tensor_shard_pages_per_shard_x *
                                           output_tensor_shard_grid_height * output_tensor_shard_grid_width);
 #endif
-                write_chunk(
+                write_chunk_legacy(
                     output_page_idx,
                     col_idx,
                     row_idx,
@@ -165,7 +165,7 @@ void kernel_main() {
                 output_page_idx < output_tensor_shard_pages_per_shard_y * output_tensor_shard_pages_per_shard_x *
                                       output_tensor_shard_grid_height * output_tensor_shard_grid_width);
 #endif
-            write_chunk(
+            write_chunk_legacy(
                 output_page_idx,
                 col_idx,
                 row_idx,

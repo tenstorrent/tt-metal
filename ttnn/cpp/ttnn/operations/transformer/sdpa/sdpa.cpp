@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,15 +7,14 @@
 #include <utility>
 
 #include "device/sdpa_op.hpp"
-#include "ttnn/common/constants.hpp"
+#include "device/joint_sdpa_op.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
-
-using namespace tt::tt_metal;
 
 namespace ttnn::operations::transformer {
 
 ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -31,10 +30,10 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
-    return operation::run(
+    return tt::tt_metal::operation::run(
                ScaledDotProductAttention{
                    .scale = scale,
-                   .output_mem_config = memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+                   .output_mem_config = memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
                    .program_config = std::move(program_config),
                    .is_causal = is_causal,
                    .chunk_start_idx = std::nullopt,
@@ -70,7 +69,7 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
 }
 
 ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -86,10 +85,10 @@ ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
-    return operation::run(
+    return tt::tt_metal::operation::run(
                ScaledDotProductAttention{
                    .scale = scale,
-                   .output_mem_config = memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+                   .output_mem_config = memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
                    .program_config = std::move(program_config),
                    .is_causal = true,  // Always causal for chunked version
                    .chunk_start_idx = chunk_start_idx,
@@ -121,6 +120,64 @@ ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
         scale,
         memory_config,
         std::move(program_config),
+        compute_kernel_config);
+}
+
+std::tuple<ttnn::Tensor, ttnn::Tensor> ExecuteJointAttention::invoke(
+    QueueId queue_id,
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    const ttnn::Tensor& joint_tensor_q,
+    const ttnn::Tensor& joint_tensor_k,
+    const ttnn::Tensor& joint_tensor_v,
+    const std::string& joint_strategy,
+    SDPAProgramConfig program_config,
+    std::optional<float> scale,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
+                    ? input_tensor_q.device()->arch()
+                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto kernel_config_val = init_device_compute_kernel_config(
+        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
+
+    auto results = tt::tt_metal::operation::run(
+        JointScaledDotProductAttention{
+            .joint_strategy = joint_strategy,
+            .scale = scale,
+            .output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            .program_config = std::move(program_config),
+            .compute_kernel_config = kernel_config_val},
+        {input_tensor_q, input_tensor_k, input_tensor_v, joint_tensor_q, joint_tensor_k, joint_tensor_v},
+        {},
+        {},
+        queue_id);
+
+    return {results.at(0), results.at(1)};
+}
+
+std::tuple<ttnn::Tensor, ttnn::Tensor> ExecuteJointAttention::invoke(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    const ttnn::Tensor& joint_tensor_q,
+    const ttnn::Tensor& joint_tensor_k,
+    const ttnn::Tensor& joint_tensor_v,
+    const std::string& joint_strategy,
+    SDPAProgramConfig program_config,
+    std::optional<float> scale,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    return invoke(
+        DefaultQueueId,
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
+        joint_tensor_q,
+        joint_tensor_k,
+        joint_tensor_v,
+        joint_strategy,
+        std::move(program_config),
+        scale,
         compute_kernel_config);
 }
 

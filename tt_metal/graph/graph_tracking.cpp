@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/graph/graph_tracking.hpp"
+#include <graph_tracking.hpp>
 
 namespace tt::tt_metal {
 
@@ -44,31 +44,36 @@ void GraphTracker::track_deallocate(Buffer* buffer) {
 }
 
 void GraphTracker::track_allocate_cb(
-    const CoreRangeSet& core_range_set, uint64_t addr, uint64_t size, bool is_globally_allocated) {
+    const CoreRangeSet& core_range_set,
+    uint64_t addr,
+    uint64_t size,
+    bool is_globally_allocated,
+    const IDevice* device) {
     if (processors.empty()) {
         return;
     }
     for (auto& it : processors) {
-        it->track_allocate_cb(core_range_set, addr, size, is_globally_allocated);
+        it->track_allocate_cb(core_range_set, addr, size, is_globally_allocated, device);
     }
 }
 
-void GraphTracker::track_deallocate_cb() {
+void GraphTracker::track_deallocate_cb(const IDevice* device) {
     if (processors.empty()) {
         return;
     }
     for (auto& it : processors) {
-        it->track_deallocate_cb();
+        it->track_deallocate_cb(device);
     }
 }
 
-void GraphTracker::track_program(Program* program) {
+void GraphTracker::track_program(Program* program, const IDevice* device) {
     TT_ASSERT(program);
+    TT_ASSERT(device);
     if (processors.empty()) {
         return;
     }
     for (auto& it : processors) {
-        it->track_program(program);
+        it->track_program(program, device);
     }
 }
 

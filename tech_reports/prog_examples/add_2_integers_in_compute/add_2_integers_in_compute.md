@@ -5,12 +5,10 @@ In this example, we will build a TT-Metal program that will add two vectors cont
 This program can be found in
 [add_2_integers_in_compute.cpp](../../../tt_metal/programming_examples/add_2_integers_in_compute/add_2_integers_in_compute.cpp).
 
-To build and execute, you may use the following commands. Note that we include the necessary environment variables here, but you may possibly need more depending on the most up-to-date installation methods.
-
+To build and execute, you may use the following commands:
 ```bash
-    export ARCH_NAME=<arch name>
-    export TT_METAL_HOME=<this repo dir>
-    ./build_metal.sh --build-tests
+    export TT_METAL_HOME=$(pwd)
+    ./build_metal.sh --build-programming-examples
     ./build/programming_examples/add_2_integers_in_compute
 ```
 ## Set up device and program/collaboration mechanisms
@@ -159,7 +157,7 @@ The reader kernel reads in a one tile from each of the two source vectors that a
 
 ``` cpp
 binary_op_init_common(cb_in0, cb_in1, cb_out0);
-add_tiles_init();
+add_tiles_init(cb_in0, cb_in1);
 
 // wait for a block of tiles in each of input CBs
 cb_wait_front(cb_in0, 1);

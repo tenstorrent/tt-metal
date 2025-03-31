@@ -7,10 +7,13 @@
 #include <gtest/gtest.h>
 
 #include "dispatch_fixture.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/impl/device/device_pool.hpp"
+#include <tt-metalium/device_pool.hpp>
+#include "llrt.hpp"
+
+namespace tt::tt_metal {
 
 class DeviceFixture : public DispatchFixture {
 protected:
@@ -69,7 +72,7 @@ protected:
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (!slow_dispatch) {
             tt::log_info(
-                tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
+                tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
             this->slow_dispatch_ = false;
             GTEST_SKIP();
         }
@@ -83,8 +86,8 @@ protected:
         this->num_devices_ = this->reserved_devices_.size();
     }
 
-    tt::tt_metal::Device* device_;
-    std::map<chip_id_t, tt::tt_metal::Device*> reserved_devices_;
+    tt::tt_metal::IDevice* device_;
+    std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
     size_t num_devices_;
 };
 
@@ -94,7 +97,7 @@ class BlackholeSingleCardFixture : public DeviceSingleCardFixture {
 protected:
     void SetUp() override {
         this->validate_dispatch_mode();
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         if (this->arch_ != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP();
         }
@@ -112,3 +115,5 @@ class DeviceSingleCardFastSlowDispatchFixture : public DeviceSingleCardFixture {
         }
     }
 };
+
+}  // namespace tt::tt_metal

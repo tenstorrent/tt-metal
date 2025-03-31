@@ -37,9 +37,10 @@ def test_bidirectional_erisc_bandwidth(sample_counts, sample_sizes, channel_coun
     sample_sizes_str = " ".join([str(s) for s in sample_sizes])
     channel_counts_str = " ".join([str(s) for s in channel_counts])
 
+    ARCH_NAME = os.getenv("ARCH_NAME")
     rc = os.system(
         f"TT_METAL_DEVICE_PROFILER=1 \
-            {os.environ['TT_METAL_HOME']}/build/test/tt_metal/perf_microbenchmark/ethernet/test_ethernet_link_ping_latency_no_edm \
+            {os.environ['TT_METAL_HOME']}/build/test/tt_metal/perf_microbenchmark/ethernet/test_ethernet_link_ping_latency_no_edm_{ARCH_NAME} \
                 {len(sample_counts)} {sample_counts_str} \
                     {len(sample_sizes)} {sample_sizes_str} \
                         {len(channel_counts)} {channel_counts_str} \

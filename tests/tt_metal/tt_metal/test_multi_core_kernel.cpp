@@ -6,10 +6,10 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
-#include "common/core_coord.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/core_coord.hpp>
 // #include "tt_gdb/tt_gdb.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -19,7 +19,7 @@ using std::vector;
 using namespace tt;
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     uint32_t single_tile_size,
     const CoreRange& all_cores,
     const std::vector<uint32_t>& eltwise_unary_args) {
@@ -75,7 +75,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
 }
 
 void compile_and_configure_program(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt_metal::Program& program,
     std::vector<uint32_t>& src_vec,
     tt_metal::Buffer& src_dram_buffer) {
@@ -99,7 +99,7 @@ void set_rt_args(tt_metal::Program &program, tt_metal::KernelHandle kernel, cons
 }
 
 void write_same_runtime_args_to_device(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt_metal::Program& program,
     tt_metal::KernelHandle reader_kernel_id,
     tt_metal::KernelHandle writer_kernel_id,
@@ -124,7 +124,7 @@ void write_same_runtime_args_to_device(
 }
 
 void write_unique_writer_runtime_args_to_device(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt_metal::Program& program,
     tt_metal::KernelHandle reader_kernel_id,
     tt_metal::KernelHandle writer_kernel_id,
@@ -166,7 +166,7 @@ void write_unique_writer_runtime_args_to_device(
     }
 }
 
-bool test_multi_core_kernel_same_runtime_args(tt_metal::Device* device) {
+bool test_multi_core_kernel_same_runtime_args(tt_metal::IDevice* device) {
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Buffer Setup
@@ -229,7 +229,7 @@ bool test_multi_core_kernel_same_runtime_args(tt_metal::Device* device) {
     return pass;
 }
 
-bool test_multi_core_kernel_unique_runtime_args(tt_metal::Device* device) {
+bool test_multi_core_kernel_unique_runtime_args(tt_metal::IDevice* device) {
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Buffer Setup
@@ -330,7 +330,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         pass &= test_multi_core_kernel_same_runtime_args(device);
 

@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/fill_rm/device/fill_rm_op.hpp"
-#include "tt_metal/common/test_tiles.hpp"
+#include <tt-metalium/tilize_utils.hpp>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/util.hpp>
 
 using namespace tt::tt_metal;
 
@@ -25,7 +25,7 @@ operation::ProgramWithCallbacks fill_rm_single_core(
     uint32_t wFill,
     float val_hi,
     float val_lo) {
-    tt::tt_metal::Device* device = any.device();
+    tt::tt_metal::IDevice* device = any.device();
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     CoreRange core({0, 0}, {0, 0});
 
@@ -100,14 +100,11 @@ void FillRM::validate(const std::vector<Tensor>& input_tensors) const {
         "FillRM does not currently support sharding");
 }
 
-std::vector<ttnn::SimpleShape> FillRM::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    return {ttnn::SimpleShape({this->N, this->C, this->H, this->W})};
-}
-
-std::vector<Tensor> FillRM::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::TensorSpec> FillRM::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+    ttnn::Shape shape({this->N, this->C, this->H, this->W});
     const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, input_tensor.get_dtype(), Layout::ROW_MAJOR, this->output_mem_config);
+    return {
+        TensorSpec(shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::ROW_MAJOR), output_mem_config))};
 }
 
 operation::ProgramWithCallbacks FillRM::create_program(

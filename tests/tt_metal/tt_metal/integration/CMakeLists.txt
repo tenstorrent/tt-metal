@@ -9,6 +9,7 @@ set(UNIT_TESTS_INTEGRATION_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/matmul/test_matmul_multi_core_X_dram.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/matmul/test_matmul_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/matmul/test_matmul_X_tile.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/vecadd/test_vecadd_multi_core.cpp
 )
 
 add_executable(unit_tests_integration ${UNIT_TESTS_INTEGRATION_SRC})
@@ -18,9 +19,7 @@ target_link_libraries(unit_tests_integration PUBLIC test_metal_common_libs)
 target_include_directories(
     unit_tests_integration
     PRIVATE
-        ${PROJECT_SOURCE_DIR}
-        ${PROJECT_SOURCE_DIR}/tt_metal
-        ${PROJECT_SOURCE_DIR}/tt_metal/common
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
         ${CMAKE_CURRENT_SOURCE_DIR}

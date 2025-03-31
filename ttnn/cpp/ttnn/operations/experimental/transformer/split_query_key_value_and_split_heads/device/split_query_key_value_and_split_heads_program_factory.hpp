@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 
 namespace ttnn::operations::experimental::transformer::detail {
 
@@ -12,11 +12,11 @@ using namespace tt::constants;
 using namespace tt;
 using namespace tt_metal;
 
-operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads(
     const Tensor& a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
-    const auto& ashape = a.get_legacy_shape();
+    const auto& ashape = a.get_padded_shape();
 
-    tt_metal::Device* device = a.device();
+    tt_metal::IDevice* device = a.device();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
 
@@ -207,7 +207,7 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
     return {std::move(program), override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads_sharded(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads_sharded(
     const Tensor& a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
@@ -222,7 +222,7 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
     uint32_t num_h_cores = rm ? bbox.end_coord.y + 1 : bbox.end_coord.x + 1;
     uint32_t num_w_cores = rm ? bbox.end_coord.x + 1 : bbox.end_coord.y + 1;
     // tensor shape
-    const auto shape = a.get_legacy_shape();
+    const auto shape = a.get_padded_shape();
     uint32_t M = shape[2] * shape[0];  // 4608
     uint32_t K = shape[3];             // 3072
     uint32_t Mt = M / TILE_WIDTH;
@@ -248,7 +248,7 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Device* device = a.device();
+    tt_metal::IDevice* device = a.device();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup

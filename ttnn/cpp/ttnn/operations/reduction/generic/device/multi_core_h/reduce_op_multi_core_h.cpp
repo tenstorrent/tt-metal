@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
 using namespace tt::constants;
@@ -20,7 +20,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     ReduceOpMath reduce_op,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     float scaler) {
-    const auto shape = a.get_legacy_shape();
+    const auto shape = a.get_padded_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
 
     uint32_t Wt = W / TILE_WIDTH;
@@ -41,7 +41,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
 
     uint32_t num_tiles = a.volume() / TILE_HW;
 
-    tt_metal::Device* device = a.device();
+    tt_metal::IDevice* device = a.device();
 
     bool in_sharded = a.is_sharded();
     bool out_sharded = output.is_sharded();
@@ -96,7 +96,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             .set_page_size(scaler_cb_index, scaler_single_tile_size);
     auto cb_scaler = tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
 
-    uint32_t output_cb_index = CBIndex::c_16;  // output operands start at index 16
+    uint32_t output_cb_index = CBIndex::c_3;
     CBHandle cb_output;
     if (out_sharded) {
         uint32_t num_output_tiles = output.shard_spec().value().numel() / TILE_HW;

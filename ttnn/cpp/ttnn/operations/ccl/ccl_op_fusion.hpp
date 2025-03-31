@@ -4,8 +4,7 @@
 
 #pragma once
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/program/program.hpp"
+#include <tt-metalium/program_impl.hpp>
 
 namespace ttnn {
 namespace experimental {
@@ -50,7 +49,7 @@ struct AllGatherFusedOpSignaler {
 
     void init_all_gather(
         tt::tt_metal::Program& program,
-        tt::tt_metal::Device const* device,
+        tt::tt_metal::IDevice const* device,
 
         CoreRangeSet const& all_gather_workers,
         std::vector<CoreCoord>& all_gather_worker_cores);
@@ -96,7 +95,7 @@ struct MatmulFusedOpSignaler {
 
     void init_fused_op(
         tt::tt_metal::Program& program,
-        tt::tt_metal::Device const* device,
+        tt::tt_metal::IDevice const* device,
         const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
         FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI);
 

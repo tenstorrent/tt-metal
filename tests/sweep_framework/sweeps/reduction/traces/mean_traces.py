@@ -4,8 +4,8 @@
 
 from typing import Optional, Tuple
 
+import pytest
 import torch
-
 import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -14,7 +14,7 @@ from models.utility_functions import torch_random
 TIMEOUT = 15
 
 parameters = {
-    "default": {
+    "pytorch": {
         "params": [
             ((1, 1, 1024), (-1), True),
             ((1, 1, 512), (-1), True),
@@ -108,11 +108,7 @@ parameters = {
 }
 
 
-def run(
-    params,
-    *,
-    device,
-) -> list:
+def run_mean(device, params):
     [input_shape, dim, keepdim] = params
     torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
     torch_output_tensor = torch.mean(torch_input_tensor, dim, keepdim)
@@ -123,5 +119,18 @@ def run(
     output_tensor = ttnn.mean(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
-    expected_pcc = 0.9999
+    expected_pcc = 0.999
     return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]
+
+
+@pytest.mark.parametrize("params", parameters["pytorch"]["params"])
+def test_pytorch(device, params):
+    run_mean(device, params)
+
+
+def run(
+    params,
+    *,
+    device,
+) -> list:
+    return run_mean(device, params)

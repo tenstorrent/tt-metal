@@ -7,21 +7,13 @@ run_tg_llama3_tests() {
 
   echo "LOG_METAL: Running run_tg_llama3_tests"
 
-  # Llama3.2-1B
-  llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
-  # Llama3.2-3B
-  llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
-  # Llama3.1-8B
-  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
-  # Llama3.2-11B
-  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
   # Llama3.1-70B
   llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
 
   # Run all Llama3 tests for 8B, 1B, and 3B weights
   # for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b"; do
   for llama_dir in "$llama70b"; do
-    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest --timeout 1800 -n auto models/demos/llama3/tests/test_llama_model.py -k full --timeout=1800 ; fail+=$?
+    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest --timeout 1800 -n auto models/demos/llama3_subdevices/tests/test_llama_model.py -k full --timeout=1800 ; fail+=$?
     echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
 
@@ -36,14 +28,7 @@ run_tg_llama3_tests() {
 
 run_tg_tests() {
 
-  if [[ "$1" == "llama3-70b-old" ]]; then
-    echo "LOG_METAL: running llama3_70b (old) run_tg_frequent_tests"
-    pytest -n auto models/demos/tg/llama3_70b/tests/test_llama_mlp_galaxy.py --timeout=300 ; fail+=$?
-    pytest -n auto models/demos/tg/llama3_70b/tests/test_llama_attention_galaxy.py --timeout=480 ; fail+=$?
-    pytest -n auto models/demos/tg/llama3_70b/tests/test_llama_decoder_galaxy.py --timeout=600 ; fail+=$?
-    pytest -n auto models/demos/tg/llama3_70b/tests/test_llama_model_galaxy_ci.py --timeout=800 ; fail+=$?
-
-  elif [[ "$1" == "llama3" ]]; then
+  if [[ "$1" == "llama3" ]]; then
     echo "LOG_METAL: running Llama3 run_tg_frequent_tests"
     run_tg_llama3_tests
 

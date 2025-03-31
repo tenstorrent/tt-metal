@@ -12,7 +12,7 @@
 namespace ttnn::operations::experimental::matmul {
 
 ttnn::Tensor AttnMatmulOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const CoreCoord& compute_with_storage_grid_size,
@@ -24,7 +24,7 @@ ttnn::Tensor AttnMatmulOperation::invoke(
                     ? input_tensor_a.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config);
-    return operation::run(
+    return tt::tt_metal::operation::run(
                AttnMatmulDeviceOperation{
                    std::nullopt,
                    std::nullopt,
@@ -60,7 +60,7 @@ ttnn::Tensor AttnMatmulOperation::invoke(
 
 // TODO: Should we support option to read directly from cache (with optional transpose_hw)?
 ttnn::Tensor AttnMatmulFromCacheOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const uint32_t num_tokens,
@@ -72,14 +72,14 @@ ttnn::Tensor AttnMatmulFromCacheOperation::invoke(
     std::optional<Tensor> optional_output_tensor) {
     TT_FATAL(num_tokens > 0, "Number of tokens must be at least 1!");
     TT_FATAL(
-        num_tokens <= input_tensor_b.get_legacy_shape()[2],
+        num_tokens <= input_tensor_b.get_padded_shape()[2],
         "Number of tokens must be smaller or equal to the max cache length (B.shape[2])!");
     const uint32_t num_tokens_rounded_up_to_32 = ((num_tokens - 1) / 32 + 1) * 32;
     auto arch = input_tensor_a.storage_type() == StorageType::DEVICE
                     ? input_tensor_a.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(arch, compute_kernel_config);
-    return operation::run(
+    return tt::tt_metal::operation::run(
                AttnMatmulDeviceOperation{
                    num_tokens_rounded_up_to_32,
                    transpose_hw,

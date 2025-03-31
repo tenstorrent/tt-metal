@@ -18,13 +18,22 @@ enum class BinaryOpType {
     NE,
     SQUARED_DIFFERENCE,
     BIAS_GELU,
-    LOGADDEXP,
     LOGICAL_AND,
     LOGICAL_OR,
     LOGICAL_XOR,
     LDEXP,
+    LOGADDEXP,
     LOGADDEXP2,
-    DIV_FAST
+    DIV,
+    RSUB,
+    POWER,
+    BITWISE_XOR,
+    BITWISE_AND,
+    BITWISE_OR,
+    LEFT_SHIFT,
+    RIGHT_SHIFT,
+    QUANT,
+    REQUANT,
+    DEQUANT
 };
-
 }

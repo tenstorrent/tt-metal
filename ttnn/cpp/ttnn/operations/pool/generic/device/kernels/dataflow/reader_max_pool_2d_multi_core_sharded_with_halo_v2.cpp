@@ -10,17 +10,7 @@
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "debug/dprint.h"
-
-inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
-    for (uint32_t page = 0; page < npages; ++page) {
-        DPRINT << start + page << ": ";
-        for (uint32_t j = 0; j < pagelen; ++j, ++ptr) {
-            DPRINT << BF16(*ptr) << " ";
-        }
-        DPRINT << ENDL();
-    }
-}
+#include "debug/dprint_pages.h"
 #endif
 
 #define ALWI inline __attribute__((always_inline))
@@ -63,12 +53,14 @@ void kernel_main() {
 
     constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(12);
 
+    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(15);
+
     constexpr uint32_t TILE_WIDTH = 32;
 
-    constexpr uint32_t in_cb_id = (reader_id == 1) ? tt::CBIndex::c_1 : tt::CBIndex::c_0;
-    constexpr uint32_t in_shard_cb_id = tt::CBIndex::c_2;  // local input shard
-    constexpr uint32_t in_reader_indices_cb_id = tt::CBIndex::c_3;
-    constexpr uint32_t in_scalar_cb_id = tt::CBIndex::c_4;
+    constexpr uint32_t in_cb_id = (reader_id == 1) ? get_compile_time_arg_val(17) : get_compile_time_arg_val(16);
+    constexpr uint32_t in_shard_cb_id = get_compile_time_arg_val(18);
+    constexpr uint32_t in_reader_indices_cb_id = get_compile_time_arg_val(19);
+    constexpr uint32_t in_scalar_cb_id = get_compile_time_arg_val(20);
 
     constexpr uint32_t ROW_HW = 64;
 
@@ -87,7 +79,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint16_t* reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(reader_indices_l1_addr);
 
-    uint32_t in_w_padded = in_w + 2 * pad_w;
+    uint32_t in_w_padded = in_w + 2 * pad_w + ceil_pad_w;
 
     uint32_t npages_to_reserve = 1;
     uint32_t counter = reader_id;

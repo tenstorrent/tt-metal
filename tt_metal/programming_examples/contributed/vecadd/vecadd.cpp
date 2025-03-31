@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/core_coord.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -20,7 +20,7 @@ using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
 constexpr uint32_t TILE_WIDTH = 32;
 constexpr uint32_t TILE_HEIGHT = 32;
 
-std::shared_ptr<Buffer> MakeBuffer(Device* device, uint32_t size, uint32_t page_size, bool sram) {
+std::shared_ptr<Buffer> MakeBuffer(IDevice* device, uint32_t size, uint32_t page_size, bool sram) {
     InterleavedBufferConfig config{
         .device = device,
         .size = size,
@@ -35,7 +35,7 @@ std::shared_ptr<Buffer> MakeBuffer(Device* device, uint32_t size, uint32_t page_
 // @param device: The device to allocate the buffer on.
 // @param n_tiles: The number of tiles to allocate.
 // @param sram: If true, allocate the buffer on SRAM, otherwise allocate it on DRAM.
-std::shared_ptr<Buffer> MakeBufferBFP16(Device* device, uint32_t n_tiles, bool sram) {
+std::shared_ptr<Buffer> MakeBufferBFP16(IDevice* device, uint32_t n_tiles, bool sram) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * TILE_WIDTH * TILE_HEIGHT;
     // For simplicity, all DRAM buffers have page size = tile size.
     const uint32_t page_tiles = sram ? n_tiles : 1;
@@ -98,7 +98,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    Device* device = CreateDevice(device_id);
+    IDevice* device = CreateDevice(device_id);
 
     Program program = CreateProgram();
     // This example program will only use 1 Tensix core. So we set the core to {0, 0}.

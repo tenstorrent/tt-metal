@@ -23,7 +23,7 @@ template <typename T>
 Result conv2d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    T * device,
+    T* device,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
@@ -39,13 +39,12 @@ Result conv2d(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
     const std::optional<const MemoryConfig>& memory_config = std::nullopt);
 
-
-struct Conv2dOperation{
+struct Conv2dOperation {
     static Result invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
-        Device * device,
+        IDevice* device,
         uint32_t in_channels,
         uint32_t out_channels,
         uint32_t batch_size,
@@ -62,10 +61,10 @@ struct Conv2dOperation{
         const std::optional<const MemoryConfig>& memory_config = std::nullopt);
 
     static Result invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
-        MeshDevice * device,
+        MeshDevice* device,
         uint32_t in_channels,
         uint32_t out_channels,
         uint32_t batch_size,
@@ -85,6 +84,6 @@ struct Conv2dOperation{
 }  // namespace operations::conv
 }  // namespace ttnn
 
-namespace ttnn{
-    constexpr auto conv2d = ttnn::register_operation<"ttnn::conv2d", operations::conv::conv2d::Conv2dOperation>();
+namespace ttnn {
+constexpr auto conv2d = ttnn::register_operation<"ttnn::conv2d", operations::conv::conv2d::Conv2dOperation>();
 }

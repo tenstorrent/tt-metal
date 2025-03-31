@@ -29,26 +29,18 @@ def run_bert_large_pre_softmax_bmm_test(device, dtype, in0_mem_config, in1_mem_c
     A = torch.randn(a_shape)
     B = torch.randn(b_shape) - 0.95
 
-    a_t = (
-        ttnn.Tensor(
-            A.flatten().tolist(),
-            a_shape,
-            dtype,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(device, in0_mem_config)
-    )
-    b_t = (
-        ttnn.Tensor(
-            B.flatten().tolist(),
-            b_shape,
-            dtype,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(device, in1_mem_config)
-    )
+    a_t = ttnn.Tensor(
+        A.flatten().tolist(),
+        a_shape,
+        dtype,
+        ttnn.TILE_LAYOUT,
+    ).to(device, in0_mem_config)
+    b_t = ttnn.Tensor(
+        B.flatten().tolist(),
+        b_shape,
+        dtype,
+        ttnn.TILE_LAYOUT,
+    ).to(device, in1_mem_config)
 
     t2 = custom_matmuls.bert_large_pre_softmax_bmm(a_t, b_t, out_mem_config)
 
@@ -60,8 +52,7 @@ def run_bert_large_pre_softmax_bmm_test(device, dtype, in0_mem_config, in1_mem_c
     logger.debug(f"in1 is on: {b_t.memory_config().buffer_type}")
     logger.debug(f"out is on: {t2.memory_config().buffer_type}")
 
-    tt_host_rm = t2.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
-    pyt_got_back_rm = tt_host_rm.to_torch()
+    pyt_got_back_rm = ttnn.to_torch(t2)
 
     ref_bmm = torch.matmul(A, B)
     passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)
@@ -114,13 +105,13 @@ def test_bert_large_pre_softmax_bmm_with_program_cache(device, use_program_cache
         run_bert_large_pre_softmax_bmm_test(device, dtype, mem_config, mem_config, mem_config)
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
-        tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
+        tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype, device, ttnn.TILE_LAYOUT, mem_config)
 
     mem_config = ttnn.L1_MEMORY_CONFIG
     for _ in range(2):
         run_bert_large_pre_softmax_bmm_test(device, dtype, mem_config, mem_config, mem_config)
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
-        tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
+        tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype, device, ttnn.TILE_LAYOUT, mem_config)
 
     assert device.num_program_cache_entries() == 2

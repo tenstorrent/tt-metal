@@ -17,7 +17,7 @@ void MAIN {
     uint32_t in1_block_tile_cnt = get_compile_time_arg_val(5);
     uint32_t out_block_tile_cnt = get_compile_time_arg_val(6);
 
-    mm_init();
+    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
 
     acquire_dst();
     for (uint32_t b = 0; b < block_cnt; ++b) {

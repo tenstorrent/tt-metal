@@ -36,7 +36,7 @@ void MAIN {
         // Tests both inits, 1st one inits UNPACK for Bfp8_b
         // data inside CB_0, 2nd one inits it to Bfp16_b
         // which is inside CB_2
-        copy_tile_init();
+        copy_tile_init(cb_in0);
         // This call will test copy_tile_to_dst_init_short as well
         copy_tile_to_dst_init_short_with_dt(cb_in0, cb_in2);
 

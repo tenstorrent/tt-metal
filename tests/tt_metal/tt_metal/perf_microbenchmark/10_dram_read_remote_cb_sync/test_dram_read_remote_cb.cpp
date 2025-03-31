@@ -11,22 +11,26 @@
 #include <string>
 #include <vector>
 
-#include "common/bfloat8.hpp"
-#include "common/bfloat16.hpp"
-#include "common/tt_backend_api_types.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
-#include "tt_metal/impl/buffers/global_semaphore.hpp"
-#include "tt_metal/include/tt_metal/global_circular_buffer.hpp"
-#include "tt_metal/include/tt_metal/program.hpp"
+#include <yaml-cpp/yaml.h>
+
+#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/global_circular_buffer_impl.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/sub_device.hpp>
+
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tests/tt_metal/test_utils/tilization.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/tt_metal/common/matmul_test_utils.hpp"
-#include <yaml-cpp/yaml.h>
+
+#include "tests/tt_metal/test_utils/tilization.hpp"
+
+#include "test_common.hpp"
 
 using std::vector;
 using namespace tt;
@@ -80,12 +84,12 @@ void get_max_page_size_and_num_pages(
     num_pages = total_size / page_size;
 }
 
-std::tuple<std::vector<tt_metal::Program>,std::shared_ptr<tt_metal::v1::experimental::GlobalCircularBuffer>>
+std::tuple<std::vector<tt_metal::Program>, tt_metal::experimental::GlobalCircularBuffer>
 create_programs(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     const CoreRangeSet& dram_reader_core,
     const CoreRangeSet& l1_receiver_cores,
-    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     const uint32_t& single_tile_size,
     const tt::DataFormat& tile_format,
     uint32_t k,
@@ -141,12 +145,12 @@ create_programs(
             .set_page_size(reader_cb_index, single_tile_size);
     auto reader_cb = tt_metal::CreateCircularBuffer(sender_program, dram_reader_core, reader_cb_config);
 
-    auto global_cb = tt_metal::v1::experimental::CreateGlobalCircularBuffer(
+    auto global_cb = tt_metal::experimental::CreateGlobalCircularBuffer(
         device, sender_receiver_core_mapping, padded_global_cb_size, tt_metal::BufferType::L1);
     tt_metal::CircularBufferConfig writer_cb_config = tt_metal::CircularBufferConfig(receiver_cb_size);
     writer_cb_config.remote_index(writer_cb_index).set_page_size(single_tile_size).set_data_format(tile_format);
     auto writer_cb =
-        tt_metal::v1::experimental::CreateCircularBuffer(sender_program, dram_reader_core, writer_cb_config, *global_cb);
+        tt_metal::experimental::CreateCircularBuffer(sender_program, dram_reader_core, writer_cb_config, global_cb);
 
     // mixed cb dataformat
     uint32_t next_layer_num_blocks = num_blocks * 2;
@@ -177,8 +181,8 @@ create_programs(
     uint32_t receiver_page_size = 32;
     tt_metal::CircularBufferConfig receiver_cb_config = tt_metal::CircularBufferConfig(receiver_cb_size);
     receiver_cb_config.remote_index(receiver_cb_index).set_page_size(single_tile_size).set_data_format(tile_format);
-    auto receiver_cb = tt_metal::v1::experimental::CreateCircularBuffer(
-        receiver_program, l1_receiver_cores, receiver_cb_config, *global_cb);
+    auto receiver_cb = tt_metal::experimental::CreateCircularBuffer(
+        receiver_program, l1_receiver_cores, receiver_cb_config, global_cb);
 
     log_info("reader_cb_size: {}", reader_cb_size);
     log_info("receiver_cb_size: {}", receiver_cb_size);
@@ -400,7 +404,7 @@ bool validation_fp16(
     std::vector<uint32_t> result;
     tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
-    auto result_flat_layout = convert_to_flat_layout(result_bfp16);
+    auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
     auto result_untilized = tt::test_utils::untilize(result_flat_layout, kt * 32 / num_blocks * cb_num_blocks, nt * 32);
 
     const auto& values = input_tensor.get_values();
@@ -443,7 +447,7 @@ bool validation_mixed_df(
     tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
 
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
-    auto result_untilized_fp16 = convert_to_flat_layout(result_bfp16);
+    auto result_untilized_fp16 = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
 
     std::vector<float> golden_vec(kt * 32 / num_blocks * cb_num_blocks * nt * 32);
     std::vector<float> result_vec_fp16(kt * 32 / num_blocks * cb_num_blocks * nt * 32);
@@ -549,7 +553,7 @@ bool validation_mixed_df(
 }
 
 std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     const vector<uint32_t>& input_vec,
     uint32_t ht,
     uint32_t wt,
@@ -572,7 +576,6 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
         cores,
         {ht * tt::constants::TILE_HEIGHT, wt * tt::constants::TILE_WIDTH / num_receivers},
         ShardOrientation::ROW_MAJOR,
-        false,
         {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
         {ht, wt});
 
@@ -708,7 +711,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         CoreCoord dram_bank_coord = CoreCoord{0, 0};
         CoreCoord dram_reader_core_coord = CoreCoord{0, 0};
@@ -721,13 +724,16 @@ int main(int argc, char** argv) {
             l1_receiver_core_coord_range = CoreRange{CoreCoord{1, 0}, CoreCoord{num_receivers, 0}};
         }
         CoreRangeSet l1_receiver_core{std::set<CoreRange>{l1_receiver_core_coord_range}};
-        std::unordered_map<CoreCoord, CoreRangeSet> sender_receiver_core_mapping;
-        sender_receiver_core_mapping[dram_reader_core_coord] = l1_receiver_core;
+        std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {
+            { dram_reader_core_coord, l1_receiver_core }
+        };
+        std::vector<SubDeviceId> receiver_sub_device_ids = {};
         if (use_sub_devices) {
             SubDevice sender_sub_device = SubDevice(std::array{dram_reader_core});
             SubDevice receiver_sub_device = SubDevice(std::array{l1_receiver_core});
             SubDeviceManagerId sdm_id = device->create_sub_device_manager({sender_sub_device, receiver_sub_device}, 0);
             device->load_sub_device_manager(sdm_id);
+            receiver_sub_device_ids.push_back(SubDeviceId{1});
         }
         ////////////////////////////////////////////////////////////////////////////
         //                      Input Setup
@@ -764,7 +770,7 @@ int main(int argc, char** argv) {
                         num_banks);
                 } else {  // odd layers
                     auto input_vec_tilized = tt::test_utils::tilize(tensor_fp16.get_values(), k, n);
-                    auto input_vec_tile_layout = convert_to_tile_layout(input_vec_tilized);
+                    auto input_vec_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(input_vec_tilized));
                     vector<uint32_t> packed_input_vec_tile_layout =
                         pack_bfloat16_vec_into_uint32_vec(input_vec_tile_layout);
                     input_buffers[i] = create_and_transfer_data_sharded_cb(
@@ -782,7 +788,7 @@ int main(int argc, char** argv) {
             for (uint32_t i = 0; i < num_mixed_df_layers; ++i) {
                 if (i % 2 == 0) {  // even layers
                     auto input_vec_tilized = tt::test_utils::tilize(tensor_fp16.get_values(), k, n);
-                    auto input_vec_tile_layout = convert_to_tile_layout(input_vec_tilized);
+                    auto input_vec_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(input_vec_tilized));
                     vector<uint32_t> packed_input_vec_tile_layout =
                         pack_bfloat16_vec_into_uint32_vec(input_vec_tile_layout);
                     input_buffers[i] = create_and_transfer_data_sharded_cb(
@@ -846,7 +852,7 @@ int main(int argc, char** argv) {
                 tt::DataFormat::Bfp8_b,
                 l1_receiver_core,
                 num_receivers,
-                global_cb->buffer_address());
+                global_cb.buffer_address());
 
         } else {
             // output
@@ -860,7 +866,7 @@ int main(int argc, char** argv) {
                 tt::DataFormat::Float16_b,
                 l1_receiver_core,
                 num_receivers,
-                global_cb->buffer_address());
+                global_cb.buffer_address());
         }
 
         ////////////////////////////////////////////////////////////////////////////
@@ -872,8 +878,18 @@ int main(int argc, char** argv) {
 
         log_info(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
-            for (auto& program : programs) {
-                EnqueueProgram(device->command_queue(), program, false);
+            if (use_sub_devices) {
+                // Enqueue the sender program
+                EnqueueProgram(device->command_queue(), programs[0], false);
+                device->set_sub_device_stall_group(receiver_sub_device_ids);
+                for (uint32_t j = 1; j < programs.size(); ++j) {
+                    EnqueueProgram(device->command_queue(), programs[j], false);
+                }
+                device->reset_sub_device_stall_group();
+            } else {
+                for (auto& program : programs) {
+                    EnqueueProgram(device->command_queue(), program, false);
+                }
             }
             Finish(device->command_queue());
             for (auto& program : programs) {

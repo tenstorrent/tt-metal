@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/core_coord.hpp"
+#include <core_coord.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -14,10 +14,10 @@
 #include <vector>
 
 #include "umd/device/tt_xy_pair.h"
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
-#include "tt_metal/tt_stl/span.hpp"
+#include <assert.hpp>
+#include "tracy/Tracy.hpp"
+#include <tt_stl/reflection.hpp>
+#include <tt_stl/span.hpp>
 
 auto fmt::formatter<CoreCoord>::format(const CoreCoord& core_coord, format_context& ctx) const
     -> format_context::iterator {
@@ -225,13 +225,12 @@ CoreRangeSet CoreRangeSet::merge(const T& other) const {
     // By overallocating by one x entry, we can avoid needing to check for
     // boundary conditions when iterating, since there'll always be one
     // last false entry
-    bool grid[max_y + 1][max_x + 2];
-    memset(grid, 0, sizeof(grid));
+    std::vector<std::vector<uint8_t>> grid(max_y + 1, std::vector<uint8_t>(max_x + 2, 0));
 
     for (const auto& cr : crs) {
         for (unsigned y = cr.start_coord.y; y <= cr.end_coord.y; y++) {
             for (unsigned x = cr.start_coord.x; x <= cr.end_coord.x; x++) {
-                grid[y][x] = true;
+                grid[y][x] = 1;
             }
         }
     }
@@ -404,6 +403,14 @@ CoreRange CoreRangeSet::bounding_box() const {
     return {{min_x, min_y}, {max_x, max_y}};
 }
 
+CoreRangeSet CoreRangeSet::merge_ranges() const {
+    if (this->ranges_.size() <= 1) {
+        return *this;
+    }
+    // Merging incidentally optimizes the resulting CoreRangeSet.
+    return CoreRangeSet().merge(*this);
+}
+
 void CoreRangeSet::validate_no_overlap() {
     if (this->ranges_.size() < 2) {
         return;
@@ -420,6 +427,70 @@ void CoreRangeSet::validate_no_overlap() {
             }
         }
     }
+}
+
+CoreRangeSet CoreRangeSet::subtract(const CoreRangeSet& other) const {
+    const CoreRangeSet& this_merged = this->merge_ranges();
+    const CoreRangeSet& other_merged = other.merge_ranges();
+
+    // Early returns for empty sets and non-intersecting sets
+    if (other_merged.empty() || this_merged.empty() || !this_merged.intersects(other_merged)) {
+        return this_merged;
+    }
+
+    std::vector<CoreRange> result_ranges;
+
+    for (const auto& current_range : this_merged.ranges_) {
+        std::vector<CoreRange> current_remaining = {current_range};
+
+        for (const auto& subtract_range : other_merged.ranges_) {
+            std::vector<CoreRange> new_remaining;
+
+            for (const auto& remaining : current_remaining) {
+                auto intersection_opt = remaining.intersection(subtract_range);
+                if (!intersection_opt.has_value()) {
+                    new_remaining.push_back(remaining);
+                    continue;
+                }
+
+                const CoreRange& intersection = intersection_opt.value();
+
+                if (remaining.start_coord.x < intersection.start_coord.x) {
+                    CoreRange left{
+                        remaining.start_coord, CoreCoord{intersection.start_coord.x - 1, remaining.end_coord.y}};
+                    new_remaining.push_back(left);
+                }
+
+                if (remaining.end_coord.x > intersection.end_coord.x) {
+                    CoreRange right{
+                        CoreCoord{intersection.end_coord.x + 1, remaining.start_coord.y}, remaining.end_coord};
+                    new_remaining.push_back(right);
+                }
+
+                if (remaining.start_coord.y < intersection.start_coord.y) {
+                    CoreRange bottom{
+                        CoreCoord{
+                            std::max(remaining.start_coord.x, intersection.start_coord.x), remaining.start_coord.y},
+                        CoreCoord{
+                            std::min(remaining.end_coord.x, intersection.end_coord.x), intersection.start_coord.y - 1}};
+                    new_remaining.push_back(bottom);
+                }
+
+                if (remaining.end_coord.y > intersection.end_coord.y) {
+                    CoreRange top{
+                        CoreCoord{
+                            std::max(remaining.start_coord.x, intersection.start_coord.x),
+                            intersection.end_coord.y + 1},
+                        CoreCoord{std::min(remaining.end_coord.x, intersection.end_coord.x), remaining.end_coord.y}};
+                    new_remaining.push_back(top);
+                }
+            }
+            current_remaining = new_remaining;
+        }
+        result_ranges.insert(result_ranges.end(), current_remaining.begin(), current_remaining.end());
+    }
+
+    return CoreRangeSet(std::move(result_ranges));
 }
 
 bool operator==(const CoreRangeSet& a, const CoreRangeSet& b) {
@@ -518,6 +589,30 @@ std::vector<CoreCoord> grid_to_cores_with_noop(
             cores.emplace_back(x, y);
         }
     }
+
+    return cores;
+}
+
+// Noop cores are appended at the end with no guarantees on ordering
+std::vector<CoreCoord> grid_to_cores_with_noop(
+    const CoreRangeSet& used_cores, const CoreRangeSet& all_cores, const bool row_wise) {
+    ZoneScoped;
+    TT_ASSERT(all_cores.contains(used_cores));
+    // Most likely a lot of optimizations to do here
+    // Implemented this way for simplicity for now
+    std::vector<CoreCoord> cores;
+    cores.reserve(all_cores.num_cores());
+    cores = corerange_to_cores(used_cores, std::nullopt, row_wise);
+    std::vector<CoreCoord> all_cores_vec = corerange_to_cores(all_cores, std::nullopt, row_wise);
+    auto sorted_used_cores = cores;
+    std::sort(sorted_used_cores.begin(), sorted_used_cores.end());
+    std::sort(all_cores_vec.begin(), all_cores_vec.end());
+    std::set_difference(
+        all_cores_vec.begin(),
+        all_cores_vec.end(),
+        sorted_used_cores.begin(),
+        sorted_used_cores.end(),
+        std::back_inserter(cores));
 
     return cores;
 }

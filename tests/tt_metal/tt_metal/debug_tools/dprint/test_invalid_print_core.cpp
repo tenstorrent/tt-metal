@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "gtest/gtest.h"
 #include "debug_tools_fixture.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
+#include <tt-metalium/host_api.hpp>
+#include "rtoptions.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking that the DPRINT server can detect an invalid core.
@@ -20,7 +20,7 @@ TEST_F(DPrintFixture, TensixTestPrintInvalidCore) {
 
     // We expect that even though illegal worker cores were requested, device setup did not hang.
     // So just make sure that device setup worked and then close the device.
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         EXPECT_TRUE(device != nullptr);
     }
     tt::llrt::RunTimeOptions::get_instance().set_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint, false);

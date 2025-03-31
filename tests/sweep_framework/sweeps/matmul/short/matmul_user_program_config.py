@@ -6,10 +6,12 @@ from typing import Optional, Tuple
 from loguru import logger
 import enum
 
+import pytest
 import torch
 
 import ttnn
 
+from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
@@ -85,7 +87,6 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                     (384, 64),
                     ttnn.ShardOrientation.COL_MAJOR,
-                    False,
                 ),
             )
         ],
@@ -97,7 +98,6 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                     (64, 128),
                     ttnn.ShardOrientation.COL_MAJOR,
-                    False,
                 ),
             )
         ],
@@ -143,7 +143,6 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                     (128, 64),
                     ttnn.ShardOrientation.COL_MAJOR,
-                    False,
                 ),
             )
         ],
@@ -193,7 +192,6 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                     (2 * 32, 32),
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             )
         ],
@@ -251,7 +249,6 @@ parameters = {
                     ),
                     (256, 64),  # M // num_cores(34), K
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             )
         ],
@@ -304,7 +301,6 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                     (64, 64),  # M, K // num_cores(32)
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             )
         ],
@@ -356,7 +352,6 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 4))}),
                     (320, 64),  # M // grid_size[1], K // grid_size[0]
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             )
         ],
@@ -407,7 +402,6 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 3))}),
                     (320, 64),  # M // grid_size[0], K // grid_size[1]
                     ttnn.ShardOrientation.COL_MAJOR,
-                    False,
                 ),
             )
         ],
@@ -458,7 +452,6 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 5))}),
                     (32, 64),  # M // grid_size[1], K
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             )
         ],
@@ -470,7 +463,6 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
                     (64, 64),  # K, N // grid_size[0]
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             )
         ],
@@ -510,7 +502,8 @@ for p in parameters.values():
     p.update(general)
 
 
-def run(
+def run_matmul(
+    device,
     batch_sizes,
     input_shapes,
     batch_matrix_multiply,
@@ -523,8 +516,6 @@ def run(
     input_b_dtype,
     output_dtype,
     input_layout,
-    *,
-    device,
 ) -> list:
     (m_size, k_size, n_size) = input_shapes
     input_shape_a = (*batch_sizes, m_size, k_size)
@@ -568,3 +559,69 @@ def run(
 
     expected_pcc = 0.99
     return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]
+
+
+@pytest.mark.parametrize(**gen_pytest_parametrize_args(parameters))
+def test_matmul(
+    device,
+    batch_sizes,
+    input_shapes,
+    batch_matrix_multiply,
+    program_config,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    compute_kernel_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+):
+    run_matmul(
+        device,
+        batch_sizes,
+        input_shapes,
+        batch_matrix_multiply,
+        program_config,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+        compute_kernel_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+    )
+
+
+def run(
+    batch_sizes,
+    input_shapes,
+    batch_matrix_multiply,
+    program_config,
+    input_a_memory_config,
+    input_b_memory_config,
+    output_memory_config,
+    compute_kernel_config,
+    input_a_dtype,
+    input_b_dtype,
+    output_dtype,
+    input_layout,
+    *,
+    device,
+) -> list:
+    return run_matmul(
+        device,
+        batch_sizes,
+        input_shapes,
+        batch_matrix_multiply,
+        program_config,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+        compute_kernel_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+    )

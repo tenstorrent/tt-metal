@@ -5,19 +5,20 @@
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
 #include "buffer_test_utils.hpp"
-#include "host_api.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/allocator.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 
-using tt::tt_metal::Device;
+using tt::tt_metal::IDevice;
 using namespace tt::test_utils;
 using namespace tt::test::buffer::detail;
 
 namespace tt::test::buffer::detail {
-bool SimpleDramReadOnly(Device* device, size_t local_address, size_t byte_size) {
+bool SimpleDramReadOnly(IDevice* device, size_t local_address, size_t byte_size) {
     std::vector<uint32_t> inputs =
         generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
     std::vector<uint32_t> outputs;
-    uint32_t dram_channel = device->dram_channel_from_bank_id(0);
+    uint32_t dram_channel = device->allocator()->get_dram_channel_from_bank_id(0);
     writeDramBackdoor(device, dram_channel, local_address, inputs);
     readDramBackdoor(device, dram_channel, local_address, byte_size, outputs);
     bool pass = (inputs == outputs);
@@ -26,11 +27,11 @@ bool SimpleDramReadOnly(Device* device, size_t local_address, size_t byte_size) 
     }
     return pass;
 }
-bool SimpleDramWriteOnly(Device* device, size_t local_address, size_t byte_size) {
+bool SimpleDramWriteOnly(IDevice* device, size_t local_address, size_t byte_size) {
     std::vector<uint32_t> inputs =
         generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, byte_size / sizeof(uint32_t));
     std::vector<uint32_t> outputs;
-    uint32_t dram_channel = device->dram_channel_from_bank_id(0);
+    uint32_t dram_channel = device->allocator()->get_dram_channel_from_bank_id(0);
     writeDramBackdoor(device, dram_channel, local_address, inputs);
     readDramBackdoor(device, dram_channel, local_address, byte_size, outputs);
     bool pass = (inputs == outputs);
@@ -41,9 +42,11 @@ bool SimpleDramWriteOnly(Device* device, size_t local_address, size_t byte_size)
 }
 }  // namespace tt::test::buffer::detail
 
+namespace tt::tt_metal {
+
 TEST_F(DeviceFixture, TestSimpleDramBufferReadOnlyLo) {
     for (unsigned int id = 0; id < num_devices_; id++) {
-        size_t lo_address = devices_.at(id)->get_base_allocator_addr(HalMemType::DRAM);
+        size_t lo_address = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::DRAM);
         ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), lo_address, 4));
         ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), lo_address, 8));
         ASSERT_TRUE(SimpleDramReadOnly(this->devices_.at(id), lo_address, 16));
@@ -65,7 +68,7 @@ TEST_F(DeviceFixture, TestSimpleDramBufferReadOnlyHi) {
 }
 TEST_F(DeviceFixture, TestSimpleDramBufferWriteOnlyLo) {
     for (unsigned int id = 0; id < num_devices_; id++) {
-        size_t lo_address = devices_.at(id)->get_base_allocator_addr(HalMemType::DRAM);
+        size_t lo_address = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::DRAM);
         ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), lo_address, 4));
         ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), lo_address, 8));
         ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), lo_address, 16));
@@ -85,3 +88,5 @@ TEST_F(DeviceFixture, TestSimpleDramBufferWriteOnlyHi) {
         ASSERT_TRUE(SimpleDramWriteOnly(this->devices_.at(id), hi_address, 16 * 1024));
     }
 }
+
+}  // namespace tt::tt_metal

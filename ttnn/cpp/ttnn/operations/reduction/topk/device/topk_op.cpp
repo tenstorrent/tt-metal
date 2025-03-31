@@ -5,6 +5,8 @@
 #include "topk_op.hpp"
 #include "topk_program_factory.hpp"
 
+using namespace tt::tt_metal;
+
 namespace topk_utils {
 
 static inline bool verify_available_cores(
@@ -12,7 +14,7 @@ static inline bool verify_available_cores(
     uint16_t min_dim,
     uint16_t max_dim,
     CoreCoord grid,
-    uint16_t k,
+    uint32_t k,
     const uint32_t l1_size,
     const uint32_t value_tile_size,
     const uint32_t index_tile_size) {
@@ -28,7 +30,8 @@ static inline bool verify_available_cores(
             (split_size / tt::constants::TILE_WIDTH) *
             (value_tile_size + index_tile_size);  // we divide the width into split_size chunks and each chunk, as well
                                                   // as a matching set of indices, is processed by a core
-        if (num_cores <= max_cores && (memory_cost_gather + memory_cost_local) < l1_size && num_cores > 1) {
+        if (num_cores <= max_cores && (memory_cost_gather + (memory_cost_local * num_cores)) < (l1_size * num_cores) &&
+            num_cores > 1) {
             return true;
         }
     }
@@ -41,18 +44,13 @@ namespace ttnn::operations::reduction {
 
 void TopK::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    auto input_shape = input_tensors.at(0).get_legacy_shape();
+    auto input_shape = input_tensors.at(0).get_padded_shape();
     TT_FATAL(input_shape.rank() == 4, "Input shape must be 4D, got {}", input_shape.rank());
-    TT_FATAL(this->k == 32, "K must be equal to 32, pad with -infinity if necessary to get 32, got {}", this->k);
-    TT_FATAL(this->dim == -1 || this->dim == 3, "Only the last dim is supported right now, got {}", this->dim);
+    TT_FATAL(this->k <= 64, "K must be less than or equal to 64, got {}", this->k);
 
     TT_FATAL(
         input_shape[-1] >= 64,
-        "Input shape inner dim {} must be a multiple of 64, pad with -infinity if necessary",
-        input_shape[-1]);
-    TT_FATAL(
-        (input_shape[-1] & (input_shape[-1] - 1)) == 0,
-        "Input shape inner dim {} must be a power of 2, pad with -infinity if necessary",
+        "Input shape inner dim {} must be a multiple of 64, pad with +/-infinity if necessary",
         input_shape[-1]);
     TT_FATAL(
         (input_shape[0] * input_shape[1] * input_shape[2]) % 32 == 0,
@@ -120,12 +118,12 @@ std::vector<Tensor> TopK::create_output_tensors(
 operation::ProgramWithCallbacks TopK::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    if (input_tensor.get_legacy_shape()[dim] < topk_utils::multi_core_min_width) {
+    if (input_tensor.get_padded_shape()[dim] < topk_utils::multi_core_min_width) {
         return detail::topk_single_core_interleaved(
-            input_tensor, this->k, this->dim, output_tensors.at(0), output_tensors.at(1));
+            input_tensor, this->k, this->dim, this->largest, this->sorted, output_tensors.at(0), output_tensors.at(1));
     } else {
         return detail::topk_multicore_interleaved(
-            input_tensor, this->k, this->dim, output_tensors.at(0), output_tensors.at(1));
+            input_tensor, this->k, this->dim, this->largest, this->sorted, output_tensors.at(0), output_tensors.at(1));
     }
 }
 

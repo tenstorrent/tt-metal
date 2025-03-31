@@ -8,10 +8,11 @@
 
 #include <filesystem>
 
-#include "tt_metal/host_api.hpp"
-#include "common/bfloat16.hpp"
-#include "impl/debug/dprint_server.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include "dprint_server.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include "tt_metal/jit_build/build_env_manager.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -19,7 +20,7 @@
 using std::vector;
 using namespace tt;
 
-bool test_compile_args(std::vector<uint32_t> compile_args_vec, tt_metal::Device* device) {
+bool test_compile_args(std::vector<uint32_t> compile_args_vec, tt_metal::IDevice* device) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -64,10 +65,15 @@ int main(int argc, char** argv) {
     try {
         int device_id = 0;
 
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
         // Remove old compiled kernels
         static const std::string kernel_name = "test_compile_args";
-        auto binary_path_str = device->build_env().get_out_kernel_root_path() + kernel_name;
+        auto binary_path_str =
+            kernel
+                ->binaries(
+                    tt::tt_metal::BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env)
+                .get_out_kernel_root_path() +
+            kernel_name;
         std::filesystem::remove_all(binary_path_str);
 
         pass &= test_compile_args({0, 68, 0, 124}, device);

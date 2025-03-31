@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <map>
 #include <vector>
 #include <string>
@@ -36,18 +37,4 @@ T parse_env(const char* env_name, const T& default_value) {
     }
 }
 
-template <typename T>
-T parse_trigger(const char* env_name, const T& default_value) {
-    T retval = parse_env<T>(env_name, default_value);
-    unsetenv(env_name);
-    return retval;
-}
-
 }  // namespace tt
-
-// Explicit specializations
-template bool tt::parse_env<bool>(const char*, const bool&);
-template std::string tt::parse_env<std::string>(const char*, const std::string&);
-template int tt::parse_env<int>(const char*, const int&);
-template uint32_t tt::parse_env<uint32_t>(const char*, const uint32_t&);
-template uint64_t tt::parse_env<uint64_t>(const char*, const uint64_t&);

@@ -1,0 +1,82 @@
+name: "[internal] Blackhole Demo tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      docker-image:
+        required: true
+        type: string
+
+jobs:
+  single-card-demo-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          {
+            name: "whisper_performance",
+            arch: blackhole,
+            runs-on: ["BH", "pipeline-perf", "in-service"],
+            cmd: pytest models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation",
+            owner_id: U05RWH3QUPM #Salar Hosseini
+          }
+        ]
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs-on }}
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.build-artifact-name }}
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+      - name: Enable Performance mode
+        if: ${{ contains(matrix.test-group.name, 'performance') }}
+        run: |
+          sudo cpupower frequency-set -g performance
+      - name: Run demo regression tests
+        uses: ./.github/actions/docker-run
+        timeout-minutes: 70
+        env:
+          LOGURU_LEVEL: INFO
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=${{ matrix.test-group.arch }}
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+          install_wheel: true
+          run_args: ${{ matrix.test-group.cmd }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            generated/test_reports/
+          prefix: "test_reports_"
+      - name: Disable Performance mode
+        if: ${{ contains(matrix.test-group.name, 'performance') }}
+        run: |
+          sudo cpupower frequency-set -g ondemand
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.owner_id }}

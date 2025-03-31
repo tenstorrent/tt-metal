@@ -1,0 +1,97 @@
+name: "[internal] Fabric unit tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        required: true
+        type: string
+      runner-label:
+        required: true
+        type: string
+      timeout:
+        required: false
+        type: number
+        default: 10
+      os:
+        required: false
+        type: string
+        default: "ubuntu-20.04"
+  workflow_dispatch:
+    inputs:
+      arch:
+        required: true
+        type: choice
+        options:
+          - wormhole_b0
+      runner-label:
+        required: true
+        type: choice
+        options:
+          - N300
+      timeout:
+        required: false
+        type: number
+        default: 10
+      os:
+        required: false
+        type: string
+        default: "ubuntu-20.04"
+
+jobs:
+  fabric-tests:
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        test-group: [
+          {name: fabric unit tests, cmd: ./tests/scripts/run_cpp_fabric_tests.sh },
+        ]
+    name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
+    runs-on: ${{ startsWith(inputs.runner-label, 'tt-beta-ubuntu') && fromJSON(format('["{0}"]', inputs.runner-label)) || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label)) }}
+    env:
+      ARCH_NAME: ${{ inputs.arch }}
+      LOGURU_LEVEL: INFO
+    steps:
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - uses: ./.github/actions/prepare-metal-run
+      - name: ${{ matrix.test-group.name }} tests
+        timeout-minutes: ${{ inputs.timeout }}
+        uses: ./.github/actions/docker-run
+        with:
+          docker_os_arch: tt-metalium/${{ inputs.os }}-dev-amd64
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e ARCH_NAME=${{ inputs.arch }}
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e TT_METAL_SLOW_DISPATCH_MODE=1
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e GTEST_OUTPUT=xml:generated/test_reports/
+          run_args: |
+            pip install --force-reinstall pip==21.2.4
+            pip install -r tt_metal/python_env/requirements-dev.txt
+            pip install -e .
+            mkdir -p generated/test_reports
+            ${{ matrix.test-group.cmd }}
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: U06CXU895AP # Michael Chiou
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            generated/test_reports/
+          prefix: "test_reports_"
+      - name: Generate system logs on failure
+        uses: ./.github/actions/generate-system-logs
+        if: ${{ failure() }}
+      - name: Generate gtest annotations on failure
+        uses: ./.github/actions/generate-gtest-failure-message
+        if: ${{ failure() }}
+        with:
+          path: |
+            generated/test_reports/

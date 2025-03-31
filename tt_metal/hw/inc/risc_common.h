@@ -34,7 +34,12 @@ const uint32_t STREAM_RESTART_CHECK_MASK = (0x1 << 3) - 1;
 
 const uint32_t MAX_TILES_PER_PHASE = 2048;
 
+// These values are defined in each core type's FW .cc file
+
+// Virtual X coordinate
 extern uint8_t my_x[NUM_NOCS];
+
+// Virtual Y coordinate
 extern uint8_t my_y[NUM_NOCS];
 
 inline void WRITE_REG(uint32_t addr, uint32_t val) {
@@ -97,10 +102,15 @@ inline __attribute__((always_inline)) uint32_t buf_ptr_dec_wrap(uint32_t buf_ptr
     return result;
 }
 
+// This definition of reg_read conflicts with the one in
+// tt_metal/third_party/tt_llk_wormhole_b0/common/inc/ckernel.h, which trisc
+// kernels bring into the global namespace using "using namespace ckernel".
+#if !defined(COMPILE_FOR_TRISC)  // BRISC, NCRISC, ERISC, IERISC
 inline __attribute__((always_inline)) uint32_t reg_read(uint32_t addr) {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(addr);
     return p_reg[0];
 }
+#endif
 
 inline void assert_trisc_reset() {
     uint32_t soft_reset_0 = READ_REG(RISCV_DEBUG_REG_SOFT_RESET_0);
@@ -166,32 +176,36 @@ inline void riscv_wait(uint32_t cycles) {
 }
 
 // Invalidates Blackhole's entire L1 cache
-// Blackhole L1 cache is a small write-through cache (4x16B L1 lines). If cache is enabled, the entire L1 is cached (no
-// MMU).
-//  Writing an address on one core and reading it from another core only requires the reader to invalidate.
-//  Need to invalidate any address written by noc that may have been previously read
+// Blackhole L1 cache is a small write-through cache (4x16B L1 lines). The cache covers all of L1 (no
+// MMU or range registers).
+//  Writing an address on one proc and reading it from another proc only requires the reader to invalidate.
+//  Need to invalidate any address written by noc that may have been previously read by riscv
 inline __attribute__((always_inline)) void invalidate_l1_cache() {
 #if defined(ARCH_BLACKHOLE) && !defined(DISABLE_L1_DATA_CACHE)
     asm("fence");
 #endif
 }
 
-// Disables Blackhole's L1 cache. Grayskull and Wormhole do not have L1 cache
-// L1 cache can be disabled by setting `TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS` env var
-// export TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS=<BR,NC,TR,ER>
-inline __attribute__((always_inline)) void conditionally_disable_l1_cache() {
-#if defined(ARCH_BLACKHOLE) && defined(DISABLE_L1_DATA_CACHE)
-    // asm(R"ASM(
-    //         csrrsi zero, 0x7c0, 0x8
-    //       )ASM");
+inline __attribute__((always_inline)) void configure_l1_data_cache() {
+#if defined(ARCH_BLACKHOLE)
+#if defined(DISABLE_L1_DATA_CACHE)
+    // Disables Blackhole's L1 cache. Grayskull and Wormhole do not have L1 cache
+    // L1 cache can be disabled by setting `TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS` env var
+    // export TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS=<BR,NC,TR*,ER*>
     asm(R"ASM(
-        .option push
-        li   t1, 0x1
-        slli t1, t1, 3
+        li t1, 0x8
         csrrs zero, 0x7c0, t1
-        .option pop
          )ASM" ::
             : "t1");
+#elif !defined(ENABLE_HW_CACHE_INVALIDATION)
+    // Disable gathering to stop HW from invalidating the data cache after 128 transactions
+    // This is default enabled
+    asm(R"ASM(
+        lui  t1, 0x40
+        csrrs zero, 0x7c0, t1
+         )ASM" ::
+            : "t1");
+#endif
 #endif
 }
 

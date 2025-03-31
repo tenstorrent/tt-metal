@@ -9,9 +9,9 @@ Describe the approach used to solve the problem.
 Summarize the changes made and its impact.
 
 ### Checklist
-- [ ] Post commit CI passes
-- [ ] Blackhole Post commit (if applicable)
-- [ ] Model regression CI testing passes (if applicable)
-- [ ] Device performance regression CI testing passes (if applicable)
-- [ ] **(For models and ops writers)** Full [new models](https://github.com/tenstorrent/tt-metal/actions/workflows/full-new-models-suite.yaml) tests passes
+- [ ] [All post commit](https://github.com/tenstorrent/tt-metal/actions/workflows/all-post-commit-workflows.yaml) CI passes
+- [ ] [Blackhole Post commit](https://github.com/tenstorrent/tt-metal/actions/workflows/blackhole-post-commit.yaml) CI passes (if applicable)
+- [ ] [Model regression](https://github.com/tenstorrent/tt-metal/actions/workflows/perf-models.yaml) CI passes (if applicable)
+- [ ] [Device performance regression](https://github.com/tenstorrent/tt-metal/actions/workflows/perf-device-models.yaml) CI passes (if applicable)
+- [ ] **(For models and ops writers)** Full [new models tests](https://github.com/tenstorrent/tt-metal/actions/workflows/full-new-models-suite.yaml) CI passes (if applicable)
 - [ ] New/Existing tests provide coverage for changes

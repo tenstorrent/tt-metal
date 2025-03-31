@@ -30,6 +30,7 @@ enum SfpuType {
     gelu_derivative,
     dropout,
     abs,
+    abs_int32,
     sign,
     max,
     sine,
@@ -90,5 +91,6 @@ enum SfpuType {
     unused,
     reshuffle_rows,
     cumsum,
-    fill
+    fill,
+    round,
 };

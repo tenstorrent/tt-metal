@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp"
 #include "ttnn/types.hpp"
 
@@ -103,14 +103,14 @@ void py_bind_reduce_scatter(pybind11::module& module) {
         Args:
             input_tensor (ttnn.Tensor): multi-device tensor
             dim (int): Dimension to perform operation
-            cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the line-all-gather operation on.
-            mesh_device (MeshDevice): Device mesh to perform the line-all-gather operation on.
+            cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the line-reduce-scatter operation on.
+            mesh_device (MeshDevice): Device mesh to perform the line-reduce-scatter operation on.
         * cluster_axis and mesh_device parameters are applicable only for Linear Topology.
 
         Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md
 
         Keyword Args:
-            num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
+            num_links (int, optional): Number of links to use for the reduce0scatter operation. Defaults to `1`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
             num_workers (int, optional): Number of workers to use for the operation. Defaults to `None`.
             num_buffers_per_channel (int, optional): Number of buffers per channel to use for the operation. Defaults to `None`.

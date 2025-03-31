@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
-#include "common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/functions.hpp"
 
 using namespace tt;
@@ -25,7 +25,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
         ttnn::Shape shapeb1({1, 1, Kt * TILE_HEIGHT, Nt * TILE_WIDTH});
 
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = ttnn::random::random(shapea.value).to(Layout::TILE).to(device);
+        Tensor a = ttnn::random::random(shapea).to_layout(Layout::TILE).to_device(device);
         Tensor b = ttnn::zeros(shapeb, DataType::BFLOAT16, Layout::TILE, *device);
         Tensor b1 = ttnn::zeros(shapeb1, DataType::BFLOAT16, Layout::TILE, *device);
 
@@ -51,7 +51,7 @@ int main(int argc, char** argv) {
                         ttnn::operations::matmul::Matmul{
                             /*program_config=*/std::nullopt,
                             /*bcast_batch=*/std::nullopt,
-                            operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+                            tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
                             /*output_dtype=*/std::nullopt,
                             /*compute_kernel_config=*/std::nullopt,
                             /*untilize_out=*/false,

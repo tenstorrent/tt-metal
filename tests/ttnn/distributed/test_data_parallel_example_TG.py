@@ -28,6 +28,7 @@ class TtFalconMLP:
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((1, 4), id="1x4_grid")], indirect=True)
 def test_data_parallel_falcon_mlp(mesh_device):
+    torch.manual_seed(0)
     # Load Falcon MLP model from huggingface
     config = transformers.FalconConfig.from_pretrained("tiiuae/falcon-7b-instruct")
     model = transformers.models.falcon.modeling_falcon.FalconMLP(config).eval()

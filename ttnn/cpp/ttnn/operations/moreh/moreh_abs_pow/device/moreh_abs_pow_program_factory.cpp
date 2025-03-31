@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_abs_pow_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_abs_pow {
@@ -22,7 +22,7 @@ MorehAbsPowOperation::MorehAbsPowFactory::cached_program_t MorehAbsPowOperation:
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto input_shape = input.get_legacy_shape();
+    const auto input_shape = input.get_padded_shape();
     const auto input_rank = input_shape.rank();
 
     const auto H = input_shape[-2];
@@ -33,7 +33,7 @@ MorehAbsPowOperation::MorehAbsPowFactory::cached_program_t MorehAbsPowOperation:
 
     const auto num_units = input.volume() / H / W * Ht;
 
-    const auto origin_w = input_shape.without_padding()[input_rank - 1];
+    const auto origin_w = input.get_logical_shape()[input_rank - 1];
 
     auto [floored_p, decimal, p_is_negative] = get_floored_p_and_decimal_and_p_is_negative(p);
     ////////////////////////////////////////////////////////////////////////////

@@ -6,11 +6,11 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "test_tiles.hpp"
+#include <tt-metalium/tilize_utils.hpp>
 #include "hostdevcommon/common_values.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -19,6 +19,7 @@
 using std::vector;
 using namespace tt;
 
+namespace test {
 // Given a tensor that is row-major datums, make it tilized
 // so that its row major within a tile, and each tile's data
 // is contiguous
@@ -45,6 +46,7 @@ std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
     }
     return result;
 }
+}  // namespace test
 
 void print_vec(const std::vector<bfloat16>& data, int rows, int cols, string name) {
     std::cout << name << ": " << std::endl;
@@ -87,7 +89,7 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
 }
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     int start_core_x,
     int start_core_y,
     int num_cores_r,
@@ -218,7 +220,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle, tt
 }
 
 bool write_runtime_args_to_device(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt_metal::Program& program,
     int start_core_x,
     int start_core_y,
@@ -348,7 +350,7 @@ std::vector<bfloat16> get_col_slice(
 }
 
 bool move_tiles_to_dram(
-    tt_metal::Device* device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, uint32_t dram_buffer_addr) {
+    tt_metal::IDevice* device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, uint32_t dram_buffer_addr) {
     bool pass = true;
     int tile_size = 512;  // 32*32 packed into u32
     int tile_size_bytes = 32 * 32 * 2;
@@ -377,7 +379,7 @@ int main(int argc, char** argv) {
 
     try {
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
         int start_core_x = 0;
         int start_core_y = 0;
         int num_cores_r = device->compute_with_storage_grid_size().y;
@@ -391,7 +393,7 @@ int main(int argc, char** argv) {
         int per_core_M = M / num_cores_r;
         int per_core_N = N / num_cores_c;
         uint32_t single_tile_size = 2 * 1024;
-        uint32_t in0_dram_addr = device->get_base_allocator_addr(HalMemType::DRAM);
+        uint32_t in0_dram_addr = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
         uint32_t in1_dram_addr = 400 * 1024 * 1024;
         uint32_t out_dram_addr = 800 * 1024 * 1024;
         uint32_t in0_mcast_sender_semaphore_addr = 109600;
@@ -454,13 +456,13 @@ int main(int argc, char** argv) {
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
         log_info(LogTest, "Scattering inputs (activation & weights) to dram channels using tiled layout");
-        auto activations_tilized = tilize(tensor.get_values(), M * 32, K * 32);
-        auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
+        auto activations_tilized = test::tilize(tensor.get_values(), M * 32, K * 32);
+        auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
         pass &= move_tiles_to_dram(device, activations, M, K, in0_dram_addr);
 
-        auto identity_tilized = tilize(identity, K * 32, N * 32);
-        auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
+        auto identity_tilized = test::tilize(identity, K * 32, N * 32);
+        auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
         pass &= move_tiles_to_dram(device, weights, K, N, in1_dram_addr);
         log_info(LogTest, "Copying inputs to dram complete");
@@ -517,7 +519,7 @@ int main(int argc, char** argv) {
                 tt_metal::detail::ReadFromDeviceDRAMChannel(
                     device, dram_bank, dram_address, single_tile_size, result_vec);
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-                auto result_flat_layout = convert_to_flat_layout(result_bfp16);
+                auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
 
                 // log_info(LogTest, "Tile id {} on dram bank {}, address {}", tile_id, dram_bank, dram_address);
                 // print_vec(result_flat_layout, 32, 32, "Result - tile#" + std::to_string(tile_id));

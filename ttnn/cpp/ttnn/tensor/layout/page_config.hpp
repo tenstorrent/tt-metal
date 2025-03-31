@@ -5,16 +5,14 @@
 #pragma once
 
 #include <array>
-
-#include "ttnn/tensor/types.hpp"
-#include "ttnn/tensor/enum_types.hpp"
-
-#include "impl/tile/tile.hpp"
-
-#include "alignment.hpp"
-#include "size.hpp"
-
 #include <optional>
+
+#include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/tile.hpp>
+
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/alignment.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace tt::tt_metal {
 
@@ -25,12 +23,12 @@ public:
     Alignment create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const;
     void validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const;
 
-    Size get_page_shape(
-        const Size& physical_size,
+    Shape2D get_page_shape(
+        const Shape2D& physical_size,
         DataType dtype,
         const MemoryConfig& memory_config,
-        const std::optional<Size>& physical_shard_size) const;
-    size_t get_page_size_bytes(const Size& page_size, DataType dtype) const;
+        const std::optional<Shape2D>& physical_shard_size) const;
+    size_t get_page_size_bytes(const Shape2D& page_size, DataType dtype) const;
 
     const Tile& get_tile() const;
 
@@ -53,12 +51,12 @@ public:
     Alignment create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const;
     void validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const;
 
-    Size get_page_shape(
-        const Size& physical_size,
+    Shape2D get_page_shape(
+        const Shape2D& physical_size,
         DataType dtype,
         const MemoryConfig& memory_config,
-        const std::optional<Size>& physical_shard_size) const;
-    size_t get_page_size_bytes(const Size& page_size, DataType dtype) const;
+        const std::optional<Shape2D>& physical_shard_size) const;
+    size_t get_page_size_bytes(const Shape2D& page_size, DataType dtype) const;
 
     const Tile& get_tile() const;
 
@@ -83,12 +81,12 @@ public:
     Alignment create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const;
     void validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const;
 
-    Size get_page_shape(
-        const Size& physical_size,
+    Shape2D get_page_shape(
+        const Shape2D& physical_size,
         DataType dtype,
         const MemoryConfig& memory_config,
-        const std::optional<Size>& physical_shard_size) const;
-    size_t get_page_size_bytes(const Size& page_size, DataType dtype) const;
+        const std::optional<Shape2D>& physical_shard_size) const;
+    size_t get_page_size_bytes(const Shape2D& page_size, DataType dtype) const;
 
     Tile get_tile() const;
 

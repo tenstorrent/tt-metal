@@ -1,22 +1,22 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <string_view>
 #include <thread>
 #include <string>
 #include <future>
 
-#include "common/tt_backend_api_types.hpp"
-#include "common/executor.hpp"
-#include "common/utils.hpp"
-#include "common/core_coord.hpp"
-#include "jit_build/data_format.hpp"
-#include "jit_build/settings.hpp"
+#include "tt_backend_api_types.hpp"
+#include "utils.hpp"
+#include "core_coord.hpp"
+#include "data_format.hpp"
+#include "jit_build_options.hpp"
 #include "hostdevcommon/common_values.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/tt_stl/aligned_allocator.hpp"
-#include "llrt/rtoptions.hpp"
+#include "tracy/Tracy.hpp"
+#include <tt_stl/aligned_allocator.hpp>
+#include "rtoptions.hpp"
 
 namespace tt::tt_metal {
 
@@ -31,6 +31,10 @@ struct JitBuiltStateConfig {
     int processor_id = 0;
     bool is_fw = false;
     uint32_t dispatch_message_addr = 0;
+    // Set `is_cooperative` when Metal FW/Kernel code is loaded on risc with some base FW running.
+    // In this case Metal FW will need to facilitate context switching to base FW (e.g. code running on WH active
+    // eriscs)
+    bool is_cooperative = false;
 };
 
 // The build environment
@@ -98,6 +102,14 @@ protected:
 
     string link_objs_;
 
+    // Default compiler optimization setting
+    // Used when JitBuildSettings is not provided
+    string default_compile_opt_level_;
+
+    // Default linker optimization setting
+    // Used when JitBuildSettings is not provided
+    string default_linker_opt_level_;
+
     void compile(const string& log_file, const string& out_path, const JitBuildSettings* settings) const;
     void compile_one(
         const string& log_file,
@@ -105,7 +117,7 @@ protected:
         const JitBuildSettings* settings,
         const string& src,
         const string& obj) const;
-    void link(const string& log_file, const string& out_path) const;
+    void link(const string& log_file, const string& out_path, const JitBuildSettings* settings) const;
     void weaken(const string& log_file, const string& out_path) const;
     void copy_kernel(const string& kernel_in_path, const string& op_out_path) const;
     void extract_zone_src_locations(const string& log_file) const;
@@ -161,30 +173,10 @@ public:
     JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuiltStateConfig& build_config);
 };
 
-// Abstract base class for kernel specialization
-// Higher levels of the SW derive from this and fill in build details not known to the build system
-// (eg, API specified settings)
-class JitBuildSettings {
-public:
-    virtual const string& get_full_kernel_name() const = 0;
-    virtual void process_defines(const std::function<void(const string& define, const string& value)>) const = 0;
-    virtual void process_compile_time_args(const std::function<void(int i, uint32_t value)>) const = 0;
-
-private:
-    bool use_multi_threaded_compile = true;
-};
-
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings);
 void jit_build_set(const JitBuildStateSet& builds, const JitBuildSettings* settings);
 void jit_build_subset(const JitBuildStateSubset& builds, const JitBuildSettings* settings);
 
-inline void launch_build_step(const std::function<void()> build_func, std::vector<std::shared_future<void>>& events) {
-    events.emplace_back(detail::async(build_func));
-}
+void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events);
 
-inline void sync_build_step(std::vector<std::shared_future<void>>& events) {
-    for (auto& f : events) {
-        f.get();
-    }
-}
 }  // namespace tt::tt_metal

@@ -54,9 +54,9 @@
 #define MEM_BRISC_FIRMWARE_SIZE (5 * 1024 + 624)
 // TODO: perhaps put NCRISC FW in the scratch area and free 1.5K after init (GS/WH)
 #define MEM_NCRISC_FIRMWARE_SIZE 1824
-#define MEM_TRISC0_FIRMWARE_SIZE 1536
+#define MEM_TRISC0_FIRMWARE_SIZE (1536 + 128)
 #define MEM_TRISC1_FIRMWARE_SIZE 1536
-#define MEM_TRISC2_FIRMWARE_SIZE 1536
+#define MEM_TRISC2_FIRMWARE_SIZE (1536 + 128)
 
 #define MEM_BRISC_KERNEL_SIZE (24 * 1024)
 #define MEM_NCRISC_KERNEL_SIZE MEM_NCRISC_IRAM_SIZE
@@ -71,7 +71,7 @@
 #define MEM_L1_BARRIER 12
 #define MEM_MAILBOX_BASE 16
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 12256
+#define MEM_MAILBOX_SIZE 12640
 // These are used in ncrisc-halt.S, asserted in ncrisc.cc to be valid
 #define MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS MEM_MAILBOX_BASE + 4
 #define MEM_SLAVE_RUN_MAILBOX_ADDRESS MEM_MAILBOX_BASE + 8

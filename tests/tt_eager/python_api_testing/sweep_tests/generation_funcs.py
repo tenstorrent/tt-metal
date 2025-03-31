@@ -982,20 +982,6 @@ def gen_scalar_args(
             yield input_info
 
 
-def gen_conv2d_args(
-    input_shapes,
-    dtypes,
-    layouts,
-    mem_configs,
-    do_sanitize_args=True,
-    coregrid=[],
-):
-    for input_info in gen_conv_scalar_args(
-        input_shapes, dtypes, layouts, mem_configs, "conv_params", torch.int, do_sanitize_args=do_sanitize_args
-    ):
-        yield input_info
-
-
 def gen_conv_scalar_args(
     input_shapes,
     supported_dtypes,
@@ -1520,7 +1506,7 @@ def gen_polyval_args(
             yield input_info
 
 
-def gen_arange_args(input_shapes, dtypes, layouts, mem_configs, low=-100, high=100, do_sanitize_args=True):
+def gen_arange_args(input_shapes, dtypes, layouts, mem_configs, low=-100, high=100, do_sanitize_args=True, coregrid=[]):
     for input_info in gen_two_scalar_args(
         input_shapes,
         dtypes,

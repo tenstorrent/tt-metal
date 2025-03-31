@@ -278,8 +278,7 @@ def test_tensor_conversion_between_torch_and_tt_tile(
     else:
         shard_grid = grid_override
 
-    shard_halo = False
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
 
     two_d_shape = (tensor_shape[0] * tensor_shape[1] * tensor_shape[2], tensor_shape[3])
     num_tiles_width = (two_d_shape[1]) / TILE_WIDTH
@@ -339,7 +338,6 @@ def test_tensor_conversion_between_torch_and_tt_rm(
     num_pages_height = tensor_shape[3] / shard_shape[1]
 
     shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
-    shard_halo = False
     if buffer_type == ttnn.BufferType.DRAM:
         shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
     else:
@@ -347,7 +345,7 @@ def test_tensor_conversion_between_torch_and_tt_rm(
             device.compute_with_storage_grid_size().x - 1, device.compute_with_storage_grid_size().y - 1
         )
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), shard_grid)})
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation, shard_halo)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
 
     if debug:
         torch_tensor = get_debug_tensor(

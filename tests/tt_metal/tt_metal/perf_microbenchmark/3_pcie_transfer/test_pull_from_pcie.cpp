@@ -8,13 +8,18 @@
 #include <string>
 #include <vector>
 
-#include "common/bfloat16.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/impl/dispatch/command_queue_interface.hpp"
-#include "tt_metal/impl/dispatch/memcpy.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/command_queue_interface.hpp>
+#include <tt-metalium/memcpy.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <thread>
+
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
+
+#include "test_common.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -214,7 +219,7 @@ int main(int argc, char** argv) {
 
         // Device setup
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
         CoreCoord logical_core(0, 0);
         CoreCoord physical_core = device->worker_core_from_logical_core(logical_core);
 
@@ -225,8 +230,8 @@ int main(int argc, char** argv) {
         uint32_t hugepage_size = tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel);
         uint32_t host_write_ptr = 0;
 
-        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
-        uint32_t prefetch_q_base = dispatch_constants::get(dispatch_core_type)
+        CoreType dispatch_core_type = get_dispatch_core_type();
+        uint32_t prefetch_q_base = DispatchMemMap::get(dispatch_core_type)
                                        .get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
 
         uint32_t reg_addr = prefetch_q_base;
@@ -234,7 +239,7 @@ int main(int argc, char** argv) {
 
         std::vector<uint32_t> go_signal = {0};
         std::vector<uint32_t> done_signal = {1};
-        uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
+        uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         tt_metal::detail::WriteToDeviceL1(device, logical_core, l1_unreserved_base, go_signal);
 
         // Application setup

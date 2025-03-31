@@ -5,8 +5,10 @@
 #include <gtest/gtest.h>
 
 #include "galaxy_fixture.hpp"
-#include "tt_metal/llrt/tt_cluster.hpp"
-#include "tt_metal/host_api.hpp"
+#include "tt_cluster.hpp"
+#include <tt-metalium/host_api.hpp>
+
+namespace tt::tt_metal {
 
 using namespace tt;
 
@@ -46,7 +48,7 @@ std::unordered_set<chip_id_t> get_ethernet_connected_device_ids(const chip_id_t 
 // shelf, and currently tt::Cluster does not expose a way of determining
 // which shelf a particular Galaxy chip is on.
 TEST_F(TGFixture, ActiveEthValidateNumLinksBetweenAdjacentGalaxyChips) {
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         const chip_id_t device_id = device->id();
         if (is_galaxy_device(device_id)) {
             std::unordered_map<chip_id_t, uint32_t> connected_devices_to_num_links_found;
@@ -77,7 +79,7 @@ TEST_F(TGFixture, ActiveEthValidateNumLinksBetweenAdjacentGalaxyChips) {
 // Validate that each MMIO chip links to two separate Galaxy chips,
 // and that each Galaxy chip links to at most one MMIO chip
 TEST_F(GalaxyFixture, ActiveEthValidateLinksBetweenMMIOAndGalaxyChips) {
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         const chip_id_t device_id = device->id();
         const std::unordered_set<chip_id_t>& connected_device_ids = get_ethernet_connected_device_ids(device_id);
         if (is_galaxy_device(device_id)) {
@@ -112,10 +114,10 @@ TEST_F(GalaxyFixture, ActiveEthValidateLinksBetweenMMIOAndGalaxyChips) {
 
 // Validate that all galaxy chips are unharvested
 TEST_F(GalaxyFixture, ValidateAllGalaxyChipsAreUnharvested) {
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         const chip_id_t device_id = device->id();
         if (is_galaxy_device(device_id)) {
-            const uint32_t harvest_mask = tt::Cluster::instance().get_harvested_rows(device_id);
+            const uint32_t harvest_mask = tt::Cluster::instance().get_harvesting_mask(device_id);
             ASSERT_TRUE(harvest_mask == 0)
                 << "Harvest mask for chip " << device_id << ": " << harvest_mask << std::endl;
         }
@@ -124,11 +126,11 @@ TEST_F(GalaxyFixture, ValidateAllGalaxyChipsAreUnharvested) {
 
 // Validate that all MMIO chips have a single row harvested
 TEST_F(GalaxyFixture, ValidateAllMMIOChipsHaveSingleRowHarvested) {
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         const chip_id_t device_id = device->id();
         if (!is_galaxy_device(device_id)) {
             uint32_t num_rows_harvested = 0;
-            uint32_t harvest_mask = tt::Cluster::instance().get_harvested_rows(device_id);
+            uint32_t harvest_mask = tt::Cluster::instance().get_harvesting_mask(device_id);
             while (harvest_mask) {
                 if (harvest_mask & 1) {
                     num_rows_harvested++;
@@ -155,7 +157,7 @@ TEST_F(TGFixture, ValidateNumGalaxyChips) {
 TEST_F(TGFixture, ValidateChipBoardTypes) {
     uint32_t num_n150_chips = 0;
     uint32_t num_galaxy_chips = 0;
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         const chip_id_t device_id = device->id();
         if (is_galaxy_device(device_id)) {
             num_galaxy_chips++;
@@ -181,7 +183,7 @@ TEST_F(TGGFixture, ValidateNumGalaxyChips) {
 TEST_F(TGGFixture, ValidateChipBoardTypes) {
     uint32_t num_n150_chips = 0;
     uint32_t num_galaxy_chips = 0;
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         const chip_id_t device_id = device->id();
         if (is_galaxy_device(device_id)) {
             num_galaxy_chips++;
@@ -192,3 +194,5 @@ TEST_F(TGGFixture, ValidateChipBoardTypes) {
     ASSERT_TRUE(num_galaxy_chips == 64) << "Detected " << num_galaxy_chips << " Galaxy chips" << std::endl;
     ASSERT_TRUE(num_n150_chips == 8) << "Detected " << num_n150_chips << " N150 chips" << std::endl;
 }
+
+}  // namespace tt::tt_metal

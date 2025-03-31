@@ -5,8 +5,7 @@
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "prod_nc_op.hpp"
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
 
 namespace tt {
 
@@ -22,9 +21,9 @@ void Prod::validate(const std::vector<Tensor>& inputs) const {
     const auto& input = inputs.at(0);
     const auto& output = inputs.at(1);
 
-    auto input_shape = input.get_legacy_shape();
+    auto input_shape = input.get_padded_shape();
     TT_FATAL((input_shape.rank() == 4), "rank should be 4");
-    const auto& output_shape = output.get_legacy_shape();
+    const auto& output_shape = output.get_padded_shape();
     auto input_shape_wo_padding = input.get_logical_shape();
     const auto& output_shape_wo_padding = output.get_logical_shape();
 
@@ -57,19 +56,18 @@ operation::ProgramWithCallbacks Prod::create_program(
     return prod_nc_format(input, output, dim);
 }
 
-tt::tt_metal::LegacyShape compute_output_shape(const tt::tt_metal::LegacyShape& input_shape, const int64_t& dim) {
+ttnn::Shape compute_output_shape(const ttnn::Shape& input_shape, const int64_t& dim) {
     auto output_shape = input_shape;
-    auto padding = output_shape.padding();
     switch (dim) {
         case 0:
         case 1: output_shape[dim] = 1; break;
     }
 
-    return {tt::tt_metal::LegacyShape(output_shape, padding)};
+    return output_shape;
 }
 
 inline Tensor create_output_tensor(
-    const Tensor& input_tensor, const tt::tt_metal::LegacyShape& output_shape, const MemoryConfig& mem_config) {
+    const Tensor& input_tensor, const ttnn::Shape& output_shape, const MemoryConfig& mem_config) {
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE);
     return create_device_tensor(
         output_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config);
@@ -83,11 +81,10 @@ Tensor prod_(const Tensor& input, const Tensor& output, const int64_t& dim) {
 
 // output creation inside
 Tensor prod_(const Tensor& input, const int64_t& dim, const MemoryConfig& mem_config) {
-    const auto& input_shape = input.get_legacy_shape();
-    const auto& output_shape = compute_output_shape(input_shape, dim);
+    const auto& input_shape = input.get_padded_shape();
+    auto output_shape = compute_output_shape(input_shape, dim);
     auto output = create_output_tensor(input, output_shape, mem_config);
 
-    const auto& output_shape_wo_padding = output.get_legacy_shape().without_padding();
     operation::run(Prod{.dim = dim}, {input, output});
     return output;
 }

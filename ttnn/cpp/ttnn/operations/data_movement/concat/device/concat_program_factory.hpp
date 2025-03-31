@@ -4,10 +4,9 @@
 
 #pragma once
 
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
-#include "ttnn/cpp/ttnn/operation.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/util.hpp>
+#include "cpp/ttnn/operation.hpp"
 
 #include "ttnn/operation.hpp"
 namespace ttnn::operations::data_movement::detail {

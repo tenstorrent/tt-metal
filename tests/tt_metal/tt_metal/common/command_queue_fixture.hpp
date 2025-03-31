@@ -7,18 +7,21 @@
 #include "gtest/gtest.h"
 #include "dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
-#include "impl/device/device.hpp"
+#include <tt-metalium/device_impl.hpp>
 #include "umd/device/types/cluster_descriptor_types.h"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/common/tt_backend_api_types.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
+#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "rtoptions.hpp"
+#include "llrt.hpp"
+
+namespace tt::tt_metal {
 
 class CommandQueueFixture : public DispatchFixture {
 protected:
-    tt::tt_metal::Device* device_;
+    tt::tt_metal::IDevice* device_;
     void SetUp() override {
         this->validate_dispatch_mode();
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
@@ -102,8 +105,8 @@ protected:
         }
     }
 
-    std::vector<tt::tt_metal::Device*> devices_;
-    std::map<chip_id_t, tt::tt_metal::Device*> reserved_devices_;
+    std::vector<tt::tt_metal::IDevice*> devices_;
+    std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
 };
 
 class CommandQueueSingleCardBufferFixture : public CommandQueueSingleCardFixture {};
@@ -153,9 +156,13 @@ protected:
 
     void TearDown() override { tt::tt_metal::detail::CloseDevices(reserved_devices_); }
 
-    std::vector<tt::tt_metal::Device*> devices_;
-    std::map<chip_id_t, tt::tt_metal::Device*> reserved_devices_;
+    std::vector<tt::tt_metal::IDevice*> devices_;
+    std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
     size_t num_devices_;
 };
 
 class CommandQueueMultiDeviceProgramFixture : public CommandQueueMultiDeviceFixture {};
+
+class CommandQueueMultiDeviceBufferFixture : public CommandQueueMultiDeviceFixture {};
+
+}  // namespace tt::tt_metal

@@ -12,18 +12,19 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
 
-#include "tt_metal/common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "command_queue_fixture.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/device.hpp>
+
+namespace tt::tt_metal {
 
 using std::map;
 using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
-using namespace tt::tt_metal;
 
 namespace unit_tests::create_pipeline {
 
@@ -36,7 +37,7 @@ struct PipelineRowConfig {
     size_t num_repetitions;
 };
 
-void create_and_run_row_pipeline(tt_metal::Device* device, const PipelineRowConfig& test_config) {
+void create_and_run_row_pipeline(tt_metal::IDevice* device, const PipelineRowConfig& test_config) {
     CommandQueue& cq = device->command_queue();
 
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -320,3 +321,5 @@ TEST_F(CommandQueueProgramFixture, TensixTestPipelineAcrossRows) {
     test_config.num_repetitions = 128;
     unit_tests::create_pipeline::create_and_run_row_pipeline(this->device_, test_config);
 }
+
+}  // namespace tt::tt_metal

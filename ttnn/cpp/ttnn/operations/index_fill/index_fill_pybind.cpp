@@ -8,7 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "index_fill.hpp"
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/index_fill/device/index_fill_device_operation.hpp"
 
 namespace py = pybind11;

@@ -6,12 +6,10 @@
 
 #include <algorithm>
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.hpp"
-#include "ttnn/operations/math.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/allocator.hpp>
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
@@ -320,7 +318,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
     auto remote_cores = corerange_to_cores(
         remote_shard_spec.grid, std::nullopt, remote_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
-    uint32_t total_size, unit_size, local_units_per_shard, remote_units_per_shard;
+    uint32_t unit_size, local_units_per_shard, remote_units_per_shard;
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.get_dtype());
 
     uint32_t num_units = local_tensor.buffer()->num_pages();
@@ -328,14 +326,12 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
         unit_size = tt::tt_metal::detail::TileSize(data_format);
         local_units_per_shard = local_shard_spec.numel() / TILE_HW;
         remote_units_per_shard = remote_shard_spec.numel() / TILE_HW;
-        total_size = remote_units_per_shard * unit_size;
     } else {
         unit_size = local_shard_spec.shape[1] * local_tensor.element_size();
         local_units_per_shard = local_shard_spec.shape[0];
         remote_units_per_shard = remote_shard_spec.shape[0];
-        total_size = remote_units_per_shard * unit_size;
     }
-
+    const uint32_t total_size = std::min(local_units_per_shard, remote_units_per_shard) * unit_size;
     const std::string kernel_name =
         is_reader
             ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_reader.cpp"
@@ -343,16 +339,10 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
 
     bool interface_with_dram = (remote_core_type == CoreType::DRAM);
     tt::tt_metal::KernelHandle kernel_id_0 = tt::tt_metal::CreateKernel(
-        program,
-        kernel_name,
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig({cb_index, interface_with_dram}));
+        program, kernel_name, all_cores, tt::tt_metal::ReaderDataMovementConfig({cb_index, interface_with_dram}));
 
     tt::tt_metal::KernelHandle kernel_id_1 = tt::tt_metal::CreateKernel(
-        program,
-        kernel_name,
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig({cb_index, interface_with_dram}));
+        program, kernel_name, all_cores, tt::tt_metal::WriterDataMovementConfig({cb_index, interface_with_dram}));
 
     tt::tt_metal::CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(total_size, {{cb_index, data_format}})
@@ -364,8 +354,9 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
     uint32_t remote_core_units_rem = remote_units_per_shard;
     uint32_t remote_address = remote_tensor.buffer()->address();
     auto remote_buffer_type = remote_tensor.buffer()->buffer_type();
-    auto bank_id = device->bank_ids_from_logical_core(remote_buffer_type, remote_cores[remote_core_idx])[0];
-    uint32_t bank_offset = device->bank_offset(remote_buffer_type, bank_id);
+    auto bank_id =
+        device->allocator()->get_bank_ids_from_logical_core(remote_buffer_type, remote_cores[remote_core_idx])[0];
+    uint32_t bank_offset = device->allocator()->get_bank_offset(remote_buffer_type, bank_id);
 
     std::array<tt::tt_metal::KernelHandle, 2> kernels = {kernel_id_0, kernel_id_1};
     uint32_t local_units_left = num_units;
@@ -385,12 +376,13 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
                     if (remote_core_units_rem == 0) {
                         remote_core_idx++;
                         remote_core_units_rem = remote_units_per_shard;
-                        bank_id =
-                            device->bank_ids_from_logical_core(remote_buffer_type, remote_cores[remote_core_idx])[0];
-                        bank_offset = device->bank_offset(remote_buffer_type, bank_id);
+                        bank_id = device->allocator()->get_bank_ids_from_logical_core(
+                            remote_buffer_type, remote_cores[remote_core_idx])[0];
+                        bank_offset = device->allocator()->get_bank_offset(remote_buffer_type, bank_id);
                     }
                     uint32_t units_to_transfer = std::min(remote_core_units_rem, local_units_to_transfer);
-                    bank_id = device->bank_ids_from_logical_core(remote_buffer_type, remote_cores[remote_core_idx])[0];
+                    bank_id = device->allocator()->get_bank_ids_from_logical_core(
+                        remote_buffer_type, remote_cores[remote_core_idx])[0];
                     kernel_args.insert(
                         kernel_args.end(),
                         {bank_id,
@@ -458,7 +450,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
         total_size = output_shard_spec.numel() / TILE_HW * unit_size;
     } else {
         unit_size = output_shard_spec.shape[1] * output.element_size();
-        page_size = output.get_legacy_shape()[-1] * output.element_size();
+        page_size = output.get_padded_shape()[-1] * output.element_size();
         total_size = output_shard_shape[0] * unit_size;
     }
 
@@ -553,7 +545,7 @@ compute_width_sharded_reshard_runtime_args(
     const std::vector<CoreCoord>& remote_cores,
     const BufferType& remote_buffer_type,
     const CoreType& remote_core_type,
-    Device* device,
+    IDevice* device,
     uint32_t element_size) {
     const uint32_t num_local_shards = local_cores.size();
     const uint32_t num_remote_shards = remote_cores.size();
@@ -588,14 +580,14 @@ compute_width_sharded_reshard_runtime_args(
             const uint32_t remaining_output = remote_shard_width - remote_shard_offset;
             const uint32_t transfer_size = std::min(remaining_input, remaining_output);
 
-            auto bank_id =
-                device->bank_ids_from_logical_core(remote_buffer_type, remote_cores[current_remote_core_idx])[0];
-            auto bank_offset = device->bank_offset(remote_buffer_type, bank_id);
+            const auto bank_id = device->allocator()->get_bank_ids_from_logical_core(
+                remote_buffer_type, remote_cores[current_remote_core_idx])[0];
+            const auto bank_offset = device->allocator()->get_bank_offset(remote_buffer_type, bank_id);
             core_args.emplace_back(
                 element_size * transfer_size,
                 element_size * local_shard_offset,
                 bank_id,
-                element_size * remote_shard_offset + bank_offset);
+                element_size * remote_shard_offset);
 
             local_shard_offset += transfer_size;
             remote_shard_offset += transfer_size;

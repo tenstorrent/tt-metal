@@ -16,7 +16,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
 
-#include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "compute_common.hpp"
 
 namespace NAMESPACE {
@@ -79,6 +79,7 @@ void MAIN {
 
     uint32_t arg_idx = 0;
     const bool do_reduce = get_arg_val<uint32_t>(arg_idx++) == 1;
+    const bool apply_mask_at_last_chunk = do_reduce && is_causal;
     const bool do_output = get_arg_val<uint32_t>(arg_idx++) == 1;
     const uint32_t cur_head = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_batch = get_arg_val<uint32_t>(arg_idx++);
@@ -126,7 +127,7 @@ void MAIN {
         num_cores_to_wait = k_num_chunks - 1;
     }
 
-    mm_init();
+    mm_init(cb_q_in, cb_k_in, cb_out_final);
     cb_wait_front(cb_q_in, q_chunk_tiles);
 
     for (uint32_t cur_head_work = 0; cur_head_work < num_heads_per_core; ++cur_head_work) {
@@ -136,6 +137,8 @@ void MAIN {
             DHt,
             Sq_chunk_t,
             Sk_chunk_t,
+            qk_chunk_tiles,
+            out_chunk_tiles,
             // QK matmul block parameters
             qk_in0_block_w,
             qk_subblock_w,
@@ -170,7 +173,7 @@ void MAIN {
             cb_exp_max_diff,
             cb_out_o,
             cb_out_m,
-            cb_out_l>(k_chunk_start, k_chunk_end, do_reduce, qk_chunk_tiles, out_chunk_tiles);
+            cb_out_l>(k_chunk_start, k_chunk_end, do_reduce, apply_mask_at_last_chunk);
 
         // do reduction across intermediates from other cores if this is the reduction core
         if (do_reduce) {
@@ -181,10 +184,6 @@ void MAIN {
                 // This indicates that there are computes done by other workers. Needs to wait for them and send to
                 // reducer's compute
                 for (uint32_t i = 0; i < num_cores_to_wait; i++) {
-                    cb_wait_front(cb_out_o, q_chunk_tiles);  // o_2
-                    cb_wait_front(cb_m_in, Sq_chunk_t);      // m_2
-                    cb_wait_front(cb_l_in, Sq_chunk_t);      // l_2
-
                     // reconfig_data_format(cb_q_in, cb_q_in); // DEBUG
                     // pack_reconfig_data_format(cb_out_accumulate_im_2);
                     copy_block(cb_out_o, cb_out_accumulate_im_2, q_chunk_tiles);

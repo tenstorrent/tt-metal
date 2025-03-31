@@ -23,7 +23,7 @@ Note that the core coordinates are logical coordinates, so worker cores and ethe
 
     export TT_METAL_DPRINT_CORES=0,0                    # required, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all OR worker OR dispatch
     export TT_METAL_DPRINT_ETH_CORES=0,0                # optional, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all OR worker OR dispatch
-    export TT_METAL_DPRINT_CHIPS=0                      # optional, comma separated list of chips
+    export TT_METAL_DPRINT_CHIPS=0                      # optional, comma separated list of chips OR all. Default is all.
     export TT_METAL_DPRINT_RISCVS=BR                    # optional, default is all RISCs. Use a subset of BR,NC,TR0,TR1,TR2
     export TT_METAL_DPRINT_FILE=log.txt                 # optional, default is to print to the screen
     export TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC=0   # optional, enabled by default. Prepends prints with <device id>:(<core x>, <core y>):<RISC>:.
@@ -88,7 +88,8 @@ An example of how to print data from a CB (in this case, ``CBIndex::c_25``) is s
 to the current CB read or write pointer. This means that for printing a tile read from the front of the CB, the
 ``DPRINT`` call has to occur between the ``cb_wait_front`` and ``cb_pop_front`` calls. For printing a tile from the
 back of the CB, the ``DPRINT`` call has to occur between the ``cb_reserve_back`` and ``cb_push_back`` calls. Currently supported data
-formats for printing from CBs are ``DataFormat::Float32``, ``DataFormat::Float16_b``, ``DataFormat::Bfp8_b``, and ``DataFormat::Bfp4_b``.
+formats for printing from CBs are ``DataFormat::Float32``, ``DataFormat::Float16_b``, ``DataFormat::Bfp8_b``, ``DataFormat::Bfp4_b``,
+``DataFormat::Int8``, ``DataFormat::UInt8``, ``DataFormat::UInt16``, ``DataFormat::Int32``, and ``DataFormat::UInt832``.
 
 .. code-block:: c++
 

@@ -7,6 +7,7 @@ namespace ttnn::operations::experimental::detail {
 
 using namespace tt::constants;
 
-operation::ProgramWithCallbacks plusone_single_core(const Tensor& input);
+tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
+    const Tensor& input, const std::optional<CoreRangeSet>& sub_core_grids);
 
 }  // namespace ttnn::operations::experimental::detail

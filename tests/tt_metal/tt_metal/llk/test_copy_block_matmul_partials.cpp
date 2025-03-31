@@ -5,6 +5,8 @@
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
+namespace tt::tt_metal {
+
 using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
@@ -27,7 +29,7 @@ struct CopyBlockMatmulPartialsConfig {
 };
 
 void run_single_core_copy_block_matmul_partials(
-    tt_metal::Device* device, const CopyBlockMatmulPartialsConfig& test_config) {
+    tt_metal::IDevice* device, const CopyBlockMatmulPartialsConfig& test_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -225,3 +227,5 @@ TEST_F(DeviceFixture, TensixComputeCopyBlockComputeBottleneck) {
         }
     }
 }
+
+}  // namespace tt::tt_metal

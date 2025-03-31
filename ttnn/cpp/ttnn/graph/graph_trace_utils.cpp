@@ -10,7 +10,7 @@
 
 #include "graph_consts.hpp"
 #include "graph_processor.hpp"
-#include "tt_metal/common/assert.hpp"
+#include <tt-metalium/assert.hpp>
 
 namespace ttnn::graph {
 
@@ -42,7 +42,7 @@ ttnn::Shape parse_shape(std::string_view shape_string) {
         }
     }
 
-    return ttnn::Shape(shape);
+    return ttnn::Shape(std::move(shape));
 }
 }  // namespace
 
@@ -152,6 +152,23 @@ std::vector<std::string> extract_calltrace(const nlohmann::json& trace) {
     }
 
     return op_calls;
+}
+
+std::vector<OperationInfo> extract_arguments(const nlohmann::json& trace) {
+    std::vector<OperationInfo> operations;
+    size_t i = 0;
+    while (i < trace.size()) {
+        const auto& v = trace[i];
+        i++;
+        OperationInfo info;
+        if (v[kArguments].size() > 0) {
+            info.operation_name = v[kParams][kName];
+            info.arguments = v[kArguments];
+            operations.push_back(info);
+        }
+    }
+
+    return operations;
 }
 
 std::unordered_set<uint32_t> extract_output_tensors(const nlohmann::json& trace) {

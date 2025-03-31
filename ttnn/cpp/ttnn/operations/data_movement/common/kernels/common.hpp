@@ -20,10 +20,11 @@ FORCE_INLINE void enhanced_noc_async_read(
     const uint64_t src_noc_addr, const uint32_t dst_l1_addr, const uint32_t bytes) {
     // If you do not know the max_transfer_size at compile time write 0 to it.
     // only reads is true if we ONLY use noc_async_read and all calls to tt_memmove have use_read_datamover as True
-    if constexpr (((max_transfer_size < NOC_MAX_BURST_SIZE) && (max_transfer_size != 0)) || only_reads) {
+    if constexpr (only_reads) {
         noc_async_read_one_packet(src_noc_addr, dst_l1_addr, bytes);
     } else {
-        noc_async_read(src_noc_addr, dst_l1_addr, bytes);
+        noc_async_read<max_transfer_size == 0 ? NOC_MAX_BURST_SIZE + 1 : max_transfer_size>(
+            src_noc_addr, dst_l1_addr, bytes);
     }
 }
 
@@ -174,6 +175,11 @@ FORCE_INLINE void transpose_2d(
             }
         }
     }
+}
+
+template <uint32_t AlignReq>
+FORCE_INLINE uint32_t align_address(const uint32_t address, const uint64_t mask) {
+    return (address & mask) + AlignReq;
 }
 
 }  // namespace tt::data_movement::common

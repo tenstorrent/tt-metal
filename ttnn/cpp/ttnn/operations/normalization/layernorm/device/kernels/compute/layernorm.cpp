@@ -44,17 +44,17 @@ void MAIN {
 #else
     constexpr uint32_t cb_xmm = tt::CBIndex::c_24;  // x minus mean
 #endif
-    constexpr auto cb_ex = tt::CBIndex::c_25;      // E[x]
-    constexpr auto cb_ex2 = tt::CBIndex::c_26;     // E[(x-E[x])^2]
-    constexpr auto cb_xmm2 = tt::CBIndex::c_27;    // xmm^2
-    constexpr auto cb_ex2pe = tt::CBIndex::c_28;   // E[(x-E[x])^2]+eps
-    constexpr auto cb_fusion = tt::CBIndex::c_29;  // stream gamma/beta
+    constexpr auto cb_ex = tt::CBIndex::c_18;      // E[x]
+    constexpr auto cb_ex2 = tt::CBIndex::c_19;     // E[(x-E[x])^2]
+    constexpr auto cb_xmm2 = tt::CBIndex::c_20;    // xmm^2
+    constexpr auto cb_ex2pe = tt::CBIndex::c_21;   // E[(x-E[x])^2]+eps
+    constexpr auto cb_fusion = tt::CBIndex::c_22;  // stream gamma/beta
     constexpr auto scaler0 = 0;
 #ifdef FUSE_PRE_ADD
 #ifdef RMSNORM
     constexpr uint32_t cb_x = cb_xmm;
 #else
-    constexpr uint32_t cb_x = tt::CBIndex::c_30;
+    constexpr uint32_t cb_x = tt::CBIndex::c_23;
 #endif
 #else
     constexpr uint32_t cb_x = cb_in;
@@ -81,7 +81,7 @@ void MAIN {
 #ifdef FUSE_PRE_ADD
         reconfig_data_format(cb_in, cb_inb);
         pack_reconfig_data_format(cb_x);
-        add_tiles_init();
+        add_tiles_init(cb_in, cb_inb);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             ACQ();
             // UNPACK(( { DPRINT  << "Waiting on cb_x" << ENDL(); } ));
@@ -122,7 +122,7 @@ void MAIN {
          */
         ACQ();
         cb_reserve_back(cb_ex, onetile);
-        reduce_init_delta<false>();
+        reduce_init_delta<false>(cb_x, cb_scaler, cb_ex);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_x, wt + blk);
             for (uint32_t j = 0; j < blk; j++) {
@@ -131,7 +131,7 @@ void MAIN {
             // we don't pop cb_x until we compute Ex
         }
         pack_tile(dst0, cb_ex);
-        reduce_revert_delta();
+        reduce_revert_delta(cb_ex);
         REL();
 
         cb_push_back(cb_ex, 1);
@@ -145,7 +145,7 @@ void MAIN {
         }
         cb_wait_front(cb_ex, 1);  // should have 1 tile
         cb_reserve_back(cb_xmm, Wt);
-        sub_bcast_cols_init_short();
+        sub_bcast_cols_init_short(cb_x, cb_ex);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             ACQ();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
@@ -166,7 +166,7 @@ void MAIN {
         /* (x - E[x])^2
          * compute temp = xmm*xmm = (x-E[x])^2
          */
-        mul_tiles_init();
+        mul_tiles_init(cb_xmm, cb_xmm);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_xmm, wt + blk);  // cumulative wait
             cb_reserve_back(cb_xmm2, blk);    // can probably use less space for this if we block
@@ -193,7 +193,7 @@ void MAIN {
             reconfig_data_format(cb_xmm2, cb_scaler);
         }
         cb_reserve_back(cb_ex2, 1);
-        reduce_init_delta<false>();
+        reduce_init_delta<false>(cb_xmm2, cb_scaler, cb_ex2);
         ACQ();
         cb_wait_front(cb_xmm2, Wt);
         // cb_wait_front(cb_xmm, Wt);
@@ -206,7 +206,7 @@ void MAIN {
         }
         cb_pop_front(cb_xmm2, Wt);
         pack_tile(dst0, cb_ex2);
-        reduce_revert_delta();
+        reduce_revert_delta(cb_ex2);
         REL();
 
         cb_push_back(cb_ex2, 1);
@@ -219,7 +219,7 @@ void MAIN {
             reconfig_data_format(cb_ex2, cb_eps);
         }
         ACQ();
-        add_tiles_init();
+        add_tiles_init(cb_ex2, cb_eps);
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
 
         cb_reserve_back(cb_ex2pe, 1);  // 1
@@ -252,7 +252,7 @@ void MAIN {
             reconfig_data_format_srca(cb_fusion, cb_xmm);
 #endif
             ACQ();
-            mul_bcast_cols_init_short();
+            mul_bcast_cols_init_short(cb_xmm, cb_ex2pe);
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 // cb_xmm[wt+wtr] since we pop Wt from cb_xmm after the entire loop
                 mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, wt + wtr, 0, wtr);  // tile *= 1/(sum(exp(x)))
@@ -273,7 +273,7 @@ void MAIN {
                 reconfig_data_format_srcb(cb_ex2pe, cb_gamma);
                 ACQ();
                 uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
-                mul_bcast_rows_init_short();
+                mul_bcast_rows_init_short(cb_fusion, cb_gamma);
                 cb_reserve_back(cb_outg, blk);
                 cb_wait_front(cb_gamma, wt + blk);  // we don't pop, TODO: only wait on first ht
                 cb_wait_front(cb_fusion, blk);
@@ -295,7 +295,7 @@ void MAIN {
                     reconfig_data_format_srcb(cb_ex2pe, cb_beta);
                 }
                 ACQ();
-                add_bcast_rows_init_short();
+                add_bcast_rows_init_short(cb_fusion, cb_beta);
                 cb_reserve_back(cb_out, blk);
                 cb_wait_front(cb_beta, wt + blk);  // TODO: optimization - only wait on first ht
                 cb_wait_front(cb_fusion, blk);

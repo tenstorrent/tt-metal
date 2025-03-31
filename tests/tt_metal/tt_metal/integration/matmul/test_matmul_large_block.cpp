@@ -3,13 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dispatch_fixture.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "test_tiles.hpp"
+#include <tt-metalium/tilize_utils.hpp>
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "matmul_test_utils.hpp"
+
+namespace tt::tt_metal {
 
 using std::vector;
 using namespace tt;
@@ -38,7 +40,7 @@ void set_math_fid_masks(uint16_t& math_fid_mask, MathFidelity math_fidelity = Ma
 
 void create_CBs_for_fused_matmul(
     tt_metal::Program& program,
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     CoreCoord core,
     bool activations_rm,
     bool output_rm,
@@ -171,8 +173,8 @@ void create_CBs_for_fused_matmul(
 }
 
 bool matmul_large_block(
-    DispatchFixture* fixture,
-    tt_metal::Device* device,
+    tt_metal::DispatchFixture* fixture,
+    tt_metal::IDevice* device,
     bool activations_rm,
     bool output_rm,
     MathFidelity math_fidelity = MathFidelity::HiFi4) {
@@ -339,14 +341,14 @@ bool matmul_large_block(
         activations = pack_bfloat16_vec_into_uint32_vec(tensor.get_values());
     } else {
         auto activations_tilized = test_utils::tilize(tensor.get_values(), M * 32, K * 32);
-        auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
+        auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
         activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
     }
     fixture->WriteBuffer(device, src0_dram_buffer, activations);
 
     auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);  // bflaot16 32x32 identity
     auto identity_tilized = test_utils::tilize(identity, K * 32, N * 32);
-    auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
+    auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
     fixture->WriteBuffer(device, src1_dram_buffer, weights);
 
@@ -376,19 +378,19 @@ bool matmul_large_block(
     if (output_rm) {
         pass &= (golden == result_bfp16);
         if (not pass) {
-            print_faces(result_bfp16, "Result");
+            tt_metal::print_faces(result_bfp16, "Result");
         }
     } else {
-        auto result_flat_layout = convert_to_flat_layout(result_bfp16);
+        auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
         auto result_untilized = test_utils::untilize(result_flat_layout, M * 32, N * 32);
         pass &= (golden == result_untilized);
         if (not pass) {
-            print_faces(result_untilized, "Result");
+            tt_metal::print_faces(result_untilized, "Result");
         }
     }
 
     if (not pass) {
-        print_faces(tensor.get_values(), "Golden");
+        tt_metal::print_faces(tensor.get_values(), "Golden");
     }
     return pass;
 }
@@ -417,3 +419,5 @@ TEST_F(DispatchFixture, TensixMatmulLargeBlock) {
         }
     }
 }
+
+}  // namespace tt::tt_metal

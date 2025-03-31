@@ -10,9 +10,6 @@
 #include <cstring>
 #include <string>
 
-#include "impl/debug/dprint_server.hpp"
-#include "tools/profiler/profiler_state.hpp"
-
 using std::vector;
 
 namespace tt {
@@ -31,12 +28,21 @@ const char* RunTimeDebugClassNames[RunTimeDebugClassCount] = {"N/A", "worker", "
 
 static const char* TT_METAL_HOME_ENV_VAR = "TT_METAL_HOME";
 static const char* TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
+// Set this var to change the cache dir.
+static const char* TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
 
 RunTimeOptions::RunTimeOptions() {
     const char* root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
     if (root_dir_str != nullptr) {
         this->is_root_dir_env_var_set = true;
         this->root_dir = std::string(root_dir_str) + "/";
+    }
+
+    // Check if user has specified a cache path.
+    const char* cache_dir_str = std::getenv(TT_METAL_CACHE_ENV_VAR);
+    if (cache_dir_str != nullptr) {
+        this->is_cache_dir_env_var_set = true;
+        this->cache_dir_ = std::string(cache_dir_str) + "/tt-metal-cache/";
     }
 
     const char* kernel_dir_str = std::getenv(TT_METAL_KERNEL_PATH_ENV_VAR);
@@ -73,7 +79,19 @@ RunTimeOptions::RunTimeOptions() {
             profiler_sync_enabled = true;
         }
     }
-    const char* profile_buffer_usage_str = std::getenv("TT_METAL_MEM_PROFILER");
+
+    const char *profiler_noc_events_str = std::getenv("TT_METAL_DEVICE_PROFILER_NOC_EVENTS");
+    if (profiler_noc_events_str != nullptr && profiler_noc_events_str[0] == '1') {
+        profiler_enabled = true;
+        profiler_noc_events_enabled = true;
+    }
+
+    const char *profiler_noc_events_report_path_str = std::getenv("TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH");
+    if (profiler_noc_events_report_path_str != nullptr) {
+        profiler_noc_events_report_path = profiler_noc_events_report_path_str;
+    }
+
+    const char *profile_buffer_usage_str = std::getenv("TT_METAL_MEM_PROFILER");
     if (profile_buffer_usage_str != nullptr && profile_buffer_usage_str[0] == '1') {
         profiler_buffer_usage_enabled = true;
     }
@@ -83,6 +101,8 @@ RunTimeOptions::RunTimeOptions() {
         "Cannot enable both debug printing and profiling");
 
     null_kernels = (std::getenv("TT_METAL_NULL_KERNELS") != nullptr);
+
+    kernels_early_return = (std::getenv("TT_METAL_KERNELS_EARLY_RETURN") != nullptr);
 
     clear_l1 = false;
     const char* clear_l1_enabled_str = std::getenv("TT_METAL_CLEAR_L1");
@@ -110,13 +130,16 @@ RunTimeOptions::RunTimeOptions() {
         }
     }
 
+    const char* fb_fabric = getenv("TT_METAL_FD_FABRIC");
+    fb_fabric_en = fb_fabric != nullptr;
+
     const char* dispatch_data_collection_str = std::getenv("TT_METAL_DISPATCH_DATA_COLLECTION");
     if (dispatch_data_collection_str != nullptr) {
         enable_dispatch_data_collection = true;
     }
 
     if (getenv("TT_METAL_GTEST_ETH_DISPATCH")) {
-        this->dispatch_core_config.set_dispatch_core_type(tt_metal::DispatchCoreType::ETH);
+        this->dispatch_core_type = tt_metal::DispatchCoreType::ETH;
     }
 
     if (getenv("TT_METAL_SKIP_LOADING_FW")) {
@@ -126,6 +149,17 @@ RunTimeOptions::RunTimeOptions() {
     if (getenv("TT_METAL_SKIP_DELETING_BUILT_CACHE")) {
         this->skip_deleting_built_cache = true;
     }
+
+    this->enable_hw_cache_invalidation = (std::getenv("TT_METAL_ENABLE_HW_CACHE_INVALIDATION") != nullptr);
+
+    if (std::getenv("TT_METAL_SIMULATOR")) {
+        this->simulator_enabled = true;
+        this->simulator_path = std::getenv("TT_METAL_SIMULATOR");
+    }
+
+    if (getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
+        this->erisc_iram_enabled = true;
+    }
 }
 
 const std::string& RunTimeOptions::get_root_dir() {
@@ -134,6 +168,13 @@ const std::string& RunTimeOptions::get_root_dir() {
     }
 
     return root_dir;
+}
+
+const std::string& RunTimeOptions::get_cache_dir() {
+    if (!this->is_cache_dir_specified()) {
+        TT_THROW("Env var {} is not set.", TT_METAL_CACHE_ENV_VAR);
+    }
+    return this->cache_dir_;
 }
 
 const std::string& RunTimeOptions::get_kernel_dir() const {
@@ -165,6 +206,12 @@ void RunTimeOptions::ParseWatcherEnv() {
 
     const char* watcher_noinline_str = getenv("TT_METAL_WATCHER_NOINLINE");
     watcher_noinline = (watcher_noinline_str != nullptr);
+
+    const char* watcher_phys_str = getenv("TT_METAL_WATCHER_PHYS_COORDS");
+    watcher_phys_coords = (watcher_phys_str != nullptr);
+
+    const char* watcher_text_start_str = getenv("TT_METAL_WATCHER_TEXT_START");
+    watcher_text_start = (watcher_text_start_str != nullptr);
 
     // Auto unpause is for testing only, no env var.
     watcher_auto_unpause = false;
@@ -298,6 +345,11 @@ void RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std
 
     // If the environment variable is not empty, parse it.
     while (env_var_str != nullptr) {
+        // Can also have "all"
+        if (strcmp(env_var_str, "all") == 0) {
+            feature_targets[feature].all_chips = true;
+            break;
+        }
         uint32_t chip;
         if (sscanf(env_var_str, "%d", &chip) != 1) {
             TT_THROW("Invalid {}", env_var_str);
@@ -309,9 +361,9 @@ void RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std
         }
     }
 
-    // Default is no chips are specified is chip 0.
+    // Default is no chips are specified is all
     if (chips.size() == 0) {
-        chips.push_back(0);
+        feature_targets[feature].all_chips = true;
     }
     feature_targets[feature].chip_ids = chips;
 }
@@ -336,16 +388,27 @@ void RunTimeOptions::ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const s
         if (strstr(env_var_str, "TR2")) {
             riscv_mask |= RISCV_TR2;
         }
-        if (strstr(env_var_str, "TR")) {
+        if (strstr(env_var_str, "TR*")) {
             riscv_mask |= (RISCV_TR0 | RISCV_TR1 | RISCV_TR2);
         }
-        if (strstr(env_var_str, "ER")) {
-            riscv_mask |= RISCV_ER;
+        if (strstr(env_var_str, "ER0")) {
+            riscv_mask |= RISCV_ER0;
+        }
+        if (strstr(env_var_str, "ER1")) {
+            riscv_mask |= RISCV_ER1;
+        }
+        if (strstr(env_var_str, "ER*")) {
+            riscv_mask |= (RISCV_ER0 | RISCV_ER1);
+        }
+        if (riscv_mask == 0) {
+            TT_THROW(
+                "Invalid RISC selection: \"{}\". Valid values are BR,NC,TR0,TR1,TR2,TR*,ER0,ER1,ER*.", env_var_str);
         }
     } else {
         // Default is all RISCVs enabled.
         bool default_disabled = (feature == RunTimeDebugFeatures::RunTimeDebugFeatureDisableL1DataCache);
-        riscv_mask = default_disabled ? 0 : (RISCV_ER | RISCV_BR | RISCV_TR0 | RISCV_TR1 | RISCV_TR2 | RISCV_NC);
+        riscv_mask =
+            default_disabled ? 0 : (RISCV_ER0 | RISCV_ER1 | RISCV_BR | RISCV_TR0 | RISCV_TR1 | RISCV_TR2 | RISCV_NC);
     }
 
     feature_targets[feature].riscv_mask = riscv_mask;
@@ -365,6 +428,14 @@ void RunTimeOptions::ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feat
     char *env_var_str = std::getenv(env_var.c_str());
     feature_targets[feature].prepend_device_core_risc =
         (env_var_str != nullptr) ? (strcmp(env_var_str, "1") == 0) : true;
+}
+
+// Can't create a DispatchCoreConfig as part of the RTOptions constructor because the DispatchCoreConfig constructor
+// depends on RTOptions settings.
+tt_metal::DispatchCoreConfig RunTimeOptions::get_dispatch_core_config() const {
+    tt_metal::DispatchCoreConfig dispatch_core_config = tt_metal::DispatchCoreConfig{};
+    dispatch_core_config.set_dispatch_core_type(this->dispatch_core_type);
+    return dispatch_core_config;
 }
 
 }  // namespace llrt

@@ -4,6 +4,7 @@
 
 #include "moreh_getitem_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "cpp/ttnn/operations/experimental/reshape/view.hpp"
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -36,8 +37,8 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     const CoreRange allCores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     auto core_range = allCores;
 
-    auto input_shape = input.get_shape();
-    auto output_shape = output.get_shape();
+    auto input_shape = input.get_logical_shape();
+    auto output_shape = output.get_logical_shape();
 
     std::array<uint32_t, 5> new_input_shape{};
     std::array<uint32_t, 5> new_output_shape{};
@@ -59,9 +60,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     uint32_t index_end_dim = index_dims.back();
 
     Tensor input_5d = input;
-    input_5d = input_5d.reshape(input_5d_shape);
-
-    auto input_5d_shape_without_padding = input_5d_shape.value.without_padding();
+    input_5d = ttnn::experimental::view(input_5d, input_5d_shape);
 
     IndexInfo index_info[5] = {0};
 
@@ -72,10 +71,10 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
         index_info[dim].is_defined = true;
         index_info[dim].address = index_tensors[i].buffer()->address();
         index_info[dim].is_dram = is_dram(index_tensors[i]);
-        index_info[dim].unit_size = index.get_shape().value[-1] * index.element_size();
+        index_info[dim].unit_size = index.get_padded_shape()[-1] * index.element_size();
     }
 
-    uint32_t index_size = index_tensors.front().get_shape().value[-1];
+    uint32_t index_size = index_tensors.front().get_padded_shape()[-1];
 
     uint32_t input_unit_size = input_5d_shape[-1] * input_5d.element_size();
     uint32_t output_unit_size = input_unit_size;
@@ -148,9 +147,9 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
         writer_defines);
 
     uint32_t input_stick_idx_stride_h = 1;
-    uint32_t input_stick_idx_stride_d = input_stick_idx_stride_h * input_5d_shape.value.without_padding()[3];
-    uint32_t input_stick_idx_stride_c = input_stick_idx_stride_d * input_5d_shape.value.without_padding()[2];
-    uint32_t input_stick_idx_stride_n = input_stick_idx_stride_c * input_5d_shape.value.without_padding()[1];
+    uint32_t input_stick_idx_stride_d = input_stick_idx_stride_h * input_5d_shape[3];
+    uint32_t input_stick_idx_stride_c = input_stick_idx_stride_d * input_5d_shape[2];
+    uint32_t input_stick_idx_stride_n = input_stick_idx_stride_c * input_5d_shape[1];
 
     // Set Runtime Args
     auto core_x_offset = core_range.start_coord.x;
@@ -179,11 +178,11 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
             input_stick_idx_stride_d,
             input_stick_idx_stride_h,
 
-            input_5d_shape_without_padding[0],
-            input_5d_shape_without_padding[1],
-            input_5d_shape_without_padding[2],
-            input_5d_shape_without_padding[3],
-            input_5d_shape_without_padding[4],
+            input_5d_shape[0],
+            input_5d_shape[1],
+            input_5d_shape[2],
+            input_5d_shape[3],
+            input_5d_shape[4],
 
             // index
             index_info[0].is_defined,

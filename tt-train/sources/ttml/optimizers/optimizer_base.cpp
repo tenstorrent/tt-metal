@@ -4,6 +4,7 @@
 
 #include "optimizer_base.hpp"
 
+#include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 
 namespace ttml::optimizers {

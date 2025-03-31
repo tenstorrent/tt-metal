@@ -5,7 +5,7 @@
 #pragma once
 
 #include <vector>
-#include "tt_metal/tt_stl/reflection.hpp"
+#include <tt_stl/reflection.hpp>
 
 namespace ttnn::operations::unary {
 
@@ -24,6 +24,7 @@ enum class UnaryOpType {
     SIN,
     COS,
     ABS,
+    ABS_INT32,
     SIGN,
     SQUARE,
     EQZ,
@@ -83,12 +84,15 @@ enum class UnaryOpType {
     FLOOR_FLOAT32,
     CEIL,
     CEIL_FLOAT32,
+    ROUND,
     LEFT_SHIFT,
     REMAINDER,
     FMOD,
     DROPOUT,
     FILL,
     PRELU_SFPU,
+    ZERO_POINT,
+    MISH,
 };
 
 struct UnaryWithParam {

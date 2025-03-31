@@ -11,7 +11,7 @@ namespace ttnn::operations::reduction {
 
 void MoeDeviceOperation::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    auto input_shape = input_tensors.at(0).get_legacy_shape();
+    auto input_shape = input_tensors.at(0).get_padded_shape();
     TT_FATAL(input_shape.rank() == 4, "Input shape must be 4D, got {}", input_shape.rank());
     TT_FATAL(this->k == 32, "K must be equal to 32, pad with -infinity if necessary to get 32, got {}", this->k);
 
@@ -31,8 +31,8 @@ void MoeDeviceOperation::validate_with_output_tensors(
     TT_FATAL(this->output_mem_config.is_sharded() == false, "Sharded implementation not supported yet");
     TT_FATAL(input_tensors.at(0).get_layout() == Layout::TILE, "The input must be in tiled format");
 
-    auto topk_shape = input_tensors.at(2).get_legacy_shape();
-    auto expert_shape = input_tensors.at(1).get_legacy_shape();
+    auto topk_shape = input_tensors.at(2).get_padded_shape();
+    auto expert_shape = input_tensors.at(1).get_padded_shape();
 
     TT_FATAL(topk_shape[-1] == this->k, "Topk shape inner dim must be equal to k, got {}", topk_shape[-1]);
     TT_FATAL(

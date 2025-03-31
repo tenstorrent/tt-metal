@@ -1,11 +1,46 @@
 project(ttml)
 
-file(
-    GLOB_RECURSE SOURCES
-    LIST_DIRECTORIES true
-    *.hpp
-    *.cpp
-) # I am a bad person
+set(SOURCE_DIRS
+    ${CMAKE_CURRENT_SOURCE_DIR}/autograd
+    ${CMAKE_CURRENT_SOURCE_DIR}/core
+    ${CMAKE_CURRENT_SOURCE_DIR}/datasets
+    ${CMAKE_CURRENT_SOURCE_DIR}/init
+    ${CMAKE_CURRENT_SOURCE_DIR}/models
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers
+    ${CMAKE_CURRENT_SOURCE_DIR}/schedulers
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization
+    ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers
+    ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed
+)
+
+set(SOURCES "")
+foreach(dir ${SOURCE_DIRS})
+    file(
+        GLOB_RECURSE DIR_SOURCES
+        ${dir}/*.cpp
+        ${dir}/*.hpp
+    )
+    list(APPEND SOURCES ${DIR_SOURCES})
+endforeach()
+
+# Manually select only specific files from metal_ops
+set(METAL_OPS_FILES
+    # General
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/operations.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ttnn_all_includes.hpp
+    # RMSNorm
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_program_factory.cpp
+)
+
+list(APPEND SOURCES ${METAL_OPS_FILES})
 
 # Check if Metalium::Metal target exists
 # If it does not exist, assume that we are building with tt-train as top level project
@@ -19,11 +54,17 @@ if(NOT TARGET Metalium::Metal)
         "$ENV{TT_METAL_HOME}"
         "$ENV{TT_METAL_HOME}/tt_metal"
         "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd"
+        "$ENV{TT_METAL_HOME}/tt_metal/third_party/tracy/public"
         "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/wormhole"
         "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/wormhole/wormhole_b0_defines"
         "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/"
+        "$ENV{TT_METAL_HOME}/tt_metal/api/"
         "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd/device/api"
+        "$ENV{TT_METAL_HOME}/tt_metal/hostdevcommon/api"
+        "$ENV{TT_METAL_HOME}/tt_metal/include"
+        "$ENV{TT_METAL_HOME}/tt_stl"
         # TTNN
+        "$ENV{TT_METAL_HOME}/ttnn"
         "$ENV{TT_METAL_HOME}/ttnn/cpp"
         "$ENV{TT_METAL_HOME}/ttnn/cpp/ttnn/deprecated"
         "${reflect_SOURCE_DIR}"
@@ -98,7 +139,7 @@ target_link_libraries(
         Metalium::TTNN
         Python::Python
         fmt::fmt-header-only
-        magic_enum
+        magic_enum::magic_enum
         yaml-cpp::yaml-cpp
         xtensor
         xtensor-blas

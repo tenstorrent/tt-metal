@@ -4,11 +4,11 @@
 
 #include "sharded_to_interleaved_op.hpp"
 
-#include "tt_metal/host_api.hpp"
-
 #include "sharded_to_interleaved_program_factory.hpp"
+#include <tt-metalium/hal_exp.hpp>
 
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement {
 
@@ -23,7 +23,7 @@ void ShardedToInterleavedDeviceOperation::validate(const std::vector<Tensor>& in
         this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
         "Output memory config must be Interleaved");
     if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-        uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+        uint32_t l1_alignment = hal::get_l1_alignment();
         TT_FATAL(
             (*input_tensor.memory_config().shard_spec).shape[1] * input_tensor.element_size() % (l1_alignment) == 0,
             "Shard page size must be aligned to {}B for L1 Tensor",
@@ -34,17 +34,17 @@ void ShardedToInterleavedDeviceOperation::validate(const std::vector<Tensor>& in
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> ShardedToInterleavedDeviceOperation::compute_output_shapes(
+std::vector<ttnn::TensorSpec> ShardedToInterleavedDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.get_legacy_shape()};
-}
-
-std::vector<Tensor> ShardedToInterleavedDeviceOperation::create_output_tensors(
-    const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, this->output_dtype, input_tensor.get_layout(), this->output_mem_config);
+    return {TensorSpec(
+        input_tensor.get_logical_shape(),
+        TensorLayout::fromPaddedShape(
+            output_dtype,
+            PageConfig(input_tensor.get_layout()),
+            output_mem_config,
+            input_tensor.get_logical_shape(),
+            input_tensor.get_padded_shape()))};
 }
 
 operation::ProgramWithCallbacks ShardedToInterleavedDeviceOperation::create_program(

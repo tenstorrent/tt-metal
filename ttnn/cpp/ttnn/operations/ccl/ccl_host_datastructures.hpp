@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "eth_l1_address_map.h"
-#include "ttnn/cpp/ttnn/tensor/tensor_impl.hpp"
+#include <tt-metalium/hal_exp.hpp>
+#include "cpp/ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+#include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/distributed/types.hpp"
 #include <limits>
 
@@ -15,9 +15,8 @@ namespace ttnn {
 namespace ccl {
 
 struct EriscDatamoverConfig {
-    static constexpr std::size_t total_l1_buffer_space =
-        eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
-    static constexpr std::size_t usable_l1_base_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    std::size_t total_l1_buffer_space = tt::tt_metal::experimental::hal::get_erisc_l1_unreserved_size();
+    std::size_t usable_l1_base_address = tt::tt_metal::experimental::hal::get_erisc_l1_unreserved_base();
 
     static constexpr std::size_t semaphore_size = 32;
     static constexpr std::size_t handshake_location_size = 16;    // ethernet word size
@@ -32,14 +31,14 @@ struct EriscDatamoverConfig {
     static constexpr std::size_t eth_word_size_bytes = 16;
     static constexpr bool enable_merged_payload_and_channel_sync = true;
     static std::size_t get_eth_channel_sync_size_bytes();
-    static uint32_t get_edm_handshake_address();
+    uint32_t get_edm_handshake_address();
     static std::size_t get_semaphores_region_size(std::size_t num_edm_channels);
     static std::size_t get_semaphores_region_start_offset(std::size_t num_edm_channels);
-    static uint32_t get_semaphores_base_address(std::size_t num_edm_channels);
+    uint32_t get_semaphores_base_address(std::size_t num_edm_channels);
     static uint32_t get_buffers_region_start_offset(std::size_t num_edm_channels);
     static std::size_t get_eth_word_size();
-    static uint32_t get_buffers_base_address(std::size_t num_edm_channels);
-    static uint32_t compute_buffer_size(
+    uint32_t get_buffers_base_address(std::size_t num_edm_channels);
+    uint32_t compute_buffer_size(
         std::size_t num_edm_channels,
         std::size_t num_buffers_per_channel = 1,
         uint32_t page_size = eth_word_size_bytes);
@@ -50,7 +49,7 @@ public:
     CCLOpConfig(std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors, Topology topology);
 
     uint32_t get_page_size() const;
-    Tile get_tile() const;
+    tt::tt_metal::Tile get_tile() const;
     Topology get_topology() const;
     bool is_input_sharded() const;
     bool is_output_sharded() const;
@@ -67,7 +66,7 @@ private:
     bool output_sharded;
     bool is_row_major;
     tt::DataFormat df;
-    Tile tile;
+    tt::tt_metal::Tile tile;
 
     std::vector<Tensor> const* input_tensors;
     std::vector<Tensor> const* output_tensors;

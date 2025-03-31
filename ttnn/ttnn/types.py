@@ -65,7 +65,8 @@ class ShardStrategy(Enum):
 
 
 MeshShape = ttnn._ttnn.multi_device.MeshShape
-MeshOffset = ttnn._ttnn.multi_device.MeshOffset
+MeshCoordinate = ttnn._ttnn.multi_device.MeshCoordinate
+MeshCoordinateRange = ttnn._ttnn.multi_device.MeshCoordinateRange
 ShardOrientation = ttnn._ttnn.tensor.ShardOrientation
 ShardMode = ttnn._ttnn.tensor.ShardMode
 ShardSpec = ttnn._ttnn.tensor.ShardSpec
@@ -73,6 +74,7 @@ CoreRangeSet = ttnn._ttnn.tensor.CoreRangeSet
 CoreRange = ttnn._ttnn.tensor.CoreRange
 CoreCoord = ttnn._ttnn.tensor.CoreCoord
 
+QueueId = ttnn._ttnn.types.QueueId
 
 UnaryWithParam = ttnn._ttnn.activation.UnaryWithParam
 UnaryOpType = ttnn._ttnn.activation.UnaryOpType

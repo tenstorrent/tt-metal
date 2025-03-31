@@ -15,6 +15,7 @@
 
 namespace ckernel {
 
+// clang-format off
 /**
  * Performs an elementwise add operation with the two integer inputs: y = add(x0,x1)
  * Output overwrites first operand in DST.
@@ -26,15 +27,13 @@ namespace ckernel {
  *
  * Return value: None
  *
- * | Argument              | Description                                                                 | Type     |
- * Valid Range                                           | Required |
+ * | Argument              | Description                                                                 | Type     | Valid Range                                           | Required |
  * |-----------------------|-----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst0                 | The index of the tile in DST register buffer to use as first operand        | uint32_t |
- * Must be less than the size of the DST register buffer | True     | | idst1                 | The index of the tile in
- * DST register buffer to use as second operand       | uint32_t | Must be less than the size of the DST register buffer
- * | True     | | sign_magnitude_format | Whether the Int32 values are in sign-magnitude format (not 2's complement)  |
- * bool     |                                                       | False    |
+ * | idst0                 | The index of the tile in DST register buffer to use as first operand        | uint32_t | Must be less than the size of the DST register buffer | True     | 
+ * | idst1                 | The index of the tile in DST register buffer to use as second operand       | uint32_t | Must be less than the size of the DST register buffer | True     | 
+ * | sign_magnitude_format | Whether the Int32 values are in sign-magnitude format (not 2's complement)  | bool     |                                                       | False    |
  */
+ // clang-format on
 template <bool sign_magnitude_format = false>
 ALWI void add_int32_tile(uint32_t idst0, uint32_t idst1) {
     MATH((llk_math_eltwise_binary_sfpu_add_int32<APPROX, sign_magnitude_format>(idst0, idst1)));

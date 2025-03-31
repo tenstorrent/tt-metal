@@ -7,13 +7,19 @@
 #include <cstdint>
 #include <unordered_map>
 #include "core_coord.hpp"
-#include "tt_metal/common/logger.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/dispatch/cq_commands.hpp"
-#include "noc/noc_parameters.h"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/allocator.hpp>
 
-#include "tt_metal/llrt/hal.hpp"
+#include "noc/noc_parameters.h"
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+
+#include "hal.hpp"
+#include "llrt.hpp"
+#include <tt-metalium/tt_align.hpp>
+
+using namespace tt::tt_metal;  // test only
 
 extern bool debug_g;
 extern bool use_coherent_data_g;
@@ -46,18 +52,18 @@ private:
 
     // Validate a single core's worth of results vs expected
     bool validate_one_core(
-        Device* device,
+        IDevice* device,
         std::unordered_set<CoreCoord>& validated_cores,
         const one_core_data_t& one_core_data,
         const uint32_t start_index,
         uint32_t result_addr);
     bool validate_host(std::unordered_set<CoreCoord>& validated_cores, const one_core_data_t& one_core_data);
 
-    void prepopulate_dram(Device* device, uint32_t size_words);
+    void prepopulate_dram(IDevice* device, uint32_t size_words);
 
 public:
     DeviceData(
-        Device* device,
+        IDevice* device,
         CoreRange workers,
         uint32_t l1_data_addr,
         uint32_t dram_data_addr,
@@ -83,8 +89,8 @@ public:
     uint32_t get_base_result_addr(CoreType core_type);
     uint32_t get_result_data_addr(CoreCoord core, int bank_id = 0);
 
-    bool validate(Device* device);
-    void overflow_check(Device* device);
+    bool validate(IDevice* device);
+    void overflow_check(IDevice* device);
 
     int size() { return amt_written; }
     int size(CoreCoord core, int bank_id = 0) { return this->all_data[core][bank_id].data.size(); }
@@ -99,7 +105,7 @@ public:
 };
 
 DeviceData::DeviceData(
-    Device* device,
+    IDevice* device,
     CoreRange workers,
     uint32_t l1_data_addr,
     uint32_t dram_data_addr,
@@ -117,8 +123,9 @@ DeviceData::DeviceData(
     this->amt_written = 0;
 
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
-    const std::vector<CoreCoord>& pcie_cores = soc_d.get_pcie_cores();
-    for (CoreCoord core : pcie_cores) {
+    const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
+    for (const CoreCoord& core_coord : pcie_cores) {
+        CoreCoord core = {core_coord.x, core_coord.y};
         // TODO: make this all work w/ phys coords
         // this is really annoying
         // the PCIE phys core conflicts w/ worker logical cores
@@ -135,11 +142,11 @@ DeviceData::DeviceData(
     }
 
     // Always populate DRAM
-    auto num_banks = device->num_banks(BufferType::DRAM);
+    auto num_banks = device->allocator()->get_num_banks(BufferType::DRAM);
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
-        auto dram_channel = device->dram_channel_from_bank_id(bank_id);
+        auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(bank_id);
         CoreCoord phys_core = device->logical_core_from_dram_channel(dram_channel);
-        int32_t bank_offset = device->bank_offset(BufferType::DRAM, bank_id);
+        int32_t bank_offset = device->allocator()->get_bank_offset(BufferType::DRAM, bank_id);
         this->all_data[phys_core][bank_id] = one_core_data_t();
         this->all_data[phys_core][bank_id].logical_core = phys_core;
         this->all_data[phys_core][bank_id].phys_core = phys_core;
@@ -150,11 +157,11 @@ DeviceData::DeviceData(
 
     // TODO: make banked L1 tests play nicely w/ non-banked L1 tests
     if (is_banked) {
-        num_banks = device->num_banks(BufferType::L1);
+        num_banks = device->allocator()->get_num_banks(BufferType::L1);
         for (int bank_id = 0; bank_id < num_banks; bank_id++) {
-            CoreCoord core = device->logical_core_from_bank_id(bank_id);
+            CoreCoord core = device->allocator()->get_logical_core_from_bank_id(bank_id);
             CoreCoord phys_core = device->worker_core_from_logical_core(core);
-            int32_t bank_offset = device->bank_offset(BufferType::L1, bank_id);
+            int32_t bank_offset = device->allocator()->get_bank_offset(BufferType::L1, bank_id);
             this->all_data[core][bank_id] = one_core_data_t();
             this->all_data[core][bank_id].logical_core = core;
             this->all_data[core][bank_id].phys_core = phys_core;
@@ -181,12 +188,12 @@ DeviceData::DeviceData(
 }
 
 // Populate interleaved DRAM with data for later readback.  Can we extended to L1 if needed.
-void DeviceData::prepopulate_dram(Device* device, uint32_t size_words) {
-    uint32_t num_dram_banks = device->num_banks(BufferType::DRAM);
+void DeviceData::prepopulate_dram(IDevice* device, uint32_t size_words) {
+    uint32_t num_dram_banks = device->allocator()->get_num_banks(BufferType::DRAM);
 
     for (int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
-        auto offset = device->bank_offset(BufferType::DRAM, bank_id);
-        auto dram_channel = device->dram_channel_from_bank_id(bank_id);
+        auto offset = device->allocator()->get_bank_offset(BufferType::DRAM, bank_id);
+        auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(bank_id);
         auto bank_core = device->logical_core_from_dram_channel(dram_channel);
         one_core_data_t& data = this->all_data[bank_core][bank_id];
 
@@ -349,7 +356,7 @@ uint32_t DeviceData::at(CoreCoord core, int bank_id, uint32_t offset) {
 }
 
 inline bool DeviceData::validate_one_core(
-    Device* device,
+    IDevice* device,
     std::unordered_set<CoreCoord>& validated_cores,
     const one_core_data_t& one_core_data,
     const uint32_t start_index,
@@ -475,7 +482,7 @@ bool DeviceData::validate_host(std::unordered_set<CoreCoord>& validated_cores, c
     return failed;
 }
 
-bool DeviceData::validate(Device* device) {
+bool DeviceData::validate(IDevice* device) {
     bool failed = false;
     std::unordered_set<CoreCoord> validated_cores;
 
@@ -502,7 +509,7 @@ bool DeviceData::validate(Device* device) {
     return !failed;
 }
 
-void DeviceData::overflow_check(Device* device) {
+void DeviceData::overflow_check(IDevice* device) {
     for (const auto& [core, bank_device_data] : this->all_data) {
         for (auto& [bank, one_core_data] : bank_device_data) {
             if (one_core_data.core_type == CoreType::WORKER) {
@@ -530,7 +537,7 @@ void configure_kernel_variant(
     CoreCoord phys_my_core,
     CoreCoord phys_upstream_core,
     CoreCoord phys_downstream_core,
-    Device* device,
+    IDevice* device,
     NOC my_noc_index,
     NOC upstream_noc_index,
     NOC downstream_noc_index) {
@@ -561,20 +568,21 @@ void configure_kernel_variant(
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = my_noc_index,
             .compile_args = compile_args,
-            .defines = defines});
+            .defines = defines,
+            .opt_level = KernelBuildOptLevel::Os});
 }
 
 // Specific to this test. This test doesn't use Buffers, and for Storage cores in L1 that have 2 banks, they are
 // intended to be allocated top-down and carry "negative" offsets via bank_to_l1_offset for cores that have 2 banks.
 // This function will scan through all banks bank_to_l1_offset and return the minimum required buffer addr to avoid
 // bank_to_l1_offset being applied and underflowing.  In GS this is basically 512B or half the L1 Bank size.
-inline uint32_t get_min_required_buffer_addr(Device* device, bool is_dram) {
+inline uint32_t get_min_required_buffer_addr(IDevice* device, bool is_dram) {
     int32_t smallest_offset = std::numeric_limits<int32_t>::max();
     BufferType buffer_type = is_dram ? BufferType::DRAM : BufferType::L1;
-    uint32_t num_banks = device->num_banks(buffer_type);
+    uint32_t num_banks = device->allocator()->get_num_banks(buffer_type);
 
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
-        int32_t offset = device->bank_offset(buffer_type, bank_id);
+        int32_t offset = device->allocator()->get_bank_offset(buffer_type, bank_id);
         smallest_offset = offset < smallest_offset ? offset : smallest_offset;
     }
 
@@ -630,7 +638,7 @@ inline void generate_random_payload(
 
 // Generate a random payload for a paged write command. Note: Doesn't currently support using the base_addr here.
 inline void generate_random_paged_payload(
-    Device* device,
+    IDevice* device,
     CQDispatchCmd cmd,
     std::vector<uint32_t>& cmds,
     DeviceData& data,
@@ -638,7 +646,7 @@ inline void generate_random_paged_payload(
     bool is_dram) {
     static uint32_t coherent_count = 0x100;  // Abitrary starting value, avoid 0x0 since matches with DRAM prefill.
     auto buf_type = is_dram ? BufferType::DRAM : BufferType::L1;
-    uint32_t num_banks = device->num_banks(buf_type);
+    uint32_t num_banks = device->allocator()->get_num_banks(buf_type);
     uint32_t words_per_page = cmd.write_paged.page_size / sizeof(uint32_t);
     log_debug(
         tt::LogTest,
@@ -649,17 +657,17 @@ inline void generate_random_paged_payload(
         words_per_page);
 
     // Note: the dst address marches in unison regardless of whether or not a core is written to
-    uint32_t page_size_alignment_bytes = device->get_allocator_alignment();
+    uint32_t page_size_alignment_bytes = device->allocator()->get_alignment(buf_type);
     for (uint32_t page_id = start_page; page_id < start_page + cmd.write_paged.pages; page_id++) {
         CoreCoord bank_core;
         uint32_t bank_id = page_id % num_banks;
-        uint32_t bank_offset = align(cmd.write_paged.page_size, page_size_alignment_bytes) * (page_id / num_banks);
+        uint32_t bank_offset = tt::align(cmd.write_paged.page_size, page_size_alignment_bytes) * (page_id / num_banks);
 
         if (is_dram) {
-            auto dram_channel = device->dram_channel_from_bank_id(bank_id);
+            auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(bank_id);
             bank_core = device->logical_core_from_dram_channel(dram_channel);
         } else {
-            bank_core = device->logical_core_from_bank_id(bank_id);
+            bank_core = device->allocator()->get_logical_core_from_bank_id(bank_id);
         }
 
         // Generate data and add to cmd for sending to device, and device_data for correctness checking.
@@ -823,7 +831,7 @@ inline void add_dispatcher_cmd(
 }
 
 inline void add_dispatcher_paged_cmd(
-    Device* device,
+    IDevice* device,
     std::vector<uint32_t>& cmds,
     DeviceData& device_data,
     CQDispatchCmd cmd,
@@ -836,7 +844,7 @@ inline void add_dispatcher_paged_cmd(
 }
 
 inline void add_dispatcher_packed_cmd(
-    Device* device,
+    IDevice* device,
     std::vector<uint32_t>& cmds,
     std::vector<CoreCoord>& worker_cores,
     DeviceData& device_data,
@@ -859,7 +867,7 @@ inline void add_dispatcher_packed_cmd(
 
 // bare: doesn't generate random payload data, for use w/ eg, dram reads
 inline void gen_bare_dispatcher_unicast_write_cmd(
-    Device* device, std::vector<uint32_t>& cmds, CoreCoord worker_core, DeviceData& device_data, uint32_t length) {
+    IDevice* device, std::vector<uint32_t>& cmds, CoreCoord worker_core, DeviceData& device_data, uint32_t length) {
     CQDispatchCmd cmd;
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
@@ -878,7 +886,7 @@ inline void gen_bare_dispatcher_unicast_write_cmd(
 }
 
 inline void gen_dispatcher_unicast_write_cmd(
-    Device* device, std::vector<uint32_t>& cmds, CoreCoord worker_core, DeviceData& device_data, uint32_t length) {
+    IDevice* device, std::vector<uint32_t>& cmds, CoreCoord worker_core, DeviceData& device_data, uint32_t length) {
     CQDispatchCmd cmd;
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
@@ -895,7 +903,7 @@ inline void gen_dispatcher_unicast_write_cmd(
 }
 
 inline void gen_dispatcher_multicast_write_cmd(
-    Device* device,
+    IDevice* device,
     std::vector<uint32_t>& cmds,
     CoreRange worker_core_range,
     DeviceData& device_data,
@@ -922,15 +930,16 @@ inline void gen_dispatcher_multicast_write_cmd(
 }
 
 inline void gen_dispatcher_paged_write_cmd(
-    Device* device,
+    IDevice* device,
     std::vector<uint32_t>& cmds,
     DeviceData& device_data,
     bool is_dram,
     uint32_t start_page,
     uint32_t page_size,
     uint32_t pages) {
-    uint32_t page_size_alignment_bytes = device->get_allocator_alignment();
-    uint32_t num_banks = device->num_banks(is_dram ? BufferType::DRAM : BufferType::L1);
+    BufferType buffer_type = is_dram ? BufferType::DRAM : BufferType::L1;
+    uint32_t page_size_alignment_bytes = device->allocator()->get_alignment(buffer_type);
+    uint32_t num_banks = device->allocator()->get_num_banks(buffer_type);
     CoreType core_type = is_dram ? CoreType::DRAM : CoreType::WORKER;
 
     // Not safe to mix paged L1 and paged DRAM writes currently in this test since same book-keeping.
@@ -950,7 +959,7 @@ inline void gen_dispatcher_paged_write_cmd(
 
     // For the CMD generation, start_page is 8 bits, so much wrap around, and increase base_addr instead based on page
     // size, which assumes page size never changed between calls to this function (checked above).
-    uint32_t bank_offset = align(page_size, page_size_alignment_bytes) * (start_page / num_banks);
+    uint32_t bank_offset = tt::align(page_size, page_size_alignment_bytes) * (start_page / num_banks);
     // TODO: make this take the latest address, change callers to not manage this
     uint32_t base_addr = device_data.get_base_result_addr(core_type) + bank_offset;
     uint16_t start_page_cmd = start_page % num_banks;
@@ -980,7 +989,7 @@ inline void gen_dispatcher_paged_write_cmd(
 }
 
 inline void gen_dispatcher_packed_write_cmd(
-    Device* device,
+    IDevice* device,
     std::vector<uint32_t>& cmds,
     std::vector<CoreCoord>& worker_cores,
     DeviceData& device_data,
@@ -1009,7 +1018,7 @@ inline void gen_dispatcher_packed_write_cmd(
     add_dispatcher_packed_cmd(device, cmds, worker_cores, device_data, cmd, size_words, repeat);
 }
 
-inline void gen_rnd_dispatcher_packed_write_cmd(Device* device, std::vector<uint32_t>& cmds, DeviceData& device_data) {
+inline void gen_rnd_dispatcher_packed_write_cmd(IDevice* device, std::vector<uint32_t>& cmds, DeviceData& device_data) {
     // Note: this cmd doesn't clamp to a max size which means it can overflow L1 buffer
     // However, this cmd doesn't send much data and the L1 buffer is < L1 limit, so...
 
@@ -1057,7 +1066,7 @@ inline void gen_rnd_dispatcher_packed_write_cmd(Device* device, std::vector<uint
 }
 
 inline bool gen_rnd_dispatcher_packed_write_large_cmd(
-    Device* device, CoreRange workers, std::vector<uint32_t>& cmds, DeviceData& device_data, uint32_t space_available) {
+    IDevice* device, CoreRange workers, std::vector<uint32_t>& cmds, DeviceData& device_data, uint32_t space_available) {
     int ntransactions = perf_test_g ? (CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS / 2)
                                     : ((std::rand() % CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS) + 1);
 

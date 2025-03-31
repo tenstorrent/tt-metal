@@ -5,8 +5,7 @@
 #include "rotary_embedding_llama_device_operation.hpp"
 #include "rotary_embedding_llama_program_factory.hpp"
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
 
 namespace tt {
 
@@ -124,22 +123,12 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
     }
 }
 
-std::vector<ttnn::SimpleShape> RotaryEmbeddingLlama::compute_output_shapes(
+std::vector<ttnn::TensorSpec> RotaryEmbeddingLlama::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto shape = input_tensor.get_logical_shape();
-    return {shape};
-}
-
-std::vector<Tensor> RotaryEmbeddingLlama::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    auto output_shape = this->compute_output_shapes(input_tensors)[0];
-    return {create_device_tensor(
-        output_shape,
-        input_tensor.get_dtype(),
-        input_tensor.get_layout(),
-        input_tensor.device(),
-        this->output_mem_config)};
+    return {TensorSpec(
+        shape, TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), output_mem_config))};
 }
 
 operation::ProgramWithCallbacks RotaryEmbeddingLlama::create_program(

@@ -141,7 +141,6 @@ class TtFusedFalconLayernorm:
                 shard_spec_cores_grid,
                 [self.model_config["SEQ_LEN"] // 8, H // 8],  # 1024
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         # self.width_sharded_memconfig = ttnn.MemoryConfig(
@@ -154,7 +153,6 @@ class TtFusedFalconLayernorm:
         #             H // 64,
         #         ],
         #         ttnn.ShardOrientation.ROW_MAJOR,
-        #         False,
         #     ),
         # )
 
@@ -185,6 +183,7 @@ class TtFusedFalconLayernorm:
             bias=None,
             memory_config=self.sharded_memconfig,
             program_config=self.prg_config,
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
         )
 
         out1 = ttnn.bcast(
@@ -277,7 +276,6 @@ def run_test_FalconLayernorm_inference(pcc, devices, model_location_generator, g
                 H // 8,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
     # width_sharded_memconfig = ttnn.MemoryConfig(
@@ -290,7 +288,6 @@ def run_test_FalconLayernorm_inference(pcc, devices, model_location_generator, g
     #             H // 64,
     #         ],
     #         ttnn.ShardOrientation.ROW_MAJOR,
-    #         False,
     #     ),
     # )
     input = ttnn.interleaved_to_sharded(input, block_sharded_memconfig)

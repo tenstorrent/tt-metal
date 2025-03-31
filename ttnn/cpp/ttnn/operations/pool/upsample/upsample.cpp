@@ -42,17 +42,19 @@ ttnn::Tensor ExecuteUpSample::invoke(
     if (input_tensor.is_sharded()) {
         // TT_FATAL(not input_tensor.is_sharded(), "Error");
         int shard_height = input_tensor.memory_config().shard_spec.value().shape[0];
-        const auto batch_size = input_tensor.get_shape()[0];
-        const auto input_h = input_tensor.get_shape()[1];
-        const auto input_w = input_tensor.get_shape()[2];
-        const auto num_channels = input_tensor.get_shape()[3];
+        const auto& input_shape = input_tensor.get_logical_shape();
+        const auto batch_size = input_shape[0];
+        const auto input_h = input_shape[1];
+        const auto input_w = input_shape[2];
+        const auto num_channels = input_shape[3];
         if (shard_height % input_w != 0) {
             TT_FATAL(shard_height % input_w != 0, "Error");
         }
     }
 
     // return ttnn::upsample(input_tensor, scale_h, scale_w, mem_config);
-    auto output_tensor = operation::run(UpSample{scale_h, scale_w, mode, mem_config, config}, {input_tensor}).front();
+    auto output_tensor =
+        tt::tt_metal::operation::run(UpSample{scale_h, scale_w, mode, mem_config, config}, {input_tensor}).front();
     return output_tensor;
 }
 

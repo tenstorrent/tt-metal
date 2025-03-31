@@ -11,14 +11,18 @@ pcie:
 dram:
   [[1-0]]
 
-dram_preferred_eth_endpoint:
-  [ 1-0 ]
+dram_views:
+  [
+    {
+      channel: 0,
+      eth_endpoint: 0,
+      worker_endpoint: 0,
+      address_offset: 0
+    }
+  ]
 
-dram_preferred_worker_endpoint:
-  [ 1-0 ]
-
-dram_address_offsets:
-  [ 0 ]
+dram_view_size:
+  1073741824
 
 eth:
   []

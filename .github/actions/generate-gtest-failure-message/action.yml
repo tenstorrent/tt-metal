@@ -1,0 +1,17 @@
+name: "Generate gtest failure message"
+description: "Generate gtest failure message for Github workflow annotations"
+
+inputs:
+  path:
+    description: "Paths to pass containing gtest XML files"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Generate gtest failure messages
+      id: generate-gtest-message
+      shell: bash
+      run: |
+        set +e
+        python3 .github/scripts/data_analysis/print_gtest_annotations.py ${{ inputs.path }}

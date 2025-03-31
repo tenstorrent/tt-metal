@@ -8,7 +8,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::pool {
@@ -36,6 +36,7 @@ void bind_max_pool2d_operation(py::module& module) {
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): the memory configuration for the output tensor. Defaults to `None`.
             applied_shard_scheme (ttnn.TensorMemoryLayout, optional): the sharding scheme to apply to a non-pre-sharded input tensor. Defaults to `None`, which should be used with pre-sharded input tensors.
+            ceil_mode (bool, optional): whether to use ceil mode for the output shape. Defaults to `False`.
             queue_id (int, optional): the queue id to use for the operation. Defaults to `0`.
 
         Returns:
@@ -69,6 +70,7 @@ void bind_max_pool2d_operation(py::module& module) {
                                 dilation=[dilation_h, dilation_w],
                                 memory_config=None,
                                 applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                                ceil_mode=False,
                             )
 
         )doc",
@@ -85,7 +87,8 @@ void bind_max_pool2d_operation(py::module& module) {
                std::array<uint32_t, 2> dilation,
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
-               const uint8_t& queue_id) -> ttnn::Tensor {
+               bool ceil_mode,
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(
                     queue_id,
                     input_tensor,
@@ -98,7 +101,8 @@ void bind_max_pool2d_operation(py::module& module) {
                     padding,
                     dilation,
                     memory_config,
-                    applied_shard_scheme);
+                    applied_shard_scheme,
+                    ceil_mode);
             },
             py::arg("input_tensor"),
             py::arg("batch_size"),
@@ -112,7 +116,8 @@ void bind_max_pool2d_operation(py::module& module) {
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("applied_shard_scheme") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("ceil_mode") = false,
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 void py_module(py::module& module) { bind_max_pool2d_operation(module); }

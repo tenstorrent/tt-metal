@@ -6,6 +6,7 @@
 
 #include "sdpa_program_factory.hpp"
 #include "ttnn/run_operation.hpp"
+#include <tt-metalium/constants.hpp>
 
 using namespace tt::tt_metal;
 
@@ -30,6 +31,14 @@ void ScaledDotProductAttention::validate(
             input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Operands to SDPA need to be in DRAM");
     }
+
+    auto validate_padding = [&](const Tensor& tensor) {
+        auto logical_shape = tensor.get_logical_shape();
+        auto legacy_shape = tensor.get_padded_shape();
+        TT_FATAL(logical_shape[0] == legacy_shape[0], "Padding is not supported on the batch dimension");
+        TT_FATAL(logical_shape[1] == legacy_shape[1], "Padding is not supported on the num_heads dimension");
+        TT_FATAL(logical_shape[3] == legacy_shape[3], "Padding is not supported on the head_dim dimension");
+    };
 
     auto validate_regular_mode = [&]() {
         TT_FATAL(
@@ -57,20 +66,37 @@ void ScaledDotProductAttention::validate(
                 mask.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
                 "When mask is provided to SDPA, it must be in DRAM");
 
-            const auto mask_shape = mask.get_legacy_shape();
-            const auto q_shape = input_tensors.at(0).get_legacy_shape();
-            const auto k_shape = input_tensors.at(1).get_legacy_shape();
+            const auto mask_shape = mask.get_logical_shape();
+            const auto q_shape = input_tensors.at(0).get_logical_shape();
+            const auto k_shape = input_tensors.at(1).get_logical_shape();
 
             TT_FATAL(mask_shape[0] == q_shape[0], "Mask batch dim must match Q batch dim");
             TT_FATAL(mask_shape[1] == 1, "Mask num_heads must be 1 to be broadcasted across all heads");
             TT_FATAL(mask_shape[2] == q_shape[2], "Mask sequence length must match Q sequence length");
             TT_FATAL(mask_shape[3] == k_shape[2], "Mask sequence length must match K sequence length");
+
+            // When given a mask, we must check that the mask can be divided by chunk size. Otherwise we'd need to pad
+            // the mask.
+            const auto q_chunk_size = this->get_q_chunk_size();
+            const auto k_chunk_size = this->get_k_chunk_size();
+            TT_FATAL(
+                q_shape[2] % q_chunk_size == 0,
+                "If mask is provided, Q sequence length must be divisible by q_chunk_size. Got q_seq_len: {}, "
+                "q_chunk_size: {}",
+                q_shape[2],
+                q_chunk_size);
+            TT_FATAL(
+                k_shape[2] % k_chunk_size == 0,
+                "If mask is provided, K sequence length must be divisible by k_chunk_size. Got k_seq_len: {}, "
+                "k_chunk_size: {}",
+                k_shape[2],
+                k_chunk_size);
         }
 
         // Shape checks
-        const auto q_shape = input_tensors.at(0).get_legacy_shape();
-        const auto k_shape = input_tensors.at(1).get_legacy_shape();
-        const auto v_shape = input_tensors.at(2).get_legacy_shape();
+        const auto q_shape = input_tensors.at(0).get_logical_shape();
+        const auto k_shape = input_tensors.at(1).get_logical_shape();
+        const auto v_shape = input_tensors.at(2).get_logical_shape();
         const auto B = q_shape[0];
         const auto nqh = q_shape[1];
         const auto nkv = k_shape[1];
@@ -102,15 +128,15 @@ void ScaledDotProductAttention::validate(
             auto k_chunk_size = program_config->k_chunk_size;
 
             TT_FATAL(
-                Sq % q_chunk_size == 0,
-                "q_chunk_size must divide q_shape[-2]. Got q_chunk_size: {}, q_shape[-2]: {}",
+                q_chunk_size % tt::constants::TILE_WIDTH == 0,
+                "q_chunk_size must be divisible by TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
                 q_chunk_size,
-                q_shape[-2]);
+                tt::constants::TILE_WIDTH);
             TT_FATAL(
-                Sk % k_chunk_size == 0,
-                "k_chunk_size must divide k_shape[-2]. Got k_chunk_size: {}, k_shape[-2]: {}",
+                k_chunk_size % tt::constants::TILE_WIDTH == 0,
+                "k_chunk_size must be divisible by TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
                 k_chunk_size,
-                k_shape[-2]);
+                tt::constants::TILE_WIDTH);
         }
     };
 
@@ -133,17 +159,17 @@ void ScaledDotProductAttention::validate(
             "Attention mask should not be provided in chunked mode - masking is handled internally");
 
         // Additional chunked-specific validations
-        const auto q_shape = input_tensors.at(0).get_legacy_shape();
-        const auto k_shape = input_tensors.at(1).get_legacy_shape();
-        const auto v_shape = input_tensors.at(2).get_legacy_shape();
-        const auto page_table_shape = page_table.get_legacy_shape();
+        const auto q_shape = input_tensors.at(0).get_logical_shape();
+        const auto k_shape = input_tensors.at(1).get_logical_shape();
+        const auto v_shape = input_tensors.at(2).get_logical_shape();
+        const auto page_table_shape = page_table.get_logical_shape();
         const auto B = q_shape[0];
         const auto nqh = q_shape[1];
         const auto nkv = k_shape[1];
         const auto Sq = q_shape[2];
         const auto DH = q_shape[3];
         const auto k_page_size = k_shape[2];
-        const uint32_t num_pages_per_user = page_table.get_legacy_shape()[1];
+        const uint32_t num_pages_per_user = page_table.get_logical_shape()[1];
         // Check that k page size matches v page size
         TT_FATAL(
             k_page_size == v_shape[2], "K page size must match V page size. Got K: {}, V: {}", k_page_size, v_shape[2]);
@@ -173,15 +199,15 @@ void ScaledDotProductAttention::validate(
             auto k_chunk_size = program_config->k_chunk_size;
 
             TT_FATAL(
-                Sq % q_chunk_size == 0,
-                "q_chunk_size must divide q_shape[-2]. Got q_chunk_size: {}, q_shape[-2]: {}",
+                q_chunk_size % tt::constants::TILE_WIDTH == 0,
+                "q_chunk_size must be divisible by TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
                 q_chunk_size,
-                q_shape[-2]);
+                tt::constants::TILE_WIDTH);
             TT_FATAL(
-                kv_length % k_chunk_size == 0,
-                "k_chunk_size must divide k_shape[-2]. Got k_chunk_size: {}, k_shape[-2]: {}",
+                k_chunk_size % tt::constants::TILE_WIDTH == 0,
+                "k_chunk_size must be divisible by TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
                 k_chunk_size,
-                k_shape[-2]);
+                tt::constants::TILE_WIDTH);
         }
 
         // In chunked mode, K's sequence dimension should be >= Q's sequence dimension + chunk_start_idx
@@ -214,6 +240,12 @@ void ScaledDotProductAttention::validate(
     } else {
         validate_regular_mode();
     }
+
+    // Check padding: Only the sequence dimension may be padded. For all other dims, logical shape must be equal to
+    // legacy shape
+    for (const auto& tensor : input_tensors) {
+        validate_padding(tensor);
+    }
 }
 
 std::vector<TensorSpec> ScaledDotProductAttention::compute_output_specs(
@@ -221,6 +253,14 @@ std::vector<TensorSpec> ScaledDotProductAttention::compute_output_specs(
     auto& input = input_tensors.at(0);
     return {TensorSpec(
         input.get_logical_shape(), TensorLayout(input.get_dtype(), PageConfig(Layout::TILE), output_mem_config))};
+}
+
+std::uint32_t ScaledDotProductAttention::get_q_chunk_size() const {
+    return this->program_config ? this->program_config->q_chunk_size : 32;
+}
+
+std::uint32_t ScaledDotProductAttention::get_k_chunk_size() const {
+    return this->program_config ? this->program_config->k_chunk_size : 32;
 }
 
 operation::ProgramWithCallbacks ScaledDotProductAttention::create_program(
@@ -235,11 +275,12 @@ operation::ProgramWithCallbacks ScaledDotProductAttention::create_program(
 
     auto scale = this->scale;
     if (not scale.has_value()) {
-        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.get_legacy_shape()[-1]));
+        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.get_padded_shape()[-1]));
     }
 
-    std::size_t q_chunk_size = this->program_config ? this->program_config->q_chunk_size : 32;
-    std::size_t k_chunk_size = this->program_config ? this->program_config->k_chunk_size : 32;
+    std::size_t q_chunk_size = this->get_q_chunk_size();
+    std::size_t k_chunk_size = this->get_k_chunk_size();
+
     // get page table if chunked
     const auto page_table = this->chunk_start_idx.has_value() ? optional_input_tensors.at(1) : std::nullopt;
 

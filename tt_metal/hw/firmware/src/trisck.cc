@@ -15,8 +15,8 @@
 
 #include "tools/profiler/kernel_profiler.hpp"
 
-#if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS or defined UPDATE_REMOTE_CB_CONFIGS_IN_L1
-#include "circular_buffer_init.h"
+#if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
+#include "remote_circular_buffer_api.h"
 #endif
 
 // Global vars
@@ -37,10 +37,10 @@ volatile tt_reg_ptr uint * mailbox_base[4] = {
 };
 }
 
-void kernel_launch(uint32_t kernel_base_addr)
-{
-  DeviceZoneScopedMainChildN("TRISC-KERNEL");
+void kernel_launch(uint32_t kernel_base_addr) {
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
+    wait_for_go_message();
+    DeviceZoneScopedMainChildN("TRISC-KERNEL");
 #ifdef KERNEL_RUN_TIME
     ckernel::wait(KERNEL_RUN_TIME);
 #endif
@@ -57,9 +57,11 @@ void kernel_launch(uint32_t kernel_base_addr)
 #if !defined(UCK_CHLKC_MATH) and defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
+    wait_for_go_message();
+    DeviceZoneScopedMainChildN("TRISC-KERNEL");
+    EARLY_RETURN_FOR_DEBUG
+    WAYPOINT("K");
     run_kernel();
-#if !defined(UCK_CHLKC_MATH) and defined UPDATE_REMOTE_CB_CONFIGS_IN_L1
-    UPDATE_REMOTE_CB_CONFIGS_IN_L1
-#endif
+    WAYPOINT("KD");
 #endif
 }

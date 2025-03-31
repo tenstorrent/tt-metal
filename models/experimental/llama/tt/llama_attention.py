@@ -167,18 +167,10 @@ class TtLlamaAttention(nn.Module):
 
         self.rotary_emb = LlamaRotaryEmbedding(self.head_dim, max_position_embeddings=self.max_position_embeddings)
 
-        self.query_linear = TTLinear(
-            self.q_weights.shape.with_tile_padding()[-1], self.q_weights.shape.with_tile_padding()[-2], self.q_weights
-        )
-        self.key_linear = TTLinear(
-            self.k_weights.shape.with_tile_padding()[-1], self.k_weights.shape.with_tile_padding()[-2], self.k_weights
-        )
-        self.value_linear = TTLinear(
-            self.v_weights.shape.with_tile_padding()[-1], self.v_weights.shape.with_tile_padding()[-2], self.v_weights
-        )
-        self.attn_linear = TTLinear(
-            self.o_weights.shape.with_tile_padding()[-1], self.o_weights.shape.with_tile_padding()[-2], self.o_weights
-        )
+        self.query_linear = TTLinear(self.q_weights.padded_shape[-1], self.q_weights.padded_shape[-2], self.q_weights)
+        self.key_linear = TTLinear(self.k_weights.padded_shape[-1], self.k_weights.padded_shape[-2], self.k_weights)
+        self.value_linear = TTLinear(self.v_weights.padded_shape[-1], self.v_weights.padded_shape[-2], self.v_weights)
+        self.attn_linear = TTLinear(self.o_weights.padded_shape[-1], self.o_weights.padded_shape[-2], self.o_weights)
 
         self.scalar = pad_by_zero(torch.Tensor([1 / math.sqrt(self.head_dim)]), self.device)[0]
 
@@ -196,8 +188,8 @@ class TtLlamaAttention(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         """Input shape: Batch x Time x Channel"""
 
-        bsz = hidden_states.shape.with_tile_padding()[0]
-        q_len = hidden_states.shape.with_tile_padding()[2]
+        bsz = hidden_states.padded_shape[0]
+        q_len = hidden_states.padded_shape[2]
         query = self.query_linear(hidden_states)
         query_states = shape_tt(query, bsz, q_len, self.num_heads, self.head_dim)
 
@@ -249,17 +241,17 @@ class TtLlamaAttention(nn.Module):
         # TODO: Fuse into softmax
         attn_weights = ttnn.multiply(mul, self.scalar)
 
-        if attn_weights.shape.with_tile_padding() != [bsz, self.num_heads, q_len, kv_seq_len]:
+        if attn_weights.padded_shape != [bsz, self.num_heads, q_len, kv_seq_len]:
             raise ValueError(
                 f"Attention weights should be of size {(bsz * self.num_heads, q_len, kv_seq_len)}, but is"
-                f" {attn_weights.shape.with_tile_padding()}"
+                f" {attn_weights.padded_shape}"
             )
 
         # change attention_mask to TT tensor
         if attention_mask is not None:
             if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
                 raise ValueError(
-                    f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.shape.with_tile_padding()}"
+                    f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.padded_shape}"
                 )
             # TT eltwise add operation, expand attention_mask shape
             attention_mask = attention_mask.repeat(1, self.num_heads, 1, 1)
@@ -276,10 +268,10 @@ class TtLlamaAttention(nn.Module):
         attn_weights = ttnn.softmax_in_place(attn_weights)
         attn_output = ttnn.matmul(attn_weights, value_states)
 
-        if attn_output.shape.with_tile_padding() != [bsz, self.num_heads, q_len, self.head_dim]:
+        if attn_output.padded_shape != [bsz, self.num_heads, q_len, self.head_dim]:
             raise ValueError(
                 f"`attn_output` should be of size {(bsz, self.num_heads, q_len, self.head_dim)}, but is"
-                f" {attn_output.shape.with_tile_padding()}"
+                f" {attn_output.padded_shape}"
             )
 
         attn_output = ttnn.transpose(attn_output, 1, -2)

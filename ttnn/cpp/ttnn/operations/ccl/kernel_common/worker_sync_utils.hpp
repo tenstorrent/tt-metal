@@ -7,7 +7,7 @@
 #include "dataflow_api.h"
 #include "debug/assert.h"
 #include "debug/dprint.h"
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <array>
 
 // Called by the master worker to synchronize with the slave workers

@@ -39,7 +39,7 @@ private:
 
 template <typename Model, typename Optimizer>
 void save_training_state(
-    std::string &model_path,
+    const std::string &model_path,
     const std::shared_ptr<Model> &model,
     Optimizer &optimizer,
     const std::string &model_name,
@@ -52,7 +52,7 @@ void save_training_state(
 
 template <typename Model, typename Optimizer>
 void load_training_state(
-    std::string &model_path,
+    const std::string &model_path,
     const std::shared_ptr<Model> &model,
     Optimizer &optimizer,
     const std::string &model_name,

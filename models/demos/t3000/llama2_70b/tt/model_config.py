@@ -161,7 +161,6 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
                 shard_width_hidden_dim_per_device_across_16_cores,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
 
@@ -175,7 +174,6 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
                 shard_width_hidden_dim_across_32_cores,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
     model_config["HIDDEN_WIDTH_16_CORES_MEMCFG"] = ttnn.MemoryConfig(
@@ -188,7 +186,6 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
                 shard_width_hidden_dim_across_16_cores,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
     model_config["LN_F_PROGCFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -290,7 +287,6 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
                 shard_width_hidden_dim_per_device_across_16_cores,  # 8192 // 32 // num_devices
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
 
@@ -304,7 +300,6 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
                 shard_width_hidden_dim_across_8_cores,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
     model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
@@ -317,7 +312,6 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
                 shard_width_qkv_heads_per_device_across_8_cores,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
 
@@ -381,7 +375,6 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
                 head_dim,  # head dim
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
 
@@ -395,7 +388,7 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
     model_config["SDPA_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
-        ttnn.ShardSpec(batch_core_range, (32, head_dim), ttnn.ShardOrientation.ROW_MAJOR, False),  # padded local heads
+        ttnn.ShardSpec(batch_core_range, (32, head_dim), ttnn.ShardOrientation.ROW_MAJOR),  # padded local heads
     )
 
     model_config["SELFOUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(

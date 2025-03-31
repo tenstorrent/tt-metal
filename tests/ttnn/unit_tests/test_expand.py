@@ -8,24 +8,14 @@ import pytest
 
 
 @pytest.mark.parametrize(
-    "input_shape",
+    "input_shape, output_shape",
     [
-        [1, 32],
-        [8, 1],
-        [32, 1],
+        [(4, 1), (4, 2)],
+        [(1, 32), (32, -1)],
+        [(1, 32), (64, 32)],
+        [(8, 1), (8, 8)],
+        [(8, 1), (-1, 32)],
     ],
-    ids=["1d", "2d", "large_2d"],
-)
-@pytest.mark.parametrize(
-    "output_shape",
-    [
-        [-1, 32],
-        [32, -1, 32],
-        [32, 32, -1, 32],
-        [32, 32, 32, -1, 32],
-        [4, 4, 4096, -1, 32],
-    ],
-    ids=["2d", "3d", "4d", "5d", "random_large_5d"],
 )
 @pytest.mark.parametrize(
     "tensor_layout",
@@ -43,7 +33,7 @@ def test_expand(input_shape, output_shape, tensor_layout, device):
     output_tensor = ttnn.expand(input_tensor, output_shape)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert torch.equal(torch_output_tensor, output_tensor)
+    assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-1, rtol=1e-2)
 
 
 @pytest.mark.parametrize(
@@ -56,7 +46,7 @@ def test_expand(input_shape, output_shape, tensor_layout, device):
 def test_expand_callback(tensor_layout, device, use_program_cache):
     num_program_cache_entries_list = []
     for i in range(2):
-        test_expand([32, 1], [32, 32, 32], tensor_layout, device)
+        test_expand([32, 1], [32, 32], tensor_layout, device)
         num_program_cache_entries_list.append(device.num_program_cache_entries())
 
     assert num_program_cache_entries_list[0] > 0

@@ -4,7 +4,7 @@
 
 #include "moreh_bmm_backward.hpp"
 
-#include "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
+#include "cpp/ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
 
 namespace ttnn::operations::moreh::moreh_bmm_backward {
 std::vector<std::optional<Tensor>> MorehBMMBackward::invoke(

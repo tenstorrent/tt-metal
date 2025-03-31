@@ -6,11 +6,11 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "test_tiles.hpp"
+#include <tt-metalium/tilize_utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -18,6 +18,7 @@
 using std::vector;
 using namespace tt;
 
+namespace test {
 // Given a tensor that is row-major datums, make it tilized
 // so that its row major within a tile, and each tile's data
 // is contiguous
@@ -67,6 +68,7 @@ std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
 
     return result;
 }
+}  // namespace test
 
 // Transpose 2D matrix of tiles so that its column major of tiles instead of row major.
 // this is usually used for activation so that blocks data is contiguous in memory
@@ -154,7 +156,7 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
 }
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     int num_cores_r,
     int num_cores_c,
     int per_core_M,
@@ -297,7 +299,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
         int num_cores_r = compute_with_storage_grid_size.y;
@@ -312,7 +314,7 @@ int main(int argc, char** argv) {
         int per_core_M = M / num_cores_r;
         int per_core_N = N / num_cores_c;
         uint32_t single_tile_size = 2 * 1024;
-        uint32_t dram_unreserved_base = device->get_base_allocator_addr(HalMemType::DRAM);
+        uint32_t dram_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
         log_info(LogTest, "M = {}, N = {}, K = {}", M, N, K);
         log_info(LogTest, "Activation = {}x{}", M * 32, K * 32);
         log_info(LogTest, "Weights = {}x{}", K * 32, N * 32);
@@ -383,15 +385,15 @@ int main(int argc, char** argv) {
                 TT_FATAL(dram_buffer_src1_addr + dram_buffer_size_weights < 1024 * 1024 * 1024, "Error");
                 TT_FATAL(dram_buffer_dst_addr + dram_buffer_size_out < 1024 * 1024 * 1024, "Error");
 
-                auto activations_tilized = tilize(activation_slice, per_core_M * 32, K * 32);
-                auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
+                auto activations_tilized = test::tilize(activation_slice, per_core_M * 32, K * 32);
+                auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
                 auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
                 auto activations_tile_transposed = transpose_tiles(activations, per_core_M, K, in0_block_w);
                 pass &= tt_metal::detail::WriteToDeviceDRAMChannel(
                     device, dram_src0_channel_id, dram_buffer_src0_addr, activations_tile_transposed);
 
-                auto identity_tilized = tilize(weights_slice, K * 32, per_core_N * 32);
-                auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
+                auto identity_tilized = test::tilize(weights_slice, K * 32, per_core_N * 32);
+                auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
                 auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
                 pass &= tt_metal::detail::WriteToDeviceDRAMChannel(
                     device, dram_src1_channel_id, dram_buffer_src1_addr, weights);
@@ -448,8 +450,8 @@ int main(int argc, char** argv) {
                     per_core_M * per_core_N * single_tile_size,
                     result_vec);
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-                auto result_flat_layout = convert_to_flat_layout(result_bfp16);
-                auto result_untilized = untilize(result_flat_layout, per_core_M * 32, per_core_N * 32);
+                auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
+                auto result_untilized = test::untilize(result_flat_layout, per_core_M * 32, per_core_N * 32);
                 pass &= (per_core_golden == result_untilized);
             }
         }

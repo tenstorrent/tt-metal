@@ -3,13 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "dispatch_fixture.hpp"
 #include "gtest/gtest.h"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <tt-metalium/command_queue.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "tt_metal/common/bfloat16.hpp"
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/logger.hpp>
 
 using namespace tt;
 
@@ -23,7 +23,7 @@ struct DRAMConfig {
     tt_metal::DataMovementConfig data_movement_cfg;
 };
 
-bool dram_single_core_db(DispatchFixture* fixture, tt_metal::Device* device) {
+bool dram_single_core_db(tt::tt_metal::DispatchFixture* fixture, tt_metal::IDevice* device) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreCoord core = {0, 0};
@@ -85,9 +85,12 @@ bool dram_single_core_db(DispatchFixture* fixture, tt_metal::Device* device) {
 }
 
 bool dram_single_core(
-    DispatchFixture* fixture, tt_metal::Device* device, const DRAMConfig& cfg, std::vector<uint32_t> src_vec) {
+    tt::tt_metal::DispatchFixture* fixture,
+    tt_metal::IDevice* device,
+    const DRAMConfig& cfg,
+    std::vector<uint32_t> src_vec) {
     // Create a program
-    tt_metal::Program program = CreateProgram();
+    tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt_metal::InterleavedBufferConfig dram_config{
         .device = device,
@@ -122,7 +125,60 @@ bool dram_single_core(
     fixture->ReadBuffer(device, output_dram_buffer, result_vec);
     return result_vec == src_vec;
 }
+
+bool dram_single_core_pre_allocated(
+    tt::tt_metal::DispatchFixture* fixture,
+    tt_metal::IDevice* device,
+    const DRAMConfig& cfg,
+    std::vector<uint32_t> src_vec) {
+    // Create a program
+    tt_metal::Program program = tt::tt_metal::CreateProgram();
+
+    tt_metal::InterleavedBufferConfig dram_config{
+        .device = device,
+        .size = cfg.dram_buffer_size,
+        .page_size = cfg.dram_buffer_size,
+        .buffer_type = tt_metal::BufferType::DRAM};
+
+    auto input_dram_buffer = tt_metal::CreateBuffer(dram_config);
+    uint32_t input_dram_buffer_addr = input_dram_buffer->address();
+    auto input_dram_pre_allocated_buffer = tt_metal::CreateBuffer(dram_config, input_dram_buffer_addr);
+    uint32_t input_dram_pre_allocated_buffer_addr = input_dram_pre_allocated_buffer->address();
+
+    EXPECT_EQ(input_dram_buffer_addr, input_dram_pre_allocated_buffer_addr);
+
+    auto output_dram_buffer = tt_metal::CreateBuffer(dram_config);
+    uint32_t output_dram_buffer_addr = output_dram_buffer->address();
+    auto output_dram_pre_allocated_buffer = tt_metal::CreateBuffer(dram_config, output_dram_buffer_addr);
+    uint32_t output_dram_pre_allocated_buffer_addr = output_dram_pre_allocated_buffer->address();
+
+    EXPECT_EQ(output_dram_buffer_addr, output_dram_pre_allocated_buffer_addr);
+
+    // Create the kernel
+    auto dram_kernel = tt_metal::CreateKernel(program, cfg.kernel_file, cfg.core_range, cfg.data_movement_cfg);
+    fixture->WriteBuffer(device, input_dram_pre_allocated_buffer, src_vec);
+
+    tt_metal::SetRuntimeArgs(
+        program,
+        dram_kernel,
+        cfg.core_range,
+        {cfg.l1_buffer_addr,
+         input_dram_pre_allocated_buffer_addr,
+         (std::uint32_t)0,
+         output_dram_pre_allocated_buffer_addr,
+         (std::uint32_t)0,
+         cfg.dram_buffer_size});
+
+    fixture->RunProgram(device, program);
+
+    std::vector<uint32_t> result_vec;
+    fixture->ReadBuffer(device, output_dram_pre_allocated_buffer, result_vec);
+
+    return result_vec == src_vec;
+}
 }  // namespace unit_tests_common::dram::test_dram
+
+namespace tt::tt_metal {
 
 TEST_F(DispatchFixture, TensixDRAMLoopbackSingleCore) {
     uint32_t buffer_size = 2 * 1024 * 25;
@@ -142,6 +198,24 @@ TEST_F(DispatchFixture, TensixDRAMLoopbackSingleCore) {
     }
 }
 
+TEST_F(DispatchFixture, TensixDRAMLoopbackSingleCorePreAllocated) {
+    uint32_t buffer_size = 2 * 1024 * 25;
+    std::vector<uint32_t> src_vec =
+        create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
+    unit_tests_common::dram::test_dram::DRAMConfig dram_test_config = {
+        .core_range = {{0, 0}, {0, 0}},
+        .kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp",
+        .dram_buffer_size = buffer_size,
+        .l1_buffer_addr = 400 * 1024,
+        .data_movement_cfg =
+            {.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
+    };
+    for (unsigned int id = 0; id < devices_.size(); id++) {
+        ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core_pre_allocated(
+            this, devices_.at(id), dram_test_config, src_vec));
+    }
+}
+
 TEST_F(DispatchFixture, TensixDRAMLoopbackSingleCoreDB) {
     if (!this->IsSlowDispatch()) {
         tt::log_info(tt::LogTest, "This test is only supported in slow dispatch mode");
@@ -151,3 +225,5 @@ TEST_F(DispatchFixture, TensixDRAMLoopbackSingleCoreDB) {
         ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core_db(this, devices_.at(id)));
     }
 }
+
+}  // namespace tt::tt_metal

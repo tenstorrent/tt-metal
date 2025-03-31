@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
@@ -14,11 +14,11 @@ using namespace tt::constants;
 using namespace tt;
 
 namespace reuse_optimized_helpers {
-using namespace tt::constants;
-using namespace tt;
-using namespace tt_metal;
-operation::ProgramWithCallbacks create_program(
-    tt_metal::Device* device,
+
+using tt::tt_metal::Tensor;
+
+tt::tt_metal::operation::ProgramWithCallbacks create_program(
+    tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
@@ -115,7 +115,7 @@ operation::ProgramWithCallbacks create_program(
     uint32_t num_tiles_per_block_in1 = K * per_core_N;
     uint32_t num_tiles_per_block_out = per_core_M_per_batch * per_core_N;
     uint32_t num_output_blocks_total = (B * M / per_core_M) * (N / per_core_N);
-    std::optional<ShardSpec> shard_spec = std::nullopt;
+    std::optional<tt::tt_metal::ShardSpec> shard_spec = std::nullopt;
     if (in0_is_sharded) {
         shard_spec = in0.shard_spec().value();
     } else if (in1_is_sharded) {
@@ -178,17 +178,17 @@ operation::ProgramWithCallbacks create_program(
         mm_kernel_in1_reader_writer_defines["OUT_SHARDED"] = "1";
     }
 
-    KernelHandle mm_kernel_in0_reader_id = tt_metal::CreateKernel(
+    tt::tt_metal::KernelHandle mm_kernel_in0_reader_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0.cpp",
         all_cores,
-        ReaderDataMovementConfig(reader_compile_time_args, mm_kernel_in0_reader_defines));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, mm_kernel_in0_reader_defines));
 
-    KernelHandle mm_kernel_in1_reader_writer_id = tt_metal::CreateKernel(
+    tt::tt_metal::KernelHandle mm_kernel_in1_reader_writer_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_writer_bmm_tile_layout_in1.cpp",
         all_cores,
-        WriterDataMovementConfig(reader_writer_compile_time_args, mm_kernel_in1_reader_writer_defines));
+        tt::tt_metal::WriterDataMovementConfig(reader_writer_compile_time_args, mm_kernel_in1_reader_writer_defines));
 
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         in0_block_w,             // in0_block_w
@@ -271,7 +271,7 @@ operation::ProgramWithCallbacks create_program(
     }
 
     // Create circular buffers
-    uint32_t src0_cb_index = 0;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
             .set_page_size(src0_cb_index, in0_single_tile_size)
@@ -281,7 +281,7 @@ operation::ProgramWithCallbacks create_program(
     }
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    uint32_t src1_cb_index = 1;
+    uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
             .set_page_size(src1_cb_index, in1_single_tile_size)
@@ -291,8 +291,8 @@ operation::ProgramWithCallbacks create_program(
     }
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
-    uint32_t output_cb_index = tt::CBIndex::c_16;
-    uint32_t interm0_cb_index = 24;
+    uint32_t output_cb_index = tt::CBIndex::c_4;
+    uint32_t interm0_cb_index = tt::CBIndex::c_5;
     tt_metal::CircularBufferConfig interm0_cb_config =
         tt_metal::CircularBufferConfig(0, {{interm0_cb_index, interm0_data_format}});
     tt_metal::CircularBufferConfig output_cb_config =
@@ -388,7 +388,7 @@ operation::ProgramWithCallbacks create_program(
     };
     bool row_major = false;
     if (shard_spec.has_value()) {
-        row_major = shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
+        row_major = shard_spec.value().orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR;
     }
     const auto cores = grid_to_cores(num_cores, core_range.x, core_range.y, row_major);
 
@@ -417,7 +417,7 @@ operation::ProgramWithCallbacks create_program(
     auto override_runtime_arguments_callback =
         [mm_kernel_in0_reader_id, mm_kernel_in1_reader_writer_id, cb_src0, cb_src1, cb_output, num_cores, cores](
             const void* operation,
-            Program& program,
+            tt::tt_metal::Program& program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
@@ -476,7 +476,7 @@ namespace operations {
 
 namespace matmul {
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
     const Tensor& a,
     const Tensor& b,
     Tensor& output,
@@ -491,8 +491,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
     uint32_t per_core_N,
     bool fuse_batch,
     bool untilize_out) {
-    const auto& ashape = a.get_legacy_shape();
-    const auto& bshape = b.get_legacy_shape();
+    const auto& ashape = a.get_padded_shape();
+    const auto& bshape = b.get_padded_shape();
     auto in0_tile_shape = a.get_tensor_spec().tile().get_tile_shape();
     auto in1_tile_shape = b.get_tensor_spec().tile().get_tile_shape();
 
@@ -505,7 +505,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype());    // in1
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output_dtype);  // output
 
-    tt_metal::Device* device = a.device();
+    tt_metal::IDevice* device = a.device();
 
     tt_metal::Buffer* in0_buffer = a.buffer();
     tt_metal::Buffer* in1_buffer = b.buffer();
@@ -578,7 +578,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
 
 // TODO: Get rid of no-op reshapes when we generalize
 // matmul_multi_core_reuse_optimized_bert_large not used
-operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
+tt::tt_metal::operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
     const Tensor& a,
     const Tensor& b,
     Tensor& output,

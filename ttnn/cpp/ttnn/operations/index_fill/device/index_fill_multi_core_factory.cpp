@@ -2,11 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "host_api.hpp"
-#include "impl/buffers/circular_buffer_types.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
 #include "index_fill_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/types.hpp"
 
 using namespace tt;
@@ -47,7 +46,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
 
     auto num_rows = input.volume() / input.get_logical_shape()[-1];
     Program program{};
-    Device* device = input.device();
+    IDevice* device = input.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;

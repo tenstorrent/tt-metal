@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 #include "debug/dprint.h"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 
 void kernel_main() {
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
@@ -30,7 +30,7 @@ void kernel_main() {
         uint32_t pages_to_read = std::min<uint32_t>(pages_per_edm_buffer, num_pages_to_read_total - num_pages_read);
         cb_reserve_back(cb_id_in0, pages_to_read);
         uint32_t local_l1_read_addr = get_write_ptr(cb_id_in0);
-        local_l1_read_addr += sizeof(tt::fabric::PacketHeader);
+        local_l1_read_addr += sizeof(PACKET_HEADER_TYPE);
 
         for (uint32_t p = 0; p < pages_to_read; ++p) {
             uint64_t src_noc_addr = get_noc_addr(num_pages_read + p, source_address_generator);

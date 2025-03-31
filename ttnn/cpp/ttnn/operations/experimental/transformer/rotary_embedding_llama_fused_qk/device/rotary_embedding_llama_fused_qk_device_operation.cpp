@@ -5,8 +5,7 @@
 #include "rotary_embedding_llama_fused_qk_device_operation.hpp"
 #include "rotary_embedding_llama_fused_qk_program_factory.hpp"
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
 
 namespace tt {
 
@@ -66,10 +65,8 @@ void RotaryEmbeddingLlamaFusedQK::validate(const std::vector<Tensor>& input_tens
     TT_FATAL(
         q_batch_size <= 32,
         "Q and K must have batch size less than or equal to 32, due to parallelization over core-grid of 64");
-    uint32_t q_num_cores = q_input_tensor.shard_spec()->grid.bounding_box().grid_size().x *
-                           q_input_tensor.shard_spec()->grid.bounding_box().grid_size().y;
-    uint32_t k_num_cores = k_input_tensor.shard_spec()->grid.bounding_box().grid_size().x *
-                           k_input_tensor.shard_spec()->grid.bounding_box().grid_size().y;
+    uint32_t q_num_cores = q_input_tensor.shard_spec()->grid.num_cores();
+    uint32_t k_num_cores = k_input_tensor.shard_spec()->grid.num_cores();
     TT_FATAL(q_num_cores + k_num_cores <= 64, "Q and K must not exceed max core grid size of 64");
 
     bool is_overlap = q_input_tensor.shard_spec()->grid.intersects(k_input_tensor.shard_spec()->grid);
@@ -84,8 +81,7 @@ void RotaryEmbeddingLlamaFusedQK::validate(const std::vector<Tensor>& input_tens
         "sizes");
 
     // Checks for transformation matrix
-    uint32_t trans_mat_num_cores = trans_mat.shard_spec()->grid.bounding_box().grid_size().x *
-                                   trans_mat.shard_spec()->grid.bounding_box().grid_size().y;
+    uint32_t trans_mat_num_cores = trans_mat.shard_spec()->grid.num_cores();
     TT_FATAL(
         trans_mat_num_cores >= (q_num_cores + k_num_cores),
         "Transformation matrix is repeated for Q and K must be sharded over core grid of Q and K");
@@ -94,32 +90,19 @@ void RotaryEmbeddingLlamaFusedQK::validate(const std::vector<Tensor>& input_tens
         "Transformation matrix must be sharded to single tile of shape (32, 32)");
 }
 
-std::vector<ttnn::SimpleShape> RotaryEmbeddingLlamaFusedQK::compute_output_shapes(
+std::vector<ttnn::TensorSpec> RotaryEmbeddingLlamaFusedQK::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& q_input_tensor = input_tensors.at(0);
     const auto& k_input_tensor = input_tensors.at(1);
     auto q_shape = q_input_tensor.get_logical_shape();
     auto k_shape = k_input_tensor.get_logical_shape();
-    return {q_shape, k_shape};
-}
-
-std::vector<Tensor> RotaryEmbeddingLlamaFusedQK::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& q_input_tensor = input_tensors.at(0);
-    const auto& k_input_tensor = input_tensors.at(1);
-    auto output_shapes = this->compute_output_shapes(input_tensors);
     return {
-        create_device_tensor(
-            output_shapes[0],
-            q_input_tensor.get_dtype(),
-            q_input_tensor.get_layout(),
-            q_input_tensor.device(),
-            this->q_output_mem_config),
-        create_device_tensor(
-            output_shapes[1],
-            k_input_tensor.get_dtype(),
-            k_input_tensor.get_layout(),
-            k_input_tensor.device(),
-            this->k_output_mem_config)};
+        TensorSpec(
+            q_shape,
+            TensorLayout(q_input_tensor.get_dtype(), PageConfig(q_input_tensor.get_layout()), q_output_mem_config)),
+        TensorSpec(
+            k_shape,
+            TensorLayout(k_input_tensor.get_dtype(), PageConfig(k_input_tensor.get_layout()), k_output_mem_config))};
 }
 
 operation::ProgramWithCallbacks RotaryEmbeddingLlamaFusedQK::create_program(

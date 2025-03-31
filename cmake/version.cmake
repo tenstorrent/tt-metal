@@ -74,20 +74,25 @@ function(ParseGitDescribe)
     endif()
 
     set(VERSION_FULL "${VERSION_NUMERIC}")
+    set(VERSION_DEB "${VERSION_NUMERIC}")
     if(VERSION_STATUS)
         string(APPEND VERSION_FULL "-${VERSION_STATUS}")
+        string(APPEND VERSION_DEB "~${VERSION_STATUS}") # Debian versioning uses a ~ for "less than blank"
     endif()
     if(VERSION_COMMIT_COUNT)
         string(APPEND VERSION_FULL "+${VERSION_COMMIT_COUNT}.${VERSION_HASH}")
+        string(APPEND VERSION_DEB "+${VERSION_COMMIT_COUNT}.${VERSION_HASH}")
     endif()
     if(VERSION_DIRTY)
         string(APPEND VERSION_FULL "+m")
+        string(APPEND VERSION_DEB "+m")
     endif()
 
     message(STATUS "Version: ${VERSION_FULL}")
 
     # Output variables
     set(VERSION_FULL "${VERSION_FULL}" PARENT_SCOPE)
+    set(VERSION_DEB "${VERSION_DEB}" PARENT_SCOPE)
     set(VERSION_NUMERIC "${VERSION_NUMERIC}" PARENT_SCOPE)
     set(VERSION_HASH "${VERSION_HASH}" PARENT_SCOPE)
 endfunction()

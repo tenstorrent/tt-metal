@@ -11,8 +11,8 @@ namespace ttnn::operations::unary::program {
 
 struct UnaryShardedProgramFactory {
     struct shared_variables_t {
-        CBHandle cb_src0;
-        CBHandle out_cb;
+        tt::tt_metal::CBHandle cb_src0;
+        tt::tt_metal::CBHandle out_cb;
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 

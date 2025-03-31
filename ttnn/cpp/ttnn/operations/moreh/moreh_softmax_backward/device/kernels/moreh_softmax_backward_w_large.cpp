@@ -7,7 +7,7 @@
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -24,7 +24,7 @@ void MAIN {
     constexpr auto cb_inter2 = tt::CBIndex::c_26;
     constexpr auto cb_add = tt::CBIndex::c_27;
 
-    binary_op_init_common(cb_y, cb_bcast_scaler);
+    binary_op_init_common(cb_y, cb_bcast_scaler, cb_dx);
 
     uint32_t N = get_compile_time_arg_val(0);
     uint32_t Wt = get_compile_time_arg_val(1);

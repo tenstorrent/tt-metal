@@ -9,7 +9,7 @@
 #pragma once
 
 #include "ttnn/tensor/types.hpp"
-#include "tt_metal/common/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 namespace ttnn {
 
@@ -23,6 +23,131 @@ struct BlockSplit {
     uint32_t nblocks_per_core;
     uint32_t nblocks_per_core_cliff;
 };
+
+struct BlockSplitWH {
+    uint32_t ncores = 0;
+    CoreRangeSet all_cores;
+    CoreRangeSet core_range;
+    CoreRangeSet cliff_row_core_range;
+    CoreRangeSet cliff_col_core_range;
+    CoreRangeSet cliff_col_row_core_range;
+    uint32_t nblocks_per_core = 0;
+    uint32_t single_block_size = 0;
+    uint32_t single_block_size_cliff_row = 0;
+    uint32_t single_block_size_cliff_col = 0;
+    bool has_cliff_row = false;
+    bool has_cliff_col = false;
+    uint32_t full_cores_per_row = 0;
+    uint32_t full_cores_per_col = 0;
+};
+
+inline std::pair<int, int> closest_square_larger_than_b(int b, int width, int height, int ref) {
+    if (ref <= 0) {
+        return {1, 1};
+    }
+
+    int sqrt_b = static_cast<int>(std::sqrt(b));
+
+    // Check if b is a perfect square and if it meets the condition using integer arithmetic for ceiling.
+    if (sqrt_b * sqrt_b == b) {
+        int numX = (width + sqrt_b - 1) / sqrt_b;   // equivalent to ceil(width / sqrt_b)
+        int numY = (height + sqrt_b - 1) / sqrt_b;  // equivalent to ceil(height / sqrt_b)
+        if (numX * numY < ref) {
+            return {b, sqrt_b};
+        }
+    }
+
+    // Iterate over candidate values, starting from sqrt_b + 1,
+    // and check the condition using integer arithmetic.
+    for (int candidate = sqrt_b + 1; candidate <= width * height; ++candidate) {
+        int square = candidate * candidate;
+        int numX = (width + candidate - 1) / candidate;   // equivalent to ceil(width / candidate)
+        int numY = (height + candidate - 1) / candidate;  // equivalent to ceil(height / candidate)
+        if (numX * numY < ref) {
+            return {square, candidate};
+        }
+    }
+
+    return {1, 1};
+}
+
+inline BlockSplitWH split_blocks_for_tilize_wh(
+    CoreCoord grid_size, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles) {
+    // Compute grid area and initial blocks-per-core using integer math.
+    const uint32_t grid_area = grid_size.x * grid_size.y;
+    uint32_t nblocks_per_core = (grid_area == 0) ? 1 : (nblocks + grid_area - 1) / grid_area;
+
+    // Adjust nblocks_per_core and determine the optimal block size.
+    auto [adjusted_nblocks_per_core, single_block_size] =
+        closest_square_larger_than_b(nblocks_per_core, width_tiles, height_tiles, grid_area);
+    nblocks_per_core = adjusted_nblocks_per_core;
+
+    // Helper lambda for ceiling division.
+    auto divCeil = [](uint32_t a, uint32_t b) -> uint32_t { return (a + b - 1) / b; };
+    const uint32_t total_blocks_width = divCeil(width_tiles, single_block_size);
+    const uint32_t total_blocks_height = divCeil(height_tiles, single_block_size);
+    const uint32_t total_blocks = total_blocks_width * total_blocks_height;
+    const uint32_t ncores = (nblocks_per_core == 0) ? nblocks : total_blocks;
+    const uint32_t ncores_x = grid_size.x;
+    const uint32_t ncores_y = (ncores_x == 0) ? 0 : divCeil(ncores, ncores_x);
+    // Sets to hold different core ranges.
+    std::set<CoreRange> core_range, cliff_col_core_range, cliff_row_core_range, cliff_col_row_core_range;
+    std::set<CoreRange> all_cores;
+    const uint32_t full_cores_per_row = width_tiles / single_block_size;
+    const bool has_cliff_row = (full_cores_per_row < total_blocks_width);
+    const uint32_t full_cores_per_col = height_tiles / single_block_size;
+    const bool has_cliff_col = (full_cores_per_col < total_blocks_height);
+    const uint32_t single_block_size_cliff_row = width_tiles - full_cores_per_row * single_block_size;
+    const uint32_t single_block_size_cliff_col = height_tiles - full_cores_per_col * single_block_size;
+    // Coordinates for assigning cores sequentially.
+    uint32_t i_x = 0;
+    uint32_t i_y = 0;
+    auto addCore = [&](std::set<CoreRange>& targetSet) {
+        CoreRange range{CoreCoord{i_x, i_y}, CoreCoord{i_x, i_y}};
+        targetSet.insert(range);
+        all_cores.insert(range);
+        // Update core coordinates in a cyclic row-wise manner.
+        if (i_x == grid_size.x - 1) {
+            i_x = 0;
+            i_y++;
+        } else {
+            i_x++;
+        }
+    };
+    // Distribute cores over full rows (each row may have an extra "cliff" block at the end).
+    for (uint32_t row = 0; row < full_cores_per_col; row++) {
+        for (uint32_t col = 0; col < full_cores_per_row; col++) {
+            addCore(core_range);
+        }
+        if (has_cliff_row) {
+            addCore(cliff_row_core_range);
+        }
+    }
+    // Add the cliff column if present.
+    if (has_cliff_col) {
+        for (uint32_t col = 0; col < full_cores_per_row; col++) {
+            addCore(cliff_col_core_range);
+        }
+        if (has_cliff_row) {
+            addCore(cliff_col_row_core_range);
+        }
+    }
+    return BlockSplitWH{
+        ncores,
+        all_cores,
+        core_range,
+        cliff_row_core_range,
+        cliff_col_core_range,
+        cliff_col_row_core_range,
+        nblocks_per_core,
+        single_block_size,
+        single_block_size_cliff_row,
+        single_block_size_cliff_col,
+        has_cliff_row,
+        has_cliff_col,
+        full_cores_per_row,
+        full_cores_per_col};
+}
 
 inline BlockSplit split_blocks_for_tilize(CoreCoord grid_size, uint32_t nblocks) {
     size_t grid_area = grid_size.x * grid_size.y;
@@ -152,11 +277,17 @@ struct FullRep {
     BlockRep pad;
     uint32_t times_total;
 
-    FullRep(uint32_t n_rows, uint32_t n_pads, uint32_t times, uint32_t pads_mul, uint32_t times_total) :
-        rep{n_rows / 32, n_rows % 32, n_pads / 32, times},
-        pad{0, 0, (n_rows + n_pads) * pads_mul, 1},
+    FullRep(
+        uint32_t n_rows,
+        uint32_t n_pads,
+        uint32_t times,
+        uint32_t pads_mul,
+        uint32_t times_total,
+        uint32_t tile_height) :
+        rep{n_rows / tile_height, n_rows % tile_height, n_pads / tile_height, times},
+        pad{0, 0, (n_rows + n_pads) * pads_mul / tile_height, 1},
         times_total(times_total) {
-        TT_FATAL((n_rows + n_pads) % 32 == 0 && "total rows must be divisible by 32", "Error");
+        TT_FATAL((n_rows + n_pads) % tile_height == 0 && "total rows must be divisible by {}", "Error", tile_height);
     }
 
     std::vector<BlockRep> to_block_reps() const {
@@ -176,26 +307,29 @@ struct FullRep {
     }
 };
 
+inline bool compare_assignments(const BlockRep& el0, const BlockRep& el1) {
+    return (
+        el0.n_data == el1.n_data && el0.n_mixed == el1.n_mixed && el0.n_pads == el1.n_pads && el0.times == el1.times);
+}
+
 inline std::vector<std::vector<BlockRep>> distribute_work(
-    const ttnn::SimpleShape& logical_shape,
-    const tt::tt_metal::Padding& padding,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
     uint32_t num_cores,
     uint32_t blocks_per_core,
     bool has_cliff,
-    uint32_t nblocks_per_core_cliff) {
-    TT_FATAL(
-        logical_shape.rank() >= 2, "Logical shape rank needs to be >=2. Shape: {}", "Error", logical_shape, padding);
+    uint32_t nblocks_per_core_cliff,
+    uint32_t tile_height) {
+    auto input_w = logical_shape[-4];
+    auto input_z = logical_shape[-3];
+    auto input_y = logical_shape[-2];
 
-    auto input_w = logical_shape.rank() >= 4 ? logical_shape[-4] : 1;
-    auto input_z = logical_shape.rank() >= 3 ? logical_shape[-3] : 1;
-    auto input_y = logical_shape.rank() >= 2 ? logical_shape[-2] : 1;
-
-    auto padding_w = logical_shape.rank() >= 4 ? padding[padding.get_normalized_index(-4)].back : 0;
-    auto padding_z = logical_shape.rank() >= 3 ? padding[padding.get_normalized_index(-3)].back : 0;
-    auto padding_y = logical_shape.rank() >= 2 ? padding[padding.get_normalized_index(-2)].back : 0;
+    auto padding_w = padded_shape[-4] - input_w;
+    auto padding_z = padded_shape[-3] - input_z;
+    auto padding_y = padded_shape[-2] - input_y;
 
     // total work is a full rep followed by a padding.
-    auto full_rep_blocks = FullRep(input_y, padding_y, input_z, padding_z, input_w).to_block_reps();
+    auto full_rep_blocks = FullRep(input_y, padding_y, input_z, padding_z, input_w, tile_height).to_block_reps();
     std::deque<BlockRep> total_work(full_rep_blocks.begin(), full_rep_blocks.end());
     total_work.emplace_back(0, 0, (input_y + padding_y) * (input_z + padding_z) * padding_w, 1);
 

@@ -5,36 +5,47 @@
 import torch
 import ttnn
 
+from typing import Literal
+
 from ttnn.model_preprocessing import infer_ttnn_module_args
 
 from models.experimental.functional_unet.tt import unet_shallow_torch
 
 
+def pad_channels_up_to_target(input_tensor, target=16):
+    assert len(input_tensor.shape) == 4, "Expected input tensor to rank 4"
+    N, C, H, W = input_tensor.shape
+    if C < target:
+        return torch.nn.functional.pad(input_tensor, (0, 0, 0, 0, 0, target - C), mode="constant", value=0)
+    else:
+        return input_tensor
+
+
 def create_unet_input_tensors(
-    batch: int, groups: int, pad_input=True, input_channels=4, input_height=1056, input_width=160, mesh_mapper=None
+    batch: int,
+    groups: int,
+    input_channels: int = 4,
+    input_height: int = 1056,
+    input_width: int = 160,
+    channel_order: Literal["first", "last"] = "last",
+    fold: bool = True,
+    pad: bool = True,
+    mesh_mapper=None,
 ):
     torch_input_tensor = torch.randn(batch, input_channels * groups, input_height, input_width)
-    ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-    ttnn_input_tensor = ttnn_input_tensor.reshape(
-        ttnn_input_tensor.shape[0],
-        1,
-        ttnn_input_tensor.shape[1] * ttnn_input_tensor.shape[2],
-        ttnn_input_tensor.shape[3],
-    )
-    if pad_input:
-        pad, hpad = 16, 0
-        if ttnn_input_tensor.shape[-1] < pad or ttnn_input_tensor.shape[-2] < hpad:
-            ttnn_input_tensor = torch.nn.functional.pad(
-                ttnn_input_tensor,
-                (0, max(0, pad - ttnn_input_tensor.shape[-1]), 0, max(0, hpad - ttnn_input_tensor.shape[-2])),
-            )
+
+    # We almost always (unless running full model) want to ensure we have least 16 because conv2d requires it
+    ttnn_input_tensor = pad_channels_up_to_target(torch_input_tensor, 16) if pad else torch_input_tensor
+
+    ttnn_input_tensor = ttnn_input_tensor if channel_order == "first" else ttnn_input_tensor.permute(0, 2, 3, 1)
+
+    if fold:
+        if channel_order == "first":
+            raise RuntimeError("Cannot fold B x H x W when in channels first ordering")
+        ttnn_input_tensor = ttnn_input_tensor.reshape(batch, 1, input_height * input_width, -1)
+
     ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
-    ttnn_input_tensor = ttnn_input_tensor.reshape(
-        1,
-        1,
-        ttnn_input_tensor.shape[0] * ttnn_input_tensor.shape[1] * ttnn_input_tensor.shape[2],
-        ttnn_input_tensor.shape[3],
-    )
+
     return torch_input_tensor, ttnn_input_tensor
 
 
@@ -46,11 +57,11 @@ def create_unet_model_parameters(
     for key in parameters.keys():
         parameters[key].module = getattr(model, key)
 
-    parameters.c1["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 16 * 32}
+    parameters.c1["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 8 * 32}
     parameters.c1["use_split_reader"] = True
     parameters.c1["use_activation_double_buffer"] = True
     parameters.c1["input_channels_alignment"] = 16
-    parameters.c1_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 16 * 32}
+    parameters.c1_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 8 * 32}
     parameters.c1_2["use_split_reader"] = True
     parameters.c1_2["use_activation_double_buffer"] = True
     parameters.c1_2["input_channels_alignment"] = 16
@@ -111,6 +122,7 @@ def create_unet_model_parameters(
     parameters.c6_3["use_activation_double_buffer"] = True
     parameters.c6_3["input_channels_alignment"] = 16
 
+    parameters.c7["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 8 * 32}
     parameters.c7["use_activation_double_buffer"] = True
     parameters.c7["use_split_reader"] = True
     parameters.c7["input_channels_alignment"] = 16
@@ -136,7 +148,6 @@ def create_unet_model_parameters(
     parameters.c8_3["use_split_reader"] = True
     parameters.c8_3["input_channels_alignment"] = 16
 
-    parameters.output_layer["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 16 * 32}
     parameters.output_layer["use_activation_double_buffer"] = True
     parameters.output_layer["use_split_reader"] = True
     parameters.output_layer["input_channels_alignment"] = 16

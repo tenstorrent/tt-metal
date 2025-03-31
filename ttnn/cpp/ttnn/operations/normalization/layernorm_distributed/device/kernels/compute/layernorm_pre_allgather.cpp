@@ -33,9 +33,9 @@ void MAIN {
     constexpr uint32_t cb_inp = tt::CBIndex::c_0;
     constexpr uint32_t cb_reduce = tt::CBIndex::c_1;
 
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
+    constexpr uint32_t cb_out = tt::CBIndex::c_14;
 
-    constexpr uint32_t cb_x2 = tt::CBIndex::c_24;  // x**2
+    constexpr uint32_t cb_x2 = tt::CBIndex::c_6;  // x**2
 
     cb_wait_front(cb_reduce, 1);  // comes from the reader
 
@@ -68,7 +68,7 @@ void MAIN {
          */
         reconfig_data_format(cb_x2, cb_reduce);
         pack_reconfig_data_format(cb_out);
-        reduce_init_delta<false>();
+        reduce_init_delta<false>(cb_x2, cb_reduce, cb_out);
         cb_wait_front(cb_x2, Wt);
         cb_reserve_back(cb_out, onetile);
         ACQ();
@@ -80,7 +80,7 @@ void MAIN {
         cb_push_back(cb_out, onetile);
         cb_pop_front(cb_x2, Wt);
 
-        reduce_revert_delta();
+        reduce_revert_delta(cb_out);
 
 #ifndef RMSNORM
 
@@ -89,7 +89,7 @@ void MAIN {
          */
         reconfig_data_format(cb_inp, cb_reduce);
         pack_reconfig_data_format(cb_out);
-        reduce_init_delta<false>();
+        reduce_init_delta<false>(cb_inp, cb_reduce, cb_out);
         cb_reserve_back(cb_out, onetile);
         ACQ();
         for (uint32_t wtr = 0; wtr < Wt; wtr++) {
@@ -99,7 +99,7 @@ void MAIN {
         REL();
         cb_push_back(cb_out, onetile);
 
-        reduce_revert_delta();
+        reduce_revert_delta(cb_out);
 
 #endif
 

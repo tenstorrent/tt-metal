@@ -119,9 +119,9 @@ def test_perf_device_bare_metal(batch_size, expected_perf):
     margin = 0.03
 
     if is_wormhole_b0():
-        expected_perf = 3990.0
+        expected_perf = 4475.2
     else:
-        expected_perf = 3476.55
+        expected_perf = 3460.0
 
     command = f"pytest tests/ttnn/integration_tests/bert_tiny/test_bert_tiny.py::test_bert_for_question_answering"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

@@ -11,15 +11,12 @@
 
 #include "core_config.h"
 #include "dev_mem_map.h"
-#include "dev_msgs.h"
+#include <dev_msgs.h>
 #include "noc/noc_parameters.h"
 
 #include "hal.hpp"
 #include "hal_asserts.hpp"
 #include "wormhole/wh_hal.hpp"
-
-// FIXME: Eventually this file will be gone
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // L1_KERNEL_CONFIG
 
 #include "umd/device/tt_soc_descriptor.h"  // CoreType
 
@@ -33,6 +30,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
     static_assert(MEM_IERISC_MAP_END % L1_ALIGNMENT == 0);
 
     std::vector<DeviceAddr> mem_map_bases;
+    constexpr std::uint32_t L1_KERNEL_CONFIG_SIZE = 69 * 1024;
 
     mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_ETH_BASE;
@@ -75,6 +73,8 @@ HalCoreInfoType create_idle_eth_mem_map() {
         processor_types[0] = HalJitBuildConfig{
             .fw_base_addr = MEM_IERISC_FIRMWARE_BASE,
             .local_init_addr = MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH,
+            .fw_launch_addr = 0x0,
+            .fw_launch_addr_value = generate_risc_startup_addr(MEM_IERISC_FIRMWARE_BASE),
         };
         processor_classes[processor_class_idx] = processor_types;
     }

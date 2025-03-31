@@ -25,18 +25,17 @@ void MAIN {
 
     for (uint32_t n = 0; n < num_blocks; n++) {
         // tilize input via unpack and then pack
-        tilize_init_short(cb_in, 1);
+        tilize_init_short(cb_in, 1, cb_tilize);
 
         cb_wait_front(cb_in, x_block_size);
         cb_reserve_back(cb_tilize, 1);
 
         tilize_block(cb_in, 1, cb_tilize);  // tilize and pack into cb_tilize
 
-        // tile slice according to unpacker is garbage after tilize_block in the second iteration, missing an uninit?
         cb_push_back(cb_tilize, 1);
         cb_pop_front(cb_in, x_block_size);
 
-        tilize_uninit(cb_in);
+        tilize_uninit(cb_in, cb_tilize);
 
         // transpose input
         cb_wait_front(cb_tilize, 1);
@@ -56,7 +55,6 @@ void MAIN {
 
         cb_push_back(cb_out, w_block_size);
 
-        cb_wait_front(cb_out, w_block_size);
         pack_untilize_uninit(cb_out);
 
         cb_pop_front(cb_tilize, 1);

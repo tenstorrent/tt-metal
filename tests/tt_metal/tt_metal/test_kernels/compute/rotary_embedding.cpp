@@ -21,7 +21,7 @@ ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
 
 #ifdef DECODE_MODE
     ACQ();
-    mul_bcast_rows_init_short();
+    mul_bcast_rows_init_short(in0_cb, in1_cb);
     mul_tiles_bcast_rows(in0_cb, in1_cb, 0, in1_idx, 0);
     pack_tile(0, out_cb);
     REL();
@@ -30,7 +30,7 @@ ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
 // We don't pop in1 in decode which is sin/cos since we don't stream
 #else
     ACQ();
-    mul_tiles_init();
+    mul_tiles_init(in0_cb, in1_cb);
     mul_tiles(in0_cb, in1_cb, 0, 0, 0);
     pack_tile(0, out_cb);
     REL();
@@ -51,7 +51,7 @@ ALWI void UNTILIZE_TILES(uint32_t in0_cb, uint32_t out_cb, uint32_t num_tiles) {
 }
 
 ALWI void TILIZE_ROWS(uint32_t in0_cb, uint32_t sync_cb, uint32_t out_cb, uint32_t num_tiles) {
-    tilize_init_short(in0_cb, num_tiles);
+    tilize_init_short(in0_cb, num_tiles, out_cb);
     cb_wait_front(sync_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
     tilize_block(in0_cb, num_tiles, out_cb);
@@ -60,7 +60,7 @@ ALWI void TILIZE_ROWS(uint32_t in0_cb, uint32_t sync_cb, uint32_t out_cb, uint32
     // Pop shared cbs after tilize
     cb_pop_front(in0_cb, num_tiles);
     cb_pop_front(sync_cb, num_tiles);
-    tilize_uninit(in0_cb);
+    tilize_uninit(in0_cb, out_cb);
 }
 
 namespace NAMESPACE {
@@ -80,7 +80,7 @@ void MAIN {
     constexpr uint32_t Wt = get_compile_time_arg_val(10);
     constexpr uint32_t half_Wt = get_compile_time_arg_val(11);
 
-    binary_op_init_common(in_cb, cos_cb);
+    binary_op_init_common(in_cb, cos_cb, out_cb);
 
     cb_wait_front(scalar_cb, onetile);
 
@@ -112,7 +112,7 @@ void MAIN {
                 cb_wait_front(rotated_in_cb, onetile);
                 cb_reserve_back(rotated_in_interm_cb, onetile);
                 ACQ();
-                mul_tiles_bcast_scalar_init_short();
+                mul_tiles_bcast_scalar_init_short(rotated_in_cb, scalar_cb);
                 mul_tiles_bcast_scalar(rotated_in_cb, scalar_cb, 0, 0, 0);
                 pack_tile(0, rotated_in_interm_cb);
                 REL();
@@ -134,7 +134,7 @@ void MAIN {
             cb_reserve_back(out_cb, onetile);
 
             ACQ();
-            add_tiles_init();
+            add_tiles_init(cos_interm_cb, sin_interm_cb);
             add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
             pack_tile(0, out_cb);
             REL();

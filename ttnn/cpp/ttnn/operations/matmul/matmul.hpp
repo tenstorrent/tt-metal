@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/command_queue.hpp>
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
@@ -22,7 +22,7 @@ namespace matmul {
 
 namespace detail {
 
-bool is_input_batched(const ttnn::SimpleShape& logical_shape);
+bool is_input_batched(const ttnn::Shape& logical_shape);
 
 }  // namespace detail
 
@@ -33,7 +33,8 @@ ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
     const struct Matmul& parameters,
-    const uint8_t& queue_id);
+    const uint8_t& queue_id,
+    std::optional<ttnn::Tensor>& optional_output_tensor);
 
 struct MatmulOperation {
     static Tensor invoke(
@@ -47,7 +48,10 @@ struct MatmulOperation {
         const std::optional<const std::string>& activation = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         const std::optional<const CoreGrid> core_grid = std::nullopt,
-        const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt);
+        const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt,
+        const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer>& global_cb = std::nullopt,
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 };
 
 struct LinearOperation {
@@ -63,7 +67,10 @@ struct LinearOperation {
         const std::optional<const std::string>& activation = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         const std::optional<const CoreGrid> core_grid = std::nullopt,
-        const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt);
+        const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt,
+        const std::optional<const tt::tt_metal::DeviceGlobalCircularBuffer>& global_cb = std::nullopt,
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 };
 
 }  // namespace matmul

@@ -9,17 +9,7 @@
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
-
-inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
-    for (uint32_t page = 0; page < npages; ++page) {
-        DPRINT << start + page << ": ";
-        for (uint32_t j = 0; j < pagelen; ++j, ++ptr) {
-            DPRINT << BF16(*ptr) << " ";
-        }
-        DPRINT << ENDL();
-    }
-}
+#include "debug/dprint_pages.h"
 #endif
 
 constexpr uint32_t weight_size_w = get_compile_time_arg_val(12);  // Input filter window width
@@ -91,6 +81,12 @@ void kernel_main() {
     const uint32_t act_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(22));
     constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(23);
     constexpr bool transpose_mcast = get_compile_time_arg_val(24) == 1;
+    constexpr uint32_t cb_id_act = get_compile_time_arg_val(27);
+    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(28);
+    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(29);
+    constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(30);
+    constexpr uint32_t cb_id_act_row_major_bfloat16 = get_compile_time_arg_val(31);
+    constexpr uint32_t cb_l1_array = get_compile_time_arg_val(32);
 
     uint32_t i = 0;
     uint32_t noop = get_arg_val<uint32_t>(i);
@@ -115,17 +111,10 @@ void kernel_main() {
 
     tt_l1_ptr uint32_t* act_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
 
-    constexpr uint32_t cb_id_act = tt::CBIndex::c_0;
-    constexpr uint32_t tilized_in0_cb_id = tt::CBIndex::c_25;
-    constexpr uint32_t cb_id_sharded_act = tt::CBIndex::c_3;
-    constexpr uint32_t cb_id_act_row_major_bfloat16 = tt::CBIndex::c_6;
-
-    constexpr uint32_t cb_reader_indices = tt::CBIndex::c_4;
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
 
     // L1 array
-    constexpr uint32_t cb_l1_array = tt::CBIndex::c_5;
     volatile tt_l1_ptr uint32_t* l1_array = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_l1_array));
     // Set up local VALID value, to be mcasted to destinations flag address after the data has been mcasted
     volatile tt_l1_ptr uint32_t* act_mcast_sender_semaphore_valid_addr_ptr = &l1_array[0];
@@ -283,4 +272,5 @@ void kernel_main() {
         }  // act_w_num_outer
         cb_pop_front(tilized_in0_cb_id, act_block_num_tiles);
     }
+    noc_async_write_barrier();
 }

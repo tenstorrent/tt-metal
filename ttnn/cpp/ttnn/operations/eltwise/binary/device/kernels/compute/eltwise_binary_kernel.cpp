@@ -34,7 +34,7 @@ void MAIN {
     binary_op_init_common(cb_inp0, cb_inp1, cb_out0);
 
 #if not PRE_SCALE
-    binary_op_specific_init<false, ELTWISE_OP_TYPE>();
+    binary_op_specific_init<false, ELTWISE_OP_TYPE>(cb_inp0, cb_inp1);
 #endif
 
 #ifdef PACK_RELU
@@ -43,7 +43,7 @@ void MAIN {
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
 #if PRE_SCALE
-        copy_tile_to_dst_init_short();  // need to copy from CB to DST to be able to run sfpu math
+        copy_tile_to_dst_init_short(cb_in0);  // need to copy from CB to DST to be able to run sfpu math
 #endif
 
 #ifdef SFPU_OP_INIT_PRE_IN0_0
@@ -110,7 +110,7 @@ void MAIN {
         cb_reserve_back(cb_out0, per_core_block_size);
 
 #if PRE_SCALE
-        binary_op_specific_init<true, ELTWISE_OP_TYPE>();
+        binary_op_specific_init<true, ELTWISE_OP_TYPE>(cb_inp0, cb_inp1);
 #endif
 
         tile_regs_acquire();

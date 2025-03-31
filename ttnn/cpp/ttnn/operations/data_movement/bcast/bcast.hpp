@@ -12,7 +12,7 @@ namespace operations::data_movement {
 
 struct BcastOperation {
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         ttnn::BcastOpMath bcast_op,

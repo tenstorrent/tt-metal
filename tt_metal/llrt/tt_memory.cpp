@@ -9,7 +9,7 @@
 #include <limits>
 
 #include "tt_elffile.hpp"
-#include "tt_metal/common/assert.hpp"
+#include <assert.hpp>
 
 namespace ll_api {
 
@@ -97,6 +97,12 @@ void memory::process_spans(
         std::vector<uint32_t>::iterator it = data_.begin() + offset;
         callback(it, span.addr, span.len);
         offset += span.len;
+    }
+}
+
+void memory::update_spans(std::function<void(uint64_t& addr)>& callback) {
+    for (auto& span : link_spans_) {
+        callback(span.addr);
     }
 }
 

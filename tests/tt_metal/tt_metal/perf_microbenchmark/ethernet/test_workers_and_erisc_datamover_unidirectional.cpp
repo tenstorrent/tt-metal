@@ -7,21 +7,25 @@
 #include <functional>
 #include <limits>
 #include <random>
+#include <thread>
 
+#include "buffer_constants.hpp"
 #include "umd/device/types/arch.h"
 #include "tt_backend_api_types.hpp"
-#include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/buffer.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+
+#include "tt_cluster.hpp"
 
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
@@ -67,7 +71,7 @@ public:
         }
     }
 
-    std::vector<tt::tt_metal::Device*> devices_;
+    std::vector<tt::tt_metal::IDevice*> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -97,8 +101,8 @@ bool RunWriteBWTest(
     std::string const& receiver_side_reader_worker_kernel_path,
     std::string const& receiver_side_writer_worker_kernel_path,
 
-    tt_metal::Device* sender_device,
-    tt_metal::Device* receiver_device,
+    tt_metal::IDevice* sender_device,
+    tt_metal::IDevice* receiver_device,
 
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,
@@ -117,6 +121,11 @@ bool RunWriteBWTest(
     bool dest_is_dram
 
 ) {
+    using tt_metal::BufferType;
+    using tt_metal::CBHandle;
+    using tt_metal::DataMovementProcessor;
+    using tt_metal::InterleavedBufferConfig;
+
     // number of bytes to send per eth send (given that eth l1 buf size not
     // guaranteed to be multiple of page size, we won't send the left over
     // bytes at the end

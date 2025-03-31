@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
@@ -180,14 +180,14 @@ void bind_unary_operation(
                const Tensor& input_tensor,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const uint8_t& queue_id) -> ttnn::Tensor {
+               QueueId queue_id) -> ttnn::Tensor {
                     return self(queue_id, input_tensor, memory_config, output_tensor);
                 },
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 
@@ -250,14 +250,14 @@ void bind_unary_operation_overload_complex(
                const Tensor& input_tensor,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const uint8_t& queue_id) -> ttnn::Tensor {
+               QueueId queue_id) -> ttnn::Tensor {
                     return self(queue_id, input_tensor, memory_config, output_tensor);
                 },
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0},
+            py::arg("queue_id") = DefaultQueueId},
 
         ttnn::pybind_overload_t{
             [](const unary_operation_t& self,
@@ -308,6 +308,7 @@ void bind_unary_operation_overload_complex_return_complex(
                  - 2, 3, 4
 
             {3}
+            More information about the `BFLOAT8_B  <../tensor.html#limitation-of-bfloat8-b>`_.
 
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
@@ -327,14 +328,14 @@ void bind_unary_operation_overload_complex_return_complex(
                const Tensor& input_tensor,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const uint8_t& queue_id) -> ttnn::Tensor {
+               QueueId queue_id) -> ttnn::Tensor {
                     return self(queue_id, input_tensor, memory_config, output_tensor);
                 },
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0},
+            py::arg("queue_id") = DefaultQueueId},
 
         ttnn::pybind_overload_t{
             [](const unary_operation_t& self,
@@ -403,7 +404,7 @@ void bind_unary_operation_with_fast_and_approximate_mode(py::module& module, con
                const bool parameter,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const uint8_t& queue_id)  -> ttnn::Tensor {
+               QueueId queue_id)  -> ttnn::Tensor {
                 return self(queue_id, input_tensor, parameter, memory_config, output_tensor);
             },
             py::arg("input_tensor"),
@@ -411,7 +412,7 @@ void bind_unary_operation_with_fast_and_approximate_mode(py::module& module, con
             py::arg("fast_and_approximate_mode") = false,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 template <typename unary_operation_t>
@@ -482,7 +483,7 @@ void bind_unary_operation_with_float_parameter(
                const float parameter,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const uint8_t& queue_id) {
+               QueueId queue_id) {
                 return self(queue_id, input_tensor, parameter, memory_config, output_tensor);
             },
             py::arg("input_tensor"),
@@ -490,31 +491,33 @@ void bind_unary_operation_with_float_parameter(
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 template <typename unary_operation_t>
-void bind_unary_operation_with_integer_parameter(
+void bind_unary_operation_with_int_parameter(
     py::module& module,
     const unary_operation_t& operation,
     const std::string& parameter_name,
     const std::string& parameter_doc,
-    const std::string& supported_dtype = "INT32",
+    const std::string& info_doc,
+    const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = "") {
-
     auto doc = fmt::format(
         R"doc(
-        Applies {0} to :attr:`input_tensor` element-wise.
+        Applies {0} to :attr:`input_tensor` element-wise with {2}.
+
+        {4}
 
         .. math::
-            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
+            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i, \verb|{2}|)
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
             {2} (int): {3}.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
 
@@ -530,21 +533,22 @@ void bind_unary_operation_with_integer_parameter(
                * - Dtypes
                  - Layouts
                  - Ranks
-               * - {4}
+               * - {5}
                  - TILE
                  - 2, 3, 4
 
-            {5}
+            {6}
 
         Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> {2} = 5
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> {2} = 3
             >>> output = {1}(tensor, {2})
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
         parameter_name,
         parameter_doc,
+        info_doc,
         supported_dtype,
         note);
 
@@ -555,10 +559,10 @@ void bind_unary_operation_with_integer_parameter(
         ttnn::pybind_overload_t{
             [](const unary_operation_t& self,
                const Tensor& input_tensor,
-               int parameter,
+               const int parameter,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const uint8_t& queue_id) {
+               QueueId queue_id) {
                 return self(queue_id, input_tensor, parameter, memory_config, output_tensor);
             },
             py::arg("input_tensor"),
@@ -566,9 +570,8 @@ void bind_unary_operation_with_integer_parameter(
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
-
 
 template <typename unary_operation_t>
 void bind_unary_operation_with_dim_parameter(
@@ -715,7 +718,7 @@ void bind_unary_rdiv(
                const std::optional<std::string> parameter_b,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const uint8_t& queue_id) {
+               QueueId queue_id) {
                 return self(queue_id, input_tensor, parameter_a, parameter_b, memory_config, output_tensor);
             },
             py::arg("input_tensor"),
@@ -724,7 +727,7 @@ void bind_unary_rdiv(
             py::arg(parameter_name_b.c_str()) = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 template <typename unary_operation_t>
@@ -780,7 +783,7 @@ void bind_softplus(py::module& module, const unary_operation_t& operation) {
                const float threshold,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& output_tensor,
-               const uint8_t queue_id) {
+               const QueueId queue_id) {
                 return self(queue_id, input, beta, threshold, memory_config, output_tensor);
             },
             py::arg("input_tensor"),
@@ -789,7 +792,7 @@ void bind_softplus(py::module& module, const unary_operation_t& operation) {
             py::arg("threshold") = 20.0f,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 template <typename unary_operation_t>
@@ -841,14 +844,14 @@ void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operatio
                const Tensor& input_tensor,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& output_tensor,
-               const uint8_t queue_id) -> ttnn::Tensor {
+               const QueueId queue_id) -> ttnn::Tensor {
                 return self(queue_id, input_tensor, memory_config, output_tensor);
             },
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 template <typename unary_operation_t>
@@ -904,7 +907,7 @@ void bind_unary_chain(py::module& module, const unary_operation_t& operation) {
                const FusedActivations& ops_chain,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& output_tensor,
-               const uint8_t queue_id) {
+               const QueueId queue_id) {
                 return self(queue_id, input_tensor, ops_chain, memory_config, output_tensor);
             },
             py::arg("input_tensor"),
@@ -912,7 +915,7 @@ void bind_unary_chain(py::module& module, const unary_operation_t& operation) {
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 template <typename unary_operation_t>
@@ -965,14 +968,14 @@ void bind_identity(py::module& module, const unary_operation_t& operation) {
                const Tensor& input_tensor,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<Tensor>& output_tensor,
-               const uint8_t queue_id) {
+               const QueueId queue_id) {
                 return self(queue_id, input_tensor, memory_config, output_tensor);
             },
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 template <typename unary_operation_t>
@@ -1446,7 +1449,7 @@ void bind_unary_composite_trunc(py::module& module, const unary_operation_t& ope
                const Tensor& input_tensor,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const uint8_t& queue_id) {
+               QueueId queue_id) {
                     return self(queue_id, input_tensor, memory_config, output_tensor);
                 },
             py::arg("input_tensor"),
@@ -1595,76 +1598,6 @@ void bind_unary_composite_rpow(
 }
 
 
-template <typename unary_operation_t>
-void bind_dropout(py::module& module, const unary_operation_t& operation) {
-    auto doc = fmt::format(
-        R"doc(
-
-        Applies {0} to :attr:`input_tensor` element-wise.
-
-        .. math::
-            \verb|{0}|(\mathrm{{input\_tensor}}_i)
-
-        Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-
-        Keyword Args:
-            seed (uint32_t): seed used for RNG.
-            probability (float): Dropout probability. In average total_elems * probability elements will be zeroed out.
-            scale (float): Scales output tensor. In general scale = 1.0/(1.0-probability).
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
-        Note:
-            Supported dtypes, layouts, and ranks:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-                 - Ranks
-               * - BFLOAT16
-                 - TILE
-                 - 2, 3, 4
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> seed = 124
-            >>> prob = 0.2
-            >>> output = {1}(tensor, seed=seed, probability=prob, scale= 1.0/(1.0 - prob))
-        )doc",
-        ttnn::dropout.base_name(),
-        ttnn::dropout.python_fully_qualified_name());
-
-    bind_registered_operation(
-        module,
-        ttnn::dropout,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input,
-               const uint32_t seed,
-               const float probability,
-               const float scale,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor,
-               const uint8_t queue_id) {
-                return self(queue_id, input, seed, probability, scale, memory_config, output_tensor);
-            },
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg("seed"),
-            py::arg("probability"),
-            py::arg("scale"),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
-}
 
 }  // namespace detail
 
@@ -1684,6 +1617,7 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::eqz, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ == 0}}))doc");
     detail::bind_unary_operation(module, ttnn::floor, R"doc(\mathrm{{output\_tensor}}_i = \verb|floor|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(Supported only for Wormhole_B0.)doc");
     detail::bind_unary_operation(module, ttnn::ceil, R"doc(\mathrm{{output\_tensor}}_i = \verb|ceil|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(Supported only for Wormhole_B0.)doc");
+    detail::bind_unary_operation(module, ttnn::mish, R"doc(\mathrm{{output\_tensor}}_i = \verb|mish|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(Supported only for Wormhole_B0. [supported range -20 to inf].)doc");
     detail::bind_unary_operation(module, ttnn::gez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ >= 0}}))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::gtz, R"doc(\mathrm{{output\_tensor}}_i= (\mathrm{{input\_tensor_i\ > 0}}))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
@@ -1703,8 +1637,7 @@ void py_module(py::module& module) {
     detail::bind_unary_operation(module, ttnn::neg, R"doc(\mathrm{{output\_tensor}}_i = \verb|neg|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::nez, R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ != 0}}))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    detail::bind_unary_operation_overload_complex_return_complex(module, ttnn::reciprocal);
-
+    detail::bind_unary_operation_overload_complex_return_complex(module, ttnn::reciprocal, R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(BFLOAT8_B is supported only for non-zero inputs. Inputs containing zero may produce inaccurate results due to the characteristics of the block-FP format.)doc");
     detail::bind_unary_operation(module, ttnn::relu, R"doc(\mathrm{{output\_tensor}}_i = \verb|relu|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::relu6, R"doc(\mathrm{{output\_tensor}}_i = \verb|relu6|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_operation(module, ttnn::sigmoid, R"doc(\mathrm{{output\_tensor}}_i = \verb|sigmoid|(\mathrm{{input\_tensor}}_i))doc", R"doc(BFLOAT16, BFLOAT8_B)doc");
@@ -1740,10 +1673,6 @@ void py_module(py::module& module) {
     detail::bind_unary_operation_with_float_parameter(module, ttnn::relu_min, "lower_limit", "The min value for ReLU function",
         "This will carry out ReLU operation at min value instead of the standard 0", R"doc(BFLOAT16)doc",
         R"doc(System memory is not supported.)doc");
-
-    // Unaries with integer parameter
-    detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_left_shift, "shift_bits", "integer within range (0, 31)", "INT32", "Support provided for Wormhole_B0 only.");
-    detail::bind_unary_operation_with_integer_parameter(module, ttnn::bitwise_right_shift, "shift_bits", "integer within range (0, 31)", "INT32", "Support provided for Wormhole_B0 only.");
 
     // Unary ops with dim parameter
     detail::bind_unary_operation_with_dim_parameter(
@@ -1800,7 +1729,6 @@ void py_module(py::module& module) {
 
     // Other unaries (unary chain operations)
     detail::bind_softplus(module, ttnn::softplus);
-    detail::bind_dropout(module, ttnn::dropout);
     detail::bind_sigmoid_accurate(module, ttnn::sigmoid_accurate);
     detail::bind_unary_chain(module, ttnn::unary_chain);
     detail::bind_identity(module, ttnn::identity);
@@ -1821,8 +1749,6 @@ void py_module(py::module& module) {
         R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(TILE)doc", R"doc(2, 3, 4)doc", "", R"doc(torch.tensor([[2, 3], [4, 5]], dtype=torch.bfloat16))doc");
     detail::bind_unary_composite(module, ttnn::lgamma, R"doc(Performs lgamma function on :attr:`input_tensor`.)doc", "[supported for value greater than 0].", R"doc(BFLOAT16)doc");
     detail::bind_unary_composite(module, ttnn::log1p, R"doc(Performs log1p function on :attr:`input_tensor`.)doc", "[supported range -1 to 1].", R"doc(BFLOAT16, BFLOAT8_B)doc");
-    detail::bind_unary_composite(module, ttnn::mish, R"doc(Performs mish function on :attr:`input_tensor`.)doc", "[supported range -20 to inf].", R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(TILE)doc", R"doc(2, 3, 4)doc", R"doc(Not supported on Grayskull.)doc");
     detail::bind_unary_composite(module, ttnn::multigammaln, R"doc(Performs multigammaln function on :attr:`input_tensor`.)doc", "[supported range 1.6 to inf].", R"doc(BFLOAT16)doc",
         R"doc(TILE)doc", R"doc(2, 3, 4)doc", "", R"doc(torch.tensor([[2, 3], [4, 5]], dtype=torch.bfloat16))doc");
     detail::bind_unary_composite(module, ttnn::sinh, R"doc(Performs sinh function on :attr:`input_tensor`.)doc", "[supported range -9 to 9].", R"doc(BFLOAT16, BFLOAT8_B)doc");
@@ -1891,11 +1817,11 @@ void py_module(py::module& module) {
         "diagonal", "diagonal value", 0,
         R"doc(Performs triu function on :attr:`input_tensor`, :attr:`diagonal`.)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
-    detail::bind_unary_composite_int_with_default(
+    detail::bind_unary_operation_with_int_parameter(
         module,
         ttnn::round,
-        "decimals", "decimals value", 0,
-        R"doc(Performs round function on :attr:`input_tensor`, :attr:`decimals`.)doc",
+        "decimals", "no. of decimal places to round off to",
+        R"doc(Round the input tensor to `decimals` decimal places.)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc",
         R"doc(Not supported on Grayskull.)doc");
     detail::bind_unary_composite_int(

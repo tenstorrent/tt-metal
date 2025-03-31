@@ -6,7 +6,7 @@
 
 namespace ttnn::operations::data_movement {
 
-operation::ProgramWithCallbacks bcast_multi_core_h(
+tt::tt_metal::operation::ProgramWithCallbacks bcast_multi_core_h(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const Tensor& output_tensor,

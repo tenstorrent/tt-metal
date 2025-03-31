@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_pre_all_gather_op.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include "cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_pre_all_gather_op.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/circular_buffer.hpp>
 #include <optional>
 #include <variant>
 
@@ -52,7 +52,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     DeviceComputeKernelConfig compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const bool is_rmsnorm = norm_type == LayerNormDistributedType::RMSNORM;
-    const auto shape = a.get_legacy_shape();
+    const auto shape = a.get_padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
     const uint32_t HW = H * W;
     const uint32_t NC = a.volume() / HW;
@@ -76,7 +76,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
     //////////////////////////////////////////////////////////////////////////
-    Device* device = a.device();
+    IDevice* device = a.device();
 
     ////////////////////////////////////////////////////////////////////////////
     //                Circular Buffer Data Format Setup
@@ -222,13 +222,13 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     // LN and RMS shared intermediates //
     // c_intermed0 -> xˆ2
     CircularBufferConfig cb_intermed0_config =
-        CircularBufferConfig(intermed0_tiles * single_tile_size, {{tt::CBIndex::c_24, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_24, single_tile_size);
+        CircularBufferConfig(intermed0_tiles * single_tile_size, {{tt::CBIndex::c_6, cb_data_format}})
+            .set_page_size(tt::CBIndex::c_6, single_tile_size);
     CreateCircularBuffer(program, all_cores, cb_intermed0_config);
 
     CircularBufferConfig cb_out0_config =
-        CircularBufferConfig(out0_tiles * out_single_tile_size, {{tt::CBIndex::c_16, out_data_format}})
-            .set_page_size(tt::CBIndex::c_16, out_single_tile_size);
+        CircularBufferConfig(out0_tiles * out_single_tile_size, {{tt::CBIndex::c_14, out_data_format}})
+            .set_page_size(tt::CBIndex::c_14, out_single_tile_size);
     CreateCircularBuffer(program, all_cores, cb_out0_config);
 
     // Log all circular buffers with program.circular_buffers_on_corerange(all_cores), which returns

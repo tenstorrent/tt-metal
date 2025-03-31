@@ -13,6 +13,7 @@ struct UniformDeviceOperation {
     struct operation_attributes_t {
         const float from;
         const float to;
+        uint32_t seed;
         const MemoryConfig memory_config;
         const DeviceComputeKernelConfig compute_kernel_config;
     };
@@ -26,8 +27,8 @@ struct UniformDeviceOperation {
 
     struct ProgramFactory {
         struct shared_variables_t {
-            KernelHandle compute_kernel_id;
-            KernelHandle writer_kernel_id;
+            tt::tt_metal::KernelHandle compute_kernel_id;
+            tt::tt_metal::KernelHandle writer_kernel_id;
             std::vector<CoreCoord> cores;
         };
 
@@ -58,8 +59,11 @@ struct UniformDeviceOperation {
         const Tensor& input,
         const float from,
         const float to,
+        const uint32_t seed,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
+
+    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::uniform

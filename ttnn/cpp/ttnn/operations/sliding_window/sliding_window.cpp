@@ -4,7 +4,7 @@
 
 #include "sliding_window.hpp"
 #include <vector>
-#include "tt_metal/common/assert.hpp"
+#include <tt-metalium/assert.hpp>
 
 using namespace tt::tt_metal;
 
@@ -14,8 +14,8 @@ std::size_t SlidingWindowConfig::get_hash() const { return std::hash<std::string
 /**
  * Return the input shape (excluding depth)
  */
-Shape SlidingWindowConfig::get_input_shape() const {
-    return Shape({batch_size, std::get<0>(input_hw), std::get<1>(input_hw)});
+ttnn::Shape SlidingWindowConfig::get_input_shape() const {
+    return ttnn::Shape({batch_size, std::get<0>(input_hw), std::get<1>(input_hw)});
 }
 
 bool SlidingWindowConfig::has_parallel_config() const {
@@ -24,8 +24,10 @@ bool SlidingWindowConfig::has_parallel_config() const {
 /**
  * Calculate the window op output shape, excludes the channel dimension since this config is independent of the depth.
  */
-Shape SlidingWindowConfig::get_output_shape() const {
+ttnn::Shape SlidingWindowConfig::get_output_shape() const {
     if (is_transpose) {
+        TT_FATAL(!ceil_mode, "ceil_mode is not supported for transposed operation");
+
         // This is the inverse calculation of the shape used in the forward pass.
         // Given the same values of stride, padding, dilation, and kernel size, the output shape of conv_transpose2d is
         // the input shape of conv2d, and vice versa.
@@ -40,35 +42,64 @@ Shape SlidingWindowConfig::get_output_shape() const {
             output_h,
             output_w,
             "is_transpose==True");
-        return Shape({batch_size, output_h, output_w, 0});
+        return ttnn::Shape({batch_size, output_h, output_w, 0});
     }
 
-    uint32_t output_h =
-        (input_hw.first + 2 * pad_hw.first - window_hw.first - (dilation_hw.first - 1) * (window_hw.first - 1)) /
-            stride_hw.first +
-        1;
-    uint32_t output_w =
-        (input_hw.second + 2 * pad_hw.second - window_hw.second - (dilation_hw.second - 1) * (window_hw.second - 1)) /
-            stride_hw.second +
-        1;
+    uint32_t output_h;
+    uint32_t output_w;
+    float eff_size_h = (float)(input_hw.first + 2 * pad_hw.first - dilation_hw.first * (window_hw.first - 1) - 1);
+    float eff_size_w = (float)(input_hw.second + 2 * pad_hw.second - dilation_hw.second * (window_hw.second - 1) - 1);
+    if (ceil_mode) {
+        output_h = std::ceil(eff_size_h / stride_hw.first) + 1;
+        output_w = std::ceil(eff_size_w / stride_hw.second) + 1;
+    } else {
+        output_h = std::floor(eff_size_h / stride_hw.first) + 1;
+        output_w = std::floor(eff_size_w / stride_hw.second) + 1;
+    }
+
     if (is_bilinear) {
+        TT_FATAL(!ceil_mode, "ceil_mode is not supported for bilinear operation");
+
         // for bilinear input and output should be same.. and kernel size is 2x2
         //  we need neighboring width in the output tensor
         output_h = input_hw.first;
         output_w = input_hw.second;
     }
     log_debug(tt::LogOp, "SlidingWindowConfig::get_output_shape():: {} {} {}", batch_size, output_h, output_w);
-    return Shape({batch_size, output_h, output_w, 0});
+    return ttnn::Shape({batch_size, output_h, output_w, 0});
 }
 
-Shape SlidingWindowConfig::get_transposed_full_input_shape() const {
+uint32_t SlidingWindowConfig::get_ceil_pad_h() const {
+    uint32_t ceil_padding_h = 0;
+    if (ceil_mode) {
+        ttnn::Shape output_shape = get_output_shape();
+        // extra_padding=stride×(out_size−1)+kernel_size−input_size−2×padding
+        ceil_padding_h = stride_hw.first * (output_shape[1] - 1) + window_hw.first - input_hw.first - 2 * pad_hw.first;
+    }
+
+    return ceil_padding_h;
+}
+
+uint32_t SlidingWindowConfig::get_ceil_pad_w() const {
+    uint32_t ceil_padding_w = 0;
+    if (ceil_mode) {
+        ttnn::Shape output_shape = get_output_shape();
+        // extra_padding=stride×(out_size−1)+kernel_size−input_size−2×padding
+        ceil_padding_w =
+            stride_hw.second * (output_shape[2] - 1) + window_hw.second - input_hw.second - 2 * pad_hw.second;
+    }
+
+    return ceil_padding_w;
+}
+
+ttnn::Shape SlidingWindowConfig::get_transposed_full_input_shape() const {
     TT_FATAL(
         is_transpose == true,
         "SlidingWindowConfig::get_transposed_full_input_shape() is only valid for transposed operation");
     auto output_shape = get_output_shape();
     uint32_t full_input_height = output_shape[1] + dilation_hw.first * (window_hw.first - 1);
     uint32_t full_input_width = output_shape[2] + dilation_hw.second * (window_hw.second - 1);
-    return Shape(std::vector<uint32_t>{batch_size, full_input_height, full_input_width, 0});
+    return ttnn::Shape({batch_size, full_input_height, full_input_width, 0});
 }
 
 std::array<uint32_pair_t, 2> SlidingWindowConfig::get_transposed_real_padding() const {
@@ -95,7 +126,7 @@ std::array<uint32_pair_t, 2> SlidingWindowConfig::get_transposed_real_padding() 
  */
 uint32_t SlidingWindowConfig::get_output_shard_y(bool snap_to_tile) const {
     TT_ASSERT(has_parallel_config(), "Parallel config is not set in SlidingWindowConfig");
-    Shape output_shape = get_output_shape();
+    ttnn::Shape output_shape = get_output_shape();
     uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
     uint32_t output_nhw_padded =
         tt::round_up(output_nhw, num_cores_nhw * (snap_to_tile ? tt::constants::TILE_HEIGHT : 1));
@@ -142,15 +173,17 @@ std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config) {
         return pad_metadata;
 
     } else {
-        uint32_t padded_input_h = config.input_hw.first + 2 * config.pad_hw.first;
-        uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second;
+        uint32_t ceil_padding_h = config.get_ceil_pad_h();
+        uint32_t ceil_padding_w = config.get_ceil_pad_w();
+        uint32_t padded_input_h = config.input_hw.first + 2 * config.pad_hw.first + ceil_padding_h;
+        uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second + ceil_padding_w;
         std::vector<bool> pad_metadata(config.batch_size * padded_input_h * padded_input_w, false);
 
         for (uint32_t b = 0; b < config.batch_size; ++b) {
             for (uint32_t h = 0; h < padded_input_h; ++h) {
                 for (uint32_t w = 0; w < padded_input_w; ++w) {
-                    if (h < config.pad_hw.first || h >= config.pad_hw.first + config.input_hw.first ||
-                        w < config.pad_hw.second || w >= config.pad_hw.second + config.input_hw.second) {
+                    if (h < config.pad_hw.first || h >= (config.pad_hw.first + config.input_hw.first) ||
+                        w < config.pad_hw.second || w >= (config.pad_hw.second + config.input_hw.second)) {
                         pad_metadata[b * padded_input_h * padded_input_w + h * padded_input_w + w] = true;
                     }
                 }
@@ -161,7 +194,7 @@ std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config) {
 }
 
 std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& config) {
-    Shape output_shape = config.get_output_shape();
+    ttnn::Shape output_shape = config.get_output_shape();
     uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
     std::vector<uint32_t> op_trace_metadata(output_nhw, 0);
 
@@ -180,8 +213,11 @@ std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& conf
             }
         }
     } else {
-        uint32_t padded_input_h = config.input_hw.first + 2 * config.pad_hw.first;
-        uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second;
+        uint32_t ceil_padding_h = config.get_ceil_pad_h();
+        uint32_t ceil_padding_w = config.get_ceil_pad_w();
+
+        uint32_t padded_input_h = config.input_hw.first + 2 * config.pad_hw.first + ceil_padding_h;
+        uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second + ceil_padding_w;
         uint32_t i = 0;
         for (uint32_t b = 0; b < output_shape[0]; ++b) {
             for (uint32_t h = 0; h < output_shape[1]; ++h) {
@@ -196,12 +232,16 @@ std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& conf
     return op_trace_metadata;
 }
 
-std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(
+std::vector<ShardBoundary> generate_shard_boundaries(
     const SlidingWindowConfig& config, const std::vector<uint32_t>& op_trace_metadata) {
-    std::vector<std::pair<uint32_pair_t, uint32_pair_t>> shard_boundaries;
-    uint32_t num_cores = config.num_cores_nhw;
-    uint32_t output_shard_h = config.get_output_shard_y(config.snap_to_tile);
-    uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second;
+    std::vector<ShardBoundary> shard_boundaries;
+
+    const uint32_t num_cores = config.num_cores_nhw;
+    const uint32_t output_shard_h = config.get_output_shard_y(config.snap_to_tile);
+
+    const uint32_t ceil_padding_w = config.get_ceil_pad_w();
+    uint32_t padded_input_w = config.input_hw.second + 2 * config.pad_hw.second + ceil_padding_w;
+
     uint32_t max_index = op_trace_metadata.size();
     if (config.is_transpose) {
         padded_input_w = config.get_transposed_full_input_shape()[2];
@@ -214,9 +254,10 @@ std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(
     if (config.is_bilinear) {
         halo_with_pad_len = (config.window_hw.first) * padded_input_w;
     }
+
     uint32_t output_index_start = 0;
     for (uint32_t core = 0; core < num_cores; ++core) {
-        uint32_t output_index_end = std::min(output_index_start + output_shard_h, max_index) - 1;
+        const uint32_t output_index_end = std::min(output_index_start + output_shard_h, max_index) - 1;
         uint32_t input_index_start = op_trace_metadata[std::min(output_index_start, max_index - 1)];
         uint32_t input_index_end = op_trace_metadata[output_index_end] + halo_with_pad_len;
         if (input_index_start == 0 and output_index_start != 0) {
@@ -234,26 +275,20 @@ std::vector<std::pair<uint32_pair_t, uint32_pair_t>> generate_shard_boundaries(
         shard_boundaries.push_back({{output_index_start, output_index_end}, {input_index_start, input_index_end}});
         output_index_start = output_index_end + 1;
     }
-#if 1
-    for (auto [output_shard, input_shard] : shard_boundaries) {
-        log_debug(
-            tt::LogOp,
-            "output_shard: ({}, {}), input_shard: ({}, {})",
-            output_shard.first,
-            output_shard.second,
-            input_shard.first,
-            input_shard.second);
-    }
-#endif
+
+    for (auto& boundary : shard_boundaries) {
+        log_debug(tt::LogOp, "shard_boundary={}", boundary);
+    };
+
     return shard_boundaries;
 }
 
-std::vector<std::pair<bool, uint32_pair_t>> generate_tensor_metadata(
+std::vector<PixelMetadata> generate_tensor_metadata(
     const std::vector<bool>& pad_metadata,
     const SlidingWindowConfig& config,
     uint32_t reshard_num_cores_nhw,
     bool is_in_tiled) {
-    Shape input_shape = config.get_input_shape();
+    ttnn::Shape input_shape = config.get_input_shape();
     uint32_t input_nhw = input_shape[0] * input_shape[1] * input_shape[2];
     uint32_t input_nhw_padded;
     if (is_in_tiled) {
@@ -277,14 +312,20 @@ std::vector<std::pair<bool, uint32_pair_t>> generate_tensor_metadata(
         }
     };
 
-    std::vector<std::pair<bool, uint32_pair_t>> tensor_metadata;
+    std::vector<PixelMetadata> tensor_metadata;
+    tensor_metadata.reserve(pad_metadata.size());
+
     uint32_t core_id = 0;
     uint32_t input_reshard_local_idx = 0;
-    for (bool is_pad_stick : pad_metadata) {
-        if (is_pad_stick) {
-            tensor_metadata.push_back(std::make_pair(is_pad_stick, std::make_pair(0, 0)));
+
+    for (bool is_pad_flag : pad_metadata) {
+        if (is_pad_flag) {
+            tensor_metadata.push_back(PixelMetadata{true, 0, 0});
         } else {
-            tensor_metadata.push_back(std::make_pair(is_pad_stick, remap(core_id, input_reshard_local_idx++)));
+            auto [new_core_id, new_local_idx] = remap(core_id, input_reshard_local_idx);
+            tensor_metadata.push_back(PixelMetadata{false, new_core_id, new_local_idx});
+
+            input_reshard_local_idx++;
             if (input_reshard_local_idx == input_shard_height) {
                 core_id++;
                 input_reshard_local_idx = 0;
@@ -295,8 +336,7 @@ std::vector<std::pair<bool, uint32_pair_t>> generate_tensor_metadata(
     return tensor_metadata;
 }
 
-uint32_t generate_max_out_nsticks_per_core(
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries) {
+uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& shard_boundaries) {
     // calculate max_out_nsticks_per_core
     uint32_t max_out_nsticks_per_core = 0;
     for (auto [_, in_shard] : shard_boundaries) {
@@ -306,14 +346,13 @@ uint32_t generate_max_out_nsticks_per_core(
     return max_out_nsticks_per_core;
 }
 
-std::tuple<std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>, std::vector<std::vector<uint16_t>>>
-generate_halo_kernel_config_tensors(
-    const std::vector<std::pair<bool, uint32_pair_t>>& tensor_metadata,
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
+std::vector<std::vector<std::vector<uint16_t>>> generate_halo_kernel_config_tensors(
+    const std::vector<PixelMetadata>& tensor_metadata,
+    const std::vector<ShardBoundary>& shard_boundaries,
     bool is_block_sharded,
     bool transpose_mcast,
     bool remote_read,
-    Device* device) {
+    IDevice* device) {
     auto core_id_to_noc_coords = [is_block_sharded, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
         auto num_cores_x = device->compute_with_storage_grid_size().x;
         auto core_coord = is_block_sharded ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id))
@@ -332,8 +371,7 @@ generate_halo_kernel_config_tensors(
         for (uint32_t global_idx = input_start; global_idx <= input_end; ++global_idx) {
             uint32_t dst_core_id = core_id;
             uint32_t local_idx = global_idx - input_start;
-            auto [is_pad_stick, src_idx] = tensor_metadata[global_idx];
-            auto [src_core_id, src_local_idx] = src_idx;
+            auto [is_pad_stick, src_core_id, src_local_idx] = tensor_metadata[global_idx];
             TT_ASSERT(local_idx < pad_local && src_local_idx < pad_local, "Index overflow");
             if (is_pad_stick) {
                 TT_ASSERT(src_local_idx == 0);
@@ -359,7 +397,8 @@ generate_halo_kernel_config_tensors(
      *     each element (for core i): [dst_start0, length0, dst_start1, length1, ...]
      * local_config: length num_cores_nhw
      *     each element (for core i): (nocx, nocy, len) -> [src_start0, dst_start0, length0, src_start1, dst_start1,
-     * length1, ...] remote_config: length num_cores_nhw each element (for core i): { (nocx, nocy, len) -> [src_start0,
+     * length1, ...]
+     * remote_config: length num_cores_nhw each element (for core i): { (nocx, nocy, len) -> [src_start0,
      * dst_start0, length0, src_start1, dst_start1, length1, ...], (nocx, nocy, len) -> [src_start0, dst_start0,
      * length0, src_start1, dst_start1, length1, ...], ...}
      */
@@ -396,90 +435,130 @@ generate_halo_kernel_config_tensors(
     }
 
     // flatten and uniformize the lengths of each config list
-    auto flatten_pad_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
-        // find max length
+    auto flatten_pad_config = [](auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
+        // Find max length for vector which is going to be processed on each core
         size_t max_len = 0;
-        for (auto& data : config) {
-            max_len = std::max(max_len, 2 * data.size());  // each data is 2 * data.size()
+        for (const auto& data : config) {
+            max_len = std::max(
+                max_len,
+                data.size() +
+                    4);  // For split reader, each vector size is ((2 * data.size()) / 2 + 2) and 2 for null plug.
         }
-        std::vector<std::vector<uint16_t>> flattened_config;
-        for (auto& data : config) {
-            std::vector<uint16_t> flat_data(max_len, 0);
-            uint32_t idx = 0;
-            for (auto data_elem : data) {
-                auto [dst_start, length] = data_elem;
-                flat_data[idx++] = dst_start;
-                flat_data[idx++] = length;
-            }
-            // null plug
-            flat_data.emplace_back(0);
-            flat_data.emplace_back(0);
-            flattened_config.emplace_back(flat_data);
-        }
-        return flattened_config;
-    };
 
-    auto flatten_local_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
-        // find max length
-        size_t max_len = 0;
-        for (auto& [_, data] : config) {
-            max_len = std::max(max_len, 3 * data.size());  // each key is 3, data is 3 * data.size()
-        }
-        max_len += 3;  // key tuple
-        std::vector<std::vector<uint16_t>> flattened_config;
-        for (auto& [key, data] : config) {
-            auto [nocx, nocy, len] = key;
-            std::vector<uint16_t> flat_data(max_len, 0);
-            flat_data[0] = nocx;
-            flat_data[1] = nocy;
-            flat_data[2] = len;
-            uint32_t idx = 3;
+        std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
+        for (const auto& data : config) {
+            std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
+            uint32_t idx1 = 0, idx2 = 0;
             for (size_t i = 0; i < data.size(); ++i) {
-                auto [src_start, dst_start, length] = data[i];
-                flat_data[idx++] = src_start;
-                flat_data[idx++] = dst_start;
-                flat_data[idx++] = length;
-            }
-            // null plug
-            flat_data.emplace_back(0);
-            flat_data.emplace_back(0);
-            flat_data.emplace_back(0);
-            flattened_config.emplace_back(flat_data);
-        }
-        return flattened_config;
-    };
-
-    auto flatten_remote_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
-        // find max length
-        size_t max_len = 0;
-        for (auto& core_config : config) {
-            size_t curr_len = 0;
-            for (auto& [key, subdata] : core_config) {
-                curr_len += 3 + 3 * subdata.size();  // each key is len 3
-            }
-            max_len = std::max(max_len, curr_len);  // each key is 3, data is 3 * data.size()
-        }
-        std::vector<std::vector<uint16_t>> flattened_config;
-        for (auto& core_config : config) {
-            std::vector<uint16_t> flat_data(max_len, 0);
-            uint32_t idx = 0;
-            for (auto& key_data : core_config) {
-                auto [nocx, nocy, len] = key_data.first;
-                flat_data[idx++] = nocx;
-                flat_data[idx++] = nocy;
-                flat_data[idx++] = len;
-                for (size_t i = 0; i < key_data.second.size(); ++i) {
-                    auto [src_start, dst_start, length] = key_data.second[i];
-                    flat_data[idx++] = src_start;
-                    flat_data[idx++] = dst_start;
-                    flat_data[idx++] = length;
+                auto [dst_start, length] = data[i];
+                if (i % 2 == 0) {
+                    flat_data[0][idx1++] = dst_start;
+                    flat_data[0][idx1++] = length;
+                } else {
+                    flat_data[1][idx2++] = dst_start;
+                    flat_data[1][idx2++] = length;
                 }
             }
-            // null plug
-            flat_data.emplace_back(0);
-            flat_data.emplace_back(0);
-            flat_data.emplace_back(0);
-            flattened_config.emplace_back(flat_data);
+
+            flattened_config[0].emplace_back(std::move(flat_data[0]));
+            flattened_config[1].emplace_back(std::move(flat_data[1]));
+        }
+        return flattened_config;
+    };
+
+    auto flatten_local_config = [](auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
+        // Find max length
+        size_t max_len = 0;
+        for (const auto& [_, data] : config) {
+            max_len = std::max(max_len, 3 * (data.size() / 2 + 1));  // For split reader, each vector is ( 3 *
+                                                                     // data.size() / 2 + 1).
+        }
+        max_len += 6;  // account for the key tuple and null plug
+
+        std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
+        for (const auto& [key, data] : config) {
+            auto [nocx, nocy, len] = key;
+            std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
+            flat_data[0][0] = nocx;
+            flat_data[0][1] = nocy;
+            flat_data[1][0] = nocx;
+            flat_data[1][1] = nocy;
+
+            uint32_t idx1 = 3, idx2 = 3;
+            for (size_t i = 0; i < data.size(); ++i) {
+                auto [src_start, dst_start, length] = data[i];
+                if (i % 2 != 0) {
+                    flat_data[0][idx1++] = src_start;
+                    flat_data[0][idx1++] = dst_start;
+                    flat_data[0][idx1++] = length;
+                    flat_data[0][2] += 3;
+                } else {
+                    flat_data[1][idx2++] = src_start;
+                    flat_data[1][idx2++] = dst_start;
+                    flat_data[1][idx2++] = length;
+                    flat_data[1][2] += 3;
+                }
+            }
+
+            flattened_config[0].emplace_back(std::move(flat_data[0]));
+            flattened_config[1].emplace_back(std::move(flat_data[1]));
+        }
+        return flattened_config;
+    };
+
+    auto flatten_remote_config = [](auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
+        // Find max length
+        size_t max_len = 0;
+        for (const auto& core_config : config) {
+            size_t curr_len = 0;
+            for (const auto& [key, subdata] : core_config) {
+                curr_len += 3 + (3 * (subdata.size() / 2 + 1));  // For split reader,  3 for source[nocx, nocy, length]
+                                                                 // and each vector is ( 3 * data.size() / 2 + 1).
+            }
+            max_len = std::max(max_len, curr_len);
+        }
+        max_len += 3;  // account for null plug
+
+        std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
+        for (const auto& core_config : config) {
+            std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
+            uint32_t idx1 = 0, idx2 = 0;
+            uint32_t len_idx1 = 0, len_idx2 = 0;
+            uint32_t vector_id = 0;
+
+            for (const auto& [key, subdata] : core_config) {
+                auto [nocx, nocy, len] = key;
+                flat_data[0][idx1++] = nocx;
+                flat_data[0][idx1++] = nocy;
+                len_idx1 = idx1;
+                flat_data[0][idx1++] = 0;
+
+                flat_data[1][idx2++] = nocx;
+                flat_data[1][idx2++] = nocy;
+                len_idx2 = idx2;
+                flat_data[1][idx2++] = 0;
+
+                for (size_t i = 0; i < subdata.size(); ++i) {
+                    auto [src_start, dst_start, length] = subdata[i];
+                    if (vector_id) {
+                        flat_data[0][idx1++] = src_start;
+                        flat_data[0][idx1++] = dst_start;
+                        flat_data[0][idx1++] = length;
+                        flat_data[0][len_idx1] += 3;
+                    } else {
+                        flat_data[1][idx2++] = src_start;
+                        flat_data[1][idx2++] = dst_start;
+                        flat_data[1][idx2++] = length;
+                        flat_data[1][len_idx2] += 3;
+                    }
+                    vector_id = (vector_id + 1) % 2;
+                }
+                idx1 = flat_data[0][len_idx1] ? idx1 : idx1 - 3;
+                idx2 = flat_data[1][len_idx2] ? idx2 : idx2 - 3;
+            }
+
+            flattened_config[0].emplace_back(std::move(flat_data[0]));
+            flattened_config[1].emplace_back(std::move(flat_data[1]));
         }
         return flattened_config;
     };
@@ -507,22 +586,31 @@ generate_halo_kernel_config_tensors(
         }
     };
 
-    align_config(flattened_pad_config, 2);
-    align_config(flattened_local_config, 2);
-    align_config(flattened_remote_config, 2);
+    align_config(flattened_pad_config[0], 2);
+    align_config(flattened_pad_config[1], 2);
+    align_config(flattened_local_config[0], 2);
+    align_config(flattened_local_config[1], 2);
+    align_config(flattened_remote_config[0], 2);
+    align_config(flattened_remote_config[1], 2);
 
-    return std::make_tuple(flattened_pad_config, flattened_local_config, flattened_remote_config);
+    return {
+        flattened_pad_config[0],
+        flattened_pad_config[1],
+        flattened_local_config[0],
+        flattened_local_config[1],
+        flattened_remote_config[0],
+        flattened_remote_config[1]};
 }
 
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     const std::vector<uint32_t>& op_trace_metadata,
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
+    const std::vector<ShardBoundary>& shard_boundaries,
     bool pad_tile,
     bool pad_cores) {
     std::vector<std::vector<uint16_t>> sharded_input_top_left_indices;
     for (const auto& item : shard_boundaries) {
-        const auto& [output_shard_start, output_shard_end] = item.first;
-        const auto& [input_shard_start, input_shard_end] = item.second;
+        const auto& [output_shard_start, output_shard_end] = item.output_range;
+        const auto& [input_shard_start, input_shard_end] = item.input_range;
         std::vector<uint16_t> local_top_left_indices;
         // sanity check
         if (output_shard_start >= op_trace_metadata.size()) {
@@ -588,7 +676,7 @@ Tensor construct_on_host_config_tensor(
     // we need the last dim of tensors to be multiple of 2, pad if needed
     uint32_t extend_with_zeroes = config[0].size() % 2;
     extend_with_zeroes = extend_with_zeroes > 0 ? 2 - extend_with_zeroes : 0;
-    Shape config_shape = Shape({(uint32_t)config.size(), (uint32_t)config[0].size() + extend_with_zeroes});
+    ttnn::Shape config_shape({(uint32_t)config.size(), (uint32_t)config[0].size() + extend_with_zeroes});
     std::vector<uint16_t> config_vector = flatten(config, extend_with_zeroes);
     if (p_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
         auto config_buffer = owned_buffer::create<uint16_t>(std::move(config_vector));
@@ -601,7 +689,7 @@ Tensor construct_on_host_config_tensor(
             repeat_config.insert(repeat_config.end(), config_vector.begin(), config_vector.end());
         }
         auto config_buffer = owned_buffer::create<uint16_t>(std::move(repeat_config));
-        config_shape = Shape({config_shape[0] * repeat_factor, config_shape[1]});
+        config_shape = ttnn::Shape({config_shape[0] * repeat_factor, config_shape[1]});
         return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
     } else if (p_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
         TT_ASSERT(p_config.grid.ranges().size() == 1, "BLOCK_SHARDED should have just a single core range");
@@ -631,7 +719,7 @@ Tensor construct_on_host_config_tensor(
             repeat_config.insert(repeat_config.end(), config_vector.begin(), config_vector.end());
         }
         auto config_buffer = owned_buffer::create<uint16_t>(std::move(repeat_config));
-        config_shape = Shape({config_shape[0] * repeat_factor, config_shape[1]});
+        config_shape = ttnn::Shape({config_shape[0] * repeat_factor, config_shape[1]});
         return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
     } else {
         TT_ASSERT(false, "Unsupported shard scheme");
@@ -640,16 +728,16 @@ Tensor construct_on_host_config_tensor(
 }
 
 Tensor move_config_tensor_to_device(
-    const Tensor& config_tensor, const ParallelConfig& p_config, bool is_block_sharded, Device* device) {
-    auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.get_shape()[-1]});
+    const Tensor& config_tensor, const ParallelConfig& p_config, bool is_block_sharded, IDevice* device) {
+    auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.get_logical_shape()[-1]});
     log_debug(tt::LogOp, "shard_shape: ({}, {})", shard_shape[0], shard_shape[1]);
     auto config_shard_orientation =
         is_block_sharded ? (p_config.shard_orientation == ShardOrientation::COL_MAJOR ? ShardOrientation::ROW_MAJOR
                                                                                       : ShardOrientation::COL_MAJOR)
                          : ShardOrientation::ROW_MAJOR;
-    ShardSpec shard_spec(p_config.grid, shard_shape, config_shard_orientation, false);
+    ShardSpec shard_spec(p_config.grid, shard_shape, config_shard_orientation);
     MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, shard_spec};
-    return config_tensor.to(device, memory_config);
+    return config_tensor.to_device(device, memory_config);
 }
 
 std::string SlidingWindowConfig::to_string() const {
@@ -659,7 +747,8 @@ std::string SlidingWindowConfig::to_string() const {
            std::to_string(std::get<1>(stride_hw)) + "_" + std::to_string(std::get<0>(pad_hw)) + "_" +
            std::to_string(std::get<1>(pad_hw)) + "_" + std::to_string(std::get<0>(dilation_hw)) + "_" +
            std::to_string(std::get<1>(dilation_hw)) + "_" + std::to_string(num_cores_nhw) + "_" +
-           std::to_string(num_cores_c) + "_" + core_range_set.str();
+           std::to_string(num_cores_c) + "_" + core_range_set.str() + (snap_to_tile ? "_snap_to_tile" : "") +
+           (is_bilinear ? "_bilinear" : "") + (is_transpose ? "_transpose" : "") + (ceil_mode ? "_ceil_mode" : "");
 }
 
 }  // namespace ttnn::operations::sliding_window
@@ -693,8 +782,8 @@ auto fmt::formatter<ttnn::operations::sliding_window::ParallelConfig>::format(
 }
 
 auto fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig>::format(
-    const ttnn::operations::sliding_window::SlidingWindowConfig& t,
-    format_context& ctx) const -> format_context::iterator {
+    const ttnn::operations::sliding_window::SlidingWindowConfig& t, format_context& ctx) const
+    -> format_context::iterator {
     std::string str = fmt::format(
         "SlidingWindowConfig(batch_size={}, input_hw=({},{}), window_hw=({},{}), stride_hw=({},{}), pad_hw=({},{}), "
         "dilation_hw=({},{}), num_cores_nhw={}, num_cores_c={}, core_range_set_={})",
@@ -713,4 +802,15 @@ auto fmt::formatter<ttnn::operations::sliding_window::SlidingWindowConfig>::form
         t.num_cores_c,
         t.core_range_set.str());
     return fmt::format_to(ctx.out(), "{}", str);
+}
+
+auto fmt::formatter<ttnn::operations::sliding_window::ShardBoundary>::format(
+    const ttnn::operations::sliding_window::ShardBoundary& t, format_context& ctx) const -> format_context::iterator {
+    return fmt::format_to(
+        ctx.out(),
+        "[output_shard=({}, {}), input_shard=({}, {})]",
+        t.output_range.start,
+        t.output_range.end,
+        t.input_range.start,
+        t.input_range.end);
 }

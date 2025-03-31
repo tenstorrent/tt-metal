@@ -65,22 +65,26 @@ void MorehNllLossStep2DeviceOperation::validate_on_program_cache_hit(
     validate_inputs(attributes, tensor_args);
 }
 
-MorehNllLossStep2DeviceOperation::shape_return_value_t MorehNllLossStep2DeviceOperation::compute_output_shapes(
+MorehNllLossStep2DeviceOperation::spec_return_value_t MorehNllLossStep2DeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (operation_attributes.reduction == NONE && tensor_args.output_tensor.has_value()) {
+        return tensor_args.output_tensor->get_tensor_spec();
+    }
+
     const auto& input_tensor = tensor_args.input_tensor;
-    auto input_shape = input_tensor.get_shape().value;
-    auto input_shape_without_padding = input_shape.without_padding();
+    auto input_shape = input_tensor.get_padded_shape();
+    auto input_shape_without_padding = input_tensor.get_logical_shape();
     auto input_rank = input_shape.rank();
+    auto dtype = tensor_args.input_tensor.get_dtype();
+    Layout layout{Layout::TILE};
 
     auto C = input_shape[1];
 
-    ttnn::SmallVector<Padding::PadDimension> dimensions_pads;
     ttnn::SmallVector<uint32_t> output_shape_vec;
 
     // Need extend 1d output to 2d, because TT not support 1d tensor
     if (input_rank == 2) {
         output_shape_vec.push_back(1);
-        dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = 0});
     }
 
     for (uint32_t dim = 0; dim < input_rank; dim++) {
@@ -90,25 +94,10 @@ MorehNllLossStep2DeviceOperation::shape_return_value_t MorehNllLossStep2DeviceOp
         }
 
         output_shape_vec.push_back(input_shape_without_padding[dim]);
-        dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = 0});
     }
 
-    // padding output
-    {
-        uint32_t output_rank = output_shape_vec.size();
-        for (uint32_t dim = output_rank - 2; dim < output_rank; dim++) {
-            uint32_t up32_shape = tt::round_up(output_shape_vec[dim], 32);
-            uint32_t padding_back = up32_shape - output_shape_vec[dim];
-
-            output_shape_vec[dim] = up32_shape;
-            dimensions_pads[dim].back = padding_back;
-        }
-    }
-
-    const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-    auto output_shape = Shape(tt::tt_metal::LegacyShape{output_shape_vec, padding});
-
-    return output_shape;
+    auto output_shape = Shape{output_shape_vec};
+    return TensorSpec(output_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config));
 }
 
 MorehNllLossStep2DeviceOperation::tensor_return_value_t MorehNllLossStep2DeviceOperation::create_output_tensors(
@@ -119,12 +108,8 @@ MorehNllLossStep2DeviceOperation::tensor_return_value_t MorehNllLossStep2DeviceO
 
     // In case reduction is 'sum' or 'mean' we need to create a tensor to save loss result and reduce it to
     // tensor_args.output_tensor using moreh_sum() operation
-    auto output_shape = compute_output_shapes(operation_attributes, tensor_args);
-    auto dtype = tensor_args.input_tensor.get_dtype();
-    Layout layout{Layout::TILE};
-    auto device = tensor_args.input_tensor.device();
-
-    return create_device_tensor(output_shape, dtype, layout, device, operation_attributes.memory_config);
+    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    return create_device_tensor(output_spec, tensor_args.input_tensor.device());
 }
 
 std::tuple<MorehNllLossStep2DeviceOperation::operation_attributes_t, MorehNllLossStep2DeviceOperation::tensor_args_t>

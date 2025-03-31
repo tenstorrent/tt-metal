@@ -2,13 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/common/bfloat16.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/allocator.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -16,7 +17,7 @@ using namespace tt::tt_metal;
 int main(int argc, char** argv) {
     // get program/device
     int device_id = 0;
-    Device* device = CreateDevice(device_id);
+    IDevice* device = CreateDevice(device_id);
     CommandQueue& cq = device->command_queue();
     Program program = CreateProgram();
 
@@ -45,7 +46,7 @@ int main(int argc, char** argv) {
     uint32_t input_unit_size = sizeof(uint32_t);
     uint32_t shard_width_bytes = shard_width * data_size;
     uint32_t num_units_per_row = shard_width * input_unit_size;
-    uint32_t padded_offset_bytes = align(input_unit_size, device->get_allocator_alignment());
+    uint32_t padded_offset_bytes = align(input_unit_size, device->allocator()->get_alignment(BufferType::DRAM));
 
     // configure and create interleaved DRAM buffer to insert source data into
     uint32_t src_buffer_size = input_unit_size * num_values / data_size;

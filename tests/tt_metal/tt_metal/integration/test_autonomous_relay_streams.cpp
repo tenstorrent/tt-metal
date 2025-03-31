@@ -13,23 +13,23 @@
 #include "gtest/gtest.h"
 #include "umd/device/types/arch.h"
 #include "command_queue_fixture.hpp"
-#include "tt_metal/common/logger.hpp"
-#include "impl/device/device.hpp"
-#include "impl/buffers/circular_buffer.hpp"
-#include "impl/kernels/data_types.hpp"
-#include "impl/kernels/kernel_types.hpp"
-#include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/detail/persistent_kernel_cache.hpp"
+#include <tt-metalium/persistent_kernel_cache.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 
-using tt::tt_metal::Device;
+using tt::tt_metal::IDevice;
 
 constexpr uint32_t num_sizes = 8;
 namespace tt {
@@ -63,7 +63,7 @@ constexpr uint32_t noc_word_size = 16;
 
 // Reads data from input
 std::vector<uint32_t> get_sender_reader_rt_args(
-    Device* device,
+    IDevice* device,
     uint32_t input_buffer_addr,
     uint32_t page_size_plus_header,
     uint32_t num_messages_to_read,
@@ -76,7 +76,7 @@ std::vector<uint32_t> get_sender_reader_rt_args(
 }
 // sender stream data mover kernel
 std::vector<uint32_t> get_sender_writer_rt_args(
-    Device* device,
+    IDevice* device,
     uint32_t num_messages,
     uint32_t relay_done_semaphore,
     CoreCoord const& relay_core,
@@ -117,7 +117,7 @@ std::vector<uint32_t> get_sender_writer_rt_args(
 }
 
 std::vector<uint32_t> get_relay_rt_args(
-    Device* device,
+    IDevice* device,
     uint32_t relay_stream_overlay_blob_addr,
     uint32_t relay_done_semaphore,
     CoreCoord const& sender_core,
@@ -161,7 +161,7 @@ std::vector<uint32_t> get_relay_rt_args(
 
 // Receiver stream data mover kernel
 std::vector<uint32_t> get_receiver_reader_rt_args(
-    Device* device,
+    IDevice* device,
     uint32_t num_messages,
     uint32_t relay_done_semaphore,
     CoreCoord const& relay_core,
@@ -199,14 +199,14 @@ std::vector<uint32_t> get_receiver_reader_rt_args(
         remote_src_start_phase_id};
 }
 std::vector<uint32_t> get_receiver_writer_rt_args(
-    Device* device, uint32_t output_buffer_addr, uint32_t page_size, uint32_t num_messages_to_read) {
+    IDevice* device, uint32_t output_buffer_addr, uint32_t page_size, uint32_t num_messages_to_read) {
     return std::vector<uint32_t>{output_buffer_addr, page_size, num_messages_to_read};
 }
 
 // TODO: randomize each noc for testing purposes
 void build_and_run_autonomous_stream_test(
     std::vector<Program>& programs,
-    std::vector<Device*> const& devices,
+    std::vector<IDevice*> const& devices,
     std::size_t num_messages,
     std::size_t page_size,
     uint32_t tile_header_buffer_num_messages,
@@ -232,7 +232,7 @@ void build_and_run_autonomous_stream_test(
     uint32_t relay_stream_overlay_blob_size_bytes = 256;
 
     programs.emplace_back();
-    Device* device = devices.at(0);
+    IDevice* device = devices.at(0);
     Program& program = programs.at(0);
     log_trace(tt::LogTest, "Device ID: {}", device->id());
 
@@ -638,10 +638,6 @@ void build_and_run_autonomous_stream_test(
     }
 }
 
-}  // namespace tt_metal
-
-}  // namespace tt
-
 TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreams) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
@@ -962,3 +958,7 @@ TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAutonomousRelayStreamsSwee
 
     return;
 }
+
+}  // namespace tt_metal
+
+}  // namespace tt

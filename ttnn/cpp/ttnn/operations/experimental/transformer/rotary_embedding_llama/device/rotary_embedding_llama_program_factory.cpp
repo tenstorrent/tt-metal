@@ -4,11 +4,11 @@
 
 #include <vector>
 #include "rotary_embedding_llama_program_factory.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 
 namespace tt {
 
@@ -46,7 +46,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
 
     const uint32_t Wbytes = input.get_padded_shape()[-1] * sizeof(bfloat16);
 
-    tt_metal::Device* device = input.device();
+    tt_metal::IDevice* device = input.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -359,7 +359,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core_sharded(
     const uint32_t n_heads_t = shard_spec->shape[0] / constants::TILE_HEIGHT;
     const uint32_t head_dim_t = shard_spec->shape[1] / constants::TILE_WIDTH;
 
-    tt_metal::Device* device = input.device();
+    tt_metal::IDevice* device = input.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);

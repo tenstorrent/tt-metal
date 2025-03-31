@@ -5,17 +5,20 @@
 #include <math.h>
 
 #include "upsample_op.hpp"
+#include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/common/math.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/math.hpp>
 
-#include "tt_metal/tt_stl/reflection.hpp"
+#include <tt_stl/reflection.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::upsample {
 using namespace tt;
@@ -25,26 +28,25 @@ operation::ProgramWithCallbacks upsample_single_core(
     CoreRange core({0, 0}, {0, 0});
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
-    uint32_t input_unit_size = input.get_legacy_shape()[-1] * input.element_size();
+    uint32_t input_unit_size = input.get_padded_shape()[-1] * input.element_size();
     tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
-    uint32_t output_unit_size = output.get_legacy_shape()[-1] * output.element_size();
+    uint32_t output_unit_size = output.get_padded_shape()[-1] * output.element_size();
 
-    uint32_t output_num_units = output.volume() / output.get_legacy_shape()[-1];  // N*H*W for outout
-    uint32_t input_num_units = input.volume() / input.get_legacy_shape()[-1];     // N*H*W for input
+    uint32_t output_num_units = output.volume() / output.get_padded_shape()[-1];  // N*H*W for outout
+    uint32_t input_num_units = input.volume() / input.get_padded_shape()[-1];     // N*H*W for input
 
-    auto output_shape = output.get_legacy_shape();
+    auto output_shape = output.get_padded_shape();
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device* device = output.device();
+    tt_metal::IDevice* device = output.device();
 
     // circulat buffer for input
-    uint32_t src0_cb_index = CBIndex::c_0;
+    uint32_t next_cb_index = CBIndex::c_0;
+    uint32_t src0_cb_index = next_cb_index++;
     uint32_t num_input_units = 2;
-    uint32_t aligned_input_unit_size = round_up_to_mul32(input_unit_size);
-    tt_metal::CircularBufferConfig cb_src0_config =
-        tt_metal::CircularBufferConfig(
-            num_input_units * aligned_input_unit_size, {{src0_cb_index, input_cb_data_format}})
-            .set_page_size(src0_cb_index, aligned_input_unit_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    uint32_t aligned_input_unit_size = tt::round_up(input_unit_size, hal::get_dram_alignment());
+
+    tt::tt_metal::create_cb(
+        src0_cb_index, program, core, aligned_input_unit_size, num_input_units, input_cb_data_format);
 
     // circulat buffer same for input and output. No compute kernels.
     uint32_t output_cb_index = src0_cb_index;  // same as input cb

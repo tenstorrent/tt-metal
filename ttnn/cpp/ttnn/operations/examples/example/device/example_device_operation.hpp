@@ -50,23 +50,24 @@ struct ExampleDeviceOperation {
         // std::tuple<std::vector<std::optional<Tensor>>, std::optional<Tensor>> some_crazy_tuple_of_tensors;
     };
 
-    // Define the return types for the shape(s) of the operation
-    // Can be a single ttnn::Shape, std::optional<ttnn::Shape>, std::vector<ttnn::Shape>, std::tuple<ttnn::Shape> etc.
-    using shape_return_value_t = ttnn::Shape;
+    // Define the return types for the spec(s) of the operation
+    // Can be a single ttnn::TensorSpec, std::optional<ttnn::TensorSpec>, std::vector<ttnn::TensorSpec>,
+    // std::tuple<ttnn::TensorSpec> etc.
+    using spec_return_value_t = ttnn::TensorSpec;
 
     // Define the return types for the tensor(s) of the operation
     // Can be a single Tensor, std::optional<Tensor, ...>, std::vector<Tensor>, std::tuple<Tensor, ...> etc.
     using tensor_return_value_t = Tensor;
 
-    // Note shape_return_value_t and tensor_return_value_t should follow the same pattern
-    // i.e. if shape_return_value_t is a std::vector<std::optional<ttnn::Shape>> then tensor_return_value_t should be
-    // std::vector<std::optional<Tensor>>
+    // Note spec_return_value_t and tensor_return_value_t should follow the same pattern
+    // i.e. if spec_return_value_t is a std::vector<std::optional<ttnn::TensorSpec>> then tensor_return_value_t should
+    // be std::vector<std::optional<Tensor>>
 
     struct SingleCore {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
-            KernelHandle unary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
@@ -85,8 +86,8 @@ struct ExampleDeviceOperation {
     struct MultiCore {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
-            KernelHandle unary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
             std::size_t num_cores;
             std::size_t num_cores_y;
         };
@@ -117,8 +118,8 @@ struct ExampleDeviceOperation {
     // Validate the operation when it reuses a program. Usually will have less checks
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
-    // Compute the output shapes based on the operation attributes and tensor args
-    static shape_return_value_t compute_output_shapes(const operation_attributes_t&, const tensor_args_t&);
+    // Compute the output specs based on the operation attributes and tensor args
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
@@ -140,7 +141,7 @@ struct ExampleDeviceOperation {
 
     // In case the operation needs a custom create_op_performance_model, this method can be implemented
     /*
-    static operation::OpPerformanceModel create_op_performance_model(
+    static tt::tt_metal::tt::tt_metal::operation::OpPerformanceModel create_op_performance_model(
         const operation_attributes_t&,
         const tensor_args_t&,
         tensor_return_value_t&);

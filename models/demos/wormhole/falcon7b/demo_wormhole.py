@@ -10,9 +10,9 @@ from models.utility_functions import is_wormhole_b0
 @pytest.mark.parametrize(
     "perf_mode, max_seq_len, expected_perf_metrics, greedy_sampling, expected_greedy_output_path",
     (
-        (True, 128, {"prefill_t/s": 1370, "decode_t/s": 430, "decode_t/s/u": 13.4}, False, None),
-        (True, 1024, {"prefill_t/s": 1770, "decode_t/s": 370, "decode_t/s/u": 11.6}, False, None),
-        (True, 2048, {"prefill_t/s": 1600, "decode_t/s": 360, "decode_t/s/u": 11.2}, False, None),
+        (True, 128, {"prefill_t/s": 1750, "decode_t/s": 559, "decode_t/s/u": 17.5}, False, None),
+        (True, 1024, {"prefill_t/s": 2250, "decode_t/s": 499, "decode_t/s/u": 15.6}, False, None),
+        (True, 2048, {"prefill_t/s": 1990, "decode_t/s": 462, "decode_t/s/u": 14.4}, False, None),
         (True, 128, None, False, None),
         (True, 1024, None, False, None),
         (True, 2048, None, False, None),
@@ -54,13 +54,13 @@ def test_demo(
 
     batch_size = 32
     if perf_mode:
-        csv_perf_targets = {
+        json_perf_targets = {
             "prefill_t/s": {128: 2034, 1024: 9880, 2048: 9881}[max_seq_len],
             "decode_t/s": 26 * batch_size,
             "decode_t/s/u": 26,
         }  # performance targets that we aim for (wormhole)
     else:
-        csv_perf_targets = {}
+        json_perf_targets = {}
 
     return run_falcon_demo_kv(
         user_input=user_input,
@@ -74,6 +74,6 @@ def test_demo(
         greedy_sampling=greedy_sampling,
         expected_perf_metrics=expected_perf_metrics,
         expected_greedy_output_path=expected_greedy_output_path,
-        csv_perf_targets=csv_perf_targets,
+        json_perf_targets=json_perf_targets,
         is_ci_env=is_ci_env,
     )

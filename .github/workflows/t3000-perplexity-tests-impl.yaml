@@ -2,9 +2,22 @@ name: "[internal] T3000 perplexity tests impl"
 
 on:
   workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
 
 jobs:
-
   t3000-accuracy-perplexity-tests:
     strategy:
       fail-fast: false
@@ -17,38 +30,81 @@ jobs:
           { name: "t3k_llama3_tests_single_card", arch: wormhole_b0, cmd: run_t3000_llama3_perplexity_tests_single_card, timeout: 300, owner_id: U03PUAKE719}, # Mark O'Connor
           { name: "t3k_llama3_tests_t3k", arch: wormhole_b0, cmd: run_t3000_llama3_perplexity_tests_t3000, timeout: 300, owner_id: U03PUAKE719}, # Mark O'Connor
         ]
-
     name: ${{ matrix.test-group.name }}
-    env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.test-group.arch }}
-      LOGURU_LEVEL: INFO
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    environment: dev
-    runs-on: ["arch-wormhole_b0", "config-t3000", "in-service", "pipeline-perf"]
+    runs-on:
+      - arch-wormhole_b0
+      - config-t3000
+      - pipeline-perf
+      - ${{ inputs.extra-tag }}
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ matrix.test-group.arch }}
+        LOGURU_LEVEL: INFO
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - uses: ./.github/actions/ensure-active-weka-mount
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
         with:
-          name: TTMetal_build_${{ matrix.test-group.arch }}
+          submodules: recursive
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.build-artifact-name }}
+          path: docker-job
+
       - name: Extract files
-        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
-      - uses: ./.github/actions/install-python-deps
+        run: tar -xvf ttm_any.tar
+
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+          path: docker-job
+
+      - name: Install Wheel
+        run: |
+          WHEEL_FILENAME=$(ls -1 *.whl)
+          pip3 install $WHEEL_FILENAME
+
       - name: Run perplexity tests
-        shell: bash {0}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_perplexity_tests.sh
+          ls -lart /mnt/MLPerf/
+          ls -lart /dev/tenstorrent/
+          source /work/tests/scripts/t3000/run_t3000_perplexity_tests.sh
           ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: ${{ matrix.test-group.owner_id }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            /work/generated/test_reports/
+          prefix: "test_reports_"
+      - name: Generate gtest annotations on failure
+        uses: ./.github/actions/generate-gtest-failure-message
+        if: ${{ failure() }}
+        with:
+          path: |
+            /work/generated/test_reports/
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

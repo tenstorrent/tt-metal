@@ -6,23 +6,24 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
-  build-wheels:
-    needs: build-artifact
-    strategy:
-      matrix:
-        # Since pre-compiled builds only run on 20.04, we can only test on 20.04 for now
-        # The full 22.04 flow can be tested without precompiled
-        os: [ubuntu-20.04]
-        arch: [grayskull, wormhole_b0]
-    uses: ./.github/workflows/_build-wheels-impl.yaml
     with:
-      os: ${{ matrix.os }}
-      arch: ${{ matrix.arch }}
-      from-precompiled: true
+      build-wheel: true
+  create-image-tag-name:
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag-name: ${{ steps.set-tag-name.outputs.image-tag-name }}
+    steps:
+      - name: Set the tag name of the docker image
+        id: set-tag-name
+        run: |
+          echo "image-tag-name=${GITHUB_REF_NAME//\//-}" >> $GITHUB_OUTPUT
   publish-release-image:
-    needs: build-wheels
+    needs:
+      - build-artifact
+      - create-image-tag-name
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
     with:
-      version: dev-${GITHUB_REF_NAME//\//-}
+      base-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      version: dev-${{ needs.create-image-tag-name.outputs.image-tag-name }}
       is_major_version: false

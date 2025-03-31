@@ -6,12 +6,14 @@
 #include <functional>
 #include <random>
 
-#include "common/bfloat16.hpp"
-#include "test_tiles.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/tt_metal.hpp>
+
+#include "test_common.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -20,6 +22,7 @@ using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
+namespace test {
 // Given a tensor that is row-major datums, make it tilized
 // so that its row major within a tile, and each tile's data
 // is contiguous
@@ -46,6 +49,7 @@ std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
     }
     return result;
 }
+}  // namespace test
 
 void print_vec(const std::vector<bfloat16>& data, int rows, int cols, string name) {
     std::cout << name << ": " << std::endl;
@@ -88,7 +92,7 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
 }
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     int num_cores_r,
     int num_cores_c,
     int M,
@@ -193,7 +197,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
 }
 
 bool assign_runtime_args_to_program(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt_metal::Program& program,
     int num_cores_r,
     int num_cores_c,
@@ -328,7 +332,7 @@ int main(int argc, char** argv) {
 
     try {
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         int num_cores_r = device->logical_grid_size().y - 1;
         int num_cores_c = device->logical_grid_size().x;
@@ -397,15 +401,15 @@ int main(int argc, char** argv) {
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
         log_info(LogTest, "Scattering inputs (activation & weights) to dram channels using tiled layout");
-        auto activations_tilized = tilize(tensor.get_values(), M * 32, K * 32);
-        auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
+        auto activations_tilized = test::tilize(tensor.get_values(), M * 32, K * 32);
+        auto activations_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(activations_tilized));
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
 
         Buffer activation_buffer(device, activations.size() * sizeof(uint32_t), 1024 * 2, BufferType::DRAM);
         pass &= move_tiles_to_dram(cq, activation_buffer, activations, M, K);
 
-        auto identity_tilized = tilize(identity, K * 32, N * 32);
-        auto weights_tile_layout = convert_to_tile_layout(identity_tilized);
+        auto identity_tilized = test::tilize(identity, K * 32, N * 32);
+        auto weights_tile_layout = convert_to_tile_layout(tt::stl::MakeConstSpan(identity_tilized));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
 
         Buffer weight_buffer(device, weights.size() * sizeof(uint32_t), 1024 * 2, BufferType::DRAM);
@@ -457,7 +461,7 @@ int main(int argc, char** argv) {
                 result_vec.insert(result_vec.end(), result_iter, result_iter + 512);
                 result_iter += 512;
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-                auto result_flat_layout = convert_to_flat_layout(result_bfp16);
+                auto result_flat_layout = convert_to_flat_layout(tt::stl::MakeConstSpan(result_bfp16));
 
                 pass &= (golden_tile == result_flat_layout);
             }

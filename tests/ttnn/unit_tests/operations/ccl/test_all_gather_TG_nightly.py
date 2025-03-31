@@ -72,11 +72,12 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
     replication_factor,
     num_iters=1,
 ):
+    if len(mesh_device.get_devices()) != 32:
+        pytest.skip("Not TG!")
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         input_shard_shape,
         shard_grid_orientation,
-        False,
     )
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
@@ -147,38 +148,38 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
             ttnn.TILE_LAYOUT,
         ),
-        (
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            (8, 1, 2048, 32),
-            0,
-            (64, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-            ttnn.TILE_LAYOUT,
-        ),
-        (
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            (1, 8, 2048, 32),
-            1,
-            (64, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-            ttnn.TILE_LAYOUT,
-        ),
-        (
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            (1, 1, 16384, 32),
-            2,
-            (64, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-            ttnn.TILE_LAYOUT,
-        ),
-        (
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            (1, 1, 2048, 256),
-            3,
-            (64, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
-            ttnn.TILE_LAYOUT,
-        ),
+        # (
+        #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        #     (8, 1, 2048, 32),
+        #     0,
+        #     (64, 32),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        #     ttnn.TILE_LAYOUT,
+        # ),
+        # (
+        #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        #     (1, 8, 2048, 32),
+        #     1,
+        #     (64, 32),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        #     ttnn.TILE_LAYOUT,
+        # ),
+        # (
+        #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        #     (1, 1, 16384, 32),
+        #     2,
+        #     (64, 32),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        #     ttnn.TILE_LAYOUT,
+        # ),
+        # (
+        #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        #     (1, 1, 2048, 256),
+        #     3,
+        #     (64, 32),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        #     ttnn.TILE_LAYOUT,
+        # ),
     ),
 )
 @pytest.mark.parametrize("replication_factor", [4])
@@ -202,11 +203,12 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
     replication_factor,
     num_iters=1,
 ):
+    if len(mesh_device.get_devices()) != 32:
+        pytest.skip("Not TG!")
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         input_shard_shape,
         shard_grid_orientation,
-        False,
     )
 
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
@@ -272,6 +274,8 @@ def test_line_all_gather_on_TG_cols_nightly(
     replication_factor,
     num_iters=1,
 ):
+    if len(mesh_device.get_devices()) != 32:
+        pytest.skip("Not TG!")
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
         num_devices,

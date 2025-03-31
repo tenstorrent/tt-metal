@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
@@ -21,14 +22,15 @@ using ::ttnn::experimental::xtensor::span_to_xtensor_view;
 using ::ttnn::experimental::xtensor::to_xtensor;
 using ::ttnn::experimental::xtensor::xtensor_to_span;
 
-TensorSpec get_tensor_spec(const ttnn::SimpleShape& shape) {
-    return TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+TensorSpec get_tensor_spec(const ttnn::Shape& shape) {
+    return TensorSpec(
+        shape, TensorLayout(tt::tt_metal::DataType::FLOAT32, tt::tt_metal::Layout::ROW_MAJOR, MemoryConfig{}));
 }
 
 TEST(XtensorConversionTest, SpanToXtensor) {
     std::vector<int> data = {1, 2, 3, 4, 5, 6};
     tt::stl::Span<const int> data_span(data.data(), data.size());
-    ttnn::SimpleShape shape({2, 3});
+    ttnn::Shape shape({2, 3});
 
     auto result = span_to_xtensor_view(data_span, shape);
 
@@ -50,25 +52,24 @@ TEST(XtensorConversionTest, XtensorToSpan) {
 }
 
 TEST(XtensorConversionTest, GetShape) {
-    EXPECT_THAT(
-        get_shape_from_xarray(xt::xarray<int>::from_shape({2, 3, 4, 5, 6})), Eq(ttnn::SimpleShape{2, 3, 4, 5, 6}));
-    EXPECT_THAT(get_shape_from_xarray(xt::xarray<int>::from_shape({7})), Eq(ttnn::SimpleShape{7}));
+    EXPECT_THAT(get_shape_from_xarray(xt::xarray<int>::from_shape({2, 3, 4, 5, 6})), Eq(ttnn::Shape{2, 3, 4, 5, 6}));
+    EXPECT_THAT(get_shape_from_xarray(xt::xarray<int>::from_shape({7})), Eq(ttnn::Shape{7}));
 }
 
 TEST(XtensorConversionTest, FromXtensorInvalidShape) {
     xt::xarray<float> arr = {{1.0f, 2.0f}, {3.0f, 4.0f}};
-    EXPECT_ANY_THROW(from_xtensor(arr, get_tensor_spec(ttnn::SimpleShape{3, 3})));
+    EXPECT_ANY_THROW(from_xtensor(arr, get_tensor_spec(ttnn::Shape{3, 3})));
 }
 
 TEST(XtensorConversionTest, Roundtrip) {
-    const std::vector<ttnn::SimpleShape> shapes{
-        ttnn::SimpleShape{1},
-        ttnn::SimpleShape{1, 1, 1, 1},
-        ttnn::SimpleShape{1, 1, 1, 10},
-        ttnn::SimpleShape{1, 32, 32, 16},
-        ttnn::SimpleShape{1, 40, 3, 128},
-        ttnn::SimpleShape{2, 2},
-        ttnn::SimpleShape{1, 1, 1, 1, 10},
+    const std::vector<ttnn::Shape> shapes{
+        ttnn::Shape{1},
+        ttnn::Shape{1, 1, 1, 1},
+        ttnn::Shape{1, 1, 1, 10},
+        ttnn::Shape{1, 32, 32, 16},
+        ttnn::Shape{1, 40, 3, 128},
+        ttnn::Shape{2, 2},
+        ttnn::Shape{1, 1, 1, 1, 10},
     };
 
     for (const auto& shape : shapes) {

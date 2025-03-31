@@ -36,7 +36,7 @@ Examples:
   $0 llama-3.1-70b-instruct main dev
 
   # Deploy with specific commit SHAs
-  $0 llama-3.1-70b-instruct v0.53.0-rc36 384f1790c3be16e1d1b10de07252be2e66d00935
+  $0 llama-3.1-70b-instruct v0.54.0-rc2 953161188c50f10da95a88ab305e23977ebd3750
 
 EOF
     exit 0
@@ -155,7 +155,6 @@ check_and_build_tt_metal() {
     if [[ ! -d "python_env" ]]; then
         git checkout "${TT_METAL_COMMIT_SHA_OR_TAG}"
         git submodule update --init --recursive
-        git submodule foreach 'git lfs fetch --all && git lfs pull'
         ./build_metal.sh
         ./create_venv.sh
         source python_env/bin/activate

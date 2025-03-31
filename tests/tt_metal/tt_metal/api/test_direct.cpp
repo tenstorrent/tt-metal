@@ -9,8 +9,9 @@
 #include <random>
 
 #include "device_fixture.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/allocator.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -27,7 +28,7 @@ namespace unit_tests::dram::direct {
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool reader_only(
-    tt_metal::Device* device, const size_t& byte_size, const size_t& l1_byte_address, const CoreCoord& reader_core) {
+    tt_metal::IDevice* device, const size_t& byte_size, const size_t& l1_byte_address, const CoreCoord& reader_core) {
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -86,7 +87,7 @@ bool reader_only(
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool writer_only(
-    tt_metal::Device* device, const size_t& byte_size, const size_t& l1_byte_address, const CoreCoord& writer_core) {
+    tt_metal::IDevice* device, const size_t& byte_size, const size_t& l1_byte_address, const CoreCoord& writer_core) {
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -150,7 +151,7 @@ struct ReaderWriterConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool reader_writer(tt_metal::Device* device, const ReaderWriterConfig& test_config) {
+bool reader_writer(tt_metal::IDevice* device, const ReaderWriterConfig& test_config) {
     bool pass = true;
 
     const uint32_t cb_index = 0;
@@ -239,7 +240,7 @@ struct ReaderDatacopyWriterConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriterConfig& test_config) {
+bool reader_datacopy_writer(tt_metal::IDevice* device, const ReaderDatacopyWriterConfig& test_config) {
     bool pass = true;
 
     const uint32_t input0_cb_index = 0;
@@ -333,9 +334,11 @@ bool reader_datacopy_writer(tt_metal::Device* device, const ReaderDatacopyWriter
 }
 }  // namespace unit_tests::dram::direct
 
+namespace tt::tt_metal {
+
 TEST_F(DeviceFixture, TensixSingleCoreDirectDramReaderOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
-        uint32_t l1_unreserved_base = devices_.at(id)->get_base_allocator_addr(HalMemType::L1);
+        uint32_t l1_unreserved_base = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
         ASSERT_TRUE(
             unit_tests::dram::direct::reader_only(devices_.at(id), 1 * 1024, l1_unreserved_base, CoreCoord(0, 0)));
         ASSERT_TRUE(
@@ -346,7 +349,7 @@ TEST_F(DeviceFixture, TensixSingleCoreDirectDramReaderOnly) {
 }
 TEST_F(DeviceFixture, TensixSingleCoreDirectDramWriterOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
-        uint32_t l1_unreserved_base = devices_.at(id)->get_base_allocator_addr(HalMemType::L1);
+        uint32_t l1_unreserved_base = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
         ASSERT_TRUE(
             unit_tests::dram::direct::writer_only(devices_.at(id), 1 * 1024, l1_unreserved_base, CoreCoord(0, 0)));
         ASSERT_TRUE(
@@ -386,3 +389,5 @@ TEST_F(DeviceFixture, TensixSingleCoreDirectDramReaderDatacopyWriter) {
         ASSERT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(devices_.at(id), test_config));
     }
 }
+
+}  // namespace tt::tt_metal

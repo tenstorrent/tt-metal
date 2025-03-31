@@ -27,14 +27,14 @@ struct MorehNllLossStep2DeviceOperation {
         const std::optional<Tensor>& output_tensor;
     };
 
-    using shape_return_value_t = ttnn::Shape;
+    using spec_return_value_t = ttnn::TensorSpec;
 
     using tensor_return_value_t = ttnn::Tensor;
 
     struct Factory {
         struct shared_variables_t {
-            KernelHandle unary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
             std::size_t num_cores;
             std::size_t num_cores_y;
         };
@@ -62,7 +62,7 @@ struct MorehNllLossStep2DeviceOperation {
 
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
-    static shape_return_value_t compute_output_shapes(const operation_attributes_t&, const tensor_args_t&);
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 

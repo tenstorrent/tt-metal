@@ -2,20 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 
 namespace ttnn::operations::experimental::transformer::detail {
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 using namespace tt;
 
-operation::ProgramWithCallbacks concatenate_heads_multi_core(
+tt::tt_metal::operation::ProgramWithCallbacks concatenate_heads_multi_core(
     const Tensor& a, Tensor& output, CoreCoord compute_with_storage_grid_size) {
-    const auto& ashape = a.get_legacy_shape();
+    const auto& ashape = a.get_padded_shape();
 
-    tt_metal::Device* device = a.device();
+    tt_metal::IDevice* device = a.device();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
 

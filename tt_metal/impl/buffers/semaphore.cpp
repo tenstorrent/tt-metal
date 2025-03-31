@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/buffers/semaphore.hpp"
+#include <semaphore.hpp>
+
+#include "hal.hpp"
 
 namespace tt {
 

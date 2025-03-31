@@ -8,7 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "tilize.hpp"
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
@@ -47,13 +47,13 @@ void bind_tilize(py::module& module) {
                const std::optional<MemoryConfig>& memory_config,
                std::optional<DataType> output_dtype,
                bool use_multicore,
-               uint8_t queue_id) { return self(queue_id, input_tensor, memory_config, output_dtype, use_multicore); },
+               QueueId queue_id) { return self(queue_id, input_tensor, memory_config, output_dtype, use_multicore); },
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
             py::arg("use_multicore") = true,
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
         });
 }
 }  // namespace ttnn::operations::data_movement::detail

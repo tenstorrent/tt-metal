@@ -42,21 +42,21 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(
         "Operands to bcast need to be on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to bcast need to be on the same device!");
 
-    const auto input_shape_a = input_tensor_a.get_legacy_shape();
-    const auto input_shape_b = input_tensor_b.get_legacy_shape();
+    const auto input_shape_a = input_tensor_a.get_padded_shape();
+    const auto input_shape_b = input_tensor_b.get_padded_shape();
 
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Error");
     TT_FATAL(input_tensor_b.get_layout() == Layout::TILE, "Error");
     TT_FATAL(is_floating_point(input_tensor_a.get_dtype()), "Unsupported data format");
     if (!output_tensors.empty() && output_tensors.at(0).has_value()) {
         TT_FATAL(is_floating_point(output_tensors.at(0).value().get_dtype()), "Unsupported data format");
-        const std::vector<ttnn::SimpleShape> output_shape_required = this->compute_output_shapes(input_tensors);
+        const auto output_spec_required = this->compute_output_specs(input_tensors, output_tensors);
         const auto& out_tensor = output_tensors.at(0).value();
         TT_FATAL(
-            out_tensor.get_logical_shape() == output_shape_required.at(0),
+            out_tensor.get_logical_shape() == output_spec_required.at(0).logical_shape(),
             "The input tensors need a shape of {}, however the output tensor is only {}",
-            output_shape_required,
-            out_tensor.get_legacy_shape());
+            output_spec_required.at(0).logical_shape(),
+            out_tensor.get_padded_shape());
     }
     if (this->in_place) {
         TT_FATAL(input_tensor_a.memory_config().memory_layout == this->output_mem_config.memory_layout, "Error");
@@ -122,16 +122,10 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(
     }
 }
 
-std::vector<ttnn::SimpleShape> EltwiseBinaryBroadcast::compute_output_shapes(
-    const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.get_logical_shape()};
-}
-
-std::vector<Tensor> EltwiseBinaryBroadcast::create_output_tensors(
+std::vector<ttnn::TensorSpec> EltwiseBinaryBroadcast::compute_output_specs(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     if (!output_tensors.empty() && output_tensors.at(0).has_value()) {
-        return {output_tensors.at(0).value()};
+        return {output_tensors.at(0)->get_tensor_spec()};
     }
     if (this->in_place) {
         return {};
@@ -145,16 +139,36 @@ std::vector<Tensor> EltwiseBinaryBroadcast::create_output_tensors(
         }
         auto mem_config = this->output_mem_config;
         mem_config.shard_spec = shard_spec;
-        return {create_device_tensor(
-            input_tensor.get_legacy_shape(),
-            input_tensor.get_dtype(),
-            Layout::TILE,
-            input_tensor.device(),
-            mem_config)};
-    } else {
-        return operation::generic_create_output_tensors(
-            *this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
+        return {TensorSpec(
+            input_tensor.get_logical_shape(),
+            TensorLayout::fromPaddedShape(
+                input_tensor.get_dtype(),
+                PageConfig(Layout::TILE),
+                mem_config,
+                input_tensor.get_logical_shape(),
+                input_tensor.get_padded_shape()))};
     }
+
+    return {TensorSpec(
+        input_tensor.get_logical_shape(),
+        TensorLayout::fromPaddedShape(
+            input_tensor.get_dtype(),
+            PageConfig(Layout::TILE),
+            output_mem_config,
+            input_tensor.get_logical_shape(),
+            input_tensor.get_padded_shape()))};
+}
+
+std::vector<Tensor> EltwiseBinaryBroadcast::create_output_tensors(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    if (!output_tensors.empty() && output_tensors.at(0).has_value()) {
+        return {output_tensors.at(0).value()};
+    }
+    if (this->in_place) {
+        return {};
+    }
+    auto spec = compute_output_specs(input_tensors, output_tensors)[0];
+    return {create_device_tensor(spec, input_tensors.at(0).device())};
 }
 
 operation::ProgramWithCallbacks EltwiseBinaryBroadcast::create_program(
@@ -182,7 +196,7 @@ operation::ProgramWithCallbacks EltwiseBinaryBroadcast::create_program(
 const operation::Hash EltwiseBinaryBroadcast::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     auto parallelization_strategy = this->get_parallelization_strategy(input_tensors);
     bool bcast_scalar =
-        (input_tensors.at(1).get_legacy_shape()[-2] * input_tensors.at(1).get_legacy_shape()[-1] == 1) &&
+        (input_tensors.at(1).get_padded_shape()[-2] * input_tensors.at(1).get_padded_shape()[-1] == 1) &&
         this->dim == BcastOpDim::HW;
     return operation::hash_operation<EltwiseBinaryBroadcast>(
         *this,
@@ -202,13 +216,13 @@ BcastOpParallelizationStrategy EltwiseBinaryBroadcast::get_parallelization_strat
     const auto& input_tensor_b = input_tensors.at(1);
 
     uint32_t num_tiles = input_tensor_a.volume() / TILE_HW;
-    uint32_t Ht = input_tensor_a.get_legacy_shape()[-2] / TILE_HEIGHT;
-    uint32_t Wt = input_tensor_a.get_legacy_shape()[-1] / TILE_WIDTH;
+    uint32_t Ht = input_tensor_a.get_padded_shape()[-2] / TILE_HEIGHT;
+    uint32_t Wt = input_tensor_a.get_padded_shape()[-1] / TILE_WIDTH;
 
     if (this->dim == BcastOpDim::H) {
         if (input_tensor_a.is_sharded()) {
-            if (input_tensor_a.get_legacy_shape()[0] == input_tensor_b.get_legacy_shape()[0] ||
-                input_tensor_a.get_legacy_shape()[0] > 1 and input_tensor_b.get_legacy_shape()[0] == 1) {
+            if (input_tensor_a.get_padded_shape()[0] == input_tensor_b.get_padded_shape()[0] ||
+                input_tensor_a.get_padded_shape()[0] > 1 and input_tensor_b.get_padded_shape()[0] == 1) {
                 return BcastOpParallelizationStrategy::MULTI_CORE_H_SHARDED_OPTIMISED;
             } else {
                 return BcastOpParallelizationStrategy::MULTI_CORE_H_SHARDED;

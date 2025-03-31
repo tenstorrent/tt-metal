@@ -7,6 +7,7 @@ import json
 import importlib
 import os
 import pathlib
+import re
 from types import ModuleType
 
 from loguru import logger
@@ -58,7 +59,7 @@ def save_config_to_json_file(json_path):
     with open(json_path, "w") as f:
         normalized_config = {}
         for key in dir(CONFIG):
-            if "__" in key:
+            if re.match("^_.+_$", key):
                 continue
             value = getattr(CONFIG, key)
             if isinstance(value, pathlib.Path):
@@ -100,16 +101,37 @@ from ttnn._ttnn.multi_device import (
     get_t3k_physical_device_ids_ring,
 )
 
-from ttnn._ttnn.events import create_event, record_event, wait_for_event
+from ttnn._ttnn.events import (
+    MeshEvent,
+    record_event,
+    wait_for_event,
+    record_mesh_event,
+    wait_for_mesh_event,
+)
+
+from ttnn._ttnn.operations.trace import (
+    MeshTraceId,
+    begin_trace_capture,
+    end_trace_capture,
+    execute_trace,
+    release_trace,
+    begin_mesh_trace_capture,
+    end_mesh_trace_capture,
+    execute_mesh_trace,
+    release_mesh_trace,
+)
 
 from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
 )
 
+from ttnn._ttnn.fabric import FabricConfig, initialize_fabric_config
+
 from ttnn._ttnn.global_semaphore import (
     create_global_semaphore,
     get_global_semaphore_address,
     reset_global_semaphore_value,
+    create_global_semaphore_with_same_address,
 )
 
 from ttnn.types import (
@@ -145,6 +167,7 @@ from ttnn.types import (
     TILE_LAYOUT,
     StorageType,
     DEVICE_STORAGE_TYPE,
+    MULTI_DEVICE_STORAGE_TYPE,
     CoreGrid,
     CoreRange,
     Shape,
@@ -153,7 +176,9 @@ from ttnn.types import (
     WormholeComputeKernelConfig,
     GrayskullComputeKernelConfig,
     MeshShape,
-    MeshOffset,
+    MeshCoordinate,
+    MeshCoordinateRange,
+    QueueId,
     UnaryWithParam,
     UnaryOpType,
     BinaryOpType,
@@ -172,7 +197,9 @@ from ttnn.device import (
     disable_and_clear_program_cache,
     manage_device,
     synchronize_device,
+    synchronize_mesh_device,
     dump_device_memory_state,
+    get_memory_view,
     GetPCIeDeviceID,
     GetNumPCIeDevices,
     GetNumAvailableDevices,
@@ -205,6 +232,9 @@ from ttnn.core import (
     has_tile_padding,
     is_sharded,
     get_memory_config,
+    light_metal_begin_capture,
+    light_metal_end_capture,
+    LightMetalReplay,
     create_sharded_memory_config,
     create_sharded_memory_config_,
     dump_memory_config,
@@ -216,13 +246,6 @@ from ttnn.core import (
 
 import ttnn.reflection
 import ttnn.database
-
-
-begin_trace_capture = ttnn._ttnn.operations.core.begin_trace_capture
-end_trace_capture = ttnn._ttnn.operations.core.end_trace_capture
-execute_trace = ttnn._ttnn.operations.core.execute_trace
-release_trace = ttnn._ttnn.operations.core.release_trace
-
 
 from ttnn.decorators import (
     attach_golden_function,
@@ -309,6 +332,8 @@ from ttnn.operations.reduction import (
 
 from ttnn.operations.ccl import (
     Topology,
+    teardown_edm_fabric,
+    initialize_edm_fabric,
 )
 
 from ttnn.operations.conv2d import (
@@ -317,6 +342,7 @@ from ttnn.operations.conv2d import (
     prepare_conv_weights,
     prepare_conv_bias,
 )
+from ttnn._ttnn.operations.experimental import Conv3dConfig
 from ttnn.operations.conv1d import Conv1d, Conv1dConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig
@@ -325,3 +351,9 @@ import ttnn.graph
 
 if importlib.util.find_spec("torch") is not None:
     import ttnn.tracer
+
+from ttnn._ttnn.device import get_arch_name as _get_arch_name
+
+
+def get_arch_name():
+    return _get_arch_name()

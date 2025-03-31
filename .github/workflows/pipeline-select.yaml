@@ -10,7 +10,8 @@ on:
           - Release
           - Debug
           - RelWithDebInfo
-          - CI
+          - ASan
+          - TSan
         default: "Release"
       build-with-tracy:
         required: false
@@ -33,6 +34,10 @@ on:
         required: false
         type: boolean
         default: false
+      cpp-unit:
+        required: false
+        type: boolean
+        default: false
 
 run-name: ${{ inputs.description }}
 jobs:
@@ -51,14 +56,35 @@ jobs:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/perf-models-impl.yaml
-    if: ${{ inputs.perf-models }}
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+    if: ${{ inputs.single-card-perf-models }}
   single-card-perf-device-models-tests:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/perf-device-models-impl.yaml
-    if: ${{ inputs.perf-device-models }}
+    if: ${{ inputs.single-card-perf-device-models }}
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   single-card-nightly:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     if: ${{ inputs.single-card-nightly }}
+  cpp-unit-tests:
+    if: ${{ inputs.cpp-unit }}
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/cpp-post-commit.yaml
+    with:
+      arch: wormhole_b0
+      runner-label: tt-beta-ubuntu-2204-n300-large-stable
+      os: ubuntu-22.04
