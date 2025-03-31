@@ -13,6 +13,7 @@ from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
 from tabulate import tabulate
 import pandas as pd
+from models.utility_functions import enable_persistent_kernel_cache, disable_persistent_kernel_cache
 
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 
@@ -203,6 +204,7 @@ def run_fabric_edm(
     logger.warning("removing file profile_log_device.csv")
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
 
+    enable_persistent_kernel_cache()
     cmd = f"TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_DEVICE_PROFILER=1 \
             {os.environ['TT_METAL_HOME']}/build/test/ttnn/unit_tests_ttnn_fabric_edm \
                 {int(is_unicast)} \
@@ -218,6 +220,8 @@ def run_fabric_edm(
                 {int(unidirectional)} \
                 {int(senders_are_unidirectional)}"
     rc = os.system(cmd)
+
+    disable_persistent_kernel_cache()
     if rc != 0:
         if os.WEXITSTATUS(rc) == 1:
             pytest.skip("Skipping test because it only works with T3000")
@@ -427,6 +431,7 @@ def test_fabric_4chip_one_link_mcast_bw(
         packet_size=packet_size,
         fabric_mode=FabricTestMode.Linear,
         disable_sends_for_interior_workers=False,
+        unidirectional=False,
     )
 
 
@@ -663,6 +668,7 @@ def test_fabric_one_link_forwarding_unicast_unidirectional_single_producer_multi
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("noc_message_type", ["noc_unicast_flush_atomic_inc", "noc_unicast_no_flush_atomic_inc"])
 @pytest.mark.parametrize("packet_size", [16])
 def test_fabric_one_link_forwarding_unicast_single_producer_multihop_atomic_inc_bw(
     num_messages,
@@ -670,13 +676,14 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_atomic_inc_
     num_op_invocations,
     line_sync,
     line_size,
+    noc_message_type,
     packet_size,
 ):
     run_fabric_edm(
         is_unicast=True,
         num_messages=num_messages,
         num_links=num_links,
-        noc_message_type="noc_unicast_atomic_inc",
+        noc_message_type=noc_message_type,
         num_op_invocations=num_op_invocations,
         line_sync=line_sync,
         line_size=line_size,

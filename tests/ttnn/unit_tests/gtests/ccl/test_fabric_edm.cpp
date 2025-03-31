@@ -55,8 +55,12 @@ int main(int argc, char** argv) {
         noc_send_type = tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE;
     } else if (message_noc_type == "noc_multicast_write") {
         noc_send_type = tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE;
-    } else if (message_noc_type == "noc_unicast_atomic_inc") {
+    } else if (message_noc_type == "noc_unicast_flush_atomic_inc") {
         noc_send_type = tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC;
+        flush = true;
+    } else if (message_noc_type == "noc_unicast_no_flush_atomic_inc") {
+        noc_send_type = tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC;
+        flush = false;
     } else if (message_noc_type == "noc_fused_unicast_write_flush_atomic_inc") {
         noc_send_type = tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC;
         flush = true;
