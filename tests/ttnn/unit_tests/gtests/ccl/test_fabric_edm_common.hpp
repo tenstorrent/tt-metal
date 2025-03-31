@@ -2582,7 +2582,7 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
 
         // compute worker based on ethernet cores
         CoreRangeSet worker_cores = {};
-        if (use_tg) {
+        if (use_tg and topology == ttnn::ccl::Topology::Linear) {
             std::vector<CoreCoord> ethernet_cores_virtual = compute_top_row_ethernet_cores(
                 device, has_forward_connection, has_backward_connection, forward_device, backward_device);
             worker_cores = get_optimal_worker_core_placement(device, ethernet_cores_virtual, num_links);
