@@ -20,7 +20,10 @@ struct InterleavedToShardedDeviceOperation {
     tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 
-    static constexpr auto attribute_names = std::make_tuple("output_mem_config");
-    const auto attribute_values() const { return std::make_tuple(std::cref(this->output_mem_config)); }
+    static constexpr auto attribute_names = std::make_tuple("output_mem_config", "output_dtype", "keep_l1_aligned");
+    const auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->output_mem_config), std::cref(this->output_dtype), std::cref(this->keep_l1_aligned));
+    }
 };
 }  // namespace ttnn::operations::data_movement

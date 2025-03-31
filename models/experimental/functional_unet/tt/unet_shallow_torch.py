@@ -4,9 +4,6 @@
 
 import torch
 import torch.nn as nn
-import ttnn
-
-from loguru import logger
 
 
 def concatenate(activations, residuals, groups=2):

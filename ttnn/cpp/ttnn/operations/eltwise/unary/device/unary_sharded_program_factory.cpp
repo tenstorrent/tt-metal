@@ -7,7 +7,7 @@
 #include <algorithm>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
@@ -17,7 +17,7 @@ namespace ttnn::operations::unary::program {
 static const std::string compute_root_sharded = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/";
 
 using namespace tt::constants;
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
@@ -61,8 +61,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
             "Shard width should be multiple of {} to satisfy L1 alignment",
             hal::get_l1_alignment());
         size_t shard_height = shard_spec.shape[0];
-        size_t shard_width = round_up_to_mul16(
-            shard_spec.shape[1]);  // rounding up is done to aligned with  --> tt-metal/tt_metal/detail/util.hpp:31
+        size_t shard_width = shard_spec.shape[1];
         size_t shard_size_in_bytes = shard_height * shard_width * datum_size(act_df);
         TT_FATAL(shard_size_in_bytes % input_tile_size == 0, "Shard Size must be multiple of input_tile_size");
         num_tile_per_core = (shard_size_in_bytes + input_tile_size - 1) / input_tile_size;  // ceil value

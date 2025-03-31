@@ -104,8 +104,8 @@ struct WorkerToFabricEdmSenderImpl {
         volatile uint32_t* const from_remote_buffer_slot_rdptr_ptr,
         volatile uint32_t* const worker_teardown_addr,
         uint32_t local_buffer_index_addr,
-        uint8_t data_noc_cmd_buf,
-        uint8_t sync_noc_cmd_buf) :
+        uint8_t data_noc_cmd_buf = write_reg_cmd_buf,
+        uint8_t sync_noc_cmd_buf = write_at_cmd_buf) :
         edm_buffer_addr(edm_buffer_base_addr),
         edm_buffer_slot_wrptr_addr(
             connected_to_persistent_fabric ? edm_l1_sem_id
@@ -121,7 +121,7 @@ struct WorkerToFabricEdmSenderImpl {
         from_remote_buffer_slot_rdptr_ptr(from_remote_buffer_slot_rdptr_ptr),
         worker_teardown_addr(worker_teardown_addr),
         edm_buffer_base_addr(edm_buffer_base_addr),
-        buffer_slot_wrptr_ptr(reinterpret_cast<size_t*>(local_buffer_index_addr)),
+        buffer_slot_wrptr_ptr(reinterpret_cast<tt_l1_ptr size_t*>(local_buffer_index_addr)),
         buffer_size_bytes(buffer_size_bytes),
         num_buffers_per_channel(num_buffers_per_channel),
         last_buffer_index(num_buffers_per_channel - 1),
@@ -152,11 +152,11 @@ struct WorkerToFabricEdmSenderImpl {
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
             auto slots_used = distance_behind<EDM_NUM_BUFFER_SLOTS>(
                 BufferPtr{static_cast<uint8_t>(*this->from_remote_buffer_slot_rdptr_ptr)},
-                BufferPtr{static_cast<uint8_t>(*this->buffer_slot_wrptr_ptr)});
+                BufferPtr{static_cast<uint8_t>(this->buffer_slot_wrptr)});
             return slots_used < this->num_buffers_per_channel;
         } else {
             const auto rdptr = *this->from_remote_buffer_slot_rdptr_ptr;
-            const auto wrptr = *this->buffer_slot_wrptr_ptr;
+            const auto wrptr = this->buffer_slot_wrptr;
             auto buffer_ptr_wrap = 2 * this->num_buffers_per_channel;
             auto slots_used = distance_behind(
                 BufferPtr{static_cast<uint8_t>(rdptr)}, BufferPtr{static_cast<uint8_t>(wrptr)}, buffer_ptr_wrap);
@@ -168,13 +168,13 @@ struct WorkerToFabricEdmSenderImpl {
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
             while (distance_behind<EDM_NUM_BUFFER_SLOTS>(
                        BufferPtr{static_cast<uint8_t>(*this->from_remote_buffer_slot_rdptr_ptr)},
-                       BufferPtr{static_cast<uint8_t>(*this->buffer_slot_wrptr_ptr)}) < this->num_buffers_per_channel);
+                       BufferPtr{static_cast<uint8_t>(this->buffer_slot_wrptr)}) < this->num_buffers_per_channel);
         } else {
             const auto first_rdptr = *this->from_remote_buffer_slot_rdptr_ptr;
             auto buffer_ptr_wrap = 2 * this->num_buffers_per_channel;
             bool has_space = distance_behind(
                                  BufferPtr{static_cast<uint8_t>(first_rdptr)},
-                                 BufferPtr{static_cast<uint8_t>(*this->buffer_slot_wrptr_ptr)},
+                                 BufferPtr{static_cast<uint8_t>(this->buffer_slot_wrptr)},
                                  buffer_ptr_wrap) < this->num_buffers_per_channel;
             if (!has_space) {
                 while (first_rdptr == *this->from_remote_buffer_slot_rdptr_ptr);
@@ -227,7 +227,13 @@ struct WorkerToFabricEdmSenderImpl {
 
     static constexpr size_t edm_sender_channel_field_stride_bytes = 16;
 
-    void open() {
+    // Advanced usage API:
+    // Starts the connection opening process but doesn't wait for the process complete. This avoids waiting
+    // for the read barrier to complete before returning, saving some cycles for advanced users.
+    // !!! IMPORTANT !!!
+    // Must be called alongside (before) open_finish().
+    template <bool posted = false>
+    void open_start() {
         const auto dest_noc_addr_coord_only = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
 
         const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
@@ -250,23 +256,43 @@ struct WorkerToFabricEdmSenderImpl {
             reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_teardown_semaphore_address));
         const uint64_t connection_worker_xy_address =
             dest_noc_addr_coord_only | reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_xy));
-        noc_inline_dw_write(dest_edm_location_info_addr, reinterpret_cast<size_t>(from_remote_buffer_slot_rdptr_ptr));
-        noc_inline_dw_write(edm_teardown_semaphore_address_address, reinterpret_cast<size_t>(worker_teardown_addr));
-        noc_inline_dw_write(connection_worker_xy_address, WorkerXY(my_x[0], my_y[0]).to_uint32());
+        noc_inline_dw_write<false, posted>(
+            dest_edm_location_info_addr, reinterpret_cast<size_t>(from_remote_buffer_slot_rdptr_ptr));
+        noc_inline_dw_write<false, posted>(
+            edm_teardown_semaphore_address_address, reinterpret_cast<size_t>(worker_teardown_addr));
+        noc_inline_dw_write<false, posted>(connection_worker_xy_address, WorkerXY(my_x[0], my_y[0]).to_uint32());
 
         const uint64_t edm_connection_handshake_noc_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
-        noc_inline_dw_write(edm_connection_handshake_noc_addr, open_connection_value);
-        noc_async_read_barrier();
+        noc_inline_dw_write<false, posted>(edm_connection_handshake_noc_addr, open_connection_value);
+    }
 
+    // Advanced usage API:
+    // Completes the connection opening process. Induces a read barrier
+    // !!! IMPORTANT !!!
+    // Must be called alongside (after) open_start().
+    void open_finish() {
+        noc_async_read_barrier();
+        this->buffer_slot_wrptr = *this->buffer_slot_wrptr_ptr;
         if constexpr (!USER_DEFINED_NUM_BUFFER_SLOTS) {
             this->edm_buffer_addr =
                 this->edm_buffer_base_addr +
                 (this->get_buffer_slot_index() * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
         }
-        ASSERT(*this->buffer_slot_wrptr_ptr < 20);
+        ASSERT(this->buffer_slot_wrptr < 20);
     }
 
-    void close() {
+    template <bool posted = false>
+    void open() {
+        open_start<posted>();
+        open_finish();
+    }
+
+    // Advanced usage API:
+    // Starts the connection closing process but doesn't wait for the process to complete. This avoids waiting
+    // for the ack from the fabric before returning, saving some cycles for advanced users.
+    // !!! IMPORTANT !!!
+    // Must be called alongside (before) close_finish().
+    void close_start() {
         const auto dest_noc_addr_coord_only =
             get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr) &
             ~(uint64_t)NOC_COORDINATE_MASK;
@@ -276,12 +302,22 @@ struct WorkerToFabricEdmSenderImpl {
 
         // buffer index stored at location after handshake addr
         const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
-        noc_inline_dw_write(remote_buffer_index_addr, *this->buffer_slot_wrptr_ptr);
+        noc_inline_dw_write(remote_buffer_index_addr, this->buffer_slot_wrptr);
+    }
 
+    // Advanced usage API:
+    // Completes the connection closing process. Induces a write barrier
+    // !!! IMPORTANT !!!
+    // Must be called alongside (after) close_start().
+    void close_finish() {
         // Need to wait for the ack to teardown notice, from edm
         noc_semaphore_wait(this->worker_teardown_addr, 1);
-
         noc_async_write_barrier();
+    }
+
+    void close() {
+        close_start();
+        close_finish();
     }
 
     uint32_t edm_buffer_addr;
@@ -299,12 +335,13 @@ struct WorkerToFabricEdmSenderImpl {
     // Local copy of the the buffer slot rdptr on the EDM
     // EDM will update this to indicate that packets have been read (and hence
     // space is available)
-    volatile uint32_t* from_remote_buffer_slot_rdptr_ptr;
-    volatile uint32_t* worker_teardown_addr;
+    volatile tt_l1_ptr uint32_t* from_remote_buffer_slot_rdptr_ptr;
+    volatile tt_l1_ptr uint32_t* worker_teardown_addr;
     size_t edm_buffer_base_addr;
 
     // TODO: keep a local copy that we use during the lifetime of the channel to avoid repeated L1 reads
-    size_t* buffer_slot_wrptr_ptr;
+    volatile tt_l1_ptr size_t* buffer_slot_wrptr_ptr;
+    size_t buffer_slot_wrptr;
 
     uint16_t buffer_size_bytes;
     uint8_t num_buffers_per_channel;
@@ -325,34 +362,34 @@ private:
     FORCE_INLINE void update_edm_buffer_slot_wrptr(uint8_t noc = noc_index) {
         if constexpr (stateful_api) {
             if constexpr (enable_ring_support) {
-                noc_inline_dw_write_with_state<true, false, false>(
-                    *this->buffer_slot_wrptr_ptr, this->edm_buffer_slot_wrptr_addr, this->sync_noc_cmd_buf, noc);
+                noc_inline_dw_write_with_state<true, false, true>(
+                    this->buffer_slot_wrptr, this->edm_buffer_slot_wrptr_addr, this->sync_noc_cmd_buf, noc);
             } else {
-                noc_inline_dw_write_with_state<false, false, false>(
-                    *this->buffer_slot_wrptr_ptr, 0, this->sync_noc_cmd_buf, noc);
+                noc_inline_dw_write_with_state<false, false, true>(
+                    this->buffer_slot_wrptr, 0, this->sync_noc_cmd_buf, noc);
             }
         } else {
             const uint64_t noc_sem_addr =
                 get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr, noc);
-            noc_inline_dw_write(noc_sem_addr, *this->buffer_slot_wrptr_ptr, 0xf, noc);
+            noc_inline_dw_write(noc_sem_addr, this->buffer_slot_wrptr, 0xf, noc);
         }
     }
 
     FORCE_INLINE uint8_t get_buffer_slot_index() const {
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
-            return normalize_ptr<EDM_NUM_BUFFER_SLOTS>(BufferPtr{static_cast<uint8_t>(*this->buffer_slot_wrptr_ptr)});
+            return normalize_ptr<EDM_NUM_BUFFER_SLOTS>(BufferPtr{static_cast<uint8_t>(this->buffer_slot_wrptr)});
         } else {
             return normalize_ptr(
-                BufferPtr{static_cast<uint8_t>(*this->buffer_slot_wrptr_ptr)}, this->num_buffers_per_channel);
+                BufferPtr{static_cast<uint8_t>(this->buffer_slot_wrptr)}, this->num_buffers_per_channel);
         }
     }
 
     FORCE_INLINE void advance_buffer_slot_wrptr() {
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
-            *this->buffer_slot_wrptr_ptr = wrap_increment<BUFFER_SLOT_PTR_WRAP>(*this->buffer_slot_wrptr_ptr);
+            this->buffer_slot_wrptr = wrap_increment<BUFFER_SLOT_PTR_WRAP>(this->buffer_slot_wrptr);
         } else {
-            uint8_t wrptr = *this->buffer_slot_wrptr_ptr;
-            *this->buffer_slot_wrptr_ptr = !(wrptr == ((this->num_buffers_per_channel * 2) - 1)) ? wrptr + 1 : 0;
+            uint8_t wrptr = this->buffer_slot_wrptr;
+            this->buffer_slot_wrptr = !(wrptr == ((this->num_buffers_per_channel * 2) - 1)) ? wrptr + 1 : 0;
             this->edm_buffer_addr =
                 this->edm_buffer_base_addr +
                 (this->get_buffer_slot_index() * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));

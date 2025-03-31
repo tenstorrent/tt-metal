@@ -31,9 +31,8 @@ def generate_submeshes(mesh_device, data_parallel):
     return mesh_device.create_submeshes(ttnn.MeshShape(1, num_devices // data_parallel))
 
 
-def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, mesh_device, tt_cache_path, tt_data_parallel=1):
-    submesh_devices = generate_submeshes(mesh_device, tt_data_parallel)
-
+def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
+    submesh_devices = [model.mesh_device for model in dp_model]
     kv_cache = []
     for mesh_idx, submesh in enumerate(submesh_devices):
         cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
@@ -85,7 +84,7 @@ def initialize_vllm_text_transformer(
 
         assert model_args_i.model_name.replace("-", "") in hf_config._name_or_path.replace(
             "-", ""
-        ), f"The model specified in vLLM ({hf_config._name_or_path}) does not match the model name ({model_args_i.model_name}) with model weights ({model_args_i.DEFAULT_CKPT_DIR})."
+        ), f"The model specified in vLLM ({hf_config._name_or_path}) does not match the model name ({model_args_i.model_name}) with model weights ({model_args_i.CKPT_DIR})."
         if n_layers is not None:
             model_args_i.n_layers = n_layers
 
@@ -241,7 +240,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         )
 
     def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_vllm_kv_cache(*args, **kwargs, tt_cache_path=self.cache_path)
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
 @INPUT_REGISTRY.register_input_processor(input_processor_for_llama_text)
@@ -274,7 +273,7 @@ class LlamaForCausalLM(Generator):
         return super().decode_forward_text(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_vllm_kv_cache(*args, **kwargs, tt_cache_path=self.cache_path)
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
 class Qwen2ForCausalLM(Generator):
@@ -306,4 +305,4 @@ class Qwen2ForCausalLM(Generator):
         return super().decode_forward_text(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
-        return allocate_vllm_kv_cache(*args, **kwargs, tt_cache_path=self.cache_path)
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
