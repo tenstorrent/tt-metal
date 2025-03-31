@@ -33,20 +33,16 @@ struct OldInfraDeviceOperation {
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-        static cached_program_t create_at(
+        static cached_program_t create(
             const operation_attributes_t& operation_attributes,
-            const ttnn::MeshCoordinate& mesh_coord,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
 
-        static void override_runtime_arguments_at(
+        static void override_runtime_arguments(
             cached_program_t& cached_program,
             const operation_attributes_t& operation_attributes,
-            const ttnn::MeshCoordinate&,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
-
-        static bool uses_heterogenous_dispatch(const operation_attributes_t& attributes);
     };
 
     struct MeshWorkloadFactory {
@@ -112,8 +108,6 @@ struct OldInfraDeviceOperation {
         tensor_return_value_t& tensor_return_value);
 
     static std::string get_type_name(const operation_attributes_t& attributes);
-
-    static bool uses_heterogenous_dispatch(const operation_attributes_t& attributes);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         operation_attributes_t&& operation_attributes,

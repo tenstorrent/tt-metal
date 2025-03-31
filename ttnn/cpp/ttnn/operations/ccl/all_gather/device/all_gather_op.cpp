@@ -173,6 +173,16 @@ std::vector<Tensor> AllGather::create_output_tensors(const std::vector<Tensor>& 
     return tt::tt_metal::operation::default_create_output_tensors(*this, input_tensors, {});
 }
 
+tt::tt_metal::operation::MeshWorkloadWithCallbacks AllGather::create_mesh_workload(
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    return ccl::create_mesh_workload_from_programs(
+        tensor_coords, input_tensors, output_tensors, [&, this](const ttnn::MeshCoordinate& coord) {
+            return create_program_at(coord, input_tensors, output_tensors);
+        });
+}
+
 tt::tt_metal::operation::ProgramWithCallbacks AllGather::create_program_at(
     const ttnn::MeshCoordinate& mesh_coord,
     const std::vector<Tensor>& input_tensors,

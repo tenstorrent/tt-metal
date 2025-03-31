@@ -7,6 +7,7 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
 /* All Gather Matmul fusion includes */
@@ -91,6 +92,17 @@ std::vector<Tensor> AllGatherMatmul::create_output_tensors(const std::vector<Ten
         this->matmul_struct.create_output_tensors({input_tensors[1], input_tensors[2]})[0];
 
     return {all_gather_output_tensor, matmul_output_tensor, datacopy_output_tensor};
+}
+
+tt::tt_metal::operation::MeshWorkloadWithCallbacks AllGatherMatmul::create_mesh_workload(
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    return ttnn::ccl::create_mesh_workload_from_programs(
+        tensor_coords, input_tensors, output_tensors, [&, this](const ttnn::MeshCoordinate& coord) {
+            return create_program_at(coord, input_tensors, optional_input_tensors, output_tensors);
+        });
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmul::create_program_at(

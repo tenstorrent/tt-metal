@@ -107,37 +107,10 @@ struct MeshDeviceOperationAdapter {
 
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-
-            auto make_program = [&](const ttnn::MeshCoordinate& coord) {
-                if constexpr (requires { &ProgramFactory::create; }) {
-                    return program_factory.create(attrs, tensor_args, tensor_return_value);
-                } else {
-                    return program_factory.create_at(attrs, coord, tensor_args, tensor_return_value);
-                }
-            };
-
-            // Fast path - create a single program for all devices.
-            // No customization and uniform tensor storage spanning all devices.
-            if (!mesh_device_operation_utils::uses_heterogenous_dispatch<ProgramFactory>(attrs) &&
-                tensor_coords.size() == 1) {
-                const auto& mesh_coordinate_range = tensor_coords.ranges()[0];
-                auto cached_program = make_program(ttnn::MeshCoordinate(0, 0));
-                mesh_workload.add_program(mesh_coordinate_range, std::move(cached_program.program));
-                shared_variables[mesh_coordinate_range] = std::move(cached_program.shared_variables);
-            } else {
-                // Create separate programs for each device.
-                tt::log_warning(
-                    tt::LogOp,
-                    "Tensors that are distributed across mesh device unevenly negatively affect Op dispatch "
-                    "performance.");
-                for (const auto& mesh_coordinate_range : tensor_coords.ranges()) {
-                    for (const auto& coord : mesh_coordinate_range) {
-                        auto cached_program = make_program(coord);
-                        const ttnn::MeshCoordinateRange coordinate_range(coord, coord);
-                        mesh_workload.add_program(coordinate_range, std::move(cached_program.program));
-                        shared_variables[coordinate_range] = std::move(cached_program.shared_variables);
-                    }
-                }
+            for (const auto& range : tensor_coords.ranges()) {
+                auto cached_program = program_factory.create(attrs, tensor_args, tensor_return_value);
+                mesh_workload.add_program(range, std::move(cached_program.program));
+                shared_variables[range] = std::move(cached_program.shared_variables);
             }
 
             return AdaptedCachedMeshWorkload<shared_variables_t>{std::move(mesh_workload), std::move(shared_variables)};

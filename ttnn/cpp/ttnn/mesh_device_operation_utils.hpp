@@ -22,22 +22,6 @@ namespace ttnn::device_operation::mesh_device_operation_utils {
 template <typename T>
 using AdaptedCachedMeshWorkload = tt::tt_metal::program_cache::detail::AdaptedCachedMeshWorkload<T>;
 
-// Determines if the device operation and a given program factory use heterogenous dispatch (constructing a single
-// program for the entire mesh workload, or creating a program for each device within the mesh).
-// For the old infra type-erased `DeviceOperation`, this is determined by `uses_heterogenous_dispatch` method on the
-// program factory.
-// For the new infra, this is determined by the presence of `create_at` method for creating programs at
-// a specific location.
-template <ProgramFactoryConcept ConcreteProgramFactory, typename OperationAttributes>
-auto uses_heterogenous_dispatch(const OperationAttributes& attrs) {
-    if constexpr (requires { ConcreteProgramFactory::uses_heterogenous_dispatch(attrs); }) {
-        return ConcreteProgramFactory::uses_heterogenous_dispatch(attrs);
-    } else {
-        constexpr bool has_create_at = requires { &ConcreteProgramFactory::create_at; };
-        return has_create_at;
-    }
-}
-
 // Returns true if all tensors have uniform storage, false otherwise.
 template <typename TensorArgs>
 bool all_tensors_have_uniform_storage(const TensorArgs& tensor_args) {
@@ -137,30 +121,16 @@ void apply_override_runtime_arguments(
     const ttnn::MeshCoordinate& coord,
     const TensorArgs& tensor_args,
     TensorReturnValue& return_value) {
-    if constexpr (
-        requires {
-            typename ProgramFactory::cached_program_t;
-            factory.override_runtime_arguments(
-                std::declval<typename ProgramFactory::cached_program_t&>(), attrs, tensor_args, return_value);
-        } ||
-        requires {
-            typename ProgramFactory::cached_program_t;
-            factory.override_runtime_arguments_at(
-                std::declval<typename ProgramFactory::cached_program_t&>(), attrs, coord, tensor_args, return_value);
-        }) {
+    if constexpr (requires {
+                      typename ProgramFactory::cached_program_t;
+                      factory.override_runtime_arguments(
+                          std::declval<typename ProgramFactory::cached_program_t&>(), attrs, tensor_args, return_value);
+                  }) {
         // Proxy references to `program` and `shared_vars` as a `CachedProgram` object.
         auto cached_program_proxy = ProgramFactory::cached_program_t::proxy(program, shared_vars);
-        if constexpr (requires { &ProgramFactory::override_runtime_arguments_at; }) {
-            factory.override_runtime_arguments_at(cached_program_proxy, attrs, coord, tensor_args, return_value);
-        } else {
-            factory.override_runtime_arguments(cached_program_proxy, attrs, tensor_args, return_value);
-        }
+        factory.override_runtime_arguments(cached_program_proxy, attrs, tensor_args, return_value);
     } else {
-        if constexpr (requires { &ProgramFactory::override_runtime_arguments_at; }) {
-            factory.override_runtime_arguments_at(program, shared_vars, attrs, coord, tensor_args, return_value);
-        } else {
-            factory.override_runtime_arguments(program, shared_vars, attrs, tensor_args, return_value);
-        }
+        factory.override_runtime_arguments(program, shared_vars, attrs, tensor_args, return_value);
     }
 }
 
