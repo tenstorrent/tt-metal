@@ -30,7 +30,7 @@ void MAIN {
 #endif
             for (uint32_t b = 0; b < per_core_block_cnt; ++b) {
 // If LLK perf is measured disable sync with DM cores/kernels
-#ifndef LLK_TILIZE_PERF
+#ifndef LLK_TILIZE_PERF_NO_DM
             cb_wait_front(tt::CBIndex::c_0, per_core_block_tile_cnt);
             cb_reserve_back(tt::CBIndex::c_16, per_core_block_tile_cnt);
 #endif
@@ -45,7 +45,7 @@ void MAIN {
             }
 #endif
 // If LLK perf is measured disable sync with DM cores/kernels
-#ifndef LLK_TILIZE_PERF
+#ifndef LLK_TILIZE_PERF_NO_DM
             cb_push_back(tt::CBIndex::c_16, per_core_block_tile_cnt);
             cb_pop_front(tt::CBIndex::c_0, per_core_block_tile_cnt);
 #endif
