@@ -21,7 +21,7 @@ void bind_squeeze(pybind11::module& module, const data_movement_operation_t& ope
         operation,
         doc,
         ttnn::pybind_overload_t{
-            [](const data_movement_operation_t& self, const ttnn::Tensor& input_tensor, pybind11::object dim)
+            [](const data_movement_operation_t& self, const ttnn::Tensor& input_tensor, const pybind11::object& dim)
                 -> ttnn::Tensor {
                 if (dim.is_none()) {  // None
                     return self(input_tensor);
