@@ -6,18 +6,8 @@ from loguru import logger
 
 import torch
 import pytest
-from models.utility_functions import (
-    is_wormhole_b0,
-    skip_for_grayskull,
-    is_grayskull,
-    is_wormhole_b0,
-    is_x2_harvested,
-)
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc, check_with_pcc_without_tensor_printout
 import ttnn
-import math
-import os
-import torch.nn as nn
 
 
 def run_conv(
@@ -152,7 +142,6 @@ def run_conv(
     assert passing
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, groups, use_1d_systolic_array, config_override, use_shallow_conv_variant",
@@ -231,7 +220,6 @@ def test_conv1d_mamba(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, groups, use_1d_systolic_array, config_override, use_shallow_conv_variant",
@@ -306,7 +294,6 @@ def test_conv1d(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, groups, shard_layout, config_override, use_shallow_conv_variant",
