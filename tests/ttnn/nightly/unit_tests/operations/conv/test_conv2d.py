@@ -1711,6 +1711,8 @@ def test_unet_conv_groups_4_6_wh(
         pytest.skip("Row major layout not compatible with bfloat8_b")
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and input_height >= 1056:
         pytest.skip("OOM")
+    if input_channels == 32 and input_height == 1056 and groups == 6:
+        pytest.skip("OOM - enable when support for full in-place conv2d")
     run_conv(
         device,
         torch_tensor_map,
