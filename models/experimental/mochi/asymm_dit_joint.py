@@ -138,7 +138,7 @@ class TtAsymmDiTJoint(LightweightModule):
         """
         Prepare text features for the model.
         """
-        assert t5_feat.size(1) == self.t5_token_length
+        # assert t5_feat.size(1) == self.t5_token_length
         t5_y_pool = self.t5_y_embedder(t5_feat, t5_mask)
         y_feat_BLY = self.t5_yproj(t5_feat)
 

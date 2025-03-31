@@ -72,7 +72,7 @@ class TtFinalLayer(LightweightModule):
             bias = bias.permute(2, 0, 1)
             bias = bias.reshape(patch_size**2 * out_channels)
             self.linear_bias = as_replicated_tensor(
-                bias,
+                bias.reshape(1, -1),
                 mesh_device,
                 cache_file_name=weight_cache_path / (state_dict_prefix + f".{linear_name}.bias"),
             )
