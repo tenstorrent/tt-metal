@@ -328,8 +328,6 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
     const bool transpose_mcast,
     Tensor& output_tensor,
     const bool capture_buffers) {
-    const bool in_place = true;
-
     IDevice* device = input_tensor.device();
     Buffer* src_buffer = input_tensor.buffer();
     Buffer* dst_buffer = output_tensor.buffer();
@@ -436,34 +434,31 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
     uint32_t remote_temp_cb_id = 0;
     std::vector<uint32_t> output_tensor_cores_x;
     std::vector<uint32_t> output_tensor_cores_y;
-    if (in_place) {
-        int32_t in_out_buffer_start_delta = max_out_nsticks_per_core - input_npages;
-        const auto delta =
-            output_tensor.buffer()->aligned_size_per_bank() - input_tensor.buffer()->aligned_size_per_bank();
-        TT_ASSERT(
-            src_buffer->sharded_page_address(0, 0) == dst_buffer->sharded_page_address(0, 0) + delta,
-            "In-place halo requires input and output buffers to be sharded at the same address");
-        TT_ASSERT(!remote_read, "remote_read is not supported for in place operation");
+    int32_t in_out_buffer_start_delta = max_out_nsticks_per_core - input_npages;
+    const auto delta = output_tensor.buffer()->aligned_size_per_bank() - input_tensor.buffer()->aligned_size_per_bank();
+    TT_ASSERT(
+        src_buffer->sharded_page_address(0, 0) == dst_buffer->sharded_page_address(0, 0) + delta,
+        "In-place halo requires input and output buffers to be sharded at the same address");
+    TT_ASSERT(!remote_read, "remote_read is not supported for in place operation");
 
-        // create the remote temp CB
-        if (max_ref_size > 0) {
-            remote_temp_cb_id = cb_indices.get_next_cb_id();
-            auto remote_temp_cb_config =
-                CircularBufferConfig(
-                    max_ref_size * output_shard_shape[1] * out_nbytes, {{remote_temp_cb_id, kernel_config_df}})
-                    .set_page_size(remote_temp_cb_id, output_shard_shape[1] * out_nbytes);
-            CBHandle remote_temp_cb = CreateCircularBuffer(program, all_cores, remote_temp_cb_config);
-        }
+    // create the remote temp CB
+    if (max_ref_size > 0) {
+        remote_temp_cb_id = cb_indices.get_next_cb_id();
+        auto remote_temp_cb_config =
+            CircularBufferConfig(
+                max_ref_size * output_shard_shape[1] * out_nbytes, {{remote_temp_cb_id, kernel_config_df}})
+                .set_page_size(remote_temp_cb_id, output_shard_shape[1] * out_nbytes);
+        CBHandle remote_temp_cb = CreateCircularBuffer(program, all_cores, remote_temp_cb_config);
+    }
 
-        semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+    semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
 
-        const bool is_rm_orientation = input_tensor.shard_spec()->orientation == ShardOrientation::ROW_MAJOR;
-        const auto cores = corerange_to_cores(all_cores, std::nullopt, is_rm_orientation);
-        for (const auto& core : cores) {
-            auto worker = device->worker_core_from_logical_core(core);
-            output_tensor_cores_x.push_back(worker.x);
-            output_tensor_cores_y.push_back(worker.y);
-        }
+    const bool is_rm_orientation = input_tensor.shard_spec()->orientation == ShardOrientation::ROW_MAJOR;
+    const auto cores = corerange_to_cores(all_cores, std::nullopt, is_rm_orientation);
+    for (const auto& core : cores) {
+        auto worker = device->worker_core_from_logical_core(core);
+        output_tensor_cores_x.push_back(worker.x);
+        output_tensor_cores_y.push_back(worker.y);
     }
 
     // Compute core data and create semaphore
