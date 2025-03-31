@@ -8,6 +8,7 @@
 #include "quantization.hpp"
 
 #include <string>
+#include <variant>
 
 namespace ttnn::operations::quantization {
 namespace detail {
@@ -24,7 +25,7 @@ void bind_quantize_operation(
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            scale (Number): the quantization scale.
+            scale (ttnn.Tensor or Number): the quantization scale.
             zero_point (Number): the quantization zero point.
 
         Keyword Args:
@@ -67,7 +68,7 @@ void bind_quantize_operation(
         ttnn::pybind_overload_t{
             [](const T& self,
                const ttnn::Tensor& input_tensor,
-               const float scale,
+               const std::variant<ttnn::Tensor, float>& scale,
                const int32_t zero_point,
                const std::optional<int32_t> axis,
                const std::optional<const DataType>& dtype,
@@ -99,9 +100,9 @@ void bind_requantize_operation(
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            in_scale (Number): the input quantization scale.
+            in_scale (ttnn.Tensor or Number): the input quantization scale.
             in_zero_point (Number): the input quantization zero point.
-            out_scale (Number): the output quantization scale.
+            out_scale (ttnn.Tensor or Number): the output quantization scale.
             out_zero_point (Number): the output quantization zero point.
 
         Keyword Args:
@@ -146,9 +147,9 @@ void bind_requantize_operation(
         ttnn::pybind_overload_t{
             [](const T& self,
                const ttnn::Tensor& input_tensor,
-               const float in_scale,
+               const std::variant<ttnn::Tensor, float>& in_scale,
                const int32_t in_zero_point,
-               const float out_scale,
+               const std::variant<ttnn::Tensor, float>& out_scale,
                const int32_t out_zero_point,
                const std::optional<int32_t> axis,
                const std::optional<const DataType>& dtype,
@@ -192,7 +193,7 @@ void bind_dequantize_operation(
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            scale (Number): the quantization scale.
+            scale (ttnn.Tensor or Number): the quantization scale.
             zero_point (Number): the quantization zero point.
 
         Keyword Args:
@@ -235,7 +236,7 @@ void bind_dequantize_operation(
         ttnn::pybind_overload_t{
             [](const T& self,
                const ttnn::Tensor& input_tensor,
-               const float scale,
+               const std::variant<ttnn::Tensor, float>& scale,
                const int32_t zero_point,
                const std::optional<int32_t> axis,
                const std::optional<const DataType>& dtype,
