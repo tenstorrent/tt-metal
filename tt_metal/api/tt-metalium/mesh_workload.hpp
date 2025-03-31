@@ -38,7 +38,7 @@ private:
     ProgramBinaryStatus get_program_binary_status(std::size_t mesh_id) const;
     void set_program_binary_status(std::size_t mesh_id, ProgramBinaryStatus status);
     ProgramConfig& get_program_config(uint32_t index);
-    ProgramCommandSequence& get_dispatch_cmds_for_program(Program& program);
+    ProgramCommandSequence& get_dispatch_cmds_for_program(Program& program, uint64_t command_hash);
 
     std::unordered_map<std::size_t, ProgramBinaryStatus> program_binary_status_;
     std::shared_ptr<MeshBuffer> kernel_bin_buf_;
