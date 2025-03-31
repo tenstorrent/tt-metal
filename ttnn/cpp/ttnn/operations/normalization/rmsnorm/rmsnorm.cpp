@@ -31,8 +31,6 @@ ttnn::Tensor ExecuteRMSNorm::invoke(
 
     // For 0D tensors
     if (rank == 0) [[unlikely]] {
-        float fill_val = 1.0f;
-        // TODO: fill_val needs to be -1.0f when the 0D value is negative
         auto result = ttnn::divide(
             input_tensor, ttnn::abs(input_tensor, output_memory_config), /*alpha=*/std::nullopt, output_memory_config);
 

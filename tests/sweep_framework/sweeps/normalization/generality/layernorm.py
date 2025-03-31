@@ -7,6 +7,7 @@ import pytest
 import random
 import torch
 import ttnn
+from loguru import logger
 
 from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
 from tests.ttnn.utils_for_testing import check_with_pcc
@@ -99,7 +100,7 @@ def run_normalization(device, tensor_shape, op) -> list:
 
     # Skip the rest of the test if an exception was raised in both
     if torch_errored:
-        print(f"both torch and ttnn raised errors: torch: {torch_error_msg}, ttnn: {ttnn_error_msg}")
+        logger.warning(f"both torch and ttnn raised errors: torch: {torch_error_msg}, ttnn: {ttnn_error_msg}")
         return [True, ""]
 
     ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
