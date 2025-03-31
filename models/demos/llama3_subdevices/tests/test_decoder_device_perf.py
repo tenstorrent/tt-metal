@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import torch
 import pytest
 from loguru import logger
 import os
@@ -9,220 +8,141 @@ import ttnn
 import pandas as pd
 from collections import defaultdict
 from models.demos.llama3_subdevices.tt.llama_common import (
-    precompute_freqs,
     PagedAttentionConfig,
-)
-from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
-from models.demos.llama3_subdevices.tt.llama_decoder import TtTransformerBlock
-from models.demos.llama3_subdevices.tt.llama_rope import TtLlamaRotarySetup
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock
-from models.utility_functions import skip_for_grayskull
-from models.demos.llama3_subdevices.tt.prefetcher_common import TtLlamaPrefetcherSetup
-from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
-from models.perf.device_perf_utils import run_device_perf
-from tt_metal.tools.profiler.process_model_log import (
-    get_latest_ops_log_filename,
 )
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
+from models.demos.llama3_subdevices.demo.demo_decode import run_llama3_demo
+from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 
-@torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
+
+@pytest.mark.parametrize(
+    "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test",
+    [
+        (  # Batch-32 run (Throughput) - 32 users, small prompt
+            "instruct",  # weights
+            10,  # layers
+            "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            32,  # batch_size
+            1,  # max_generated_tokens
+            False,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
+            {"top_k": 32, "top_p": 0.08, "seed": 42},  # sampling_params (argmax)
+            False,  # stress_test
+        ),
+    ],
+    ids=[
+        "device-perf-measurement",
+    ],
+)
+@pytest.mark.parametrize(
+    "optimizations",
+    [
+        LlamaOptimizations.performance,
+    ],
+)
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
-        )
+        (8, 4),
     ],
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "paged_attention",
-    (
-        # True,
-        False,
-    ),
-    ids=(
-        # "paged_attention",
-        "default_attention",
-    ),
+    "device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}], indirect=True
 )
-@pytest.mark.parametrize(
-    "page_params",
-    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
-)
-@pytest.mark.parametrize(
-    "batch_size",
-    (32,),
-)
-@pytest.mark.parametrize(
-    "max_seq_len",
-    (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-        }
-    ],
-    indirect=True,
-)
-def test_llama_decoder_inference(
+def test_llama_demo(
+    weights,
+    layers,
+    input_prompts,
+    instruct,
+    repeat_batches,
     max_seq_len,
     batch_size,
+    max_generated_tokens,
     paged_attention,
     page_params,
+    sampling_params,
+    optimizations,
     mesh_device,
     use_program_cache,
+    is_ci_env,
     reset_seeds,
-    ensure_gc,
+    stress_test,
 ):
-    dtype = ttnn.bfloat8_b
+    if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
+        pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
+
+    # TODO: Remove this once all batch sizes are supported on TG
+    if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
+        pytest.skip("TG only supports batch 1 and 32")
+
     mesh_device.enable_async(True)
-
-    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=True)
-    model_args.n_layers = 1
-    generation_length = 10
-    seqlen = 1
-    generation_start_pos = 127
-    all_tests_pass = True
-
-    state_dict = model_args.load_state_dict()
-
-    prefetcher_setup = TtLlamaPrefetcherSetup(
-        mesh_device,
-        n_tensors=5,
-        n_layers=model_args.n_layers,
-    )
-    mesh_device.set_sub_device_stall_group(
-        [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
-    )
-
-    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id)
-    # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    first_layer_prefix = model_args.get_state_dict_prefix("TtTransformerBlock", 0)
-    partial_state_dict = {
-        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-    }
-    reference_model = TransformerBlock(layer_id=0, args=model_args)
-    reference_model.load_state_dict(partial_state_dict)
-
-    # Setup RoPE transformation matrices
-    rope_setup = TtLlamaRotarySetup(
-        mesh_device,
-        model_args.max_batch_size,
-        model_args.head_dim,
-        model_args.max_seq_len,
-        model_args.rope_theta,
-        model_args.use_scaled_rope,
-        model_args.rope_scaling_factor,
-    )
-    transformation_mats = rope_setup.get_both_trans_mats()
-
-    # Prepare page table for paged attention
-    page_table_tt = None
-    paged_attention_config = None
 
     if paged_attention:
         paged_attention_config = PagedAttentionConfig(
             block_size=page_params["page_block_size"],
             max_num_blocks=page_params["page_max_num_blocks"],
         )
-        # Implied shuffling of blocks
-        permutation = torch.randperm(paged_attention_config.max_num_blocks)
-        # Page table which maps virtual blocks to physical
-        reverse_permutation = torch.argsort(permutation)
-        page_table = reverse_permutation.reshape(
-            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
-        )
-        page_table_tt = ttnn.from_torch(
-            page_table,
-            device=mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
-                dims=(None, -2) if (model_args.is_galaxy and batch_size > 1) else (None, None),
-                mesh_shape=model_args.cluster_shape,
-            ),
-        )
+    else:
+        paged_attention_config = None
 
-    # Initialize TT model
-    tt_model = TtTransformerBlock(
-        args=model_args,
+    return run_llama3_demo(
+        user_input=input_prompts,
         mesh_device=mesh_device,
-        dtype=dtype,
-        state_dict=state_dict,
-        layer_num=0,
-        n_layers=model_args.n_layers,
-        weight_cache_path=model_args.weight_cache_path(dtype),
-        transformation_mats=transformation_mats,
+        max_seq_len=max_seq_len,
+        batch_size=batch_size,
+        num_batches=repeat_batches,
+        paged_attention=paged_attention,
         paged_attention_config=paged_attention_config,
-        prefetcher_setup=prefetcher_setup,
-        tt_ccl=tt_ccl,
+        max_generated_tokens=max_generated_tokens,
+        optimizations=optimizations,
+        sampling_params=sampling_params,
+        instruct_mode=instruct,
+        is_ci_env=is_ci_env,
+        print_to_file=False,
+        weights=weights,
+        layers=layers,
+        stress_test=stress_test,
     )
 
-    cos, sin = precompute_freqs(
-        model_args.head_dim,
-        model_args.max_seq_len * 2,
-        model_args.rope_theta,
-        model_args.use_scaled_rope,
-        model_args.rope_scaling_factor,
-    )
-    freqs_cis = torch.complex(cos, sin)
 
-    # Initial positions
-    current_pos = torch.tensor([generation_start_pos for _ in range(batch_size)])
-    current_pos_tensor = ttnn.from_torch(
-        current_pos,
-        device=mesh_device,
-        dtype=ttnn.int32,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device,
-            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
-            mesh_shape=model_args.cluster_shape,
-        ),
-    )
-    # input = torch.randn(1, 32, 4096)
-    tt_decode_input = (torch.rand(batch_size, seqlen, model_args.dim) * 2) - 1
+def build_kernel_duration_dict(input_data):
+    kernel_duration_dict = {}
+    for entry in input_data:
+        op_code = entry["OP CODE"]
+        duration = entry["DEVICE KERNEL DURATION [ns]"]
+        if op_code not in kernel_duration_dict:
+            kernel_duration_dict[op_code] = []
+        kernel_duration_dict[op_code].append(duration)
+    return kernel_duration_dict
 
-    decode_input = model_args.prepare_residual_tensor_decode(
-        tt_decode_input,
-        # ttnn.DRAM_MEMORY_CONFIG,
-        model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
-    )
 
-    # Get cos/sin matrices for the current position of each user
-    rot_mats = rope_setup.get_rot_mats(current_pos)
-    tt_pf = prefetcher_setup.get_input_tensors()
-    ttnn.dram_prefetcher(
-        tt_pf,
-        num_layers=1,
-        global_cb=prefetcher_setup.global_circular_buffer,
-    )
-    mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
+def build_kernel_duration_dict_per_instance(input_data, num_layers=9):
+    kernel_duration_per_instance_dict = {}
+    for op_code in input_data:
+        num_ops_with_op_code = len(input_data[op_code])
+        num_instances = num_ops_with_op_code // num_layers
+        assert num_ops_with_op_code % num_layers == 0
+        for iteration_id in range(num_layers):
+            for instance_id in range(num_instances):
+                op_code_with_id = f"{op_code}_{instance_id}"
+                if op_code_with_id not in kernel_duration_per_instance_dict:
+                    kernel_duration_per_instance_dict[op_code_with_id] = []
+                kernel_duration_per_instance_dict[op_code_with_id].append(
+                    input_data[op_code][iteration_id * num_instances + instance_id]
+                )
+    return kernel_duration_per_instance_dict
 
-    res = None
-    for i in range(generation_length):
-        # Run TT model
 
-        tt_out, res = tt_model(
-            decode_input,
-            res,
-            current_pos_tensor,
-            rot_mats=rot_mats,
-            mode="decode",
-            page_table=page_table_tt,
-        )
-        res = tt_out
-    tt_out = ttnn.to_torch(
-        tt_out,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
-    )
-    ttnn.synchronize_device(mesh_device)
-    tt_ccl.close()
+def average_over_dict(input_dict):
+    averaged_dict = {}
+    for op_code_with_id in input_dict:
+        averaged_dict[op_code_with_id] = sum(input_dict[op_code_with_id]) / len(input_dict[op_code_with_id])
+    return averaged_dict
 
 
 def merge_device_rows(df):
@@ -287,15 +207,15 @@ def merge_device_rows(df):
 
 @pytest.mark.parametrize(
     "abs_tolerance_ns",
-    (1000,),
+    (500,),
 )
 @pytest.mark.parametrize(
     "abs_tolerance_ns_all_reduce",
-    (30000000,),
+    (1200,),
 )
 @pytest.mark.parametrize(
     "abs_tolerance_ns_all_gather",
-    (10000,),
+    (500,),
 )
 @pytest.mark.models_device_performance_bare_metal
 def test_llama_TG_perf_device(reset_seeds, abs_tolerance_ns, abs_tolerance_ns_all_reduce, abs_tolerance_ns_all_gather):
@@ -306,85 +226,75 @@ def test_llama_TG_perf_device(reset_seeds, abs_tolerance_ns, abs_tolerance_ns_al
     batch_size = 32
     subdir = "tg-llama-decoder"
     num_iterations = 1
-    generation_length = 10
+    num_layers = 10
 
-    command = f"pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_decoder_inference"
-    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
-    profiler.start("run")
-    profiler.start(step_name)
-    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
-    profiler.end(step_name)
-    profiler.end("run")
+    # command = f"pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_demo"
+    # cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
+    # profiler.start("run")
+    # profiler.start(step_name)
+    # post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
+    # profiler.end(step_name)
+    # profiler.end("run")
 
-    filename = get_latest_ops_log_filename(subdir)
+    # filename = get_latest_ops_log_filename(subdir)
+    # filename = "/proj_sw/user_dev/jrock/tt-metal/generated/profiler/tg-llama-decoder/reports/2025_03_31_09_11_08/ops_perf_results_2025_03_31_09_11_08.csv"
+    filename = "/proj_sw/user_dev/jrock/tt-metal/generated/profiler/tg-llama-decoder/reports/2025_03_31_10_07_34/ops_perf_results_2025_03_31_10_07_34.csv"
 
     df = pd.read_csv(filename)
     df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
     df = merge_device_rows(df)
-    # df = df[int(len(df) / generation_length) :] # Excluding first layer
-    input_data = df[["OP CODE", "DEVICE KERNEL DURATION [ns]"]].to_dict(orient="records")
-    kernel_duration_dict = {}
-    for entry in input_data:
-        op_code = entry["OP CODE"]
-        if op_code in ["Embeddings", "DramPrefetcher"]:
-            continue
-        duration = entry["DEVICE KERNEL DURATION [ns]"]
-        if op_code not in kernel_duration_dict:
-            kernel_duration_dict[op_code] = []
-        kernel_duration_dict[op_code].append(duration)
+    # Excluding compile run and capture trace entries
+    df = df[int(len(df) / 3 * 2) :]
+    # Excluding model overhead: 4 ops in beginning and 12 ops in end
+    whole_model_df = df[4:-12]
+    first_layer_df = whole_model_df[: int(len(whole_model_df) / num_layers)]
+    mid_layer_df = whole_model_df[int(len(whole_model_df) / num_layers) :]
+
+    # Add decoder layer perf results
+    # Use mid layer average values for in-model op perf regressions
+    input_data = mid_layer_df[["OP CODE", "DEVICE KERNEL DURATION [ns]"]].to_dict(orient="records")
+    kernel_duration_dict_decoder_layer = build_kernel_duration_dict(input_data)
 
     # Average over all generations
-    kernel_duration_per_instance_dict = {}
-    for op_code in kernel_duration_dict:
-        num_ops_with_op_code = len(kernel_duration_dict[op_code])
-        num_instances = num_ops_with_op_code // generation_length
-        assert num_ops_with_op_code % generation_length == 0
-        for iteration_id in range(generation_length):
-            for instance_id in range(num_instances):
-                op_code_with_id = f"{op_code}_{instance_id}"
-                if op_code_with_id not in kernel_duration_per_instance_dict:
-                    kernel_duration_per_instance_dict[op_code_with_id] = []
-                kernel_duration_per_instance_dict[op_code_with_id].append(
-                    kernel_duration_dict[op_code][iteration_id * num_instances + instance_id]
-                )
+    kernel_duration_decoder_layer_per_instance_dict = build_kernel_duration_dict_per_instance(
+        kernel_duration_dict_decoder_layer
+    )
+    kernel_duration_decoder_layer_per_instance_averaged_dict = average_over_dict(
+        kernel_duration_decoder_layer_per_instance_dict
+    )
 
-    kernel_duration_per_instance_averaged_dict = {}
-    for op_code_with_id in kernel_duration_per_instance_dict:
-        kernel_duration_per_instance_averaged_dict[op_code_with_id] = sum(
-            kernel_duration_per_instance_dict[op_code_with_id]
-        ) / len(kernel_duration_per_instance_dict[op_code_with_id])
-
-    print(kernel_duration_per_instance_averaged_dict)
+    print(kernel_duration_decoder_layer_per_instance_averaged_dict)
 
     expected_times_dict = {
-        "LayerNorm_0": 6443.3,
-        "LayerNorm_1": 6491.0,
-        "LayerNorm_2": 6148.1,
-        "LayerNorm_3": 6390.6,
-        "AllGatherAsync_0": 2710.3,
-        "AllGatherAsync_1": 5837.7,
-        "AllGatherAsync_2": 2486.7,
-        "ReshardDeviceOperation_0": 1803.7,
-        "ReshardDeviceOperation_1": 1851.5,
-        "ReshardDeviceOperation_2": 1520.3,
-        "Matmul_0": 8429.8,
-        "Matmul_1": 8926.8,
-        "Matmul_2": 9583.1,
-        "Matmul_3": 9631.9,
-        "Matmul_4": 17304.9,
-        "AllReduceAsync_0": 515885.6,
-        "AllReduceAsync_1": 350838.1,
-        "AllReduceAsync_2": 3828933.1,
-        "AllReduceAsync_3": 133560.4,
-        "AllReduceAsync_4": 1007790.5,
-        "NLPCreateHeadsDecodeDeviceOperation_0": 8496.5,
-        "RotaryEmbeddingLlamaFusedQK_0": 5177.4,
-        "PagedUpdateCacheDeviceOperation_0": 4613.0,
-        "ScaledDotProductAttentionDecode_0": 19761.8,
-        "NLPConcatHeadsDecodeDeviceOperation_0": 6234.9,
-        "BinaryDeviceOperation_0": 871.3,
-        "BinaryDeviceOperation_1": 13043.2,
-        "BinaryDeviceOperation_2": 1860.9,
+        "LayerNorm_0": 6838.0,
+        "LayerNorm_1": 7100.7,
+        "LayerNorm_2": 6860.6,
+        "LayerNorm_3": 7187.3,
+        "AllGatherAsync_0": 3520.8,
+        "AllGatherAsync_1": 8765.5,
+        "AllGatherAsync_2": 3842.9,
+        "ReshardDeviceOperation_0": 2884.6,
+        "ReshardDeviceOperation_1": 1777.9,
+        "ReshardDeviceOperation_2": 2628.2,
+        "ReshardDeviceOperation_3": 2735.6,
+        "Matmul_0": 11090.1,
+        "Matmul_1": 8934.0,
+        "Matmul_2": 10705.8,
+        "Matmul_3": 10793.3,
+        "Matmul_4": 18160.4,
+        "AllReduceAsync_0": 16891.4,
+        "AllReduceAsync_1": 29328.0,
+        "AllReduceAsync_2": 23946.7,
+        "AllReduceAsync_3": 22933.5,
+        "AllReduceAsync_4": 23985.8,
+        "NLPCreateHeadsDecodeDeviceOperation_0": 8131.5,
+        "RotaryEmbeddingLlamaFusedQK_0": 5034.6,
+        "PagedUpdateCacheDeviceOperation_0": 5446.0,
+        "ScaledDotProductAttentionDecode_0": 20495.1,
+        "NLPConcatHeadsDecodeDeviceOperation_0": 6705.6,
+        "BinaryDeviceOperation_0": 2420.2,
+        "BinaryDeviceOperation_1": 9989.5,
+        "BinaryDeviceOperation_2": 2434.8,
     }
 
     mapping_op_code_to_name = {
@@ -398,6 +308,7 @@ def test_llama_TG_perf_device(reset_seeds, abs_tolerance_ns, abs_tolerance_ns_al
         "ReshardDeviceOperation_0": "ReshardDeviceOperation_LN_0",
         "ReshardDeviceOperation_1": "ReshardDeviceOperation_CreateHeads",
         "ReshardDeviceOperation_2": "ReshardDeviceOperation_LN_1",
+        "ReshardDeviceOperation_3": "ReshardDeviceOperation_BinaryMulSilu",
         "Matmul_0": "QKV_MM",
         "Matmul_1": "DO_MM",
         "Matmul_2": "FF1_MM",
@@ -418,12 +329,12 @@ def test_llama_TG_perf_device(reset_seeds, abs_tolerance_ns, abs_tolerance_ns_al
         "BinaryDeviceOperation_2": "Binary_Residual_1",
     }
 
-    assert len(kernel_duration_per_instance_averaged_dict) == len(
+    assert len(kernel_duration_decoder_layer_per_instance_averaged_dict) == len(
         expected_times_dict
-    ), f"Expected {len(expected_times_dict)} operations, got {len(kernel_duration_per_instance_averaged_dict)}. If the number or type of operations changed, expected times must be updated."
+    ), f"Expected {len(expected_times_dict)} operations, got {len(kernel_duration_decoder_layer_per_instance_averaged_dict)}. If the number or type of operations changed, expected times must be updated."
 
     passing = True
-    for op_code_with_id, avg_duration in kernel_duration_per_instance_averaged_dict.items():
+    for op_code_with_id, avg_duration in kernel_duration_decoder_layer_per_instance_averaged_dict.items():
         if op_code_with_id in expected_times_dict:
             expected_time = expected_times_dict[op_code_with_id]
             op_name = mapping_op_code_to_name[op_code_with_id]
@@ -447,6 +358,10 @@ def test_llama_TG_perf_device(reset_seeds, abs_tolerance_ns, abs_tolerance_ns_al
         else:
             passing = False
             logger.info(f"Warning: {op_code_with_id} not found in expected_times_dict")
+
+    # Add model overhead to perf results
+
+    # Add e2e perf results
 
     benchmark_data.save_partial_run_json(
         profiler,
