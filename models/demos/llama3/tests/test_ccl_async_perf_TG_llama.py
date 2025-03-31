@@ -2,10 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
 from loguru import logger
-import ttnn
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
@@ -136,7 +134,7 @@ def test_fused_all_gather_concat_perf(
     step_name = f"all_gather_concat_heads_fused"
 
     subdir = "llama_ccl_perf"
-    command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_qkv_all_reduce_minimal.py::test_all_reduce_create_qkv_heads_fuse_perf"
+    command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_qkv_all_reduce_minimal.py::test_all_reduce_create_qkv_heads_perf"
     cols = ["DEVICE KERNEL"]
     op_name = "AllGatherConcat"
     warmup_iters = warmup_iters * 32  # 5 iterations per device
