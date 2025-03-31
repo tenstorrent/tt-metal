@@ -732,7 +732,7 @@ def test_fabric_one_link_multihop_fused_write_atomic_inc_bw(
         fabric_mode=FabricTestMode.Linear,
         disable_sends_for_interior_workers=disable_sends_for_interior_workers,
         unidirectional=unidirectional,
-        senders_are_unidirectional=is_unicast,
+        senders_are_unidirectional=True,
     )
 
 
