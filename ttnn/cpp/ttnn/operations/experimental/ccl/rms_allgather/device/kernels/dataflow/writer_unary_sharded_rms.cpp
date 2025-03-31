@@ -24,14 +24,17 @@ void kernel_main() {
     constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(7);
     constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(8);
     constexpr uint32_t num_links = get_compile_time_arg_val(9);
-    const uint32_t scalar_w = get_arg_val<uint32_t>(1);
+    size_t arg_idx = 0;
+    const uint32_t scalar_w = get_arg_val<uint32_t>(arg_idx++);
     wh_generate_reduce_scaler<false>(cb_in_2, scalar_w);
 
     if constexpr (is_all_to_all_worker) {
-        const uint32_t scalar_c = get_arg_val<uint32_t>(0);
+        const uint32_t scalar_c = get_arg_val<uint32_t>(arg_idx++);
         wh_generate_reduce_scaler<false>(cb_in_4, scalar_c);
+    } else {
+        arg_idx++;
     }
-    size_t arg_idx = 2;
+
     const uint32_t iteration_number = get_arg_val<uint32_t>(arg_idx++);
     const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);

@@ -943,11 +943,11 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             (use_two_stage_reduce and width_index_two_stage < 1)) {
             std::vector<uint32_t> writer_mcast_sender_args;
             if (use_two_stage_reduce && (!(width_index < 1))) {
+                writer_mcast_sender_args.push_back(packed_winv_value);
                 writer_mcast_sender_args.push_back(packed_cinv_value_one);
-                writer_mcast_sender_args.push_back(packed_winv_value);
             } else {
-                writer_mcast_sender_args.push_back(packed_cinv_value);
                 writer_mcast_sender_args.push_back(packed_winv_value);
+                writer_mcast_sender_args.push_back(packed_cinv_value);
             }
             writer_mcast_sender_args.push_back(i);  // Core ID to limit number of cores to do all gather on
             writer_mcast_sender_args.insert(
@@ -956,8 +956,8 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             writer_kernel_ids.push_back(writer_mcast_sender_kernels_id);
         } else {
             std::vector<uint32_t> writer_mcast_receiver_args;
-            writer_mcast_receiver_args.push_back(packed_cinv_value);
             writer_mcast_receiver_args.push_back(packed_winv_value);
+            writer_mcast_receiver_args.push_back(packed_cinv_value);
             writer_mcast_receiver_args.push_back(i);  // Core ID to limit number of cores to do all gather on
             writer_mcast_receiver_args.insert(
                 writer_mcast_receiver_args.end(), all_gather_rts.begin(), all_gather_rts.end());
