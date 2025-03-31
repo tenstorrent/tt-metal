@@ -138,7 +138,7 @@
 <p>It is similar to torch.Tensor in the sense that it represents multi-dimensional matrix containing elements of a single data type.</p>
 <p>The are a few key differences:</p>
 <ul class="simple">
-<li><p>ttnn.Tensor can be stored in the SRAM or DRAM of TensTorrent devices</p></li>
+<li><p>ttnn.Tensor can be stored in the SRAM or DRAM of Tenstorrent devices</p></li>
 <li><p>ttnn.Tensor doesn’t have a concept of the strides, however it has a concept of row-major and tile layout</p></li>
 <li><p>ttnn.Tensor has support for data types not supported by torch such as <code class="docutils literal notranslate"><span class="pre">bfp8</span></code> for example</p></li>
 <li><p>ttnn.Tensor’s shape stores the padding added to the tensor due to TILE_LAYOUT</p></li>
@@ -367,7 +367,7 @@ ttnn_tensor.dtype: DataType.BFLOAT16
 <section id="Layout">
 <h2>Layout<a class="headerlink" href="#Layout" title="Permalink to this heading"></a>
 </h2>
-<p>TensTorrent hardware is most efficiently utilized when running tensors using <a class="reference external" href="https://tenstorrent.github.io/tt-metal/latest/ttnn/ttnn/tensor.html#layout">tile layout</a>. The current tile size is hard-coded to [32, 32]. It was determined to be the optimal size for a tile given the compute, memory and data transfer constraints.</p>
+<p>Tenstorrent hardware is most efficiently utilized when running tensors using <a class="reference external" href="https://tenstorrent.github.io/ttnn/latest/ttnn/tensor.html#layout">tile layout</a>. The current tile size is hard-coded to [32, 32]. It was determined to be the optimal size for a tile given the compute, memory and data transfer constraints.</p>
 <p>ttnn provides easy and intuitive way to convert from row-major layout to tile layout and back.</p>
 <div class="nbinput docutils container">
 <div class="prompt highlight-none notranslate">
