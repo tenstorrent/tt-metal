@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright (C) 2023, TensTorrent, Inc.
+# Copyright (C) 2023, Tenstorrent, Inc.
 # All rights reserved.
 
 # LayerNorm runs with tensor sizes for Stable Diffusion:
