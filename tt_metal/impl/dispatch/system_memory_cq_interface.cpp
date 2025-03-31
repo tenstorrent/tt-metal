@@ -4,6 +4,7 @@
 
 #include <tt-metalium/command_queue_common.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/system_memory_cq_interface.hpp>
 
 #include "assert.hpp"

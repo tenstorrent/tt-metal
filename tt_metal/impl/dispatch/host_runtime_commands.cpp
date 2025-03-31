@@ -26,6 +26,7 @@
 #include "device.hpp"
 #include "dispatch/device_command.hpp"
 #include "dispatch_core_manager.hpp"
+#include "dprint_server.hpp"
 #include "hal_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "llrt/hal.hpp"
