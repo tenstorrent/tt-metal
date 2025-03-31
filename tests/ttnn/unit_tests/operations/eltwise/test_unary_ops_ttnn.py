@@ -992,21 +992,22 @@ def test_unary_sqrt_ttnn(input_shapes, device):
 )
 def test_unary_bitwise_not(input_shapes, device):
     torch.manual_seed(213919)
-    in_data1 = torch.randint(-1000, 1000, input_shapes, dtype=torch.int32)
-    corner_cases = [0, 1, -1, 2147483647, -2147483648]
 
-    # Randomly replace some elements with corner cases
-    num_replacements = int(in_data1.numel() * 0.001)  # Replace ~0.1% of elements
+    # Generate a uniform range of values across the valid int32 range
+    num_elements = torch.prod(torch.tensor(input_shapes)).item()
+    uniform_values = torch.linspace(-2147483648, 2147483647, num_elements, dtype=torch.int32)
 
-    indices = torch.randint(0, in_data1.numel(), (num_replacements,))
-    for idx in indices:
-        in_data1.view(-1)[idx] = random.choice(corner_cases)
+    corner_cases = torch.tensor([0, 1, -1, 2147483647, -2147483648], dtype=torch.int32)
+    in_data = torch.cat([uniform_values, corner_cases])
 
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    in_data = in_data[-num_elements:].reshape(input_shapes)
 
-    output_tensor = ttnn.bitwise_not(input_tensor1)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.bitwise_not(input_tensor)
     golden_function = ttnn.get_golden_function(ttnn.bitwise_not)
-    golden_tensor = golden_function(in_data1)
+    golden_tensor = golden_function(in_data)
+
     output_tensor = ttnn.to_torch(output_tensor)
 
     pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
