@@ -1,7 +1,7 @@
 What is ttnn?
 #############
 
-:doc:`ttnn </ttnn/about>` is a library that provides a user-friendly interface to operations that run on TensTorrent's hardware using ``tt-metal`` programming model.
+:doc:`ttnn </ttnn/about>` is a library that provides a user-friendly interface to operations that run on Tenstorrent's hardware using ``tt-metal`` programming model.
 
 :doc:`ttnn </ttnn/about>` is designed to be intuitive to an user that is familiar with `PyTorch <https://pytorch.org/>`_.
 
