@@ -118,7 +118,18 @@ tt::tt_metal::Program& create_or_get_program_from_cache(
                  &tensor_return_value,
                  program_factory_index = program_factory.index()]<MeshWorkloadFactoryConcept WorkloadFactory>(
                     const WorkloadFactory&) -> tt::tt_metal::Program& {
-                    TT_THROW("Trying to use mesh workload factory in single-device context!");
+                    using cached_mesh_workload_t = WorkloadFactory::cached_mesh_workload_t;
+                    program_cache.insert(
+                        program_hash,
+                        CachedProgramFactory{
+                            WorkloadFactory::create_mesh_workload(
+                                operation_attributes, get_unit_tensor_coords(), tensor_args, tensor_return_value),
+                            program_factory_index});
+                    auto& cached_program_factory = program_cache.get(program_hash);
+                    auto& cached_workload =
+                        cached_program_factory.cached_program.template get<cached_mesh_workload_t>();
+                    TT_FATAL(cached_workload.workload.get_programs().size() == 1, "Expected 1 program in workload.");
+                    return cached_workload.workload.get_programs().begin()->second;
                 },
             },
             program_factory);
@@ -151,7 +162,13 @@ tt::tt_metal::Program& create_or_get_program_from_cache(
                  &tensor_args,
                  &tensor_return_value]<MeshWorkloadFactoryConcept WorkloadFactory>(
                     const WorkloadFactory&) -> tt::tt_metal::Program& {
-                    TT_THROW("Trying to use mesh workload factory in single-device context!");
+                    using cached_mesh_workload_t = WorkloadFactory::cached_mesh_workload_t;
+                    auto& cached_workload =
+                        cached_program_factory.cached_program.template get<cached_mesh_workload_t>();
+                    WorkloadFactory::override_runtime_arguments(
+                        cached_workload, operation_attributes, tensor_args, tensor_return_value);
+                    TT_FATAL(cached_workload.workload.get_programs().size() == 1, "Expected 1 program in workload.");
+                    return cached_workload.workload.get_programs().begin()->second;
                 },
             },
             program_factory);
@@ -322,7 +339,11 @@ void launch_on_worker_thread(
                 },
                 [&]<MeshWorkloadFactoryConcept WorkloadFactory>(
                     const WorkloadFactory&) -> std::shared_ptr<tt::tt_metal::Program> {
-                    TT_THROW("Trying to use mesh workload factory in single-device context!");
+                    auto cached_workload = WorkloadFactory::create_mesh_workload(
+                        operation_attributes, get_unit_tensor_coords(), tensor_args, tensor_return_value);
+                    TT_FATAL(cached_workload.workload.get_programs().size() == 1, "Expected 1 program in workload.");
+                    return std::make_shared<tt::tt_metal::Program>(
+                        std::move(cached_workload.workload.get_programs().begin()->second));
                 }},
             device_operation_t::select_program_factory(operation_attributes, tensor_args));
 
