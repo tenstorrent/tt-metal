@@ -25,6 +25,13 @@ jobs:
             runs-on: ["BH", "pipeline-perf", "in-service"],
             cmd: pytest models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation",
             owner_id: U05RWH3QUPM #Salar Hosseini
+          },
+          {
+            name: "Llama3-8B_performance",
+            arch: blackhole,
+            runs-on: ["BH", "pipeline-perf", "in-service"],
+            cmd: LLAMA_DIR=/proj_sw/user_dev/hf_data/Llama3/Llama3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k performance-batch-1,
+            owner_id: U03PUAKE719 # Miguel Tairum
           }
         ]
     name: ${{ matrix.test-group.name }}
