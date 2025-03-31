@@ -151,7 +151,7 @@ def test_vision_block_inference(
     tt_model = VisionBlock(
         mesh_device=mesh_device,
         state_dict=state_dict,
-        weight_cache_path=None,  # NOCOMMIT model_args.weight_cache_path(dtype),
+        weight_cache_path=model_args.weight_cache_path(dtype),
         layer_num=0,
         dtype=dtype,
         transformation_mats=transformation_mats,

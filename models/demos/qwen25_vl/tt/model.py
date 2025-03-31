@@ -69,6 +69,28 @@ class VisionTransformer(LightweightModule):
             dtype=dtype,
         )
 
+    def prepare_input(self, patch_input, window_index):
+        """Convert a patchified torch input to a ttnn tensor
+        Args:
+            patch_input (torch.Tensor): Patchified input tensor
+            window_index (torch.Tensor): Window index tensor
+
+        Returns:
+            ttnn.Tensor: Prepared input tensor
+        """
+        patch_seq_len, _ = patch_input.shape
+        spatial_merge_unit = self.args.hf_config.vision_config.spatial_merge_size**2
+        x = patch_input.reshape(patch_seq_len // spatial_merge_unit, spatial_merge_unit, -1)
+        x = x[window_index, :, :]
+        x = x.reshape(patch_seq_len, -1)
+        seq_len = ((patch_seq_len // 128) + 1) * 128
+        x = torch.nn.functional.pad(x, (0, 0, 0, seq_len - patch_seq_len))
+        x = self.args.prepare_residual_tensor_prefill(
+            x,
+            force_replicated=False if self.args.is_galaxy else True,
+        )
+        return x
+
     def forward(
         self,
         x,

@@ -10,9 +10,7 @@ from models.tt_transformers.tt.ccl import tt_all_reduce
 
 
 class MLP(LightweightModule):
-    def __init__(
-        self, mesh_device, args, state_dict, weight_cache_path, layer_num, dtype, model_config, state_dict_prefix=None
-    ):
+    def __init__(self, mesh_device, args, state_dict, weight_cache_path, layer_num, state_dict_prefix=None):
         super().__init__()
 
         self.state_dict = state_dict
@@ -82,7 +80,6 @@ class MLP(LightweightModule):
             compute_kernel_config=self.args.compute_kernel_config_lofi
             if self.four_bit_mlp
             else self.args.compute_kernel_config_hifi2_fp16,
-            dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
@@ -93,7 +90,6 @@ class MLP(LightweightModule):
             compute_kernel_config=self.args.compute_kernel_config_lofi
             if self.four_bit_mlp
             else self.args.compute_kernel_config_hifi2_fp16,
-            dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(x)

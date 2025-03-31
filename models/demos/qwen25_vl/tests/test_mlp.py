@@ -59,8 +59,6 @@ def test_mlp_inference(rows, batch_size, mesh_device, use_program_cache, reset_s
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         layer_num=0,
-        dtype=dtype,
-        model_config=model_args.model_config,
     )
     torch_input = torch.randn(1, 1, rows, model_args.hf_config.vision_config.hidden_size)
     reference_output = reference_model(torch_input)

@@ -55,8 +55,6 @@ class VisionBlock(LightweightModule):
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
-            dtype=dtype,
-            model_config=self.model_config,
         )
         self.attention_norm = DistributedNorm(
             RMSNorm(

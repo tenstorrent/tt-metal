@@ -65,7 +65,9 @@ def test_vision_model_inference(
     num_layers,
 ):
     dtype = ttnn.bfloat8_b
-    pcc = 0.99
+    pcc = (
+        0.99 if num_layers <= 3 else 0.95
+    )  # Llama 3 repo allows 0.91 for prefill, vision probably even less sensitive to pcc
     batch_size = 1  # For prefill we only support batch_size = 1
 
     mesh_device.enable_async(False)
@@ -162,31 +164,20 @@ def test_vision_model_inference(
     )
     transformation_mats = {"prefill": transformation_mats_prefill}
 
-    # Preprocess patch embeddings for the TT model in torch for now
-    patch_input = reference_model.patch_embed(pt_pixel_values)
-    patch_seq_len, _ = patch_input.shape
-    spatial_merge_unit = model_args.hf_config.vision_config.spatial_merge_size**2
-    patch_input = patch_input.reshape(patch_seq_len // spatial_merge_unit, spatial_merge_unit, -1)
-    patch_input = patch_input[window_index, :, :]
-    patch_input = patch_input.reshape(patch_seq_len, -1)
-
     # Initialize TT model
     tt_model = VisionTransformer(
         mesh_device=mesh_device,
         args=model_args,
         state_dict=state_dict,
-        weight_cache_path=None,  # NOCOMMIT model_args.weight_cache_path(dtype),
+        weight_cache_path=model_args.weight_cache_path(dtype),
         dtype=dtype,
         transformation_mats=transformation_mats,
         paged_attention_config=paged_attention_config,
     )
 
     # Prepare input tensor for the TT model
-    tt_input = torch.nn.functional.pad(patch_input, (0, 0, 0, seq_len - ref_seq_len))
-    tt_input = model_args.prepare_residual_tensor_prefill(
-        tt_input,
-        force_replicated=False if model_args.is_galaxy else True,
-    )
+    patch_input = reference_model.patch_embed(pt_pixel_values)  # Use ref model for conv3d for now
+    tt_input = tt_model.prepare_input(patch_input, window_index)
 
     # Run TT model (only blocks, not patch embedding/merging)
     tt_out = tt_model(

@@ -59,7 +59,7 @@ def test_patch_merger_inference(rows, batch_size, mesh_device, use_program_cache
         mesh_device=mesh_device,
         args=model_args,
         state_dict=state_dict,
-        weight_cache_path=None,  # model_args.weight_cache_path(dtype),
+        weight_cache_path=model_args.weight_cache_path(dtype),
         dtype=dtype,
     )
 

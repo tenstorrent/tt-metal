@@ -95,7 +95,6 @@ class PatchMerger(LightweightModule):
             x,
             self.w1,
             compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
-            dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         x = ttnn.gelu(x)
@@ -105,7 +104,6 @@ class PatchMerger(LightweightModule):
             x,
             self.w2,
             compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
-            dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         return x
