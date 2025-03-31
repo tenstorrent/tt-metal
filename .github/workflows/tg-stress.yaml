@@ -48,7 +48,7 @@ jobs:
       - name: Run stress tests
         timeout-minutes: 360
         run: |
-          pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "full and batch-32-stress-test"
+          pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "stress-test"
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
