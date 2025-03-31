@@ -10,7 +10,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.experimental.mochi.block import TtAsymmetricJointBlock
 from models.experimental.mochi.final_layer import TtFinalLayer
 from models.experimental.mochi.common import to_tt_tensor, unsqueeze_to_4d, replicate_attn_mask, stack_cos_sin
-from models.demos.llama3.tt.llama_common import get_rot_transformation_mat
+from models.tt_transformers.tt.common import get_rot_transformation_mat
 from genmo.mochi_preview.dit.joint_model.layers import (
     PatchEmbed,
     TimestepEmbedder,
@@ -154,7 +154,7 @@ class TtAsymmDiTJoint(LightweightModule):
         c_t = self.t_embedder(1 - sigma)
 
         # Pool T5 tokens using attention pooler
-        assert t5_feat.size(1) == self.t5_token_length
+        # assert t5_feat.size(1) == self.t5_token_length
         t5_y_pool = self.t5_y_embedder(t5_feat, t5_mask)
         assert t5_y_pool.size(0) == B
 

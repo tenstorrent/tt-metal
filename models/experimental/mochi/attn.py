@@ -142,7 +142,7 @@ class TtAsymmetricAttention(LightweightModule):
         )
         if b is not None:
             b = as_sharded_tensor(
-                shuffle_heads(b),
+                shuffle_heads(b).reshape(1, -1),
                 self.mesh_device,
                 dim=-1,
                 cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.bias"),

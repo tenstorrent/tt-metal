@@ -1,7 +1,7 @@
 import os
 import math
 from pathlib import Path
-from models.demos.llama3.tt.llama_common import get_out_subblock_w
+from models.tt_transformers.tt.common import get_out_subblock_w
 from typing import Tuple, Optional
 import ttnn
 
@@ -197,7 +197,7 @@ def col_parallel_linear(name, bias, weight_cache_path, state_dict, state_dict_pr
     )
     if b is not None:
         b = as_sharded_tensor(
-            b,
+            b.reshape(1, -1),
             mesh_device,
             dim=-1,
             cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.bias"),
@@ -250,7 +250,7 @@ def create_linear_layer(
     bias_tensor = None
     if bias:
         bias_tensor = as_replicated_tensor(
-            bias_pt,
+            bias_pt.reshape(1, -1),
             mesh_device,
             cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.bias"),
         )
