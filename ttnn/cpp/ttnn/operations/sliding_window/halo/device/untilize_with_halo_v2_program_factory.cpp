@@ -304,9 +304,9 @@ struct InplaceCBIndices {
     uint32_t src_cb_id = 32;
     uint32_t pad_cb_id = 32;
     uint32_t out_cb_id = 32;
-    uint32_t padding_config_cb_id1 = 32;
-    uint32_t local_config_cb_id1 = 32;
-    uint32_t remote_config_cb_id1 = 32;
+    uint32_t padding_config_cb_id = 32;
+    uint32_t local_config_cb_id = 32;
+    uint32_t remote_config_cb_id = 32;
     uint32_t get_next_cb_id() { return next_cb_id++; }
 
 private:
@@ -321,9 +321,9 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
     const uint32_t ncores_c,
     const uint32_t max_out_nsticks_per_core,
     const uint32_t max_ref_size,
-    const Tensor& padding_config1,
-    const Tensor& local_config1,
-    const Tensor& remote_config1,
+    const Tensor& padding_config,
+    const Tensor& local_config,
+    const Tensor& remote_config,
     const bool remote_read,
     const bool transpose_mcast,
     Tensor& output_tensor,
@@ -388,44 +388,44 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
         tt::datum_size(kernel_config_df) * 2;  // each config is a pair "start, size", so double the size
     uint32_t pagesize = 0;
 
-    TT_ASSERT(padding_config1.get_dtype() == DataType::UINT16);
-    TT_ASSERT(local_config1.get_dtype() == DataType::UINT16);
-    TT_ASSERT(remote_config1.get_dtype() == DataType::UINT16);
+    TT_ASSERT(padding_config.get_dtype() == DataType::UINT16);
+    TT_ASSERT(local_config.get_dtype() == DataType::UINT16);
+    TT_ASSERT(remote_config.get_dtype() == DataType::UINT16);
 
     const uint32_t num_cores = all_cores.num_cores();
 
-    auto padding_config_buffer1 = padding_config1.device_buffer();
-    cb_indices.padding_config_cb_id1 = cb_indices.get_next_cb_id();
-    auto padding_config_cb1 = create_circular_buffer(
+    auto padding_config_buffer = padding_config.device_buffer();
+    cb_indices.padding_config_cb_id = cb_indices.get_next_cb_id();
+    auto padding_config_cb = create_circular_buffer(
         program,
         all_cores,
-        cb_indices.padding_config_cb_id1,
+        cb_indices.padding_config_cb_id,
         kernel_config_df,
         1,
-        padding_config_buffer1->size() / num_cores,
-        padding_config_buffer1.get());
+        padding_config_buffer->size() / num_cores,
+        padding_config_buffer.get());
 
-    auto local_config_buffer1 = local_config1.device_buffer();
-    cb_indices.local_config_cb_id1 = cb_indices.get_next_cb_id();
-    auto local_config_cb1 = create_circular_buffer(
+    auto local_config_buffer = local_config.device_buffer();
+    cb_indices.local_config_cb_id = cb_indices.get_next_cb_id();
+    auto local_config_cb = create_circular_buffer(
         program,
         all_cores,
-        cb_indices.local_config_cb_id1,
+        cb_indices.local_config_cb_id,
         kernel_config_df,
         1,
-        local_config_buffer1->size() / num_cores,
-        local_config_buffer1.get());
+        local_config_buffer->size() / num_cores,
+        local_config_buffer.get());
 
-    auto remote_config_buffer1 = remote_config1.device_buffer();
-    cb_indices.remote_config_cb_id1 = cb_indices.get_next_cb_id();
-    auto remote_config_cb1 = create_circular_buffer(
+    auto remote_config_buffer = remote_config.device_buffer();
+    cb_indices.remote_config_cb_id = cb_indices.get_next_cb_id();
+    auto remote_config_cb = create_circular_buffer(
         program,
         all_cores,
-        cb_indices.remote_config_cb_id1,
+        cb_indices.remote_config_cb_id,
         kernel_config_df,
         1,
-        remote_config_buffer1->size() / num_cores,
-        remote_config_buffer1.get());
+        remote_config_buffer->size() / num_cores,
+        remote_config_buffer.get());
 
     const bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
     const bool is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
@@ -510,8 +510,8 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
         max_out_nsticks_per_core};
 
     reader_ct_args[0] = 0;
-    reader_ct_args[1] = cb_indices.local_config_cb_id1;
-    reader_ct_args[2] = cb_indices.remote_config_cb_id1;
+    reader_ct_args[1] = cb_indices.local_config_cb_id;
+    reader_ct_args[2] = cb_indices.remote_config_cb_id;
     reader_ct_args[3] = remote_temp_cb_id;
     KernelHandle reader_kernel_id0 = CreateKernel(
         program,
@@ -520,12 +520,12 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_ct_args});
 
-    reader_ct_args[0] = cb_indices.padding_config_cb_id1;
+    reader_ct_args[0] = cb_indices.padding_config_cb_id;
     reader_ct_args[1] = 0;
     reader_ct_args[2] = 0;
     reader_ct_args[3] = 0;
     reader_ct_args[16] = false;
-    KernelHandle reader_kernel_id1 = CreateKernel(
+    KernelHandle reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather_in_place.cpp",
         all_cores,
@@ -536,22 +536,22 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
     reader_rt_args.insert(reader_rt_args.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
     reader_rt_args.insert(reader_rt_args.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
     SetRuntimeArgs(program, reader_kernel_id0, all_cores, reader_rt_args);
-    SetRuntimeArgs(program, reader_kernel_id1, all_cores, reader_rt_args);
+    SetRuntimeArgs(program, reader_kernel_id, all_cores, reader_rt_args);
 
     if (!capture_buffers) {
-        padding_config_buffer1 = nullptr;
-        local_config_buffer1 = nullptr;
-        remote_config_buffer1 = nullptr;
+        padding_config_buffer = nullptr;
+        local_config_buffer = nullptr;
+        remote_config_buffer = nullptr;
     }
     // Capture padding_config_buffer, local_config_buffer, remote_config_buffer to cache this with the program
     auto override_runtime_arguments_callback = [src_cb,
                                                 out_cb,
-                                                padding_config_cb1,
-                                                local_config_cb1,
-                                                remote_config_cb1,
-                                                padding_config_buffer1,
-                                                local_config_buffer1,
-                                                remote_config_buffer1](
+                                                padding_config_cb,
+                                                local_config_cb,
+                                                remote_config_cb,
+                                                padding_config_buffer,
+                                                local_config_buffer,
+                                                remote_config_buffer](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,
