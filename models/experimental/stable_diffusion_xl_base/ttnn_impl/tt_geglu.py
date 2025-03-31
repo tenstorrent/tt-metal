@@ -5,6 +5,7 @@
 import torch.nn as nn
 import torch
 import ttnn
+from math import ceil
 
 
 class TtGEGLU(nn.Module):
@@ -28,5 +29,5 @@ class TtGEGLU(nn.Module):
             self.tt_weights,
             bias=self.tt_bias,
         )
-        hidden_states, gate = ttnn.split(hidden_states, 2, -1)
+        hidden_states, gate = ttnn.split(hidden_states, ceil(hidden_states.shape[3] / 2), 3)
         return ttnn.multiply(hidden_states, ttnn.gelu(gate))
