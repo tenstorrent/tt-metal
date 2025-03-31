@@ -4,9 +4,9 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
-from models.tt_transformers.tt.mlp import MLP
 from models.common.rmsnorm import RMSNorm
 from models.demos.qwen25_vl.tt.vision_attention import VisionAttention
+from models.demos.qwen25_vl.tt.mlp import MLP
 
 
 class VisionBlock(LightweightModule):
@@ -19,7 +19,6 @@ class VisionBlock(LightweightModule):
         layer_num,
         weight_cache_path,
         transformation_mats,
-        paged_attention_config=None,
     ):
         super().__init__()
 
@@ -46,8 +45,6 @@ class VisionBlock(LightweightModule):
             dtype=dtype,
             transformation_mats=transformation_mats,
             configuration=args,
-            paged_attention_config=paged_attention_config,
-            causal_mask=False,
         )
         self.feed_forward = MLP(
             mesh_device=mesh_device,
@@ -92,8 +89,6 @@ class VisionBlock(LightweightModule):
         x: ttnn.Tensor,
         cu_seqlens,
         rot_mats,
-        user_id=0,
-        page_table=None,
     ) -> ttnn.Tensor:
         TG = self.args.is_galaxy
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
@@ -108,8 +103,6 @@ class VisionBlock(LightweightModule):
             attn_in,
             cu_seqlens=cu_seqlens,
             rot_mats=rot_mats,
-            user_id=user_id,
-            page_table=page_table,
         )
 
         # Here x and attn_out are both fractured across devices

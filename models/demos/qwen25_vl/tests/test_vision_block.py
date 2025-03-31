@@ -15,7 +15,6 @@ from models.utility_functions import (
 from models.utility_functions import skip_for_grayskull
 from models.tt_transformers.tt.common import (
     get_rot_transformation_mat,
-    PagedAttentionConfig,
 )
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLVisionBlock
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, standardize_hf_keys
@@ -33,24 +32,7 @@ from models.demos.qwen25_vl.tt.vision_block import VisionBlock
     ],
     indirect=True,
 )
-@pytest.mark.parametrize(
-    "paged_attention",
-    (
-        True,
-        # False,
-    ),
-    ids=(
-        "paged_attention",
-        # "default_attention",
-    ),
-)
-@pytest.mark.parametrize(
-    "page_params",
-    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
-)
 def test_vision_block_inference(
-    paged_attention,
-    page_params,
     mesh_device,
     use_program_cache,
     reset_seeds,
@@ -123,30 +105,6 @@ def test_vision_block_inference(
     )
     transformation_mats = {"prefill": transformation_mats_prefill}
 
-    # Setup page table
-    page_table_tt = None
-    paged_attention_config = None
-
-    if paged_attention:
-        paged_attention_config = PagedAttentionConfig(
-            block_size=page_params["page_block_size"],
-            max_num_blocks=page_params["page_max_num_blocks"],
-        )
-        # Implied shuffling of blocks
-        permutation = torch.randperm(paged_attention_config.max_num_blocks)
-        # Page table which maps virtual blocks to physical
-        reverse_permutation = torch.argsort(permutation)
-        page_table = reverse_permutation.reshape(
-            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
-        )
-        page_table_tt = ttnn.from_torch(
-            page_table,
-            device=mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-
     # Initialize TT model
     tt_model = VisionBlock(
         mesh_device=mesh_device,
@@ -156,7 +114,6 @@ def test_vision_block_inference(
         dtype=dtype,
         transformation_mats=transformation_mats,
         args=model_args,
-        paged_attention_config=paged_attention_config,
     )
 
     # Prepare input tensor for the TT model
@@ -172,8 +129,6 @@ def test_vision_block_inference(
         tt_input,
         cu_seqlens=cu_seqlens,
         rot_mats=rot_mats,
-        user_id=0,
-        page_table=page_table_tt,
     )
 
     # Process the output

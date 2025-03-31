@@ -35,7 +35,6 @@ class VisionModelArgs(ModelArgs):
             logger.info(f"padding head dim from {self.head_dim} to {self.padded_head_dim}")
 
         self.qkv_size = self.padded_head_dim * (2 * self.n_kv_heads + self.n_heads)
-        self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
         self.MAX_QKV_MM_SEQ_LEN = self.MAX_QKV_MM_SEQ_LEN
 
         assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"

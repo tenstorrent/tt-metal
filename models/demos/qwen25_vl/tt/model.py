@@ -24,7 +24,6 @@ class VisionTransformer(LightweightModule):
         state_dict,
         weight_cache_path,
         transformation_mats,
-        paged_attention_config=None,
     ):
         """
         Initialize the Vision Transformer model.
@@ -35,7 +34,6 @@ class VisionTransformer(LightweightModule):
             mesh_device (ttnn.mesh_device): Mesh device for the model
             state_dict (dict): State dictionary containing model weights
             weight_cache_path (str): Path to weight cache
-            paged_attention_config (PagedAttentionConfig, optional): Configuration for paged attention
             num_layers (int, optional): Number of layers to use. If None, use all layers.
         """
         super().__init__()
@@ -43,7 +41,6 @@ class VisionTransformer(LightweightModule):
         self.mesh_device = mesh_device
         self.dtype = dtype
         self.weight_cache_path = weight_cache_path
-        self.paged_attention_config = paged_attention_config
         self.fullatt_block_indexes = args.hf_config.vision_config.fullatt_block_indexes
 
         # Create vision blocks
@@ -57,7 +54,6 @@ class VisionTransformer(LightweightModule):
                 dtype=dtype,
                 transformation_mats=transformation_mats,  # Will be provided during forward pass
                 args=args,
-                paged_attention_config=paged_attention_config,
             )
             self.blocks.append(block)
 
@@ -98,8 +94,6 @@ class VisionTransformer(LightweightModule):
         cu_seqlens,
         cu_window_seqlens,
         rot_mats,
-        user_id=0,
-        page_table=None,
     ):
         """
         Forward pass through the Vision Transformer blocks.
@@ -109,8 +103,6 @@ class VisionTransformer(LightweightModule):
             cu_seqlens (torch.Tensor): Cumulative sequence lengths
             cu_window_seqlens (torch.Tensor): Cumulative window sequence lengths
             rot_mats (list): Rotation matrices for positional embeddings
-            user_id (int): User ID
-            page_table (ttnn.Tensor, optional): Page table for paged attention
 
         Returns:
             ttnn.Tensor: Output tensor
@@ -129,8 +121,6 @@ class VisionTransformer(LightweightModule):
                 x,
                 cu_seqlens=cu_seqlens_now,
                 rot_mats=rot_mats,
-                user_id=user_id,
-                page_table=page_table,
             )
 
         # Merge patches - first remove any sequence length padding

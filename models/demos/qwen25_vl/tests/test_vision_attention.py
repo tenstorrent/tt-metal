@@ -11,7 +11,6 @@ from models.tt_transformers.tt.model_config import ModelArgs
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.tt_transformers.tt.common import (
     get_rot_transformation_mat,
-    PagedAttentionConfig,
 )
 from models.demos.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
 from models.utility_functions import (
@@ -36,24 +35,7 @@ from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, stand
     indirect=True,
 )
 # Model and attention prefill tests should run both with and without paged attention to debug any issues that may occur with default attention
-@pytest.mark.parametrize(
-    "paged_attention",
-    (
-        True,
-        #        False,
-    ),
-    ids=(
-        "paged_attention",
-        #        "default_attention",
-    ),
-)
-@pytest.mark.parametrize(
-    "page_params",
-    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
-)
 def test_vision_attention_inference(
-    paged_attention,
-    page_params,
     mesh_device,
     use_program_cache,
     reset_seeds,
@@ -116,7 +98,6 @@ def test_vision_attention_inference(
     rot_mats = [cos, sin]
 
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
-    print(transformation_mat_torch)
 
     transformation_mats_prefill = ttnn.as_tensor(
         transformation_mat_torch,
@@ -128,30 +109,6 @@ def test_vision_attention_inference(
     )
     transformation_mats = {"prefill": transformation_mats_prefill}
 
-    # Setup page table
-    page_table_tt = None
-    paged_attention_config = None
-
-    if paged_attention:
-        paged_attention_config = PagedAttentionConfig(
-            block_size=page_params["page_block_size"],
-            max_num_blocks=page_params["page_max_num_blocks"],
-        )
-        # Implied shuffling of blocks
-        permutation = torch.randperm(paged_attention_config.max_num_blocks)
-        # Page table which maps virtual blocks to physical
-        reverse_permutation = torch.argsort(permutation)
-        page_table = reverse_permutation.reshape(
-            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
-        )
-        page_table_tt = ttnn.from_torch(
-            page_table,
-            device=mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-
     tt_model = VisionAttention(
         mesh_device,
         state_dict,
@@ -160,8 +117,6 @@ def test_vision_attention_inference(
         dtype=dtype,
         transformation_mats=transformation_mats,
         configuration=model_args,
-        paged_attention_config=paged_attention_config,
-        causal_mask=False,
     )
 
     tt_attention_input = pt_attention_input.clone()
@@ -175,8 +130,6 @@ def test_vision_attention_inference(
         attention_input,
         cu_seqlens=cu_seqlens,
         rot_mats=rot_mats,
-        user_id=0,
-        page_table=page_table_tt,
     )
     tt_out = ttnn.to_torch(
         tt_out,

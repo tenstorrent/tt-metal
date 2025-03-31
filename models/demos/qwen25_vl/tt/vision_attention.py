@@ -8,6 +8,8 @@ from models.tt_transformers.tt.attention import Attention
 
 class VisionAttention(Attention):
     def __init__(self, *args, **kwargs):
+        kwargs["causal_mask"] = False
+        kwargs["use_kv_cache"] = False
         super().__init__(*args, **kwargs)
 
     def forward(self, x, cu_seqlens, rot_mats, user_id=0, page_table=None, chunk_page_table=None, chunk_start_idx=None):

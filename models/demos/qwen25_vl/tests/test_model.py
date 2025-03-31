@@ -11,7 +11,6 @@ from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.demos.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
 from models.tt_transformers.tt.common import (
     get_rot_transformation_mat,
-    PagedAttentionConfig,
 )
 from models.utility_functions import (
     comp_pcc,
@@ -36,28 +35,11 @@ from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, stand
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "paged_attention",
-    (
-        True,
-        # False,
-    ),
-    ids=(
-        "paged_attention",
-        # "default_attention",
-    ),
-)
-@pytest.mark.parametrize(
-    "page_params",
-    [{"page_block_size": 32, "page_max_num_blocks": 1024}],
-)
-@pytest.mark.parametrize(
     "num_layers",
-    [None, 1, 3],  # None means all layers, specific numbers will run fewer layers
-    ids=["all_layers", "single_layer", "three_layers"],
+    [None, 1, 2],  # None means all layers, specific numbers will run fewer layers
+    ids=["all_layers", "single_layer", "two_layers"],
 )
 def test_vision_model_inference(
-    paged_attention,
-    page_params,
     mesh_device,
     use_program_cache,
     reset_seeds,
@@ -66,7 +48,7 @@ def test_vision_model_inference(
 ):
     dtype = ttnn.bfloat8_b
     pcc = (
-        0.99 if num_layers <= 3 else 0.95
+        0.99 if num_layers and num_layers <= 3 else 0.95
     )  # Llama 3 repo allows 0.91 for prefill, vision probably even less sensitive to pcc
     batch_size = 1  # For prefill we only support batch_size = 1
 
@@ -96,30 +78,6 @@ def test_vision_model_inference(
     state_dict = convert_hf_to_meta(state_dict, model_args.head_dim)
     state_dict_prefix = model_args.get_state_dict_prefix("VisionTransformer")
     state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
-
-    # Set up paged attention config
-    page_table_tt = None
-    paged_attention_config = None
-
-    if paged_attention:
-        paged_attention_config = PagedAttentionConfig(
-            block_size=page_params["page_block_size"],
-            max_num_blocks=page_params["page_max_num_blocks"],
-        )
-        # Implied shuffling of blocks
-        permutation = torch.randperm(paged_attention_config.max_num_blocks)
-        # Page table which maps virtual blocks to physical
-        reverse_permutation = torch.argsort(permutation)
-        page_table = reverse_permutation.reshape(
-            model_args.max_batch_size, paged_attention_config.max_num_blocks // model_args.max_batch_size
-        )
-        page_table_tt = ttnn.from_torch(
-            page_table,
-            device=mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
 
     # Get the necessary preprocessing for vision model
     cu_seqlens, cu_window_seqlens, position_embeddings, window_index = qwen2_5_vision_transformer_preprocess(
@@ -172,7 +130,6 @@ def test_vision_model_inference(
         weight_cache_path=model_args.weight_cache_path(dtype),
         dtype=dtype,
         transformation_mats=transformation_mats,
-        paged_attention_config=paged_attention_config,
     )
 
     # Prepare input tensor for the TT model
@@ -186,8 +143,6 @@ def test_vision_model_inference(
         cu_seqlens=cu_seqlens,
         cu_window_seqlens=cu_window_seqlens,
         rot_mats=rot_mats,
-        user_id=0,
-        page_table=page_table_tt,
     )
 
     # Run reference model
