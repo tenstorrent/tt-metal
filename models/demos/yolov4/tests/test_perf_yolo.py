@@ -2,14 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
-from models.demos.yolov4.reference.yolov4 import Yolov4
+from models.demos.yolov4.common import load_torch_model
 from models.demos.yolov4.ttnn.model_preprocessing import create_yolov4_model_parameters
 from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
 from models.perf.device_perf_utils import (
@@ -45,26 +43,11 @@ def test_yolov4(
 ):
     disable_persistent_kernel_cache()
     profiler.clear()
-    model_path = model_location_generator("models", model_subdir="Yolo")
     batch_size = input_shape[0]
-
-    if model_path == "models":
-        if not os.path.exists("tests/ttnn/integration_tests/yolov4/yolov4.pth"):  # check if yolov4.th is availble
-            os.system(
-                "tests/ttnn/integration_tests/yolov4/yolov4_weights_download.sh"
-            )  # execute the yolov4_weights_download.sh file
-
-        weights_pth = "tests/ttnn/integration_tests/yolov4/yolov4.pth"
-    else:
-        weights_pth = str(model_path / "yolov4.pth")
 
     resolution = (input_shape[1], input_shape[2])
 
-    torch_model = Yolov4()
-    torch_dict = torch.load(weights_pth)
-    new_state_dict = dict(zip(torch_model.state_dict().keys(), torch_dict.values()))
-    torch_model.load_state_dict(new_state_dict)
-    torch_model.eval()
+    torch_model = load_torch_model(model_location_generator)
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
     torch_input = torch_input_tensor.permute(0, 3, 1, 2).float()
     parameters = create_yolov4_model_parameters(torch_model, torch_input, resolution, device)
