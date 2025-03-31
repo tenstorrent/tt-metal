@@ -240,7 +240,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
 
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
-    bool optimal_placement = false;
+    bool optimal_placement = true;
     auto sub_device_cores = device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value_or(device->get_sub_device_ids().at(0)));
 
