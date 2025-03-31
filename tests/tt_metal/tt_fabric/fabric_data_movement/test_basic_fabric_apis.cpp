@@ -165,7 +165,8 @@ void RunAsyncWriteTest(
         tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
     // Create the sender program
-    auto outbound_eth_channels = tt::Cluster::instance().get_fabric_ethernet_channels(start_mesh_chip_id.second);
+    auto soc_desc = tt::Cluster::instance().get_soc_desc(start_mesh_chip_id.second);
+    uint32_t outbound_eth_channel = (uint32_t)soc_desc.logical_eth_core_to_chan_map.at(sender_logical_core);
     std::vector<uint32_t> sender_compile_time_args = {
         (uint32_t)mode, (uint32_t)test_mode::TEST_ASYNC_WRITE, (uint32_t)is_raw_write};
     std::vector<uint32_t> sender_runtime_args = {
@@ -176,7 +177,7 @@ void RunAsyncWriteTest(
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
         tt_metal::hal_ref.noc_xy_encoding(routers[0].second.x, routers[0].second.y),
-        *outbound_eth_channels.begin()};
+        outbound_eth_channel};
     std::map<string, string> defines = {};
     if (mode == fabric_mode::PULL) {
         defines["FVC_MODE_PULL"] = "";
@@ -265,7 +266,8 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode) {
         tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
     // Create the sender program
-    auto outbound_eth_channels = tt::Cluster::instance().get_fabric_ethernet_channels(start_mesh_chip_id.second);
+    auto soc_desc = tt::Cluster::instance().get_soc_desc(start_mesh_chip_id.second);
+    uint32_t outbound_eth_channel = (uint32_t)soc_desc.logical_eth_core_to_chan_map.at(sender_logical_core);
     auto sender_program = tt_metal::CreateProgram();
     std::map<string, string> defines = {};
     if (mode == fabric_mode::PULL) {
@@ -281,7 +283,7 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode) {
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
         tt_metal::hal_ref.noc_xy_encoding(routers[0].second.x, routers[0].second.y),
-        *outbound_eth_channels.begin()};
+        outbound_eth_channel};
 
     CreateSenderKernel(
         sender_program,
@@ -380,7 +382,8 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
         tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
     // Create the sender program
-    auto outbound_eth_channels = tt::Cluster::instance().get_fabric_ethernet_channels(start_mesh_chip_id.second);
+    auto soc_desc = tt::Cluster::instance().get_soc_desc(start_mesh_chip_id.second);
+    uint32_t outbound_eth_channel = (uint32_t)soc_desc.logical_eth_core_to_chan_map.at(sender_logical_core);
     auto sender_program = tt_metal::CreateProgram();
     std::map<string, string> defines = {};
 
@@ -398,7 +401,8 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
         atomic_inc,
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
-        tt_metal::hal_ref.noc_xy_encoding(routers[0].second.x, routers[0].second.y)};
+        tt_metal::hal_ref.noc_xy_encoding(routers[0].second.x, routers[0].second.y),
+        outbound_eth_channel};
 
     CreateSenderKernel(
         sender_program,
@@ -406,8 +410,7 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
         std::move(sender_compile_time_args),
         sender_logical_core,
         defines,
-        std::move(sender_runtime_args),
-        *outbound_eth_channels.begin());
+        std::move(sender_runtime_args));
 
     // Create the receiver program for validation
     auto receiver_program = tt_metal::CreateProgram();
@@ -563,7 +566,8 @@ void RunAsyncWriteMulticastTest(
     }
 
     // Prepare runtime args based on whether it's multidirectional or not
-    auto outbound_eth_channels = tt::Cluster::instance().get_fabric_ethernet_channels(start_mesh_chip_id.second);
+    auto soc_desc = tt::Cluster::instance().get_soc_desc(start_mesh_chip_id.second);
+    uint32_t outbound_eth_channel = (uint32_t)soc_desc.logical_eth_core_to_chan_map.at(sender_logical_core);
     std::vector<uint32_t> sender_runtime_args;
 
     if (multidirectional) {
@@ -580,7 +584,7 @@ void RunAsyncWriteMulticastTest(
             end_mesh_chip_ids_by_dir[RoutingDirection::W][0].second,
             mcast_hops[RoutingDirection::W],
             sender_router_noc_xys[RoutingDirection::W],
-            *outbound_eth_channels.begin()};
+            outbound_eth_channel};
     } else {
         auto routing_direction = RoutingDirection::E;
         sender_runtime_args = {
@@ -592,7 +596,7 @@ void RunAsyncWriteMulticastTest(
             end_mesh_chip_ids_by_dir[routing_direction][0].second,
             mcast_hops[routing_direction],
             sender_router_noc_xys[routing_direction],
-            *outbound_eth_channels.begin()};
+            outbound_eth_channel};
     }
 
     // Choose the appropriate kernel based on whether it's multidirectional or not

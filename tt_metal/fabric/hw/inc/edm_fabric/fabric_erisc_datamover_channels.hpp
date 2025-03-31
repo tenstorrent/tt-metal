@@ -151,11 +151,12 @@ struct EdmChannelWorkerInterface {
 
     template <bool enable_ring_support>
     FORCE_INLINE void update_worker_copy_of_read_ptr(BufferPtr new_ptr_val) {
-        noc_inline_dw_write(this->cached_worker_semaphore_address, new_ptr_val);
+        noc_inline_dw_write<false, true>(this->cached_worker_semaphore_address, new_ptr_val);
     }
 
     // Connection management methods
     //
+    template <bool posted = false>
     FORCE_INLINE void teardown_connection(uint32_t last_edm_rdptr_value) const {
         const auto& worker_info = *worker_location_info_ptr;
         uint64_t worker_semaphore_address = get_noc_addr(
@@ -168,7 +169,7 @@ struct EdmChannelWorkerInterface {
 
         *reinterpret_cast<volatile uint32_t*>(&(worker_location_info_ptr->edm_rdptr)) = last_edm_rdptr_value;
 
-        noc_semaphore_inc(worker_semaphore_address, 1);
+        noc_semaphore_inc<posted>(worker_semaphore_address, 1);
     }
 
     FORCE_INLINE void cache_producer_noc_addr() {

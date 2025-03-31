@@ -301,6 +301,12 @@ inline void start_ncrisc_kernel_run(dispatch_core_processor_masks enables) {
 inline void wait_ncrisc_trisc() {
     WAYPOINT("NTW");
     while (mailboxes->slave_sync.all != RUN_SYNC_MSG_ALL_SLAVES_DONE) {
+#if defined(ARCH_WORMHOLE)
+        // Avoid hammering L1 while other cores are trying to work. Seems not to
+        // be needed on Blackhole, probably because invalidate_l1_cache takes
+        // time.
+        asm volatile("nop; nop; nop; nop; nop");
+#endif
         invalidate_l1_cache();
     }
     WAYPOINT("NTD");
