@@ -1,6 +1,9 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+
+import ttnn
+import torch
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen25_vl.tt.vision_block import VisionBlock
 from models.demos.qwen25_vl.tt.patch_merger import PatchMerger
@@ -58,9 +61,18 @@ class VisionTransformer(LightweightModule):
             )
             self.blocks.append(block)
 
+        self.patch_merger = PatchMerger(
+            mesh_device=mesh_device,
+            args=args,
+            state_dict=state_dict,
+            weight_cache_path=weight_cache_path,
+            dtype=dtype,
+        )
+
     def forward(
         self,
         x,
+        unpadded_seq_len,
         cu_seqlens,
         cu_window_seqlens,
         rot_mats,
@@ -83,7 +95,6 @@ class VisionTransformer(LightweightModule):
         """
 
         # Forward through each block
-        hidden_states = x
         for i, block in enumerate(self.blocks):
             # Determine which attention type to use (full or windowed)
             if i in self.fullatt_block_indexes:
@@ -92,12 +103,32 @@ class VisionTransformer(LightweightModule):
                 cu_seqlens_now = cu_window_seqlens
 
             # Forward through block
-            hidden_states = block(
-                hidden_states,
+            x = block(
+                x,
                 cu_seqlens=cu_seqlens_now,
                 rot_mats=rot_mats,
                 user_id=user_id,
                 page_table=page_table,
             )
 
-        return hidden_states
+        # Merge patches - first we need to remove any sequence length padding
+        x = x[:, :, :unpadded_seq_len, :]
+        print(f"pre-merge x.shape: {x.shape}")
+
+        tt_out = ttnn.to_torch(
+            x,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=self.args.cluster_shape),
+        )
+        tt_output_torch = tt_out[:, 0:1, :, : self.args.hf_config.vision_config.out_hidden_size].squeeze(0).squeeze(0)
+        torch.save(torch.Tensor(tt_output_torch), "our_pre_merge.pt")
+
+        x = self.patch_merger(x)
+        print(f"post-merge x.shape: {x.shape}")
+
+        tt_out = ttnn.to_torch(
+            x,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=self.args.cluster_shape),
+        )
+        tt_output_torch = tt_out[:, 0:1, :, : self.args.hf_config.vision_config.out_hidden_size].squeeze(0).squeeze(0)
+        torch.save(torch.Tensor(tt_output_torch), "our_post_merge.pt")
+        return x

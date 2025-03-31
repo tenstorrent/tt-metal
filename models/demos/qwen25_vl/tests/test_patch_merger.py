@@ -32,10 +32,7 @@ from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
 )
 @pytest.mark.parametrize(
     "rows",
-    (
-        14336,  # TODO: fix padding issues
-        # 14308, # from 3B test image
-    ),
+    (14308,),  # from 3B test image
 )
 @pytest.mark.parametrize(
     "batch_size",
@@ -54,6 +51,9 @@ def test_patch_merger_inference(rows, batch_size, mesh_device, use_program_cache
         spatial_merge_size=model_args.hf_config.vision_config.spatial_merge_size,
     )
 
+    state_dict = torch.load("ref_merger_state_dict.pt")
+    reference_model.load_state_dict(state_dict)
+
     state_dict = convert_hf_to_meta(reference_model.state_dict(), model_args.head_dim)
     state_dict_prefix = model_args.get_state_dict_prefix("PatchMerger")
     state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
@@ -62,14 +62,19 @@ def test_patch_merger_inference(rows, batch_size, mesh_device, use_program_cache
         mesh_device=mesh_device,
         args=model_args,
         state_dict=state_dict,
-        weight_cache_path=model_args.weight_cache_path(dtype),
+        weight_cache_path=None,  # model_args.weight_cache_path(dtype),
         dtype=dtype,
-        model_config=model_args.model_config,
     )
 
     # Input shape should match context_dim
-    torch_input = torch.randn(batch_size, 1, rows, model_args.hf_config.vision_config.hidden_size)
-    reference_output = reference_model(torch_input)
+    # torch_input = torch.randn(batch_size, 1, rows, model_args.hf_config.vision_config.hidden_size)
+    ref_input = torch.load("ref_hidden_states.pt", weights_only=True)
+    torch_input = torch.load("our_pre_merge.pt", weights_only=True).unsqueeze(0).unsqueeze(0)
+    print(
+        f"torch_input.shape: {torch_input.shape} vs {ref_input.shape} vs test config {(batch_size, 1, rows, model_args.hf_config.vision_config.hidden_size)}"
+    )
+    reference_output = reference_model(ref_input)
+    torch.save(reference_output, "test_ref_output.pt")
 
     tt_input = ttnn.from_torch(
         torch_input,
@@ -79,7 +84,7 @@ def test_patch_merger_inference(rows, batch_size, mesh_device, use_program_cache
             dims=(None, 3) if model_args.is_galaxy else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )
@@ -94,6 +99,8 @@ def test_patch_merger_inference(rows, batch_size, mesh_device, use_program_cache
     tt_output_torch = (
         tt_output_torch[:, 0:1, :, : model_args.hf_config.vision_config.out_hidden_size].squeeze(0).squeeze(0)
     )
+
+    torch.save(torch.Tensor(tt_output_torch), "test_our_output.pt")
 
     pcc_required = 0.99
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)

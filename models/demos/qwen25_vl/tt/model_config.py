@@ -74,7 +74,7 @@ class VisionModelArgs(ModelArgs):
             "VisionAttention": "attention",
             "VisionBlock": "",
             "VisionTransformer": "visual",
-            "PatchMerger": "merger",
+            "PatchMerger": "visual.merger",
             "": "",  # If no module is given, just get layer prefix
         }
         return layer_prefix + module_map[module_name]

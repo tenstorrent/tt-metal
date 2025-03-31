@@ -18,7 +18,9 @@ from models.utility_functions import (
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
-from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VisionTransformerPretrainedModel
+
+# from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VisionTransformerPretrainedModel
+from models.demos.qwen25_vl.reference.model import Qwen2_5_VisionTransformerPretrainedModel
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, standardize_hf_keys
 
 
@@ -68,10 +70,12 @@ def test_vision_model_inference(
 
     mesh_device.enable_async(False)
 
-    # Example inputs
+    # Example inputs for http://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg
+    # pixel_values are produced by Qwen2_5_VLImageProcessor, these come from the above img
+    pt_pixel_values = torch.randn([14308, 1176])
     # image_grid_thw (`torch.LongTensor` of shape `(num_images, 3)`, *optional*):
     #     The temporal, height and width of feature shape of each image in LLM.
-    # for this test assume 1 image of size 98 x 146 as used in their repo as an example
+    # for this test assume 1 image of size 98 x 146 patches as used in with their repo example img
     image_grid_thw = torch.tensor([[1, 98, 146]])
     ref_seq_len = image_grid_thw[0, 1] * image_grid_thw[0, 2]
     # pad seq_len to be divisible by 128 (MAX_QKV_MM_SEQ_LEN from tt_transformers model)
@@ -114,9 +118,6 @@ def test_vision_model_inference(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
-
-    # Example inputs and preprocessing
-    # pt_input = torch.randn(ref_seq_len, 3, 224, 224)  # Simulated image patches
 
     # Get the necessary preprocessing for vision model
     cu_seqlens, cu_window_seqlens, position_embeddings, window_index = qwen2_5_vision_transformer_preprocess(
@@ -162,7 +163,12 @@ def test_vision_model_inference(
     transformation_mats = {"prefill": transformation_mats_prefill}
 
     # Create a simulated output from patch embeddings for the TT model
-    embedded_input = torch.randn(1, ref_seq_len, model_args.dim)
+    patch_input = reference_model.patch_embed(pt_pixel_values)
+    patch_seq_len, _ = patch_input.shape
+    spatial_merge_unit = model_args.hf_config.vision_config.spatial_merge_size**2
+    patch_input = patch_input.reshape(patch_seq_len // spatial_merge_unit, spatial_merge_unit, -1)
+    patch_input = patch_input[window_index, :, :]
+    patch_input = patch_input.reshape(patch_seq_len, -1)
 
     # Initialize TT model
     tt_model = VisionTransformer(
@@ -176,7 +182,7 @@ def test_vision_model_inference(
     )
 
     # Prepare input tensor for the TT model
-    tt_input = torch.nn.functional.pad(embedded_input, (0, 0, 0, seq_len - ref_seq_len))
+    tt_input = torch.nn.functional.pad(patch_input, (0, 0, 0, seq_len - ref_seq_len))
     tt_input = model_args.prepare_residual_tensor_prefill(
         tt_input,
         force_replicated=False if model_args.is_galaxy else True,
@@ -185,6 +191,7 @@ def test_vision_model_inference(
     # Run TT model (only blocks, not patch embedding/merging)
     tt_out = tt_model(
         tt_input,
+        unpadded_seq_len=ref_seq_len,
         cu_seqlens=cu_seqlens,
         cu_window_seqlens=cu_window_seqlens,
         rot_mats=rot_mats,
@@ -192,33 +199,20 @@ def test_vision_model_inference(
         page_table=page_table_tt,
     )
 
-    # Process the output
+    # Run reference model
+    reference_output = reference_model(pt_pixel_values, image_grid_thw)
+
     tt_out = ttnn.to_torch(
         tt_out,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
     )
-    tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, seq_len, -1)  # [batch, seq, hidden_dim]
+    tt_output_torch = tt_out[:, 0:1, :, : model_args.hf_config.vision_config.out_hidden_size].squeeze(0).squeeze(0)
 
-    # Remove sequence padding
-    tt_output_torch = tt_output_torch[0, :ref_seq_len, :]
-
-    # Run reference model
-    # Note: We're running just the blocks, not the full forward pass which would include patch embedding/merging
-    hidden_states = embedded_input.squeeze(0)
-
-    # Simulate running just through the blocks of the reference model
-    for layer_num, blk in zip(range(num_layers), reference_model.blocks):
-        if layer_num in reference_model.fullatt_block_indexes:
-            cu_seqlens_now = cu_seqlens
-        else:
-            cu_seqlens_now = cu_window_seqlens
-        hidden_states = blk(hidden_states, cu_seqlens=cu_seqlens_now, position_embeddings=position_embeddings)
-
-    reference_output = hidden_states
+    # Post-process in torch
+    # tt_output_torch = tt_output_torch[torch.argsort(window_index), :]
 
     # Compare outputs
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
-
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
 

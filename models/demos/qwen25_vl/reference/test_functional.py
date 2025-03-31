@@ -128,15 +128,8 @@ def test_qwen2_mlp(vision_weights, implementation):
     hidden_states = inputs["args"][0]
     block_weights = vision_weights["blocks"]["0"]["mlp"]  # Use first block's MLP weights
 
-    # Print shapes for debugging
-    print(f"Input shape: {hidden_states.shape}, Output shape: {outputs.shape}")
-    print(f"Gate weight shape: {block_weights['gate_proj']['weight'].shape}")
-    print(f"Up weight shape: {block_weights['up_proj']['weight'].shape}")
-    print(f"Down weight shape: {block_weights['down_proj']['weight'].shape}")
-
     # Run functional implementation
     result = implementation.qwen2_5_vl_mlp(hidden_states, block_weights)
-    print(f"Result shape: {result.shape}")
 
     # Reshape to match expected output if needed
     if result.shape != outputs.shape:
@@ -319,7 +312,6 @@ def test_qwen2_5_vision_transformer(vision_weights, implementation):
     # Extract inputs
     hidden_states = inputs["args"][0]
     grid_thw = inputs["kwargs"]["grid_thw"]
-    print(f"grid_thw: {grid_thw}")
 
     # Calculate head_dim from the hidden size and num_heads
     num_heads = model_settings["num_heads"]

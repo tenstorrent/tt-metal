@@ -10,13 +10,18 @@ from models.common.rmsnorm import RMSNorm
 
 
 class PatchMerger(LightweightModule):
-    def __init__(self, mesh_device, args, state_dict, weight_cache_path, dtype, model_config):
+    def __init__(self, mesh_device, args, state_dict, weight_cache_path, dtype):
         super().__init__()
+
+        # state_dict = torch.load("ref_merger_state_dict.pt")
+
+        # state_dict = convert_hf_to_meta(state_dict, args.head_dim)
+        # state_dict_prefix = args.get_state_dict_prefix("PatchMerger")
+        # state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.args = args
-        self.model_config = model_config
 
         self.mlp_size = args.hf_config.vision_config.hidden_size * (
             args.hf_config.vision_config.spatial_merge_size**2
@@ -32,6 +37,7 @@ class PatchMerger(LightweightModule):
                 state_dict_prefix=state_dict_prefix + ".",
                 weight_key="ln_q",
                 weight_dtype=ttnn.bfloat16,
+                eps=1e-6,  # Qwen2_5_VLPatchMerger hard-codes this
                 is_distributed=False,
             ),
             args,
@@ -64,11 +70,46 @@ class PatchMerger(LightweightModule):
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        def save_tensor(x, name):
+            from os import getenv
+
+            x_torch = ttnn.to_torch(
+                x,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    self.mesh_device, dims=(1, 3), mesh_shape=self.args.cluster_shape
+                ),
+            )
+            x_torch = torch.Tensor(x_torch[:, 0:1, :, : x.shape[-1]].squeeze())
+            prefix = getenv("MPREFIX") or ""
+            torch.save(x_torch, prefix + name)
+
         # Apply RMSNorm
         x = self.norm(x, mode="prefill")
+        save_tensor(x, "1_post_norm.pt")
 
         # Reshape to merge spatial dimensions
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        save_tensor(x, "1a_untilized.pt")
         x = ttnn.reshape(x, (x.shape[0], x.shape[1], -1, self.mlp_size))
+        save_tensor(x, "1b_reshaped.pt")
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        save_tensor(x, "2_tilized.pt")
+
+        # Reshape to merge spatial dimensions
+        # x = ttnn.to_torch(x)
+        # x = torch.reshape(x, (x.shape[0], x.shape[1], -1, self.mlp_size))
+        # x = ttnn.from_torch(
+        #     x,
+        #     device=self.mesh_device,
+        #     mesh_mapper=ttnn.ShardTensor2dMesh(
+        #         self.mesh_device,
+        #         dims=(None, 3) if self.args.is_galaxy else (None, None),
+        #         mesh_shape=self.args.cluster_shape,
+        #     ),
+        #     dtype=ttnn.bfloat16,
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     layout=ttnn.TILE_LAYOUT,
+        # )
 
         # First linear + GELU
         x = ttnn.linear(
@@ -78,7 +119,9 @@ class PatchMerger(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        save_tensor(x, "3_post_linear.pt")
         x = ttnn.gelu(x)
+        save_tensor(x, "4_post_gelu.pt")
 
         # Second linear
         x = ttnn.linear(
@@ -88,5 +131,5 @@ class PatchMerger(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
+        save_tensor(x, "5_post_linear.pt")
         return x

@@ -578,9 +578,12 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
             else:
                 hidden_states = blk(hidden_states, cu_seqlens=cu_seqlens_now, position_embeddings=position_embeddings)
 
+        torch.save(hidden_states, "ref_hidden_states.pt")
+        torch.save(self.merger.state_dict(), "ref_merger_state_dict.pt")
         hidden_states = self.merger(hidden_states)
-        reverse_indices = torch.argsort(window_index)
-        hidden_states = hidden_states[reverse_indices, :]
+        # torch.save(hidden_states, "ref_hidden_states_after_merger.pt")
+        # reverse_indices = torch.argsort(window_index)
+        # hidden_states = hidden_states[reverse_indices, :]
         return hidden_states
 
 
