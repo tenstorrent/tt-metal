@@ -21,7 +21,7 @@ void kernel_main() {
     const uint32_t start_stick_id = get_arg_val<uint32_t>(8);
 
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
-#define stick_size_is_power_of_two get_compile_time_arg_val(1) == 1
+    constexpr bool stick_size_is_power_of_two = get_compile_time_arg_val(1) == 1;
 
 #if (stick_size_is_power_of_two)
     constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(2);

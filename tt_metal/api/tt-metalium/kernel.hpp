@@ -119,7 +119,7 @@ class Kernel : public JitBuildSettings {
     const string& get_full_kernel_name() const override;
     void add_defines(const std::map<std::string, std::string>& defines);
     void process_defines(const std::function<void (const string& define, const string &value)>) const override;
-    void process_compile_time_args(const std::function<void (int i, uint32_t value)>) const override;
+    void process_compile_time_args(const std::function<void(const std::vector<uint32_t>& values)>) const override;
 
     bool is_idle_eth() const;
 
