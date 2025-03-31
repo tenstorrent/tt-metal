@@ -288,15 +288,7 @@ void kernel_main() {
     uint64_t out_ready_sem_noc_addr_concat =
         safe_get_noc_addr(out_ready_sem_noc0_x_concat, out_ready_sem_noc0_y_concat, out_ready_sem_bank_addr_concat);
 
-    DPRINT << "is drain core: " << (uint32_t)is_drain_core << ENDL();
-    if (is_drain_core == 1) {
-        while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr_concat) !=
-               out_ready_sem_wait_value_concat) {
-            DPRINT << "waitval done\n";
-        }
-    } else {
-        noc_semaphore_wait(signal_semaphore_addr_ptr, VALID);
-    }
+    noc_semaphore_wait(signal_semaphore_addr_ptr, VALID);
 
     uint32_t phase = PHASES_TO_READ;
     nlp_concat(

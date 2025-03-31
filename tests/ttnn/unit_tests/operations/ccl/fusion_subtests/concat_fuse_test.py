@@ -21,6 +21,7 @@ def run_with_trace(
     mesh_device,
     all_gather_topology,
     input_tensor_mesh,
+    buffer_tensor_mesh,
     dim,
     num_links,
     output_mem_config,
@@ -35,6 +36,7 @@ def run_with_trace(
     logger.info("Compiling model")
     tt_out_tensor = ttnn.experimental.all_gather_concat(
         input_tensor_mesh,
+        buffer_tensor_mesh,
         dim,
         multi_device_global_semaphore=multi_device_global_semaphore,
         num_links=num_links,
@@ -54,6 +56,7 @@ def run_with_trace(
         for i in range(warmup_iters):
             tt_out_tensor = ttnn.experimental.all_gather_concat(
                 input_tensor_mesh,
+                buffer_tensor_mesh,
                 dim,
                 multi_device_global_semaphore=multi_device_global_semaphore,
                 num_links=num_links,
@@ -70,6 +73,7 @@ def run_with_trace(
     for i in range(num_iter):
         tt_out_tensor = ttnn.experimental.all_gather_concat(
             input_tensor_mesh,
+            buffer_tensor_mesh,
             dim,
             multi_device_global_semaphore=multi_device_global_semaphore,
             num_links=num_links,
@@ -482,6 +486,7 @@ def run_concat_fuse_impl(
 
     input_tensor_mesh_list = []
     output_tensor_goldens_list = []
+    intermediate_tensors_list = []
 
     for i in range(num_iters):
         output_tensor = torch.rand(output_shape).bfloat16()
@@ -498,6 +503,33 @@ def run_concat_fuse_impl(
 
         input_tensor_mesh_list.append(input_tensor_mesh)
 
+        intermediate_core_range_set = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 0)),
+            }
+        )
+        intermediate_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                intermediate_core_range_set,
+                [32, 128],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+
+        zeros_tensor = torch.zeros(output_shape).bfloat16()
+        tt_intermediate_tensors = []
+        for i in range(4):
+            tt_intermediate_tensor = (
+                ttnn.Tensor(zeros_tensor, input_dtype)
+                .to(layout)
+                .to(mesh_device.get_devices()[i], intermediate_mem_config)
+            )
+            tt_intermediate_tensors.append(tt_intermediate_tensor)
+        intermediate_tensor_mesh = ttnn.aggregate_as_tensor(tt_intermediate_tensors)
+        intermediate_tensors_list.append(intermediate_tensor_mesh)
     tt_out_tensor_list = []
 
     if trace_mode:
@@ -505,6 +537,7 @@ def run_concat_fuse_impl(
             mesh_device,
             all_gather_topology,
             input_tensor_mesh_list[0],
+            intermediate_tensors_list[0],
             dim,
             num_links,
             output_mem_config,
@@ -520,6 +553,7 @@ def run_concat_fuse_impl(
         for i in range(num_iters):
             tt_out_tensor = ttnn.experimental.all_gather_concat(
                 input_tensor_mesh_list[i],
+                intermediate_tensors_list[i],
                 dim,
                 multi_device_global_semaphore=ccl_semaphore_handles[i],
                 num_links=num_links,

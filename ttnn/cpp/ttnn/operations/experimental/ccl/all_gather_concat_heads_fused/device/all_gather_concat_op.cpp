@@ -18,7 +18,6 @@ namespace all_gather_concat_detail {
 AllGatherConcat create_all_gather_concat_struct(
     const Tensor& input_tensor,
     const uint32_t dim,
-    std::unordered_map<chip_id_t, Tensor> temp_tensor_map,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const std::vector<IDevice*>& devices,
@@ -50,7 +49,6 @@ AllGatherConcat create_all_gather_concat_struct(
         forward_device,
         backward_device,
         dim,
-        temp_tensor_map,
         num_links,
         num_devices,
         device_index,
@@ -66,7 +64,6 @@ AllGatherConcat create_all_gather_concat_struct(
 }  // namespace ccl
 
 void AllGatherConcat::validate(const std::vector<Tensor>& input_tensors) const {
-    TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& layout = input_tensors[0].get_layout();
     const auto& dtype = input_tensors[0].get_dtype();
@@ -147,17 +144,13 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program(
 
     log_trace(tt::LogOp, "Detected all gather specialized shape. all_gather_concat_llama_sharded is called");
     CoreCoord compute_with_storage_grid_size = input_tensors[0].device()->compute_with_storage_grid_size();
-    const auto& input_tensor = input_tensors[0];
-
-    chip_id_t this_device_id = input_tensor.device()->id();
-    Tensor temp_tensor = this->temp_tensor_map.at(this_device_id);
     return all_gather_concat_llama_sharded(
         input_tensors[0],
+        input_tensors[1],
         this->forward_device,
         this->backward_device,
         output_tensors[0],
         this->dim,
-        temp_tensor,
         this->num_links,
         this->ring_size,
         this->ring_index,
@@ -180,7 +173,6 @@ const tt::tt_metal::operation::Hash AllGatherConcat::compute_program_hash(
 
     return tt::tt_metal::operation::hash_operation<AllGatherConcat>(
         this->dim,
-        this->temp_tensor_map,
         this->num_links,
         this->ring_size,
         this->ring_index,
@@ -199,8 +191,8 @@ namespace ccl {
 
 Tensor all_gather_concat(
     const Tensor& input_tensor,
+    Tensor& buffer_tensor,
     const uint32_t dim,
-    std::unordered_map<chip_id_t, Tensor> temp_tensor_map,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const uint32_t num_heads,
     const uint32_t num_links,
@@ -232,7 +224,6 @@ Tensor all_gather_concat(
 
     tt::tt_metal::operation::launch_op(
         [dim,
-         temp_tensor_map,
          num_links,
          num_devices,
          memory_config,
@@ -246,12 +237,11 @@ Tensor all_gather_concat(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor = input_tensors.at(0);
-
+            const auto& buffer_tensor = input_tensors.at(1);
             return tt::tt_metal::operation::run(
                 ttnn::ccl::all_gather_concat_detail::create_all_gather_concat_struct(
                     input_tensor,
                     dim,
-                    temp_tensor_map,
                     num_links,
                     memory_config,
                     devices,
@@ -260,19 +250,19 @@ Tensor all_gather_concat(
                     sub_device_id,
                     enable_persistent_fabric_mode,
                     num_heads),
-                {input_tensor});
+                {input_tensor, buffer_tensor});
         },
-        {input_tensor},
+        {input_tensor, buffer_tensor},
         output_tensors);
     return output_tensors.at(0);
 }
 
 Tensor all_gather_concat(
     const Tensor& input_tensor,
+    Tensor& buffer_tensor,
     const uint32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
-    std::unordered_map<chip_id_t, Tensor> temp_tensor_map,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const uint32_t num_heads,
     const std::optional<uint32_t> num_links,
@@ -307,7 +297,6 @@ Tensor all_gather_concat(
         [gather_dim,
          mesh_view,
          cluster_axis,
-         temp_tensor_map,
          num_links,
          num_devices,
          memory_config,
@@ -321,6 +310,7 @@ Tensor all_gather_concat(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_tensor = input_tensors.at(0);
+            const auto& buffer_tensor = input_tensors.at(1);
 
             TT_FATAL(
                 mesh_view.is_mesh_2d(),
@@ -328,12 +318,10 @@ Tensor all_gather_concat(
             const auto coordinate = mesh_view.find_device(input_tensor.device()->id());
             std::vector<IDevice*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(coordinate[1])
                                                                 : mesh_view.get_devices_on_row(coordinate[0]);
-
             return tt::tt_metal::operation::run(
                 ttnn::ccl::all_gather_concat_detail::create_all_gather_concat_struct(
                     input_tensor,
                     gather_dim,
-                    temp_tensor_map,
                     num_links.has_value() ? num_links.value() : 1,
                     memory_config,
                     devices,
@@ -342,9 +330,9 @@ Tensor all_gather_concat(
                     sub_device_id,
                     enable_persistent_fabric_mode,
                     num_heads),
-                {input_tensor});
+                {input_tensor, buffer_tensor});
         },
-        {input_tensor},
+        {input_tensor, buffer_tensor},
         output_tensors);
     return output_tensors.at(0);
 }

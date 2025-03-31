@@ -55,11 +55,11 @@ void append_fabric_connection_rt_arguments(
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     const Tensor& input_tensor,
+    const Tensor& temp_tensor,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
     const uint32_t dim,
-    Tensor& temp_tensor,
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
@@ -592,7 +592,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
          num_cores,
          cb_q_output,
          cores,
-         temp_tensor,
          concat_reader_kernel_id,
          concat_reader_2_kernel_id,
          face_h,
@@ -603,6 +602,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             const auto& input = input_tensors[0];
+            const auto& temp_tensor = input_tensors[1];
             const auto& output = output_tensors[0];
             auto dst_buffer_query = output.buffer();
 

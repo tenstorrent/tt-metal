@@ -28,6 +28,7 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
+               ttnn::Tensor& buffer_tensor,
                const int32_t dim,
                const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
                const uint32_t num_heads,
@@ -40,6 +41,7 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
                 return self(
                     queue_id,
                     input_tensor,
+                    buffer_tensor,
                     dim,
                     multi_device_global_semaphore,
                     num_heads,
@@ -50,6 +52,7 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
                     enable_persistent_fabric_mode);
             },
             py::arg("input_tensor"),
+            py::arg("buffer_tensor"),
             py::arg("dim"),
             py::arg("multi_device_global_semaphore"),
             py::arg("num_heads").noconvert(),
@@ -64,6 +67,7 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
+               ttnn::Tensor& buffer_tensor,
                const int32_t dim,
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
@@ -78,6 +82,7 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
                 return self(
                     queue_id,
                     input_tensor,
+                    buffer_tensor,
                     dim,
                     cluster_axis,
                     mesh_device,
@@ -90,6 +95,7 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
                     enable_persistent_fabric_mode);
             },
             py::arg("input_tensor"),
+            py::arg("buffer_tensor"),
             py::arg("dim"),
             py::arg("cluster_axis"),
             py::arg("mesh_device"),

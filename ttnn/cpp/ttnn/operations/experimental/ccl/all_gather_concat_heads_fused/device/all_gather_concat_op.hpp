@@ -33,7 +33,6 @@ struct AllGatherConcat {
     std::optional<IDevice*> forward_device;
     std::optional<IDevice*> backward_device;
     const uint32_t dim;
-    std::unordered_map<chip_id_t, Tensor> temp_tensor_map;
     const uint32_t num_links;
     const uint32_t ring_size;
     const uint32_t ring_index;
@@ -48,7 +47,6 @@ struct AllGatherConcat {
         std::optional<IDevice*> forward_device,
         std::optional<IDevice*> backward_device,
         uint32_t dim,
-        std::unordered_map<chip_id_t, Tensor> temp_tensor_map,
         uint32_t num_links,
         uint32_t ring_size,
         uint32_t ring_index,
@@ -61,7 +59,6 @@ struct AllGatherConcat {
         forward_device(forward_device),
         backward_device(backward_device),
         dim(dim),
-        temp_tensor_map(temp_tensor_map),
         num_links(num_links),
         ring_size(ring_size),
         ring_index(ring_index),
@@ -103,7 +100,6 @@ namespace all_gather_concat_detail {
 AllGatherConcat create_all_gather_concat_struct(
     const Tensor& input_tensor,
     const uint32_t dim,
-    std::unordered_map<chip_id_t, Tensor> temp_tensor_map,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const std::vector<IDevice*>& devices,
@@ -125,11 +121,11 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     const Tensor& input_tensor,
+    const Tensor& buffer_tensor,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
     const uint32_t dim,
-    Tensor& temp_tensor,
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
@@ -141,11 +137,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded_subgrids(
     const Tensor& input_tensor,
+    const Tensor& buffer_tensor,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
     const uint32_t dim,
-    Tensor& temp_tensor,
     const uint32_t num_links,
     const uint32_t ring_size,
     const uint32_t ring_index,
@@ -161,8 +157,8 @@ namespace ccl {
 
 Tensor all_gather_concat(
     const Tensor& input_tensor,
+    Tensor& buffer_tensor,
     const uint32_t dim,
-    std::unordered_map<chip_id_t, Tensor> temp_tensor_map,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const uint32_t num_heads,
     const uint32_t num_links = 1,
@@ -173,10 +169,10 @@ Tensor all_gather_concat(
 
 Tensor all_gather_concat(
     const Tensor& input_tensor,
+    Tensor& buffer_tensor,
     const uint32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
-    std::unordered_map<chip_id_t, Tensor> temp_tensor_map,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const uint32_t num_heads,
     const std::optional<uint32_t> num_links = std::nullopt,

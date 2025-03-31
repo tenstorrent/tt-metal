@@ -23,6 +23,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_global_semaphore_with_same_address,
 )
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import check_mesh_tensor_alloc
 
 
 NUM_ITERATIONS = 10
@@ -33,6 +34,7 @@ def run_with_trace(
     mesh_device,
     all_gather_topology,
     input_tensor,
+    buffer_tensor,
     dim,
     cluster_axis,
     num_links,
@@ -53,6 +55,7 @@ def run_with_trace(
 
     tt_out_tensor = ttnn.experimental.all_gather_concat(
         input_tensor,
+        buffer_tensor,
         dim,
         cluster_axis=cluster_axis,
         multi_device_global_semaphore=ccl_semaphore_handles[0],
@@ -75,6 +78,7 @@ def run_with_trace(
         for i in range(n_iters):
             tt_out_tensor = ttnn.experimental.all_gather_concat(
                 input_tensor,
+                buffer_tensor,
                 dim,
                 cluster_axis=cluster_axis,
                 mesh_device=mesh_device,
@@ -222,6 +226,37 @@ def run_line_all_gather_concat_on_TG_with_mesh_tensor_along_rows(
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
     ttnn_tensor = ttnn.to_memory_config(ttnn_tensor, input_mem_config)
 
+    intermediate_core_range_set = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 0)),
+        }
+    )
+
+    intermediate_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            intermediate_core_range_set,
+            [32, 128],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    temp_shape = full_mesh_input_shape
+    temp_shape[1] *= 4
+    intermediate_tensor = torch.zeros(temp_shape, dtype=torch.bfloat16)
+    tt_intermediate_tensor = ttnn.from_torch(
+        intermediate_tensor,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=input_dtype,
+        memory_config=intermediate_mem_config,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_shape),
+    )
+
+    check_mesh_tensor_alloc(tt_intermediate_tensor)
+    tt_intermediate_tensors = [tt_intermediate_tensor]
+
     sub_device_stall_group = []
     if use_all_gather_async:
         compute_grid_size = mesh_device.compute_with_storage_grid_size()
@@ -252,6 +287,7 @@ def run_line_all_gather_concat_on_TG_with_mesh_tensor_along_rows(
         if trace_mode:
             ttnn_tensor_out = run_with_trace(
                 input_tensor=ttnn_tensor,
+                buffer_tensor=tt_intermediate_tensors[0],
                 dim=dim,
                 mesh_device=mesh_device,
                 cluster_axis=cluster_axis,
@@ -273,6 +309,7 @@ def run_line_all_gather_concat_on_TG_with_mesh_tensor_along_rows(
                 logger.info("Running all-gather async")
                 ttnn_tensor_out = ttnn.experimental.all_gather_concat(
                     ttnn_tensor,
+                    tt_intermediate_tensors[0],
                     dim,
                     cluster_axis=cluster_axis,
                     multi_device_global_semaphore=ccl_semaphore_handles[i % NUM_BUFFERS],

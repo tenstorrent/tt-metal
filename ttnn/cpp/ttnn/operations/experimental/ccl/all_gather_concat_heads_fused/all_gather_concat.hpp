@@ -15,6 +15,7 @@ struct ExecuteAllGatherConcat {
     static ttnn::Tensor invoke(
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
+        ttnn::Tensor& buffer_tensor,
         const int32_t dim,
         const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
         const uint32_t num_heads,
@@ -26,6 +27,7 @@ struct ExecuteAllGatherConcat {
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
+        ttnn::Tensor& buffer_tensor,
         const int32_t dim,
         const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
         const uint32_t num_heads,
@@ -38,6 +40,7 @@ struct ExecuteAllGatherConcat {
     static ttnn::Tensor invoke(
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
+        ttnn::Tensor& buffer_tensor,
         const int32_t dim,
         const uint32_t cluster_axis,
         const MeshDevice& mesh_device,
@@ -51,6 +54,7 @@ struct ExecuteAllGatherConcat {
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
+        ttnn::Tensor& buffer_tensor,
         const int32_t dim,
         const uint32_t cluster_axis,
         const MeshDevice& mesh_device,
