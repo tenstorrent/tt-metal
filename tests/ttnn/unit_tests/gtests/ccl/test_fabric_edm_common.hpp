@@ -2292,7 +2292,9 @@ void Run1DFabricPacketSendTest(
     size_t num_links,
     size_t num_op_invocations,
     const std::vector<Fabric1DPacketSendTestSpec>& test_specs,
-    const WriteThroughputStabilityTestWithPersistentFabricParams& params = {}) {
+    const WriteThroughputStabilityTestWithPersistentFabricParams& params = {},
+    size_t fabric_context_switch_interval =
+        tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     TT_FATAL(
@@ -2832,7 +2834,7 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
              .num_messages = num_unicasts,
              .packet_payload_size_bytes = packet_payload_size_bytes});
     }
-    Run1DFabricPacketSendTest(num_links, num_op_invocations, test_specs, params);
+    Run1DFabricPacketSendTest(num_links, num_op_invocations, test_specs, params, 0);
 }
 
 void RunRingDeadlockStabilityTestWithPersistentFabric(
@@ -2906,7 +2908,7 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
         enable_persistent_fabric_mode,
         num_links,
         topology,
-        tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval);
+        fabric_context_switch_interval);
 
     // Other boiler plate setup
     CoreRangeSet worker_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_links - 1, 0)));
