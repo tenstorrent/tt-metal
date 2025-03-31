@@ -41,6 +41,7 @@ def get_torch_act_func_from_string(act_string):
         "silu": torch.nn.functional.silu,
         "mish": torch.nn.functional.mish,
         "sigmoid": torch.nn.functional.sigmoid,
+        "sigmoid_approx": torch.nn.functional.sigmoid,
         "tanh": torch.nn.functional.tanh,
         "log": torch.log,
         "softplus": torch.nn.functional.softplus,
@@ -555,7 +556,7 @@ def test_conv_features_multi_device(
     ],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4])
-@pytest.mark.parametrize("activation", ["", "relu", "silu", "sigmoid", "tanh", "sqrt", "gelu"])
+@pytest.mark.parametrize("activation", ["", "relu", "silu", "sigmoid", "sigmoid_approx", "tanh", "sqrt", "gelu"])
 def test_conv_activation(
     device,
     torch_tensor_map,
