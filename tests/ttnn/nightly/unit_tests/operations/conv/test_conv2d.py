@@ -89,6 +89,7 @@ def run_conv(
     output_mesh_composer=None,
     enable_split_reader=False,
     activation="",
+    in_place=False,
     preprocess_weights_on_device=True,
     run_twice=False,
 ):
@@ -196,6 +197,7 @@ def run_conv(
         transpose_shards=transpose_shards,
         preprocess_weights_on_device=preprocess_weights_on_device,
         always_preprocess_weights=True,
+        in_place=in_place,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -1648,24 +1650,24 @@ def test_unet_conv_groups_2_wh(
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
-    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override, use_shallow_conv_variant",
+    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override, use_shallow_conv_variant, in_place",
     (
-        (16, 4, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True),
-        (16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True),
-        (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True),
-        (32, 16, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False),
-        (32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False),
-        (32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False),
-        (64, 32, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False),
-        (64, 64, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False),
-        (32, 96, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False),
-        (32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False),
-        (32, 64, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False),
-        (32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False),
-        # (16, 48, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True), # OOM - need inplace convolution
-        (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True),
-        # (16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True), # OOM - need inplace convolution
-        (1, 16, 1056, 160, 1, 1, 1, 1, 0, 0, HS, {"act_block_h": 2 * 32}, False),
+        (16, 4, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False),
+        (16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False),
+        (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False),
+        (32, 16, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False),
+        (32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False),
+        (32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False, False),
+        (64, 32, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False, False),
+        (64, 64, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False, False),
+        (32, 96, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False, False),
+        (32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False, False),
+        (32, 64, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False),
+        (32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False, False),
+        (16, 48, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False),
+        (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, False),
+        (16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True, True),
+        (1, 16, 1056, 160, 1, 1, 1, 1, 0, 0, HS, {"act_block_h": 2 * 32}, False, False),
     ),
 )
 @pytest.mark.parametrize(
@@ -1701,6 +1703,7 @@ def test_unet_conv_groups_4_6_wh(
     use_shallow_conv_variant,
     output_layout,
     groups,
+    in_place,
 ):
     if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
         pytest.skip("Test is not supported on n300 (8,7) grid")
@@ -1708,6 +1711,8 @@ def test_unet_conv_groups_4_6_wh(
         pytest.skip("Row major layout not compatible with bfloat8_b")
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and input_height >= 1056:
         pytest.skip("OOM")
+    if input_channels == 32 and input_height == 1056 and groups == 6:
+        pytest.skip("OOM - enable when support for full in-place conv2d")
     run_conv(
         device,
         torch_tensor_map,
@@ -1730,6 +1735,7 @@ def test_unet_conv_groups_4_6_wh(
         transpose_shards=True,  ## use RM (transpose_mcast=False) with 2D on WH
         output_layout=output_layout,
         groups=groups,
+        in_place=in_place,
     )
 
 
