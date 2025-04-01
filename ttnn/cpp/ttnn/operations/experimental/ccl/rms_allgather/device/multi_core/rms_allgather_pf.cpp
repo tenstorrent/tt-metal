@@ -1476,22 +1476,10 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
 
     if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
         auto gamma_stick_size = gamma.value().get_padded_shape()[-1] * gamma.value().element_size();
-        bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
-        writer_mcast_sender_compile_time_args.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
-        writer_mcast_receiver_compile_time_args.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
-        if (gamma_stick_size_is_power_of_two) {
-            uint32_t gamma_log2_stick_size =
-                gamma_stick_size_is_power_of_two ? (std::uint32_t)std::log2(gamma_stick_size) : 0;
-            writer_mcast_sender_compile_time_args.push_back((std::uint32_t)gamma_log2_stick_size);
-            writer_mcast_receiver_compile_time_args.push_back((std::uint32_t)gamma_log2_stick_size);
-        } else {
-            writer_mcast_sender_compile_time_args.push_back(gamma_stick_size);
-            writer_mcast_receiver_compile_time_args.push_back(gamma_stick_size);
-        }
+        writer_mcast_sender_compile_time_args.push_back(gamma_stick_size);
+        writer_mcast_receiver_compile_time_args.push_back(gamma_stick_size);
     } else {
         writer_mcast_sender_compile_time_args.push_back(0);
-        writer_mcast_sender_compile_time_args.push_back(0);
-        writer_mcast_receiver_compile_time_args.push_back(0);
         writer_mcast_receiver_compile_time_args.push_back(0);
     }
 
