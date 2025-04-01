@@ -597,19 +597,10 @@ INSTANTIATE_TEST_SUITE_P(
                  ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 28736,
                      .l1_buffers_peak_per_core = 59392,
-                     .l1_output_buffer_per_core = 59392}},
-                {BoardType::E150,
-                 ttnn::graph::ResourceUsage{
-                     .cb_peak_size_per_core = 28736,
-                     .l1_buffers_peak_per_core = 26624,
-                     .l1_output_buffer_per_core = 26624}}})));
+                     .l1_output_buffer_per_core = 59392}}})));
 
 class Conv2dOpIfTest : public ttnn::TTNNFixtureWithDevice {};
 TEST_F(Conv2dOpIfTest, Conv2d) {
-    // Todo(arminaleTT): There is a known problem with calculating conv output size. Once fixed, this test will be
-    // enabled.
-    GTEST_SKIP();
-
     const auto input_spec = ttnn::TensorSpec(
         ttnn::Shape{1, 1, 50176, 3},
         tt::tt_metal::TensorLayout(
@@ -642,7 +633,7 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
     const auto expected_resource_usage_map = ResourceUsageMap{
         {BoardType::N300,
          ttnn::graph::ResourceUsage{
-             .cb_peak_size_per_core = 0, .l1_buffers_peak_per_core = 0, .l1_output_buffer_per_core = 0}},
+             .cb_peak_size_per_core = 229440, .l1_buffers_peak_per_core = 190568, .l1_output_buffer_per_core = 0}},
         {BoardType::E150,
          ttnn::graph::ResourceUsage{
              .cb_peak_size_per_core = 0, .l1_buffers_peak_per_core = 0, .l1_output_buffer_per_core = 0}}};
@@ -655,7 +646,6 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
     // Run the test
     {
         tt::tt_metal::IDevice* device = device_;
-        const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
             ttnn::conv2d,
             device,
@@ -677,9 +667,11 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
             std::nullopt,
             output_spec.tensor_layout().get_memory_config());
 
-        // Todo(arminaleTT): There is a known problem with calculating conv output size. Once fixed, this test will be
-        // expanded
-        EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Error);
+        EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
+        EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, expected_resource_usage.cb_peak_size_per_core);
+        EXPECT_EQ(query.resource_usage.l1_buffers_peak_per_core, expected_resource_usage.l1_buffers_peak_per_core);
+        EXPECT_EQ(query.resource_usage.l1_output_buffer_per_core, expected_resource_usage.l1_output_buffer_per_core);
+        EXPECT_EQ(query.output_tensor_spec.value(), output_spec);
     }
 }
 
