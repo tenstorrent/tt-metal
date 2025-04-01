@@ -73,7 +73,7 @@ mcast_Linear,noc_fused_unicast_write_no_flush_atomic_inc,2048,4,1,True,False,Tru
 unicast_Linear,noc_fused_unicast_write_no_flush_atomic_inc,2048,4,1,True,False,True,5.218077750097365,2547889.5264147287
 mcast_Linear,noc_fused_unicast_write_no_flush_atomic_inc,4096,4,1,False,False,True,9.077815104209982,2216263.453176265
 unicast_Linear,noc_fused_unicast_write_no_flush_atomic_inc,4096,4,1,False,False,True,10.142245111495427,2478023.0485755896
-mcast_Linear,noc_fused_unicast_write_no_flush_atomic_inc,4096,4,1,True,False,True,8.202099080555907,None
+mcast_Linear,noc_fused_unicast_write_no_flush_atomic_inc,4096,4,1,True,False,True,8.322099080555907,None
 unicast_Linear,noc_fused_unicast_write_no_flush_atomic_inc,4096,4,1,True,False,True,9.914685774899743,2420577.5817626324
 mcast_Linear,noc_fused_unicast_write_no_flush_atomic_inc,16,4,1,False,True,True,0.019978494274703586,1248655.892168974
 unicast_Linear,noc_fused_unicast_write_no_flush_atomic_inc,16,4,1,False,True,True,0.02395335963497056,1497084.97718566

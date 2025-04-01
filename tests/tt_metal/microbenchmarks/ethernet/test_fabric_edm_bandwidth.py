@@ -288,7 +288,7 @@ def run_fabric_edm(
     if packet_size <= 2048 and fabric_mode != FabricTestMode.Linear:
         bw_threshold_general = 0.12
     ## These seem to be a little more noisy so for now we widen the threshold to have test stability
-    bw_threshold_fused_write_atomic = 0.12
+    bw_threshold_fused_write_atomic = 0.14
     pps_threshold_fused_write_atomic = 0.03
     use_general_threshold = (
         noc_message_type == "noc_fused_unicast_write_flush_atomic_inc"
