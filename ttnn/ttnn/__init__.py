@@ -178,6 +178,7 @@ from ttnn.types import (
     MeshShape,
     MeshCoordinate,
     MeshCoordinateRange,
+    MeshCoordinateRangeSet,
     QueueId,
     UnaryWithParam,
     UnaryOpType,
