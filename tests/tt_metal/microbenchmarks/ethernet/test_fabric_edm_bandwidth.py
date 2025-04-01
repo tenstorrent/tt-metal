@@ -291,8 +291,8 @@ def run_fabric_edm(
     bw_threshold_fused_write_atomic = 0.14
     pps_threshold_fused_write_atomic = 0.03
     use_general_threshold = (
-        noc_message_type == "noc_fused_unicast_write_flush_atomic_inc"
-        or noc_message_type == "noc_fused_unicast_write_no_flush_atomic_inc"
+        noc_message_type != "noc_fused_unicast_write_flush_atomic_inc"
+        and noc_message_type != "noc_fused_unicast_write_no_flush_atomic_inc"
     )
 
     bw_threshold = bw_threshold_general if use_general_threshold else bw_threshold_fused_write_atomic
