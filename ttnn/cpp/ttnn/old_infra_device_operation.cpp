@@ -57,13 +57,12 @@ template void override_addresses<OptionalTensors>(
 
 template <typename OutputTensors>
 typename OldInfraDeviceOperation<OutputTensors>::ProgramFactory::cached_program_t
-OldInfraDeviceOperation<OutputTensors>::ProgramFactory::create_at(
+OldInfraDeviceOperation<OutputTensors>::ProgramFactory::create(
     const operation_attributes_t& operation_attributes,
-    const ttnn::MeshCoordinate& mesh_coord,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto program_with_callbacks = operation_attributes.create_program_at(
-        mesh_coord, tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_return_value);
+    auto program_with_callbacks = operation_attributes.create_program(
+        tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_return_value);
     return cached_program_t{
         std::move(program_with_callbacks.program),
         shared_variables_t{
@@ -72,10 +71,9 @@ OldInfraDeviceOperation<OutputTensors>::ProgramFactory::create_at(
 }
 
 template <typename OutputTensors>
-void OldInfraDeviceOperation<OutputTensors>::ProgramFactory::override_runtime_arguments_at(
+void OldInfraDeviceOperation<OutputTensors>::ProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
-    const ttnn::MeshCoordinate&,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto& override_addresses_callback = cached_program.shared_variables.override_addresses_callback;
@@ -106,11 +104,11 @@ template <typename OutputTensors>
 typename OldInfraDeviceOperation<OutputTensors>::MeshWorkloadFactory::cached_mesh_workload_t
 OldInfraDeviceOperation<OutputTensors>::MeshWorkloadFactory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
-    const std::vector<ttnn::MeshCoordinate>& mesh_coords,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     auto workload_with_callbacks = operation_attributes.create_mesh_workload(
-        mesh_coords, tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_return_value);
+        tensor_coords, tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_return_value);
 
     TT_FATAL(
         !workload_with_callbacks.workload_callback.has_value() || workload_with_callbacks.per_program_callbacks.empty(),
@@ -198,12 +196,6 @@ auto OldInfraDeviceOperation<OutputTensors>::create_op_performance_model(
 template <typename OutputTensors>
 std::string OldInfraDeviceOperation<OutputTensors>::get_type_name(const operation_attributes_t& attributes) {
     return attributes.get_type_name();
-}
-
-template <typename OutputTensors>
-bool OldInfraDeviceOperation<OutputTensors>::ProgramFactory::uses_heterogenous_dispatch(
-    const operation_attributes_t& attributes) {
-    return attributes.uses_heterogenous_dispatch();
 }
 
 template <typename OutputTensors>

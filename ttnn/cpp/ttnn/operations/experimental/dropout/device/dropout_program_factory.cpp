@@ -351,19 +351,21 @@ void DropoutProgramFactory::override_runtime_arguments(
 
 DropoutMeshWorkloadFactory::cached_mesh_workload_t DropoutMeshWorkloadFactory::create_mesh_workload(
     const operation_attributes_t& args,
-    const std::vector<ttnn::MeshCoordinate>& mesh_coords,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     TT_ASSERT(args.use_per_device_seed, "DropoutMeshWorkloadFactory should only be used if per-device seed is used.");
 
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    for (const auto& mesh_coord : mesh_coords) {
-        const ttnn::MeshCoordinateRange mesh_coord_range{mesh_coord, mesh_coord};
-        auto single_device_program = DropoutProgramFactory::create(
-            override_per_device_seed(args, mesh_coord, tensor_args.input), tensor_args, output);
-        shared_variables[mesh_coord_range] = std::move(single_device_program.shared_variables);
-        workload.add_program(mesh_coord_range, std::move(single_device_program.program));
+    for (const auto& mesh_coord_range : tensor_coords.ranges()) {
+        for (const auto& mesh_coord : mesh_coord_range) {
+            const ttnn::MeshCoordinateRange mesh_coord_range{mesh_coord, mesh_coord};
+            auto single_device_program = DropoutProgramFactory::create(
+                override_per_device_seed(args, mesh_coord, tensor_args.input), tensor_args, output);
+            shared_variables[mesh_coord_range] = std::move(single_device_program.shared_variables);
+            workload.add_program(mesh_coord_range, std::move(single_device_program.program));
+        }
     }
     return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
