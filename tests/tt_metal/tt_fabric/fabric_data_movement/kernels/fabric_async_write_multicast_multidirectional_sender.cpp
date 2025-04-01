@@ -6,12 +6,14 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
+#include "tests/tt_metal/tt_fabric/fabric_data_movement/test_common.hpp"
 
 using namespace tt::tt_fabric;
 
 void kernel_main() {
     constexpr uint32_t client_interface_cb = get_compile_time_arg_val(0);
     constexpr uint32_t data_mode = get_compile_time_arg_val(1);
+    constexpr uint32_t test_mode = get_compile_time_arg_val(2);
 
     uint32_t rt_args_idx = 0;
     uint32_t src_addr = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
@@ -32,10 +34,10 @@ void kernel_main() {
     uint32_t packet_size_bytes = num_bytes + PACKET_HEADER_SIZE_BYTES;
 
     uint32_t client_interface_addr = get_write_ptr(client_interface_cb);
-    volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface =
-        reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
+    volatile fabric_pull_client_interface_t* client_interface =
+        (volatile fabric_pull_client_interface_t*)client_interface_addr;
     for (uint32_t i = 0; i < num_dirs; i++) {
-        fabric_endpoint_init(client_interface + i, 0 /* unused */);
+        fabric_endpoint_init<decltype(client_interface)>(client_interface + i, 0 /* unused */);
     }
 
     fabric_async_write_multicast<
@@ -104,7 +106,7 @@ void kernel_main() {
             0);
     }
     // Flush all pull requests
-    client_interface = reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
+    client_interface = reinterpret_cast<volatile fabric_pull_client_interface_t*>(client_interface_addr);
     for (uint32_t i = 0; i < num_dirs; i++) {
         fabric_wait_for_pull_request_flushed(client_interface);
         client_interface++;
