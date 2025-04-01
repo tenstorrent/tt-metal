@@ -4,8 +4,8 @@
 
 loguru
 
-pip install git+https://github.com/tenstorrent/tt-smi.git@v3.0.12
-pip install git+https://github.com/tenstorrent/tt-topology.git@v1.2.4
+git+https://github.com/tenstorrent/tt-smi.git@v3.0.12
+git+https://github.com/tenstorrent/tt-topology.git@v1.2.4
 
 # For github workflow unit test failure annotations
 pytest-github-actions-annotate-failures==0.3.0
