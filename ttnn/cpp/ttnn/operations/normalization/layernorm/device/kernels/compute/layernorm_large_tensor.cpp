@@ -117,7 +117,6 @@ void MAIN {
         //         -----------
         //              n
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            // pack_reconfig_data_format(cb_xmm);
             tile_regs_acquire();
             tile_regs_wait();
             cb_wait_front(cb_in, blk);
@@ -166,9 +165,8 @@ void MAIN {
                 copy_tile(cb_ex2, 0, dst0);
                 cb_pop_front(cb_ex2, onetile);
             }
-            reconfig_data_format(cb_xmm, cb_scaler);
-            // pack_reconfig_data_format(cb_ex2);
             cb_wait_front(cb_xmm, blk);
+            reconfig_data_format(cb_xmm, cb_scaler);
             reduce_init_delta<false>(cb_xmm, cb_scaler, cb_ex2);
             // accumulates squared residual
             for (uint32_t j = 0; j < blk; j++) {
@@ -198,7 +196,6 @@ void MAIN {
         cb_wait_front(cb_ex2, onetile);
 
         reconfig_data_format(cb_ex2, cb_eps);
-        pack_reconfig_data_format(cb_ex2pe);
 
         add_tiles_init(cb_ex2, cb_eps);
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
@@ -222,7 +219,6 @@ void MAIN {
         tile_regs_acquire();
         tile_regs_wait();
         reconfig_data_format_srca(cb_ex2pe);
-        // pack_reconfig_data_format(cb_ex2pe);
         unary_bcast_init<BroadcastType::COL>(cb_ex2pe, cb_ex2pe);
         unary_bcast<BroadcastType::COL>(cb_ex2pe, 0, dst0);
         cb_pop_front(cb_ex2pe, onetile);
@@ -283,6 +279,7 @@ void MAIN {
                 cb_xmm = cb_out;
             }
             pack_reconfig_data_format(cb_xmm);
+            cb_reserve_back(cb_xmm, blk);
             for (uint32_t j = 0; j < blk; j++) {
                 pack_tile(j, cb_xmm);
             }
@@ -292,8 +289,13 @@ void MAIN {
                 tile_regs_acquire();
                 tile_regs_wait();
                 reconfig_data_format(cb_xmm, cb_gamma);
-                !do_beta ? pack_reconfig_data_format(cb_out) : pack_reconfig_data_format(cb_xmm);
+                if constexpr (!do_beta) {
+                    pack_reconfig_data_format(cb_out);
+                }
                 cb_wait_front(cb_gamma, blk);
+                if (ncht == 1) {
+                    DPRINT << "\n\n\nFINAL VAL Pre Var Value wt: " << wt << ENDL();
+                }
                 cb_wait_front(cb_xmm, blk);
                 mul_bcast_rows_init_short(cb_xmm, cb_gamma);
                 for (uint32_t j = 0; j < blk; j++) {
@@ -302,12 +304,14 @@ void MAIN {
                 tile_regs_commit();
                 cb_pop_front(cb_gamma, blk);
                 cb_pop_front(cb_xmm, blk);
-                if (!do_beta) {
+                if constexpr (!do_beta) {
+                    cb_reserve_back(cb_out, blk);
                     for (uint32_t j = 0; j < blk; j++) {
                         pack_tile(j, cb_out);
                     }
                     cb_push_back(cb_out, blk);
                 } else {
+                    cb_reserve_back(cb_xmm, blk);
                     for (uint32_t j = 0; j < blk; j++) {
                         pack_tile(j, cb_xmm);
                     }
@@ -330,6 +334,7 @@ void MAIN {
                 tile_regs_commit();
                 cb_pop_front(cb_beta, blk);
                 cb_pop_front(cb_xmm, blk);
+                cb_reserve_back(cb_out, blk);
                 for (uint32_t j = 0; j < blk; j++) {
                     pack_tile(j, cb_out);
                 }
@@ -337,6 +342,12 @@ void MAIN {
                 cb_push_back(cb_out, blk);
             }
         }
+
+        UNPACK(DPRINT << "-----NCHt val: " << NCHt << "---------- ncht" << ncht << ENDL());
+        cb_xmm = tt::CBIndex::c_24;  // x minus mean
+#ifdef RMSNORM
+        cb_pop_front(cb_ex, 1);
+#endif
         // End of
         // Final Val Calc
         //    x-E[X]

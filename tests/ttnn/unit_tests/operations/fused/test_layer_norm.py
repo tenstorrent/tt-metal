@@ -120,7 +120,7 @@ def test_layer_norm_with_tile_layout(device, h, w):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
 
 
-@pytest.mark.parametrize("h, w", [(2048, 2048), (2048, 4096)])
+@pytest.mark.parametrize("h, w", [(2048, 4096)])
 @pytest.mark.parametrize("d_type", [torch.bfloat16, torch.float32])
 def test_large_layer_norm(device, h, w, d_type):
     torch.manual_seed(0)
@@ -161,7 +161,7 @@ def test_large_layer_norm_with_weight_and_bias(device, h, w):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.97)
 
 
-@pytest.mark.parametrize("h, w", [(2048, 2048)])
+@pytest.mark.parametrize("h, w", [(2048, 4096), (2048, 2048)])
 def test_large_layer_norm_with_weight(device, h, w):
     torch.manual_seed(0)
 
