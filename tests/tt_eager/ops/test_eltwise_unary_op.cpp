@@ -210,7 +210,7 @@ void test_numerically() {
         TT_FATAL(allclose, "Error");
     }
     {
-        auto allclose = run_test<UnaryOpType::LOG>(device, shape, 0.0f, 1.0f, 1e-1f, 1e-1f);
+        auto allclose = run_test<UnaryOpType::LOG>(device, shape, 0.0f, 1.0f, 1e-1f, 1e-2f);
         TT_FATAL(allclose, "Error");
     }
     {
