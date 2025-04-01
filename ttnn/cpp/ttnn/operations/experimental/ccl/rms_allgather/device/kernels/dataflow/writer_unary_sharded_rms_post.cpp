@@ -24,7 +24,7 @@ void kernel_main() {
     constexpr uint32_t cb_gamma = get_compile_time_arg_val(8);
 
     // Data type CTs
-#define stick_size_is_pow2 get_compile_time_arg_val(9) == 1
+    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(9) == 1;
     constexpr uint32_t stick_size = get_compile_time_arg_val(10);
     constexpr bool FLOAT32_DTYPE_GAMMA = get_compile_time_arg_val(11) == 1;
 
@@ -54,12 +54,8 @@ void kernel_main() {
 
     if constexpr (fuse_gamma) {
         const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
-#if (stick_size_is_pow2)
-        const InterleavedPow2AddrGen<gamma_is_dram> gamma = {
-            .bank_base_address = gamma_addr, .log_base_2_of_page_size = stick_size};
-#else
-        const InterleavedAddrGen<gamma_is_dram> gamma = {.bank_base_address = gamma_addr, .page_size = stick_size};
-#endif
+        const auto gamma =
+            get_interleaved_addr_gen<gamma_is_dram, stick_size_is_pow2>(gamma_addr, stick_size, stick_size);
 
         constexpr uint32_t bytes_in_faceline = FLOAT32_DTYPE_GAMMA ? 64 : 32;
         constexpr uint32_t bytes_in_two_facelines = bytes_in_faceline * 2;
