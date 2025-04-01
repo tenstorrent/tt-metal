@@ -38,7 +38,7 @@ def run_unary_test_sharded(device, hw, out_channels, ttnn_function, pcc=0.9999):
     input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
     )
-    output_tensor = ttnn.sigmoid_mode(input_tensor, 2)
+    output_tensor = ttnn_function(input_tensor, mode=2, fast_and_approximate_mode=False)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 

@@ -84,9 +84,6 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::ROUND:
             op_init_and_name = {"round_tile_init();", fmt::format("round_tile({}, {});", idst, (int)param0)};
             break;
-        case UnaryOpType::SIGMOID_MODE:
-            op_init_and_name = {"sigmoid_tile_init();", fmt::format("sigmoid_tile<{1}>({0});", idst, (int)param0)};
-            break;
         case UnaryOpType::RELU_MAX:
             op_init_and_name = {
                 "relu_max_tile_init();",
@@ -172,6 +169,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             op_init_and_name = {
                 fmt::format("exp_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("exp_tile<{1}u>({0});", idst, (uint32_t)param0)};
+            break;
+        case UnaryOpType::SIGMOID:
+            op_init_and_name = {
+                "sigmoid_tile_init();",
+                fmt::format("sigmoid_tile<{1}, {2}u>({0});", idst, (int32_t)param0, (uint32_t)params[1])};
             break;
         case UnaryOpType::ERF:
             op_init_and_name = {
@@ -393,7 +395,7 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     } else if (name == "silu") {
         return UnaryWithParam(UnaryOpType::SILU);
     } else if (name == "sigmoid") {
-        return UnaryWithParam(UnaryOpType::SIGMOID, static_cast<float>(false));
+        return UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(4), static_cast<float>(false)});
     } else if (name == "sigmoid_approx") {
         return UnaryWithParam(UnaryOpType::SIGMOID, static_cast<float>(true));
     } else if (name == "sqrt") {

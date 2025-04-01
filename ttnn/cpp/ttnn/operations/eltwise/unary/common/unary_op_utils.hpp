@@ -65,7 +65,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::REMAINDER:
         case UnaryOpType::FILL:
         case UnaryOpType::ROUND:
-        case UnaryOpType::SIGMOID_MODE:
+        case UnaryOpType::SIGMOID:
         case UnaryOpType::PRELU_SFPU:
         case UnaryOpType::FMOD:
         case UnaryOpType::MAXIMUM: return true;

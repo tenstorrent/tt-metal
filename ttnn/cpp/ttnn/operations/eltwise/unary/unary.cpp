@@ -138,6 +138,24 @@ template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::RSQRT>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::SIGMOID>;
 
 template <UnaryOpType unary_op_type>
+Tensor ExecuteUnaryWithVectorAndFastAndApproximateMode<unary_op_type>::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const int mode,
+    const bool parameter,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return detail::unary_impl(
+        queue_id,
+        input_tensor,
+        {UnaryWithParam{unary_op_type, {static_cast<float>(mode), static_cast<float>(parameter)}}},
+        memory_config,
+        optional_output_tensor);
+}
+
+template struct ExecuteUnaryWithVectorAndFastAndApproximateMode<UnaryOpType::SIGMOID>;
+
+template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFloatParameter<unary_op_type>::invoke(
     QueueId queue_id,
     const Tensor& input_tensor,
@@ -340,7 +358,6 @@ Tensor ExecuteUnaryWithIntegerParameter<unary_op_type, T>::invoke(
 }
 
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::POWER, uint32_t>;
-template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::SIGMOID_MODE, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::LEFT_SHIFT, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::RIGHT_SHIFT, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::ROUND, int32_t>;
