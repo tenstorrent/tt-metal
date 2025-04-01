@@ -8,6 +8,7 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -102,7 +103,6 @@ struct TileIterator {
         tile_idx_w(0),
         tile_end_h(in_end_h - 1),
         tile_end_w(in_end_w - 1),
-        offset(0),
         element_count(0),
         first(true) {};
 
@@ -113,14 +113,11 @@ struct TileIterator {
         }
         if (tile_idx_w < tile_end_w) {
             TT_ASSERT(element_count < this->size());
-            ++offset;
             ++element_count;
             ++tile_idx_w;
             return true;
         } else if (tile_idx_h < tile_end_h) {
             TT_ASSERT(element_count < this->size());
-            auto pad = 31 - tile_idx_w;
-            offset += pad == 0 ? 1 : pad + 1;
             ++element_count;
             tile_idx_w = 0;
             ++tile_idx_h;
@@ -141,7 +138,6 @@ protected:
     uint32_t tile_idx_w;
     const uint32_t tile_end_h;
     const uint32_t tile_end_w;
-    uint32_t offset;
     uint32_t element_count;
     bool first;
 
@@ -167,12 +163,7 @@ std::vector<SegmentMapData> reshape_map_output_page(
     const uint32_t ho_sz = std::min(output_shape[-2] - ho_0, tile_shape[0]);
     const uint32_t wo_sz = std::min(output_shape[-1] - wo_0, tile_shape[1]);
 
-    TT_ASSERT(
-        co_0 < output_shape[0],
-        "co_0: {} output_shape[0]: {} page index: {}",
-        co_0,
-        output_shape[0],
-        output_page_index);
+    TT_ASSERT(co_0 < output_shape[0]);
 
     TileIterator output_tile_iterator(ho_0, wo_0, ho_sz, wo_sz);
 
@@ -191,22 +182,9 @@ std::vector<SegmentMapData> reshape_map_output_page(
         const auto page_idx_i = tensor_idxs_to_page_idx(ci, hi, wi, input_shape, tile_shape, tile_dims_input);
         const auto offset_i = tensor_idxs_to_faced_tile_offset(hi, wi, tile_shape, face_shape);
 
-        // TT_ASSERT(page_idx_i < tt::div_up(input_shape.volume(), tile_shape[0]*tile_shape[1]), "Input Page index: {},
-        // output page index: {}", page_idx_i,output_page_index);
-
-        TT_ASSERT(
-            ci < input_shape[0],
-            "ci: {} input_shape[0]: {} in pg idx {} out pg idx {} co {} ho {}, wo {}",
-            ci,
-            input_shape[0],
-            page_idx_i,
-            output_page_index,
-            co_0,
-            ho,
-            wo);
+        TT_ASSERT(ci < input_shape[0]);
         TT_ASSERT(hi < input_shape[1], "hi: {} input_shape[1]: {} ", hi, input_shape[1]);
         TT_ASSERT(wi < input_shape[2], "wi: {} input_shape[2]: {} ", wi, input_shape[2]);
-
         TT_ASSERT(offset_i < tile_shape[0] * tile_shape[1]);
 
         if (map_data.count(page_idx_i)) {
@@ -223,9 +201,6 @@ std::vector<SegmentMapData> reshape_map_output_page(
         prev_offset_i = offset_i;
         prev_page_idx_i = page_idx_i;
     }
-
-    // std::cout<<"Num input pages: "<<map_data.size()<<std::endl;
-    // for(auto m : map_data)std::cout<<"Input page: "<<m.first<<" num segments: "<<m.second.size()<<std::endl;
 
     auto total_num_elements = std::accumulate(map_data.begin(), map_data.end(), 0, [](auto acc, auto& v) {
         return acc + std::accumulate(
@@ -250,6 +225,7 @@ std::vector<SegmentMapData> reshape_map_output_page(
 }
 
 Tensor compute_reshape_mapping_host_tensor(
+    const uint32_t num_input_pages,
     const uint32_t num_output_pages,
     const Shape& input_shape,
     const Shape& output_shape,
@@ -272,7 +248,7 @@ Tensor compute_reshape_mapping_host_tensor(
         })->size();
 
     // Ensure that map data is always aligned
-    max_input_segments += max_input_segments % 2;
+    max_input_segments += max_input_segments % (tt::tt_metal::hal::get_l1_alignment());
 
     // initialize to 0 because that will be checked by the kernel as a stopping condition
     std::vector<uint32_t> flat_mapping_vector(SegmentMapData::size * num_output_pages * max_input_segments, 0);
@@ -317,28 +293,22 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
 
     TT_ASSERT(input_buffer != nullptr, "Output buffer should be allocated on device!");
 
+    const uint32_t num_input_pages = tt::div_up(input_tensor.volume(), tile_shape[0] * tile_shape[1]);
     const uint32_t num_output_pages = tt::div_up(output_tensor.volume(), tile_shape[0] * tile_shape[1]);
 
-    Tensor mapping_tensor =
-        detail::compute_reshape_mapping_host_tensor(num_output_pages, input_shape, output_shape, tile_shape, face_shape)
-            .to_device(device);
-
-    // DEBUG
-    // mapping_tensor.print();
+    Tensor mapping_tensor = detail::compute_reshape_mapping_host_tensor(
+                                num_input_pages, num_output_pages, input_shape, output_shape, tile_shape, face_shape)
+                                .to_device(device);
 
     tt::tt_metal::Buffer* mapping_buffer = mapping_tensor.buffer();
-
     const auto grid = device->compute_with_storage_grid_size();
-
-    // DEBUG
-    // const CoreCoord grid{1,1};
 
     uint32_t num_cores_x = grid.x;
     uint32_t num_cores_y = grid.y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
     // set up CB for mapping metadata
-    constexpr auto reader_cb_len = 1;  // shrugs
+    constexpr auto reader_cb_len = 1;
 
     auto mapping_page_size = mapping_tensor.get_logical_shape()[-1];
     auto mapping_dataformat = tt::tt_metal::datatype_to_dataformat_converter(mapping_tensor.get_dtype());

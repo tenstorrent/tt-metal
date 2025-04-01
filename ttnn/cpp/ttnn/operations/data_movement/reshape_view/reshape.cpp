@@ -233,6 +233,10 @@ ttnn::Tensor reshape_tiled(
         tensor3d = ttnn::sharded_to_interleaved(queue_id, tensor, working_input_memory_config, std::nullopt);
     }
 
+    if (tensor.get_dtype() == DataType::BFLOAT8_B) {
+        tensor3d = ttnn::typecast(tensor3d, DataType::BFLOAT16);
+    }
+
     MemoryConfig working_output_memory_config = memory_config;
     if (memory_config.is_sharded()) {
         working_output_memory_config.memory_layout = TensorMemoryLayout::INTERLEAVED;
@@ -249,6 +253,10 @@ ttnn::Tensor reshape_tiled(
 
     if (memory_config.is_sharded()) {
         output_tensor_3d = ttnn::interleaved_to_sharded(queue_id, output_tensor_3d, memory_config, std::nullopt);
+    }
+
+    if (tensor.get_dtype() == DataType::BFLOAT8_B) {
+        output_tensor_3d = ttnn::typecast(output_tensor_3d, tensor.get_dtype());
     }
 
     return PerformView(output_tensor_3d, logical_shape, compute_padded_shape(logical_shape));
