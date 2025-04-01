@@ -330,8 +330,8 @@ class ModelArgs:
                 config_path = hf_hub_download(HF_MODEL, "config.json")
                 hf_model_dir = os.path.split(config_path)[0]
             except ImportError as e:
-                logger.warning(f"Failed to use hf_hub_download to find model's cache: {e}")
                 hf_model_dir = os.path.join("model_cache", "--".join(["models"] + HF_MODEL.split("/")))
+                logger.warning(f"Failed to use hf_hub_download to find model's cache. Defaulting to: {hf_model_dir}")
 
             self.CKPT_DIR = hf_model_dir
             self.TOKENIZER_PATH = hf_model_dir
