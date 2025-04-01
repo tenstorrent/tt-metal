@@ -124,7 +124,7 @@ void AllGatherAsync::validate_with_output_tensors(
         for (size_t i = 0; i < input_shape.size(); ++i) {
             if (i == this->dim) {
                 TT_FATAL(
-                    output_shape[i] == input_shape[i] * this->ring_size,
+                    output_shape[i] <= input_shape[i] * this->ring_size,
                     "Error, Output tensor shape at dimension {} should be {} but has {}",
                     i,
                     input_shape[i] * this->ring_size,
@@ -165,16 +165,8 @@ static void validate_output_tensor_allocation(const std::vector<Tensor>& output_
 
 std::vector<ttnn::TensorSpec> AllGatherAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    AllGatherAsyncVersion version = select_version(input_tensor);
     auto shape = input_tensor.get_padded_shape();  // TODO: Replace with get_logical_shape()
-
-    // Adjust shape for llama post binary mult+silu case to remove padding in the output tensor
-    if (version == AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED && shape[this->dim] == 960) {
-        shape[this->dim] = 896 * this->ring_size;
-    } else {
-        shape[this->dim] *= this->ring_size;
-    }
-
+    shape[this->dim] *= this->ring_size;
     return {TensorSpec(
         shape,
         TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config))};
