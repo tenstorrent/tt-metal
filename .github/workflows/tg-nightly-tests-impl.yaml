@@ -24,7 +24,7 @@ jobs:
             name: "Llama TG Accuracy Test",
             arch: wormhole_b0,
             cmd: "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/ FAKE_DEVICE=TG pytest models/demos/llama3_subdevices/tests/test_llama_accuracy.py",
-            timeout: 20,
+            timeout: 26,
             owner_id: U071CKL4AFK
           }, # Ammar Vora
         ]

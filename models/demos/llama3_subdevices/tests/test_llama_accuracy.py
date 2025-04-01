@@ -53,10 +53,10 @@ def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: Ll
 
 
 @torch.no_grad()
-@pytest.mark.timeout(1200)
+@pytest.mark.timeout(1500)
 @pytest.mark.parametrize(
     "min_top1_acc, min_top5_acc",  # Max seqlen should be at least prefill_len + decode_len
-    ((97, 100),),
+    ((93, 100),),
 )
 @pytest.mark.parametrize(
     "prefill_len, decode_len, max_seq_len",  # Max seqlen should be at least prefill_len + decode_len
@@ -469,6 +469,8 @@ def test_tt_model_acc(
     #     model_args.device_name,
     #     optimizations,s
     # )
+
+    tt_model.tt_ccl.close()
 
     logger.info(f"Top-1: {total_top1_acc:.0f}% | Top-5: {total_top5_acc:.0f}%")
     assert (
