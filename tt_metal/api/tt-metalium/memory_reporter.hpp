@@ -13,8 +13,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "allocator.hpp"
-#include "allocator_types.hpp"
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/allocator_types.hpp>
 
 namespace tt {
 namespace tt_metal {

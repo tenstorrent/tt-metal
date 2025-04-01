@@ -10,9 +10,9 @@
 #include <tt-metalium/hal.hpp>
 
 #include <umd/device/types/cluster_descriptor_types.h>
-#include "fabric_edm_types.hpp"
-#include "fabric_edm_packet_header.hpp"
-#include "edm_fabric_counters.hpp"
+#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/fabric_edm_packet_header.hpp>
+#include <tt-metalium/edm_fabric_counters.hpp>
 
 #include <unordered_map>
 #include <optional>

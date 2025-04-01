@@ -16,11 +16,11 @@
 #include <unordered_set>
 #include <vector>
 
-#include "assert.hpp"
-#include "control_plane.hpp"
-#include "device.hpp"
-#include "dispatch_core_common.hpp"
-#include "system_memory_manager.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt {

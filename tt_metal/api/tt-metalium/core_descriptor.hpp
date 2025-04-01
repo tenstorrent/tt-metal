@@ -14,8 +14,8 @@
 #include <utility>
 #include <vector>
 
-#include "core_coord.hpp"
-#include "dispatch_core_common.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
 
 namespace tt {
 

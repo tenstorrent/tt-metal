@@ -7,7 +7,7 @@
 #include <vector>
 #include <variant>
 
-#include "shape.hpp"
+#include <tt-metalium/shape.hpp>
 
 namespace tt::tt_metal {
 

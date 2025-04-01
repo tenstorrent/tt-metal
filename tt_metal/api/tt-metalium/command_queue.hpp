@@ -9,11 +9,11 @@
 #include <memory>
 #include <thread>
 
-#include "worker_config_buffer.hpp"
-#include "trace_buffer.hpp"
-#include "command_queue_interface.hpp"
+#include <tt-metalium/worker_config_buffer.hpp>
+#include <tt-metalium/trace_buffer.hpp>
+#include <tt-metalium/command_queue_interface.hpp>
 
-#include "vector_aligned.hpp"
+#include <tt-metalium/vector_aligned.hpp>
 
 namespace tt::tt_metal {
 

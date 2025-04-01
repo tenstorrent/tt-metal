@@ -10,10 +10,10 @@
 #include <memory>
 #include <tuple>
 
-#include "buffer_constants.hpp"
-#include "core_coord.hpp"
-#include "hal_types.hpp"
-#include "mesh_buffer.hpp"
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 namespace tt {
 namespace tt_metal {
