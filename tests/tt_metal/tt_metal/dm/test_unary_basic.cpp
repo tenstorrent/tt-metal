@@ -9,7 +9,7 @@
 
 namespace tt::tt_metal {
 
-using std::vector;
+using namespace std;
 using namespace tt;
 using namespace tt::test_utils;
 
@@ -24,6 +24,8 @@ struct DmConfig {
     size_t page_size_bytes = 0;
     DataFormat l1_data_format = DataFormat::Invalid;
     CoreRangeSet cores = CoreRangeSet();
+    array<uint32_t, 2> tensor_shape_in_pages = {0, 0};
+    array<uint32_t, 2> num_dram_banks = {0, 0};
 };
 
 /// @brief Does Dram --> Reader --> CB --> Writer --> Dram.
@@ -37,21 +39,41 @@ bool run_dm(IDevice* device, const DmConfig& test_config) {
     // DRAM Buffers
     const size_t total_size_bytes =
         test_config.num_of_transactions * test_config.transaction_size_pages * test_config.page_size_bytes;
-    // TODO: Test for sharded dram buffer as well
-    InterleavedBufferConfig dram_config{
+
+    InterleavedBufferConfig interleaved_dram_config{
         .device = device, .size = total_size_bytes, .page_size = total_size_bytes, .buffer_type = BufferType::DRAM};
 
-    auto input_dram_buffer = CreateBuffer(dram_config);
+    ShardSpecBuffer shard_spec = ShardSpecBuffer(
+        test_config.cores,
+        {test_config.tensor_shape_in_pages[0] * 4 / test_config.num_dram_banks[0],
+         test_config.tensor_shape_in_pages[1] * (device->arch() == ARCH::BLACKHOLE ? 8 : 4) /
+             test_config.num_dram_banks[1]},
+        ShardOrientation::ROW_MAJOR,
+        {4, (device->arch() == ARCH::BLACKHOLE) ? 8 : 4},
+        test_config.tensor_shape_in_pages);
+    ShardedBufferConfig sharded_dram_config{
+        .device = device,
+        .size = total_size_bytes,
+        .page_size = total_size_bytes,
+        .buffer_type = BufferType::DRAM,
+        .buffer_layout = TensorMemoryLayout::BLOCK_SHARDED,
+        .shard_parameters = shard_spec};
+
+    std::shared_ptr<Buffer> input_dram_buffer;
+    if (!test_config.num_dram_banks[0]) {
+        log_info("Using interleaved config");
+        input_dram_buffer = CreateBuffer(interleaved_dram_config);
+    } else {
+        log_info("Using sharded config");
+        input_dram_buffer = CreateBuffer(sharded_dram_config);
+    }
     uint32_t input_dram_byte_address = input_dram_buffer->address();
-    auto output_dram_buffer = CreateBuffer(dram_config);
+    auto output_dram_buffer = CreateBuffer(interleaved_dram_config);
     uint32_t output_dram_byte_address = output_dram_buffer->address();
 
     // Input
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -100.0f,
-        100.0f,
-        total_size_bytes / bfloat16::SIZEOF,
-        std::chrono::system_clock::now().time_since_epoch().count());
+        -100.0f, 100.0f, total_size_bytes / bfloat16::SIZEOF, chrono::system_clock::now().time_since_epoch().count());
 
     // Golden output
     vector<uint32_t> packed_golden = packed_input;
@@ -189,10 +211,52 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedCoreLocations) {
         }
     }
 }
-// TODO: New test for sharded DRAM buffer with
-//      1. different transaction numbers and sizes
-//      2. different core locations
-// TODO: New test for core-to-core transactions. May use master and slave core range sets, added in the test config.
-// Might use a separate test file
+
+/* ========== Sharded dram buffer test ========== */
+TEST_F(DeviceFixture, TensixDataMovementDRAMSharded) {
+    // Parameters
+    size_t max_tensor_dim_pages = 4;  // Arbitrary tensor for sharding
+    size_t page_size_bytes = 32;      // Page size in bytes (=flit size): 32 bytes for WH, 64 for BH
+    if (arch_ == tt::ARCH::BLACKHOLE) {
+        page_size_bytes *= 2;
+    }
+
+    // Cores
+    CoreRange core_range({0, 0}, {0, 0});
+    CoreRangeSet core_range_set({core_range});
+
+    size_t transaction_size_pages = 1;
+    for (size_t tensor_dim_size = 1; tensor_dim_size <= max_tensor_dim_pages; tensor_dim_size *= 2) {
+        array<uint32_t, 2> tensor_shape_in_pages = {tensor_dim_size, tensor_dim_size};
+        size_t num_of_transactions = tensor_dim_size * tensor_dim_size / transaction_size_pages;
+        for (size_t dram_banks_dim_ratio = 1; dram_banks_dim_ratio <= 2; dram_banks_dim_ratio *= 2) {
+            uint32_t dram_banks_dim_size = tensor_dim_size / dram_banks_dim_ratio;
+            array<uint32_t, 2> num_dram_banks = {dram_banks_dim_size, dram_banks_dim_size};
+
+            // Test config
+            unit_tests::dm::DmConfig test_config = {
+                .num_of_transactions = num_of_transactions,
+                .transaction_size_pages = transaction_size_pages,
+                .page_size_bytes = page_size_bytes,
+                .l1_data_format = DataFormat::Float16_b,
+                .cores = core_range_set,
+                .tensor_shape_in_pages = tensor_shape_in_pages,
+                .num_dram_banks = num_dram_banks};
+
+            // Run
+            for (unsigned int id = 0; id < num_devices_; id++) {
+                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            }
+
+            if (tensor_dim_size == 1) {
+                break;
+            }
+        }
+    }
+}
+
+// TODO: Extend sharded DRAM buffer test with (?)
+//  1. different transaction numbers and sizes
+//  2. different core locations
 
 }  // namespace tt::tt_metal
