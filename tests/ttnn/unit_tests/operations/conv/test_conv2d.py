@@ -127,6 +127,8 @@ SliceWidth = ttnn.Conv2dSliceWidth
         (48,   56,   1016,  1016,  SliceWidth,    8,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (4, 4), 32, 32 * 3,  ttnn.MathFidelity.LoFi  ),
         (56,   64,   1008,  256,   SliceWidth,    8,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (8, 8), 32, 0,       ttnn.MathFidelity.LoFi  ),
         (64,   128,  992,   992,   SliceWidth,   64,  ttnn.bfloat8_b, ttnn.bfloat16, (2, 2), (1, 1), (0, 0), (1, 1), 32, 32 * 4,  ttnn.MathFidelity.LoFi  ),
+        (64,    64,  2048,   256,  SliceHeight,   4,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1), 32, 32 * 16, ttnn.MathFidelity.LoFi  ),
+        (56,    64,  1008,  1008,  SliceWidth,    6,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (8, 8), 32, 0,       ttnn.MathFidelity.LoFi  ),
     )
     # fmt: on
 )
@@ -253,7 +255,7 @@ def test_conv_dram(
     diff = torch.abs(out - ref).flatten()
     num_elements = diff.numel()
 
-    # Filter out the top 1% of the differences
+    # Filter out the top 1% of the differences.
     # Using histogram to find the top 1% of differences is faster than sorting. Sorting is single-core.
     bin_count, bin_edge = torch.histogram(diff, bins=100)
     top1_count = num_elements // 100
