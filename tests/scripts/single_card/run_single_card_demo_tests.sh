@@ -123,7 +123,7 @@ run_n300_perf_tests(){
     echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
 
-  # # Falcon7b (perf verification for 128/1024/2048 seq lens and output token verification)
+  # Falcon7b (perf verification for 128/1024/2048 seq lens and output token verification)
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py; fail+=$?
 
   # Mamba

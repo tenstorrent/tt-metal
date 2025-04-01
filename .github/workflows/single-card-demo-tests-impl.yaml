@@ -20,16 +20,16 @@ jobs:
       matrix:
         test-group: [
           {
-           name: "N150",
-           arch: wormhole_b0,
-           runs-on: ["cloud-virtual-machine", "N150", "in-service"],
-           cmd: run_n150_tests
+            name: "N150",
+            arch: wormhole_b0,
+            runs-on: ["cloud-virtual-machine", "N150", "in-service"],
+            cmd: run_n150_tests
           }, # group of owners; working on splitting up
           {
-           name: "N300_functionality",
-           arch: wormhole_b0,
-           runs-on: ["cloud-virtual-machine", "N300", "in-service"],
-           cmd: run_n300_func_tests
+            name: "N300_functionality",
+            arch: wormhole_b0,
+            runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+            cmd: run_n300_func_tests
           }, # group of owners; working on splitting up
           {
             name: "N300_performance",
