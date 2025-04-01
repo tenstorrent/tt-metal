@@ -650,8 +650,7 @@ def test_block_sharded_partial_op(
 @pytest.mark.parametrize("num_cores", [64, 1], ids=["multi_core", "single_core"])
 @pytest.mark.parametrize("in0_height_sharded", [True, False], ids=["in0_height_sharded", "in0_dram_interleaved"])
 @pytest.mark.parametrize("out_height_sharded", [True, False], ids=["out_height_sharded", "out_dram_interleaved"])
-@pytest.mark.parametrize("in_place", [True, False], ids=["in_place", "not_in_place"])
-def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded, in_place):
+def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded):
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
@@ -668,9 +667,7 @@ def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded, in_
 
     height_sharded_memory_config = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
 
-    tt_scalar_dram = ttnn.from_torch(
-        torch_scalar, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+    tt_scalar = torch_scalar.item()
 
     tt_in0_dram = ttnn.from_torch(
         torch_in0, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -697,12 +694,12 @@ def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded, in_
 
         tt_out = ttnn.multiply(
             tt_in0_height_sharded,
-            tt_scalar_dram,
+            tt_scalar,
             memory_config=out_mem_config,
         )
         tt_in0_height_sharded.deallocate()
     else:
-        tt_out = ttnn.multiply(tt_in0_dram, tt_scalar_dram, memory_config=out_mem_config)
+        tt_out = ttnn.multiply(tt_in0_dram, tt_scalar, memory_config=out_mem_config)
 
     if out_height_sharded:
         tt_out = ttnn.to_memory_config(tt_out, ttnn.DRAM_MEMORY_CONFIG)
@@ -710,7 +707,7 @@ def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded, in_
     # Reference is out and input dram interleaved
     tt_out_ref = ttnn.multiply(
         tt_in0_dram,
-        tt_scalar_dram,
+        tt_scalar,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     tt_in0_dram.deallocate()
