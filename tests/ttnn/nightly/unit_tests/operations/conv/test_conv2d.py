@@ -18,6 +18,27 @@ BS = ttnn.TensorMemoryLayout.BLOCK_SHARDED
 WS = ttnn.TensorMemoryLayout.WIDTH_SHARDED
 
 
+def torch_fast_pcc(golden, calculated, pcc=0.99):
+    golden = torch.Tensor(golden).flatten()
+    calculated = torch.Tensor(calculated).flatten()
+    if torch.any(torch.isinf(calculated)) or torch.any(torch.isnan(calculated)):
+        logger.error("Output tensor contains inf or nan values")
+        return False, 0.0
+    cov_input = torch.concat([calculated, golden])
+    calc_pcc = torch.corrcoef(cov_input)
+    return calc_pcc >= pcc, calc_pcc
+
+
+def check_with_fast_pcc_without_tensor_printout(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
+    if expected_pytorch_result.shape != actual_pytorch_result.shape:
+        return (
+            False,
+            f"list(expected_pytorch_result.shape)={list(expected_pytorch_result.shape)} vs list(actual_pytorch_result.shape)={list(actual_pytorch_result.shape)}",
+        )
+    pcc_passed, pcc_message = torch_fast_pcc(expected_pytorch_result, actual_pytorch_result, pcc)
+    return pcc_passed, pcc_message
+
+
 # Cache map used for torch tensor reuse - the tensor will not be generated if a tensor of the same dimensions has already been generated
 @pytest.fixture(scope="module")
 def torch_tensor_map(request):
@@ -291,32 +312,11 @@ def run_conv(
         # tanh has a range of -1 to 1. So discrepancies in output values which are close to 0 tend to disproportionately affect the PCC.
         pcc = pcc * 0.99
 
-    scaled_diff_mean = 0
     if fast_compare:
-        diff = torch.abs(out - ref).flatten()
-        if torch.any(diff.isnan()) or torch.any(diff.isinf()):
-            # Histogram doesn't work if there are any infs or nans.
-            fast_compare = False
-            logger.info("Fast compare disabled due to inf or nan in diff")
-    if fast_compare and not torch.any(diff.isnan()) and not torch.any(diff.isinf()):
-        num_elements = diff.numel()
-        # Filter out the top 1% of the differences.
-        # Using histogram to find the top 1% of differences is faster than sorting. Sorting is single-core.
-        bin_count, bin_edge = torch.histogram(diff, bins=100)
-        top1_count = num_elements // 100
-        count = 0
-        index = -1
-        while count < top1_count and index < len(bin_count) - 1:
-            count += bin_count[index]
-            index -= 1
-        top1_diff = diff[diff > bin_edge[index]]
-
-        abs_ref = ref.abs()
-        abs_ref_mean = abs_ref.mean()
-
-        scaled_diff_mean = top1_diff.mean() / abs_ref_mean
-        logger.info(f"Filtered Scaled diff mean = {scaled_diff_mean} ")
-    if not fast_compare or scaled_diff_mean > 0.2:
+        passing, pcc_msg = check_with_fast_pcc_without_tensor_printout(out, ref, pcc=pcc)
+        logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
+        assert passing, pcc_msg
+    else:
         passing, pcc_msg = check_with_pcc_without_tensor_printout(out, ref, pcc=pcc)
         logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
         assert passing, pcc_msg
