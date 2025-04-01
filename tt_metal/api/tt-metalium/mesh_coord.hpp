@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "assert.hpp"
+#include "reflection.hpp"
 #include "shape_base.hpp"
 #include "utils.hpp"
 
@@ -469,32 +470,21 @@ struct tuple_element<1, tt::tt_metal::distributed::detail::MeshCoordinateValuePr
 template <>
 struct hash<tt::tt_metal::distributed::MeshCoordinate> {
     size_t operator()(const tt::tt_metal::distributed::MeshCoordinate& coord) const noexcept {
-        size_t seed = 0;
-        for (const auto coord_value : coord.coords()) {
-            tt::utils::hash_combine(seed, coord_value);
-        }
-        return seed;
+        return tt::stl::hash::hash_objects_with_default_seed(coord.attribute_values());
     }
 };
 
 template <>
 struct hash<tt::tt_metal::distributed::MeshCoordinateRange> {
     size_t operator()(const tt::tt_metal::distributed::MeshCoordinateRange& range) const noexcept {
-        size_t seed = 0;
-        tt::utils::hash_combine(seed, range.start_coord());
-        tt::utils::hash_combine(seed, range.end_coord());
-        return seed;
+        return tt::stl::hash::hash_objects_with_default_seed(range.attribute_values());
     }
 };
 
 template <>
 struct hash<tt::tt_metal::distributed::MeshCoordinateRangeSet> {
     size_t operator()(const tt::tt_metal::distributed::MeshCoordinateRangeSet& range_set) const noexcept {
-        size_t seed = 0;
-        for (const auto& range : range_set.ranges()) {
-            tt::utils::hash_combine(seed, range);
-        }
-        return seed;
+        return tt::stl::hash::hash_objects_with_default_seed(range_set.attribute_values());
     }
 };
 
