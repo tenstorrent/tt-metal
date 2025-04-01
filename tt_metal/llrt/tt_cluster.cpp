@@ -4,10 +4,16 @@
 
 #include "tt_cluster.hpp"
 
+#include <core_coord.hpp>
+#include <dev_msgs.h>
+#include <logger.hpp>
+#include <metal_soc_descriptor.h>
+#include <rtoptions.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <initializer_list>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -20,32 +26,25 @@
 #include <utility>
 #include <vector>
 
+#include "control_plane.hpp"
+#include "fabric_host_interface.h"
+#include "fabric_types.hpp"
 #include "fmt/base.h"
-#include <logger.hpp>
-#include <metal_soc_descriptor.h>
-#include <tt_backend_api_types.hpp>
-#include "umd/device/types/arch.h"
-#include "umd/device/tt_cluster_descriptor.h"
-#include "umd/device/types/cluster_descriptor_types.h"
-#include "umd/device/cluster.h"
-#include "umd/device/tt_soc_descriptor.h"
-#include "umd/device/tt_xy_pair.h"
-#include "umd/device/types/xy_pair.h"
-#include "umd/device/hugepage.h"
-
-#include <dev_msgs.h>
-
-#include "llrt/hal.hpp"
-
-#include "tracy/Tracy.hpp"
-#include "umd/device/tt_simulation_device.h"
-
-#include "sanitize_noc_host.hpp"
-#include <rtoptions.hpp>
-#include "tt_metal/llrt/tlb_config.hpp"
-#include <core_coord.hpp>
-
 #include "get_platform_architecture.hpp"
+#include "hal_types.hpp"
+#include "llrt/hal.hpp"
+#include "sanitize_noc_host.hpp"
+#include "tracy/Tracy.hpp"
+#include "tt_metal/llrt/tlb_config.hpp"
+#include <umd/device/cluster.h>
+#include <umd/device/hugepage.h>
+#include <umd/device/tt_cluster_descriptor.h>
+#include <umd/device/tt_simulation_device.h>
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/arch.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_types.h>
+#include <umd/device/types/xy_pair.h>
 
 static constexpr uint32_t HOST_MEM_CHANNELS = 4;
 static constexpr uint32_t HOST_MEM_CHANNELS_MASK = HOST_MEM_CHANNELS - 1;
@@ -187,13 +186,9 @@ void Cluster::generate_cluster_descriptor() {
                 } else if (this->cluster_desc_->get_all_chips().size() == 4) {
                     this->cluster_type_ = ClusterType::P150_X4;
                 }
+            } else if (board_type == BoardType::UBB) {
+                this->cluster_type_ = ClusterType::GALAXY;
             }
-        }
-
-        if ((this->cluster_desc_->get_all_chips().size() == this->cluster_desc_->get_chips_with_mmio().size()) and
-            (this->cluster_desc_->get_all_chips().size() == 32)) {
-            //TODO: need to get this from umd, for now UBB has null set as board type
-            this->cluster_type_ = ClusterType::GALAXY;
         }
     }
 

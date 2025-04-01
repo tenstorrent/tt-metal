@@ -2,27 +2,39 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <iostream>
-#include <fstream>
-#include <iomanip>
-#include <filesystem>
-
-#include <host_api.hpp>
-#include <tt_metal.hpp>
-#include "profiler.hpp"
-#include "profiler_state.hpp"
-#include "profiler_paths.hpp"
-#include "hostdevcommon/profiler_common.h"
-#include <rtoptions.hpp>
 #include <dev_msgs.h>
 #include <device.hpp>
-#include "tools/profiler/event_metadata.hpp"
+#include <host_api.hpp>
+#include <magic_enum/magic_enum.hpp>
+#include <nlohmann/json.hpp>
+#include <rtoptions.hpp>
+#include <tracy/TracyTTDevice.hpp>
+#include <tt_metal.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <functional>
+#include <iostream>
 
+#include "assert.hpp"
+#include "dispatch/kernels/cq_commands.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
 #include "hostdevcommon/profiler_common.h"
-#include "tracy/Tracy.hpp"
-#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-
 #include "llrt.hpp"
+#include "logger.hpp"
+#include "metal_soc_descriptor.h"
+#include "profiler.hpp"
+#include "profiler_paths.hpp"
+#include "profiler_state.hpp"
+#include "tools/profiler/event_metadata.hpp"
+#include "tracy/Tracy.hpp"
+#include "tt_backend_api_types.hpp"
+#include "tt_cluster.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/arch.h>
+#include <umd/device/types/xy_pair.h>
 
 namespace tt {
 

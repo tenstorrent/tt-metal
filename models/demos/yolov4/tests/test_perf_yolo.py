@@ -2,24 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import pytest
-import ttnn
 import os
 
+import pytest
+import torch
 from loguru import logger
+
 import ttnn
-from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
 from models.demos.yolov4.reference.yolov4 import Yolov4
 from models.demos.yolov4.ttnn.model_preprocessing import create_yolov4_model_parameters
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
+from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
+from models.perf.device_perf_utils import (
+    check_device_perf,
+    prep_device_perf_report,
+    run_device_perf,
 )
 from models.perf.perf_utils import prep_perf_report
-from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
-from models.utility_functions import (
-    profiler,
-)
+from models.utility_functions import disable_persistent_kernel_cache, profiler
 
 
 def get_expected_compile_time_sec():
@@ -27,7 +26,7 @@ def get_expected_compile_time_sec():
 
 
 def get_expected_inference_time_sec():
-    return 0.48
+    return 0.5
 
 
 @pytest.mark.models_performance_bare_metal

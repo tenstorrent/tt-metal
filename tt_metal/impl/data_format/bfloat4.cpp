@@ -2,21 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <emmintrin.h>
+#include <immintrin.h>
+#include <math.h>
 #include <tt-metalium/bfloat4.hpp>
-
-#include <algorithm>
-#include <iostream>
+#include <tt_stl/span.hpp>
+#include <array>
+#include <functional>
 #include <random>
 #include <vector>
-#include <immintrin.h>
 
 #include "assert.hpp"
 #include "blockfloat_common.hpp"
-#include "tt_backend_api_types.hpp"
-#include <tt_stl/span.hpp>
-#include "tracy/Tracy.hpp"
-
+#include "constants.hpp"
+#include "hal_types.hpp"
 #include "llrt/hal.hpp"
+#include "math.hpp"
+#include "tile.hpp"
+#include "tracy/Tracy.hpp"
+#include "tt_backend_api_types.hpp"
 
 std::vector<uint32_t> pack_fp32_vec_as_bfp4_tiles(
     tt::stl::Span<const float> fp32_vec,

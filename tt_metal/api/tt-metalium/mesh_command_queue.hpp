@@ -4,19 +4,49 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <atomic>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <queue>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
+#include <variant>
+#include <vector>
 
 #include "buffer.hpp"
 #include "command_queue.hpp"
 #include "command_queue_interface.hpp"
-#include "multi_producer_single_consumer_queue.hpp"
-
+#include "core_coord.hpp"
+#include "dispatch_settings.hpp"
+#include "launch_message_ring_buffer_state.hpp"
 #include "mesh_buffer.hpp"
+#include "mesh_coord.hpp"
 #include "mesh_device.hpp"
-#include "mesh_workload.hpp"
 #include "mesh_trace.hpp"
 #include "mesh_trace_id.hpp"
+#include "mesh_workload.hpp"
+#include "multi_producer_single_consumer_queue.hpp"
+#include "span.hpp"
+#include "sub_device_types.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include "vector_aligned.hpp"
+#include "worker_config_buffer.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+class SystemMemoryManager;
+namespace distributed {
+class MeshDevice;
+class MeshWorkload;
+}  // namespace distributed
+struct ProgramCommandSequence;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -25,8 +55,8 @@ class ThreadPool;
 namespace distributed {
 
 class MeshEvent;
-struct MeshReadEventDescriptor;
 struct MeshBufferReadDescriptor;
+struct MeshReadEventDescriptor;
 
 using MeshCompletionReaderVariant = std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor>;
 

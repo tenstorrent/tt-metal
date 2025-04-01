@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "hal.hpp"
+
 namespace tt::tt_metal::blackhole {
 
 // If you are trying to include this file and you aren't hal...you are doing something wrong

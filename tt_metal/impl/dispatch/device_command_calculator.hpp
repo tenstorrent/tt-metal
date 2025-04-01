@@ -2,6 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <stdint.h>
+#include <type_traits>
+#include <utility>
+#include <vector>
+
+#include "assert.hpp"
+#include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "tt_align.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"

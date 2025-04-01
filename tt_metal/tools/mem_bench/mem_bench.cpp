@@ -2,22 +2,31 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <numeric>
-
 #include <benchmark/benchmark.h>
-
-#include <tt_cluster.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <stdint.h>
+#include <stdlib.h>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt_cluster.hpp>
+#include <iostream>
+#include <map>
+#include <numeric>
+#include <optional>
+#include <span>
+#include <string>
+#include <vector>
 
 #include "assert.hpp"
 #include "context.hpp"
-#include "host_utils.hpp"
+#include "device.hpp"
 #include "device_utils.hpp"
-#include "work_thread.hpp"
+#include "host_utils.hpp"
+#include "program_impl.hpp"
+#include "system_memory_manager.hpp"
 #include "tt_metal/impl/dispatch/util/size_literals.hpp"
+#include "vector_aligned.hpp"
+#include "work_thread.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

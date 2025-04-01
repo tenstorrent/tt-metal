@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/system_memory_cq_interface.hpp>
 #include <tt-metalium/command_queue_common.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
+#include <tt-metalium/system_memory_cq_interface.hpp>
+
+#include "assert.hpp"
 #include "llrt/hal.hpp"
 
 namespace tt::tt_metal {

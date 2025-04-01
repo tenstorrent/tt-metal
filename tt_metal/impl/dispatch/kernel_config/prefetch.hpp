@@ -4,9 +4,17 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <optional>
+
+#include "core_coord.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
 #include "fd_kernel.hpp"
 #include "mesh_graph.hpp"
-#include "umd/device/types/cluster_descriptor_types.h"
+#include "system_memory_manager.hpp"
+#include "tt_cluster.hpp"
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/cluster_descriptor_types.h>
 
 typedef struct prefetch_static_config {
     std::optional<uint32_t> my_downstream_cb_sem_id;
