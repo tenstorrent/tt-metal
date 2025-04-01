@@ -16,7 +16,7 @@ namespace ttnn::operations::experimental::reduction {
 
 struct CumSumDeviceOperation {
     struct operation_attributes_t {
-        const int dim;  // axis to perform cumsum on (must be `-tensor.dim <= dim < tensor.dim`)
+        const int64_t dim;  // axis to perform cumsum on (must be `-tensor.dim <= dim < tensor.dim`)
         const tt::tt_metal::DataType dtype = tt::tt_metal::DataType::INVALID;
     };
 
@@ -56,7 +56,7 @@ struct CumSumDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
-        int dim,
+        int64_t dim,
         std::optional<ttnn::DataType> dtype,
         std::optional<Tensor> preallocated_output);
 };

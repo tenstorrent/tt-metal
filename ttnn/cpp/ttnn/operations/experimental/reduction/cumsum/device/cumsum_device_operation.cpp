@@ -21,8 +21,6 @@ CumSumDeviceOperation::program_factory_t CumSumDeviceOperation::select_program_f
 void CumSumDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // TODO: Verify `dim` parameter (`-input.dims <= dim < input.dim`)
-    // TODO: If preallocated_tensor if set then check it has the correct size (or reallocate ?)
-
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(
         args.dim < input_tensor.get_logical_shape().size() && args.dim >= -input_tensor.get_logical_shape().size(),
@@ -67,7 +65,7 @@ CumSumDeviceOperation::tensor_return_value_t CumSumDeviceOperation::create_outpu
 std::tuple<CumSumDeviceOperation::operation_attributes_t, CumSumDeviceOperation::tensor_args_t>
 CumSumDeviceOperation::invoke(
     const Tensor& input_tensor,
-    int dim,
+    int64_t dim,
     std::optional<ttnn::DataType> dtype,
     std::optional<Tensor> preallocated_output) {
     // Scaffold => return copy of input tensor

@@ -13,9 +13,9 @@ import ttnn
 # 3) test with misc. tensor layouts
 
 
-@pytest.mark_parametrize("size", [[0, 0, 0], [2, 3, 4]])
-@pytest.mark_parametrize("dim", [0, 1, 2, -1, -2, -3])
-@pytest.mark_parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("size", [[0, 0, 0], [2, 3, 4]])
+@pytest.mark.parametrize("dim", [0, 1, 2, -1, -2, -3])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_cumsum(size, dim, dtype):
     torch_input_tensor = torch.rand(size, dtype=dtype)
 
