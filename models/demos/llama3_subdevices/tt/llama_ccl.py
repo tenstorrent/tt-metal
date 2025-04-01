@@ -34,6 +34,7 @@ class TT_CCL:
         self.create_persistent_fabric = create_persistent_fabric
         self.teardown_persistent_fabric = teardown_persistent_fabric
         self.model_config = model_args.model_config
+        self.all_gather_concat_inter_tensor = self.get_all_gather_concat_inter_buffer()
 
         if create_persistent_fabric:
             assert enable_persistent_fabric
@@ -78,6 +79,36 @@ class TT_CCL:
         self.gather_idx = [0, 0]
         self.buffer_idx = [0, 0]
         self.reduce_scatter_buffer_idx = [0, 0]
+
+    def get_all_gather_concat_inter_buffer(self):
+        intermediate_core_range_set = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 0)),
+            }
+        )
+        intermediate_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                intermediate_core_range_set,
+                [32, 128],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        temp_shape = [8, 128, 32, 128]
+        intermediate_tensor = torch.zeros(temp_shape, dtype=torch.bfloat16)
+        tt_intermediate_tensor = ttnn.from_torch(
+            intermediate_tensor,
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=intermediate_mem_config,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=[0, 1], mesh_shape=[8, 4]),
+        )
+        check_mesh_tensor_alloc(tt_intermediate_tensor)
+        tt_intermediate_tensors = [tt_intermediate_tensor]
+        return tt_intermediate_tensors
 
     def get_all_gather_buffers(self):
         """
@@ -541,37 +572,9 @@ class TT_CCL:
         return ttnn_tensor_out
 
     def all_gather_concat(self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, num_heads=8):
-        intermediate_core_range_set = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 0)),
-            }
-        )
-        intermediate_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(
-                intermediate_core_range_set,
-                [32, 128],
-                ttnn.ShardOrientation.ROW_MAJOR,
-            ),
-        )
-        temp_shape = [8, 128, 32, 128]
-        intermediate_tensor = torch.zeros(temp_shape, dtype=torch.bfloat16)
-        tt_intermediate_tensor = ttnn.from_torch(
-            intermediate_tensor,
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=intermediate_mem_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=[0, 1], mesh_shape=[8, 4]),
-        )
-        check_mesh_tensor_alloc(tt_intermediate_tensor)
-        tt_intermediate_tensors = [tt_intermediate_tensor]
-
         ttnn_tensor_out = ttnn.experimental.all_gather_concat(
             input_tensor_mesh,
-            tt_intermediate_tensors[0],
+            self.all_gather_concat_inter_tensor[0],
             dim,
             cluster_axis=cluster_axis,
             mesh_device=self.mesh_device,
