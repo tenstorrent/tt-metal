@@ -337,8 +337,29 @@ void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig&
 /**************************************
 Following tests are for Unpack Tilize
 ***************************************/
+TEST_F(DeviceFixture, TensixComputeUnpackTilizePerf) {
+    const char* rt_dim_s = std::getenv("RT_DIM");
+    const char* ct_dim_s = std::getenv("CT_DIM");
+
+    uint32_t rt_dim = std::stoi(rt_dim_s);
+    uint32_t ct_dim = std::stoi(ct_dim_s);
+
+    for (uint8_t counter = 0; counter < 10; counter++) {
+        unit_tests::compute::tilize::TestConfig test_config = {
+            .dst_full_sync_en = false,
+            .fp32_dest_acc_en = false,
+            .input_single_tile_size = 2 * 1024,
+            .output_single_tile_size = 1024 * 2,
+            .num_tiles_r = rt_dim,
+            .num_tiles_c = ct_dim,
+            .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+            .golden_function = unit_tests::compute::gold_standard_tilize};
+        unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+    }
+}
+
 TEST_F(DeviceFixture, TensixComputeUnpackTilize) {
-    vector<vector<uint32_t>> num_tiles = {{5, 3}};
+    vector<vector<uint32_t>> num_tiles = {{5, 10}};
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {false}) {
             // FP32 dest acc not possible for GS
