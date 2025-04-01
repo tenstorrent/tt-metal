@@ -52,18 +52,32 @@ def run_dm_tests(profile, gtest_filter):
 
     # Gather stats from csv
     stats = import_log_run_stats(setup)
-    # TODO: Print/log for each core, currently we are missing some info from the other cores
-    core = [key for key in stats["devices"][0]["cores"].keys() if key != "DEVICE"][0]
+    cores = [key for key in stats["devices"][0]["cores"].keys() if key != "DEVICE"]
     dm_stats = {
         "reader": {
-            "analysis": stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"]["reader_kernel_analysis"],
+            "analysis": {"stats": dict(), "series": []},
             "attributes": dict(),
         },
         "writer": {
-            "analysis": stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"]["writer_kernel_analysis"],
+            "analysis": {"stats": dict(), "series": []},
             "attributes": dict(),
         },
     }
+
+    # Gather analysis stats
+    for core in cores:
+        dm_stats["reader"]["analysis"]["stats"][core] = stats["devices"][0]["cores"][core]["riscs"]["TENSIX"][
+            "analysis"
+        ]["reader_kernel_analysis"]["stats"]
+        dm_stats["reader"]["analysis"]["series"].extend(
+            stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"]["reader_kernel_analysis"]["series"]
+        )
+        dm_stats["writer"]["analysis"]["stats"][core] = stats["devices"][0]["cores"][core]["riscs"]["TENSIX"][
+            "analysis"
+        ]["writer_kernel_analysis"]["stats"]
+        dm_stats["writer"]["analysis"]["series"].extend(
+            stats["devices"][0]["cores"][core]["riscs"]["TENSIX"]["analysis"]["writer_kernel_analysis"]["series"]
+        )
 
     # Gather test attributes
     for kernel in dm_stats.keys():
@@ -92,10 +106,11 @@ def run_dm_tests(profile, gtest_filter):
             logger.info(f"  {attr}: {val}")
         logger.info(f"\n")
 
-    # Analysis average stats (Not very meaningful)
-    logger.info(f"Averages")
-    logger.info(f'Reader duration: {dm_stats["reader"]["analysis"]["stats"]["Average"]}')
-    logger.info(f'Writer duration: {dm_stats["writer"]["analysis"]["stats"]["Average"]}\n')
+    # Analysis average stats per core (Not very meaningful)
+    for core in dm_stats["reader"]["analysis"]["stats"].keys():
+        logger.info(f"Averages for core: {core}")
+        logger.info(f"Reader stats: {dm_stats['reader']['analysis']['stats'][core]['Average']}")
+        logger.info(f"Writer stats: {dm_stats['writer']['analysis']['stats'][core]['Average']}\n")
 
     # # # # # # Performance check method # # # # # #
     reader_cycles = dm_stats["reader"]["analysis"]["series"][0]["duration_cycles"]
@@ -141,6 +156,8 @@ def plot_dm_stats(dm_stats):
     writer_bandwidths = []
     reader_data_sizes = []
     writer_data_sizes = []
+    reader_host_ids = []
+    writer_host_ids = []
 
     for i, entry in enumerate(reader_series):
         run_host_id = entry["duration_type"][0]["run_host_id"]
@@ -149,6 +166,7 @@ def plot_dm_stats(dm_stats):
         bandwidth = attributes["Number of transactions"] * transaction_size / entry["duration_cycles"]
         reader_bandwidths.append(bandwidth)
         reader_data_sizes.append(transaction_size)
+        reader_host_ids.append(run_host_id)
 
     for i, entry in enumerate(writer_series):
         run_host_id = entry["duration_type"][0]["run_host_id"]
@@ -157,13 +175,14 @@ def plot_dm_stats(dm_stats):
         bandwidth = attributes["Number of transactions"] * transaction_size / entry["duration_cycles"]
         writer_bandwidths.append(bandwidth)
         writer_data_sizes.append(transaction_size)
+        writer_host_ids.append(run_host_id)
 
     # Plot durations
     plt.figure(figsize=(18, 6))
     plt.subplot(1, 3, 1)
-    plt.plot(reader_durations, label="Reader Duration (cycles)", marker="o")
-    plt.plot(writer_durations, label="Writer Duration (cycles)", marker="o")
-    plt.xlabel("Index")
+    plt.plot(reader_host_ids, reader_durations, label="Reader Duration (cycles)", marker="o")
+    plt.plot(writer_host_ids, writer_durations, label="Writer Duration (cycles)", marker="o")
+    plt.xlabel("Runtime Host ID")
     plt.ylabel("Duration (cycles)")
     plt.title("Kernel Durations")
     plt.legend()
@@ -171,9 +190,9 @@ def plot_dm_stats(dm_stats):
 
     # Plot bandwidth
     plt.subplot(1, 3, 2)
-    plt.plot(reader_bandwidths, label="Reader Bandwidth (bytes/cycle)", marker="o")
-    plt.plot(writer_bandwidths, label="Writer Bandwidth (bytes/cycle)", marker="o")
-    plt.xlabel("Index")
+    plt.plot(reader_host_ids, reader_bandwidths, label="Reader Bandwidth (bytes/cycle)", marker="o")
+    plt.plot(writer_host_ids, writer_bandwidths, label="Writer Bandwidth (bytes/cycle)", marker="o")
+    plt.xlabel("Runtime Host ID")
     plt.ylabel("Bandwidth (bytes/cycle)")
     plt.title("Bandwidth Comparison")
     plt.legend()
