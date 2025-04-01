@@ -9,10 +9,10 @@
 #include <type_traits>
 #include <vector>
 
-#include "assert.hpp"
-#include "reflection.hpp"
-#include "shape_base.hpp"
-#include "utils.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/reflection.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/utils.hpp>
 
 namespace tt::tt_metal::distributed {
 
