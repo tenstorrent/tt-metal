@@ -54,13 +54,6 @@ bool check_mergeable(const MeshCoordinateRange& a, const MeshCoordinateRange& b)
     }
 }
 
-// Compares two ranges in lexicographical order.
-struct MeshCoordinateRangeLessThan {
-    bool operator()(const MeshCoordinateRange& a, const MeshCoordinateRange& b) const {
-        return (a.start_coord() != b.start_coord()) ? a.start_coord() < b.start_coord() : a.end_coord() < b.end_coord();
-    }
-};
-
 }  // namespace
 
 MeshShape::MeshShape(uint32_t x) : MeshShape({x}) {}
@@ -73,6 +66,7 @@ MeshShape::MeshShape(std::initializer_list<uint32_t> ilist) : ShapeBase(ilist) {
 MeshShape::MeshShape(tt::stl::Span<const uint32_t> span) : ShapeBase(span) { compute_strides(); }
 
 void MeshShape::compute_strides() {
+    TT_FATAL(dims() > 0, "MeshShape cannot have 0 dimension.");
     size_t stride = 1;
     strides_.resize(dims());
     for (int dim = dims() - 1; dim >= 0; --dim) {
@@ -306,7 +300,9 @@ void MeshCoordinateRangeSet::merge(const MeshCoordinateRange& to_merge) {
     ranges_.push_back(merged);
 
     // Sort the ranges to ensure deterministic order.
-    std::sort(ranges_.begin(), ranges_.end(), MeshCoordinateRangeLessThan{});
+    std::sort(ranges_.begin(), ranges_.end(), [](const auto& a, const auto& b) {
+        return (a.start_coord() != b.start_coord()) ? a.start_coord() < b.start_coord() : a.end_coord() < b.end_coord();
+    });
 }
 
 MeshCoordinateRangeSet subtract(const MeshCoordinateRange& parent, const MeshCoordinateRange& intersection) {
