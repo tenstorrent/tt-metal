@@ -46,8 +46,8 @@ std::vector<size_t> find_diff_dimensions(const MeshCoordinateRange& a, const Mes
     return diff_dims;
 }
 
-// Returns true if the two ranges are mergeable: ranges must either be identical, have an intersection, or be adjacent
-// along exactly one dimension.
+// Returns true if the two ranges are mergeable; that is, when 2 ranges can be replaced by one.
+// Ranges must either be identical, be adjacent along exactly one dimension, or contain each other.
 bool check_mergeable(const MeshCoordinateRange& a, const MeshCoordinateRange& b) {
     TT_ASSERT(a.dims() == b.dims(), "Cannot compare ranges with different dimensions: {} != {}", a.dims(), b.dims());
 
@@ -56,11 +56,12 @@ bool check_mergeable(const MeshCoordinateRange& a, const MeshCoordinateRange& b)
         // Ranges are identical.
         return true;
     } else if (diff_dims.size() == 1) {
+        // Ranges are adjacent or overlap along one dimension.
         size_t diff_dim = diff_dims[0];
         return std::max(a.start_coord()[diff_dim], b.start_coord()[diff_dim]) <=
                std::min(a.end_coord()[diff_dim], b.end_coord()[diff_dim]) + 1;
     } else {
-        return false;
+        return a.contains(b) || b.contains(a);
     }
 }
 
@@ -288,12 +289,13 @@ void MeshCoordinateRangeSet::merge(const MeshCoordinateRange& to_merge) {
         to_merge.dims());
 
     // Iteratively merge the new range with existing ranges until no more merges are possible.
+    std::vector<MeshCoordinateRange> add_back;
     MeshCoordinateRange merged = to_merge;
-    bool did_merge = true;
-    while (did_merge) {
-        did_merge = false;
-        for (auto it = ranges_.begin(); it != ranges_.end(); ++it) {
+    while (true) {
+        bool did_merge = false;
+        for (auto it = ranges_.begin(); it != ranges_.end();) {
             if (check_mergeable(merged, *it)) {
+                // Can replace `it` + `merged` with a single new range.
                 tt::stl::SmallVector<uint32_t> new_start;
                 tt::stl::SmallVector<uint32_t> new_end;
                 for (size_t i = 0; i < merged.dims(); ++i) {
@@ -304,7 +306,23 @@ void MeshCoordinateRangeSet::merge(const MeshCoordinateRange& to_merge) {
                 ranges_.erase(it);
                 did_merge = true;
                 break;
+            } else if (merged.intersects(*it) || it->intersects(merged)) {
+                // There is an intersection between `merged` and `it`.
+                // For simplicity, erase the entire `it`, but add back what isn't present in `merged`.
+                for (const auto& coord : *it) {
+                    if (!merged.contains(coord)) {
+                        add_back.push_back(MeshCoordinateRange(coord));
+                    }
+                }
+                it = ranges_.erase(it);
+            } else {
+                // Cannot merge nor intersect with `it`, proceed to the next element.
+                ++it;
             }
+        }
+
+        if (!did_merge) {
+            break;
         }
     }
     ranges_.push_back(merged);
@@ -313,6 +331,11 @@ void MeshCoordinateRangeSet::merge(const MeshCoordinateRange& to_merge) {
     std::sort(ranges_.begin(), ranges_.end(), [](const auto& a, const auto& b) {
         return (a.start_coord() != b.start_coord()) ? a.start_coord() < b.start_coord() : a.end_coord() < b.end_coord();
     });
+
+    // Merge back the ranges that were removed.
+    for (const auto& range : add_back) {
+        merge(range);
+    }
 }
 
 MeshCoordinateRangeSet subtract(const MeshCoordinateRange& parent, const MeshCoordinateRange& intersection) {
