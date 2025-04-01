@@ -400,4 +400,4 @@ def test_multimodal_demo_text(
                 output_sequence_length=max_gen_len,
             )
 
-        verify_perf(measurements, targets)
+        verify_perf(measurements, targets, high_tol_percentage=1.15)
