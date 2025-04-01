@@ -14,7 +14,7 @@ pytest-github-actions-annotate-failures==0.3.0
 # a breaking dependency for virtualenv installed by pre-commit. virtualenv
 # requires <4.0.0 platformdirs, so we're pinning platformdirs here
 platformdirs<4.0.0
-pre-commit==3.0.4
+pre-commit==3.5.0
 black==24.3.0
 clang-format==19.1.4
 build==0.10.0
