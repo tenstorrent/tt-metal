@@ -22,7 +22,7 @@ struct BroadcastParam {
     uint32_t c;  // input tensor channel
     uint32_t h;  // input tensor height
     uint32_t w;  // input tensor width
-    std::vector<int32_t> broadcast_shape;
+    std::vector<uint32_t> broadcast_shape;
 };
 
 class Broadcast_toFixture : public TTNNFixtureWithDevice, public testing::WithParamInterface<BroadcastParam> {};
@@ -32,16 +32,10 @@ TEST_P(Broadcast_toFixture, Broadcast_to) {
     auto& device = *device_;
     std::array<uint32_t, 4> dimensions = {param.n, param.c, param.h, param.w};
     ttnn::Shape input_shape(dimensions);
-    std::vector<uint32_t> output_size = {
-        param.broadcast_shape[0],
-        param.broadcast_shape[1],
-        param.broadcast_shape[2],
-        param.broadcast_shape[3],
-    };
-    ttnn::Shape output_shape(output_size);
+    ttnn::Shape output_shape(param.broadcast_shape);
 
-    const std::optional<MemoryConfig> memory_config = std::nullopt;
-    const std::optional<ttnn::Tensor> output = std::nullopt;
+    const auto memory_config = std::nullopt;
+    const auto output = std::nullopt;
 
     const auto input_tensor = ttnn::ones(input_shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
     auto output_tensor = ttnn::experimental::broadcast_to(input_tensor, output_shape, memory_config, output);
