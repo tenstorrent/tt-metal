@@ -309,13 +309,12 @@ void MeshCoordinateRangeSet::merge(const MeshCoordinateRange& to_merge) {
             } else if (merged.intersects(*it) || it->intersects(merged)) {
                 // There is an intersection between `merged` and `it`.
                 // For simplicity, erase the entire `it`, but add back what isn't present in `merged`.
-                const auto removed = *it;
-                ranges_.erase(it);
-                for (const auto& coord : removed) {
+                for (const auto& coord : *it) {
                     if (!merged.contains(coord)) {
                         add_back.push_back(MeshCoordinateRange(coord));
                     }
                 }
+                it = ranges_.erase(it);
             } else {
                 // Cannot merge nor intersect with `it`, proceed to the next element.
                 ++it;
