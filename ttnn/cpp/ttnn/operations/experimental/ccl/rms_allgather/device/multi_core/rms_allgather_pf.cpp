@@ -256,21 +256,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             storage_core_noc_y.back());
     }
 
-    // get sharded addr
-    auto in0_addr = a.buffer()->address();
-    uint32_t in1_addr;
-    bool b_sharded;
-    if (b) {
-        in1_addr = b.value().buffer()->address();
-    } else {
-        in1_addr = 0;
-    }
-    auto out_addr = output.buffer()->address();
-    // b addr
-    auto in1_dram_addr = b ? b.value().buffer()->address() : 0;
-    // num tiles for a
-    uint32_t num_tiles = a.volume() / TILE_HW;
-
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -1115,16 +1100,8 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
             storage_core_noc_y.back());
     }
 
-    // get sharded addr
-    auto in0_addr = a.buffer()->address();
-    bool b_sharded;
-    auto out_addr = output.buffer()->address();
     // b, gamma addr
-    auto in1_dram_addr = 0;
     auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
-    // num tiles for a, gamma
-    uint32_t num_tiles = a.volume() / TILE_HW;
-    uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().volume() / TILE_HW : 0;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
