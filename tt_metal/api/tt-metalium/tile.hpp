@@ -9,10 +9,10 @@
 #include <optional>
 #include <tuple>
 
-#include "bfloat16.hpp"
-#include "constants.hpp"
-#include "math.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 
 namespace tt {
 enum class DataFormat : uint8_t;

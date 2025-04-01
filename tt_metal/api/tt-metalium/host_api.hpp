@@ -7,13 +7,13 @@
 #include <variant>
 #include <vector>
 
-#include "dispatch_core_common.hpp"
-#include "runtime_args_data.hpp"
-#include "program_impl.hpp"
-#include "device.hpp"
-#include "sub_device_types.hpp"
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include <tt_stl/span.hpp>
-#include "lightmetal_binary.hpp"
+#include <tt-metalium/lightmetal_binary.hpp>
 
 /** @file */
 
