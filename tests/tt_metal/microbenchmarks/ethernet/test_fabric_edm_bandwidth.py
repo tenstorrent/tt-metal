@@ -123,15 +123,15 @@ def read_golden_results(
         & (df["Senders Are Unidirectional"] == senders_are_unidirectional)
     ]
 
-    if len(results["Bandwidth (B/c)"]) == 0:
+    if len(results["Bandwidth (B/c)"]) == 0 or len(results["Packets/Second"]) == 0:
         logger.error(
             f"No golden data found for tests_name={test_name} noc_message_type={noc_message_type} packet_size={packet_size} line_size={line_size} num_links={num_links} disable_sends_for_interior_workers={disable_sends_for_interior_workers} unidirectional={unidirectional}"
         )
+        assert (
+            len(results["Bandwidth (B/c)"]) == 0 and len(results["Packets/Second"]) == 0
+        ), "Golden data may be incorrect or corrupted. One of `Bandwidth (B/c)` or `Packets/Second` was missing but not both. Either both should be present or both should be missing."
         return 0, 0
-    if len(results["Packets/Second"]) == 0:
-        logger.error(
-            f"No golden data found for tests_name={test_name} noc_message_type={noc_message_type} packet_size={packet_size} line_size={line_size} num_links={num_links} disable_sends_for_interior_workers={disable_sends_for_interior_workers} unidirectional={unidirectional}"
-        )
+
     bandwidth = results["Bandwidth (B/c)"].values[0]
     pps = results["Packets/Second"].values[0]
 

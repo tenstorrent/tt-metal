@@ -195,6 +195,11 @@ void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC>(
         }
 
     } else {
+        ASSERT(false);  // Invalid path with no hops in either direction. The test was misconfigured or args were passed
+                        // incorrectly.
+
+        // In case we are not running with watcher, we want to indicate to the runner that there is a problem
+        // rather than spit out numbers that are not meaningful/are incorrect.
         while (1);
     }
 

@@ -2491,7 +2491,6 @@ void Run1DFabricPacketSendTest(
     std::vector<KernelHandle> worker_kernel_ids;
     std::vector<size_t> per_device_global_sem_addr_rt_arg;
     for (size_t i = 0; i < num_devices_with_workers; i++) {
-        log_info(tt::LogTest, "i: {}", i);
         const size_t line_index = i;
         auto& program = programs[i];
         auto* device = devices[i];
@@ -2603,10 +2602,6 @@ void Run1DFabricPacketSendTest(
                     num_fwd_hops = 0;
                 }
             }
-            log_info(tt::LogTest, "\tsenders_are_unidirectional: {}", params.senders_are_unidirectional);
-            log_info(tt::LogTest, "\tunicast_forward: {}", unicast_forward);
-            log_info(tt::LogTest, "\tnum_fwd_hops: {}", num_fwd_hops);
-            log_info(tt::LogTest, "\tnum_bwd_hops: {}", num_bwd_hops);
             // We will get 1 inc per remote chip + 1 local
             sync_count_per_link = num_devices_with_workers;
         }
@@ -2688,7 +2683,6 @@ void Run1DFabricPacketSendTest(
             bool disable_sends_for_worker =
                 (params.disable_sends_for_interior_workers && (i != 0) && (i != line_size - 1)) ||
                 (params.disable_end_workers_in_backward_direction && (i == line_size - 1));
-            log_info(tt::LogTest, "\tdisable_sends_for_worker: {}", disable_sends_for_worker);
             // Get forward and backward destination coordinates
             const size_t dest_noc_x_fwd = device->worker_core_from_logical_core(dest_core_coord[l]).x;
             const size_t dest_noc_y_fwd = device->worker_core_from_logical_core(dest_core_coord[l]).y;
@@ -2712,18 +2706,10 @@ void Run1DFabricPacketSendTest(
                     num_bwd_hops_per_type.push_back(num_bwd_hops);
                     send_type_payload_sizes.push_back(test_spec.packet_payload_size_bytes);
                     flush_send.push_back(test_spec.flush);
-                    log_info(tt::LogTest, "\tsend_types: {}", send_types);
-                    log_info(tt::LogTest, "\tchip_send_types: {}", chip_send_types);
-                    log_info(tt::LogTest, "\tsend_counts_per_type: {}", send_counts_per_type);
-                    log_info(tt::LogTest, "\tnum_fwd_hops_per_type: {}", num_fwd_hops_per_type);
-                    log_info(tt::LogTest, "\tnum_bwd_hops_per_type: {}", num_bwd_hops_per_type);
-                    log_info(tt::LogTest, "\tsend_type_payload_sizes: {}", send_type_payload_sizes);
-                    log_info(tt::LogTest, "\tflush_send: {}", flush_send);
                 }
             }
 
             size_t num_send_types = disable_sends_for_worker ? 0 : test_specs.size();
-            log_info(tt::LogTest, "\tnum_send_types: {}", num_send_types);
             std::vector<uint32_t> rt_args = {
                 dest_bank_addr,
                 dest_noc_x_fwd,
