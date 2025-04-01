@@ -408,6 +408,7 @@ Reduction
    ttnn.argmax
    ttnn.prod
    ttnn.topk
+   ttnn.experimental.sort
 
 Data Movement
 =============
