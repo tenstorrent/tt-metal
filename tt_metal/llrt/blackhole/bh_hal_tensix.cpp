@@ -17,7 +17,7 @@
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
 #include "tensix.h"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/tt_core_coordinates.h>
 
 #define GET_MAILBOX_ADDRESS_HOST(x) ((uint64_t)&(((mailboxes_t*)MEM_MAILBOX_BASE)->x))
 

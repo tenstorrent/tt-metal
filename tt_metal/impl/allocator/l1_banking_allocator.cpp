@@ -23,7 +23,7 @@
 #include "bank_manager.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.h>
 
 namespace tt {
 

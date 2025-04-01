@@ -20,7 +20,7 @@
 #include "llrt/tt_cluster.hpp"
 #include "logger.hpp"
 #include "rtoptions.hpp"
-#include "umd/device/tt_soc_descriptor.h"
+#include <umd/device/tt_soc_descriptor.h>
 #include "utils.hpp"
 
 using namespace tt::tt_metal;

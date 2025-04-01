@@ -18,7 +18,7 @@
 #include "fabric_host_utils.hpp"
 #include "metal_soc_descriptor.h"
 #include "tt_cluster.hpp"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.h>
 
 namespace tt {
 namespace tt_metal {

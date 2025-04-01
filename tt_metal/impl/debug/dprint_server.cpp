@@ -38,9 +38,9 @@
 #include "llrt.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tt_backend_api_types.hpp"
-#include "umd/device/tt_core_coordinates.h"
-#include "umd/device/tt_soc_descriptor.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_soc_descriptor.h>
+#include <umd/device/types/xy_pair.h>
 
 using std::cout;
 using std::endl;

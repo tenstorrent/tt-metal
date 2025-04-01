@@ -15,7 +15,7 @@
 #include "system_memory_manager.hpp"
 #include "tt_cluster.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
-#include "umd/device/tt_xy_pair.h"
+#include <umd/device/tt_xy_pair.h>
 
 typedef struct dispatch_static_config {
     std::optional<uint32_t> dispatch_cb_base;  // 0

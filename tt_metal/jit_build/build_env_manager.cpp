@@ -29,7 +29,7 @@
 #include "metal_soc_descriptor.h"
 #include "system_memory_manager.hpp"
 #include "tt_cluster.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/tt_core_coordinates.h>
 
 namespace tt::tt_metal {
 

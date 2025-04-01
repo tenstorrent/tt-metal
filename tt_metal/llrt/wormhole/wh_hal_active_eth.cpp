@@ -14,7 +14,7 @@
 #include "hal_asserts.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/tt_core_coordinates.h>
 #include "wormhole/wh_hal.hpp"
 
 #define GET_ETH_MAILBOX_ADDRESS_HOST(x) \

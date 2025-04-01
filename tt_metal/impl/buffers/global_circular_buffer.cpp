@@ -29,7 +29,7 @@
 #include "reflection.hpp"
 #include "span.hpp"
 #include "tt_cluster.hpp"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.h>
 
 namespace tt::tt_metal {
 namespace experimental {

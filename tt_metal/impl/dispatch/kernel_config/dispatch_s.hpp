@@ -9,7 +9,7 @@
 #include "fd_kernel.hpp"
 #include "system_memory_manager.hpp"
 #include "tt_cluster.hpp"
-#include "umd/device/tt_xy_pair.h"
+#include <umd/device/tt_xy_pair.h>
 
 typedef struct dispatch_s_static_config {
     std::optional<uint32_t> cb_base;

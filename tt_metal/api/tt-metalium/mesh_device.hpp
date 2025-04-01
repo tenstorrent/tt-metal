@@ -34,7 +34,7 @@
 #include "small_vector.hpp"
 #include "sub_device_types.hpp"
 #include "trace_buffer.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.h>
 #include "work_executor_types.hpp"
 
 enum class CoreType;

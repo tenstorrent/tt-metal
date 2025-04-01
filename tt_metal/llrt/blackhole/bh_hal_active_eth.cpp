@@ -16,7 +16,7 @@
 #include "hal_asserts.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/tt_core_coordinates.h>
 
 #define GET_ETH_MAILBOX_ADDRESS_HOST(x) \
     ((std::uint64_t)&(((mailboxes_t*)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))

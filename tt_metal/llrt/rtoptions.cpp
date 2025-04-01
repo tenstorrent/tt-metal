@@ -13,7 +13,7 @@
 #include <string>
 
 #include "assert.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/tt_core_coordinates.h>
 
 using std::vector;
 

@@ -21,7 +21,7 @@
 #include "device.hpp"
 #include "dispatch_core_common.hpp"
 #include "system_memory_manager.hpp"
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt {
 namespace tt_metal::detail {

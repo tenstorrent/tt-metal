@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "fmt/base.h"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.h>
 
 namespace tt {
 

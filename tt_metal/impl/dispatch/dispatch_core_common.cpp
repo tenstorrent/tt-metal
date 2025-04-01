@@ -5,7 +5,7 @@
 #include "dispatch_core_common.hpp"
 #include "dispatch_core_manager.hpp"
 #include "get_platform_architecture.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.h>
 
 enum class CoreType;
 

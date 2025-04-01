@@ -23,8 +23,8 @@
 #include "hal_types.hpp"
 #include "prefetch.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
-#include "umd/device/tt_core_coordinates.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/xy_pair.h>
 #include "utils.hpp"
 
 using namespace tt::tt_metal;

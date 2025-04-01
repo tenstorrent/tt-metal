@@ -28,9 +28,9 @@
 #include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "sub_device_types.hpp"
-#include "umd/device/tt_core_coordinates.h"
-#include "umd/device/tt_soc_descriptor.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_soc_descriptor.h>
+#include <umd/device/types/xy_pair.h>
 
 namespace tt {
 namespace stl {

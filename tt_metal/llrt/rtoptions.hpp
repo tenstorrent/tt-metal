@@ -20,7 +20,7 @@
 
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"  // For DispatchCoreConfig
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.h>
 
 enum class CoreType;
 

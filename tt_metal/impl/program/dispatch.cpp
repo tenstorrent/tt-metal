@@ -59,8 +59,8 @@
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
-#include "umd/device/tt_core_coordinates.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/xy_pair.h>
 #include "vector_aligned.hpp"
 #include "worker_config_buffer.hpp"
 

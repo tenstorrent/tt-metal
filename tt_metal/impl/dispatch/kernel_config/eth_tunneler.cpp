@@ -18,7 +18,7 @@
 #include "hal.hpp"
 #include "mux.hpp"
 #include "tt_cluster.hpp"
-#include "umd/device/tt_xy_pair.h"
+#include <umd/device/tt_xy_pair.h>
 #include "utils.hpp"
 
 using namespace tt::tt_metal;

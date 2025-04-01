@@ -38,7 +38,7 @@
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
-#include "umd/device/tt_xy_pair.h"
+#include <umd/device/tt_xy_pair.h>
 #include "work_executor.hpp"
 
 namespace tt {

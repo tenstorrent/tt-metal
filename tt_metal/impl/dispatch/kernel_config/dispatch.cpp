@@ -27,7 +27,7 @@
 #include "mux.hpp"
 #include "prefetch.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.h>
 #include "utils.hpp"
 
 using namespace tt::tt_metal;

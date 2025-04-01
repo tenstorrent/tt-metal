@@ -7,7 +7,7 @@
 #include <cstdint>
 
 #include "core_coord.hpp"
-#include "umd/device/tt_soc_descriptor.h"
+#include <umd/device/tt_soc_descriptor.h>
 
 enum class CoreType;
 

@@ -18,8 +18,8 @@
 #include <string>
 #include <vector>
 
-#include "umd/device/tt_xy_pair.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/xy_pair.h>
 
 namespace tt {
 namespace stl {

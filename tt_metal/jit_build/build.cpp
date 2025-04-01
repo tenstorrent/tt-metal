@@ -30,7 +30,7 @@
 #include "rtoptions.hpp"
 #include "tt_backend_api_types.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.h>
 
 namespace fs = std::filesystem;
 

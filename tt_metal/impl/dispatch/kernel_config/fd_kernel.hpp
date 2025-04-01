@@ -17,7 +17,7 @@
 #include "tt_cluster.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "umd/device/tt_xy_pair.h"
+#include <umd/device/tt_xy_pair.h>
 #include "utils.hpp"
 
 enum class CoreType;

@@ -29,9 +29,9 @@
 #include "runtime_args_data.hpp"
 #include "tt_backend_api_types.hpp"
 #include "tt_memory.h"
-#include "umd/device/tt_core_coordinates.h"
-#include "umd/device/types/cluster_descriptor_types.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/xy_pair.h>
 #include "utils.hpp"
 
 namespace ll_api {

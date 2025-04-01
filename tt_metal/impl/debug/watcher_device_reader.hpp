@@ -18,8 +18,8 @@
 #include <vector>
 
 #include "llrt/hal.hpp"
-#include "umd/device/tt_soc_descriptor.h"
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/tt_soc_descriptor.h>
+#include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt::watcher {
 

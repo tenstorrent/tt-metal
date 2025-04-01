@@ -8,7 +8,7 @@
 
 #include "get_platform_architecture.hpp"
 #include "hal_types.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.h>
 
 namespace tt {
 

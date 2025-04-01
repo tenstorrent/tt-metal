@@ -15,7 +15,7 @@
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/tt_core_coordinates.h>
 #include "wormhole/wh_hal.hpp"
 
 #define GET_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_MAILBOX_BASE)->x))

@@ -8,7 +8,7 @@
 #include <yaml-cpp/yaml.h>
 #include <string>
 
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.h>
 
 enum BoardType : uint32_t;
 

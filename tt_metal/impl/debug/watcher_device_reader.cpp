@@ -30,9 +30,9 @@
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
-#include "umd/device/tt_core_coordinates.h"
-#include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/arch.h>
+#include <umd/device/types/xy_pair.h>
 #include "watcher_device_reader.hpp"
 
 using namespace tt::tt_metal;

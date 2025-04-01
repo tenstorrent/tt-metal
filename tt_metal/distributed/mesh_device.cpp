@@ -35,7 +35,7 @@
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.h>
 
 enum class CoreType;
 namespace tt {

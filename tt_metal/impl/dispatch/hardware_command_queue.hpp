@@ -28,7 +28,7 @@
 #include "sub_device_types.hpp"
 #include "trace_buffer.hpp"
 #include "tt_metal/impl/buffers/dispatch.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/tt_core_coordinates.h>
 #include "vector_aligned.hpp"
 #include "worker_config_buffer.hpp"
 

@@ -38,7 +38,7 @@
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/tt_core_coordinates.h>
 
 using namespace tt::tt_metal;
 

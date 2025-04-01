@@ -44,8 +44,8 @@
 #include "rtoptions.hpp"
 #include "span.hpp"
 #include "tt_cluster.hpp"
-#include "umd/device/tt_core_coordinates.h"
-#include "umd/device/tt_xy_pair.h"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_xy_pair.h>
 #include "utils.hpp"
 
 namespace tt::tt_metal {

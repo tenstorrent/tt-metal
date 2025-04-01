@@ -76,11 +76,11 @@
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
-#include "umd/device/coordinate_manager.h"
-#include "umd/device/tt_core_coordinates.h"
-#include "umd/device/tt_silicon_driver_common.hpp"
-#include "umd/device/tt_xy_pair.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/coordinate_manager.h>
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_silicon_driver_common.hpp>
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/xy_pair.h>
 #include "work_executor.hpp"
 #include "work_executor_types.hpp"
 

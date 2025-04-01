@@ -27,7 +27,7 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
-#include "umd/device/tt_xy_pair.h"
+#include <umd/device/tt_xy_pair.h>
 
 enum class CoreType;
 

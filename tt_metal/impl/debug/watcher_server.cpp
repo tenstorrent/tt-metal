@@ -35,10 +35,10 @@
 #include "metal_soc_descriptor.h"
 #include "span.hpp"
 #include "tt_cluster.hpp"
-#include "umd/device/tt_core_coordinates.h"
-#include "umd/device/tt_xy_pair.h"
-#include "umd/device/types/cluster_descriptor_types.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/xy_pair.h>
 #include "utils.hpp"
 #include "watcher_device_reader.hpp"
 

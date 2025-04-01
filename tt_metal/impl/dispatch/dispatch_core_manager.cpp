@@ -15,7 +15,7 @@
 #include "dispatch_core_common.hpp"
 #include "logger.hpp"
 #include "tt_cluster.hpp"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.h>
 
 namespace tt::tt_metal {
 

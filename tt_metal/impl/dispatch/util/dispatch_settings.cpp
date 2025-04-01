@@ -21,7 +21,7 @@
 #include "magic_enum/magic_enum.hpp"
 #include "size_literals.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/tt_core_coordinates.h>
 
 namespace tt::tt_metal {
 

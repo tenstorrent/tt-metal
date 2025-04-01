@@ -27,8 +27,8 @@
 #include "tt_cluster.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
-#include "umd/device/tt_core_coordinates.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/xy_pair.h>
 #include "vector_aligned.hpp"
 
 namespace tt {

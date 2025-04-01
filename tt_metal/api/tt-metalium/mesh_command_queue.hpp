@@ -32,7 +32,7 @@
 #include "multi_producer_single_consumer_queue.hpp"
 #include "span.hpp"
 #include "sub_device_types.hpp"
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/tt_core_coordinates.h>
 #include "vector_aligned.hpp"
 #include "worker_config_buffer.hpp"
 

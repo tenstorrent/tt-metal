@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "mesh_graph.hpp"
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt::tt_fabric {
 

@@ -15,7 +15,7 @@
 #include "logger.hpp"
 #include "mesh_coord.hpp"
 #include "tt_cluster.hpp"
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt::tt_metal::distributed {
 

@@ -51,8 +51,8 @@
 #include "tracy/Tracy.hpp"
 #include "tt_cluster.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
-#include "umd/device/tt_xy_pair.h"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/xy_pair.h>
 #include "utils.hpp"
 
 namespace tt {

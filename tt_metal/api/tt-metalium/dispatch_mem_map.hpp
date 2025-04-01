@@ -11,7 +11,7 @@
 #include <utility>
 #include <vector>
 
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/tt_core_coordinates.h>
 
 namespace tt {
 namespace stl {

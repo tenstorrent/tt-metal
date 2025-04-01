@@ -13,7 +13,7 @@
 
 #include "assert.hpp"
 #include "logger.hpp"
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt {
 enum class ARCH;

@@ -31,7 +31,7 @@
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.h>
 
 namespace tt {
 
