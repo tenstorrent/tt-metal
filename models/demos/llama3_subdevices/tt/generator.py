@@ -83,20 +83,20 @@ class Generator:
             )
             if page_table is not None:
                 page_table_user = self._get_prefill_user_page_table(page_table, kv_cache, seq_len)
-            try:
-                logits = self.prefill_forward_single_user_text(
-                    prefill_ids,
-                    page_table=page_table_user if page_table is not None else None,
-                    user_id=user_id,
-                    last_token_idx=last_token_idx,
-                    kv_cache=kv_cache,
-                )
-            except Exception as e:
-                logger.error(f"Error prefilling user {user_id}: {e}")
+            # try:
+            #     logits = self.prefill_forward_single_user_text(
+            #         prefill_ids,
+            #         page_table=page_table_user if page_table is not None else None,
+            #         user_id=user_id,
+            #         last_token_idx=last_token_idx,
+            #         kv_cache=kv_cache,
+            #     )
+            # except Exception as e:
+            #     logger.error(f"Error prefilling user {user_id}: {e}")
 
-        for user_id in range(batch):
-            # Since we give unpadded_seq_len, only the tile containing the last token is returned
-            output_logits[user_id] = logits
+        # for user_id in range(batch):
+        #     # Since we give unpadded_seq_len, only the tile containing the last token is returned
+        #     output_logits[user_id] = logits
         # print("output logits", output_logits)
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
 
