@@ -32,9 +32,9 @@ void kernel_main() {
     uint32_t beta_addr = get_arg_val<uint32_t>(7);
     uint32_t b_addr = get_arg_val<uint32_t>(8);
 
-    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0, cb_id_in1 = tt::CBIndex::c_1;
-    constexpr uint32_t cb_id_gamma = tt::CBIndex::c_5;
-    constexpr uint32_t cb_id_beta = tt::CBIndex::c_6;
+    constexpr uint32_t cb_id_in0 = 0, cb_id_in1 = 1;
+    constexpr uint32_t cb_id_gamma = 5;
+    constexpr uint32_t cb_id_beta = 6;
 
     // ublocks size defined in tiles
     const uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
@@ -69,7 +69,7 @@ void kernel_main() {
 
     // Generate constant tiles for layernorm compute
     {
-        constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
+        constexpr uint32_t cb_in_2 = 2;
         uint32_t scaler = get_arg_val<uint32_t>(4);
         generate_reduce_scaler(cb_in_2, scaler);
     }
@@ -79,20 +79,33 @@ void kernel_main() {
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t offs = 0;
-    auto read_in0_and_in1 = [&]() {
+    for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+#ifndef RMSNORM
+        // Data for Calculating E[X]
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
+        }  // wt loop
+#ifdef FUSE_PRE_ADD
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            read_row_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
+        }
+#endif
+#endif
+
+        // Data for Calculating Variance
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
 #ifdef FUSE_PRE_ADD
-            // TODO(AP): refactor the ifdefs
             read_row_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
 #endif
         }  // wt loop
-    };
-    for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        read_in0_and_in1();
-#if defined FUSE_GAMMA || defined FUSE_BETA
-        if (ncht == 0) {
-            for (uint32_t wt = 0; wt < Wt; wt += blk) {
+
+        // Data for calculating the final value
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
+#ifdef FUSE_PRE_ADD
+            read_row_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
+#endif
 #ifdef FUSE_GAMMA
                 {
                     read_row_to_cb(cb_id_gamma, addrg, gamma_tile_bytes, wt, blk);
@@ -104,9 +117,7 @@ void kernel_main() {
                     read_row_to_cb(cb_id_beta, addrb, beta_tile_bytes, wt, blk);
                 }
 #endif
-            }  // wt loop
-        }
-#endif
+        }  // wt loop
         offs += Wt;
     }  // ncht loop
 }
