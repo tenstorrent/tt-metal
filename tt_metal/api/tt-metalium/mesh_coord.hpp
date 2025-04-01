@@ -171,6 +171,7 @@ bool operator!=(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs);
 std::ostream& operator<<(std::ostream& os, const MeshCoordinateRange& range);
 
 // Represents a set of non-overlapping MeshCoordinateRanges.
+// `MeshCoordinateRangeSet` performs a best-effort merge of ranges, but does not guarantee that the set is minimal.
 class MeshCoordinateRangeSet {
 public:
     MeshCoordinateRangeSet() = default;
