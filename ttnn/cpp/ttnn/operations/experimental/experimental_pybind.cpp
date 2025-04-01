@@ -10,6 +10,7 @@
 #include "ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_pybind.hpp"
 #include "ttnn/operations/experimental/conv3d/conv3d_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/argmax/argmax_pybind.hpp"
+#include "ttnn/operations/experimental/reduction/cumprod/cumprod_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_pybind.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write_pybind.hpp"
 #include "ttnn/operations/experimental/ssm/hc_sum_reduce/hc_sum_reduce_pybind.hpp"
@@ -40,6 +41,7 @@
 #include "ttnn/operations/experimental/dropout/dropout_pybind.hpp"
 #include "ttnn/operations/experimental/reshape/view_pybind.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_pybind.hpp"
+#include "ttnn/operations/experimental/reduction/sort/sort_pybind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -75,6 +77,7 @@ void py_module(py::module& module) {
     cnn::detail::bind_convert_to_chw(module);
 
     ttnn::operations::experimental::conv3d::detail::py_bind_conv3d(module);
+    ttnn::operations::experimental::reduction::cumprod::detail::bind_cumprod_operation(module);
 
     copy::detail::py_bind_typecast(module);
 
@@ -88,6 +91,8 @@ void py_module(py::module& module) {
     reshape::detail::py_bind_view(module);
 
     gelu_backward::detail::bind_experimental_gelu_backward_operation(module);
+
+    reduction::detail::bind_reduction_sort_operation(module);
 
     // CCL ops
     auto m_experimental_ccl =

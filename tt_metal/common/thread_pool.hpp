@@ -5,6 +5,7 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <thread>
 
 namespace tt::tt_metal {

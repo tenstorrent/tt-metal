@@ -8,8 +8,8 @@ import torch
 
 import ttnn
 
+from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from torch.nn import functional as F
 
 
 # fmt: off
@@ -103,7 +103,8 @@ def test_multiply_int32_with_scalar(device, input_a, scalar):
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("scalar", [0.125])
 @pytest.mark.parametrize("batch_size", [6, 7, 8])
-def test_multiply_with_scalar_sharded(device, scalar, batch_size, output_memory_config):
+@skip_for_grayskull()
+def test_multiply_float32_with_scalar_sharded(device, scalar, batch_size, output_memory_config):
     torch.manual_seed(0)
     torch_input_tensor_a = torch.rand((batch_size, 16, 384, 384), dtype=torch.float32)
     torch_output_tensor = scalar * torch_input_tensor_a

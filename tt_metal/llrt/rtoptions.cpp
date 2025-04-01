@@ -4,11 +4,16 @@
 
 #include "rtoptions.hpp"
 
+#include <ctype.h>
 #include <stdio.h>
-#include <stdlib.h>
-
+#include <cstdlib>
 #include <cstring>
+#include <functional>
+#include <stdexcept>
 #include <string>
+
+#include "assert.hpp"
+#include <umd/device/tt_core_coordinates.h>
 
 using std::vector;
 

@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <string>
 #include <core_coord.hpp>
+#include <stdint.h>
 #include <system_memory_manager.hpp>  // For chip_id_t
+#include <string>
 
 struct metal_SocDescriptor;
 
