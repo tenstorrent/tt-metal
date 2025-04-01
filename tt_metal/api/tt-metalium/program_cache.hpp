@@ -6,7 +6,7 @@
 
 #include <unordered_map>
 
-#include "program_impl.hpp"
+#include <tt-metalium/program_impl.hpp>
 #include <tt_stl/unique_any.hpp>
 
 namespace tt::tt_metal::program_cache::detail {

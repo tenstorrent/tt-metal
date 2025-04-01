@@ -11,15 +11,15 @@
 #include <string>
 #include <vector>
 
-#include "assert.hpp"
-#include "buffer.hpp"
-#include "core_coord.hpp"
-#include "dispatch_core_common.hpp"
-#include "fabric_types.hpp"
-#include "hostdevcommon/common_values.hpp"
-#include "profiler_optional_metadata.hpp"
-#include "profiler_types.hpp"
-#include "span.hpp"
+#include <hostdevcommon/common_values.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/profiler_optional_metadata.hpp>
+#include <tt-metalium/profiler_types.hpp>
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_soc_descriptor.h>
 #include <umd/device/types/cluster_descriptor_types.h>

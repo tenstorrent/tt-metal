@@ -12,9 +12,9 @@
 #include <utility>
 #include <variant>
 
-#include "buffer.hpp"
-#include "command_queue.hpp"
-#include "trace_buffer.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/trace_buffer.hpp>
 
 namespace tt {
 namespace tt_metal {

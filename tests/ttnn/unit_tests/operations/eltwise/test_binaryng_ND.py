@@ -34,25 +34,25 @@ import ttnn
 @pytest.mark.parametrize(
     "ttnn_fn",
     [
-        ttnn.experimental.add,
-        ttnn.experimental.sub,
-        ttnn.experimental.mul,
-        ttnn.experimental.div,
-        ttnn.experimental.rsub,
-        ttnn.experimental.eq,
-        ttnn.experimental.ne,
-        ttnn.experimental.gt,
-        ttnn.experimental.gte,
-        ttnn.experimental.lt,
-        ttnn.experimental.lte,
-        ttnn.experimental.logical_or,
-        ttnn.experimental.logical_xor,
-        ttnn.experimental.logical_and,
-        ttnn.experimental.ldexp,
-        ttnn.experimental.logaddexp,
-        ttnn.experimental.logaddexp2,
-        ttnn.experimental.squared_difference,
-        ttnn.experimental.bias_gelu,
+        ttnn.add,
+        ttnn.sub,
+        ttnn.mul,
+        ttnn.div,
+        ttnn.rsub,
+        ttnn.eq,
+        ttnn.ne,
+        ttnn.gt,
+        ttnn.ge,
+        ttnn.lt,
+        ttnn.le,
+        ttnn.logical_or,
+        ttnn.logical_xor,
+        ttnn.logical_and,
+        ttnn.ldexp,
+        ttnn.logaddexp,
+        ttnn.logaddexp2,
+        ttnn.squared_difference,
+        ttnn.bias_gelu,
     ],
 )
 def test_ND_subtile_bcast(device, shapes, ttnn_fn):
@@ -60,7 +60,7 @@ def test_ND_subtile_bcast(device, shapes, ttnn_fn):
 
     torch_input_tensor_a = torch.rand(shapes[0], dtype=torch.bfloat16) * 100 - 50
     torch_input_tensor_b = None
-    if ttnn_fn == ttnn.experimental.div:
+    if ttnn_fn == ttnn.div:
         torch_input_tensor_b = torch.rand(shapes[1], dtype=torch.bfloat16) * 59 + 1
     else:
         torch_input_tensor_b = torch.rand(shapes[1], dtype=torch.bfloat16) * 100 - 50
@@ -75,7 +75,7 @@ def test_ND_subtile_bcast(device, shapes, ttnn_fn):
         torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
-    output_tensor = ttnn_fn(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn_fn(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=False)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
@@ -101,19 +101,19 @@ def test_ND_subtile_bcast(device, shapes, ttnn_fn):
 @pytest.mark.parametrize(
     "ttnn_fn",
     [
-        ttnn.experimental.add,
-        ttnn.experimental.sub,
-        ttnn.experimental.mul,
-        ttnn.experimental.div,
-        ttnn.experimental.rsub,
-        ttnn.experimental.eq,
-        ttnn.experimental.ne,
-        ttnn.experimental.gt,
-        ttnn.experimental.gte,
-        ttnn.experimental.lt,
-        ttnn.experimental.lte,
-        ttnn.experimental.squared_difference,
-        ttnn.experimental.bias_gelu,
+        ttnn.add,
+        ttnn.sub,
+        ttnn.mul,
+        ttnn.div,
+        ttnn.rsub,
+        ttnn.eq,
+        ttnn.ne,
+        ttnn.gt,
+        ttnn.ge,
+        ttnn.lt,
+        ttnn.le,
+        ttnn.squared_difference,
+        ttnn.bias_gelu,
     ],
 )
 def test_ND_scalar_bcast(device, shapes, ttnn_fn):
@@ -129,7 +129,7 @@ def test_ND_scalar_bcast(device, shapes, ttnn_fn):
     )
     input_tensor_b = torch_input_tensor_b
 
-    output_tensor = ttnn_fn(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn_fn(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=False)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988

@@ -15,8 +15,10 @@
 
 using namespace tt::tt_fabric;
 
+#ifndef DISABLE_LOW_LATENCY_ROUTING
 #ifndef LOW_LATENCY_ROUTING
 #define LOW_LATENCY_ROUTING
+#endif
 #endif
 
 #define FVC_MODE_ROUTER 1
@@ -425,6 +427,7 @@ typedef struct fvc_inbound_push_state {
         }
     }
 
+#ifdef LOW_LATENCY_ROUTING
     FORCE_INLINE void advance_remote_wrptr(uint32_t num_slots, uint32_t direction) {
         if constexpr (is_power_of_2(FABRIC_ROUTER_OUTBOUND_BUF_SLOTS)) {
             remote_wrptr[direction] = (remote_wrptr[direction] + num_slots) & (FABRIC_ROUTER_OUTBOUND_BUF_SLOTS - 1);
@@ -436,6 +439,20 @@ typedef struct fvc_inbound_push_state {
             remote_wrptr[direction] = temp;
         }
     }
+#else
+    FORCE_INLINE void advance_remote_wrptr(uint32_t num_slots) {
+        if constexpr (is_power_of_2(FABRIC_ROUTER_OUTBOUND_BUF_SLOTS)) {
+            remote_wrptr[remote_wrptr_direction] =
+                (remote_wrptr[remote_wrptr_direction] + num_slots) & (FABRIC_ROUTER_OUTBOUND_BUF_SLOTS - 1);
+        } else {
+            uint32_t temp = remote_wrptr[remote_wrptr_direction] + num_slots;
+            if (temp >= remote_buffer_size) {
+                temp -= remote_buffer_size;
+            }
+            remote_wrptr[remote_wrptr_direction] = temp;
+        }
+    }
+#endif
 
     template <uint8_t fvc_mode = FVC_MODE_ROUTER>
     FORCE_INLINE uint32_t get_num_slots_available() {

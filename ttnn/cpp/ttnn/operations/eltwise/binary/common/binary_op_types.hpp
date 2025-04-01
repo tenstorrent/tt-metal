@@ -24,13 +24,17 @@ enum class BinaryOpType {
     LOGICAL_XOR,
     LDEXP,
     LOGADDEXP2,
-    DIV_FAST,
+    DIV,
     RSUB,
     POWER,
     BITWISE_XOR,
     BITWISE_AND,
     BITWISE_OR,
     LEFT_SHIFT,
-    RIGHT_SHIFT
+    RIGHT_SHIFT,
+    QUANT,
+    REQUANT,
+    DEQUANT,
 };
-}
+
+}  // namespace ttnn::operations::binary

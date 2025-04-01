@@ -22,12 +22,12 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
-#include "bfloat16.hpp"
-#include "buffer_constants.hpp"
-#include "core_coord.hpp"
-#include "hal_types.hpp"
-#include "sub_device_types.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_soc_descriptor.h>
 #include <umd/device/types/xy_pair.h>

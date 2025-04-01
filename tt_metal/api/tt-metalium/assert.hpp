@@ -13,7 +13,7 @@
 #include <sstream>
 #include <vector>
 
-#include "logger.hpp"
+#include <tt-metalium/logger.hpp>
 
 namespace tt {
 template <typename A, typename B>

@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-#include "mesh_graph.hpp"
+#include <tt-metalium/mesh_graph.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt::tt_fabric {

@@ -11,11 +11,11 @@
 #include <optional>
 #include <unordered_set>
 
-#include "buffer.hpp"
-#include "circular_buffer_constants.h"
-#include "logger.hpp"
-#include "tile.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/tile.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 
 namespace tt {
 enum class DataFormat : uint8_t;
