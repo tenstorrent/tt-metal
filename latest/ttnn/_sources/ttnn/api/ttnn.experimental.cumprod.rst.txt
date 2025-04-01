@@ -1,0 +1,8 @@
+﻿ttnn.experimental.cumprod
+=========================
+
+.. currentmodule:: ttnn.experimental
+
+.. _ttnn.experimental.cumprod:
+
+.. autofastoperation:: ttnn.experimental.cumprod

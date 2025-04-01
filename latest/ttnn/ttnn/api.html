@@ -391,6 +391,7 @@
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#reduction">Reduction</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.experimental.cumprod.html">ttnn.experimental.cumprod</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.max.html">ttnn.max</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.mean.html">ttnn.mean</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.min.html">ttnn.min</a></li>
@@ -1828,6 +1829,10 @@
 <table class="autosummary longtable docutils align-default">
 <tbody>
 <tr class="row-odd">
+<td><p><a class="reference internal" href="api/ttnn.experimental.cumprod.html#ttnn.experimental.cumprod" title="ttnn.experimental.cumprod"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.experimental.cumprod</span></code></a></p></td>
+<td><p>cumprod(input_tensor: ttnn.Tensor, dim: int) -&gt; ttnn.Tensor</p></td>
+</tr>
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.max.html#ttnn.max" title="ttnn.max"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.max</span></code></a></p></td>
 <td>
 <p></p>
@@ -1840,7 +1845,7 @@
 </dl>
 </td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.mean.html#ttnn.mean" title="ttnn.mean"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.mean</span></code></a></p></td>
 <td>
 <p></p>
@@ -1853,7 +1858,7 @@
 </dl>
 </td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.min.html#ttnn.min" title="ttnn.min"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.min</span></code></a></p></td>
 <td>
 <p></p>
@@ -1866,7 +1871,7 @@
 </dl>
 </td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.std.html#ttnn.std" title="ttnn.std"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.std</span></code></a></p></td>
 <td>
 <p></p>
@@ -1879,7 +1884,7 @@
 </dl>
 </td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.sum.html#ttnn.sum" title="ttnn.sum"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.sum</span></code></a></p></td>
 <td>
 <p></p>
@@ -1892,7 +1897,7 @@
 </dl>
 </td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.var.html#ttnn.var" title="ttnn.var"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.var</span></code></a></p></td>
 <td>
 <p></p>
@@ -1905,19 +1910,19 @@
 </dl>
 </td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.argmax.html#ttnn.argmax" title="ttnn.argmax"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.argmax</span></code></a></p></td>
 <td><p>Returns the indices of the maximum value of elements in the <code class="docutils literal notranslate"><span class="pre">input</span></code> tensor If no <code class="docutils literal notranslate"><span class="pre">dim</span></code> is provided, it will return the indices of maximum value of all elements in given <code class="docutils literal notranslate"><span class="pre">input</span></code></p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.prod.html#ttnn.prod" title="ttnn.prod"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.prod</span></code></a></p></td>
 <td><p>Computes the prod function along specified <code class="docutils literal notranslate"><span class="pre">dim</span></code> or all dimensions on the <code class="docutils literal notranslate"><span class="pre">input</span></code> tensor.</p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.topk.html#ttnn.topk" title="ttnn.topk"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.topk</span></code></a></p></td>
 <td><p>Returns the <code class="docutils literal notranslate"><span class="pre">k</span></code> largest or <code class="docutils literal notranslate"><span class="pre">k</span></code> smallest elements of the given input tensor along a given dimension.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.experimental.sort.html#ttnn.experimental.sort" title="ttnn.experimental.sort"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.experimental.sort</span></code></a></p></td>
 <td><p>Sorts the elements of the input tensor along the specified dimension in ascending order by default.</p></td>
 </tr>
