@@ -347,12 +347,12 @@ def run_all_reduce_qkv_heads_perf_impl(
         # Run the op
         logger.info("Starting Trace perf test...")
 
-        profiler.start("all-reduce-qkv-heads-trace-warmup")
-        if warmup_iters > 0:
-            ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
-            ttnn.release_trace(mesh_device, trace_id_warmup)
-            ttnn.synchronize_device(mesh_device)
-        profiler.end("all-reduce-qkv-heads-trace-warmup")
+        # profiler.start("all-reduce-qkv-heads-trace-warmup")
+        # if warmup_iters > 0:
+        #     ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
+        #     ttnn.release_trace(mesh_device, trace_id_warmup)
+        #     ttnn.synchronize_device(mesh_device)
+        # profiler.end("all-reduce-qkv-heads-trace-warmup")
 
         signpost("start")
         profiler.start("all-reduce-qkv-heads-trace")
@@ -362,9 +362,9 @@ def run_all_reduce_qkv_heads_perf_impl(
         profiler.end("all-reduce-qkv-heads-trace")
 
         signpost("stop")
-        time_taken = profiler.get_duration("all-reduce-qkv-heads-trace") - profiler.get_duration(
-            "all-reduce-qkv-heads-trace-warmup"
-        )
+        # time_taken = profiler.get_duration("all-reduce-qkv-heads-trace") - profiler.get_duration(
+        #     "all-reduce-qkv-heads-trace-warmup"
+        # )
 
         # input = [8, 4, 32, 1280]
 

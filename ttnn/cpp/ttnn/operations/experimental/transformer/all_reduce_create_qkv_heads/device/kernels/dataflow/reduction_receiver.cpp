@@ -94,51 +94,59 @@ void kernel_main() {
     constexpr uint32_t SUBTILE_ROWS = FACE_HEIGHT;
 
     // 3.2.1 read the QV/K data from the noc
-    for (uint32_t i_output_core = 0; i_output_core < q_num_cores;
-         ++i_output_core) {  // i_output_core is also the row number modulo 8 from input tile
-        uint32_t device_batch_offset_per_output_core = device_batch_offset + i_output_core;
-        uint32_t in_tile_offset_by_batch =
-            device_batch_offset_per_output_core < 16
-                ? device_batch_offset_per_output_core * SUBTILE_LINE_BYTES
-                : (device_batch_offset_per_output_core - 16) * SUBTILE_LINE_BYTES + 512 * ELEMENT_SIZE;
+    for (uint32_t i_tile_per_core = 0; i_tile_per_core < block_num_tiles; i_tile_per_core++) {
+        for (uint32_t i_output_core = 0; i_output_core < q_num_cores;
+             ++i_output_core) {  // i_output_core is also the row number modulo 8 from input tile
 
-        uint32_t read_addr = get_read_ptr(cb_id_reduction_out) + in_tile_offset_by_batch;
-        uint64_t write_addr = 0;
-        uint32_t head_index = 0, tile_index = 0, wptr_offset = 0;
-        if (index_in_cores < num_q_heads * head_size_num_tiles) {
-            // read Q
-            head_index = index_in_cores / head_size_num_tiles;  // head index of current tile(sits in current core)
-            tile_index = index_in_cores % head_size_num_tiles;  // tile index of current tile(sits in current core)
-            wptr_offset = head_index * SUBTILE_LINE_BYTES + tile_index * tile_size;
-            write_addr =
-                get_noc_addr(q_in0_mcast_noc_x[i_output_core], q_in0_mcast_noc_y[i_output_core], q_start_addr) +
-                wptr_offset;
-        } else if (index_in_cores < (num_q_heads + num_kv_heads) * head_size_num_tiles) {
-            // read K
-            head_index = 0;                                     // head index of current tile(sits in current core)
-            tile_index = index_in_cores % head_size_num_tiles;  // tile index of current tile(sits in current core)
-            wptr_offset = head_index * SUBTILE_LINE_BYTES + tile_index * tile_size;
-            uint32_t tile_index_in_output_core = index_in_cores - num_q_heads * head_size_num_tiles;
-            write_addr =
-                get_noc_addr(k_in0_mcast_noc_x[i_output_core], k_in0_mcast_noc_y[i_output_core], k_start_addr) +
-                wptr_offset;
-        } else {
-            // read V
-            head_index = 0;                                     // head index of current tile(sits in current core)
-            tile_index = index_in_cores % head_size_num_tiles;  // tile index of current tile(sits in current core)
-            wptr_offset = head_index * SUBTILE_LINE_BYTES + tile_index * tile_size;
-            uint32_t tile_index_in_output_core = index_in_cores - (num_q_heads + num_kv_heads) * head_size_num_tiles;
-            write_addr =
-                get_noc_addr(v_in0_mcast_noc_x[i_output_core], v_in0_mcast_noc_y[i_output_core], v_start_addr) +
-                wptr_offset;
-        }
+            uint32_t device_batch_offset_per_output_core = device_batch_offset + i_output_core;
+            uint32_t in_tile_offset_by_batch =
+                device_batch_offset_per_output_core < 16
+                    ? device_batch_offset_per_output_core * SUBTILE_LINE_BYTES
+                    : (device_batch_offset_per_output_core - 16) * SUBTILE_LINE_BYTES + 512 * ELEMENT_SIZE;
+            uint32_t tile_index_all_cores = i_tile_per_core + index_in_cores * block_num_tiles;
+            uint32_t read_addr = get_read_ptr(cb_id_reduction_out) + in_tile_offset_by_batch;
+            uint64_t write_addr = 0;
+            uint32_t head_index = 0, tile_index = 0, wptr_offset = 0;
+            if (tile_index_all_cores < num_q_heads * head_size_num_tiles) {
+                // read Q
+                head_index =
+                    tile_index_all_cores / head_size_num_tiles;  // head index of current tile(sits in current core)
+                tile_index =
+                    tile_index_all_cores % head_size_num_tiles;  // tile index of current tile(sits in current core)
+                wptr_offset = head_index * SUBTILE_LINE_BYTES + tile_index * tile_size;
+                write_addr =
+                    get_noc_addr(q_in0_mcast_noc_x[i_output_core], q_in0_mcast_noc_y[i_output_core], q_start_addr) +
+                    wptr_offset;
+            } else if (tile_index_all_cores < (num_q_heads + num_kv_heads) * head_size_num_tiles) {
+                // read K
+                head_index = 0;  // head index of current tile(sits in current core)
+                tile_index =
+                    tile_index_all_cores % head_size_num_tiles;  // tile index of current tile(sits in current core)
+                wptr_offset = head_index * SUBTILE_LINE_BYTES + tile_index * tile_size;
+                uint32_t tile_index_in_output_core = tile_index_all_cores - num_q_heads * head_size_num_tiles;
+                write_addr =
+                    get_noc_addr(k_in0_mcast_noc_x[i_output_core], k_in0_mcast_noc_y[i_output_core], k_start_addr) +
+                    wptr_offset;
+            } else {
+                // read V
+                head_index = 0;  // head index of current tile(sits in current core)
+                tile_index =
+                    tile_index_all_cores % head_size_num_tiles;  // tile index of current tile(sits in current core)
+                wptr_offset = head_index * SUBTILE_LINE_BYTES + tile_index * tile_size;
+                uint32_t tile_index_in_output_core =
+                    tile_index_all_cores - (num_q_heads + num_kv_heads) * head_size_num_tiles;
+                write_addr =
+                    get_noc_addr(v_in0_mcast_noc_x[i_output_core], v_in0_mcast_noc_y[i_output_core], v_start_addr) +
+                    wptr_offset;
+            }
 
-        if constexpr (PHASES_TO_READ == 1) {  // reader kernel (NCRISC)
-            noc_async_write(read_addr, write_addr, SUBTILE_LINE_BYTES);
-        }
-        if constexpr (PHASES_TO_READ == 2) {  // writer kernel(BRISC)
-            noc_async_write(
-                read_addr + FACE_HW * ELEMENT_SIZE, write_addr + FACE_HW * ELEMENT_SIZE, SUBTILE_LINE_BYTES);
+            if constexpr (PHASES_TO_READ == 1) {  // reader kernel (NCRISC)
+                noc_async_write(read_addr, write_addr, SUBTILE_LINE_BYTES);
+            }
+            if constexpr (PHASES_TO_READ == 2) {  // writer kernel(BRISC)
+                noc_async_write(
+                    read_addr + FACE_HW * ELEMENT_SIZE, write_addr + FACE_HW * ELEMENT_SIZE, SUBTILE_LINE_BYTES);
+            }
         }
     }
     noc_async_read_barrier();
