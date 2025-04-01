@@ -138,8 +138,6 @@ void kernel_main() {
                 receiver_semaphore_address,
                 multicast_semaphore_addr,
                 num_dests);  // could do different mcast for each device by having num_devices - 1 receiver cores
-
-            noc_async_atomic_barrier();
         } else {
             noc_semaphore_wait((uint32_t*)local_semaphore_address, total_senders);
         }

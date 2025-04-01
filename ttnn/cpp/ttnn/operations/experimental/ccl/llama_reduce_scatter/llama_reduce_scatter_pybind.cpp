@@ -81,7 +81,7 @@ void py_bind_llama_reduce_scatter(py::module& module) {
             py::arg("cluster_axis"),
             py::arg("mesh_device"),
             py::kw_only(),
-            py::arg("num_links") = 3,
+            py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId,
         });
