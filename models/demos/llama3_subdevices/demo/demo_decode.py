@@ -408,9 +408,6 @@ def run_llama3_demo(
     while users_decoding:
         if iteration == 0:  # First iteration also accounts for compile time
             profiler.start(f"compile_decode", iteration=iteration)
-            from tracy import signpost
-
-            signpost("tracy_perf_run")
         iteration_time_start = time()
 
         # Execute trace
