@@ -4,12 +4,11 @@ import os
 import sys
 from argparse import ArgumentParser
 from loguru import logger  # type: ignore
+import matplotlib.pyplot as plt
 
 from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
-
-# import pytest
 
 
 def run_dm_tests(profile, gtest_filter):
@@ -53,7 +52,7 @@ def run_dm_tests(profile, gtest_filter):
 
     # Gather stats from csv
     stats = import_log_run_stats(setup)
-    # TODO: Print/log for each core
+    # TODO: Print/log for each core, currently we are missing some info from the other cores
     core = [key for key in stats["devices"][0]["cores"].keys() if key != "DEVICE"][0]
     dm_stats = {
         "reader": {
@@ -126,6 +125,73 @@ def run_dm_tests(profile, gtest_filter):
 
     # assert reader_cycles_within_bounds
     # assert reader_bw_within_bounds
+
+    plot_dm_stats(dm_stats)
+
+
+def plot_dm_stats(dm_stats):
+    # Extract data for plotting
+    reader_series = dm_stats["reader"]["analysis"]["series"]
+    writer_series = dm_stats["writer"]["analysis"]["series"]
+
+    reader_durations = [entry["duration_cycles"] for entry in reader_series]
+    writer_durations = [entry["duration_cycles"] for entry in writer_series]
+
+    reader_bandwidths = []
+    writer_bandwidths = []
+    reader_data_sizes = []
+    writer_data_sizes = []
+
+    for i, entry in enumerate(reader_series):
+        run_host_id = entry["duration_type"][0]["run_host_id"]
+        attributes = dm_stats["reader"]["attributes"][run_host_id]
+        transaction_size = attributes["Transaction size in bytes"]
+        bandwidth = attributes["Number of transactions"] * transaction_size / entry["duration_cycles"]
+        reader_bandwidths.append(bandwidth)
+        reader_data_sizes.append(transaction_size)
+
+    for i, entry in enumerate(writer_series):
+        run_host_id = entry["duration_type"][0]["run_host_id"]
+        attributes = dm_stats["writer"]["attributes"][run_host_id]
+        transaction_size = attributes["Transaction size in bytes"]
+        bandwidth = attributes["Number of transactions"] * transaction_size / entry["duration_cycles"]
+        writer_bandwidths.append(bandwidth)
+        writer_data_sizes.append(transaction_size)
+
+    # Plot durations
+    plt.figure(figsize=(18, 6))
+    plt.subplot(1, 3, 1)
+    plt.plot(reader_durations, label="Reader Duration (cycles)", marker="o")
+    plt.plot(writer_durations, label="Writer Duration (cycles)", marker="o")
+    plt.xlabel("Index")
+    plt.ylabel("Duration (cycles)")
+    plt.title("Kernel Durations")
+    plt.legend()
+    plt.grid()
+
+    # Plot bandwidth
+    plt.subplot(1, 3, 2)
+    plt.plot(reader_bandwidths, label="Reader Bandwidth (bytes/cycle)", marker="o")
+    plt.plot(writer_bandwidths, label="Writer Bandwidth (bytes/cycle)", marker="o")
+    plt.xlabel("Index")
+    plt.ylabel("Bandwidth (bytes/cycle)")
+    plt.title("Bandwidth Comparison")
+    plt.legend()
+    plt.grid()
+
+    # Plot size of data transferred vs bandwidth
+    plt.subplot(1, 3, 3)
+    plt.scatter(reader_data_sizes, reader_bandwidths, label="Reader", marker="o")
+    plt.scatter(writer_data_sizes, writer_bandwidths, label="Writer", marker="o")
+    plt.xlabel("Transaction Size (bytes)")
+    plt.ylabel("Bandwidth (bytes/cycle)")
+    plt.title("Transaction Size vs Bandwidth")
+    plt.legend()
+    plt.grid()
+
+    plt.tight_layout()
+    plt.savefig("dm_stats_plot.png")
+    plt.close()
 
 
 if __name__ == "__main__":
