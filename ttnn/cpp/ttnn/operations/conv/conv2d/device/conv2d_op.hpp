@@ -132,13 +132,15 @@ struct Conv2dConfig {
     }
 };
 
-struct ConvSliceConfig {
-    // If True, slice along the height dimension of the input & output tensor.
-    // If False, slice along the width dimension of the input & output tensor.
-    bool slice_output_height = false;
+struct Conv2dSliceConfig {
+    // Determines the dimension along which the input & output tensors are sliced.
+    //  Slices based on [N, H, W, C] shape.
+    // Height also slices along the batch dimension, using a batch size of 1 for each slice.
+    enum class SliceType : bool { HEIGHT, WIDTH };
+    SliceType slice_type = SliceType::WIDTH;
 
     // Size of the output slice along the dimension being sliced.
-    uint32_t output_slice_size = 0;
+    uint32_t num_slices = 0;
 };
 
 // TODO: Accept parallelization

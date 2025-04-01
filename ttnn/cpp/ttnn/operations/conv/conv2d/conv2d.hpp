@@ -40,7 +40,7 @@ Result conv2d(
     const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
     const std::optional<const MemoryConfig>& memory_config_ = std::nullopt,
-    const std::optional<const ConvSliceConfig>& dram_slice_config_ = std::nullopt);
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_ = std::nullopt);
 
 template <typename T>
 Result conv2d_L1(
@@ -83,7 +83,8 @@ Result conv2d_DRAM(
     const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
     const std::optional<const MemoryConfig>& memory_config_ = std::nullopt,
-    const ConvSliceConfig& dram_slice_config_ = ConvSliceConfig{.slice_output_height = false, .output_slice_size = 0});
+    const Conv2dSliceConfig& dram_slice_config_ = Conv2dSliceConfig{
+        .slice_type = Conv2dSliceConfig::SliceType::WIDTH, .num_slices = 0});
 
 struct Conv2dOperation {
     static Result invoke(
@@ -105,7 +106,7 @@ struct Conv2dOperation {
         const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config_ = std::nullopt,
-        const std::optional<const ConvSliceConfig>& dram_slice_config_ = std::nullopt);
+        const std::optional<const Conv2dSliceConfig>& dram_slice_config_ = std::nullopt);
 
     static Result invoke(
         QueueId queue_id,
@@ -126,7 +127,7 @@ struct Conv2dOperation {
         const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config_ = std::nullopt,
-        const std::optional<const ConvSliceConfig>& dram_slice_config_ = std::nullopt);
+        const std::optional<const Conv2dSliceConfig>& dram_slice_config_ = std::nullopt);
 };
 }  // namespace conv2d
 }  // namespace operations::conv
