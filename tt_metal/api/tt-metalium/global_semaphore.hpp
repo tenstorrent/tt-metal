@@ -4,12 +4,22 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <tuple>
 
-#include "core_coord.hpp"
 #include "buffer_constants.hpp"
+#include "core_coord.hpp"
+#include "hal_types.hpp"
 #include "mesh_buffer.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

@@ -4,12 +4,14 @@
 
 #pragma once
 
+#include <cstdint>
+#include <map>
+#include <string>
+#include <vector>
+
 #include "base_types.hpp"
 #include "data_types.hpp"
 #include "util.hpp"
-#include <map>
-#include <vector>
-#include <string>
 
 namespace tt::tt_metal {
 

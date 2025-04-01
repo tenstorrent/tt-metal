@@ -3,12 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "host_utils.hpp"
+
+#include <tt_cluster.hpp>
+#include <algorithm>
+#include <chrono>
 #include <limits>
 #include <random>
-#include <chrono>
-#include <algorithm>
-#include <numa.h>
-#include <tt_cluster.hpp>
+#include <unordered_set>
 
 namespace tt::tt_metal::tools::mem_bench {
 

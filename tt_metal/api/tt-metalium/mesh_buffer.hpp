@@ -4,8 +4,15 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <memory>
+#include <optional>
+#include <utility>
+#include <variant>
+
 #include "buffer.hpp"
 #include "buffer_constants.hpp"
+#include "hal_types.hpp"
 #include "mesh_coord.hpp"
 #include "mesh_device.hpp"
 #include "mesh_device_view.hpp"

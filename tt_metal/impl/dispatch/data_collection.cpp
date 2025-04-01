@@ -3,11 +3,27 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "data_collection.hpp"
-#include <rtoptions.hpp>
-#include <kernel.hpp>
-#include <core_coord.hpp>
 
+#include <core_coord.hpp>
+#include <kernel.hpp>
 #include <magic_enum/magic_enum.hpp>
+#include <rtoptions.hpp>
+#include <algorithm>
+#include <array>
+#include <cstdlib>
+#include <map>
+#include <memory>
+#include <optional>
+#include <ostream>
+#include <string>
+#include <string_view>
+#include <utility>
+
+#include "assert.hpp"
+#include "dev_msgs.h"
+#include "program_impl.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include "utils.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
