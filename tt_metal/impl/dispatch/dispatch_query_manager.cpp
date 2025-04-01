@@ -94,21 +94,6 @@ tt::tt_metal::DispatchQueryManager* inst = nullptr;
 
 namespace tt::tt_metal {
 
-void DispatchQueryManager::initialize(uint8_t num_hw_cqs) {
-    if (inst == nullptr) {
-        static DispatchQueryManager DispatchQueryManager(num_hw_cqs);
-        inst = &DispatchQueryManager;
-    } else if (num_hw_cqs != inst->num_hw_cqs_ or dispatch_core_config() != inst->dispatch_core_config_) {
-        inst->reset(num_hw_cqs);
-        inst->num_hw_cqs_ = num_hw_cqs;
-    }
-}
-
-const DispatchQueryManager& DispatchQueryManager::instance() {
-    TT_FATAL(inst != nullptr, "Trying to acess the dispatch query layer without initializing it.");
-    return *inst;
-}
-
 bool DispatchQueryManager::dispatch_s_enabled() const { return dispatch_s_enabled_; }
 
 bool DispatchQueryManager::distributed_dispatcher() const { return distributed_dispatcher_; }

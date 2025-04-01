@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <stdint.h>
 #include <mutex>
 #include <vector>
@@ -28,9 +30,8 @@ public:
     DispatchQueryManager& operator=(DispatchQueryManager&& other) noexcept = delete;
     DispatchQueryManager(const DispatchQueryManager&) = delete;
     DispatchQueryManager(DispatchQueryManager&& other) noexcept = delete;
+    DispatchQueryManager(uint8_t num_hw_cqs);
 
-    static void initialize(uint8_t num_hw_cqs);
-    static const DispatchQueryManager& instance();
     // dispatch_s related queries
     bool dispatch_s_enabled() const;
     bool distributed_dispatcher() const;
@@ -44,7 +45,6 @@ public:
 
 private:
     void reset(uint8_t num_hw_cqs);
-    DispatchQueryManager(uint8_t num_hw_cqs);
 
     bool dispatch_s_enabled_ = false;
     bool distributed_dispatcher_ = false;

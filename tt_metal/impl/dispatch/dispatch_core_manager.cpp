@@ -19,23 +19,6 @@
 
 namespace tt::tt_metal {
 
-dispatch_core_manager* dispatch_core_manager::_inst = nullptr;
-
-void dispatch_core_manager::initialize(const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs) noexcept {
-    log_debug(tt::LogMetal, "DevicePool initialize");
-    if (_inst == nullptr) {
-        static dispatch_core_manager dispatch_core_manager(dispatch_core_config, num_hw_cqs);
-        _inst = &dispatch_core_manager;
-    } else if (_inst->dispatch_core_config_ != dispatch_core_config or num_hw_cqs != _inst->num_hw_cqs) {
-        _inst->reset_dispatch_core_manager(dispatch_core_config, num_hw_cqs);
-    }
-}
-
-dispatch_core_manager& dispatch_core_manager::instance() {
-    TT_ASSERT(dispatch_core_manager::_inst != nullptr, "Trying to get dispatch_core_manager without initializing it");
-    return *dispatch_core_manager::_inst;
-}
-
 const tt_cxy_pair& dispatch_core_manager::prefetcher_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
     if (assignment.prefetcher.has_value()) {

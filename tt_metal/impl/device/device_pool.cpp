@@ -32,6 +32,8 @@
 #include "rtoptions.hpp"
 #include "span.hpp"
 #include "tt_cluster.hpp"
+#include <tt_metal.hpp>
+#include <tt-metalium/metal_context.hpp>
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
@@ -217,12 +219,8 @@ void DevicePool::initialize(
     tt::stl::Span<const std::uint32_t> l1_bank_remap) noexcept {
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool initialize");
-    // Initialize the dispatch core manager, responsible for assigning dispatch cores
-    tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_config, num_hw_cqs);
-    // Initialize the dispatch query layer, used by runtime command generation
-    tt_metal::DispatchQueryManager::initialize(num_hw_cqs);
-    // Initialize DispatchSettings with defaults
-    tt_metal::DispatchSettings::initialize(tt::Cluster::instance());
+    tt::tt_metal::MetalContext::instance().initialize(
+        dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()});
 
     if (_inst == nullptr) {
         static DevicePool device_pool{};
