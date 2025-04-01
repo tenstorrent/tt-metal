@@ -56,7 +56,7 @@ def test_vision_attention_inference(
     # pad seq_len to be divisible by base_model_args.MAX_QKV_MM_SEQ_LEN
     seq_len = ((ref_seq_len // ModelArgs.MAX_QKV_MM_SEQ_LEN) + 1) * ModelArgs.MAX_QKV_MM_SEQ_LEN
 
-    model_args = VisionModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len)
+    model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=seq_len)
     reference_model = Qwen2_5_VLVisionAttention(
         model_args.hf_config.vision_config.hidden_size, num_heads=model_args.hf_config.vision_config.num_heads
     )

@@ -50,7 +50,7 @@ def test_rms_norm_inference(
 ):
     dtype = ttnn.bfloat16
 
-    model_args = VisionModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=max_seq_len)
 
     reference_model = Qwen2RMSNorm(
         model_args.hf_config.vision_config.hidden_size, eps=model_args.hf_config.rms_norm_eps

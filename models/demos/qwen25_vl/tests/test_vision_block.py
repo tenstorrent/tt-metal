@@ -53,7 +53,7 @@ def test_vision_block_inference(
     # pad seq_len to be divisible by base_model_args.MAX_QKV_MM_SEQ_LEN from the tt_transformers model
     seq_len = ((ref_seq_len // 128) + 1) * 128  # Using 128 as MAX_QKV_MM_SEQ_LEN
 
-    model_args = VisionModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len)
+    model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=seq_len)
     reference_model = Qwen2_5_VLVisionBlock(model_args.hf_config.vision_config, attn_implementation="sdpa")
 
     state_dict = standardize_hf_keys(reference_model.state_dict())

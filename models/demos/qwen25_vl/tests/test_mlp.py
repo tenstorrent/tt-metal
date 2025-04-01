@@ -47,7 +47,7 @@ def test_mlp_inference(rows, batch_size, mesh_device, use_program_cache, reset_s
 
     mesh_device.enable_async(True)
 
-    model_args = VisionModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=rows)
+    model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=rows)
     reference_model = Qwen2_5_VLMLP(model_args.hf_config.vision_config, bias=True)
     state_dict = convert_hf_to_meta(reference_model.state_dict(), model_args.head_dim)
     state_dict_prefix = model_args.get_state_dict_prefix("MLP", 0)
