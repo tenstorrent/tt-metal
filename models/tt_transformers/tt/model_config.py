@@ -324,11 +324,20 @@ class ModelArgs:
                 self.CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
             self.model_name = os.path.basename(LLAMA_DIR)  # May be overridden by config
         elif HF_MODEL:
-            self.CKPT_DIR = HF_MODEL
-            self.TOKENIZER_PATH = HF_MODEL
+            try:
+                from huggingface_hub import hf_hub_download
+
+                config_path = hf_hub_download(HF_MODEL, "config.json")
+                hf_model_dir = os.path.split(config_path)[0]
+            except ImportError as e:
+                logger.warning(f"Failed to use hf_hub_download to find model's cache: {e}")
+                hf_model_dir = os.path.join("model_cache", "--".join(["models"] + HF_MODEL.split("/")))
+
+            self.CKPT_DIR = hf_model_dir
+            self.TOKENIZER_PATH = hf_model_dir
             self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
             if not self.CACHE_PATH:
-                self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
+                self.CACHE_PATH = os.path.join(hf_model_dir, self.device_name)
             self.model_name = HF_MODEL  # May be overridden by config
             self.from_hf_url = True
         else:
@@ -357,7 +366,7 @@ class ModelArgs:
 
         self.instruct = instruct
         # If the weights file contain the keyword `instruct` also set self.instruct to true
-        if "instruct" in self.CKPT_DIR.lower():
+        if any(word in self.CKPT_DIR.lower() for word in ["instruct", "it"]):
             self.instruct = True
 
         # Check for supported batches since previous logic that contained the check was removed because it was unused
