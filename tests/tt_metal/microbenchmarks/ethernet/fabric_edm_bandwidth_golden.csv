@@ -25,7 +25,7 @@ mcast_Linear,noc_unicast_write,4096,4,2,False,False,False,7.75519617550683,18933
 unicast_Linear,noc_unicast_write,16,2,1,False,False,True,0.04479153090691918,2799470.681682449
 unicast_Linear,noc_unicast_write,2048,2,1,False,False,True,5.720823648695118,None
 unicast_Linear,noc_unicast_write,4096,2,1,False,False,True,11.431633337432455,None
-unicast_Linear,noc_unicast_write,16,2,2,False,False,True,0.044769846612909274,2798115.4133068295
+unicast_Linear,noc_unicast_write,16,2,2,False,False,True,0.044769846612909274,2787561.4133068295
 unicast_Linear,noc_unicast_write,2048,2,2,False,False,True,5.7371784811153335,2783965.295311346
 unicast_Linear,noc_unicast_write,4096,2,2,False,False,True,11.118949884548405,2714401.737510267
 unicast_Linear,noc_unicast_write,16,4,1,False,False,True,0.04152677200170299,2595423.2501064367
