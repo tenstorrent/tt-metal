@@ -73,7 +73,7 @@ def test_basic_transformer_block_512x512(
 
     torch_hidden_states = torch.permute(hidden_states, [0, 2, 3, 1])
     torch_hidden_states = torch.reshape(torch_hidden_states, [N, H * W, C])
-    torch_output = basic_transformer(torch_hidden_states, encoder_hidden_states.squeeze(0))
+    torch_output = basic_transformer(torch_hidden_states, encoder_hidden_states=encoder_hidden_states.squeeze(0))
 
     model = basic_transformer_block(device, parameters, seq_len=H * W)
 
