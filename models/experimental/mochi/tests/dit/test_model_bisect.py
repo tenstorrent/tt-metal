@@ -824,10 +824,10 @@ def test_each_step_post_e2e_optim(mesh_device, use_program_cache, reset_seeds, n
             t5_feat=cond_null["y_feat"][0], t5_mask=cond_null["y_mask"][0]
         )
         # z_1BNI, N = model.preprocess_input(z_BCTHW)
-        z_1BNI = model.preprocess_input(z_BCTHW)
+        # z_1BNI = model.preprocess_input(z_BCTHW)
 
         cond_z_1BNI = model.forward_inner(
-            x_1BNI=z_1BNI,
+            x_1BNI=z_BCTHW,
             sigma=sigma,
             y_feat_1BLY=cond_y_feat_1BLY,
             y_pool_11BX=cond_y_pool_11BX,
@@ -839,7 +839,7 @@ def test_each_step_post_e2e_optim(mesh_device, use_program_cache, reset_seeds, n
         )
 
         uncond_z_1BNI = model.forward_inner(
-            x_1BNI=z_1BNI,
+            x_1BNI=z_BCTHW,
             sigma=sigma,
             y_feat_1BLY=uncond_y_feat_1BLY,
             y_pool_11BX=uncond_y_pool_11BX,
