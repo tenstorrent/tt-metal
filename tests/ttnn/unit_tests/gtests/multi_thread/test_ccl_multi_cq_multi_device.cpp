@@ -143,6 +143,16 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
                 device_tensors[dev_idx] = dispatch_ops_to_device(device, input_tensor, ttnn::QueueId(op_cq_id));
 
                 promise->set_value();
+
+                auto dummy_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
+                for (int j = 0; j < num_elems; j++) {
+                    dummy_data[j] = bfloat16(static_cast<float>(dev_idx));
+                }
+                auto dummy_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, tensor_spec);
+                auto dummy_storage = tt::tt_metal::DeviceStorage{dummy_buffer};
+                Tensor dummy_tensor = Tensor(dummy_storage, input_shape, DataType::BFLOAT16, Layout::TILE);
+                ttnn::write_buffer(ttnn::QueueId(op_cq_id), dummy_tensor, {dummy_data});
+                dispatch_ops_to_device(device, dummy_tensor, ttnn::QueueId(op_cq_id));
             });
             dev_idx++;
         }
@@ -299,6 +309,16 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
                 ttnn::wait_for_event(device->command_queue(ccl_cq_id), operation_event);
 
                 promise->set_value();
+
+                auto dummy_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
+                for (int j = 0; j < num_elems; j++) {
+                    dummy_data[j] = bfloat16(static_cast<float>(dev_idx));
+                }
+                auto dummy_buffer = tt::tt_metal::tensor_impl::allocate_buffer_on_device(device, tensor_spec);
+                auto dummy_storage = tt::tt_metal::DeviceStorage{dummy_buffer};
+                Tensor dummy_tensor = Tensor(dummy_storage, input_shape, DataType::BFLOAT16, Layout::TILE);
+                ttnn::write_buffer(ttnn::QueueId(op_cq_id), dummy_tensor, {dummy_data});
+                dispatch_ops_to_device(device, dummy_tensor, ttnn::QueueId(op_cq_id));
             });
             dev_idx++;
         }
