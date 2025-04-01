@@ -694,8 +694,18 @@ void JitBuildState::compile_one(
             });
         }
 
-        settings->process_compile_time_args([&defines](int i, uint32_t value) {
-            defines += "-DKERNEL_COMPILE_TIME_ARG_" + to_string(i) + "=" + to_string(value) + " ";
+        settings->process_compile_time_args([&defines](const std::vector<uint32_t>& values) {
+            if (values.empty()) {
+                return;
+            }
+            std::ostringstream ss;
+            ss << "-DKERNEL_COMPILE_TIME_ARGS=";
+            for (uint32_t i = 0; i < values.size(); ++i) {
+                ss << values[i] << ",";
+            }
+            std::string args = ss.str();
+            args.pop_back();  // Remove the trailing comma
+            defines += args + " ";
         });
 
         cmd += fmt::format("-{} ", settings->get_compiler_opt_level());

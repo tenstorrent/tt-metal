@@ -12,8 +12,8 @@
 #include "debug/dprint_pages.h"
 #endif
 
-constexpr uint32_t weight_size_w = get_compile_time_arg_val(12);  // Input filter window width
-constexpr uint32_t weight_size_h = get_compile_time_arg_val(15);  // Input filter window width
+constexpr uint32_t weight_size_w = get_compile_time_arg_val(11);  // Input filter window width
+constexpr uint32_t weight_size_h = get_compile_time_arg_val(14);  // Input filter window width
 
 template <int window_height, int window_width>
 FORCE_INLINE void read_dilated_channels(
@@ -59,34 +59,33 @@ void read_channels(
     }
 }
 
-#define DILATION_W get_compile_time_arg_val(4)
+constexpr uint32_t DILATION_W = get_compile_time_arg_val(3);
 void kernel_main() {
-    constexpr bool act_in_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t stride_h = get_compile_time_arg_val(1);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(2);
-    constexpr uint32_t dilation_h = get_compile_time_arg_val(3);
-    constexpr uint32_t dilation_w = get_compile_time_arg_val(4);
-    constexpr uint32_t conv_act_size_w = get_compile_time_arg_val(5);
-    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(7);
-    constexpr uint32_t window_inner = get_compile_time_arg_val(9);
-    constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(10);
-    constexpr uint32_t padded_conv_act_size_w = get_compile_time_arg_val(13);
-    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(14);
-    constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(16);
-    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(17);
-    constexpr uint32_t act_w_num_outer = get_compile_time_arg_val(18);
-    constexpr uint32_t act_mcast_num_dests = get_compile_time_arg_val(19);
-    constexpr uint32_t act_mcast_num_cores = get_compile_time_arg_val(20);
-    const uint32_t act_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(21));
-    const uint32_t act_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(22));
-    constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(23);
-    constexpr bool transpose_mcast = get_compile_time_arg_val(24) == 1;
-    constexpr uint32_t cb_id_act = get_compile_time_arg_val(27);
-    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(28);
-    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(29);
-    constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(30);
-    constexpr uint32_t cb_id_act_row_major_bfloat16 = get_compile_time_arg_val(31);
-    constexpr uint32_t cb_l1_array = get_compile_time_arg_val(32);
+    constexpr uint32_t stride_h = get_compile_time_arg_val(0);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(1);
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(2);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(3);
+    constexpr uint32_t conv_act_size_w = get_compile_time_arg_val(4);
+    constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(6);
+    constexpr uint32_t window_inner = get_compile_time_arg_val(8);
+    constexpr uint32_t act_block_h_datums = get_compile_time_arg_val(9);
+    constexpr uint32_t padded_conv_act_size_w = get_compile_time_arg_val(12);
+    constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(13);
+    constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(15);
+    constexpr uint32_t act_block_num_tiles = get_compile_time_arg_val(16);
+    constexpr uint32_t act_w_num_outer = get_compile_time_arg_val(17);
+    constexpr uint32_t act_mcast_num_dests = get_compile_time_arg_val(18);
+    constexpr uint32_t act_mcast_num_cores = get_compile_time_arg_val(19);
+    const uint32_t act_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(20));
+    const uint32_t act_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(21));
+    constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(22);
+    constexpr bool transpose_mcast = get_compile_time_arg_val(23) == 1;
+    constexpr uint32_t cb_id_act = get_compile_time_arg_val(26);
+    constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(27);
+    constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(28);
+    constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(29);
+    constexpr uint32_t cb_id_act_row_major_bfloat16 = get_compile_time_arg_val(30);
+    constexpr uint32_t cb_l1_array = get_compile_time_arg_val(31);
 
     uint32_t i = 0;
     uint32_t noop = get_arg_val<uint32_t>(i);
@@ -159,43 +158,43 @@ void kernel_main() {
 
         for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {
             uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
-#if DILATION_W == 1
-            read_channels(
-                l1_write_addr_act,
-                act_l1_read_addr,
-                two_reader_indices & 0xffff,
-                conv_act_c_read_bytes,
-                coalesced_read_bytes,
-                stride_h_bytes);
-            if constexpr (act_block_w_extra_align_bytes) {
-                l1_write_addr_act += act_block_w_extra_align_bytes;
+            if constexpr (DILATION_W == 1) {
+                read_channels(
+                    l1_write_addr_act,
+                    act_l1_read_addr,
+                    two_reader_indices & 0xffff,
+                    conv_act_c_read_bytes,
+                    coalesced_read_bytes,
+                    stride_h_bytes);
+                if constexpr (act_block_w_extra_align_bytes) {
+                    l1_write_addr_act += act_block_w_extra_align_bytes;
+                }
+                read_channels(
+                    l1_write_addr_act,
+                    act_l1_read_addr,
+                    two_reader_indices >> 16,
+                    conv_act_c_read_bytes,
+                    coalesced_read_bytes,
+                    stride_h_bytes);
+                if constexpr (act_block_w_extra_align_bytes) {
+                    l1_write_addr_act += act_block_w_extra_align_bytes;
+                }
+            } else {
+                read_dilated_channels<weight_size_h, weight_size_w>(
+                    l1_write_addr_act,
+                    act_l1_read_addr,
+                    two_reader_indices & 0xffff,
+                    conv_act_c_read_bytes,
+                    stride_h_bytes,
+                    stride_w_bytes);
+                read_dilated_channels<weight_size_h, weight_size_w>(
+                    l1_write_addr_act,
+                    act_l1_read_addr,
+                    two_reader_indices >> 16,
+                    conv_act_c_read_bytes,
+                    stride_h_bytes,
+                    stride_w_bytes);
             }
-            read_channels(
-                l1_write_addr_act,
-                act_l1_read_addr,
-                two_reader_indices >> 16,
-                conv_act_c_read_bytes,
-                coalesced_read_bytes,
-                stride_h_bytes);
-            if constexpr (act_block_w_extra_align_bytes) {
-                l1_write_addr_act += act_block_w_extra_align_bytes;
-            }
-#else
-            read_dilated_channels<weight_size_h, weight_size_w>(
-                l1_write_addr_act,
-                act_l1_read_addr,
-                two_reader_indices & 0xffff,
-                conv_act_c_read_bytes,
-                stride_h_bytes,
-                stride_w_bytes);
-            read_dilated_channels<weight_size_h, weight_size_w>(
-                l1_write_addr_act,
-                act_l1_read_addr,
-                two_reader_indices >> 16,
-                conv_act_c_read_bytes,
-                stride_h_bytes,
-                stride_w_bytes);
-#endif
             reader_idx++;
         }
         // incrementing num issued in one shot is actually slower

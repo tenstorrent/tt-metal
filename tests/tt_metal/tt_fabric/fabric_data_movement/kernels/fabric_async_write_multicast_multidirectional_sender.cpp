@@ -85,6 +85,7 @@ void kernel_main() {
             0,
             0);
     } else {
+        client_interface++;
         // For sideband header, we will use header slot in second client interface.
         // Use AsyncWriteMode::ALL, since the header slot needs to be initialized.
         fabric_async_write_multicast<
