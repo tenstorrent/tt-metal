@@ -596,9 +596,7 @@ def tt_sharded_distributed_rmsnorm(
 
     # Run distributed rmsnorm part 1
     cluster_axis = 1
-    semaphore = multi_device_global_semaphore = tt_ccl.gather_semaphore_handles[cluster_axis][
-        tt_ccl.gather_idx[cluster_axis]
-    ]
+    semaphore = tt_ccl.gather_semaphore_handles[cluster_axis][tt_ccl.gather_idx[cluster_axis]]
     grid_offset = ttnn.CoreCoord(1, 0)
     tt_stats_sharded_config = ttnn.create_sharded_memory_config(
         shape=(32, 128),
