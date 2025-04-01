@@ -17,9 +17,10 @@ target_sources(
 
 # TODO(afuller): this should be self-describing modules.
 #   For now just cherry-pick all the files I discovered empirally by trying to run a test.
+add_library(jitapi INTERFACE)
 target_sources(
-    tt_metal
-    PUBLIC
+    jitapi
+    INTERFACE
         FILE_SET jit_api
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -274,6 +275,7 @@ endif()
 install(
     TARGETS
         tt_metal
+        jitapi
     LIBRARY
         COMPONENT metalium-runtime
     FILE_SET
