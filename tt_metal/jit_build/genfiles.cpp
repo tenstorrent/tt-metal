@@ -4,20 +4,35 @@
 
 #include "jit_build/genfiles.hpp"
 
-#include <bit>
-#include <filesystem>
-#include <fstream>
-#include <iostream>
-#include <utility>
-
-#include <tt_backend_api_types.hpp>
-#include <utils.hpp>
-#include "hostdevcommon/common_values.hpp"
-#include "build.hpp"
+#include <circular_buffer_constants.h>
 #include <data_format.hpp>
 #include <jit_build_options.hpp>
+#include <stdint.h>
+#include <tt_backend_api_types.hpp>
+#include <utils.hpp>
+#include <cstddef>
+#include <filesystem>
+#include <functional>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <tuple>
+#include <utility>
+#include <vector>
 
-#include <circular_buffer_constants.h>
+#include "assert.hpp"
+#include "build.hpp"
+#include "hlk_desc.hpp"
+#include "jit_build_settings.hpp"
+#include "kernel.hpp"
+#include "logger.hpp"
+#include "rtoptions.hpp"
+
+enum class UnpackToDestMode : uint8_t;
+namespace tt {
+enum class ARCH;
+}  // namespace tt
 
 namespace fs = std::filesystem;
 

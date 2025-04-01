@@ -4,21 +4,46 @@
 
 #pragma once
 
-#include <cstdint>
-#include <functional>
-
+#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/dev_msgs.h>
+#include <tt-metalium/fabric_host_interface.h>
+#include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/fabric_host_interface.h>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/fabric_types.hpp>
-#include "umd/device/device_api_metal.h"
-#include "umd/device/tt_cluster_descriptor.h"
-#include "umd/device/tt_xy_pair.h"
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <memory>
+#include <optional>
+#include <ostream>
+#include <set>
+#include <tuple>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
-#include <tt-metalium/dev_msgs.h>
-
+#include "assert.hpp"
+#include "core_coord.hpp"
 #include "llrt/hal.hpp"
+#include <umd/device/cluster.h>
+#include <umd/device/device_api_metal.h>
+#include <umd/device/tt_cluster_descriptor.h>
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_io.hpp>
+#include <umd/device/tt_silicon_driver_common.hpp>
+#include <umd/device/tt_soc_descriptor.h>
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/harvesting.h>
+
+namespace tt {
+enum class ARCH;
+namespace tt_fabric {
+class ControlPlane;
+}  // namespace tt_fabric
+}  // namespace tt
+struct tt_device_params;
 
 static constexpr std::uint32_t SW_VERSION = 0x00020000;
 

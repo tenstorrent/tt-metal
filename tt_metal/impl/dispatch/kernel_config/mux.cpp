@@ -2,15 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "mux.hpp"
-#include "dispatch.hpp"
-#include "eth_router.hpp"
-#include "eth_tunneler.hpp"
 
 #include <host_api.hpp>
-#include <tt_metal.hpp>
-
-#include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
+#include <map>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "assert.hpp"
+#include "device.hpp"
+#include "dispatch.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
+#include "dispatch/kernel_config/fd_kernel.hpp"
+#include "dispatch_core_common.hpp"
+#include "dispatch_mem_map.hpp"
+#include "eth_tunneler.hpp"
+#include "hal.hpp"
+#include "tt_cluster.hpp"
+#include "utils.hpp"
 
 using namespace tt::tt_metal;
 
