@@ -42,29 +42,27 @@ bool run_dm(IDevice* device, const DmConfig& test_config) {
 
     InterleavedBufferConfig interleaved_dram_config{
         .device = device, .size = total_size_bytes, .page_size = total_size_bytes, .buffer_type = BufferType::DRAM};
-
-    ShardSpecBuffer shard_spec = ShardSpecBuffer(
-        test_config.cores,
-        {test_config.tensor_shape_in_pages[0] * 4 / test_config.num_dram_banks[0],
-         test_config.tensor_shape_in_pages[1] * (device->arch() == ARCH::BLACKHOLE ? 8 : 4) /
-             test_config.num_dram_banks[1]},
-        ShardOrientation::ROW_MAJOR,
-        {4, (device->arch() == ARCH::BLACKHOLE) ? 8 : 4},
-        test_config.tensor_shape_in_pages);
-    ShardedBufferConfig sharded_dram_config{
-        .device = device,
-        .size = total_size_bytes,
-        .page_size = total_size_bytes,
-        .buffer_type = BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::BLOCK_SHARDED,
-        .shard_parameters = shard_spec};
-
     std::shared_ptr<Buffer> input_dram_buffer;
     if (!test_config.num_dram_banks[0]) {
         log_info("Using interleaved config");
         input_dram_buffer = CreateBuffer(interleaved_dram_config);
     } else {
         log_info("Using sharded config");
+        ShardSpecBuffer shard_spec = ShardSpecBuffer(
+            test_config.cores,
+            {test_config.tensor_shape_in_pages[0] * 4 / test_config.num_dram_banks[0],
+             test_config.tensor_shape_in_pages[1] * (device->arch() == ARCH::BLACKHOLE ? 8 : 4) /
+                 test_config.num_dram_banks[1]},
+            ShardOrientation::ROW_MAJOR,
+            {4, (device->arch() == ARCH::BLACKHOLE) ? 8 : 4},
+            test_config.tensor_shape_in_pages);
+        ShardedBufferConfig sharded_dram_config{
+            .device = device,
+            .size = total_size_bytes,
+            .page_size = total_size_bytes,
+            .buffer_type = BufferType::DRAM,
+            .buffer_layout = TensorMemoryLayout::BLOCK_SHARDED,
+            .shard_parameters = shard_spec};
         input_dram_buffer = CreateBuffer(sharded_dram_config);
     }
     uint32_t input_dram_byte_address = input_dram_buffer->address();
