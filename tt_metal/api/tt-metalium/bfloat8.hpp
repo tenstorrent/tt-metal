@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include <vector>
-#include <optional>
-
+#include <stdint.h>
 #include <tt-metalium/tile.hpp>
 #include <tt_stl/span.hpp>
+#include <optional>
+#include <vector>
 
 // TODO: empty struct to facilitate Tensor template logic. Reconsider how/why templating is supported in Tensor
 struct bfloat8_b {};

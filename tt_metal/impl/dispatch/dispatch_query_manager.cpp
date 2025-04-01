@@ -4,7 +4,18 @@
 
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
+#include <initializer_list>
+#include <optional>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+
+#include "assert.hpp"
+#include "core_descriptor.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
 #include "tt_cluster.hpp"
+#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/xy_pair.h>
 
 using dispatch_core_mgr = tt::tt_metal::dispatch_core_manager;
 

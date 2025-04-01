@@ -5,11 +5,30 @@
 
 #include <device_impl.hpp>
 #include <program_impl.hpp>
+#include <stdint.h>
+#include <map>
+#include <string>
+#include <vector>
+
+#include "assert.hpp"
 #include "core_coord.hpp"
 #include "mesh_graph.hpp"
+#include "system_memory_manager.hpp"
+#include "tt_cluster.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "tt_cluster.hpp"
+#include <umd/device/tt_xy_pair.h>
+#include "utils.hpp"
+
+enum class CoreType;
+namespace tt {
+namespace tt_metal {
+class IDevice;
+class Program;
+enum DispatchWorkerType : uint32_t;
+enum NOC : uint8_t;
+}  // namespace tt_metal
+}  // namespace tt
 
 #define UNUSED_LOGICAL_CORE tt_cxy_pair(device_->id(), 0, 0)
 #define UNUSED_SEM_ID 0

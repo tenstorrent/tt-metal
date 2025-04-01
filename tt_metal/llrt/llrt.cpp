@@ -2,6 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <assert.hpp>
+#include <dev_msgs.h>
+#include <fmt/base.h>
+#include <fmt/ranges.h>
+#include <logger.hpp>
+#include <rtoptions.hpp>
+#include <unistd.h>
 #include <cassert>
 #include <chrono>
 #include <condition_variable>
@@ -10,27 +17,20 @@
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
+#include <iostream>
 #include <memory>
 #include <mutex>
 #include <thread>
-#include <unistd.h>
 #include <unordered_map>
 #include <unordered_set>
-#include <utility>
 
-#include <assert.hpp>
-#include <logger.hpp>
-
+#include "hal_types.hpp"
 #include "llrt.hpp"
-#include <rtoptions.hpp>
 #include "llrt/hal.hpp"
-
-#include <jit_build_options.hpp>
-
-#include <fmt/base.h>
-#include <fmt/ranges.h>
-
-#include <dev_msgs.h>
+#include "metal_soc_descriptor.h"
+// #include <umd/device/driver_atomics.h> - This should be included as it is used here, but the file is missing include
+// guards
+#include <umd/device/tt_core_coordinates.h>
 
 namespace tt {
 

@@ -5,6 +5,16 @@
 #pragma once
 
 #include <mesh_coord.hpp>
+#include <stdint.h>
+
+namespace tt {
+namespace tt_metal {
+namespace distributed {
+template <typename T>
+class MeshContainer;
+}  // namespace distributed
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal::distributed {
 

@@ -3,8 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <semaphore.hpp>
+#include <stdint.h>
 
+#include "hal_types.hpp"
 #include "llrt/hal.hpp"
+#include <umd/device/tt_core_coordinates.h>
 
 namespace tt {
 

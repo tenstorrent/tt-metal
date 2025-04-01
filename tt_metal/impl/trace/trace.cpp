@@ -2,17 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <trace.hpp>
-
-#include <memory>
-
-#include <logger.hpp>
-#include <tt_metal.hpp>
-#include <host_api.hpp>
-#include <device.hpp>
 #include <command_queue.hpp>
+#include <device.hpp>
+#include <host_api.hpp>
+#include <logger.hpp>
 #include <trace.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <cstddef>
+#include <memory>
+#include <variant>
+#include <vector>
+
+#include "allocator_types.hpp"
+#include "assert.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "math.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 
 namespace tt::tt_metal {

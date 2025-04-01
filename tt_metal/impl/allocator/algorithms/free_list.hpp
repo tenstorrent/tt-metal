@@ -2,11 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-#include <string>
-
-#include "hostdevcommon/common_values.hpp"
-#include "allocator_algorithm.hpp"
 #include <boost/smart_ptr/local_shared_ptr.hpp>
+#include <optional>
+#include <ostream>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "allocator_algorithm.hpp"
+#include "allocator_types.hpp"
+#include "hal_types.hpp"
+#include "hostdevcommon/common_values.hpp"
 
 namespace tt {
 namespace tt_metal {

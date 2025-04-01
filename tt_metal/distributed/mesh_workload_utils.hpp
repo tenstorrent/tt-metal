@@ -3,6 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <host_api.hpp>
+#include <stdint.h>
+
+#include "core_coord.hpp"
+#include "sub_device_types.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+class SystemMemoryManager;
+}  // namespace tt_metal
+}  // namespace tt
 
 // Utility functions for dispatch MeshWorkloads
 // Used by MeshCommandQueue

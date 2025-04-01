@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <umd/device/types/cluster_descriptor_types.h>
+
 namespace tt::tt_metal {
 
 /*

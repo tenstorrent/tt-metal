@@ -2,33 +2,45 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <logger.hpp>
+#include <math.h>
+#include <pthread.h>
+#include <rtoptions.hpp>
+#include <tt-metalium/blockfloat_common.hpp>
+#include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <ostream>
-#include <sstream>
-#include <string>
-#include <thread>
-#include <future>
-#include <iostream>
-#include <fstream>
-#include <iomanip>
-#include <chrono>
-#include <set>
+#include <cstring>
 #include <filesystem>
+#include <future>
+#include <initializer_list>
+#include <iomanip>
+#include <iostream>
+#include <map>
+#include <mutex>
+#include <set>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <thread>
 #include <tuple>
-#include "llrt.hpp"
-#include <logger.hpp>
+#include <vector>
 
-#include "dprint_server.hpp"
+#include "assert.hpp"
+#include "core_coord.hpp"
 #include "debug_helpers.hpp"
-#include <rtoptions.hpp>
-
-#include <tt-metalium/bfloat8.hpp>
-#include <tt-metalium/blockfloat_common.hpp>
-
+#include "dprint_server.hpp"
+#include "fmt/base.h"
 #include "hostdevcommon/dprint_common.h"
 #include "hostdevcommon/kernel_structs.h"
+#include "llrt.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "tt_backend_api_types.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_soc_descriptor.h>
+#include <umd/device/types/xy_pair.h>
 
 using std::cout;
 using std::endl;

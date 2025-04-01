@@ -2,39 +2,65 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_metal.hpp>
-
-#include <algorithm>
-#include <optional>
-
-#include <dev_msgs.h>
-#include "llrt/hal.hpp"
 #include <allocator.hpp>
-#include "dprint_server.hpp"
-#include <command_queue.hpp>
-#include <profiler.hpp>
-
-#include <host_api.hpp>
+#include <circular_buffer.hpp>
 #include <circular_buffer_constants.h>
-#include <trace.hpp>
+#include <dev_msgs.h>
 #include <device_impl.hpp>
 #include <device_pool.hpp>
-#include <kernel.hpp>
-#include <circular_buffer.hpp>
+#include <global_circular_buffer.hpp>
 #include <global_circular_buffer_impl.hpp>
 #include <global_semaphore.hpp>
+#include <host_api.hpp>
+#include <kernel.hpp>
+#include <magic_enum/magic_enum.hpp>
 #include <sub_device_types.hpp>
-#include <global_circular_buffer.hpp>
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
-#include "tracy/Tracy.hpp"
+#include <trace.hpp>
+#include <tt_metal.hpp>
+#include <algorithm>
+#include <cstdlib>
+#include <cstring>
+#include <functional>
+#include <iostream>
+#include <optional>
+#include <string_view>
+#include <thread>
+#include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <variant>
 
-#include <graph_tracking.hpp>
+#include "buffer_constants.hpp"
+#include "circular_buffer_types.hpp"
+#include "data_types.hpp"
+#include "device.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
+#include "dispatch_settings.hpp"
+#include "hal_types.hpp"
+#include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
-
+#include "lightmetal/lightmetal_capture.hpp"
+#include "lightmetal_binary.hpp"
 #include "llrt.hpp"
+#include "llrt/hal.hpp"
+#include "logger.hpp"
+#include "program_impl.hpp"
+#include "semaphore.hpp"
+#include "system_memory_manager.hpp"
+#include "tracy/Tracy.hpp"
+#include "tt_cluster.hpp"
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/xy_pair.h>
+#include "utils.hpp"
+
 namespace tt {
 
 namespace tt_metal {
+enum class FabricConfig : uint32_t;
+struct RuntimeArgsData;
+struct TraceDescriptor;
 
 namespace {
 

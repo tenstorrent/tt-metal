@@ -4,10 +4,25 @@
 
 #pragma once
 
-#include <vector>
-#include <tt-metalium/device.hpp>
+#include <stdint.h>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <optional>
+#include <vector>
+
 #include "context.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+class Program;
+namespace tools {
+namespace mem_bench {
+struct Context;
+}  // namespace mem_bench
+}  // namespace tools
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal::tools::mem_bench {
 

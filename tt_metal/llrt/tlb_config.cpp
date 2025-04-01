@@ -4,10 +4,24 @@
 
 #include "tlb_config.hpp"
 
-#include "umd/device/blackhole_implementation.h"
-#include "umd/device/grayskull_implementation.h"
-#include "umd/device/wormhole_implementation.h"
 #include <assert.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "core_coord.hpp"
+#include "metal_soc_descriptor.h"
+#include "tt_backend_api_types.hpp"
+#include <umd/device/blackhole_implementation.h>
+#include <umd/device/cluster.h>
+#include <umd/device/grayskull_implementation.h>
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/arch.h>
+#include <umd/device/types/xy_pair.h>
+#include <umd/device/wormhole_implementation.h>
 
 namespace ll_api {
 

@@ -4,24 +4,26 @@
 
 #pragma once
 
+#include <tt-metalium/vector_aligned.hpp>
+#include <tt_stl/span.hpp>
+#include <array>
+#include <atomic>
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 #include "allocator.hpp"
+#include "hal_types.hpp"
 #include "sub_device.hpp"
 #include "sub_device_types.hpp"
 
-#include <tt_stl/span.hpp>
-
-#include <tt-metalium/vector_aligned.hpp>
-
 namespace tt::tt_metal {
 
-class TraceBuffer;
-
 class IDevice;
+class TraceBuffer;
 
 class SubDeviceManager {
 public:

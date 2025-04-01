@@ -2,20 +2,33 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "dispatch.hpp"
-#include "assert.hpp"
-#include "llrt/hal.hpp"
-#include "prefetch.hpp"
-#include "dispatch_s.hpp"
-#include "demux.hpp"
-#include "mux.hpp"
 
 #include <host_api.hpp>
-#include <tt_metal.hpp>
-#include "rtoptions.hpp"
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
-
-#include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
+#include <tt_metal.hpp>
+#include <array>
+#include <map>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "assert.hpp"
+#include "command_queue_common.hpp"
+#include "demux.hpp"
+#include "device.hpp"
+#include "dispatch/kernel_config/fd_kernel.hpp"
+#include "dispatch/kernels/packet_queue_ctrl.hpp"
+#include "dispatch_core_common.hpp"
+#include "dispatch_mem_map.hpp"
+#include "dispatch_s.hpp"
+#include "hal_types.hpp"
+#include "llrt/hal.hpp"
+#include "mux.hpp"
+#include "prefetch.hpp"
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include <umd/device/types/xy_pair.h>
+#include "utils.hpp"
 
 using namespace tt::tt_metal;
 

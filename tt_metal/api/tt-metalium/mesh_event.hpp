@@ -5,7 +5,18 @@
 #pragma once
 
 #include <cstdint>
+#include <ostream>
+
+#include "mesh_coord.hpp"
 #include "mesh_device.hpp"
+
+namespace tt {
+namespace tt_metal {
+namespace distributed {
+class MeshDevice;
+}  // namespace distributed
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal::distributed {
 

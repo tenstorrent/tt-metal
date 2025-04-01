@@ -2,22 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <core_coord.hpp>
-
-#include <algorithm>
-#include <cstdint>
-#include <limits>
-#include <mutex>
-#include <optional>
-#include <set>
-#include <string>
-#include <vector>
-
-#include "umd/device/tt_xy_pair.h"
 #include <assert.hpp>
-#include "tracy/Tracy.hpp"
+#include <core_coord.hpp>
+#include <nlohmann/json.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <iterator>
+#include <limits>
+#include <map>
+#include <mutex>
+#include <optional>
+#include <ostream>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "tracy/Tracy.hpp"
 
 auto fmt::formatter<CoreCoord>::format(const CoreCoord& core_coord, format_context& ctx) const
     -> format_context::iterator {

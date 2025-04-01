@@ -2,13 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <host_api.hpp>
-#include <command_queue.hpp>
-
-#include "tt_metal/impl/dispatch/device_command.hpp"
-#include "tt_metal/impl/program/dispatch.hpp"
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include "dev_msgs.h"
+#include "device.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
+#include "dispatch/kernels/cq_commands.hpp"
+#include "dispatch_core_common.hpp"
+#include "dispatch_mem_map.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "strong_type.hpp"
+#include "system_memory_manager.hpp"
+#include "tt_align.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
+#include "tt_metal/impl/dispatch/device_command.hpp"
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+
+enum class CoreType;
 
 namespace tt::tt_metal::distributed {
 

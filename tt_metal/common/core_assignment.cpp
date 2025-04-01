@@ -2,8 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+#include <cstddef>
+#include <limits>
+#include <numeric>
+
 #include "assert.hpp"
 #include "core_assignment.hpp"
+#include <umd/device/types/arch.h>
+#include <umd/device/types/xy_pair.h>
 
 namespace tt {
 namespace tt_metal {

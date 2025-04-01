@@ -2,11 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <host_api.hpp>
 #include <device.hpp>
+#include <host_api.hpp>
+#include <stdint.h>
+#include <vector>
+
 #include "command_queue_interface.hpp"
+#include "tt_backend_api_types.hpp"
+
+enum class CoreType;
 
 namespace tt {
+namespace tt_metal {
+class Program;
+struct KernelGroup;
+}  // namespace tt_metal
 
 typedef enum e_data_collector_t {
     DISPATCH_DATA_CB_CONFIG,

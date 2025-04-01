@@ -4,6 +4,11 @@
 
 #include "device_command_calculator.hpp"
 
+#include <algorithm>
+
+#include "dispatch/kernels/cq_commands.hpp"
+#include "hal.hpp"
+
 namespace tt::tt_metal {
 
 template <typename PackedSubCmd>

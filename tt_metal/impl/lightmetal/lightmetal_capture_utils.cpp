@@ -3,9 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <lightmetal_capture_utils.hpp>
-#include "lightmetal/host_api_capture_helpers.hpp"
+#include <stdint.h>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <cstddef>
+#include <vector>
+
+#include "lightmetal/host_api_capture_helpers.hpp"
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

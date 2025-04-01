@@ -3,14 +3,33 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/event/dispatch.hpp"
+
+#include <boost/core/span.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
+#include <tt_align.hpp>
+#include <utility>
+#include <vector>
+
+#include "assert.hpp"
+#include "command_queue_common.hpp"
+#include "core_coord.hpp"
+#include "device.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
+#include "dispatch/kernels/cq_commands.hpp"
+#include "dispatch_core_common.hpp"
+#include "dispatch_mem_map.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "logger.hpp"
+#include "strong_type.hpp"
+#include "sub_device_types.hpp"
+#include "tt_cluster.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
-#include <tt-metalium/program_impl.hpp>
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
-#include <tt_align.hpp>
+#include <umd/device/tt_xy_pair.h>
 
-#include "tt_cluster.hpp"
+enum class CoreType;
 
 namespace tt::tt_metal {
 

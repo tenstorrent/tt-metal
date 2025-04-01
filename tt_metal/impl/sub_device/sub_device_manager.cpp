@@ -2,27 +2,40 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <vector>
-
-#include "sub_device_manager.hpp"
-
-#include <assert.hpp>
-#include <host_api.hpp>
 #include <allocator.hpp>
+#include <assert.hpp>
 #include <device.hpp>
-#include <command_queue_interface.hpp>
-#include <data_types.hpp>
+#include <host_api.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
 #include <trace.hpp>
-#include <trace_buffer.hpp>
-#include <tt_stl/span.hpp>
 #include <tt_align.hpp>
+#include <tt_stl/span.hpp>
+#include <functional>
+#include <limits>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
-#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
-
+#include "allocator_types.hpp"
+#include "buffer_constants.hpp"
+#include "core_coord.hpp"
+#include "dispatch_settings.hpp"
+#include "hal.hpp"
+#include "strong_type.hpp"
+#include "sub_device_manager.hpp"
 #include "tt_cluster.hpp"
+#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/xy_pair.h>
+#include "vector_aligned.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum NOC : uint8_t;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

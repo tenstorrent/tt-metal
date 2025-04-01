@@ -4,20 +4,42 @@
 
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <thread>
+#include <variant>
 
+#include "buffer.hpp"
 #include "command_queue.hpp"
-#include "host_runtime_commands.hpp"
 #include "command_queue_interface.hpp"
+#include "core_coord.hpp"
+#include "dispatch_settings.hpp"
+#include "event.hpp"
+#include "host_runtime_commands.hpp"
+#include "launch_message_ring_buffer_state.hpp"
 #include "multi_producer_single_consumer_queue.hpp"
-#include "worker_config_buffer.hpp"
 #include "program_impl.hpp"
+#include "span.hpp"
+#include "sub_device_types.hpp"
 #include "trace_buffer.hpp"
-
 #include "tt_metal/impl/buffers/dispatch.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include "vector_aligned.hpp"
+#include "worker_config_buffer.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+class Program;
+class SystemMemoryManager;
+enum NOC : uint8_t;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

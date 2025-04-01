@@ -3,11 +3,27 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/dev_msgs.h>
+#include <algorithm>
+#include <functional>
 
+#include "assert.hpp"
+#include "device.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
+#include "dispatch/kernels/cq_commands.hpp"
+#include "dispatch_core_common.hpp"
+#include "dispatch_mem_map.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "launch_message_ring_buffer_state.hpp"
+#include "strong_type.hpp"
+#include "system_memory_manager.hpp"
+#include "trace_buffer.hpp"
+#include "tt_align.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
-#include "tt_metal/impl/trace/dispatch.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
-#include "tt_metal/impl/dispatch/device_command.hpp"
+#include "tt_metal/impl/trace/dispatch.hpp"
+#include "worker_config_buffer.hpp"
+
 namespace tt::tt_metal::trace_dispatch {
 
 void reset_host_dispatch_state_for_trace(

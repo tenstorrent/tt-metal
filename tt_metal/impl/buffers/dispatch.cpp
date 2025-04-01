@@ -2,20 +2,35 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/core/span.hpp>
 #include <device.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
+#include <algorithm>
+#include <array>
+#include <optional>
+#include <stack>
+#include <type_traits>
+#include <utility>
+
 #include "assert.hpp"
+#include "buffer_constants.hpp"
 #include "dispatch.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
+#include "dispatch/kernels/cq_commands.hpp"
+#include "dispatch_mem_map.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "logger.hpp"
+#include "math.hpp"
+#include "strong_type.hpp"
+#include "sub_device_types.hpp"
+#include "tt_align.hpp"
+#include "tt_cluster.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 
-#include <stack>
-#include <tt-metalium/command_queue_interface.hpp>
-#include "tt_metal/impl/dispatch/device_command.hpp"
-#include <tt-metalium/dispatch_settings.hpp>
-#include <tt-metalium/program_impl.hpp>
-#include <tt-metalium/allocator.hpp>
-
-#include "tt_cluster.hpp"
+enum class CoreType;
 
 namespace tt::tt_metal {
 namespace buffer_dispatch {

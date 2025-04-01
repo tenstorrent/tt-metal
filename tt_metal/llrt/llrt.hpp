@@ -11,10 +11,18 @@
 #include <unordered_set>
 #include <vector>
 
+#include "core_coord.hpp"
+#include "span.hpp"
 // clang-format off
 #include "tt_cluster.hpp"
-#include "umd/device/tt_xy_pair.h"
 #include "tt_memory.h"
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/xy_pair.h>
+#include "utils.hpp"
+
+struct go_msg_t;
+struct launch_msg_t;
 // clang-format on
 
 namespace tt {

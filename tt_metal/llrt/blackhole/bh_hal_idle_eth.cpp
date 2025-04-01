@@ -4,21 +4,21 @@
 
 #define COMPILE_FOR_ERISC
 
+#include <dev_msgs.h>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
 
+#include "assert.hpp"
+#include "blackhole/bh_hal.hpp"
 #include "core_config.h"
 #include "dev_mem_map.h"
-#include <dev_msgs.h>
-#include "noc/noc_parameters.h"
-
-#include "llrt/hal.hpp"
 #include "hal_asserts.hpp"
-#include "blackhole/bh_hal.hpp"
-
-#include "umd/device/tt_soc_descriptor.h"  // CoreType
+#include "hal_types.hpp"
+#include "llrt/hal.hpp"
+#include "noc/noc_parameters.h"
+#include <umd/device/tt_core_coordinates.h>
 
 #define GET_IERISC_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_IERISC_MAILBOX_BASE)->x))
 

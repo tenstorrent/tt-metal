@@ -2,21 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/core/span.hpp>
 #include <tt-metalium/blockfloat_common.hpp>
-
-#include <algorithm>
-#include <iostream>
-#include <random>
+#include <tt_stl/span.hpp>
+#include <array>
 #include <vector>
-#include <immintrin.h>
 
 #include "assert.hpp"
-#include "tt_backend_api_types.hpp"
-#include "tracy/Tracy.hpp"
-#include "tile.hpp"
-#include <tt_stl/span.hpp>
-
+#include "constants.hpp"
+#include "hal_types.hpp"
 #include "llrt/hal.hpp"
+#include "math.hpp"
+#include "tile.hpp"
+#include "tracy/Tracy.hpp"
+#include "tt_backend_api_types.hpp"
 
 uint8_t get_max_exp(const std::vector<uint32_t>& vec, bool is_exp_a) {
     TT_ASSERT(vec.size() == 16);

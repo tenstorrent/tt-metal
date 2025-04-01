@@ -3,13 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <stdint.h>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/tile.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt_stl/span.hpp>
+#include <cstddef>
+#include <optional>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-
-#include <tt-metalium/tile.hpp>
-#include <tt_stl/span.hpp>
+namespace tt {
+enum class DataFormat : uint8_t;
+}  // namespace tt
 
 uint8_t get_max_exp(const std::vector<uint32_t>& vec, bool is_exp_a);
 

@@ -3,9 +3,33 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "build_env_manager.hpp"
-#include <command_queue_interface.hpp>
-#include "tt_cluster.hpp"
+
+#include <limits.h>
+#include <magic_enum/magic_enum.hpp>
+#include <math.h>
+#include <tracy/Tracy.hpp>
+#include <bitset>
+#include <cstddef>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <variant>
+
+#include "assert.hpp"
+#include "core_coord.hpp"
+#include "core_descriptor.hpp"
+#include "dispatch_core_common.hpp"
+#include "dispatch_mem_map.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
+#include "jit_build/build.hpp"
+#include "metal_soc_descriptor.h"
+#include "system_memory_manager.hpp"
+#include "tt_cluster.hpp"
+#include <umd/device/tt_core_coordinates.h>
 
 namespace tt::tt_metal {
 

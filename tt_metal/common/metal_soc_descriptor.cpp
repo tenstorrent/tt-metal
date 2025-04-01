@@ -4,13 +4,13 @@
 
 #include "metal_soc_descriptor.h"
 
-#include <fstream>
-#include <iostream>
+#include <assert.hpp>
+#include <yaml-cpp/yaml.h>
 #include <string>
 
-#include <assert.hpp>
-#include "umd/device/cluster.h"
-#include "yaml-cpp/yaml.h"
+#include <umd/device/types/arch.h>
+
+enum BoardType : uint32_t;
 
 CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_view(int dram_view) const {
     TT_ASSERT(
