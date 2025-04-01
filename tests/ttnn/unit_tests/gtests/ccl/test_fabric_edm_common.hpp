@@ -2908,7 +2908,7 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
         enable_persistent_fabric_mode,
         num_links,
         topology,
-        fabric_context_switch_interval);
+        tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval);
 
     // Other boiler plate setup
     CoreRangeSet worker_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_links - 1, 0)));

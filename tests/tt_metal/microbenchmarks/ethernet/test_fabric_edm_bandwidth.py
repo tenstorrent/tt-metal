@@ -132,7 +132,10 @@ def read_golden_results(
         logger.error(
             f"No golden data found for tests_name={test_name} noc_message_type={noc_message_type} packet_size={packet_size} line_size={line_size} num_links={num_links} disable_sends_for_interior_workers={disable_sends_for_interior_workers} unidirectional={unidirectional}"
         )
-    return results["Bandwidth (B/c)"].values[0], results["Packets/Second"].values[0]
+    bandwidth = results["Bandwidth (B/c)"].values[0]
+    pps = results["Packets/Second"].values[0]
+
+    return float(bandwidth) if bandwidth is not None else None, float(pps) if pps is not None else None
 
 
 def profile_results(
