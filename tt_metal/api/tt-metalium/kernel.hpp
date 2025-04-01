@@ -4,27 +4,47 @@
 
 #pragma once
 
-#include <string_view>
-#include <vector>
+#include <magic_enum/magic_enum.hpp>
+#include <stdint.h>
+#include <tt_stl/span.hpp>
+#include <cstddef>
+#include <functional>
 #include <map>
-#include <variant>
-#include <type_traits>
 #include <memory>
+#include <ostream>
+#include <set>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#include <unordered_map>
+#include <variant>
+#include <vector>
 
 #include "base_types.hpp"
 #include "core_coord.hpp"
-#include "jit_build_settings.hpp"
+#include "hal_types.hpp"
 #include "jit_build_options.hpp"
+#include "jit_build_settings.hpp"
 #include "kernel_types.hpp"
-#include "tt_memory.h"
-#include <tt_stl/span.hpp>
 #include "runtime_args_data.hpp"
+#include "tt_backend_api_types.hpp"
+#include "tt_memory.h"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/xy_pair.h>
+#include "utils.hpp"
+
+namespace ll_api {
+class memory;
+}  // namespace ll_api
 
 namespace tt {
 
 namespace tt_metal {
 
 class IDevice;
+class JitBuildOptions;
+enum class DataMovementProcessor;
 
 constexpr uint32_t max_runtime_args = 256;
 
@@ -119,7 +139,7 @@ class Kernel : public JitBuildSettings {
     const string& get_full_kernel_name() const override;
     void add_defines(const std::map<std::string, std::string>& defines);
     void process_defines(const std::function<void (const string& define, const string &value)>) const override;
-    void process_compile_time_args(const std::function<void (int i, uint32_t value)>) const override;
+    void process_compile_time_args(const std::function<void(const std::vector<uint32_t>& values)>) const override;
 
     bool is_idle_eth() const;
 

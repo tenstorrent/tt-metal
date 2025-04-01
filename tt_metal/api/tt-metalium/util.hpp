@@ -9,7 +9,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "data_types.hpp"
 #include "hal_types.hpp"
-#include "umd/device/tt_soc_descriptor.h"
+#include <umd/device/tt_soc_descriptor.h>
 
 namespace tt::tt_metal::detail {
 

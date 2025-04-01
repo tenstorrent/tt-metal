@@ -2,7 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include <stdint.h>
+#include <array>
+#include <optional>
+
+#include "dispatch/kernels/packet_queue_ctrl.hpp"
 #include "fd_kernel.hpp"
+#include "system_memory_manager.hpp"
+#include <umd/device/tt_core_coordinates.h>
 
 typedef struct eth_tunneler_static_config {
     std::optional<uint32_t> endpoint_id_start_index;

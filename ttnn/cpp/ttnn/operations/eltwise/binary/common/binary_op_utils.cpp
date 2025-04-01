@@ -15,6 +15,24 @@ namespace ttnn::operations::binary::utils {
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
+bool is_typecast(tt::tt_metal::DataType input, tt::tt_metal::DataType output) {
+    using enum tt::tt_metal::DataType;
+
+    return (input == BFLOAT4_B && output == INT32) || (input == BFLOAT4_B && output == UINT16) ||
+           (input == BFLOAT4_B && output == UINT32) || (input == BFLOAT8_B && output == INT32) ||
+           (input == BFLOAT8_B && output == UINT16) || (input == BFLOAT8_B && output == UINT32) ||
+           (input == BFLOAT16 && output == INT32) || (input == BFLOAT16 && output == UINT16) ||
+           (input == BFLOAT16 && output == UINT32) || (input == FLOAT32 && output == BFLOAT16) ||
+           (input == FLOAT32 && output == INT32) || (input == FLOAT32 && output == UINT16) ||
+           (input == FLOAT32 && output == UINT32) || (input == INT32 && output == BFLOAT4_B) ||
+           (input == INT32 && output == BFLOAT8_B) || (input == INT32 && output == BFLOAT16) ||
+           (input == INT32 && output == FLOAT32) || (input == UINT16 && output == BFLOAT4_B) ||
+           (input == UINT16 && output == BFLOAT8_B) || (input == UINT16 && output == BFLOAT16) ||
+           (input == UINT16 && output == FLOAT32) || (input == UINT16 && output == UINT32) ||
+           (input == UINT32 && output == BFLOAT4_B) || (input == UINT32 && output == BFLOAT8_B) ||
+           (input == UINT32 && output == BFLOAT16) || (input == UINT32 && output == FLOAT32);
+}
+
 std::map<std::string, std::string> get_defines(
     BinaryOpType op_type,
     const std::optional<tt::tt_metal::DataType> input_dtype,
@@ -75,7 +93,7 @@ std::map<std::string, std::string> get_defines(
             op_name = "add_tiles";
             op_binary_type = "EltwiseBinaryType::ELWADD";
             break;
-        case BinaryOpType::DIV_FAST:
+        case BinaryOpType::DIV:
             // Divide by a non-zero tensor
             defines.merge(get_defines(UnaryOpType::RECIP, std::nullopt, "PRE_IN1_0"));
             op_name = "mul_tiles";
@@ -110,34 +128,7 @@ std::map<std::string, std::string> get_defines(
         default: TT_THROW("Undefined op type {}", op_type);
     }
 
-    using DataType = tt::tt_metal::DataType;
-    if (input_dtype.has_value() && output_dtype.has_value() &&
-        ((input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::UINT16) ||
-         (input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::INT32) ||
-         (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::BFLOAT16) ||
-         (input_dtype.value() == DataType::INT32 && output_dtype.value() == DataType::BFLOAT16) ||
-         (input_dtype.value() == DataType::FLOAT32 && output_dtype.value() == DataType::BFLOAT16) ||
-         (input_dtype.value() == DataType::FLOAT32 && output_dtype.value() == DataType::UINT16) ||
-         (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::FLOAT32) ||
-         (input_dtype.value() == DataType::FLOAT32 && output_dtype.value() == DataType::INT32) ||
-         (input_dtype.value() == DataType::INT32 && output_dtype.value() == DataType::FLOAT32) ||
-         (input_dtype.value() == DataType::BFLOAT8_B && output_dtype.value() == DataType::UINT16) ||
-         (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::BFLOAT8_B) ||
-         (input_dtype.value() == DataType::BFLOAT8_B && output_dtype.value() == DataType::INT32) ||
-         (input_dtype.value() == DataType::INT32 && output_dtype.value() == DataType::BFLOAT8_B) ||
-         (input_dtype.value() == DataType::BFLOAT16 && output_dtype.value() == DataType::UINT32) ||
-         (input_dtype.value() == DataType::UINT32 && output_dtype.value() == DataType::BFLOAT16) ||
-         (input_dtype.value() == DataType::FLOAT32 && output_dtype.value() == DataType::UINT32) ||
-         (input_dtype.value() == DataType::UINT32 && output_dtype.value() == DataType::FLOAT32) ||
-         (input_dtype.value() == DataType::BFLOAT8_B && output_dtype.value() == DataType::UINT32) ||
-         (input_dtype.value() == DataType::UINT32 && output_dtype.value() == DataType::BFLOAT8_B) ||
-         (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::UINT32) ||
-         (input_dtype.value() == DataType::BFLOAT4_B && output_dtype.value() == DataType::UINT32) ||
-         (input_dtype.value() == DataType::UINT32 && output_dtype.value() == DataType::BFLOAT4_B) ||
-         (input_dtype.value() == DataType::BFLOAT4_B && output_dtype.value() == DataType::UINT16) ||
-         (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::BFLOAT4_B) ||
-         (input_dtype.value() == DataType::BFLOAT4_B && output_dtype.value() == DataType::INT32) ||
-         (input_dtype.value() == DataType::INT32 && output_dtype.value() == DataType::BFLOAT4_B))) {
+    if (input_dtype.has_value() && output_dtype.has_value() && is_typecast(*input_dtype, *output_dtype)) {
         TT_ASSERT(defines.count("SFPU_OP_CHAIN_0") == 0, "SFPU_OP_CHAIN_0 already defined");
 
         auto in_dataformat = (uint32_t)datatype_to_dataformat_converter(input_dtype.value());
@@ -175,9 +166,9 @@ std::map<std::string, std::string> get_defines_fp32(
     const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) {
     std::map<std::string, std::string> new_defines;
     std::string op_name = "sub_binary_tile";
-    std::string idst1 = "i*2"; // tile index for input A in dst and final output
-    std::string idst2 = "i*2+1"; // tile index for input B in dst
-    std::string idst = "i"; // tile index for input prescaling
+    std::string idst1 = "i*2";    // tile index for input A in dst and final output
+    std::string idst2 = "i*2+1";  // tile index for input B in dst
+    std::string idst = "i";       // tile index for input prescaling
 
     using ttnn::operations::unary::utils::get_defines;
     switch (op_type) {
@@ -211,7 +202,7 @@ std::map<std::string, std::string> get_defines_fp32(
             new_defines.insert({"BINOP_INIT", fmt::format("power_binary_tile_init();")});
             op_name = "power_binary_tile";
             break;
-        case BinaryOpType::DIV_FAST:
+        case BinaryOpType::DIV:
             new_defines.insert({"BINOP_INIT", fmt::format("div_binary_tile_init();")});
             op_name = "div_binary_tile";
             break;
@@ -284,25 +275,31 @@ std::map<std::string, std::string> get_defines_fp32(
         // applied on A-B
         case BinaryOpType::GT:
             op_name = "sub_binary_tile";
-            new_defines.merge(get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst1)); break;
+            new_defines.merge(get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst1));
+            break;
         case BinaryOpType::LT:
             op_name = "sub_binary_tile";
-            new_defines.merge(get_defines(UnaryOpType::LTZ, std::nullopt, "0", idst1)); break;
+            new_defines.merge(get_defines(UnaryOpType::LTZ, std::nullopt, "0", idst1));
+            break;
         case BinaryOpType::GTE:
             op_name = "sub_binary_tile";
-            new_defines.merge(get_defines(UnaryOpType::GEZ, std::nullopt, "0", idst1)); break;
+            new_defines.merge(get_defines(UnaryOpType::GEZ, std::nullopt, "0", idst1));
+            break;
         case BinaryOpType::LTE:
             op_name = "sub_binary_tile";
-            new_defines.merge(get_defines(UnaryOpType::LEZ, std::nullopt, "0", idst1)); break;
+            new_defines.merge(get_defines(UnaryOpType::LEZ, std::nullopt, "0", idst1));
+            break;
         case BinaryOpType::EQ:
             op_name = "sub_binary_tile";
-            new_defines.merge(get_defines(UnaryOpType::EQZ, std::nullopt, "0", idst1)); break;
+            new_defines.merge(get_defines(UnaryOpType::EQZ, std::nullopt, "0", idst1));
+            break;
         case BinaryOpType::NE:
             op_name = "sub_binary_tile";
-            new_defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst1)); break;
+            new_defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst1));
+            break;
         default:
-        tt::log_debug(tt::LogOp, "Undefined op type {}", op_type);
-        TT_FATAL(false, "Undefined op type for binary sfpu operation {}", op_type);
+            tt::log_debug(tt::LogOp, "Undefined op type {}", op_type);
+            TT_FATAL(false, "Undefined op type for binary sfpu operation {}", op_type);
     }
 
     new_defines.insert({"BINARY_SFPU_OP", fmt::format("{}({}, {});", op_name, idst1, idst2)});

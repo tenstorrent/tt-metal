@@ -271,7 +271,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
     auto& output_tensor = output_tensors.at(0);
     tt::tt_metal::IDevice* device = input_tensor_a.device();
 
-    const auto has_bias = input_tensor_bias.has_value();
+    const bool has_bias = input_tensor_bias.has_value();
 
     const auto weights_shape = input_tensor_b.get_padded_shape();
 
@@ -329,29 +329,26 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             input_tensor_shape[3],
             output_channels,
             kernel_dims[1],
-            sliding_window_config.get_output_shape()[2]));
+            sliding_window_config.get_output_shape()[2],
+            has_bias));
 
-    if (device->arch() != tt::ARCH::BLACKHOLE) {
-        // FIXME: This L1 calculation is not accurate for Blackhole due to different alignment.
-        // https://github.com/tenstorrent/tt-metal/issues/17216
-        TT_FATAL(
-            actual_cb_size == l1_usage.CB_allocation_size,
-            "Calculated CB size {} does not match with the actual CB size {}",
-            l1_usage.CB_allocation_size,
-            actual_cb_size);
+    TT_FATAL(
+        actual_cb_size == l1_usage.CB_allocation_size,
+        "Calculated CB size {} does not match with the actual CB size {}",
+        l1_usage.CB_allocation_size,
+        actual_cb_size);
 
-        // For now assume that if post_op_l1_allocation_size == 0 op is being run
-        // in graph capture NO_DISPATCH mode.
-        // ToDo: Device should offer an API to inform the op if it is running in NO_DISPATCH mode.
-        bool is_graph_capture_no_dispathch_mode = post_op_l1_allocation_size == 0;
-        TT_FATAL(
-            post_op_l1_allocation_size == (this->pre_op_l1_allocation_size_bytes + l1_usage.tensor_allocation_size) ||
-                is_graph_capture_no_dispathch_mode,
-            "Mismatch!! L1 Allocation Pre Op =  {}, Post Op = {} Calculated Size = {}",
-            this->pre_op_l1_allocation_size_bytes,
-            post_op_l1_allocation_size,
-            l1_usage.tensor_allocation_size);
-    }
+    // For now assume that if post_op_l1_allocation_size == 0 op is being run
+    // in graph capture NO_DISPATCH mode.
+    // ToDo: Device should offer an API to inform the op if it is running in NO_DISPATCH mode.
+    bool is_graph_capture_no_dispathch_mode = post_op_l1_allocation_size == 0;
+    TT_FATAL(
+        post_op_l1_allocation_size == (this->pre_op_l1_allocation_size_bytes + l1_usage.tensor_allocation_size) ||
+            is_graph_capture_no_dispathch_mode,
+        "Mismatch!! L1 Allocation Pre Op =  {}, Post Op = {} Calculated Size = {}",
+        this->pre_op_l1_allocation_size_bytes,
+        post_op_l1_allocation_size,
+        l1_usage.tensor_allocation_size);
     return program_with_cbs;
 }
 

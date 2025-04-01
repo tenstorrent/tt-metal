@@ -87,7 +87,7 @@ def run(
     torch_input_tensor_a.requires_grad = True
 
     golden_function = ttnn.get_golden_function(ttnn.acosh_bw)
-    torch_output_tensor = golden_function(torch_grad_tensor, torch_input_tensor_a)[0]
+    torch_output_tensor = golden_function(torch_grad_tensor, torch_input_tensor_a, device=device)[0]
 
     grad_tensor = ttnn.from_torch(
         torch_grad_tensor,

@@ -4,24 +4,71 @@
 
 #include "tt_metal/impl/program/dispatch.hpp"
 
-#include <command_queue.hpp>
-#include <tt-metalium/command_queue_interface.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <mesh_command_queue.hpp>
+#include <magic_enum/magic_enum.hpp>
 #include <mesh_workload.hpp>
-#include <tt_align.hpp>
+#include <stddef.h>
+#include <string.h>
 #include <sub_device_types.hpp>
+#include <tracy/Tracy.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt_align.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <functional>
+#include <initializer_list>
+#include <iterator>
+#include <map>
+#include <optional>
+#include <set>
+#include <string_view>
+#include <tuple>
+#include <type_traits>
+#include <unordered_set>
+#include <variant>
 #include <vector>
 
+#include "assert.hpp"
+#include "buffer.hpp"
+#include "circular_buffer.hpp"
+#include "circular_buffer_constants.h"
 #include "core_coord.hpp"
+#include "device.hpp"
+#include "dispatch/device_command.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
+#include "dispatch/kernels/cq_commands.hpp"
+#include "dispatch_core_common.hpp"
+#include "dispatch_mem_map.hpp"
+#include "hal_types.hpp"
+#include "kernel.hpp"
 #include "llrt/hal.hpp"
+#include "math.hpp"
+#include "program_device_map.hpp"
+#include "program_impl.hpp"
+#include "runtime_args_data.hpp"
+#include "semaphore.hpp"
+#include "span.hpp"
+#include "strong_type.hpp"
+#include "system_memory_manager.hpp"
+#include "tt_memory.h"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
-#include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/xy_pair.h>
+#include "vector_aligned.hpp"
+#include "worker_config_buffer.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum NOC : uint8_t;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace {
 CoreCoord get_sub_device_worker_origin(
@@ -456,11 +503,14 @@ void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDevi
 template <typename PackedSubCmd>
 void generate_runtime_args_cmds(
     std::vector<HostMemDeviceCommand>& runtime_args_command_sequences,
+    std::vector<ProgramCommandSequence::RtaUpdate>& rta_updates,
     const uint32_t& l1_arg_base_addr,
     const std::vector<PackedSubCmd>& sub_cmds,
     const std::vector<std::vector<std::tuple<const void*, uint32_t, uint32_t>>>& rt_data_and_sizes,
     const uint32_t& max_runtime_args_len,
-    std::vector<std::vector<std::reference_wrapper<RuntimeArgsData>>>& rt_args_data,
+    std::vector<std::vector<
+        std::pair<std::reference_wrapper<RuntimeArgsData>, std::reference_wrapper<const std::vector<uint32_t>>>>>&
+        rt_args_data,
     const uint32_t max_prefetch_command_size,
     const uint32_t packed_write_max_unicast_sub_cmds,
     bool no_stride,
@@ -530,17 +580,28 @@ void generate_runtime_args_cmds(
             runtime_args_command_sequences.back().size_bytes() ==
             runtime_args_command_sequences.back().write_offset_bytes());
 
-        // Update kernel RTA pointers to point into the generated command
-        // Future RTA updates through the API will update the command sequence directly
         uint32_t data_offset = (uint32_t)get_runtime_args_data_offset(num_packed_cmds, max_runtime_args_len, unicast);
         const uint32_t data_inc = tt::align(max_runtime_args_len * sizeof(uint32_t), l1_alignment);
         uint32_t num_data_copies = no_stride ? 1 : num_packed_cmds;
         for (uint32_t i = offset_idx; i < offset_idx + num_data_copies; ++i) {
             uint32_t offset = 0;
-            for (auto& data : rt_args_data[i]) {
-                data.get().rt_args_data =
+            for (uint32_t j = 0; j < rt_args_data[i].size(); ++j) {
+                auto& data = rt_args_data[i][j];
+                uint32_t* data_in_sequence =
                     (uint32_t*)((char*)runtime_args_command_sequences.back().data() + data_offset + offset);
-                offset += data.get().rt_args_count * sizeof(uint32_t);
+                if (data.first.get().rt_args_data == data.second.get().data()) {
+                    // Update the pointer to point into the command sequence. Future RTA updates will modify the command
+                    // sequence directly.
+                    data.first.get().rt_args_data = data_in_sequence;
+                } else {
+                    TT_ASSERT(data.first.get().rt_args_data == std::get<0>(rt_data_and_sizes[i][j]));
+                    // Pointer already points into another command sequence. Schedule a copy from there.
+                    rta_updates.emplace_back(
+                        data.first.get().rt_args_data,
+                        data_in_sequence,
+                        data.first.get().rt_args_count * sizeof(uint32_t));
+                }
+                offset += data.first.get().rt_args_count * sizeof(uint32_t);
             }
             data_offset += data_inc;
         }
@@ -580,16 +641,17 @@ BatchedTransfers assemble_runtime_args_commands(
     const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
 
     BatchedTransfers transfers = {};
-
+    using RtaDataPair =
+        std::pair<std::reference_wrapper<RuntimeArgsData>, std::reference_wrapper<const std::vector<uint32_t>>>;
     // Dispatch Commands to Unicast Unique Runtime Args to Workers
     std::vector<CQDispatchWritePackedUnicastSubCmd> unique_sub_cmds;
     std::vector<std::vector<std::tuple<const void*, uint32_t, uint32_t>>> unique_rt_data_and_sizes;
-    std::vector<std::vector<std::reference_wrapper<RuntimeArgsData>>> unique_rt_args_data;
+    std::vector<std::vector<RtaDataPair>> unique_rt_args_data;
     // Dispatch Commands to Multicast Common Runtime Args to Workers
     std::variant<std::vector<CQDispatchWritePackedMulticastSubCmd>, std::vector<CQDispatchWritePackedUnicastSubCmd>>
         common_sub_cmds;
     std::vector<std::vector<std::tuple<const void*, uint32_t, uint32_t>>> common_rt_data_and_sizes;
-    std::vector<std::vector<std::reference_wrapper<RuntimeArgsData>>> common_rt_args_data;  // Data per kernel group
+    std::vector<std::vector<RtaDataPair>> common_rt_args_data;  // Data per kernel group
 
     program_command_sequence.runtime_args_command_sequences = {};
     uint32_t command_count = 0;
@@ -756,12 +818,13 @@ BatchedTransfers assemble_runtime_args_commands(
                                     auto kernel = detail::GetKernel(program, device_local_kernel_handle);
                                     if (!kernel->cores_with_runtime_args().empty()) {
                                         const auto& runtime_args_data = kernel->runtime_args(core_coord);
-                                        unique_rt_args_data.back().emplace_back(kernel->runtime_args_data(core_coord));
+                                        unique_rt_args_data.back().emplace_back(
+                                            RtaDataPair(kernel->runtime_args_data(core_coord), runtime_args_data));
                                         TT_ASSERT(
                                             runtime_args_data.size() * sizeof(uint32_t) <=
                                             kg->rta_sizes[dispatch_class]);
                                         unique_rt_data_and_sizes.back().emplace_back(
-                                            runtime_args_data.data(),
+                                            kernel->runtime_args_data(core_coord).rt_args_data,
                                             runtime_args_data.size() * sizeof(uint32_t),
                                             kg->rta_sizes[dispatch_class]);
                                     }
@@ -776,6 +839,7 @@ BatchedTransfers assemble_runtime_args_commands(
                 uint32_t rta_offset = program.get_program_config(index).rta_offset;
                 generate_runtime_args_cmds(
                     program_command_sequence.runtime_args_command_sequences,
+                    program_command_sequence.rta_updates,
                     rta_offset,
                     unique_sub_cmds,
                     unique_rt_data_and_sizes,
@@ -829,8 +893,11 @@ BatchedTransfers assemble_runtime_args_commands(
                     TT_ASSERT(kernel->common_runtime_args_data().size() * sizeof(uint32_t) == common_size);
                     TT_ASSERT(common_rt_args.size() * sizeof(uint32_t) <= common_size);
                     common_rt_data_and_sizes.back().emplace_back(
-                        common_rt_args.data(), common_rt_args.size() * sizeof(uint32_t), common_size);
-                    common_rt_args_data.back().emplace_back(kernel->common_runtime_args_data());
+                        kernel->common_runtime_args_data().data(),
+                        common_rt_args.size() * sizeof(uint32_t),
+                        common_size);
+                    common_rt_args_data.back().emplace_back(
+                        RtaDataPair(kernel->common_runtime_args_data(), common_rt_args));
 
                     if (core_type == CoreType::ETH) {
                         common_sub_cmds.emplace<std::vector<CQDispatchWritePackedUnicastSubCmd>>(
@@ -868,6 +935,7 @@ BatchedTransfers assemble_runtime_args_commands(
                         [&](auto&& sub_cmds) {
                             generate_runtime_args_cmds(
                                 program_command_sequence.runtime_args_command_sequences,
+                                program_command_sequence.rta_updates,
                                 crta_offset,
                                 sub_cmds,
                                 common_rt_data_and_sizes,

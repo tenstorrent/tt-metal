@@ -120,7 +120,7 @@ class TtLlamaMLP(LightweightModule):
             w1_out,
             cluster_axis=1,
             num_links=3,
-            memory_config=self.model_config["MUL_IN_MEMCFG"],
+            memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
         )
 
         w3_out = ttnn.linear(
@@ -141,7 +141,7 @@ class TtLlamaMLP(LightweightModule):
                 w3_out,
                 cluster_axis=1,
                 num_links=3,
-                memory_config=self.model_config["MUL_IN_MEMCFG"],
+                memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
             )
         except Exception as e:
             print(e)
@@ -150,12 +150,12 @@ class TtLlamaMLP(LightweightModule):
         w2_in = ttnn.mul(
             w1_out_reduced,
             w3_out_reduced,
-            input_tensor_a_activation=ttnn.UnaryOpType.SILU,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             dtype=ttnn.bfloat16,
-            memory_config=self.model_config["MUL_IN_MEMCFG"],
+            memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
         )
 
-        w2_in = ttnn.to_memory_config(w2_in, self.model_config["FF2_IN_RING_MEMCFG"])
+        # w2_in = ttnn.to_memory_config(w2_in, self.model_config["FF2_IN_RING_MEMCFG"])
 
         # print("eltwise mul", w2_in)
 
@@ -240,7 +240,7 @@ class TtLlamaMLP(LightweightModule):
         w2_in = ttnn.mul(
             w1_out_reduced,
             w3_out_reduced,
-            input_tensor_a_activation=ttnn.UnaryOpType.SILU,
+            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             dtype=ttnn.bfloat8_b,
             memory_config=w1_out.memory_config(),
         )

@@ -13,6 +13,11 @@
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
 
+// hack to let topology.cpp to know the binary is a unit test
+// TODO: delete this once tt_fabric_api.h fully support low latency feature
+extern "C" bool isFabricUnitTest();
+bool isFabricUnitTest() { return true; }
+
 using tt::tt_metal::ShardedBufferConfig;
 using tt::tt_metal::ShardOrientation;
 using tt::tt_metal::ShardSpecBuffer;
@@ -165,10 +170,9 @@ void RunAsyncWriteTest(
         tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
     // Create the sender program
-    auto soc_desc = tt::Cluster::instance().get_soc_desc(start_mesh_chip_id.second);
-    uint32_t outbound_eth_channel = (uint32_t)soc_desc.logical_eth_core_to_chan_map.at(sender_logical_core);
     std::vector<uint32_t> sender_compile_time_args = {
         (uint32_t)mode, (uint32_t)test_mode::TEST_ASYNC_WRITE, (uint32_t)is_raw_write};
+    auto outbound_eth_channels = tt::Cluster::instance().get_fabric_ethernet_channels(physical_start_device_id);
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -177,11 +181,12 @@ void RunAsyncWriteTest(
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
         tt_metal::hal_ref.noc_xy_encoding(routers[0].second.x, routers[0].second.y),
-        outbound_eth_channel};
+        *outbound_eth_channels.begin()};
     std::map<string, string> defines = {};
     if (mode == fabric_mode::PULL) {
         defines["FVC_MODE_PULL"] = "";
     }
+    defines["DISABLE_LOW_LATENCY_ROUTING"] = "";
     auto sender_program = tt_metal::CreateProgram();
     CreateSenderKernel(
         sender_program,
@@ -266,14 +271,14 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode) {
         tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
     // Create the sender program
-    auto soc_desc = tt::Cluster::instance().get_soc_desc(start_mesh_chip_id.second);
-    uint32_t outbound_eth_channel = (uint32_t)soc_desc.logical_eth_core_to_chan_map.at(sender_logical_core);
     auto sender_program = tt_metal::CreateProgram();
     std::map<string, string> defines = {};
     if (mode == fabric_mode::PULL) {
         defines["FVC_MODE_PULL"] = "";
     }
+    defines["DISABLE_LOW_LATENCY_ROUTING"] = "";
     std::vector<uint32_t> sender_compile_time_args = {(uint32_t)mode, (uint32_t)TEST_ATOMIC_INC, 0};
+    auto outbound_eth_channels = tt::Cluster::instance().get_fabric_ethernet_channels(physical_start_device_id);
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -283,7 +288,7 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode) {
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
         tt_metal::hal_ref.noc_xy_encoding(routers[0].second.x, routers[0].second.y),
-        outbound_eth_channel};
+        *outbound_eth_channels.begin()};
 
     CreateSenderKernel(
         sender_program,
@@ -382,16 +387,15 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
         tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
     // Create the sender program
-    auto soc_desc = tt::Cluster::instance().get_soc_desc(start_mesh_chip_id.second);
-    uint32_t outbound_eth_channel = (uint32_t)soc_desc.logical_eth_core_to_chan_map.at(sender_logical_core);
     auto sender_program = tt_metal::CreateProgram();
     std::map<string, string> defines = {};
-
     if (mode == fabric_mode::PULL) {
         defines["FVC_MODE_PULL"] = "";
     }
+    defines["DISABLE_LOW_LATENCY_ROUTING"] = "";
     std::vector<uint32_t> sender_compile_time_args = {
         (uint32_t)mode, (uint32_t)TEST_ASYNC_WRITE_ATOMIC_INC, (uint32_t)is_raw_write};
+    auto outbound_eth_channels = tt::Cluster::instance().get_fabric_ethernet_channels(physical_start_device_id);
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -402,7 +406,7 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
         tt_metal::hal_ref.noc_xy_encoding(routers[0].second.x, routers[0].second.y),
-        outbound_eth_channel};
+        *outbound_eth_channels.begin()};
 
     CreateSenderKernel(
         sender_program,
@@ -489,6 +493,7 @@ void RunAsyncWriteMulticastTest(
     if (mode == fabric_mode::PULL) {
         defines["FVC_MODE_PULL"] = "";
     }
+    defines["DISABLE_LOW_LATENCY_ROUTING"] = "";
     std::vector<tt_metal::Program> receiver_programs;
     std::vector<std::shared_ptr<tt_metal::Buffer>> receiver_buffers;
 
@@ -566,8 +571,7 @@ void RunAsyncWriteMulticastTest(
     }
 
     // Prepare runtime args based on whether it's multidirectional or not
-    auto soc_desc = tt::Cluster::instance().get_soc_desc(start_mesh_chip_id.second);
-    uint32_t outbound_eth_channel = (uint32_t)soc_desc.logical_eth_core_to_chan_map.at(sender_logical_core);
+    auto outbound_eth_channels = tt::Cluster::instance().get_fabric_ethernet_channels(physical_start_device_id);
     std::vector<uint32_t> sender_runtime_args;
 
     if (multidirectional) {
@@ -584,7 +588,7 @@ void RunAsyncWriteMulticastTest(
             end_mesh_chip_ids_by_dir[RoutingDirection::W][0].second,
             mcast_hops[RoutingDirection::W],
             sender_router_noc_xys[RoutingDirection::W],
-            outbound_eth_channel};
+            *outbound_eth_channels.begin()};
     } else {
         auto routing_direction = RoutingDirection::E;
         sender_runtime_args = {
@@ -596,7 +600,7 @@ void RunAsyncWriteMulticastTest(
             end_mesh_chip_ids_by_dir[routing_direction][0].second,
             mcast_hops[routing_direction],
             sender_router_noc_xys[routing_direction],
-            outbound_eth_channel};
+            *outbound_eth_channels.begin()};
     }
 
     // Choose the appropriate kernel based on whether it's multidirectional or not

@@ -28,7 +28,6 @@ void kernel_main() {
 
     uint64_t dst_noc_addr = get_noc_addr_helper(dst_noc_offset, dst_addr);
     uint32_t packet_size_bytes = num_bytes + PACKET_HEADER_SIZE_BYTES;
-
     uint32_t client_interface_addr = get_write_ptr(client_interface_cb);
     if constexpr (fabric_mode == fabric_mode::PULL) {
         volatile fabric_pull_client_interface_t* client_interface =

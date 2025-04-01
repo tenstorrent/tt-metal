@@ -3,21 +3,28 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fd_kernel.hpp"
+
 #include <host_api.hpp>
-#include <tt_metal.hpp>
+#include <utility>
+#include <variant>
+
+#include "data_types.hpp"
+#include "demux.hpp"
+#include "device.hpp"
+#include "dispatch.hpp"
 #include "dispatch/kernel_config/fabric_router_vc.hpp"
 #include "dispatch_core_common.hpp"
-#include "dprint_server.hpp"
-
-#include "kernel_types.hpp"
-#include "prefetch.hpp"
-#include "dispatch.hpp"
 #include "dispatch_s.hpp"
-#include "mux.hpp"
-#include "demux.hpp"
+#include "dprint_server.hpp"
 #include "eth_router.hpp"
 #include "eth_tunneler.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "kernel_types.hpp"
+#include "mux.hpp"
+#include "prefetch.hpp"
 #include "rtoptions.hpp"
+#include <umd/device/tt_core_coordinates.h>
 
 using namespace tt::tt_metal;
 

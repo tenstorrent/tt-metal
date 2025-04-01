@@ -46,8 +46,6 @@ bool benchmark_mode;
 // push/pull buffer model
 bool push_mode;
 
-bool low_latency_routing;
-
 // Metal fabric initialization level
 // 0: No fabric initialization
 // 1: Initialize metal fabric with default settings
@@ -1491,7 +1489,6 @@ int main(int argc, char **argv) {
 
     benchmark_mode = test_args::has_command_option(input_args, "--benchmark");
     push_mode = test_args::has_command_option(input_args, "--push_router");
-    low_latency_routing = test_args::has_command_option(input_args, "--low_latency_routing");
     uint32_t packet_size_kb =
         test_args::get_command_option_uint32(input_args, "--packet_size_kb", default_packet_size_kb);
     uint32_t max_packet_size_words = packet_size_kb * 1024 / PACKET_WORD_SIZE_BYTES;
@@ -1514,10 +1511,6 @@ int main(int argc, char **argv) {
     std::map<string, string> defines;
     if (!push_mode) {
         defines["FVC_MODE_PULL"] = "";
-    } else {
-        if (low_latency_routing) {
-            defines["LOW_LATENCY_ROUTING"] = "";
-        }
     }
 
     if (benchmark_mode) {

@@ -3,11 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <allocator.hpp>
-
-#include <math.hpp>
 #include <buffer.hpp>
+#include <magic_enum/magic_enum.hpp>
+#include <functional>
+#include <string>
+#include <string_view>
 
+#include "assert.hpp"
+#include "buffer_constants.hpp"
 #include "impl/allocator/bank_manager.hpp"
+#include "logger.hpp"
+#include <umd/device/types/xy_pair.h>
 
 namespace tt {
 

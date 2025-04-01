@@ -15,6 +15,12 @@
 
 using namespace tt::tt_fabric;
 
+#ifndef DISABLE_LOW_LATENCY_ROUTING
+#ifndef LOW_LATENCY_ROUTING
+#define LOW_LATENCY_ROUTING
+#endif
+#endif
+
 #define FVC_MODE_ROUTER 1
 #define FVC_MODE_ENDPOINT 2
 

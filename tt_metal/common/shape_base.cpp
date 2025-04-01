@@ -2,12 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/container/vector.hpp>
+#include <stdint.h>
+#include <algorithm>
+#include <cstddef>
+#include <iterator>
+#include <type_traits>
+#include <vector>
+
 #include "assert.hpp"
 #include "shape_base.hpp"
-#include <iterator>
-#include <stdexcept>
-#include <type_traits>
-#include "fmt/color.h"
+#include "span.hpp"
 
 namespace tt::tt_metal {
 

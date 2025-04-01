@@ -38,7 +38,7 @@ void kernel_main() {
         block_row_size / bytes_per_tile_row;  // Assuming 2 bytes per datum, there are 64 bytes per tile row
 
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-#define stick_size_is_pow2 get_compile_time_arg_val(1) == 1
+    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(1) == 1;
 #if (stick_size_is_pow2)
     constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(2);
     const InterleavedPow2AddrGen<src0_is_dram> s = {

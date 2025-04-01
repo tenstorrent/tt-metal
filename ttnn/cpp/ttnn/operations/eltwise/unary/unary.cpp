@@ -11,6 +11,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "ttnn/operations/eltwise/ternary/where.hpp"
 
 namespace ttnn::operations::unary {
 
@@ -103,7 +104,6 @@ template struct ExecuteUnary<UnaryOpType::NEZ>;
 template struct ExecuteUnary<UnaryOpType::RECIP>;
 template struct ExecuteUnary<UnaryOpType::RELU>;
 template struct ExecuteUnary<UnaryOpType::RELU6>;
-template struct ExecuteUnary<UnaryOpType::SIGMOID>;
 template struct ExecuteUnary<UnaryOpType::SIGN>;
 template struct ExecuteUnary<UnaryOpType::SIGNBIT>;
 template struct ExecuteUnary<UnaryOpType::SILU>;
@@ -112,7 +112,6 @@ template struct ExecuteUnary<UnaryOpType::SQRT>;
 template struct ExecuteUnary<UnaryOpType::SQUARE>;
 template struct ExecuteUnary<UnaryOpType::TAN>;
 template struct ExecuteUnary<UnaryOpType::TANH>;
-template struct ExecuteUnary<UnaryOpType::SIGMOID, UnaryOpType::LOG>;
 template struct ExecuteUnary<UnaryOpType::TILED_PROD>;
 template struct ExecuteUnary<UnaryOpType::BITWISE_NOT>;
 
@@ -136,6 +135,7 @@ template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::ERF>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::ERFC>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::GELU>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::RSQRT>;
+template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::SIGMOID>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFloatParameter<unary_op_type>::invoke(
@@ -181,6 +181,20 @@ Tensor Sigmoid_accurate::invoke(
         optional_output_tensor);
 }
 
+template struct ExecuteUnary<UnaryOpType::SIGMOID, UnaryOpType::LOG>;
+Tensor LogSigmoid::invoke(
+    QueueId queue_id,
+    const Tensor& input,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return detail::unary_impl(
+        queue_id,
+        input,
+        {UnaryWithParam(UnaryOpType::SIGMOID, 0), UnaryWithParam(UnaryOpType::LOG)},
+        memory_config,
+        optional_output_tensor);
+}
+
 Tensor Unary_chain::invoke(
     QueueId queue_id,
     const Tensor& input_tensor,
@@ -205,6 +219,33 @@ Tensor Softplus::invoke(
         {UnaryWithParam{UnaryOpType::SOFTPLUS, {beta, threshold}}},
         memory_config,
         optional_output_tensor);
+}
+
+// tanh[x] = (exp[2x] - 1) / (exp[2x] + 1)
+Tensor Tanh::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    bool accuracy) {
+    UnaryOpType op_type = UnaryOpType::TANH;
+    if (!accuracy) {
+        return detail::unary_impl(
+            queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+    } else {
+        TT_FATAL(
+            input_tensor.get_dtype() == DataType::BFLOAT16,
+            "Supported dtypes for tanh with accuracy mode enabled is : BFLOAT16");
+
+        const auto tanh_res = detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config);
+        const auto two_x = ttnn::multiply(input_tensor, 2, std::nullopt, memory_config);
+        const auto exp_2x = ttnn::exp(two_x, false, memory_config, two_x);
+        const auto numer = ttnn::subtract(exp_2x, 1, std::nullopt, memory_config);
+        const auto denom = ttnn::add_(exp_2x, 1);
+        const auto tanh_exp = ttnn::divide(numer, denom, std::nullopt, memory_config, numer);
+        const auto abs_val = ttnn::abs(input_tensor, memory_config);
+        return ttnn::where(ttnn::gt(abs_val, 3.5f), tanh_res, tanh_exp, memory_config, optional_output_tensor);
+    }
 }
 
 Tensor Prelu::invoke(
