@@ -10,6 +10,7 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 UNET_FULL_MODEL_PCC = 0.99999
+UNET_TRACE_REGION_SIZE = 483328
 
 
 @dataclass

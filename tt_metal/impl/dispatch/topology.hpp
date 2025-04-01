@@ -3,7 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include <device.hpp>
+#include <stdint.h>
+#include <memory>
+#include <set>
+#include <vector>
+
+#include "data_types.hpp"
+#include "program_impl.hpp"
+#include "system_memory_manager.hpp"
 #include "tt_metal/impl/dispatch/kernel_config/fd_kernel.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+enum DispatchWorkerType : uint32_t;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

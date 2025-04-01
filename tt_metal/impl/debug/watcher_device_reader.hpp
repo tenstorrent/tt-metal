@@ -4,21 +4,22 @@
 
 #pragma once
 
+#include <core_coord.hpp>
+// FIXME: ARCH_NAME specific, needed for several pointer types here
+#include <dev_msgs.h>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <string>
 #include <map>
 #include <set>
 #include <string>
+#include <string>
 #include <utility>
 #include <vector>
-#include <core_coord.hpp>
-#include "umd/device/tt_soc_descriptor.h"
-#include "llrt/hal.hpp"
 
-// FIXME: ARCH_NAME specific, needed for several pointer types here
-#include <dev_msgs.h>
+#include "llrt/hal.hpp"
+#include <umd/device/tt_soc_descriptor.h>
+#include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt::watcher {
 

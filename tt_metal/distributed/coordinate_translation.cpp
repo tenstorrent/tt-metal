@@ -3,10 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/distributed/coordinate_translation.hpp"
-#include "tt_metal/api/tt-metalium/tt_metal.hpp"
-#include "tt_cluster.hpp"
 
+#include <boost/move/utility_core.hpp>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+
+#include "assert.hpp"
+#include "control_plane.hpp"
 #include "indestructible.hpp"
+#include "logger.hpp"
+#include "mesh_coord.hpp"
+#include "tt_cluster.hpp"
+#include <umd/device/types/cluster_descriptor_types.h>
+
 namespace tt::tt_metal::distributed {
 
 const MeshContainer<PhysicalMeshCoordinate>& get_system_mesh_coordinate_translation_map() {

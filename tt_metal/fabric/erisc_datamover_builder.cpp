@@ -2,21 +2,37 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/sub_device_types.hpp>
+#include <stdint.h>
 #include <tt-metalium/assert.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/program_impl.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/fabric_edm_packet_header.hpp>
-
-#include <iterator>
-#include <vector>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
-#include <ranges>
+#include <array>
+#include <cstddef>
+#include <functional>
+#include <iterator>
+#include <numeric>
+#include <optional>
+#include <unordered_set>
+#include <variant>
+#include <vector>
+
+#include "core_coord.hpp"
+#include "fabric_edm_types.hpp"
+#include "logger.hpp"
+#include "system_memory_manager.hpp"
+#include <umd/device/tt_core_coordinates.h>
+
+namespace tt {
+namespace tt_metal {
+class Program;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_fabric {
 
