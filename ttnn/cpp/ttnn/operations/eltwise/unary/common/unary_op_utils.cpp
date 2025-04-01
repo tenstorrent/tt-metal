@@ -84,6 +84,9 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::ROUND:
             op_init_and_name = {"round_tile_init();", fmt::format("round_tile({}, {});", idst, (int)param0)};
             break;
+        case UnaryOpType::SIGMOID_MODE:
+            op_init_and_name = {"sigmoid_tile_init();", fmt::format("sigmoid_tile<{1}>({0});", idst, (int)param0)};
+            break;
         case UnaryOpType::RELU_MAX:
             op_init_and_name = {
                 "relu_max_tile_init();",
