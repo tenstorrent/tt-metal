@@ -9,8 +9,8 @@
 #include <type_traits>
 #include <vector>
 
+#include <tt_stl/reflection.hpp>
 #include <tt-metalium/assert.hpp>
-#include <tt-metalium/reflection.hpp>
 #include <tt-metalium/shape_base.hpp>
 #include <tt-metalium/utils.hpp>
 
