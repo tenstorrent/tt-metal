@@ -2,25 +2,36 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <kernel.hpp>
-#include <kernel_types.hpp>
-
-#include <fmt/core.h>
-#include <fmt/ranges.h>
-
-#include <magic_enum/magic_enum.hpp>
-#include <set>
-
-#include "llrt.hpp"
-#include <string_view>
-#include <tt_metal.hpp>
-#include "tt_metal/impl/debug/watcher_server.hpp"
-#include <utils.hpp>
 #include <core_coord.hpp>
 #include <device.hpp>
-#include "tt_metal/jit_build/genfiles.hpp"
+#include <fmt/ranges.h>
+#include <kernel.hpp>
+#include <kernel_types.hpp>
+#include <magic_enum/magic_enum.hpp>
+#include <utils.hpp>
+#include <algorithm>
+#include <cstring>
+#include <filesystem>
+#include <memory>
+#include <set>
+#include <string_view>
+#include <type_traits>
+#include <utility>
+
+#include "assert.hpp"
+#include "data_types.hpp"
+#include "hal.hpp"
+#include "jit_build/build.hpp"
+#include "jit_build_options.hpp"
+#include "llrt.hpp"
+#include "logger.hpp"
+#include "rtoptions.hpp"
+#include "span.hpp"
+#include "tt_memory.h"
+#include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
-#include "hw/inc/wormhole/eth_l1_address_map.h"
+#include "tt_metal/jit_build/genfiles.hpp"
+#include <umd/device/types/arch.h>
 
 namespace tt {
 
@@ -163,10 +174,8 @@ std::string_view EthernetKernel::get_compiler_opt_level() const {
 
 std::string_view EthernetKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
 
-void Kernel::process_compile_time_args(const std::function<void(int i, uint32_t value)> callback) const {
-    for (int i = 0; i < this->compile_time_args_.size(); i++) {
-        callback(i, this->compile_time_args_[i]);
-    }
+void Kernel::process_compile_time_args(const std::function<void(const std::vector<uint32_t>& values)> callback) const {
+    callback(this->compile_time_args());
 }
 
 uint8_t DataMovementKernel::expected_num_binaries() const { return 1; }

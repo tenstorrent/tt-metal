@@ -105,32 +105,68 @@ struct PixelMetadata {
 };
 
 std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config);
+
 std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& config);
+
 std::vector<ShardBoundary> generate_shard_boundaries(
     const SlidingWindowConfig& config, const std::vector<uint32_t>& op_trace_metadata);
+
 std::vector<PixelMetadata> generate_tensor_metadata(
     const std::vector<bool>& pad_metadata,
     const SlidingWindowConfig& config,
     uint32_t reshard_num_cores_nhw = 0,
     bool is_in_tiled = true);
+
 uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& shard_boundaries);
-std::vector<std::vector<std::vector<uint16_t>>> generate_halo_kernel_config_tensors(
+
+std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplace_halo_kernel_config_tensors(
     const std::vector<PixelMetadata>& tensor_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
     bool is_block_sharded,
     bool transpose_mcast,
     bool remote_read,
-    tt::tt_metal::IDevice* device);
+    tt::tt_metal::IDevice* device,
+    uint32_t max_out_nsticks_per_core = INT_MAX,
+    uint32_t in_nsticks_per_core = 0,
+    bool in_place = false);
+
+struct HaloGatherKernelConfig {
+    std::vector<std::vector<uint16_t>> pad_config;
+    std::vector<std::vector<uint16_t>> gather_config0;
+    std::vector<std::vector<uint16_t>> gather_config1;
+    std::vector<uint16_t> number_of_blocks_per_core;
+};
+
+HaloGatherKernelConfig generate_halo_kernel_config_tensors(
+    const std::vector<PixelMetadata>& tensor_metadata,
+    const std::vector<ShardBoundary>& shard_boundaries,
+    bool is_block_sharded,
+    bool transpose_mcast,
+    bool remote_read,
+    tt::tt_metal::IDevice* device,
+    bool is_in_tiled,
+    int block_size);
+
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     const std::vector<uint32_t>& op_trace_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
     bool pad_tile = false,
     bool pad_cores = false);
-std::vector<uint16_t> flatten(const std::vector<std::vector<uint16_t>>& input);
+
+std::vector<uint16_t> flatten(const std::vector<std::vector<uint16_t>>& input, uint32_t extend_with_zeroes = 0);
+
+uint32_t get_repeat_factor_for_replicating_nhw_config_across_grid(const ParallelConfig& p_config);
+
+std::vector<uint16_t> replicate_config(const std::vector<uint16_t>& config_vector, int factor);
+
+std::vector<uint16_t> remap_nhw_scalar_argument_across_full_grid(
+    const std::vector<uint16_t>& config, const ParallelConfig& parallel_config);
+
 Tensor construct_on_host_config_tensor(
     const std::vector<std::vector<uint16_t>>& config,
     const SlidingWindowConfig& sw_config,
     const ParallelConfig& p_config);
+
 Tensor move_config_tensor_to_device(
     const Tensor& config_tensor, const ParallelConfig& p_config, bool is_block_sharded, tt::tt_metal::IDevice* device);
 

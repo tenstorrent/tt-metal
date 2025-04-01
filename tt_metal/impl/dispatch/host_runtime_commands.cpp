@@ -4,49 +4,50 @@
 
 #include "host_runtime_commands.hpp"
 
-#include <array>
-#include <chrono>
-#include <cstddef>
-#include <fstream>
-#include <memory>
-#include <mutex>
-#include <string>
-#include <tuple>
-#include <type_traits>
-#include <utility>
-#include <variant>
-
-#include <buffer.hpp>
-#include <math.hpp>
-#include <dev_msgs.h>
-#include "llrt/hal.hpp"
-#include "tt_metal/impl/program/program_command_sequence.hpp"
 #include <assert.hpp>
+#include <buffer.hpp>
+#include <event.hpp>
+#include <host_api.hpp>
 #include <logger.hpp>
 #include <tt_metal.hpp>
-#include <host_api.hpp>
-#include <circular_buffer_constants.h>
-#include <circular_buffer.hpp>
-#include "dprint_server.hpp"
-#include "tt_metal/impl/debug/watcher_server.hpp"
-#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include "tt_metal/impl/dispatch/data_collection.hpp"
+#include <chrono>
+#include <fstream>
+#include <functional>
+#include <memory>
+#include <string>
+#include <thread>
+#include <type_traits>
+#include <unordered_map>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "command_queue.hpp"
+#include "device.hpp"
+#include "dispatch/device_command.hpp"
 #include "dispatch_core_manager.hpp"
-#include <event.hpp>
-#include <kernel.hpp>
-#include "tt_metal/impl/program/dispatch.hpp"
-#include "tt_metal/impl/buffers/dispatch.hpp"
-#include "umd/device/tt_xy_pair.h"
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
-#include <tt-metalium/command_queue_interface.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
-
-#include "llrt/hal.hpp"
+#include "dprint_server.hpp"
+#include "hal_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
-
-#include "tracy/Tracy.hpp"
-
+#include "llrt/hal.hpp"
+#include "program_impl.hpp"
 #include "rtoptions.hpp"
+#include "span.hpp"
+#include "system_memory_manager.hpp"
+#include "tracy/Tracy.hpp"
+#include "tt_metal/impl/debug/watcher_server.hpp"
+#include "tt_metal/impl/dispatch/data_collection.hpp"
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include "tt_metal/impl/program/dispatch.hpp"
+#include "tt_metal/impl/program/program_command_sequence.hpp"
+
+namespace tt {
+namespace tt_metal {
+class WorkerConfigBufferMgr;
+enum NOC : uint8_t;
+}  // namespace tt_metal
+}  // namespace tt
 
 using namespace tt::tt_metal;
 
@@ -147,7 +148,8 @@ void EnqueueProgramCommand::process() {
     RecordProgramRun(program);
 
     // Access the program dispatch-command cache
-    auto& cached_program_command_sequence = program.get_cached_program_command_sequences().begin()->second;
+    uint64_t command_hash = *device->get_active_sub_device_manager_id();
+    auto& cached_program_command_sequence = program.get_cached_program_command_sequences().at(command_hash);
     // Update the generated dispatch commands based on the state of the CQ and the ring buffer
     program_dispatch::update_program_dispatch_commands(
         program,

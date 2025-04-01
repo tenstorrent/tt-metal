@@ -2,21 +2,48 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/move/utility_core.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
-#include <optional>
 #include <tt-metalium/dispatch_settings.hpp>
+#include <algorithm>
+#include <array>
+#include <cstring>
+#include <functional>
+#include <optional>
+#include <type_traits>
+#include <utility>
 
+#include "assert.hpp"
 #include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "device.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
+#include "dispatch_core_common.hpp"
+#include "event/dispatch.hpp"
+#include "hal_types.hpp"
+#include "mesh_config.hpp"
 #include "mesh_coord.hpp"
+#include "mesh_workload.hpp"
+#include "program_impl.hpp"
+#include "shape2d.hpp"
+#include "strong_type.hpp"
+#include "system_memory_manager.hpp"
+#include "trace_buffer.hpp"
+#include "tt_cluster.hpp"
+#include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/buffers/dispatch.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
-#include "tt_metal/common/thread_pool.hpp"
-#include "tt_cluster.hpp"
+#include <umd/device/types/xy_pair.h>
+
+namespace tt {
+namespace tt_metal {
+struct ProgramCommandSequence;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal::distributed {
 
@@ -151,6 +178,7 @@ void MeshCommandQueue::clear_expected_num_workers_completed() {
 
 void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
     in_use_ = true;
+    uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
     std::unordered_set<SubDeviceId> sub_device_ids = mesh_workload.determine_sub_device_ids(mesh_device_);
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
     SubDeviceId sub_device_id = *(sub_device_ids.begin());
@@ -195,7 +223,7 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
     // current device state. Write the finalized program command sequence to each
     // physical device tied to the program.
     for (auto& [device_range, program] : mesh_workload.get_programs()) {
-        auto& program_cmd_seq = mesh_workload.get_dispatch_cmds_for_program(program);
+        auto& program_cmd_seq = mesh_workload.get_dispatch_cmds_for_program(program, command_hash);
         program_dispatch::update_program_dispatch_commands(
             program,
             program_cmd_seq,

@@ -3,25 +3,50 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "topology.hpp"
-#include "data_types.hpp"
-#include "dispatch_core_common.hpp"
-#include "kernel_config/fd_kernel.hpp"
+
 #include <device_pool.hpp>
-#include <memory>
-#include <tt_metal.hpp>
 #include <host_api.hpp>
+#include <tt-metalium/erisc_datamover_builder.hpp>
+#include <tt-metalium/mesh_graph.hpp>
+#include <tt_metal.hpp>
+#include <cstddef>
+#include <cstdint>
+#include <initializer_list>
+#include <map>
+#include <memory>
+#include <string>
 #include <unordered_map>
-#include "kernel_config/fd_kernel.hpp"
+#include <unordered_set>
+#include <utility>
+#include <variant>
+
+#include "assert.hpp"
+#include "command_queue_common.hpp"
+#include "control_plane.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "device.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
+#include "dispatch_core_common.hpp"
+#include "dispatch_mem_map.hpp"
+#include "fabric_edm_packet_header.hpp"
+#include "fabric_host_interface.h"
+#include "fabric_types.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
 #include "kernel_config/demux.hpp"
 #include "kernel_config/eth_router.hpp"
 #include "kernel_config/eth_tunneler.hpp"
-#include "fabric_host_interface.h"
-
+#include "kernel_config/fd_kernel.hpp"
+#include "kernel_types.hpp"
+#include "metal_soc_descriptor.h"
 #include "program_impl.hpp"
 #include "rtoptions.hpp"
+#include "span.hpp"
 #include "tt_cluster.hpp"
-#include <tt-metalium/erisc_datamover_builder.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_xy_pair.h>
+#include "utils.hpp"
 
 namespace tt::tt_metal {
 

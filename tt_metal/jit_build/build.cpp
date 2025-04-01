@@ -4,21 +4,33 @@
 
 #include "build.hpp"
 
+#include <taskflow/core/async.hpp>
+#include <algorithm>
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <span>
 #include <string>
+#include <string_view>
 
+#include "assert.hpp"
 #include "common/executor.hpp"
-#include "jit_build/genfiles.hpp"
+#include "env_lib.hpp"
+#include "fmt/base.h"
+#include "hal_types.hpp"
 #include "jit_build/kernel_args.hpp"
+#include "jit_build_settings.hpp"
+#include "llrt/hal.hpp"
+#include "logger.hpp"
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
-#include <command_queue_interface.hpp>
-#include <kernel.hpp>
+#include "rtoptions.hpp"
+#include "tt_backend_api_types.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
-#include "env_lib.hpp"
-#include "llrt/hal.hpp"
+#include <umd/device/types/arch.h>
 
 namespace fs = std::filesystem;
 
@@ -694,8 +706,18 @@ void JitBuildState::compile_one(
             });
         }
 
-        settings->process_compile_time_args([&defines](int i, uint32_t value) {
-            defines += "-DKERNEL_COMPILE_TIME_ARG_" + to_string(i) + "=" + to_string(value) + " ";
+        settings->process_compile_time_args([&defines](const std::vector<uint32_t>& values) {
+            if (values.empty()) {
+                return;
+            }
+            std::ostringstream ss;
+            ss << "-DKERNEL_COMPILE_TIME_ARGS=";
+            for (uint32_t i = 0; i < values.size(); ++i) {
+                ss << values[i] << ",";
+            }
+            std::string args = ss.str();
+            args.pop_back();  // Remove the trailing comma
+            defines += args + " ";
         });
 
         cmd += fmt::format("-{} ", settings->get_compiler_opt_level());
