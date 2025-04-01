@@ -146,19 +146,11 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     ShardSpec shard_spec = a.shard_spec().value();
     CoreRangeSet all_cores = shard_spec.grid;
     const auto& cores = corerange_to_cores(all_cores, all_cores.num_cores(), true);
-    CoreRangeSet sender_worker_core_range;
-    for (uint32_t i = 0; (i < num_links) && (i < cores.size()); ++i) {
-        const auto& core = cores[i];
-        sender_worker_core_range.merge(CoreRangeSet(CoreRange(CoreCoord(core.x, core.y), CoreCoord(core.x, core.y))));
-    }
-    auto sender_worker_cores = corerange_to_cores(sender_worker_core_range, std::nullopt, true);
 
     // Tensor Info
     // const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const uint32_t input_tensor_num_pages = 1;
     const auto input_tensor_cores = a.memory_config().shard_spec->grid;
-    const auto input_tensor_shard_shape = a.memory_config().shard_spec->shape;
-    const auto input_tensor_shard_num_pages = input_tensor_shard_shape[0] * input_tensor_shard_shape[1] / TILE_HW;
     const auto output_tensor_cores = output.memory_config().shard_spec->grid;
     const auto output_tensor_shard_shape = output.memory_config().shard_spec->shape;
     const auto output_tensor_shard_num_pages = output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
@@ -1085,27 +1077,19 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     uint32_t num_blocks = 0;
     ShardSpec shard_spec = a.shard_spec().value();
 
-    bool mcast_1d = M == block_h;
     auto bbox = shard_spec.grid.bounding_box();
     CoreCoord grid_size = {bbox.end_coord.x - bbox.start_coord.x + 1, bbox.end_coord.y - bbox.start_coord.y + 1};
     std::optional<CoreCoord> grid_offset = std::nullopt;
     if (bbox.start_coord.x != 0 || bbox.start_coord.y != 0) {
         grid_offset = bbox.start_coord;
     }
-    if (mcast_1d) {
-        num_blocks = shard_spec.num_cores();
-    } else {
-        num_blocks = grid_size.x;
-    }
+    num_blocks = shard_spec.num_cores();
 
     // two-stage reduce
     bool use_two_stage_reduce = false;
-    if (mcast_1d) {
-        // only do this for row/col dim are full length
-        if (grid_size.x > 1 && grid_size.x <= device->compute_with_storage_grid_size().x &&
-            grid_size.y > 1) {  // row major and multiple rows
-            use_two_stage_reduce = true;
-        }
+    if (grid_size.x > 1 && grid_size.x <= device->compute_with_storage_grid_size().x &&
+        grid_size.y > 1) {  // row major and multiple rows
+        use_two_stage_reduce = true;
     }
     uint32_t num_subblocks_w = block_wt / subblock_wt;
 
@@ -1220,77 +1204,56 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     CoreRangeSet all_to_all_workers_except_sender;
     CoreRangeSet not_all_to_all_workers;
     uint32_t num_cores_x_mcast, num_cores_y_mcast;
-    if (mcast_1d) {
-        sender_cores = {start_core, start_core};
-        CoreCoord all_core_grid_size;
-        CoreCoord none_core_grid_size;
-        if (use_two_stage_reduce) {
-            all_core_grid_size = {1, num_cores_y};
-            none_core_grid_size = {num_cores_x - 1, num_cores_y};
-        } else {
-            all_core_grid_size = grid_size;
-            none_core_grid_size = grid_size;
-        }
-        all_to_all_cores = num_cores_to_corerangeset(start_core, num_cores_all_to_all, all_core_grid_size, true);
-        if (use_mcast) {
-            CoreCoord all_start_core;
-            CoreCoord end_core = sender_cores.end_coord;
-            if (use_two_stage_reduce) {
-                if (end_core.x == all_core_grid_size.x - 1) {
-                    all_start_core = {0, end_core.y + 1};
-                } else {
-                    all_start_core = {end_core.x + 1, end_core.y};
-                }
-            } else {
-                if (end_core.x == bbox.end_coord.x) {
-                    all_start_core = {0, end_core.y + 1};
-                } else {
-                    all_start_core = {end_core.x + 1, end_core.y};
-                }
-            }
-            all_to_all_workers_except_sender =
-                num_cores_to_corerangeset(all_start_core, num_cores_all_to_all - 1, all_core_grid_size, true);
-        }
-        if (num_none_all_to_all_workers > 0) {
-            if (use_two_stage_reduce) {
-                CoreCoord none_start_core = {all_core_grid_size.x, sender_cores.end_coord.y};
-                CoreCoord none_end_core = {num_cores_x - 1, num_cores_y - 1};
-                CoreRange none_core_range = CoreRange(none_start_core, none_end_core);
-                not_all_to_all_workers = CoreRangeSet(none_core_range);
-            } else {
-                CoreCoord none_start_core;
-                CoreCoord end_core = (*all_to_all_cores.ranges().rbegin()).end_coord;
-                if (end_core.x == bbox.end_coord.x) {
-                    none_start_core = {0, end_core.y + 1};
-                } else {
-                    none_start_core = {end_core.x + 1, end_core.y};
-                }
-                not_all_to_all_workers =
-                    num_cores_to_corerangeset(none_start_core, num_none_all_to_all_workers, none_core_grid_size, true);
-            }
-        }
-        num_cores_x_mcast = num_cores_x;
-        num_cores_y_mcast = num_cores_y;
+    sender_cores = {start_core, start_core};
+    CoreCoord all_core_grid_size;
+    CoreCoord none_core_grid_size;
+    if (use_two_stage_reduce) {
+        all_core_grid_size = {1, num_cores_y};
+        none_core_grid_size = {num_cores_x - 1, num_cores_y};
     } else {
-        sender_cores = {
-            {(std::size_t)start_core.x, (std::size_t)start_core.y},
-            {(std::size_t)start_core.x, (std::size_t)start_core.y + num_cores_y - 1}};
-        all_to_all_cores = CoreRangeSet(CoreRange(
-            {(std::size_t)start_core.x, (std::size_t)start_core.y},
-            {(std::size_t)start_core.x + num_cores_all_to_all - 1, (std::size_t)start_core.y + num_cores_y - 1}));
-        if (use_mcast && num_cores_all_to_all > 1) {
-            all_to_all_workers_except_sender = CoreRangeSet(CoreRange(
-                {(std::size_t)start_core.x + 1, (std::size_t)start_core.y},
-                {(std::size_t)start_core.x + num_cores_all_to_all - 1, (std::size_t)start_core.y + num_cores_y - 1}));
-        }
-        if (num_none_all_to_all_workers > 0) {
-            not_all_to_all_workers = CoreRangeSet(CoreRange(
-                {(std::size_t)start_core.x + num_cores_all_to_all, (std::size_t)start_core.y},
-                {(std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_y - 1}));
-        }
-        num_cores_x_mcast = num_cores_x;
-        num_cores_y_mcast = 1;
+        all_core_grid_size = grid_size;
+        none_core_grid_size = grid_size;
     }
+    all_to_all_cores = num_cores_to_corerangeset(start_core, num_cores_all_to_all, all_core_grid_size, true);
+    if (use_mcast) {
+        CoreCoord all_start_core;
+        CoreCoord end_core = sender_cores.end_coord;
+        if (use_two_stage_reduce) {
+            if (end_core.x == all_core_grid_size.x - 1) {
+                all_start_core = {0, end_core.y + 1};
+            } else {
+                all_start_core = {end_core.x + 1, end_core.y};
+            }
+        } else {
+            if (end_core.x == bbox.end_coord.x) {
+                all_start_core = {0, end_core.y + 1};
+            } else {
+                all_start_core = {end_core.x + 1, end_core.y};
+            }
+        }
+        all_to_all_workers_except_sender =
+            num_cores_to_corerangeset(all_start_core, num_cores_all_to_all - 1, all_core_grid_size, true);
+    }
+    if (num_none_all_to_all_workers > 0) {
+        if (use_two_stage_reduce) {
+            CoreCoord none_start_core = {all_core_grid_size.x, sender_cores.end_coord.y};
+            CoreCoord none_end_core = {num_cores_x - 1, num_cores_y - 1};
+            CoreRange none_core_range = CoreRange(none_start_core, none_end_core);
+            not_all_to_all_workers = CoreRangeSet(none_core_range);
+        } else {
+            CoreCoord none_start_core;
+            CoreCoord end_core = (*all_to_all_cores.ranges().rbegin()).end_coord;
+            if (end_core.x == bbox.end_coord.x) {
+                none_start_core = {0, end_core.y + 1};
+            } else {
+                none_start_core = {end_core.x + 1, end_core.y};
+            }
+            not_all_to_all_workers =
+                num_cores_to_corerangeset(none_start_core, num_none_all_to_all_workers, none_core_grid_size, true);
+        }
+    }
+    num_cores_x_mcast = num_cores_x;
+    num_cores_y_mcast = num_cores_y;
     auto applyStartOffset = [](const CoreRangeSet& input_set, const CoreCoord& grid_offset) -> CoreRangeSet {
         if (input_set.empty()) {
             return input_set;
@@ -1668,11 +1631,7 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
     }
 
     uint32_t last_core_width_index = 0;
-    if (!mcast_1d) {
-        last_core_width_index = (num_cores_x - 1);
-    } else {
-        last_core_width_index = cores.size() - 1;
-    }
+    last_core_width_index = cores.size() - 1;
 
     // For write back calculation
     uint32_t current_storage_core = 0;
@@ -1684,13 +1643,8 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
         tt::log_debug("core: {}, {}", core.x, core.y);
 
         uint32_t height_index = 0, width_index = 0;
-        if (mcast_1d) {
-            height_index = 0;
-            width_index = i;
-        } else {
-            height_index = core.y;
-            width_index = core.x;
-        }
+        height_index = 0;
+        width_index = i;
 
         uint32_t width_index_two_stage = width_index % num_blocks_first_stage;
 
@@ -1725,22 +1679,13 @@ operation::ProgramWithCallbacks frmsnorm_post_multi_core_sharded(
 
         if (width_index == 0) {
             CoreCoord mcast_start, mcast_end;
-            if (mcast_1d) {
-                CoreCoord top_left_core = {(std::size_t)start_core.x, (std::size_t)start_core.y};
-                CoreCoord bottom_right_core = {
-                    (std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_y - 1};
-                auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-                auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
-                mcast_start = top_left_core_physical;
-                mcast_end = bottom_right_core_physical;
-            } else {
-                CoreCoord left_core_plus_one = {(std::size_t)start_core.x + 1, (std::size_t)core.y};
-                CoreCoord right_core = {(std::size_t)start_core.x + num_cores_x - 1, (std::size_t)core.y};
-                auto left_core_plus_one_physical = device->worker_core_from_logical_core(left_core_plus_one);
-                auto right_core_physical = device->worker_core_from_logical_core(right_core);
-                mcast_start = left_core_plus_one_physical;
-                mcast_end = right_core_physical;
-            }
+            CoreCoord top_left_core = {(std::size_t)start_core.x, (std::size_t)start_core.y};
+            CoreCoord bottom_right_core = {
+                (std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_y - 1};
+            auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
+            auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+            mcast_start = top_left_core_physical;
+            mcast_end = bottom_right_core_physical;
             if (reader_noc == NOC::NOC_1) {
                 std::swap(mcast_start, mcast_end);
             }
