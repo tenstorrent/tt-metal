@@ -20,7 +20,7 @@ mcast_Linear,noc_unicast_write,16,4,1,True,True,False,0.049849932231353845,31156
 mcast_Linear,noc_unicast_write,2048,4,1,True,True,False,6.29435814827175,3073417.0645858156
 mcast_Linear,noc_unicast_write,4096,4,1,True,True,False,11.43352047767663,2791386.835370271
 mcast_Linear,noc_unicast_write,16,4,2,False,False,False,0.037324257566863375,None
-mcast_Linear,noc_unicast_write,2048,4,2,False,False,False,4.768236855832999,2308321.112119565
+mcast_Linear,noc_unicast_write,2048,4,2,False,False,False,4.768236855832999,2299321.112119565
 mcast_Linear,noc_unicast_write,4096,4,2,False,False,False,7.75519617550683,1893358.4412858472
 unicast_Linear,noc_unicast_write,16,2,1,False,False,True,0.04479153090691918,2799470.681682449
 unicast_Linear,noc_unicast_write,2048,2,1,False,False,True,5.720823648695118,None
