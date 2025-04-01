@@ -6,6 +6,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -50,22 +51,6 @@ inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
 }
 inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
 
-inline uint16_t bfloat16(float float_num) {
-    uint32_t uint32_data;
-    TT_ASSERT(sizeof float_num == sizeof uint32_data);
-
-    uint32_data = *reinterpret_cast<uint32_t*>(&float_num);
-    // just move upper 16 to lower 16 (truncate)
-    uint32_data = (uint32_data >> 16);
-
-    // store lower 16 as 16-bit uint
-    return (uint16_t)uint32_data;
-}
-inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_bfloats) {
-    // first -> lower 16
-    // second -> upper 16
-    return (uint32_t)two_bfloats.first | ((uint32_t)two_bfloats.second << 16);
-}
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -507,9 +492,8 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
     tt::tt_metal::CircularBufferConfig output_cb_config =
         tt::tt_metal::CircularBufferConfig(out_CB_size, {{cb_to_allgather_writer, out_data_format}})
             .set_page_size(cb_to_allgather_writer, out_single_tile_size);
-    // output_cb_config = output_cb_config.set_globally_allocated_address(*output.buffer());
     CBHandle cb_output = 0;
-    cb_output = tt::tt_metal::CreateCircularBuffer(program, sender_cores, output_cb_config);
+    cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
     uint32_t src0_cb_index = tt::CBIndex::c_10;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
@@ -1012,8 +996,6 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
                 UpdateDynamicCircularBufferAddress(program, cb_in1, *b_tensor.value().buffer());
                 UpdateDynamicCircularBufferAddress(program, cb_add_out, *src_buffer_a);
             }
-
-            // UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};

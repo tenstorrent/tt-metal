@@ -67,7 +67,7 @@ FORCE_INLINE void wh_generate_reduce_scaler(const uint32_t cb_id, const uint32_t
         noc_async_read_one_packet_with_state(target_address, write_addr_base + (1 << 9));
         noc_async_read_one_packet_with_state(target_address, write_addr_base + (2 << 9));
         noc_async_read_one_packet_with_state(target_address, write_addr_base + (3 << 9));
+        noc_async_read_barrier();
     }
-    noc_async_read_barrier();
     cb_push_back(cb_id, 1);
 }

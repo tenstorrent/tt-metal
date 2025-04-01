@@ -77,8 +77,6 @@ const tt::tt_metal::operation::Hash RMSAllGather::compute_program_hash(
     auto input_memory_config = input_tensors[0].memory_config();
     return tt::tt_metal::operation::hash_operation<RMSAllGather>(
         this->eps,
-        // this->program_config,
-        // this->compute_kernel_config,
         this->dtype,
         this->is_pre,
         this->num_links,

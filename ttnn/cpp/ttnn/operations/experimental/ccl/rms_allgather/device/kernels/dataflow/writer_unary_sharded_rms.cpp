@@ -132,18 +132,25 @@ void kernel_main() {
             fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
                 packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
         }
-        fabric_connection.close();
+        fabric_connection.close_start();
         // increment locally
         uint64_t out_ready_sem_noc_addr =
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
-        noc_semaphore_inc(out_ready_sem_noc_addr, 1);
-        // 3. wait for mcast output ready semaphore
-        while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) < out_ready_sem_wait_value);
+        if constexpr (num_links == 1) {
+            // We deduct the local increment from the target semaphore value as we don't need internal synchronization
+            noc_semaphore_wait(
+                reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr), out_ready_sem_wait_value - 1);
+        } else {
+            // if multiple links then we need to also ensure the local ones have completed by having them also
+            // increment the semaphore and including them in the total
+            noc_semaphore_inc(out_ready_sem_noc_addr, 1);
+            noc_semaphore_wait(reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr), out_ready_sem_wait_value);
+        }
+
         // 4. global semaphore reset
         if (iteration_number == 0) {
-            const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem_bank_addr);
-            noc_inline_dw_write(dest_noc_addr, 0);
+            *reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) = 0;
         }
-        noc_async_write_barrier();
+        fabric_connection.close_finish();  // Includes a noc async write barrier
     }
 }
