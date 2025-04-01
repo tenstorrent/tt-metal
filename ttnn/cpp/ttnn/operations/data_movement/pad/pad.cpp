@@ -202,11 +202,6 @@ static ttnn::Tensor pad_impl(
     auto pad_front = padding | std::views::transform([](const auto& p) { return p.first; });
     auto pad_back = padding | std::views::transform([](const auto& p) { return p.second; });
 
-    const bool front_padding_is_zero = std::accumulate(pad_front.begin(), pad_front.end(), 0) == 0;
-    if (input_tensor.get_layout() == ttnn::TILE_LAYOUT) {
-        TT_FATAL(front_padding_is_zero, "ttnn.pad: on device tile padding does not support front padding");
-    }
-
     if (input_tensor.get_layout() == ttnn::TILE_LAYOUT) {
         const int target_height = output_padded_shape[padding_size - 2];
         const int target_width = output_padded_shape[padding_size - 1];
@@ -284,7 +279,10 @@ ttnn::Tensor invoke_tile(
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    TT_ASSERT(input_tensor.get_layout() == ttnn::TILE_LAYOUT);
+    const bool front_padding_is_zero =
+        std::all_of(padding_vec.begin(), padding_vec.end(), [](auto& x) { return x.first == 0; });
+    TT_FATAL(front_padding_is_zero, "ttnn.pad: on device tile padding does not support front padding");
+
     const auto& input_logical_shape = input_tensor.get_logical_shape();
     const auto& input_padded_shape = input_tensor.get_padded_shape();
     const auto [requested_logical_shape, requested_padded_shape] =
@@ -317,7 +315,7 @@ ttnn::Tensor invoke_tile(
             pad_impl(queue_id, output_tensor, std::move(padded_padding_vec), value, use_multicore, memory_config_arg);
 
         // this is the padded shape
-        const auto output_shape = squeeze_or_unsqueeze_shape_to_nd(output_tensor.get_logical_shape(), requested_rank);
+        const auto output_shape = squeeze_or_unsqueeze_shape_to_ND(output_tensor.get_logical_shape(), requested_rank);
 
         // "slice" down to logical shape
         output_tensor = ttnn::experimental::view(output_tensor, requested_logical_shape, requested_padded_shape);
@@ -360,9 +358,7 @@ ttnn::Tensor ExecutePad::invoke(
 
     if (input_tensor.get_layout() == ttnn::TILE_LAYOUT) {
         return invoke_tile(queue_id, input_tensor, padding_vec, value, use_multicore, memory_config_arg);
-    }
-
-    else {
+    } else {
         return invoke_rm(queue_id, input_tensor, padding_vec, value, use_multicore, memory_config_arg);
     }
 }

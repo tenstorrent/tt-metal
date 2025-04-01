@@ -12,7 +12,7 @@ namespace ttnn {
 namespace operations {
 namespace data_movement {
 
-ttnn::Shape squeeze_shape_to_nd(const ttnn::Shape& shape, const uint32_t n) {
+ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n) {
     if (shape.rank() <= n) {
         return shape;
     }
@@ -24,8 +24,8 @@ ttnn::Shape squeeze_shape_to_nd(const ttnn::Shape& shape, const uint32_t n) {
     return ttnn::Shape(shape_nd);
 }
 
-ttnn::Shape squeeze_shape_to_4D(const ttnn::Shape& shape) { return squeeze_shape_to_nd(shape, 4); }
-ttnn::Shape squeeze_shape_to_3D(const ttnn::Shape& shape) { return squeeze_shape_to_nd(shape, 3); }
+ttnn::Shape squeeze_shape_to_4D(const ttnn::Shape& shape) { return squeeze_shape_to_ND(shape, 4); }
+ttnn::Shape squeeze_shape_to_3D(const ttnn::Shape& shape) { return squeeze_shape_to_ND(shape, 3); }
 
 ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
     auto shape = tensor.get_logical_shape();
@@ -51,24 +51,24 @@ ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
     return ttnn::reshape(tensor, squeeze_shape_to_4D(shape));
 }
 
-ttnn::Shape unsqueeze_shape_to_nd(const ttnn::Shape& shape, const uint32_t n) {
+ttnn::Shape unsqueeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n) {
     ttnn::SmallVector<uint32_t> shape_vector(n, 1);
     std::copy(shape.view().rbegin(), shape.view().rend(), shape_vector.rbegin());
 
     return ttnn::Shape(shape_vector);
 }
 
-ttnn::Shape unsqueeze_shape_to_3D(const ttnn::Shape& shape) { return unsqueeze_shape_to_nd(shape, 3); };
-ttnn::Shape unsqueeze_shape_to_4D(const ttnn::Shape& shape) { return unsqueeze_shape_to_nd(shape, 4); };
+ttnn::Shape unsqueeze_shape_to_3D(const ttnn::Shape& shape) { return unsqueeze_shape_to_ND(shape, 3); };
+ttnn::Shape unsqueeze_shape_to_4D(const ttnn::Shape& shape) { return unsqueeze_shape_to_ND(shape, 4); };
 
-ttnn::Shape squeeze_or_unsqueeze_shape_to_nd(const ttnn::Shape& shape, const uint32_t n) {
+ttnn::Shape squeeze_or_unsqueeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n) {
     const auto input_rank = shape.rank();
     if (input_rank == n) {
         return shape;
     } else if (input_rank < n) {
-        return unsqueeze_shape_to_nd(shape, n);
+        return unsqueeze_shape_to_ND(shape, n);
     } else {
-        return squeeze_shape_to_nd(shape, n);
+        return squeeze_shape_to_ND(shape, n);
     }
 }
 uint32_t get_estimated_size_of_cbs(
@@ -135,8 +135,8 @@ uint32_t wrap_index(int index, int size) { return index < 0 ? size + index : ind
 ttnn::Shape compute_padded_shape(
     const ttnn::Shape& logical_shape, const uint32_t tile_height, const uint32_t tile_width) {
     if (logical_shape.rank() == 1) {
-        ttnn::SmallVector<uint32_t> output_shape_vec = {tile_height, tile_width};
-        return ttnn::Shape(output_shape_vec);
+        // ttnn::SmallVector<uint32_t> output_shape_vec = {tile_height, tile_width};
+        return ttnn::Shape{tile_height, tile_width};
     }
 
     ttnn::SmallVector<uint32_t> output_shape_vec(logical_shape.rank());
