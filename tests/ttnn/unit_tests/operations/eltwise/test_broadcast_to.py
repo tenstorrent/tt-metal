@@ -114,6 +114,8 @@ profile_input_bcast_shape_pairs = [
     ((2, 16, 1, 1), (2, 16, 64, 64)),
     ((2, 1, 64, 1), (2, 16, 64, 64)),  # col
     ((2, 1, 1, 64), (2, 16, 64, 64)),  # row
+    # following tests takes a bit longer to run
+    # enable on demand
     # ((1, 1, 256, 256), (4, 128, 256, 256)),
     # ((4, 128, 1, 1), (4, 128, 256, 256)),
     # ((4, 1, 256, 1), (4, 128, 256, 256)), # col
@@ -191,12 +193,11 @@ input_bcast_shape_pairs = [
 ]
 
 
-@pytest.mark.parametrize("dtype_pt, dtype_tt", ((torch.bfloat16, ttnn.bfloat16),))
 @pytest.mark.parametrize("input, bcast", input_bcast_shape_pairs)
-def test_invalid_broadcast_to_sharding(input, bcast, dtype_pt, dtype_tt, device):
+def test_invalid_broadcast_to_sharding(input, bcast, device):
     torch.manual_seed(0)
-
-    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(input)
+    dtype_pt, dtype_tt = [torch.bfloat16, ttnn.bfloat16]
+    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), dtype_tt)(input)
     sharded_config = ttnn.create_sharded_memory_config(
         [10 * 32, 32],
         core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 6))}),

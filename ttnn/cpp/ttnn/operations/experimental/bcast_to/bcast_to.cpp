@@ -36,7 +36,7 @@ auto check_shape(const Tensor& input, const ttnn::Shape& output_shape) {
     size_t input_ndim = input_shape.size();
     size_t output_ndim = output_shape.size();
 
-    for (int i = -1; i >= -input_ndim; --i) {
+    for (int i = -1; i >= -static_cast<int>(input_ndim); --i) {
         // Check dimensions from the right side
         uint32_t input_dim = input_shape[i];
         uint32_t output_dim = output_shape[i];
