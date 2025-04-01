@@ -794,7 +794,6 @@ inline void fabric_endpoint_init(T client_interface, uint32_t outbound_eth_chan)
         std::is_same_v<T, volatile fabric_pull_client_interface_t*> ||
             std::is_same_v<T, volatile fabric_push_client_interface_t*>,
         "T must be either volatile fabric_pull_client_interface_t* or volatile fabric_push_client_interface_t*");
-
     // TODO: Should not assume routing tables are immediately after the client interface
     // This should be a separate address we take in
     uint32_t routing_tables_offset = (uint32_t)client_interface + sizeof(*client_interface);

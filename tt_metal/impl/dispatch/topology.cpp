@@ -23,6 +23,11 @@
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 
+// hack for test_basic_fabric_apis.cpp
+// TODO: delete this once tt_fabric_api.h fully support low latency feature
+extern "C" bool isFabricUnitTest() __attribute__((weak));
+bool isFabricUnitTest() { return false; }
+
 namespace tt::tt_metal {
 
 // For readablity, unset = x = -1
@@ -910,6 +915,10 @@ std::unique_ptr<Program> create_and_compile_2d_fabric_program(IDevice* device, F
     std::map<string, string> router_defines = {};
     if (fabric_config == FabricConfig::FABRIC_2D) {
         router_defines["FVC_MODE_PULL"] = "";
+    } else {
+        if (isFabricUnitTest()) {
+            router_defines["DISABLE_LOW_LATENCY_ROUTING"] = "";
+        }
     }
 
     // TODO: Manual clear of semaphore, move this to proper Metal sempahore apis

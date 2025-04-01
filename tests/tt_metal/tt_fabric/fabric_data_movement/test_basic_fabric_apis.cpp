@@ -13,6 +13,11 @@
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
 
+// hack to let topology.cpp to know the binary is a unit test
+// TODO: delete this once tt_fabric_api.h fully support low latency feature
+extern "C" bool isFabricUnitTest();
+bool isFabricUnitTest() { return true; }
+
 TEST_F(Fabric2DPullFixture, TestAsyncWrite) {
     using tt::tt_metal::ShardedBufferConfig;
     using tt::tt_metal::ShardOrientation;
@@ -283,6 +288,7 @@ TEST_F(Fabric2DPushFixture, TestAsyncWrite) {
 
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 0, (uint32_t)fabric_mode::PUSH};
     std::map<string, string> defines = {};
+    defines["DISABLE_LOW_LATENCY_ROUTING"] = "";
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
         "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_async_write_sender.cpp",
@@ -589,6 +595,7 @@ TEST_F(Fabric2DPushFixture, TestAsyncRawWrite) {
 
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 1, (uint32_t)fabric_mode::PUSH};
     std::map<string, string> defines = {};
+    defines["DISABLE_LOW_LATENCY_ROUTING"] = "";
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
         "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_async_write_sender.cpp",
@@ -908,6 +915,7 @@ TEST_F(Fabric2DPushFixture, TestAtomicInc) {
         tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
 
     std::map<string, string> defines = {};
+    defines["DISABLE_LOW_LATENCY_ROUTING"] = "";
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, fabric_mode::PUSH};
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -1264,6 +1272,7 @@ TEST_F(Fabric2DPushFixture, TestAsyncWriteAtomicInc) {
         tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
 
     std::map<string, string> defines = {};
+    defines["DISABLE_LOW_LATENCY_ROUTING"] = "";
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 0, fabric_mode::PUSH};
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -1606,6 +1615,7 @@ TEST_F(Fabric2DPushFixture, TestAsyncRawWriteAtomicInc) {
         tt::tt_metal::CreateCircularBuffer(sender_program, sender_logical_core, client_interface_cb_config);
 
     std::map<string, string> defines = {};
+    defines["DISABLE_LOW_LATENCY_ROUTING"] = "";
     std::vector<uint32_t> sender_compile_time_args = {client_interface_cb_index, 1, fabric_mode::PUSH};
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
