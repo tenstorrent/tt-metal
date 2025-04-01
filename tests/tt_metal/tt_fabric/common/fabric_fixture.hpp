@@ -131,7 +131,7 @@ public:
                 break;
             }
         }
-        return true;
+        return connection_found;
     }
 
     void RunProgramNonblocking(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
