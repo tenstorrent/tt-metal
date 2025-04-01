@@ -69,27 +69,17 @@ class TtAsymmDiTJoint(LightweightModule):
         self.rope_theta = rope_theta
 
         # Create PyTorch embedders (these run on CPU) and load their weights
-        # self.x_embedder = TtPatchEmbed(
-        #     mesh_device=mesh_device,
-        #     state_dict=state_dict,
-        #     weight_cache_path=weight_cache_path,
-        #     dtype=ttnn.bfloat16,
-        #     patch_size=patch_size,
-        #     in_chans=in_channels,
-        #     embed_dim=hidden_size_x,
-        #     bias=patch_embed_bias,
-        #     state_dict_prefix="x_embedder",
-        # )
-        self.x_embedder = PatchEmbed(
+        self.x_embedder = TtPatchEmbed(
+            mesh_device=mesh_device,
+            state_dict=state_dict,
+            weight_cache_path=weight_cache_path,
+            dtype=ttnn.bfloat16,
             patch_size=patch_size,
             in_chans=in_channels,
             embed_dim=hidden_size_x,
             bias=patch_embed_bias,
+            state_dict_prefix="x_embedder",
         )
-        x_embedder_state_dict = {
-            k[len("x_embedder.") :]: v for k, v in state_dict.items() if k.startswith("x_embedder.")
-        }
-        self.x_embedder.load_state_dict(x_embedder_state_dict)
 
         self.t_embedder = TimestepEmbedder(hidden_size_x, bias=timestep_mlp_bias, timestep_scale=timestep_scale)
         t_embedder_state_dict = {
@@ -284,7 +274,7 @@ class TtAsymmDiTJoint(LightweightModule):
         pH, pW = H // self.patch_size, W // self.patch_size
         x = x.reshape(B, C, T, pH, self.patch_size, pW, self.patch_size)
         x = x.permute(0, 2, 3, 5, 1, 4, 6).reshape(1, B, T * pH * pW, C * self.patch_size * self.patch_size)
-        # x = to_tt_tensor(x, self.mesh_device)
+        x = to_tt_tensor(x, self.mesh_device)
         return x
 
     def reverse_preprocess(self, x, T, H, W):
@@ -336,7 +326,6 @@ class TtAsymmDiTJoint(LightweightModule):
         Returns
         """
         x_1BNX = self.x_embedder(x_1BNI)
-        x_1BNX = to_tt_tensor(unsqueeze_to_4d(x_1BNX), self.mesh_device)
 
         # Global vector embedding for conditionings
         c_t_BX = self.t_embedder(1 - sigma)
