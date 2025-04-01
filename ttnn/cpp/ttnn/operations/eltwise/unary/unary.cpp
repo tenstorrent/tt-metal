@@ -340,6 +340,7 @@ Tensor ExecuteUnaryWithIntegerParameter<unary_op_type, T>::invoke(
 }
 
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::POWER, uint32_t>;
+template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::SIGMOID_MODE, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::LEFT_SHIFT, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::RIGHT_SHIFT, int32_t>;
 template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::ROUND, int32_t>;

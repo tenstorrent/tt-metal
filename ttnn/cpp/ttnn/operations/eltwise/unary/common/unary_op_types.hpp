@@ -94,6 +94,7 @@ enum class UnaryOpType {
     ZERO_POINT,
     MISH,
     MAXIMUM,
+    SIGMOID_MODE,
 };
 
 struct UnaryWithParam {

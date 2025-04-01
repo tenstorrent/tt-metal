@@ -1886,6 +1886,12 @@ void py_module(py::module& module) {
         R"doc(Round the input tensor to `decimals` decimal places.)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc",
         R"doc(Not supported on Grayskull.)doc");
+    detail::bind_unary_operation_with_int_parameter(
+        module,
+        ttnn::sigmoid_mode,
+        "modes", "Modes to get better performance and accurate result.Use 2,4 for different vector modes (2 -> Vector Mode C and 4 -> Vector Mode RC)",
+        R"doc(Use the appropriate vector modes to optimize performance while maintaining result accuracy.)doc",
+        R"doc(BFLOAT16)doc");
     detail::bind_unary_composite_int(
         module,
         ttnn::polygamma,
