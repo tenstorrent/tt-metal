@@ -11,7 +11,7 @@ namespace ttnn::operations::experimental::reduction {
 Tensor CumSumOperation::invoke(
     QueueId queue_id,
     const Tensor& input_tensor,
-    int64_t dim,
+    const int64_t dim,
     std::optional<ttnn::DataType> dtype,
     std::optional<Tensor> optional_output_tensor) {
     // TODO

@@ -5,6 +5,7 @@
 #include "cumsum_device_operation.hpp"
 
 #include "tt-metalium/assert.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -21,21 +22,23 @@ CumSumDeviceOperation::program_factory_t CumSumDeviceOperation::select_program_f
 void CumSumDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // TODO: Verify `dim` parameter (`-input.dims <= dim < input.dim`)
+    // Note: `args.dim` can be negative (but tensor rank() is unsigned)
     const auto& input_tensor = tensor_args.input_tensor;
+    const int64_t tensor_rank = static_cast<int64_t>(input_tensor.get_logical_shape().rank());
     TT_FATAL(
-        args.dim < input_tensor.get_logical_shape().size() && args.dim >= -input_tensor.get_logical_shape().size(),
-        "Specified dim argument exceeds tensor dimensions");
+        args.dim < tensor_rank && args.dim >= -tensor_rank,
+        "Specified dim ({}) argument exceeds tensor dimensions ({})\n",
+        args.dim,
+        input_tensor.logical_shape().rank());
 
     if (tensor_args.preallocated_output.has_value()) {
-        // Check if preallocated tensor matches output specs
-
-        // Check tensor specs:
+        // Make sure preallocated tensor specs match expected specs
         // 1) If that's the case => OK, no need to allocate memory
-        // 2) If empty tensor => reallocate memory
         // 3) Otherwise =>  error (pytorch behaviour is to reallocate but this has been deprecated as of pytorch 2.8)
+
         TT_FATAL(
             tensor_args.preallocated_output->tensor_spec() == compute_output_specs(args, tensor_args),
-            "Preallocated output tensor mismatch expected specs");
+            "Preallocated output specs mismatch expected specs");
     }
 }
 
@@ -49,7 +52,9 @@ CumSumDeviceOperation::spec_return_value_t CumSumDeviceOperation::compute_output
     return TensorSpec(
         tensor_args.input_tensor.get_logical_shape(),
         tt::tt_metal::TensorLayout(
-            args.dtype, tensor_args.input_tensor.get_layout(), tensor_args.input_tensor.memory_config()));
+            args.dtype,
+            tt::tt_metal::PageConfig(tensor_args.input_tensor.layout()),
+            tensor_args.input_tensor.memory_config()));
 }
 
 CumSumDeviceOperation::tensor_return_value_t CumSumDeviceOperation::create_output_tensors(
@@ -71,7 +76,7 @@ CumSumDeviceOperation::invoke(
     // Scaffold => return copy of input tensor
     return {
         operation_attributes_t{.dim = dim, .dtype = dtype.value_or(input_tensor.dtype())},
-        tensor_args_t{.input_tensor = input_tensor, .preallocated_output = preallocated_output}};
+        tensor_args_t{.input_tensor = input_tensor, .preallocated_output = std::move(preallocated_output)}};
 }
 
 }  // namespace ttnn::operations::experimental::reduction

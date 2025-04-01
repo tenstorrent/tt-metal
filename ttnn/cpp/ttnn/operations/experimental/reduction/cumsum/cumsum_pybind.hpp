@@ -4,13 +4,11 @@
 
 #pragma once
 
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-#include "pybind11/decorators.hpp"
+#include "pybind11/pybind_fwd.hpp"
 
+namespace ttnn::operations::experimental::reduction::detail {
 namespace py = pybind11;
 
-namespace ttnn::operations::experimental::reduction {
-
 void bind_cumsum_operation(py::module& module);
-}
+
+}  // namespace ttnn::operations::experimental::reduction::detail
