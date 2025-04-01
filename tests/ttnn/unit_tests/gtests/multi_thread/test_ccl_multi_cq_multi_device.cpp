@@ -15,9 +15,9 @@
 #include <memory>
 
 #define BOOST_ASIO_HAS_STD_INVOKE_RESULT
-#include <boost/asio/thread_pool.hpp>
 #include <boost/asio/post.hpp>
-#include <boost/lockfree/queue.hpp>
+#include <boost/asio/strand.hpp>
+#include <boost/asio/thread_pool.hpp>
 
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -110,6 +110,7 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
 
     uint8_t op_cq_id = 0;  // operation command queue id
     boost::asio::thread_pool pool(devices.size());
+    boost::asio::strand<boost::asio::thread_pool::executor_type> device_strand(pool.get_executor());
 
     for (int outer_loop = 0; outer_loop < 1; outer_loop++) {
         log_info(LogTest, "Running outer loop {}", outer_loop);
@@ -122,7 +123,7 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
             auto device = devices[i];
             auto promise = std::make_shared<std::promise<void>>();
             futures.push_back(promise->get_future());
-            boost::asio::post(pool, [&, dev_idx, device, promise]() mutable {
+            boost::asio::post(device_strand, [&, dev_idx, device, promise]() mutable {
                 // Generate input data for each device
                 auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
                 for (int j = 0; j < num_elems; j++) {
@@ -181,7 +182,7 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0) {
         for (size_t i = 0; i < devices.size(); ++i) {
             auto device = devices[i];
             auto device_tensor = gathered_tensors[i];
-            boost::asio::post(pool, [&, i, device, num_elems, device_tensor]() mutable {
+            boost::asio::post(device_strand, [&, i, device, num_elems, device_tensor]() mutable {
                 auto output_data = std::shared_ptr<bfloat16[]>(new bfloat16[device_tensor.volume()]);
                 ttnn::read_buffer(ttnn::QueueId(op_cq_id), device_tensor, {output_data});
 
@@ -271,6 +272,7 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
     uint8_t op_cq_id = 1;   // device operation, read/write command queue id
 
     boost::asio::thread_pool pool(devices.size());
+    boost::asio::strand<boost::asio::thread_pool::executor_type> device_strand(pool.get_executor());
 
     for (int outer_loop = 0; outer_loop < 1; outer_loop++) {
         log_info(LogTest, "Running outer loop {}", outer_loop);
@@ -283,7 +285,7 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
             auto device = devices[i];
             auto promise = std::make_shared<std::promise<void>>();
             futures.push_back(promise->get_future());
-            boost::asio::post(pool, [&, dev_idx, device, promise]() mutable {
+            boost::asio::post(device_strand, [&, dev_idx, device, promise]() mutable {
                 // Generate input data for each device
                 auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
                 for (int j = 0; j < num_elems; j++) {
@@ -347,7 +349,7 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
             auto device = devices[i];
             auto promise = std::make_shared<std::promise<void>>();
             futures.push_back(promise->get_future());
-            boost::asio::post(pool, [&, dev_idx, device, promise]() mutable {
+            boost::asio::post(device_strand, [&, dev_idx, device, promise]() mutable {
                 auto ccl_event = std::make_shared<Event>();
                 ttnn::record_event(device->command_queue(ccl_cq_id), ccl_event);
                 // Enqueue the task waiting for the operation_event to the ccl`s command queue
@@ -369,7 +371,7 @@ TEST_F(T3000MultiCQMeshDeviceFixture, AsyncExecutionWorksCQ0CQ1) {
             auto device = devices[i];
             auto device_tensor = gathered_tensors[i];
 
-            boost::asio::post(pool, [&, i, device, num_elems, device_tensor]() mutable {
+            boost::asio::post(device_strand, [&, i, device, num_elems, device_tensor]() mutable {
                 auto output_data = std::shared_ptr<bfloat16[]>(new bfloat16[device_tensor.volume()]);
                 ttnn::read_buffer(ttnn::QueueId(op_cq_id), device_tensor, {output_data});
 
