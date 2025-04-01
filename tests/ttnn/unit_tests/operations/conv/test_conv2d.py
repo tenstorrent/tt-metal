@@ -101,14 +101,17 @@ def test_conv_features(
         run_twice=True,
     )
 
+
 SliceHeight = ttnn.Conv2dSliceHeight
 SliceWidth = ttnn.Conv2dSliceWidth
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "input_channels, output_channels, input_height, input_width, slice_type, num_slices, weights_dtype, activations_dtype, kernel, stride, padding, dilation, input_channels_alignment, act_block_h_override,  math_fidelity",
     # fmt: off
     (
-        (10,   64,   4096,  512,   SliceHeight,   4,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1), 16, 32 * 16, ttnn.MathFidelity.LoFi  ),
+        (10,   64,   4096,  512,   SliceHeight,   4,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1), 16, 32 * 8, ttnn.MathFidelity.LoFi  ),
         (128,  128,  1024,  1024,  SliceWidth,    8,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 32, 0,       ttnn.MathFidelity.LoFi  ),
         (128,  16,   1024,  1024,  SliceWidth,    8,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 32, 0,       ttnn.MathFidelity.LoFi  ),
         (16,   512,  128,   128,   SliceWidth,    2,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 32, 0,       ttnn.MathFidelity.LoFi  ),
@@ -138,7 +141,7 @@ SliceWidth = ttnn.Conv2dSliceWidth
 )
 def test_conv_dram(
     device,
-    use_program_cache,
+    torch_tensor_map,
     output_channels,
     input_channels,
     input_height,
@@ -158,125 +161,36 @@ def test_conv_dram(
     fp32_accum,
     packer_l1_acc,
 ):
-    filter_height = kernel[0]
-    filter_width = kernel[1]
     batch_size = 1
-    groups = 1
-
-    import time
-
-    torch.manual_seed(time.time())
-    conv_input_shape = [batch_size, input_channels, input_height, input_width]
-    conv_weight_shape = [output_channels, input_channels // groups, filter_height, filter_width]
-    conv_bias_shape = [1, 1, 1, output_channels]
-
-    torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
-    torch_input_tensor_nchw = torch_input_tensor_nchw.broadcast_to(conv_input_shape).float()
-    torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
-
-    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
-
-    tt_bias_tensor = None
-    torch_bias_tensor = None
-    if has_bias:
-        torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() * 50
-        tt_bias_tensor = ttnn.from_torch(
-            torch_bias_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
-        )
-        torch_bias_tensor = torch_bias_tensor.reshape(-1)
-    ref = torch.nn.functional.conv2d(
-        torch_input_tensor_nchw,
-        torch_weight_tensor,
-        bias=torch_bias_tensor,
-        stride=stride,
-        padding=padding,
-        dilation=dilation,
-        groups=1,
-    )
-
-    reader_patterns_cache = {}
-    tt_weight_tensor = ttnn.from_torch(
-        torch_weight_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
-    )
-
-    tt_input_tensor = ttnn.from_torch(torch_input_tensor, device=device, dtype=ttnn.bfloat16)
-    conv_slice_config = ttnn.Conv2dSliceConfig(
-        slice_type=slice_type,
-        num_slices=num_slices,
-    )
-
-    conv_config = ttnn.Conv2dConfig(
-        dtype=activations_dtype,
-        weights_dtype=weights_dtype,
-        act_block_h_override=act_block_h_override,
-        input_channels_alignment=input_channels_alignment,
-    )
-
-    compute_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=math_fidelity,
-        fp32_dest_acc_en=fp32_accum,
+    config = {
+        "act_block_h": act_block_h_override,
+    }
+    run_conv(
+        device,
+        torch_tensor_map,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        kernel[0],
+        kernel[1],
+        stride[0],
+        stride[1],
+        padding,
+        config,
+        has_bias=True,
+        fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
+        preprocess_weights_on_device=False,
+        transpose_shards=True,
+        run_twice=False,
+        fast_compare=True,
+        slice_config=ttnn.Conv2dSliceConfig(
+            slice_type=slice_type,
+            num_slices=num_slices,
+        ),
     )
-
-    [tt_output_tensor_on_device, [out_height, out_width]] = ttnn.conv2d(
-        input_tensor=tt_input_tensor,
-        weight_tensor=tt_weight_tensor,
-        in_channels=input_channels,
-        out_channels=output_channels,
-        device=device,
-        bias_tensor=tt_bias_tensor,
-        kernel_size=(filter_height, filter_width),
-        stride=stride,
-        padding=padding,
-        dilation=dilation,
-        batch_size=batch_size,
-        input_height=input_height,
-        input_width=input_width,
-        conv_config=conv_config,
-        compute_config=compute_config,
-        conv_op_cache=reader_patterns_cache,
-        groups=1,
-        slice_config=conv_slice_config,
-        return_output_dim=True,
-    )
-
-    out = ttnn.to_torch(tt_output_tensor_on_device)
-
-    # out is in row major layout and NHWC shape
-    # NHWC to NCHW
-    # ref = torch.permute(ref, (0, 2, 3, 1))
-    out = out.reshape(batch_size, out_height, out_width, output_channels)
-
-    ref = torch.permute(ref, (0, 2, 3, 1))
-    reader_patterns_cache.clear()
-
-    pcc = 0.999
-    diff = torch.abs(out - ref).flatten()
-    num_elements = diff.numel()
-
-    # Filter out the top 1% of the differences.
-    # Using histogram to find the top 1% of differences is faster than sorting. Sorting is single-core.
-    bin_count, bin_edge = torch.histogram(diff, bins=100)
-    top1_count = num_elements // 100
-    count = 0
-    index = -1
-    while count < top1_count and index < len(bin_count) - 1:
-        count += bin_count[index]
-        index -= 1
-    top1_diff = diff[diff > bin_edge[index]]
-
-    abs_ref = ref.abs()
-    abs_ref_mean = abs_ref.mean()
-
-    scaled_diff_mean = top1_diff.mean() / abs_ref_mean
-    logger.info(f"Filtered Scaled diff mean = {scaled_diff_mean} ")
-    if scaled_diff_mean > 0.2:
-        passing, pcc_msg = check_with_pcc_without_tensor_printout(out, ref, pcc=pcc)
-        logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
-        if not passing:
-            logger.error("Fails with PCC ", pcc_msg)
-        assert passing
-
-
-
