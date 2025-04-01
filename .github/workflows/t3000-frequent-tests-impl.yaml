@@ -36,7 +36,6 @@ jobs:
           { name: "t3k mixtral tests", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 60, owner_id: U03PUAKE719}, #Miguel Tairum Cruz
           { name: "t3k mistral tests", arch: wormhole_b0, cmd: run_t3000_mistral_tests, timeout: 60, owner_id: U03PUAKE719}, #Miguel Tairum Cruz
           { name: "t3k resnet tests", arch: wormhole_b0, cmd: run_t3000_resnet_tests, timeout: 30, owner_id: U052J2QDDKQ}, #Pavle Josipovic
-          { name: "t3k resnet tests", arch: wormhole_b0, cmd: run_t3000_resnet_tests, timeout: 30, owner_id: U055MU9S9CJ}, #Abhinav
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:
