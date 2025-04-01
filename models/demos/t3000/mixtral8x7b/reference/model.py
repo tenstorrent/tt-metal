@@ -41,6 +41,7 @@ def _reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor) -> torch.Te
     x: complex - (bsz, seq_len, head_dim / 2)
     """
     ndim = x.ndim
+    # breakpoint()
     assert 1 < ndim
     assert freqs_cis.shape == (x.shape[1], x.shape[-1]), (
         freqs_cis.shape,
@@ -105,6 +106,7 @@ class Attention(nn.Module):
         xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
 
         # The cache is a rotating buffer
+        # breakpoint()
         scatter_pos = (positions % self.args.max_seq_len)[None, :, None, None]
         scatter_pos = scatter_pos.repeat(bsz, 1, self.n_kv_heads, self.args.head_dim)
         self.cache_k[:bsz].scatter_(dim=1, index=scatter_pos, src=xk)
@@ -114,12 +116,11 @@ class Attention(nn.Module):
         # src = [32,1,8,64]
         # index = [32,1,8,64] -> [None, -1, :, :] [32,1,8,64] + [32,1,8,64]
         # self = [32,4096,8,64]
-
         if positions.shape[0] > 1:
             # prefill
             key, value = repeat_kv(xk, xv, self.repeats)
         else:
-            assert mask is None
+            # assert mask is None
             cur_pos = int(positions[-1].item() + 1)
             key, value = repeat_kv(self.cache_k[:bsz, :cur_pos, ...], self.cache_v[:bsz, :cur_pos, ...], self.repeats)
 
@@ -129,8 +130,8 @@ class Attention(nn.Module):
         # scores : [bsz, n_heads, seqlen | 1, seqlen]
         scores = torch.matmul(query, key.transpose(2, 3)) * self.scale
 
-        if mask is not None:
-            scores += mask[None, None, ...]
+        # if mask is not None:
+        #     scores += mask[None, None, ...]
 
         scores = scores.float()
         scores = nn.functional.softmax(scores, dim=-1).type_as(query)
