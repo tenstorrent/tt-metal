@@ -1,0 +1,8 @@
+﻿ttnn.experimental.sort
+======================
+
+.. currentmodule:: ttnn.experimental
+
+.. _ttnn.experimental.sort:
+
+.. autofastoperation:: ttnn.experimental.sort
