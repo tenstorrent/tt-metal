@@ -47,7 +47,7 @@ def test_tilize(device):
     # Enable llk perf testing
     os.environ["TT_ENABLE_LLK_PERF"] = "1"
 
-    perf_scope = "block"  # can be on 'block' level
+    perf_scope = "op"  # can be on 'block' level
     if perf_scope == "block":
         os.environ["TT_LLK_PERF_BLOCK"] = "1"
 
