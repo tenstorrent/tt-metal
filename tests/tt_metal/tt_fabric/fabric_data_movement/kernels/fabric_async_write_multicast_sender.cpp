@@ -6,7 +6,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
-#include "../test_common.hpp"
+#include "tests/tt_metal/tt_fabric/fabric_data_movement/test_common.hpp"
 
 using namespace tt::tt_fabric;
 
