@@ -1,0 +1,21 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/docker-existing-dockerfile
+{
+	"name": "Metalium Dockerfile",
+	"build": {
+		"context": "..",
+		"dockerfile": "../dockerfile/Dockerfile",
+		"target": "dev",
+        "args": {
+          "UBUNTU_VERSION": "22.04"
+        }
+	},
+	"workspaceFolder": "/workspace",
+    "mounts": ["source=${localWorkspaceFolder},target=/workspace,type=bind"],
+	"runArgs": [
+		"--device=/dev/tenstorrent",
+		"-v", "/dev/hugepages-1G:/dev/hugepages-1G",
+		"-v", "/mnt/MLPerf:/mnt/MLPerf"
+
+	]
+}
