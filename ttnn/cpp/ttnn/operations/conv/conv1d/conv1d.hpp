@@ -39,6 +39,9 @@ Result conv1d(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
     const std::optional<const MemoryConfig>& memory_config = std::nullopt);
 
+// Conv1dOperation is a wrapper around Conv2dOperation to handle 1D convolutions.
+// It uses the same logic as Conv2dOperation but with 1D-specific parameters.
+// The input and weight tensors are reshaped to 4D tensors before invoking the Conv2dOperation.
 struct Conv1dOperation {
     static Result invoke(
         QueueId queue_id,

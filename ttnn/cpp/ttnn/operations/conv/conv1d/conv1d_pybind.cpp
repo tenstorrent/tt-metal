@@ -19,9 +19,29 @@ void py_bind_conv1d(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::conv1d,
-        // TODO better doc
         R"doc(
         Conv 1D
+        +-------------------+-------------------------------+-----------------------------+-------------+----------+
+        | Argument          | Description                   | Data type                   | Valid range | Required |
+        +===================+===============================+=============================+=============+==========+
+        | input_tensor      | Input activations tensor      | Tensor                      |             | Yes      |
+        | weight_tensor     | Weight tensor                 | Tensor                      |             | Yes      |
+        | device            | Device                        | Device                      |             | Yes      |
+        | in_channels       | Input channels                | uint32_t                    |             | Yes      |
+        | out_channels      | Output channels               | uint32_t                    |             | Yes      |
+        | batch_size        | Batch size                    | uint32_t                    |             | Yes      |
+        | input_length      | Input length                  | uint32_t                    |             | Yes      |
+        | kernel_size       | Kernel size                   | uint32_t                    |             | Yes      |
+        | stride            | Stride                        | uint32_t                    |             | Yes      |
+        | padding           | Padding                       | uint32_t                    |             | Yes      |
+        | dilation          | Dilation                      | uint32_t                    |             | No       |
+        | groups            | Groups                        | uint32_t                    |             | No       |
+        | bias_tensor       | Bias tensor                   | Tensor                      |             | No       |
+        | conv_config       | Conv config                   | Conv1dConfig                |             | No       |
+        | compute_config    | Compute config                | DeviceComputeKernelConfig   |             | No       |
+        | memory_config     | Memory config                 | MemoryConfig                |             | No       |
+        +-------------------+-------------------------------+-----------------------------+------------------------+
+
         )doc",
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::conv1d)& self,

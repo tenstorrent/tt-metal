@@ -55,15 +55,16 @@ Result conv1d(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config) {
     // reshape input tensor to 4D, if it is not already
-    // TODO check if Tensor& can be used
-    ttnn::Tensor input_tensor_4d = input_tensor;
-    if (input_tensor.get_logical_shape().rank() < 4) {
-        input_tensor_4d = ttnn::reshape(input_tensor_4d, Shape({batch_size, input_length, 1, in_channels}));
-    }
-    ttnn::Tensor weight_tensor_4d = weight_tensor;
-    if (weight_tensor.get_logical_shape().rank() < 4) {
-        weight_tensor_4d = ttnn::reshape(weight_tensor, Shape({out_channels, in_channels / groups, kernel_size, 1}));
-    }
+    const ttnn::Tensor& input_tensor_4d =
+        (input_tensor.get_logical_shape().rank() < 4)
+            ? ttnn::reshape(input_tensor, Shape({batch_size, input_length, 1, in_channels}))
+            : input_tensor;
+
+    // reshape input tensor to 4D, if it is not already
+    const ttnn::Tensor& weight_tensor_4d =
+        (weight_tensor.get_logical_shape().rank() < 4)
+            ? ttnn::reshape(weight_tensor, Shape({out_channels, in_channels / groups, kernel_size, 1}))
+            : weight_tensor;
     // padding for conv2d based on conv1d padding
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> conv2d_padding;
     if (std::holds_alternative<uint32_t>(padding)) {
