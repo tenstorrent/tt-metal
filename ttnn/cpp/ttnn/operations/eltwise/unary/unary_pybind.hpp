@@ -916,6 +916,73 @@ void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operatio
             py::arg("queue_id") = DefaultQueueId});
 }
 
+
+template <typename unary_operation_t>
+void bind_sigmoid_mode_appx(py::module& module, const unary_operation_t& operation) {
+    auto doc = fmt::format(
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
+
+        .. math::
+            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword Args:
+            mode (int, optional): Use mode to get better performance. Defaults to 4. Use 2 or 4 for different vector modes (2 -> Vector Mode C and 4 -> Vector Mode RC)".
+            fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `False`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - BFLOAT16, BFLOAT8_B
+                 - TILE
+                 - 2, 3, 4
+
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(tensor)
+        )doc",
+        ttnn::sigmoid.base_name(),
+        ttnn::sigmoid.python_fully_qualified_name());
+
+    bind_registered_operation(
+        module,
+        ttnn::sigmoid,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               const int mode,
+               const bool parameter,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<Tensor>& output_tensor,
+               const QueueId queue_id) -> ttnn::Tensor {
+                return self(queue_id, input_tensor, mode, parameter, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("mode") = 4,
+            py::arg("fast_and_approximate_mode") = false,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId});
+}
+
+
 template <typename unary_operation_t>
 void bind_unary_chain(py::module& module, const unary_operation_t& operation) {
     auto doc = fmt::format(
@@ -1792,6 +1859,8 @@ void py_module(py::module& module) {
     detail::bind_softplus(module, ttnn::softplus);
     detail::bind_tanh(module, ttnn::tanh);
     detail::bind_sigmoid_accurate(module, ttnn::sigmoid_accurate);
+    detail::bind_sigmoid_mode_appx(module, ttnn::sigmoid);
+
     detail::bind_unary_chain(module, ttnn::unary_chain);
     detail::bind_identity(module, ttnn::identity);
 
@@ -1886,12 +1955,6 @@ void py_module(py::module& module) {
         R"doc(Round the input tensor to `decimals` decimal places.)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc",
         R"doc(Not supported on Grayskull.)doc");
-    detail::bind_unary_operation_with_int_parameter(
-        module,
-        ttnn::sigmoid_mode,
-        "modes", "Modes to get better performance and accurate result.Use 2,4 for different vector modes (2 -> Vector Mode C and 4 -> Vector Mode RC)",
-        R"doc(Use the appropriate vector modes to optimize performance while maintaining result accuracy.)doc",
-        R"doc(BFLOAT16)doc");
     detail::bind_unary_composite_int(
         module,
         ttnn::polygamma,

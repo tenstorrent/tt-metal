@@ -44,6 +44,17 @@ struct ExecuteUnaryWithFastAndApproximateMode {
 };
 
 template <UnaryOpType unary_op_type>
+struct ExecuteUnaryWithVectorAndFastAndApproximateMode {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        const int mode = 4,
+        const bool parameter = false,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+template <UnaryOpType unary_op_type>
 struct ExecuteUnaryWithFloatParameter {
     static Tensor invoke(
         QueueId queue_id,
@@ -214,6 +225,12 @@ struct Tanh {
         ttnn::operations::unary::ExecuteUnaryWithFastAndApproximateMode<                        \
             ttnn::operations::unary::UnaryOpType::operation_type>>();
 
+#define REGISTER_UNARY_OPERATION_WITH_VECTOR_AND_FAST_AND_APPROXIMATE_MODE(operation_name, operation_type) \
+    constexpr auto operation_name = ttnn::register_operation_with_auto_launch_op<                          \
+        "ttnn::" #operation_name,                                                                          \
+        ttnn::operations::unary::ExecuteUnaryWithVectorAndFastAndApproximateMode<                          \
+            ttnn::operations::unary::UnaryOpType::operation_type>>();
+
 #define REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(operation_name, operation_type) \
     constexpr auto operation_name = ttnn::register_operation_with_auto_launch_op<     \
         "ttnn::" #operation_name,                                                     \
@@ -272,6 +289,9 @@ REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(gelu, GELU);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(rsqrt, RSQRT);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(sigmoid, SIGMOID);
 
+// Unaries with vector mode and fast and approximate mode
+REGISTER_UNARY_OPERATION_WITH_VECTOR_AND_FAST_AND_APPROXIMATE_MODE(sigmoid, SIGMOID);
+
 // Unaries with float parameter
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(elu, ELU);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(heaviside, HEAVISIDE);
@@ -288,7 +308,6 @@ REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(ne_unary, UNARY_NE);
 // Unaries with integer parameter
 REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(power, POWER, uint32_t);
 REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(round, ROUND, int32_t);
-REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(sigmoid_mode, SIGMOID_MODE, int32_t);
 
 // Other unaries
 constexpr auto identity =
