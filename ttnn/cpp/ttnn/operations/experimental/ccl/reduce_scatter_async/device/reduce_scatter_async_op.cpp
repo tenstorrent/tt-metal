@@ -133,6 +133,16 @@ std::vector<ttnn::TensorSpec> ReduceScatterAsync::compute_output_specs(const std
     return output_tensors;
 }
 
+tt::tt_metal::operation::MeshWorkloadWithCallbacks ReduceScatterAsync::create_mesh_workload(
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    return ccl::create_mesh_workload_from_programs(
+        tensor_coords, input_tensors, output_tensors, [&, this](const ttnn::MeshCoordinate& coord) {
+            return create_program_at(coord, input_tensors, output_tensors);
+        });
+};
+
 operation::ProgramWithCallbacks ReduceScatterAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     std::vector<IDevice*> devices;

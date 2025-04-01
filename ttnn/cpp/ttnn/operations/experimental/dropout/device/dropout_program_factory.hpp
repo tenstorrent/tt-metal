@@ -48,7 +48,7 @@ struct DropoutMeshWorkloadFactory {
     // `AdaptedCachedMeshWorkload`, as only a single `shared_variables_t` is needed.
     static cached_mesh_workload_t create_mesh_workload(
         const operation_attributes_t& operation_attributes,
-        const std::vector<ttnn::MeshCoordinate>& mesh_coords,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
 

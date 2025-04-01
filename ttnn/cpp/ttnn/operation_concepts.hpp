@@ -24,30 +24,9 @@ concept ProgramFactoryConcept = requires {
     typename T::cached_program_t;
 
     [](const auto& operation_attributes, const auto& tensor_args, auto& tensor_return_value) {
-        // Check that exactly one of create or create_at is implemented.
-        constexpr bool has_create = requires { T::create(operation_attributes, tensor_args, tensor_return_value); };
-        constexpr bool has_create_at = requires {
-            T::create_at(operation_attributes, std::declval<ttnn::MeshCoordinate>(), tensor_args, tensor_return_value);
-        };
-        static_assert(has_create != has_create_at, "Program factory must implement exactly one of create or create_at");
+        auto cached_program = T::create(operation_attributes, tensor_args, tensor_return_value);
 
-        if constexpr (has_create) {
-            auto cached_program = T::create(operation_attributes, tensor_args, tensor_return_value);
-            T::override_runtime_arguments(cached_program, operation_attributes, tensor_args, tensor_return_value);
-        } else if constexpr (has_create_at) {
-            auto cached_program = T::create_at(
-                operation_attributes, std::declval<ttnn::MeshCoordinate>(), tensor_args, tensor_return_value);
-            T::override_runtime_arguments_at(
-                cached_program,
-                operation_attributes,
-                std::declval<ttnn::MeshCoordinate>(),
-                tensor_args,
-                tensor_return_value);
-        } else {
-            static_assert(
-                tt::stl::concepts::always_false_v<T>,
-                "Program factory must implement exactly one of create or create_at");
-        }
+        T::override_runtime_arguments(cached_program, operation_attributes, tensor_args, tensor_return_value);
     };
 };
 
@@ -55,9 +34,12 @@ template <typename T>
 concept MeshWorkloadFactoryConcept = requires {
     typename T::cached_mesh_workload_t;
 
-    [](const auto& operation_attributes, const auto& tensor_args, auto& tensor_return_value) {
-        auto cached_workload = T::create_mesh_workload(
-            operation_attributes, std::vector<ttnn::MeshCoordinate>{}, tensor_args, tensor_return_value);
+    [](const auto& operation_attributes,
+       const ttnn::MeshCoordinateRangeSet& tensor_coords,
+       const auto& tensor_args,
+       auto& tensor_return_value) {
+        auto cached_workload =
+            T::create_mesh_workload(operation_attributes, tensor_coords, tensor_args, tensor_return_value);
 
         T::override_runtime_arguments(cached_workload, operation_attributes, tensor_args, tensor_return_value);
     };

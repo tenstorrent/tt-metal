@@ -23,7 +23,7 @@ void kernel_main() {
     // single-tile ublocks
     const uint32_t stick_size_bytes = H_size_bytes;
 
-#define stick_size_is_pow2 get_compile_time_arg_val(10) == 1
+    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(10) == 1;
 #if (stick_size_is_pow2)
     constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(11);
 #else
