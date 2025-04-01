@@ -1,5 +1,6 @@
 project(ttml)
 
+# TODO: remove glob
 set(SOURCE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd
     ${CMAKE_CURRENT_SOURCE_DIR}/core
@@ -180,18 +181,36 @@ endif()
 
 add_definitions(-DTOKENIZERS_DATA_PATH="${CMAKE_SOURCE_DIR}/data")
 
-set(TOKENIZER_URL "https://huggingface.co/togethercomputer/RedPajama-INCITE-Chat-3B-v1/resolve/main/tokenizer.json")
-set(TOKENIZER_FILE "${CMAKE_SOURCE_DIR}/data/gpt2-tokenizer.json")
+set(GPT2_TOKENIZER_URL
+    "https://huggingface.co/togethercomputer/RedPajama-INCITE-Chat-3B-v1/resolve/main/tokenizer.json"
+)
+set(GPT2_TOKENIZER_FILE "${CMAKE_SOURCE_DIR}/data/gpt2-tokenizer.json")
 
 # Check if the file already exists before downloading
-if(NOT EXISTS "${TOKENIZER_FILE}")
-    message(STATUS "Downloading Tokenizer text file to ${TOKENIZER_FILE}")
+if(NOT EXISTS "${GPT2_TOKENIZER_FILE}")
+    message(STATUS "Downloading Tokenizer text file to ${GPT2_TOKENIZER_FILE}")
     file(
         DOWNLOAD
-            ${TOKENIZER_URL}
-            ${TOKENIZER_FILE}
+            ${GPT2_TOKENIZER_URL}
+            ${GPT2_TOKENIZER_FILE}
         SHOW_PROGRESS
     )
 else()
-    message(STATUS "Tokenizer text file already exists at ${TOKENIZER_FILE}, skipping download.")
+    message(STATUS "Tokenizer text file already exists at ${GPT2_TOKENIZER_FILE}, skipping download.")
+endif()
+
+set(TINYLLAMA_TOKENIZER_URL "https://huggingface.co/TinyLlama/TinyLlama_v1.1/resolve/main/tokenizer.json")
+set(TINYLLAMA_TOKENIZER_FILE "${CMAKE_SOURCE_DIR}/data/tinyllama-tokenizer.json")
+
+# Check if the file already exists before downloading
+if(NOT EXISTS "${TINYLLAMA_TOKENIZER_FILE}")
+    message(STATUS "Downloading Tokenizer text file to ${TINYLLAMA_TOKENIZER_FILE}")
+    file(
+        DOWNLOAD
+            ${TINYLLAMA_TOKENIZER_URL}
+            ${TINYLLAMA_TOKENIZER_FILE}
+        SHOW_PROGRESS
+    )
+else()
+    message(STATUS "Tokenizer text file already exists at ${TINYLLAMA_TOKENIZER_FILE}, skipping download.")
 endif()

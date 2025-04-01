@@ -11,6 +11,7 @@
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
+#include "core/distributed_mapping.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/ttnn_all_includes.hpp"
 #include "core/xtensor_utils.hpp"
@@ -184,7 +185,6 @@ RotaryEmbeddingParams build_rope_params(uint32_t sequence_length, uint32_t head_
     }
     auto [sin_freqs, cos_freqs] = gen_freqs(head_dim, sequence_length, theta);
     auto trans_mat = gen_trans_mat();
-
     return {
         .cos_cache = cos_freqs,
         .sin_cache = sin_freqs,
