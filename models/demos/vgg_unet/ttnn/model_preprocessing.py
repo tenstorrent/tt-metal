@@ -6,29 +6,20 @@ import torch
 import ttnn
 from ttnn.model_preprocessing import infer_ttnn_module_args
 from ttnn.model_preprocessing import preprocess_model_parameters, fold_batch_norm2d_into_conv2d
-from models.experimental.functional_vgg_unet.reference.vgg_unet import UNetVGG19
+from models.demos.vgg_unet.reference.vgg_unet import UNetVGG19
 
 
 def custom_preprocessor(model, name):
     parameters = {}
 
     def process_conv_bn_pair(conv_layer, bn_layer, base_name):
-        # parameters[base_name] = {}
         conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(conv_layer, bn_layer)
-
         return ttnn.from_torch(conv_weight), ttnn.from_torch(torch.reshape(conv_bias, (1, 1, 1, -1)))
-        # parameters[base_name]["weight"] = ttnn.from_torch(conv_weight)
-        # parameters[base_name]["bias"] = ttnn.from_torch(torch.reshape(conv_bias, (1, 1, 1, -1)))
 
     def process_conv_param(conv_layer, base_name):
-        # parameters[base_name] = {}
         conv_weight, conv_bias = conv_layer.weight, conv_layer.bias
         conv_bias = torch.reshape(conv_bias, (1, 1, 1, -1))
-
         return ttnn.from_torch(conv_weight), ttnn.from_torch(conv_bias)
-
-        # parameters[base_name]["weight"] = ttnn.from_torch(conv_weight)
-        # parameters[base_name]["bias"] = ttnn.from_torch(conv_bias)
 
     # Recursive function to process all layers
     def process_layers(layers, prefix=""):

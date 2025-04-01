@@ -6,11 +6,11 @@ import torch
 import ttnn
 import pytest
 from models.utility_functions import run_for_wormhole_b0
-from models.experimental.functional_vgg_unet.tests.vgg_unet_performant import (
+from models.demos.vgg_unet.tests.vgg_unet_performant import (
     run_vgg_unet_trace_inference,
     run_vgg_unet_inference,
 )
-from models.experimental.functional_vgg_unet.tests.vgg_unet_e2e_performant import VggUnetTrace2CQ
+from models.demos.vgg_unet.tests.vgg_unet_e2e_performant import VggUnetTrace2CQ
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)

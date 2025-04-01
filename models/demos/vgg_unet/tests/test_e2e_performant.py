@@ -9,7 +9,7 @@ import torch
 from loguru import logger
 
 from models.utility_functions import run_for_wormhole_b0
-from models.experimental.functional_vgg_unet.tests.vgg_unet_e2e_performant import VggUnetTrace2CQ
+from models.demos.vgg_unet.tests.vgg_unet_e2e_performant import VggUnetTrace2CQ
 
 
 @run_for_wormhole_b0()
