@@ -857,17 +857,20 @@ def test_each_step_post_e2e_optim(mesh_device, use_program_cache, reset_seeds, n
         # cond_z_1BNI = ttnn.typecast(cond_z_1BNI, dtype=ttnn.float32)
         # uncond_z_1BNI = ttnn.typecast(uncond_z_1BNI, dtype=ttnn.float32)
         # pred = uncond_z_1BNI + tt_cfg_scale * (cond_z_1BNI - uncond_z_1BNI)
-        pred = uncond_z_1BNI + cfg_scale * (cond_z_1BNI - uncond_z_1BNI)
+        # pred = uncond_z_1BNI + cfg_scale * (cond_z_1BNI - uncond_z_1BNI)
 
-        # z_1BNI = ttnn.typecast(z_1BNI, dtype=ttnn.float32)
+        # # z_1BNI = ttnn.typecast(z_1BNI, dtype=ttnn.float32)
 
-        # z = z_1BNI + tt_dsigma * pred
-        z = z_1BNI + dsigma * pred
+        # # z = z_1BNI + tt_dsigma * pred
+        # z = z_1BNI + dsigma * pred
 
-        torch_output = model.reverse_preprocess(z, T, H, W)
-        torch_pred = model.reverse_preprocess(pred, T, H, W)
+        # torch_output = model.reverse_preprocess(z, T, H, W)
+        # torch_pred = model.reverse_preprocess(pred, T, H, W)
         torch_cond = model.reverse_preprocess(cond_z_1BNI, T, H, W)
         torch_uncond = model.reverse_preprocess(uncond_z_1BNI, T, H, W)
+
+        torch_pred = torch_uncond + cfg_scale * (torch_cond - torch_uncond)
+        torch_output = z_BCTHW + dsigma * torch_pred
 
         # torch_output = model.reverse_preprocess(z, T, H, W, N)
         # torch_pred = model.reverse_preprocess(pred, T, H, W, N)
