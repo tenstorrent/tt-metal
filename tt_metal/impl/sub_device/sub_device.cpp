@@ -2,15 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <array>
-#include <cstdint>
-
 #include <assert.hpp>
 #include <core_coord.hpp>
 #include <sub_device.hpp>
-#include "llrt/hal.hpp"
 #include <tt_stl/span.hpp>
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <utility>
+
+#include "hal_types.hpp"
+#include "llrt/hal.hpp"
 
 namespace tt::tt_metal {
 

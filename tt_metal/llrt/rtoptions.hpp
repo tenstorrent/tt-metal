@@ -11,12 +11,18 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
+#include <map>
+#include <set>
 #include <string>
 #include <unordered_set>
 #include <vector>
 
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"  // For DispatchCoreConfig
+#include <umd/device/types/xy_pair.h>
+
+enum class CoreType;
 
 namespace tt {
 

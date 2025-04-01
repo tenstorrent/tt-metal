@@ -3,16 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
+
 #include <assert.hpp>
-#include "llrt/hal.hpp"
-#include "allocator_algorithm.hpp"
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
+#include <functional>
 #include <optional>
+#include <string>
+#include <unordered_map>
 #include <vector>
-#include <array>
+
+#include "allocator_algorithm.hpp"
 
 inline size_t intlg2(size_t n) {
     // std::log2() is slow

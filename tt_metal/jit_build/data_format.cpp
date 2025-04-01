@@ -4,16 +4,14 @@
 
 #include "data_format.hpp"
 
-#include <iostream>       // for basic_ostream
-#include <map>            // for operator!=
-#include <set>            // for set
-#include <string>         // for char_traits
-#include <unordered_map>  // for unordered_map
-
-#include "fmt/base.h"                      // for format_string
 #include <assert.hpp>      // for tt_throw, TT_FATAL
 #include <base_types.hpp>  // for UnpackToDestMode
 #include <circular_buffer_constants.h>
+#include <functional>
+#include <iostream>       // for basic_ostream
+#include <set>            // for set
+#include <unordered_map>  // for unordered_map
+#include <utility>
 
 namespace tt {
 

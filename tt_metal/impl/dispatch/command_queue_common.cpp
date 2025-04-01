@@ -3,11 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/command_queue_common.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
 #include <tt-metalium/dispatch_mem_map.hpp>
-#include "dispatch_core_manager.hpp"
+#include <tt-metalium/dispatch_settings.hpp>
 
+#include "dispatch_core_manager.hpp"
 #include "tt_cluster.hpp"
+
+enum class CoreType;
 
 namespace tt::tt_metal {
 

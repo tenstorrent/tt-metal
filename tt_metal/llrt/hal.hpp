@@ -9,14 +9,15 @@
 // level APIs
 //
 
-#include <cstdint>
-#include <functional>
-#include <variant>
-#include <vector>
-#include <memory>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/utils.hpp>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <type_traits>
+#include <variant>
+#include <vector>
 
 enum class CoreType;
 

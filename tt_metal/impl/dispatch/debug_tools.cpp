@@ -4,8 +4,32 @@
 
 #include "debug_tools.hpp"
 
+#include <stdint.h>
+#include <stdlib.h>
+#include <iomanip>
+#include <iostream>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "assert.hpp"
+#include "command_queue_common.hpp"
+#include "dispatch_settings.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "host_api.hpp"
+#include "logger.hpp"
+#include "system_memory_cq_interface.hpp"
+#include "system_memory_manager.hpp"
 #include "tt_cluster.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include "utils.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace internal {
 

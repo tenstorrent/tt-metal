@@ -8,12 +8,33 @@
 #include <device.hpp>
 #include <kernel.hpp>
 #include <program_impl.hpp>
+#include <stdint.h>
 #include <vector_aligned.hpp>
 #include <worker_config_buffer.hpp>
+#include <array>
+#include <memory>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include "core_coord.hpp"
+#include "dev_msgs.h"
+#include "dispatch_settings.hpp"
+#include "kernel_types.hpp"
+#include "sub_device_types.hpp"
+
+enum class CoreType;
 
 namespace tt {
 
 namespace tt_metal {
+class IDevice;
+class Program;
+class Semaphore;
+class SystemMemoryManager;
+enum class ProgramBinaryStatus : uint8_t;
+struct KernelGroup;
+struct ProgramCommandSequence;
 
 namespace program_dispatch {
 

@@ -4,12 +4,18 @@
 
 #include "dispatch_core_manager.hpp"
 
-#include "core_descriptor.hpp"
-#include "core_coord.hpp"
+#include <algorithm>
+#include <functional>
 #include <list>
-#include "dispatch_core_common.hpp"
+#include <unordered_set>
 
+#include "assert.hpp"
+#include "core_coord.hpp"
+#include "core_descriptor.hpp"
+#include "dispatch_core_common.hpp"
+#include "logger.hpp"
 #include "tt_cluster.hpp"
+#include <umd/device/types/xy_pair.h>
 
 namespace tt::tt_metal {
 

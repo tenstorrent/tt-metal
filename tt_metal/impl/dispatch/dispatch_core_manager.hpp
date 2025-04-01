@@ -4,13 +4,19 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <list>
+#include <optional>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
-#include "core_descriptor.hpp"
 #include "core_coord.hpp"
+#include "core_descriptor.hpp"
 #include "dispatch_core_common.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt::tt_metal {
 

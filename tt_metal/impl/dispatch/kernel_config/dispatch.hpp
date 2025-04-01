@@ -4,10 +4,18 @@
 
 #pragma once
 
-#include "fd_kernel.hpp"
-#include "tt_metal/impl/dispatch/topology.hpp"
+#include <stdint.h>
+#include <optional>
+
+#include "assert.hpp"
 #include "core_coord.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
+#include "fd_kernel.hpp"
 #include "mesh_graph.hpp"
+#include "system_memory_manager.hpp"
+#include "tt_cluster.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
+#include <umd/device/tt_xy_pair.h>
 
 typedef struct dispatch_static_config {
     std::optional<uint32_t> dispatch_cb_base;  // 0

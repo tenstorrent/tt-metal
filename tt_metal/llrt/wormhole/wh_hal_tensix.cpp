@@ -2,22 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <dev_msgs.h>
 #include <algorithm>
-#include <cstddef>
 #include <cstdint>
-#include <numeric>
+#include <cstdlib>
+#include <string>
 #include <vector>
 
+#include "assert.hpp"
 #include "core_config.h"
 #include "dev_mem_map.h"
-#include <dev_msgs.h>
-#include "noc/noc_parameters.h"
-
+#include "hal_types.hpp"
 #include "llrt/hal.hpp"
-#include "hal_asserts.hpp"
+#include "noc/noc_parameters.h"
+#include <umd/device/tt_core_coordinates.h>
 #include "wormhole/wh_hal.hpp"
-
-#include "umd/device/tt_soc_descriptor.h"  // CoreType
 
 #define GET_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_MAILBOX_BASE)->x))
 

@@ -4,17 +4,25 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <tt_stl/aligned_allocator.hpp>
+#include <algorithm>
 #include <bit>
 #include <cstddef>
+#include <tuple>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
-#include "env_lib.hpp"
 #include "command_queue_interface.hpp"
-#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include "memcpy.hpp"
-#include <tt_stl/aligned_allocator.hpp>
+#include "env_lib.hpp"
+#include "hal_types.hpp"
 #include "llrt/hal.hpp"
+#include "memcpy.hpp"
+#include "span.hpp"
 #include "tt_align.hpp"
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include "vector_aligned.hpp"
 
 namespace tt::tt_metal {
 

@@ -2,13 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <hal.hpp>
+#include <tt_backend_api_types.hpp>
+#include <umd/device/types/arch.h>
 #include <cstdint>
 #include <string>
 
-#include <hal.hpp>
+#include "hal_types.hpp"
 #include "llrt/hal.hpp"
-#include <tt_backend_api_types.hpp>
-#include <umd/device/types/arch.h>
 
 using tt::tt_metal::HalL1MemAddrType;
 using tt::tt_metal::HalMemType;

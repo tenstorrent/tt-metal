@@ -2,12 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <string>
-#include <fstream>
-
-#include <host_api.hpp>
 #include <device.hpp>
+#include <host_api.hpp>
+#include <fstream>
+#include <string>
+
 #include "command_queue_interface.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+class SystemMemoryManager;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace internal {
 

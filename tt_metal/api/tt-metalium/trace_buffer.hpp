@@ -4,12 +4,14 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "sub_device_types.hpp"
 

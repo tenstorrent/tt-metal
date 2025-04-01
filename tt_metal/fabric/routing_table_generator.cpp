@@ -4,8 +4,16 @@
 
 #include "routing_table_generator.hpp"
 
-#include <queue>
+#include <magic_enum/magic_enum.hpp>
+#include <algorithm>
+#include <limits>
 #include <memory>
+#include <ostream>
+#include <queue>
+#include <unordered_map>
+
+#include "assert.hpp"
+#include "logger.hpp"
 
 namespace tt::tt_fabric {
 RoutingTableGenerator::RoutingTableGenerator(const std::string& mesh_graph_desc_yaml_file) {

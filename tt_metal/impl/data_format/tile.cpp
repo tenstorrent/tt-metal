@@ -3,8 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/tile.hpp>
+#include <algorithm>
+#include <stdexcept>
 
+#include "assert.hpp"
+#include "hal_types.hpp"
 #include "llrt/hal.hpp"
+#include "math.hpp"
+#include "tt_backend_api_types.hpp"
 
 namespace tt::tt_metal {
 

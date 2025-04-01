@@ -4,17 +4,24 @@
 
 #include "noc_logging.hpp"
 
+#include <stdint.h>
+#include <array>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
 // #include <iomanip>
 #include <set>
+#include <string>
 
+#include "assert.hpp"
+#include "core_coord.hpp"
 #include "debug_helpers.hpp"
 #include "hostdevcommon/dprint_common.h"
 #include "llrt.hpp"
-#include "rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "logger.hpp"
+#include "rtoptions.hpp"
+#include <umd/device/tt_soc_descriptor.h>
+#include "utils.hpp"
 
 using namespace tt::tt_metal;
 

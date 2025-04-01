@@ -2,34 +2,38 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <ctype.h>
-#include <iostream>
-#include <vector>
-#include <stdexcept>
-#include <string>
-#include <unordered_set>
 #include <assert.hpp>
+#include <circular_buffer_constants.h>  // For NUM_CIRCULAR_BUFFERS
+#include <core_coord.hpp>
+#include <ctype.h>
+#include <dev_msgs.h>
+#include <fmt/base.h>
 #include <logger.hpp>
 #include <metal_soc_descriptor.h>
-#include <dev_msgs.h>
-
-#include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
-#include <fmt/base.h>
-#include "llrt.hpp"
+#include <rtoptions.hpp>
 #include <tt_cluster.hpp>
+#include <algorithm>
+#include <cstddef>
+#include <functional>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
-#include <core_coord.hpp>
-#include <circular_buffer_constants.h>  // For NUM_CIRCULAR_BUFFERS
+#include "core_descriptor.hpp"
+#include "debug_helpers.hpp"
+#include "dispatch_core_common.hpp"
+#include "hal_types.hpp"
 #include "hw/inc/debug/ring_buffer.h"
 #include "impl/dispatch/dispatch_core_manager.hpp"
-#include <rtoptions.hpp>
-
-#include "watcher_device_reader.hpp"
-#include "debug_helpers.hpp"
-
+#include "llrt.hpp"
 #include "llrt/hal.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/arch.h>
+#include <umd/device/types/xy_pair.h>
+#include "watcher_device_reader.hpp"
 
 using namespace tt::tt_metal;
 using std::string;

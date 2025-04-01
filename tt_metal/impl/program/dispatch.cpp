@@ -4,24 +4,71 @@
 
 #include "tt_metal/impl/program/dispatch.hpp"
 
-#include <command_queue.hpp>
-#include <tt-metalium/command_queue_interface.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <mesh_command_queue.hpp>
+#include <magic_enum/magic_enum.hpp>
 #include <mesh_workload.hpp>
-#include <tt_align.hpp>
+#include <stddef.h>
+#include <string.h>
 #include <sub_device_types.hpp>
+#include <tracy/Tracy.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt_align.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <functional>
+#include <initializer_list>
+#include <iterator>
+#include <map>
+#include <optional>
+#include <set>
+#include <string_view>
+#include <tuple>
+#include <type_traits>
+#include <unordered_set>
+#include <variant>
 #include <vector>
 
+#include "assert.hpp"
+#include "buffer.hpp"
+#include "circular_buffer.hpp"
+#include "circular_buffer_constants.h"
 #include "core_coord.hpp"
+#include "device.hpp"
+#include "dispatch/device_command.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
+#include "dispatch/kernels/cq_commands.hpp"
+#include "dispatch_core_common.hpp"
+#include "dispatch_mem_map.hpp"
+#include "hal_types.hpp"
+#include "kernel.hpp"
 #include "llrt/hal.hpp"
+#include "math.hpp"
+#include "program_device_map.hpp"
+#include "program_impl.hpp"
+#include "runtime_args_data.hpp"
+#include "semaphore.hpp"
+#include "span.hpp"
+#include "strong_type.hpp"
+#include "system_memory_manager.hpp"
+#include "tt_memory.h"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
-#include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/xy_pair.h>
+#include "vector_aligned.hpp"
+#include "worker_config_buffer.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum NOC : uint8_t;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace {
 CoreCoord get_sub_device_worker_origin(

@@ -2,12 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <stdlib.h>
 #include <utils.hpp>
+#include <filesystem>
+#include <iostream>
 #include <mutex>
-#include "tracy/Tracy.hpp"
+
 #include "rtoptions.hpp"
 
-#include <filesystem>
 namespace fs = std::filesystem;
 
 namespace tt {

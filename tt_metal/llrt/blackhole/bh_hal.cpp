@@ -2,19 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <dev_msgs.h>
 #include <cstddef>
 #include <cstdint>
 #include <numeric>
+#include <vector>
 
+#include "blackhole/bh_hal.hpp"
 #include "core_config.h"  // ProgrammableCoreType
 #include "dev_mem_map.h"
-#include <dev_msgs.h>
-#include "noc/noc_parameters.h"
-#include "noc/noc_overlay_parameters.h"
-#include "tensix.h"
-
+#include "hal_types.hpp"
 #include "llrt/hal.hpp"
-#include "blackhole/bh_hal.hpp"
+#include "noc/noc_overlay_parameters.h"
+#include "noc/noc_parameters.h"
+#include "tensix.h"
 
 // Reserved DRAM addresses
 // Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been

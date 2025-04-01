@@ -4,6 +4,15 @@
 
 #include "device_command.hpp"
 
+#include <cstring>
+
+#include "aligned_allocator.hpp"
+#include "assert.hpp"
+#include "dispatch/kernels/cq_commands.hpp"
+#include "dispatch/memcpy.hpp"
+#include "dispatch_settings.hpp"
+#include "tt_align.hpp"
+
 namespace tt::tt_metal {
 
 template <bool hugepage_write>

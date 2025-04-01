@@ -4,17 +4,18 @@
 
 #define COMPILE_FOR_ERISC
 
+#include <dev_msgs.h>
+#include <cstddef>
 #include <cstdint>
+#include <vector>
 
 #include "core_config.h"
-#include <dev_msgs.h>
 #include "eth_l1_address_map.h"
-
-#include "llrt/hal.hpp"
 #include "hal_asserts.hpp"
+#include "hal_types.hpp"
+#include "llrt/hal.hpp"
+#include <umd/device/tt_core_coordinates.h>
 #include "wormhole/wh_hal.hpp"
-
-#include "umd/device/tt_soc_descriptor.h"  // CoreType
 
 #define GET_ETH_MAILBOX_ADDRESS_HOST(x) \
     ((uint64_t)&(((mailboxes_t*)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))

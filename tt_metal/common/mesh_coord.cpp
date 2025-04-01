@@ -2,14 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <cstdint>
-#include <optional>
-
 #include <assert.hpp>
+#include <boost/container/vector.hpp>
+#include <boost/move/utility_core.hpp>
 #include <mesh_coord.hpp>
-#include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <initializer_list>
+#include <numeric>
+#include <optional>
+#include <ostream>
+#include <utility>
+#include <vector>
+
+#include "shape_base.hpp"
+#include "small_vector.hpp"
 
 namespace tt::tt_metal::distributed {
 namespace {

@@ -2,9 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "dispatch_core_manager.hpp"
 #include "dispatch_core_common.hpp"
+#include "dispatch_core_manager.hpp"
 #include "get_platform_architecture.hpp"
+#include <umd/device/types/arch.h>
+
+enum class CoreType;
 
 namespace tt::tt_metal {
 

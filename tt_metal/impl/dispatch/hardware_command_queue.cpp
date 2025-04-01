@@ -5,27 +5,47 @@
 #include "hardware_command_queue.hpp"
 
 #include <device.hpp>
-#include "dprint_server.hpp"
 #include <event.hpp>
-#include <tt_stl/overloaded.hpp>
-#include <trace_buffer.hpp>
-#include <tt-metalium/command_queue_interface.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
-
-#include "tt_cluster.hpp"
-
-#include "work_executor.hpp"
-
 // Because we are a Friend of Program, accessing Program::get_program_transfer_info() and Program::get_kernels_buffer()
 // MUST REMOVE
 #include <program_impl.hpp>
+#include <trace_buffer.hpp>
+#include <tracy/Tracy.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
+#include <tt_stl/overloaded.hpp>
+#include <algorithm>
+#include <array>
+#include <type_traits>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
+#include "assert.hpp"
+#include "buffers/dispatch.hpp"
+#include "dispatch/device_command.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
+#include "dispatch/host_runtime_commands.hpp"
+#include "dprint_server.hpp"
+#include "event/dispatch.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "logger.hpp"
+#include "program_device_map.hpp"
+#include "rtoptions.hpp"
+#include "strong_type.hpp"
+#include "system_memory_manager.hpp"
+#include "tt_cluster.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include <umd/device/tt_xy_pair.h>
+#include "work_executor.hpp"
 
-#include "rtoptions.hpp"
+namespace tt {
+namespace tt_metal {
+enum NOC : uint8_t;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 namespace {

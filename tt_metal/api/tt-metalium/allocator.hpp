@@ -5,9 +5,13 @@
 #pragma once
 
 #include <cstdint>
+#include <fstream>
 #include <functional>
-#include <vector>
+#include <memory>
+#include <optional>
+#include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "allocator_types.hpp"
 #include "assert.hpp"
@@ -18,11 +22,10 @@ namespace tt {
 
 namespace tt_metal {
 
+class BankManager;
 class Buffer;
-
 // Fwd declares
 enum class BufferType;
-class BankManager;
 
 class Allocator {
 public:

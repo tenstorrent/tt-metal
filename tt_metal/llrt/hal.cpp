@@ -4,10 +4,12 @@
 
 #include "llrt/hal.hpp"
 
-#include <tt_backend_api_types.hpp>
 #include <assert.hpp>
 
 #include "get_platform_architecture.hpp"
+#include "hal_types.hpp"
+#include <umd/device/types/arch.h>
+
 namespace tt {
 
 namespace tt_metal {

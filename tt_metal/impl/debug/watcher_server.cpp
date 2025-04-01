@@ -4,21 +4,43 @@
 
 #include "watcher_server.hpp"
 
-#include <unistd.h>
-
-#include <chrono>
-#include <ctime>
-#include <filesystem>
-#include <mutex>
-#include <thread>
-
-#include "llrt/hal.hpp"
 #include <dev_msgs.h>
-#include "llrt.hpp"
 #include <rtoptions.hpp>
+#include <unistd.h>
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <filesystem>
+#include <functional>
+#include <initializer_list>
+#include <map>
+#include <mutex>
+#include <set>
+#include <stdexcept>
+#include <string_view>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
+#include "assert.hpp"
+#include "core_coord.hpp"
 #include "debug/ring_buffer.h"
-#include "watcher_device_reader.hpp"
 #include "debug_helpers.hpp"
+#include "hal_types.hpp"
+#include "llrt.hpp"
+#include "llrt/hal.hpp"
+#include "logger.hpp"
+#include "metal_soc_descriptor.h"
+#include "span.hpp"
+#include "tt_cluster.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/xy_pair.h>
+#include "utils.hpp"
+#include "watcher_device_reader.hpp"
 
 using namespace tt::tt_metal;
 

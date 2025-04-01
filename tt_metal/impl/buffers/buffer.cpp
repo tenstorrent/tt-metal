@@ -2,28 +2,31 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <buffer.hpp>
-
-#include <assert.hpp>
-#include <math.hpp>
-#include <tt_metal.hpp>
 #include <allocator.hpp>
+#include <assert.hpp>
+#include <buffer.hpp>
+#include <buffer_constants.hpp>
 #include <device.hpp>
 #include <graph_tracking.hpp>
+#include <magic_enum/magic_enum.hpp>
+#include <math.hpp>
+#include <nlohmann/json.hpp>
+#include <tt_stl/reflection.hpp>
 #include <algorithm>
 #include <atomic>
+#include <map>
 #include <mutex>
+#include <string>
+#include <string_view>
 #include <utility>
-#include <buffer_constants.hpp>
-#include "llrt/hal.hpp"
-#include "umd/device/tt_soc_descriptor.h"
+
 #include "fmt/base.h"
-#include <tt_stl/reflection.hpp>
 #include "lightmetal/host_api_capture_helpers.hpp"
-
 #include "rtoptions.hpp"
-
+#include "strong_type.hpp"
 #include "tracy/Tracy.hpp"
+#include "tt_align.hpp"
+#include "util.hpp"
 
 namespace tt::tt_metal {
 namespace {
