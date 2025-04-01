@@ -71,7 +71,7 @@ void Hal::initialize_wh() {
             return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
         } else if ((addr & MEM_NCRISC_IRAM_BASE) == MEM_NCRISC_IRAM_BASE) {
             // Move addresses in the NCRISC memory range to l1 (copied by kernel)
-            return (addr & ~MEM_NCRISC_IRAM_BASE) + MEM_NCRISC_INIT_IRAM_L1_BASE;
+            return (addr & ~MEM_NCRISC_IRAM_BASE) + MEM_NCRISC_INIT_IRAM_L1_BASE_SCRATCH;
         }
 
         // No relocation needed
