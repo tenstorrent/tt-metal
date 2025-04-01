@@ -14,7 +14,7 @@ from models.demos.yolov4.tests.yolov4_perfomant_webdemo import Yolov4Trace2CQ
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params", [{"l1_small_size": 40960, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype",
