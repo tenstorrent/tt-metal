@@ -372,11 +372,11 @@ def run_mamba_demo(
     )
     logger.info(f"Time to first token: {(1e3 * time_to_first_token):.2f} ms")
 
-    chunk_size_to_prefill_targets_tok_per_s = {32: 135.0, 128: 430.0}  # perf is different for different chunk sizes
+    chunk_size_to_prefill_targets_tok_per_s = {32: 135.0, 128: 379.0}  # perf is different for different chunk sizes
     targets = {
         "prefill_t/s": chunk_size_to_prefill_targets_tok_per_s[prefill_chunk_size],
-        "decode_t/s": 367.6,
-        "decode_t/s/u": 11.1,
+        "decode_t/s": 228.9,
+        "decode_t/s/u": 7.2,
     }
     warmup_iterations = {"inference_prefill": 0, "inference_decode": 0}
 
