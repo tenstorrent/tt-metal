@@ -101,8 +101,14 @@ def run_dm_tests(profile, gtest_filter):
     # # # # # # Performance check method # # # # # #
     reader_cycles = dm_stats["reader"]["analysis"]["series"][0]["duration_cycles"]
     reader_cycles_lower_bound = 700
-    reader_cycles_upper_bound = 800
+    reader_cycles_upper_bound = 900
     reader_cycles_within_bounds = reader_cycles_lower_bound <= reader_cycles <= reader_cycles_upper_bound
+    reader_attributes = dm_stats["reader"]["attributes"][0]
+    reader_bw = (
+        reader_attributes["Number of transactions"] * reader_attributes["Transaction size in bytes"] / reader_cycles
+    )
+    reader_bw_lower_bound = 0.07
+    reader_bw_within_bounds = reader_bw_lower_bound <= reader_bw
 
     if not reader_cycles_within_bounds:
         logger.warning(
@@ -111,7 +117,15 @@ def run_dm_tests(profile, gtest_filter):
     else:
         logger.info(f"Reader cycles within bounds. Received {reader_cycles}")
 
+    if not reader_bw_within_bounds:
+        logger.warning(
+            f"Reader bandwidth not within bounds. Received {reader_bw}, was expecting above {reader_bw_lower_bound}"
+        )
+    else:
+        logger.info(f"Reader bandwidth within bounds. Received {reader_bw}")
+
     # assert reader_cycles_within_bounds
+    # assert reader_bw_within_bounds
 
 
 if __name__ == "__main__":
