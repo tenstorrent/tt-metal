@@ -104,7 +104,6 @@ template struct ExecuteUnary<UnaryOpType::NEZ>;
 template struct ExecuteUnary<UnaryOpType::RECIP>;
 template struct ExecuteUnary<UnaryOpType::RELU>;
 template struct ExecuteUnary<UnaryOpType::RELU6>;
-template struct ExecuteUnary<UnaryOpType::SIGMOID>;
 template struct ExecuteUnary<UnaryOpType::SIGN>;
 template struct ExecuteUnary<UnaryOpType::SIGNBIT>;
 template struct ExecuteUnary<UnaryOpType::SILU>;
@@ -112,7 +111,7 @@ template struct ExecuteUnary<UnaryOpType::SIN>;
 template struct ExecuteUnary<UnaryOpType::SQRT>;
 template struct ExecuteUnary<UnaryOpType::SQUARE>;
 template struct ExecuteUnary<UnaryOpType::TAN>;
-template struct ExecuteUnary<UnaryOpType::SIGMOID, UnaryOpType::LOG>;
+template struct ExecuteUnary<UnaryOpType::TANH>;
 template struct ExecuteUnary<UnaryOpType::TILED_PROD>;
 template struct ExecuteUnary<UnaryOpType::BITWISE_NOT>;
 
@@ -136,6 +135,7 @@ template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::ERF>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::ERFC>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::GELU>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::RSQRT>;
+template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::SIGMOID>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFloatParameter<unary_op_type>::invoke(
@@ -177,6 +177,20 @@ Tensor Sigmoid_accurate::invoke(
          UnaryWithParam(UnaryOpType::EXP, 1.0f),
          UnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, 1.0f),
          UnaryWithParam(UnaryOpType::RECIP)},
+        memory_config,
+        optional_output_tensor);
+}
+
+template struct ExecuteUnary<UnaryOpType::SIGMOID, UnaryOpType::LOG>;
+Tensor LogSigmoid::invoke(
+    QueueId queue_id,
+    const Tensor& input,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return detail::unary_impl(
+        queue_id,
+        input,
+        {UnaryWithParam(UnaryOpType::SIGMOID, 0), UnaryWithParam(UnaryOpType::LOG)},
         memory_config,
         optional_output_tensor);
 }
