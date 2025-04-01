@@ -11,13 +11,13 @@
 #include <string>
 #include <vector>
 
+#include <hostdevcommon/common_values.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/fabric_types.hpp>
-#include <tt-metalium/hostdevcommon/common_values.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
 #include <tt-metalium/profiler_types.hpp>
 #include <umd/device/tt_core_coordinates.h>
