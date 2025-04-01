@@ -1393,29 +1393,40 @@ class ModelArgs:
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
         if self.dummy_weights:
-            reference_model = Transformer(self)
-            state_dict = reference_model.state_dict()
-            state_dict_prefix = self.get_state_dict_prefix("", None)
-            state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
+            if self.checkpoint_type == CheckpointType.HuggingFace:
+                from transformers import AutoConfig, AutoModelForCausalLM
+
+                config = AutoConfig.from_pretrained(self.CKPT_DIR)
+                config.num_layers = self.n_layers
+                config.num_hidden_layers = self.n_layers
+                model = AutoModelForCausalLM.from_config(config)
+                state_dict = model.state_dict()
+            else:
+                reference_model = Transformer(self)
+                state_dict = reference_model.state_dict()
+                state_dict_prefix = self.get_state_dict_prefix("", None)
+                state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
         elif self.checkpoint_type == CheckpointType.Meta:
             state_dict = load_meta_state_dict(self.CKPT_DIR, self.n_layers)
         else:
             assert self.checkpoint_type == CheckpointType.HuggingFace
             if self.from_hf_url:
-                from transformers import AutoModelForCausalLM
+                from transformers import AutoConfig, AutoModelForCausalLM
 
                 model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
                 state_dict = model.state_dict()
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
+
+        if self.checkpoint_type == CheckpointType.HuggingFace:
             state_dict = standardize_hf_keys(state_dict)
             state_dict = convert_hf_to_meta(state_dict, self.head_dim)
+
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
         for k in keys_dict:
             if any([r in k for r in remv]):
                 state_dict.pop(k)
-
         return state_dict
 
     def create_dram_sharded_mem_config(self, k, n):
@@ -1787,6 +1798,7 @@ class ModelArgs:
             if self.dummy_weights and not load_checkpoint:
                 config = AutoConfig.from_pretrained(self.CKPT_DIR)
                 config.num_layers = self.n_layers
+                config.num_hidden_layers = self.n_layers
                 model = AutoModelForCausalLM.from_config(config)
             else:
                 model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
@@ -2051,6 +2063,29 @@ class HfModelWrapper:
 
     def eval(self):
         self.model.eval()
+
+    @property
+    def cache_k(self):
+        [(k, v)] = self.past_key_values.to_legacy_cache()
+        hf_k = k.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
+        batch_size, seq_len, n_heads, head_dim = hf_k.shape
+
+        meta_k = torch.zeros_like(hf_k)
+        for b in range(batch_size):
+            for s in range(seq_len):
+                # Flatten just heads and head_dim
+                flat = hf_k[b, s].flatten()
+                # Apply reverse_permute
+                transformed = reverse_permute(flat.unsqueeze(-1), n_heads, flat.shape[0], 1).squeeze(-1)
+                # Restore heads and head_dim shape
+                meta_k[b, s] = transformed.reshape(n_heads, head_dim)
+
+        return meta_k
+
+    @property
+    def cache_v(self):
+        [(k, v)] = self.past_key_values.to_legacy_cache()
+        return v.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
 
 def num_to_corerange(x):
