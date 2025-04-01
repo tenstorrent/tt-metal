@@ -56,8 +56,7 @@ void append_fabric_connection_rt_args(
 enum BF8_DIM3_TYPE {
     NONE,
     LLAMA_8B_N300,
-    T3K_FALCON40_8192,
-    T3K_FALCON40_32768,
+    BF8_DIM3_REMAINDER_32,
 };
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32_any(
@@ -161,11 +160,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     if (dim == 3 && num_pages_per_packet == 4) {
         if (input_tensor_shape[2] == 32 && input_tensor_shape[3] == 128256 / 2) {
             bf8_dim3_type = LLAMA_8B_N300;
-        } else if (input_tensor_shape[2] % 32 == 0 && input_tensor_shape[3] == 8192 / 8) {
-            bf8_dim3_type = T3K_FALCON40_8192;
-        } else if (input_tensor_shape[2] % 32 == 0 && input_tensor_shape[3] == 32768 / 8) {
-            bf8_dim3_type = T3K_FALCON40_32768;
-        } else {
+        } else if (input_tensor_shape[2] % 32 == 0 && input_tensor_shape[3] % 48 == 32) {
+            bf8_dim3_type = BF8_DIM3_REMAINDER_32;
         }
     }
 

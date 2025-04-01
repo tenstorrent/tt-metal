@@ -10,12 +10,7 @@
 #include <cstdint>
 #include <utility>
 
-enum BF8_DIM3_TYPE {
-    NONE,
-    LLAMA_8B_N300,
-    T3K_FALCON40_8192,
-    T3K_FALCON40_32768,
-};
+enum BF8_DIM3_TYPE { NONE, LLAMA_8B_N300, BF8_DIM3_REMAINDER_32 };
 
 FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     uint64_t noc0_dest_noc_addr,

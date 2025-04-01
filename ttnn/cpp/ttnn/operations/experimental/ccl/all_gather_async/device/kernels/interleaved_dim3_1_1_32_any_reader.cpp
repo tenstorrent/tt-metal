@@ -220,111 +220,64 @@ inline void pack_dim3_bf16_rest8_optimized(
 }
 
 template <bool DRAM>
-inline void pack_falcon40(
+inline void pack_dim3_bf8_reminder32(
     uint32_t num_tiles, uint32_t ring_size, uint32_t tile_cols_per_chip, InterleavedAddrGenFast<DRAM>& addrgen) {
     uint32_t tile_id = 0;
-    const uint32_t num_contig2 = num_banks;
     uint32_t row = num_tiles / tile_cols_per_chip;
-    if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == T3K_FALCON40_8192) {
-        if constexpr (my_chip_id % 3 == 0) {
-            for (uint32_t i = 0; i < row; i++) {
-                if (i % 3 == 0) {
-                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
-                    pack_non_contig(8, tile_id, addrgen);
-                } else if (i % 3 == 1) {
-                    pack_non_contig(8, tile_id, addrgen);
-                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
-                } else {
-                    pack_non_contig(4, tile_id, addrgen);
-                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
-                    pack_non_contig(4, tile_id, addrgen);
-                }
-            }
-        } else if constexpr (my_chip_id % 3 == 1) {
-            for (uint32_t i = 0; i < row; i++) {
-                if (i % 3 == 0) {
-                    pack_non_contig(4, tile_id, addrgen);
-                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
-                    pack_non_contig(4, tile_id, addrgen);
-                } else if (i % 3 == 1) {
-                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
-                    pack_non_contig(8, tile_id, addrgen);
-                } else {
-                    pack_non_contig(8, tile_id, addrgen);
-                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
-                }
-            }
-        } else {
-            for (uint32_t i = 0; i < row; i++) {
-                if (i % 3 == 0) {
-                    pack_non_contig(8, tile_id, addrgen);
-                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
-                } else if (i % 3 == 1) {
-                    pack_non_contig(4, tile_id, addrgen);
-                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
-                    pack_non_contig(4, tile_id, addrgen);
-                } else {
-                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
-                    pack_non_contig(8, tile_id, addrgen);
-                }
+    uint32_t num_full_contig = (tile_cols_per_chip / (num_banks * packet_size_in_pages)) * num_banks;
+    uint32_t num_contig2 =
+        ((tile_cols_per_chip - num_full_contig * packet_size_in_pages) / (num_banks * 2)) * num_banks;
+    if constexpr (my_chip_id % 3 == 0) {
+        for (uint32_t i = 0; i < row; i++) {
+            if (i % 3 == 0) {
+                pack_full_contig(num_full_contig, tile_id, addrgen);
+                pack_2contig_bf8(num_contig2, tile_id, addrgen);
+                pack_non_contig(8, tile_id, addrgen);
+            } else if (i % 3 == 1) {
+                pack_non_contig(8, tile_id, addrgen);
+                pack_full_contig(num_full_contig, tile_id, addrgen);
+                pack_2contig_bf8(num_contig2, tile_id, addrgen);
+            } else {
+                pack_non_contig(4, tile_id, addrgen);
+                pack_full_contig(num_full_contig, tile_id, addrgen);
+                pack_2contig_bf8(num_contig2, tile_id, addrgen);
+                pack_non_contig(4, tile_id, addrgen);
             }
         }
-    } else if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == T3K_FALCON40_32768) {
-        uint32_t num_full_contig = 24;
-        if constexpr (my_chip_id % 3 == 0) {
-            for (uint32_t i = 0; i < row; i++) {
-                if (i % 3 == 0) {
-                    pack_full_contig(num_full_contig, tile_id, addrgen);
-                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
-                    pack_non_contig(8, tile_id, addrgen);
-                } else if (i % 3 == 1) {
-                    pack_non_contig(8, tile_id, addrgen);
-                    pack_full_contig(num_full_contig, tile_id, addrgen);
-                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
-                } else {
-                    pack_non_contig(4, tile_id, addrgen);
-                    pack_full_contig(num_full_contig, tile_id, addrgen);
-                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
-                    pack_non_contig(4, tile_id, addrgen);
-                }
-            }
-        } else if constexpr (my_chip_id % 3 == 1) {
-            for (uint32_t i = 0; i < row; i++) {
-                if (i % 3 == 0) {
-                    pack_non_contig(4, tile_id, addrgen);
-                    pack_full_contig(num_full_contig, tile_id, addrgen);
-                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
-                    pack_non_contig(4, tile_id, addrgen);
-                } else if (i % 3 == 1) {
-                    pack_full_contig(num_full_contig, tile_id, addrgen);
-                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
-                    pack_non_contig(8, tile_id, addrgen);
-                } else {
-                    pack_non_contig(8, tile_id, addrgen);
-                    pack_full_contig(num_full_contig, tile_id, addrgen);
-                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
-                }
-            }
-        } else {
-            for (uint32_t i = 0; i < row; i++) {
-                if (i % 3 == 0) {
-                    pack_non_contig(8, tile_id, addrgen);
-                    pack_full_contig(num_full_contig, tile_id, addrgen);
-                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
-                } else if (i % 3 == 1) {
-                    pack_non_contig(4, tile_id, addrgen);
-                    pack_full_contig(num_full_contig, tile_id, addrgen);
-                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
-                    pack_non_contig(4, tile_id, addrgen);
-                } else {
-                    pack_full_contig(num_full_contig, tile_id, addrgen);
-                    pack_2contig_bf8(num_contig2, tile_id, addrgen);
-                    pack_non_contig(8, tile_id, addrgen);
-                }
+    } else if constexpr (my_chip_id % 3 == 1) {
+        for (uint32_t i = 0; i < row; i++) {
+            if (i % 3 == 0) {
+                pack_non_contig(4, tile_id, addrgen);
+                pack_full_contig(num_full_contig, tile_id, addrgen);
+                pack_2contig_bf8(num_contig2, tile_id, addrgen);
+                pack_non_contig(4, tile_id, addrgen);
+            } else if (i % 3 == 1) {
+                pack_full_contig(num_full_contig, tile_id, addrgen);
+                pack_2contig_bf8(num_contig2, tile_id, addrgen);
+                pack_non_contig(8, tile_id, addrgen);
+            } else {
+                pack_non_contig(8, tile_id, addrgen);
+                pack_full_contig(num_full_contig, tile_id, addrgen);
+                pack_2contig_bf8(num_contig2, tile_id, addrgen);
             }
         }
     } else {
-        // assert
+        for (uint32_t i = 0; i < row; i++) {
+            if (i % 3 == 0) {
+                pack_non_contig(8, tile_id, addrgen);
+                pack_full_contig(num_full_contig, tile_id, addrgen);
+                pack_2contig_bf8(num_contig2, tile_id, addrgen);
+            } else if (i % 3 == 1) {
+                pack_non_contig(4, tile_id, addrgen);
+                pack_full_contig(num_full_contig, tile_id, addrgen);
+                pack_2contig_bf8(num_contig2, tile_id, addrgen);
+                pack_non_contig(4, tile_id, addrgen);
+            } else {
+                pack_full_contig(num_full_contig, tile_id, addrgen);
+                pack_2contig_bf8(num_contig2, tile_id, addrgen);
+                pack_non_contig(8, tile_id, addrgen);
+            }
+        }
     }
 }
 
@@ -475,10 +428,8 @@ void kernel_main() {
                     num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
             }
         } else {
-            if constexpr (
-                (BF8_DIM3_TYPE)bf8_dim3_type == T3K_FALCON40_8192 ||
-                (BF8_DIM3_TYPE)bf8_dim3_type == T3K_FALCON40_32768) {
-                pack_falcon40<is_dram>(num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
+            if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == BF8_DIM3_REMAINDER_32) {
+                pack_dim3_bf8_reminder32<is_dram>(num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
             } else if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == LLAMA_8B_N300) {
                 pack_llama_8b_n300<is_dram>(num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
             } else {

@@ -147,11 +147,7 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
             ((input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
               input_tensor_shape[3] == 64128) ||  // llama 8B N300
              (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] % 32 == 0 &&
-              input_tensor_shape[3] == 4096) ||  // T3K Falcon 40, Decode/Prefill
-             (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] % 32 == 0 &&
-              input_tensor_shape[3] == 1024)  // || // T3K Falcon 40, Decode/Prefill
-             //   (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
-             //    input_tensor_shape[3] % 32 == 0) // any 1x32xN tensor
+              input_tensor_shape[3] % 48 == 32)  // T3K Falcon 40, Decode/Prefill
              )))) ||
          (dim < 3 && ((input_tensor_shape[0] * input_tensor_shape[1] * input_tensor_shape[2]) % 32 == 0))) &&
         input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
