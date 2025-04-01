@@ -52,7 +52,7 @@ def test_vision_model_inference(
     )  # Llama 3 repo allows 0.91 for prefill, vision probably even less sensitive to pcc
     batch_size = 1  # For prefill we only support batch_size = 1
 
-    mesh_device.enable_async(False)
+    mesh_device.enable_async(True)
 
     # Example inputs for http://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg
     # pixel_values are produced by Qwen2_5_VLImageProcessor, these come from the above img

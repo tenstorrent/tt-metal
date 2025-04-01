@@ -57,7 +57,7 @@ def test_mlp_inference(rows, batch_size, mesh_device, use_program_cache, reset_s
         mesh_device=mesh_device,
         args=model_args,
         state_dict=state_dict,
-        weight_cache_path=model_args.weight_cache_path(dtype),
+        weight_cache_path=None,  # Don't cache random weights
         layer_num=0,
     )
     torch_input = torch.randn(1, 1, rows, model_args.hf_config.vision_config.hidden_size)

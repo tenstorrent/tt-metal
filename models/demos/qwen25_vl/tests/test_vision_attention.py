@@ -45,7 +45,7 @@ def test_vision_attention_inference(
     pcc = 0.99
     batch_size = 1  # For prefill we only support batch_size = 1
 
-    mesh_device.enable_async(False)
+    mesh_device.enable_async(True)
 
     # Example inputs
     # image_grid_thw (`torch.LongTensor` of shape `(num_images, 3)`, *optional*):
@@ -112,7 +112,7 @@ def test_vision_attention_inference(
     tt_model = VisionAttention(
         mesh_device,
         state_dict,
-        weight_cache_path=model_args.weight_cache_path(dtype),
+        weight_cache_path=None,  # Don't cache random weights
         layer_num=0,
         dtype=dtype,
         transformation_mats=transformation_mats,

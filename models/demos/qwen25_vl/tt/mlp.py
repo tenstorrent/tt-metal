@@ -22,7 +22,7 @@ class MLP(LightweightModule):
         torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
         torch_bias = lambda name: self.state_dict[f"{state_dict_prefix}.{name}.bias"]
 
-        if args.dummy_weights:
+        if args.dummy_weights or weight_cache_path is None:
             cache_name = lambda _: None
         else:
             cache_name = lambda name: weight_cache_path / f"{state_dict_prefix}.{name}"
