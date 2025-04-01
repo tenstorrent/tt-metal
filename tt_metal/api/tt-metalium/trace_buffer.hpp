@@ -13,7 +13,7 @@
 #include <variant>
 #include <vector>
 
-#include "sub_device_types.hpp"
+#include <tt-metalium/sub_device_types.hpp>
 
 namespace tt::tt_metal {
 

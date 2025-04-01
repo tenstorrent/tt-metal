@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "host_api.hpp"
-#include "mesh_device.hpp"
-#include "mesh_buffer.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 namespace tt::tt_metal::distributed {
 using RuntimeArgsPerCore = std::vector<std::vector<RuntimeArgsData>>;

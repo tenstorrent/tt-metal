@@ -17,24 +17,24 @@
 #include <variant>
 #include <vector>
 
-#include "buffer.hpp"
-#include "command_queue.hpp"
-#include "command_queue_interface.hpp"
-#include "core_coord.hpp"
-#include "dispatch_settings.hpp"
-#include "launch_message_ring_buffer_state.hpp"
-#include "mesh_buffer.hpp"
-#include "mesh_coord.hpp"
-#include "mesh_device.hpp"
-#include "mesh_trace.hpp"
-#include "mesh_trace_id.hpp"
-#include "mesh_workload.hpp"
-#include "multi_producer_single_consumer_queue.hpp"
-#include "span.hpp"
-#include "sub_device_types.hpp"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/command_queue_interface.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
+#include <tt-metalium/launch_message_ring_buffer_state.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_trace.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/multi_producer_single_consumer_queue.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/vector_aligned.hpp>
+#include <tt-metalium/worker_config_buffer.hpp>
 #include <umd/device/tt_core_coordinates.h>
-#include "vector_aligned.hpp"
-#include "worker_config_buffer.hpp"
 
 namespace tt {
 namespace tt_metal {

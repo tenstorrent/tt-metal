@@ -7,12 +7,12 @@
 #include <memory>
 #include <optional>
 
-#include "kernel_types.hpp"
-#include "circular_buffer_types.hpp"
-#include "semaphore.hpp"
-#include "program_device_map.hpp"
-#include "worker_config_buffer.hpp"
-#include "dev_msgs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/semaphore.hpp>
+#include <tt-metalium/program_device_map.hpp>
+#include <tt-metalium/worker_config_buffer.hpp>
+#include <tt-metalium/dev_msgs.h>
 
 namespace tt {
 
