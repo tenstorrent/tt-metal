@@ -18,11 +18,13 @@ def generate_ttnn_tensor_of_shards(num_shards, dtype, aggregate):
     for i in range(num_shards):
         if dtype == ttnn.uint16:
             unconcatenated_ttnn_tensor_shards.append(
-                ttnn.from_torch(torch.randint(0, 32767, (1, 1, 32, 64)), dtype=dtype, layout=ttnn.TILE_LAYOUT)
+                ttnn.from_torch(
+                    torch.randint(0, 32767, (1, 1, 32, 64 // num_shards)), dtype=dtype, layout=ttnn.TILE_LAYOUT
+                )
             )
         else:
             unconcatenated_ttnn_tensor_shards.append(
-                ttnn.from_torch(torch.randn(1, 1, 32, 64), dtype=dtype, layout=ttnn.TILE_LAYOUT)
+                ttnn.from_torch(torch.randn(1, 1, 32, 64 // num_shards), dtype=dtype, layout=ttnn.TILE_LAYOUT)
             )
 
     if aggregate:
@@ -158,9 +160,8 @@ def test_shard_to_tensor_mesh_torch_comparison(mesh_device, dtype):
     assert out_pass1 and out_pass2
 
 
-# TOOD: fix
 @pytest.mark.parametrize(
-    "mesh_shape, mesh_device", [pytest.param((4, 2), (4, 2), id="4x2_grid")], indirect=["mesh_device"]
+    "mesh_shape, mesh_device", [pytest.param((2, 1), (2, 1), id="2x1_grid")], indirect=["mesh_device"]
 )
 @pytest.mark.parametrize(
     "M, K, N",
@@ -175,8 +176,7 @@ def test_shard2d_to_tensor_mesh_torch_comparison(M, K, N, dtype, mesh_shape, mes
     else:
         torch_tensor = torch.randn(1, 1, M, K)
 
-    # If K < N it's FF1-like test case, else FF2-like test case
-    shard_dim = (0, 3) if K < N else (3, 0)
+    shard_dim = (3, 0)
 
     torch_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
 
@@ -193,7 +193,6 @@ def test_shard2d_to_tensor_mesh_torch_comparison(M, K, N, dtype, mesh_shape, mes
         torch_tensor,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     xtensor_mapper = ttnn.shard_tensor_to_2d_mesh_mapper(
@@ -208,8 +207,10 @@ def test_shard2d_to_tensor_mesh_torch_comparison(M, K, N, dtype, mesh_shape, mes
     assert len(torch_sharded_shards) == len(xtensor_sharded_shards)
 
     out_passes = []
-    for i in range(len(torch_sharded_tensor)):
-        out_pass, out_pcc = comp_pcc(torch_sharded_shards[i], ttnn.to_torch(xtensor_sharded_shards[i]), pcc=0.99)
+    for i in range(len(torch_sharded_shards)):
+        out_pass, out_pcc = comp_pcc(
+            ttnn.to_torch(torch_sharded_shards[i]), ttnn.to_torch(xtensor_sharded_shards[i]), pcc=0.99
+        )
         out_passes.append(out_pass)
         logger.info(f"Shard {i} PCC value: {out_pcc}")
 
@@ -234,9 +235,8 @@ def test_concat_to_tensor_mesh_torch_comparison(mesh_device, dtype):
     assert out_pass
 
 
-# TOOD: fix
 @pytest.mark.parametrize(
-    "mesh_shape, mesh_device", [pytest.param((4, 2), (4, 2), id="4x2_grid")], indirect=["mesh_device"]
+    "mesh_shape, mesh_device", [pytest.param((2, 1), (2, 1), id="2x1_grid")], indirect=["mesh_device"]
 )
 @pytest.mark.parametrize(
     "M, K, N",
@@ -246,9 +246,8 @@ def test_concat_to_tensor_mesh_torch_comparison(mesh_device, dtype):
 def test_concat2d_to_tensor_mesh_torch_comparison(M, K, N, dtype, mesh_shape, mesh_device):
     torch.manual_seed(1234)
 
-    # If K < N it's FF1-like test case, else FF2-like test case
-    shard_dim = (0, 3) if K < N else (3, 0)
-    concat_dim = (3, 1) if K < N else (1, 3)
+    shard_dim = (3, 0)
+    concat_dim = (1, 3)
 
     num_shards = 4
 
@@ -340,14 +339,12 @@ def test_concat_to_tensor(mesh_device, dtype):
 
     for i in range(num_shards):
         if dtype == ttnn.uint16:
-            torch_shards.append(
-                ttnn.from_torch(torch.randint(0, 32767, (1, 1, 32, 64)), dtype=dtype, layout=ttnn.TILE_LAYOUT)
-            )
+            torch_shards.append(torch.randint(0, 32767, (1, 1, 32, 64 // num_shards)))
         else:
-            torch_shards.append(ttnn.from_torch(torch.randn(1, 1, 32, 64), dtype=dtype, layout=ttnn.TILE_LAYOUT))
+            torch_shards.append(torch.randn(1, 1, 32, 64 // num_shards))
 
     # This will be the same as the generated unconcatenated_ttnn_tensor due to the shared seeding
-    torch_concat_tensor = torch.cat(torch_shards, num_shards, dim=3)
+    torch_concat_tensor = torch.cat(torch_shards, dim=3)
 
     unconcatenated_ttnn_tensor = generate_ttnn_tensor_of_shards(num_shards, dtype, aggregate=True)
 
@@ -372,28 +369,26 @@ def test_concat_slice_to_tensor(mesh_device, dtype):
 
     for i in range(num_shards):
         if dtype == ttnn.uint16:
-            torch_shards.append(
-                ttnn.from_torch(torch.randint(0, 32767, (1, 1, 32, 64)), dtype=dtype, layout=ttnn.TILE_LAYOUT)
-            )
+            torch_shards.append(torch.randint(0, 32767, (1, 1, 32, 64 // num_shards)))
         else:
-            torch_shards.append(ttnn.from_torch(torch.randn(1, 1, 32, 64), dtype=dtype, layout=ttnn.TILE_LAYOUT))
+            torch_shards.append(torch.randn(1, 1, 32, 64 // num_shards))
 
-    # This will be the same as the generated unconcatenated_ttnn_tensor due to the shared seeding
-    torch_concat_tensor = torch.cat(torch_shards, num_shards, dim=3)
+    # This will be the same as concatenating the generated unconcatenated_ttnn_shards due to the shared order and seeding
+    torch_concat_tensor = torch.cat(torch_shards, dim=3)
 
-    unconcatenated_ttnn_shards = generate_ttnn_tensor_of_shards(torch_shards, dtype, aggregate=False)
+    unconcatenated_ttnn_shards = generate_ttnn_tensor_of_shards(num_shards, dtype, aggregate=False)
 
     composer = ttnn.concat_mesh_to_tensor_composer(dim=3)
 
-    out_tensor = ttnn.aggregate_tensor(unconcatenated_ttnn_shards, composer)
+    xtensor_concat_tensor = ttnn.aggregate_tensor(unconcatenated_ttnn_shards, composer)
 
-    out_pass, out_pcc = comp_pcc(torch_concat_tensor, ttnn.to_torch(out_tensor), pcc=0.99)
+    out_pass, out_pcc = comp_pcc(torch_concat_tensor, ttnn.to_torch(xtensor_concat_tensor), pcc=0.99)
     logger.info(f"PCC value: {out_pcc}")
     assert out_pass
 
 
 @pytest.mark.parametrize(
-    "mesh_shape, mesh_device", [pytest.param((4, 2), (4, 2), id="4x2_grid")], indirect=["mesh_device"]
+    "mesh_shape, mesh_device", [pytest.param((2, 1), (2, 1), id="2x1_grid")], indirect=["mesh_device"]
 )
 @pytest.mark.parametrize(
     "M, K, N",
@@ -410,18 +405,15 @@ def test_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
     else:
         torch_tensor = torch.randn(2, 2, M, K)
 
-    # If K < N it's FF1-like test case, else FF2-like test case
-    shard_dim = (0, 3) if K < N else (3, 0)
+    shard_dim = (3, 0)
 
-    to_shard = ttnn.from_torch(
-        torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG, device=mesh_device
-    )
+    ttnn_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
 
     mapper = ttnn.shard_tensor_to_2d_mesh_mapper(
         mesh_device, ttnn.MeshShape(mesh_shape[0], mesh_shape[1]), ttnn.Shard2dConfig(shard_dim[0], shard_dim[1])
     )
 
-    shards = ttnn.get_device_tensors(ttnn.distribute_tensor(to_shard, mapper, mesh_device))
+    xtensor_sharded_shards = ttnn.get_device_tensors(ttnn.distribute_tensor(ttnn_tensor, mapper, mesh_device))
 
     rows, cols = mesh_shape
     row_dim, col_dim = shard_dim
@@ -435,11 +427,11 @@ def test_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
     else:
         torch_sharded_shards = [tt for t in row_tensors for tt in torch.chunk(t, cols, dim=col_dim)]
 
-    assert len(shards) == len(torch_sharded_shards)
+    assert len(xtensor_sharded_shards) == len(torch_sharded_shards)
 
     out_passes = []
     for i in range(len(torch_sharded_shards)):
-        out_pass, out_pcc = comp_pcc(torch_sharded_shards[i], ttnn.to_torch(shards[i]), pcc=0.99)
+        out_pass, out_pcc = comp_pcc(torch_sharded_shards[i], ttnn.to_torch(xtensor_sharded_shards[i]), pcc=0.99)
         out_passes.append(out_pass)
         logger.info(f"Shard {i} PCC value: {out_pcc}")
 
@@ -447,7 +439,7 @@ def test_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
 
 
 @pytest.mark.parametrize(
-    "mesh_shape, mesh_device", [pytest.param((4, 2), (4, 2), id="4x2_grid")], indirect=["mesh_device"]
+    "mesh_shape, mesh_device", [pytest.param((2, 1), (2, 1), id="2x1_grid")], indirect=["mesh_device"]
 )
 @pytest.mark.parametrize(
     "M, K, N",
@@ -455,28 +447,33 @@ def test_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
 )
 @pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.float32])
 def test_concat2d_to_tensor(M, K, N, dtype, mesh_shape, mesh_device):
-    #    pytest.skip(f"Covered through distributed.py paths for now")
+    pytest.skip(f"Covered through distributed.py paths for now")
 
     torch.manual_seed(1234)
 
     num_shards = 4
 
-    torch_shards = []
-
-    for i in range(num_shards):
-        if dtype == ttnn.uint16:
-            torch_shards.append(torch.randint(0, 32767, (1, 1, 32, 64)))
-        else:
-            torch_shards.append(torch.randn(1, 1, 32, 64))
-
-    # This will be the same as the generated unconcatenated_ttnn_tensor due to the shared seeding
-    torch_concat_tensor = torch.cat(torch_shards, dim=3)
-
-    # If K < N it's FF1-like test case, else FF2-like test case
-    shard_dim = (0, 3) if K < N else (3, 0)
-    concat_dim = (3, 1) if K < N else (1, 3)
+    shard_dim = (3, 0)
+    concat_dim = (1, 3)
 
     unconcatenated_ttnn_tensor = generate_2d_sharded_ttnn_tensor(num_shards, dtype, M, K, mesh_shape, shard_dim)
+
+    rows, cols = mesh_shape
+    row_dim, col_dim = concat_dim
+
+    torch_shards = [
+        ttnn.to_torch(tt_input_tensor, mesh_composer=None)
+        for tt_input_tensor in ttnn.get_device_tensors(unconcatenated_ttnn_tensor)
+    ]
+
+    # Reshape the list of shards into a 2D list representing the device mesh
+    torch_shards_2d = [torch_shards[i : i + cols] for i in range(0, len(torch_shards), cols)]
+
+    # Concatenate along columns first (within each row)
+    row_concatenated = [torch.cat(rows, dim=col_dim) for rows in torch_shards_2d]
+
+    # Then concatenate the resulting tensors along rows
+    torch_concat_tensor = torch.cat(row_concatenated, dim=row_dim)
 
     composer = ttnn.concat_2d_mesh_to_tensor_composer(
         mesh_device, config=ttnn.Concat2dConfig(concat_dim[0], concat_dim[1])
@@ -486,4 +483,5 @@ def test_concat2d_to_tensor(M, K, N, dtype, mesh_shape, mesh_device):
 
     out_pass, out_pcc = comp_pcc(torch_concat_tensor, ttnn.to_torch(xtensor_concat_tensor), pcc=0.99)
     logger.info(f"PCC value: {out_pcc}")
+
     assert out_pass

@@ -444,7 +444,20 @@ void py_module(py::module& module) {
        Returns:
            Tensor: The shard of the tensor corresponding to the device.
    )doc");
-    module.def("get_device_tensors", &get_device_tensors, py::arg("tensor"), py::kw_only());
+    module.def(
+        "get_device_tensors",
+        &get_device_tensors,
+        py::arg("tensor"),
+        py::kw_only(),
+        R"doc(
+       Get a list of tensor shards from a multidevice tensor.
+
+       Args:
+           tensor (Tensor): The tensor to get the shards from.
+
+       Returns:
+           List[Tensor]: The shards of the tensor corresponding to the devices.
+           )doc");
     module.def(
         "replicate_tensor_to_mesh_mapper",
         [](MeshDevice& mesh_device) -> std::unique_ptr<TensorToMesh> {
