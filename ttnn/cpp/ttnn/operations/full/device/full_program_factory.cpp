@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "full_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include "full_device_operation.hpp"
 #include "cpp/ttnn/operations/moreh/moreh_helper_functions.hpp"
-#include "tt-metalium/bfloat16.hpp"
 
 using namespace tt;
 using namespace tt::constants;

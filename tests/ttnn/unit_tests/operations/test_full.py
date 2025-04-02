@@ -41,12 +41,12 @@ def test_full_int(device, input_shape, fill_value):
 @pytest.mark.parametrize(
     "input_shape",
     [
-        # [],  # single tile with rank 0
+        [],  # single tile with rank 0
         [3],  # single tile with rank 1
         [1, 3],  # single tile
         [32, 32],  # single tile
         [5, 96, 64],  # multiple tiles
-        # [3, 300, 1, 300], # multiple tiles not aligned by 32
+        [3, 300, 1, 300],  # multiple tiles not aligned by 32
     ],
 )
 @pytest.mark.parametrize(
