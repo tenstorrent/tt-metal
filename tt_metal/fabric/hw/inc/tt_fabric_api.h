@@ -180,38 +180,62 @@ inline void fabric_wait_for_pull_request_flushed(volatile tt_l1_ptr fabric_pull_
     fabric_wait_for_pull_request_words_flushed(client_interface, words_written);
 }
 
-template <typename T>
-inline void fabric_async_write_add_header(
-    T client_interface,
-    uint32_t src_addr,  // source address in sender’s memory
-    uint16_t dst_mesh_id,
-    uint16_t dst_dev_id,
-    uint64_t dst_addr,
-    uint32_t size,  // number of bytes to write to remote destination
-    packet_header_t* packet_header) {
-    packet_header->routing.flags = FORWARD;
-    packet_header->routing.packet_size_bytes = size;
-    packet_header->routing.dst_mesh_id = dst_mesh_id;
-    packet_header->routing.dst_dev_id = dst_dev_id;
-    packet_header->session.command = ASYNC_WR;
-    packet_header->session.target_offset_l = (uint32_t)dst_addr;
-    packet_header->session.target_offset_h = dst_addr >> 32;
-    tt_fabric_add_header_checksum(packet_header);
+template <typename T, ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA>
+static inline
+#if defined(FVC_MODE_PULL) || !defined(LOW_LATENCY_ROUTING)
+    packet_header_t*
+#else
+    low_latency_packet_header_t*
+#endif
+    extract_packet_header(
+        T client_interface, uint32_t src_addr, uint16_t dst_mesh_id, uint16_t dst_dev_id, uint32_t header_id) {
+    static_assert(
+        std::is_same_v<T, volatile fabric_pull_client_interface_t*> ||
+            std::is_same_v<T, volatile fabric_push_client_interface_t*> || std::is_same_v<T, std::nullptr_t>,
+        "T must be either volatile fabric_pull_client_interface_t* or volatile fabric_push_client_interface_t*");
+#if defined(FVC_MODE_PULL) || !defined(LOW_LATENCY_ROUTING)
+    packet_header_t* packet_header;
+    if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
+        packet_header = (packet_header_t*)(src_addr);
+    } else {
+        packet_header = (packet_header_t*)&client_interface->header_buffer[header_id];
+    }
+#else
+    low_latency_packet_header_t* packet_header;
+    if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
+        packet_header = (low_latency_packet_header_t*)(src_addr);
+    } else {
+        packet_header = (low_latency_packet_header_t*)&client_interface->header_buffer[header_id];
+    }
+#endif
+    return packet_header;
 }
 
 template <typename T>
 inline void fabric_async_write_add_header(
-    T client_interface,
+    T packet_header,
     uint32_t src_addr,  // source address in sender’s memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
     uint64_t dst_addr,
-    uint32_t size,  // number of bytes to write to remote destination
-    low_latency_packet_header_t* packet_header) {
-    packet_header->routing.packet_size_bytes = size;
-    packet_header->routing.target_offset_l = (uint32_t)dst_addr;
-    packet_header->routing.target_offset_h = dst_addr >> 32;
-    packet_header->routing.command = ASYNC_WR;
+    uint32_t size  // number of bytes to write to remote destination
+) {
+    static_assert(std::is_same_v<T, packet_header_t*> || std::is_same_v<T, low_latency_packet_header_t*>);
+    if constexpr (std::is_same_v<T, packet_header_t*>) {
+        packet_header->routing.flags = FORWARD;
+        packet_header->routing.packet_size_bytes = size;
+        packet_header->routing.dst_mesh_id = dst_mesh_id;
+        packet_header->routing.dst_dev_id = dst_dev_id;
+        packet_header->session.command = ASYNC_WR;
+        packet_header->session.target_offset_l = (uint32_t)dst_addr;
+        packet_header->session.target_offset_h = dst_addr >> 32;
+        tt_fabric_add_header_checksum(packet_header);
+    } else {
+        packet_header->routing.packet_size_bytes = size;
+        packet_header->routing.target_offset_l = (uint32_t)dst_addr;
+        packet_header->routing.target_offset_h = dst_addr >> 32;
+        packet_header->routing.command = ASYNC_WR;
+    }
 }
 
 template <typename T, ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA>
@@ -222,27 +246,18 @@ inline void fabric_async_write_add_header(
     uint16_t dst_dev_id,
     uint64_t dst_addr,
     uint32_t size,  // number of bytes to write to remote destination
-    uint32_t header_id = 0) {
-#if defined(FVC_MODE_PULL) || !defined(LOW_LATENCY_ROUTING)
-    packet_header_t* packet_header;
-#else
-    low_latency_packet_header_t* packet_header;
-#endif
-
-    if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
-#if defined(FVC_MODE_PULL) || !defined(LOW_LATENCY_ROUTING)
-        packet_header = (packet_header_t*)(src_addr);
-#else
-        packet_header = (low_latency_packet_header_t*)(src_addr);
-#endif
-    } else {
-#if defined(FVC_MODE_PULL) || !defined(LOW_LATENCY_ROUTING)
-        packet_header = (packet_header_t*)&client_interface->header_buffer[header_id];
-#else
-        packet_header = (low_latency_packet_header_t*)&client_interface->header_buffer[header_id];
-#endif
-    }
-    fabric_async_write_add_header(client_interface, src_addr, dst_mesh_id, dst_dev_id, dst_addr, size, packet_header);
+    uint32_t header_id) {
+    static_assert(
+        std::is_same_v<T, volatile fabric_pull_client_interface_t*> ||
+            std::is_same_v<T, volatile fabric_push_client_interface_t*>,
+        "T must be either volatile fabric_pull_client_interface_t* or volatile fabric_push_client_interface_t*");
+    fabric_async_write_add_header(
+        extract_packet_header<T, data_mode>(client_interface, src_addr, dst_mesh_id, dst_dev_id, header_id),
+        src_addr,
+        dst_mesh_id,
+        dst_dev_id,
+        dst_addr,
+        size);
 }
 
 template <bool mcast = false>
@@ -630,6 +645,37 @@ inline void fabric_async_write_multicast(
     }
 }
 
+template <typename T>
+inline void fabric_atomic_inc_add_header(
+    T packet_header,
+    uint32_t src_addr,  // source address in sender’s memory
+    uint16_t dst_mesh_id,
+    uint16_t dst_dev_id,
+    uint64_t dst_addr,
+    uint32_t atomic_inc,
+    uint32_t wrap_boundary) {
+    static_assert(std::is_same_v<T, packet_header_t*> || std::is_same_v<T, low_latency_packet_header_t*>);
+    if constexpr (std::is_same_v<T, packet_header_t*>) {
+        packet_header->routing.flags = INLINE_FORWARD;
+        packet_header->routing.packet_size_bytes = PACKET_HEADER_SIZE_BYTES;
+        packet_header->routing.dst_mesh_id = dst_mesh_id;
+        packet_header->routing.dst_dev_id = dst_dev_id;
+        packet_header->session.command = ATOMIC_INC;
+        packet_header->session.target_offset_l = (uint32_t)dst_addr;
+        packet_header->session.target_offset_h = dst_addr >> 32;
+        packet_header->packet_parameters.atomic_parameters.wrap_boundary = wrap_boundary;
+        packet_header->packet_parameters.atomic_parameters.increment = atomic_inc;
+        tt_fabric_add_header_checksum(packet_header);
+    } else {
+        packet_header->routing.packet_size_bytes = PACKET_HEADER_SIZE_BYTES;
+        packet_header->routing.atomic_offset_l = (uint32_t)dst_addr;
+        packet_header->routing.atomic_offset_h = dst_addr >> 32;
+        packet_header->routing.atomic_increment = atomic_inc;
+        packet_header->routing.atomic_wrap = wrap_boundary;
+        packet_header->routing.command = ATOMIC_INC;
+    }
+}
+
 inline void fabric_atomic_inc_add_header(
     uint32_t src_addr,  // source address in sender’s memory
     uint16_t dst_mesh_id,
@@ -637,27 +683,14 @@ inline void fabric_atomic_inc_add_header(
     uint64_t dst_addr,
     uint32_t atomic_inc,
     uint32_t wrap_boundary) {
-#if defined(FVC_MODE_PULL) || !defined(LOW_LATENCY_ROUTING)
-    packet_header_t* packet_header = (packet_header_t*)(src_addr);
-    packet_header->routing.flags = INLINE_FORWARD;
-    packet_header->routing.packet_size_bytes = PACKET_HEADER_SIZE_BYTES;
-    packet_header->routing.dst_mesh_id = dst_mesh_id;
-    packet_header->routing.dst_dev_id = dst_dev_id;
-    packet_header->session.command = ATOMIC_INC;
-    packet_header->session.target_offset_l = (uint32_t)dst_addr;
-    packet_header->session.target_offset_h = dst_addr >> 32;
-    packet_header->packet_parameters.atomic_parameters.wrap_boundary = wrap_boundary;
-    packet_header->packet_parameters.atomic_parameters.increment = atomic_inc;
-    tt_fabric_add_header_checksum(packet_header);
-#else
-    low_latency_packet_header_t* packet_header = (low_latency_packet_header_t*)(src_addr);
-    packet_header->routing.packet_size_bytes = PACKET_HEADER_SIZE_BYTES;
-    packet_header->routing.atomic_offset_l = (uint32_t)dst_addr;
-    packet_header->routing.atomic_offset_h = dst_addr >> 32;
-    packet_header->routing.atomic_increment = atomic_inc;
-    packet_header->routing.atomic_wrap = wrap_boundary;
-    packet_header->routing.command = ATOMIC_INC;
-#endif
+    fabric_atomic_inc_add_header(
+        extract_packet_header(nullptr, src_addr, dst_mesh_id, dst_dev_id, 0),
+        src_addr,
+        dst_mesh_id,
+        dst_dev_id,
+        dst_addr,
+        atomic_inc,
+        wrap_boundary);
 }
 
 // Write packetized data over fabric to dst_mesh, dst_dev.
@@ -706,6 +739,41 @@ inline void fabric_atomic_inc(
     }
 }
 
+template <typename T>
+inline void fabric_async_write_atomic_inc_add_header(
+    T packet_header,
+    uint32_t src_addr,  // source address in sender’s memory
+    uint16_t dst_mesh_id,
+    uint16_t dst_dev_id,
+    uint64_t dst_write_addr,
+    uint64_t dst_atomic_addr,
+    uint32_t size,  // number of bytes to write to remote destination
+    uint32_t atomic_inc,
+    uint32_t header_id = 0) {
+    static_assert(std::is_same_v<T, packet_header_t*> || std::is_same_v<T, low_latency_packet_header_t*>);
+    if constexpr (std::is_same_v<T, packet_header_t*>) {
+        packet_header->routing.flags = FORWARD;
+        packet_header->routing.packet_size_bytes = size;
+        packet_header->routing.dst_mesh_id = dst_mesh_id;
+        packet_header->routing.dst_dev_id = dst_dev_id;
+        packet_header->session.command = ASYNC_WR | ATOMIC_INC;
+        packet_header->session.target_offset_l = (uint32_t)dst_write_addr;
+        packet_header->session.target_offset_h = dst_atomic_addr >> 32;
+        packet_header->packet_parameters.async_wr_atomic_parameters.noc_xy = dst_atomic_addr >> 32;
+        packet_header->packet_parameters.async_wr_atomic_parameters.l1_offset = (uint32_t)dst_atomic_addr;
+        packet_header->packet_parameters.async_wr_atomic_parameters.increment = atomic_inc;
+        tt_fabric_add_header_checksum(packet_header);
+    } else {
+        packet_header->routing.packet_size_bytes = size;
+        packet_header->routing.target_offset_l = (uint32_t)dst_write_addr;
+        packet_header->routing.target_offset_h = dst_write_addr >> 32;
+        packet_header->routing.atomic_offset_l = (uint32_t)dst_atomic_addr;
+        packet_header->routing.atomic_offset_h = dst_atomic_addr >> 32;
+        packet_header->routing.atomic_increment = atomic_inc;
+        packet_header->routing.command = ASYNC_WR | ATOMIC_INC;
+    }
+}
+
 template <typename T, ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA>
 inline void fabric_async_write_atomic_inc_add_header(
     T client_interface,
@@ -716,45 +784,20 @@ inline void fabric_async_write_atomic_inc_add_header(
     uint64_t dst_atomic_addr,
     uint32_t size,  // number of bytes to write to remote destination
     uint32_t atomic_inc,
-    uint32_t header_id = 0) {
+    uint32_t header_id) {
     static_assert(
         std::is_same_v<T, volatile fabric_pull_client_interface_t*> ||
             std::is_same_v<T, volatile fabric_push_client_interface_t*>,
         "T must be either volatile fabric_pull_client_interface_t* or volatile fabric_push_client_interface_t*");
-
-#if defined(FVC_MODE_PULL) || !defined(LOW_LATENCY_ROUTING)
-    packet_header_t* packet_header;
-    if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
-        packet_header = (packet_header_t*)(src_addr);
-    } else {
-        packet_header = (packet_header_t*)&client_interface->header_buffer[header_id];
-    }
-    packet_header->routing.flags = FORWARD;
-    packet_header->routing.packet_size_bytes = size;
-    packet_header->routing.dst_mesh_id = dst_mesh_id;
-    packet_header->routing.dst_dev_id = dst_dev_id;
-    packet_header->session.command = ASYNC_WR | ATOMIC_INC;
-    packet_header->session.target_offset_l = (uint32_t)dst_write_addr;
-    packet_header->session.target_offset_h = dst_atomic_addr >> 32;
-    packet_header->packet_parameters.async_wr_atomic_parameters.noc_xy = dst_atomic_addr >> 32;
-    packet_header->packet_parameters.async_wr_atomic_parameters.l1_offset = (uint32_t)dst_atomic_addr;
-    packet_header->packet_parameters.async_wr_atomic_parameters.increment = atomic_inc;
-    tt_fabric_add_header_checksum(packet_header);
-#else
-    low_latency_packet_header_t* packet_header;
-    if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
-        packet_header = (low_latency_packet_header_t*)(src_addr);
-    } else {
-        packet_header = (low_latency_packet_header_t*)&client_interface->header_buffer[header_id];
-    }
-    packet_header->routing.packet_size_bytes = size;
-    packet_header->routing.target_offset_l = (uint32_t)dst_write_addr;
-    packet_header->routing.target_offset_h = dst_write_addr >> 32;
-    packet_header->routing.atomic_offset_l = (uint32_t)dst_atomic_addr;
-    packet_header->routing.atomic_offset_h = dst_atomic_addr >> 32;
-    packet_header->routing.atomic_increment = atomic_inc;
-    packet_header->routing.command = ASYNC_WR | ATOMIC_INC;
-#endif
+    fabric_async_write_atomic_inc_add_header(
+        extract_packet_header<T, data_mode>(client_interface, src_addr, dst_mesh_id, dst_dev_id, header_id),
+        src_addr,
+        dst_mesh_id,
+        dst_dev_id,
+        dst_write_addr,
+        dst_atomic_addr,
+        size,
+        atomic_inc);
 }
 
 // Write packetized data over fabric to dst_mesh, dst_dev.
