@@ -2,51 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
-import os
 import torch
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from loguru import logger
+
 import ttnn
-from models.demos.yolov4.reference.yolov4 import Yolov4
-from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
-from models.demos.yolov4.demo.demo import get_region_boxes, gen_yolov4_boxes_confs
+from models.demos.yolov4.common import get_model_result, load_torch_model
+from models.demos.yolov4.post_processing import gen_yolov4_boxes_confs, get_region_boxes
 from models.demos.yolov4.ttnn.model_preprocessing import create_yolov4_model_parameters
+from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
+from models.utility_functions import divup, is_wormhole_b0
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-from models.utility_functions import (
-    is_wormhole_b0,
-    divup,
-)
-
-
-def load_yolov4_weight(model_location_generator=None):
-    if model_location_generator == None:
-        model_path = "models"
-    else:
-        model_path = model_location_generator("models", model_subdir="Yolo")
-    if model_path == "models":
-        if not os.path.exists("tests/ttnn/integration_tests/yolov4/yolov4.pth"):  # check if yolov4.th is availble
-            os.system(
-                "tests/ttnn/integration_tests/yolov4/yolov4_weights_download.sh"
-            )  # execute the yolov4_weights_download.sh file
-
-        weights_pth = "tests/ttnn/integration_tests/yolov4/yolov4.pth"
-    else:
-        weights_pth = str(model_path / "yolov4.pth")
-
-    model = torch.load(weights_pth)
-    return model
-
-
-def load_yolov4_model(torch_dict):
-    torch_model = Yolov4()
-    new_state_dict = dict(zip(torch_model.state_dict().keys(), torch_dict.values()))
-    torch_model.load_state_dict(new_state_dict)
-    torch_model.eval()
-    return torch_model
-
-
-class Yolov4TestInfra:
+class YOLOv4PerformanceRunnerInfra:
     def __init__(
         self,
         device,
@@ -56,7 +24,6 @@ class Yolov4TestInfra:
         model_location_generator=None,
         resolution=(320, 320),
     ):
-        super().__init__()
         torch.manual_seed(0)
         self.resolution = resolution
         self.pcc_passed = False
@@ -67,8 +34,7 @@ class Yolov4TestInfra:
         self.weight_dtype = weight_dtype
         self.model_location_generator = model_location_generator
 
-        torch_dict = load_yolov4_weight(self.model_location_generator)
-        torch_model = load_yolov4_model(torch_dict)
+        torch_model = load_torch_model(self.model_location_generator)
 
         input_shape = (1, *resolution, 3)
 
@@ -86,7 +52,7 @@ class Yolov4TestInfra:
     def run(self):
         self.output_tensor = self.ttnn_yolov4_model(self.input_tensor)
 
-    def setup_l1_sharded_input(self, device, torch_input_tensor=None):
+    def _setup_l1_sharded_input(self, device, torch_input_tensor=None):
         if is_wormhole_b0():
             core_grid = ttnn.CoreGrid(y=8, x=8)
         else:
@@ -113,7 +79,7 @@ class Yolov4TestInfra:
         return tt_inputs_host, input_mem_config
 
     def setup_dram_sharded_input(self, device, torch_input_tensor=None, mesh_mapper=None, mesh_composer=None):
-        tt_inputs_host, input_mem_config = self.setup_l1_sharded_input(device)
+        tt_inputs_host, input_mem_config = self._setup_l1_sharded_input(device)
         dram_grid_size = device.dram_grid_size()
         dram_shard_spec = ttnn.ShardSpec(
             ttnn.CoreRangeSet(
@@ -133,33 +99,7 @@ class Yolov4TestInfra:
 
     def validate(self, output_tensor=None):
         output_tensor = self.output_tensor if output_tensor is None else output_tensor
-        result_boxes_padded = ttnn.to_torch(self.output_tensor[0])
-        result_confs = ttnn.to_torch(self.output_tensor[1])
-
-        result_boxes_padded = result_boxes_padded.permute(0, 2, 1, 3)
-        result_boxes_list = []
-        # That ttnn tensor is the concat output of 3 padded tensors
-        # As a perf workaround I'm doing the unpadding on the torch output here.
-        # TODO: cleaner ttnn code when ttnn.untilize() is fully optimized
-        if self.resolution[0] == 320:
-            box_1_start_i = 0
-            box_1_end_i = 6100
-            box_2_start_i = 6128
-            box_2_end_i = 6228
-            box_3_start_i = 6256
-            box_3_end_i = 6356
-        else:
-            box_1_start_i = 0
-            box_1_end_i = 24400
-            box_2_start_i = 24428
-            box_2_end_i = 24828
-            box_3_start_i = 24856
-            box_3_end_i = 25256
-
-        result_boxes_list.append(result_boxes_padded[:, box_1_start_i:box_1_end_i])
-        result_boxes_list.append(result_boxes_padded[:, box_2_start_i:box_2_end_i])
-        result_boxes_list.append(result_boxes_padded[:, box_3_start_i:box_3_end_i])
-        result_boxes = torch.cat(result_boxes_list, dim=1)
+        result_boxes, result_confs = get_model_result(output_tensor, self.resolution)
 
         valid_pcc = 0.99
         self.pcc_passed, self.pcc_message = assert_with_pcc(self.ref_boxes, result_boxes, pcc=valid_pcc)
@@ -178,21 +118,3 @@ class Yolov4TestInfra:
     def dealloc_output(self):
         ttnn.deallocate(self.output_tensor[0])
         ttnn.deallocate(self.output_tensor[1])
-
-
-def create_test_infra(
-    device,
-    batch_size,
-    act_dtype,
-    weight_dtype,
-    model_location_generator=None,
-    resolution=(320, 320),
-):
-    return Yolov4TestInfra(
-        device,
-        batch_size,
-        act_dtype,
-        weight_dtype,
-        model_location_generator,
-        resolution=resolution,
-    )

@@ -2,22 +2,27 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import fiftyone
-import os
 import json
-import torch
-import cv2
+import os
 from datetime import datetime
-import ttnn
-from models.utility_functions import disable_persistent_kernel_cache
-from loguru import logger
 
+import cv2
+import fiftyone
+import numpy as np
 import pytest
-from models.experimental.yolo_evaluation.yolo_evaluation_utils import LoadImages, preprocess, postprocess
+import torch
+from loguru import logger
+from sklearn.metrics import average_precision_score, precision_recall_curve
 from torch import nn
 
-import numpy as np
-from sklearn.metrics import precision_recall_curve, average_precision_score
+import ttnn
+from models.demos.yolov4.post_processing import gen_yolov4_boxes_confs
+from models.experimental.yolo_evaluation.yolo_evaluation_utils import (
+    LoadImages,
+    postprocess,
+    preprocess,
+)
+from models.utility_functions import disable_persistent_kernel_cache
 
 
 def iou(pred_box, gt_box):
@@ -233,17 +238,15 @@ def evaluation(
         if model_type == "torch_model":
             preds = model(im)
             if model_name == "YOLOv4":
-                from models.demos.yolov4.demo.demo import get_region_boxes, gen_yolov4_boxes_confs
+                from models.demos.yolov4.post_processing import get_region_boxes
 
                 y1, y2, y3 = gen_yolov4_boxes_confs(preds)
                 output = get_region_boxes([y1, y2, y3])
         else:
-            preds = model.execute_yolov4_trace_2cqs_inference(im)
+            preds = model._execute_yolov4_trace_2cqs_inference(im)
             if model_name == "YOLOv11":
                 preds = ttnn.to_torch(preds, dtype=torch.float32)
             elif model_name == "YOLOv4":
-                conf_thresh = 0.3
-                nms_thresh = 0.4
                 result_boxes = preds[0]
                 result_confs = preds[1]
                 output = [result_boxes.to(torch.float16), result_confs.to(torch.float16)]
@@ -251,7 +254,7 @@ def evaluation(
                 preds[0] = ttnn.to_torch(preds[0], dtype=torch.float32)
 
         if model_name == "YOLOv4":
-            from models.demos.yolov4.demo.demo import post_processing
+            from models.demos.yolov4.post_processing import post_processing
 
             results = post_processing(img, 0.3, 0.4, output)
         else:
@@ -309,137 +312,6 @@ def evaluation(
     logger.info(f"Mean Average Precision for val 50-95 (mAPval 50-95): {mAPval50_95_value:.4f}")
 
 
-# @pytest.mark.parametrize(
-#     "model_type",
-#     [("tt_model"), ("torch_model")],
-# )
-# @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-# @pytest.mark.parametrize("res", [(640, 640)])
-# def test_yolov8x(device, model_type, res, reset_seeds):
-#     from models.experimental.functional_yolov8x.tt.ttnn_yolov8x import YOLOv8xModel  # depends on model which we take
-#     from models.experimental.functional_yolov8x.reference import yolov8x_utils  # depends on model which we take
-#     from models.experimental.functional_yolov8x.tt.ttnn_yolov8x_utils import (
-#         custom_preprocessor,
-#     )  # depends on model which we take
-
-#     try:
-#         sys.modules["ultralytics"] = yolov8x_utils
-#         sys.modules["ultralytics.nn.tasks"] = yolov8x_utils
-#         sys.modules["ultralytics.nn.modules.conv"] = yolov8x_utils
-#         sys.modules["ultralytics.nn.modules.block"] = yolov8x_utils
-#         sys.modules["ultralytics.nn.modules.head"] = yolov8x_utils
-#     except KeyError:
-#         print("models.experimental.functional_yolov8x.reference.yolov8x_utils not found.")
-
-#     if model_type == "torch_model":
-#         model = attempt_load(
-#             "yolov8x.pt", model_path="models/experimental/functional_yolov8x/demo/yolov8x.pt", map_location="cpu"
-#         )
-#         logger.info("Inferencing using Torch Model")
-#     else:
-#         state_dict = attempt_load(
-#             "yolov8x.pt", model_path="models/experimental/functional_yolov8x/demo/yolov8x.pt", map_location="cpu"
-#         ).state_dict()
-#         parameters = custom_preprocessor(device, state_dict, inp_h=res[0], inp_w=res[1])
-#         model = YOLOv8xModel(device=device, parameters=parameters)
-#         logger.info("Inferencing using ttnn Model")
-
-#     save_dir = "models/experimental/functional_yolov8x/demo/runs"
-
-#     input_dtype = ttnn.bfloat16
-#     input_layout = ttnn.ROW_MAJOR_LAYOUT
-
-#     evaluation(
-#         device=device,
-#         res=res,
-#         model_type=model_type,
-#         model=model,
-#         parameters=None,
-#         input_dtype=input_dtype,
-#         input_layout=input_layout,
-#         save_dir=save_dir,
-#     )
-
-
-# @pytest.mark.parametrize(
-#     "model_type",
-#     [("tt_model"), ("torch_model")],
-# )
-# @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-# @pytest.mark.parametrize("res", [(224, 224)])
-# def test_yolo11n(device, model_type, res, reset_seeds):
-#     from models.experimental.functional_yolov11.tt import ttnn_yolov11  # depends on model which we take
-#     from models.experimental.functional_yolov11.reference import yolov11  # depends on model which we take
-#     from models.experimental.functional_yolov11.tt.model_preprocessing import (
-#         create_yolov11_input_tensors,
-#         create_yolov11_model_parameters,
-#     )
-
-#     try:
-#         sys.modules["ultralytics"] = yolov11
-#         sys.modules["ultralytics.nn.tasks"] = yolov11
-#         sys.modules["ultralytics.nn.modules.conv"] = yolov11
-#         sys.modules["ultralytics.nn.modules.block"] = yolov11
-#         sys.modules["ultralytics.nn.modules.head"] = yolov11
-
-#     except KeyError:
-#         print("models.experimental.functional_yolov11.reference.yolov11_utils not found.")
-
-#     if model_type == "torch_model":
-#         model = attempt_load(
-#             "yolo11n", model_path="models/experimental/functional_yolov11/reference/yolo11n.pt", map_location="cpu"
-#         )
-#         state_dict = model.state_dict()
-#         model = yolov11.YoloV11()
-#         ds_state_dict = {k: v for k, v in state_dict.items()}
-#         new_state_dict = {}
-#         for (name1, parameter1), (name2, parameter2) in zip(model.state_dict().items(), ds_state_dict.items()):
-#             if isinstance(parameter2, torch.FloatTensor):
-#                 new_state_dict[name1] = parameter2
-#         model.load_state_dict(new_state_dict)
-#         model.eval()
-#         logger.info("Inferencing using Torch Model")
-#     else:
-#         torch_input, ttnn_input = create_yolov11_input_tensors(
-#             device, input_channels=3, input_height=224, input_width=224
-#         )
-#         torch_model = attempt_load(
-#             "yolo11n", model_path="models/experimental/functional_yolov11/reference/yolo11n.pt", map_location="cpu"
-#         )
-#         state_dict = torch_model.state_dict()
-#         torch_model = yolov11.YoloV11()
-#         ds_state_dict = {k: v for k, v in state_dict.items()}
-#         new_state_dict = {}
-#         for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
-#             if isinstance(parameter2, torch.FloatTensor):
-#                 new_state_dict[name1] = parameter2
-#         torch_model.load_state_dict(new_state_dict)
-#         torch_model.eval()
-#         parameters = create_yolov11_model_parameters(torch_model, torch_input, device=device)
-#         model = ttnn_yolov11.YoloV11(device, parameters)
-#         logger.info("Inferencing using ttnn Model")
-
-#     save_dir = "models/experimental/functional_yolov11/demo/runs"
-#     model_name = "YOLOv11"
-
-#     model_path = "models/experimental/functional_yolov11/reference/yolo11n.pt"
-
-#     input_layout = ttnn.TILE_LAYOUT
-#     input_dtype = ttnn.bfloat8_b
-
-#     evaluation(
-#         device=device,
-#         res=res,
-#         model_type=model_type,
-#         model=model,
-#         parameters=None,
-#         input_dtype=input_dtype,
-#         input_layout=input_layout,
-#         save_dir=save_dir,
-#         model_name=model_name,
-#     )
-
-
 @pytest.mark.parametrize(
     "model_type",
     [
@@ -472,32 +344,13 @@ def test_run_yolov4_eval(
     model_type,
 ):
     if model_type == "torch_model":
-        from models.demos.yolov4.reference.yolov4 import Yolov4
+        from models.demos.yolov4.common import load_torch_model
 
-        model_path = model_location_generator("models", model_subdir="Yolo")
-
-        if model_path == "models":
-            if not os.path.exists("tests/ttnn/integration_tests/yolov4/yolov4.pth"):  # check if yolov4.th is availble
-                os.system(
-                    "tests/ttnn/integration_tests/yolov4/yolov4_weights_download.sh"
-                )  # execute the yolov4_weights_download.sh file
-
-            weights_pth = "tests/ttnn/integration_tests/yolov4/yolov4.pth"
-
-        else:
-            weights_pth = str(model_path / "yolov4.pth")
-
-        torch_model = Yolov4()
-        torch_dict = torch.load(weights_pth)
-        new_state_dict = dict(zip(torch_model.state_dict().keys(), torch_dict.values()))
-        torch_model.load_state_dict(new_state_dict)
-        torch_model.eval()
+        torch_model = load_torch_model(model_location_generator)
     else:
-        from models.demos.yolov4.tests.yolov4_perfomant_webdemo import Yolov4Trace2CQ
+        from models.demos.yolov4.runner.performant_runner import YOLOv4PerformantRunner
 
-        yolov4_trac2_2cq = Yolov4Trace2CQ()
-
-        yolov4_trac2_2cq.initialize_yolov4_trace_2cqs_inference(
+        ttnn_model = YOLOv4PerformantRunner(
             device,
             batch_size,
             act_dtype,
@@ -505,12 +358,12 @@ def test_run_yolov4_eval(
             resolution=resolution,
             model_location_generator=None,
         )
-        ttnn_model = yolov4_trac2_2cq
 
     save_dir = "models/demos/yolov4/demo/runs"
     model_name = "YOLOv4"
     input_dtype = ttnn.bfloat16
     input_layout = ttnn.ROW_MAJOR_LAYOUT
+
     evaluation(
         device=device,
         res=resolution,
