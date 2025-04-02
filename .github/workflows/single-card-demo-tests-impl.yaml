@@ -12,9 +12,9 @@ on:
       wheel-artifact-name:
         required: true
         type: string
-      # arch:
-      #   required: true
-      #   type: string
+      arch:
+        required: true
+        type: string
 
 jobs:
   single-card-demo-tests:
@@ -98,8 +98,8 @@ jobs:
           docker_opts: |
             -e TT_METAL_HOME=${{ github.workspace }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e ARCH_NAME=${{ inputs.arch }}
             -v /mnt/MLPerf:/mnt/MLPerf:ro
-          #  -e ARCH_NAME=${{ inputs.arch }}
           install_wheel: true
           run_args: |
             source ${{ github.workspace }}/tests/scripts/single_card/run_single_card_demo_tests.sh
@@ -115,8 +115,8 @@ jobs:
           docker_opts: |
             -e TT_METAL_HOME=${{ github.workspace }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e ARCH_NAME=${{ inputs.arch }}
             -v /mnt/MLPerf:/mnt/MLPerf:ro
-          #  -e ARCH_NAME=${{ inputs.arch }}
           install_wheel: true
           run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
       - name: Upload benchmark data
