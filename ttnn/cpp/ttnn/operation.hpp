@@ -13,6 +13,10 @@
 #include <tt_stl/reflection.hpp>
 #include "ttnn/config.hpp"
 
+#ifdef TRACY_ENABLE
+#include <tracy/Tracy.hpp>
+#endif
+
 namespace tt {
 
 namespace tt_metal {
@@ -474,7 +478,9 @@ struct DeviceOperation final {
 
     inline const Hash compute_program_hash(
         const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors) const {
+#ifdef TRACY_ENABLE
         ZoneScoped;
+#endif
         return this->compute_program_hash_impl_(this->type_erased_storage, input_tensors, optional_input_tensors);
     }
 
