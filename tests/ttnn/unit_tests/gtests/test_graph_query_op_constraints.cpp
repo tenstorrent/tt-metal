@@ -219,6 +219,7 @@ TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
         EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, expected_resource_usage.cb_peak_size_per_core);
         EXPECT_EQ(query.resource_usage.l1_buffers_peak_per_core, expected_resource_usage.l1_buffers_peak_per_core);
         EXPECT_EQ(query.resource_usage.l1_output_buffer_per_core, expected_resource_usage.l1_output_buffer_per_core);
+        ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
     }
 }
@@ -428,13 +429,13 @@ INSTANTIATE_TEST_SUITE_P(
             ResourceUsageMap{
                 {BoardType::N300,
                  ttnn::graph::ResourceUsage{
-                     .cb_peak_size_per_core = 3 * (2 * 2 * 32 * 32),
-                     .l1_buffers_peak_per_core = 10240,
+                     .cb_peak_size_per_core = 57344,
+                     .l1_buffers_peak_per_core = 26688,
                      .l1_output_buffer_per_core = 10240}},
                 {BoardType::E150,
                  ttnn::graph::ResourceUsage{
-                     .cb_peak_size_per_core = 3 * (2 * 2 * 32 * 32),
-                     .l1_buffers_peak_per_core = 6144,
+                     .cb_peak_size_per_core = 57344,
+                     .l1_buffers_peak_per_core = 14720,
                      .l1_output_buffer_per_core = 6144}}}),
         std::make_tuple(  // broadcast
             g_interleave_4_2_160_244_tiled,
@@ -442,13 +443,13 @@ INSTANTIATE_TEST_SUITE_P(
             ResourceUsageMap{
                 {BoardType::N300,
                  ttnn::graph::ResourceUsage{
-                     .cb_peak_size_per_core = 3 * (2 * 2 * 32 * 32),
-                     .l1_buffers_peak_per_core = 10240,
+                     .cb_peak_size_per_core = 57344,
+                     .l1_buffers_peak_per_core = 26688,
                      .l1_output_buffer_per_core = 10240}},
                 {BoardType::E150,
                  ttnn::graph::ResourceUsage{
-                     .cb_peak_size_per_core = 3 * (2 * 2 * 32 * 32),
-                     .l1_buffers_peak_per_core = 6144,
+                     .cb_peak_size_per_core = 57344,
+                     .l1_buffers_peak_per_core = 14720,
                      .l1_output_buffer_per_core = 6144}}})),
     [](const testing::TestParamInfo<std::tuple<ttnn::TensorSpec, ttnn::TensorSpec, ResourceUsageMap>>& info) {
         std::stringstream ss;
@@ -539,6 +540,7 @@ TEST_P(MatmulOpIfTest, Matmul) {
         EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, expected_resource_usage.cb_peak_size_per_core);
         EXPECT_EQ(query.resource_usage.l1_buffers_peak_per_core, expected_resource_usage.l1_buffers_peak_per_core);
         EXPECT_EQ(query.resource_usage.l1_output_buffer_per_core, expected_resource_usage.l1_output_buffer_per_core);
+        ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), output_spec);
     }
 }
@@ -617,10 +619,6 @@ INSTANTIATE_TEST_SUITE_P(
 
 class Conv2dOpIfTest : public ttnn::TTNNFixtureWithDevice {};
 TEST_F(Conv2dOpIfTest, Conv2d) {
-    // Todo(arminaleTT): There is a known problem with calculating conv output size. Once fixed, this test will be
-    // enabled.
-    GTEST_SKIP();
-
     const auto input_spec = ttnn::TensorSpec(
         ttnn::Shape{1, 1, 50176, 3},
         tt::tt_metal::TensorLayout(
@@ -653,10 +651,7 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
     const auto expected_resource_usage_map = ResourceUsageMap{
         {BoardType::N300,
          ttnn::graph::ResourceUsage{
-             .cb_peak_size_per_core = 0, .l1_buffers_peak_per_core = 0, .l1_output_buffer_per_core = 0}},
-        {BoardType::E150,
-         ttnn::graph::ResourceUsage{
-             .cb_peak_size_per_core = 0, .l1_buffers_peak_per_core = 0, .l1_output_buffer_per_core = 0}}};
+             .cb_peak_size_per_core = 229440, .l1_buffers_peak_per_core = 190568, .l1_output_buffer_per_core = 0}}};
     const BoardType board_type = tt::Cluster::instance().get_board_type(0);
     if (expected_resource_usage_map.count(board_type) == 0) {
         GTEST_SKIP();
@@ -666,7 +661,6 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
     // Run the test
     {
         tt::tt_metal::IDevice* device = device_;
-        const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
             ttnn::conv2d,
             device,
@@ -688,9 +682,12 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
             std::nullopt,
             output_spec.tensor_layout().get_memory_config());
 
-        // Todo(arminaleTT): There is a known problem with calculating conv output size. Once fixed, this test will be
-        // expanded
-        EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Error);
+        EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
+        EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, expected_resource_usage.cb_peak_size_per_core);
+        EXPECT_EQ(query.resource_usage.l1_buffers_peak_per_core, expected_resource_usage.l1_buffers_peak_per_core);
+        EXPECT_EQ(query.resource_usage.l1_output_buffer_per_core, expected_resource_usage.l1_output_buffer_per_core);
+        ASSERT_TRUE(query.output_tensor_spec.has_value());
+        EXPECT_EQ(query.output_tensor_spec.value(), output_spec);
     }
 }
 
