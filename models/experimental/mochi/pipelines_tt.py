@@ -80,7 +80,10 @@ def sample_model_tt(device, dit, conditioning, **args):
         )
 
         assert cond_z_1BNI.shape == uncond_z_1BNI.shape
-        return uncond_z_1BNI + cfg_scale * (cond_z_1BNI - uncond_z_1BNI)
+        torch_cond = dit.reverse_preprocess(cond_z_1BNI, latent_t, latent_h, latent_w)
+        torch_uncond = dit.reverse_preprocess(uncond_z_1BNI, latent_t, latent_h, latent_w)
+        torch_pred = torch_uncond + cfg_scale * (torch_cond - torch_uncond)
+        return torch_pred
 
     # Preparation before first iteration
     rope_cos_1HND, rope_sin_1HND, trans_mat = dit.prepare_rope_features(T=latent_t, H=latent_h, W=latent_w)
@@ -91,16 +94,16 @@ def sample_model_tt(device, dit, conditioning, **args):
     uncond_y_feat_1BLY, uncond_y_pool_11BX = dit.prepare_text_features(
         t5_feat=cond_null["y_feat"][0], t5_mask=cond_null["y_mask"][0]
     )
-    z_1BNI = dit.preprocess_input(z_BCTHW)
 
     for i in get_new_progress_bar(range(0, sample_steps), desc="Sampling"):
         sigma = sigma_schedule[i]
         dsigma = sigma - sigma_schedule[i + 1]
 
+        z_1BNI = dit.preprocess_input(z_BCTHW)
         sigma_B = torch.full([B], sigma, device=device)
-        pred_1BNI = model_fn(z_1BNI=z_1BNI, sigma_B=sigma_B, cfg_scale=cfg_schedule[i])
+        pred_BCTHW = model_fn(z_1BNI=z_1BNI, sigma_B=sigma_B, cfg_scale=cfg_schedule[i])
         # assert pred_BCTHW.dtype == torch.float32
-        z_1BNI = z_1BNI + dsigma * pred_1BNI
+        z_BCTHW = z_BCTHW + dsigma * pred_BCTHW
 
     # Postprocess z
     z_BCTHW = dit.reverse_preprocess(z_1BNI, latent_t, latent_h, latent_w).float()
