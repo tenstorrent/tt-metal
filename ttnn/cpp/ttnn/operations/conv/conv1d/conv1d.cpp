@@ -61,12 +61,6 @@ Result conv1d(
             ? ttnn::reshape(input_tensor, Shape({batch_size, input_length, 1, in_channels}))
             : input_tensor;
 
-    // TODO move this to prepare weights
-    // reshape input tensor to 4D, if it is not already
-    const ttnn::Tensor& weight_tensor_4d =
-        (weight_tensor.get_logical_shape().rank() < 4)
-            ? ttnn::reshape(weight_tensor, Shape({out_channels, in_channels / groups, kernel_size, 1}))
-            : weight_tensor;
     // padding for conv2d based on conv1d padding
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> conv2d_padding;
     if (std::holds_alternative<uint32_t>(padding)) {
@@ -85,7 +79,7 @@ Result conv1d(
     auto [output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device] = conv2d::conv2d(
         input_tensor_4d,
         // input_tensor,
-        weight_tensor_4d,
+        weight_tensor,
         // weight_tensor,
         device,
         in_channels,

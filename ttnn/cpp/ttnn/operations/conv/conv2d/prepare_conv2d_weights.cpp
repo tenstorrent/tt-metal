@@ -3,8 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
+#include "tt-metalium/shape.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include <optional>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
@@ -668,17 +670,23 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t groups,
     uint32_t act_block_h_ntiles,
     uint32_t input_width,
-    const bool parameters_on_device) {
-    validate_weight_tensor(weight_tensor);
-    ttnn::Tensor weight_tensor_;  // tensor to return
-    ttnn::Tensor bias_tensor_;
+    const bool parameters_on_device,
+    std::optional<ttnn::Shape> weight_shape_override) {
+    // Check if this can be done on device
+    ttnn::Tensor weight_tensor_ = weight_tensor;  // tensor to return
+    if (weight_shape_override.has_value()) {
+        weight_tensor_ = ttnn::reshape(weight_tensor_, weight_shape_override.value());
+    }
 
-    auto original_weights_shape = weight_tensor.get_logical_shape();
+    validate_weight_tensor(weight_tensor_);
+
+    auto original_weights_shape = weight_tensor_.get_logical_shape();
     uint32_t original_weights_out_channels = original_weights_shape[0];
     uint32_t original_weights_in_channels = original_weights_shape[1];
     uint32_t original_weights_window_h = original_weights_shape[2];
     uint32_t original_weights_window_w = original_weights_shape[3];
 
+    ttnn::Tensor bias_tensor_;
     const bool is_conv1d = is_1d_conv(original_weights_window_w, input_width);
     const bool is_conv_1d_depthwise_conv = is_1d_deptwise_conv(
         groups,
@@ -688,7 +696,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         input_width,
         bias_tensor.has_value());
 
-    weight_tensor_ = weight_tensor;
     // Convert weight tensor to 0 padded shape if groups > 1
     if (groups > 1 and is_tensor_on_device_or_multidevice(weight_tensor_)) {
         TT_THROW(
@@ -937,12 +944,16 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t groups,
     uint32_t act_block_h_ntiles,
     uint32_t input_width,
-    const bool parameters_on_device) {
-    validate_weight_tensor(weight_tensor);
-    ttnn::Tensor weight_tensor_;  // tensor to return
+    const bool parameters_on_device,
+    std::optional<ttnn::Shape> weight_shape_override) {
+    ttnn::Tensor weight_tensor_ = weight_tensor;  // tensor to return
+    if (weight_shape_override.has_value()) {
+        weight_tensor_ = ttnn::reshape(weight_tensor_, weight_shape_override.value());
+    }
+    validate_weight_tensor(weight_tensor_);
     ttnn::Tensor bias_tensor_;
 
-    const auto& original_weights_shape = weight_tensor.get_logical_shape();
+    const auto& original_weights_shape = weight_tensor_.get_logical_shape();
     uint32_t original_weights_out_channels = original_weights_shape[0];
     uint32_t original_weights_in_channels = original_weights_shape[1];
     uint32_t original_weights_window_h = original_weights_shape[2];
@@ -956,8 +967,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         original_weights_window_w,
         input_width,
         bias_tensor.has_value());
-
-    weight_tensor_ = weight_tensor;
 
     // Convert weight tensor to 0 padded shape if groups > 1
     if (!is_conv1d and groups > 1) {
@@ -1131,6 +1140,12 @@ ttnn::Tensor prepare_conv_weights(
     std::optional<const ttnn::Tensor> bias_tensor = std::nullopt;
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
+
+    // Override weight shape if 1D conv with 3D weight tensor
+    std::optional<ttnn::Shape> weight_shape_override = std::nullopt;
+    if (is_1d_conv(kernel_size[1], input_width) && weight_tensor.get_logical_shape().rank() == 3) {
+        weight_shape_override = ttnn::Shape({out_channels, in_channels / groups, kernel_size[0], 1});
+    }
     tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
         weight_tensor,
         bias_tensor,
@@ -1143,7 +1158,9 @@ ttnn::Tensor prepare_conv_weights(
         device,
         groups,
         opt_conv_op_block_config.act_block_h_ntiles,
-        input_width);
+        input_width,
+        true,  // setting to default value
+        weight_shape_override);
 
     return weight_tensor_on_device;
 }
@@ -1297,7 +1314,8 @@ template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weigh
     uint32_t groups,
     uint32_t act_block_h_ntiles,
     uint32_t input_width,
-    const bool parameters_on_device);
+    const bool parameters_on_device,
+    std::optional<ttnn::Shape> weight_shape_override);
 
 template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_on_device<MeshDevice>(
     const ttnn::Tensor& weight_tensor,
@@ -1312,7 +1330,8 @@ template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weigh
     uint32_t groups,
     uint32_t act_block_h_ntiles,
     uint32_t input_width,
-    const bool parameters_on_device);
+    const bool parameters_on_device,
+    std::optional<ttnn::Shape> weight_shape_override);
 
 template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device<IDevice>(
     const ttnn::Tensor& weight_tensor,
@@ -1327,7 +1346,8 @@ template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weigh
     uint32_t groups,
     uint32_t act_block_h_ntiles,
     uint32_t input_width,
-    const bool parameters_on_device);
+    const bool parameters_on_device,
+    std::optional<ttnn::Shape> weight_shape_override);
 
 template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>>
 prepare_conv_weights_biases_and_move_to_device<MeshDevice>(
@@ -1343,7 +1363,8 @@ prepare_conv_weights_biases_and_move_to_device<MeshDevice>(
     uint32_t groups,
     uint32_t act_block_h_ntiles,
     uint32_t input_width,
-    const bool parameters_on_device);
+    const bool parameters_on_device,
+    std::optional<ttnn::Shape> weight_shape_override);
 
 template ttnn::Tensor prepare_conv_bias<IDevice>(
     const ttnn::Tensor& bias_tensor,
