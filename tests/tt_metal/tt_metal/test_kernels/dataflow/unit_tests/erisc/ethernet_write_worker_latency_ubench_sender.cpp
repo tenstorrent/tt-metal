@@ -43,6 +43,13 @@ void kernel_main() {
     const uint32_t handshake_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_messages = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t message_size = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t worker_noc_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t worker_noc_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t worker_buffer_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t sender_encoding = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t receiver_encoding = get_arg_val<uint32_t>(arg_idx++);
+
+    const uint64_t sender_receiver_encoding = ((uint64_t)sender_encoding << 32) | receiver_encoding;
 
     ASSERT(is_power_of_two(NUM_BUFFER_SLOTS));
 
@@ -72,6 +79,9 @@ void kernel_main() {
     eth_setup_handshake(handshake_addr, true);
 
     uint64_t worker_noc_addr = get_noc_addr(worker_noc_x, worker_noc_y, worker_buffer_addr);
+
+    // Log sender/receiver tt_cxy_pair
+    DeviceTimestampedData("SR_ENCODE", sender_receiver_encoding);
 
     switch (benchmark_type) {
         case EthOnlyUniDir: {
@@ -125,4 +135,6 @@ void kernel_main() {
         asm volatile("nop");
     }
     ncrisc_noc_counters_init();
+
+    internal_::risc_context_switch();
 }
