@@ -14,7 +14,8 @@
 #include <string>
 #include <utility>
 #include <vector>
-#include <cmath>
+
+uint16_t fp32_to_bf16_bits(float val);
 
 class bfloat16 {
 private:
@@ -25,26 +26,7 @@ public:
     bfloat16() = default;
 
     // create from float: no rounding, just truncate
-    bfloat16(float float_num) {
-        static_assert(sizeof float_num == 4, "float must have size 4");
-        if (std::isnan(float_num)) {
-            uint16_data = UINT16_C(0x7FC0);
-        } else {
-            union {
-                uint32_t u32;
-                float f32;
-            };
-
-            f32 = float_num;
-            uint32_t lower_bits = u32 & 0xFFFF;
-            uint32_t guard_bit = (lower_bits >> 15) & 1;
-            uint32_t round_bit = (lower_bits >> 14) & 1;
-            uint32_t sticky_bit = (lower_bits & 0x3FFF) != 0;
-
-            uint16_data = static_cast<uint16_t>(u32 >> 16);
-            uint16_data += (guard_bit && (round_bit || sticky_bit || (uint16_data & 1)));
-        }
-    }
+    bfloat16(float float_num) { uint16_data = fp32_to_bf16_bits(float_num); }
 
     // store lower 16 as 16-bit uint
     bfloat16(uint32_t uint32_data) { uint16_data = (uint16_t)uint32_data; }

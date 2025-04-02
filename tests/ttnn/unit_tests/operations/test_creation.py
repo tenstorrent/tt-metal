@@ -280,7 +280,10 @@ def test_arange(device, start, end, step):
     if (start > end and step > 0) or (start < end and step < 0) or (step == 0):
         pytest.skip(f"Skipping invalid case: start={start}, end={end}, step={step}")
 
-    torch_output_tensor = torch.arange(start, end, step)
+    # torch.arange has worse accuracy for bf16 than ttnn for some reason:
+    # https://github.com/tenstorrent/tt-metal/pull/19882#issuecomment-2772903175
+    torch_output_tensor_int = torch.arange(start, end, step, dtype=torch.int32)
+    torch_output_tensor = torch_output_tensor_int.to(torch.bfloat16)
 
     output_tensor = ttnn.arange(start, end, step, ttnn.bfloat16, device)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)

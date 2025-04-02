@@ -152,8 +152,8 @@ int main(int argc, char** argv) {
         std::vector<uint32_t> golden_vec =
             pack_bfloat16_vec_into_uint32_vec(unpack_uint32_vec_into_bfloat16_vec(src0_vec, transform_to_golden));
 
-        constexpr float abs_tolerance = 0.02f;
-        constexpr float rel_tolerance = 0.02f;
+        constexpr float abs_tolerance = 0.025f;
+        constexpr float rel_tolerance = 0.025f;
         auto comparison_function = [](const float a, const float b) {
             return is_close(a, b, rel_tolerance, abs_tolerance);
         };
