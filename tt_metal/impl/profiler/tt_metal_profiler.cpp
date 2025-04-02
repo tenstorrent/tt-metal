@@ -136,15 +136,8 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
             .noc = tt_metal::NOC::RISCV_0_default,
             .defines = kernel_defines});
 
-    // Using MeshDevice APIs if the current device is managed by MeshDevice
-    if (auto mesh_device = device->get_mesh_device()) {
-        auto device_coord = mesh_device->get_view().find_device(device_id);
-        distributed::MeshWorkload workload;
-        workload.add_program(distributed::MeshCoordinateRange(device_coord, device_coord), std::move(sync_program));
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-    } else {
-        EnqueueProgram(device->command_queue(), sync_program, false);
-    }
+    tt_metal::detail::LaunchProgram(
+        device, sync_program, false /* wait_until_cores_done */, true /* force_slow_dispatch */);
 
     std::filesystem::path output_dir = std::filesystem::path(get_profiler_logs_dir());
     std::filesystem::path log_path = output_dir / "sync_device_info.csv";
@@ -171,11 +164,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         writeTimes[i] = (TracyGetCpuTime() - writeStart);
     }
 
-    if (auto mesh_device = device->get_mesh_device()) {
-        mesh_device->mesh_command_queue().finish();
-    } else {
-        Finish(device->command_queue());
-    }
+    tt_metal::detail::WaitProgramDone(device, sync_program, false);
 
     log_info("SYNC PROGRAM FINISH IS DONE ON {}", device_id);
     if ((smallestHostime[device_id] == 0) || (smallestHostime[device_id] > hostStartTime)) {
