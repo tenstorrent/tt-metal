@@ -109,8 +109,6 @@ __attribute__((noinline)) void init_profiler(
             // TODO(MO): Clean up magic numbers
             profiler_data_buffer[riscID][i] = 0x80000000;
         }
-        profiler_data_buffer[riscID][ID_LL] =
-            (runCounter & 0xFFFF) | (profiler_data_buffer[riscID][ID_LL] & 0xFFFF0000);
     }
 #endif
 }
@@ -155,7 +153,7 @@ inline __attribute__((always_inline)) void mark_dropped_timestamps(uint32_t inde
 
 inline __attribute__((always_inline)) void set_host_counter(uint32_t counterValue) {
     for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
-        profiler_data_buffer[riscID][ID_LL] = (counterValue << 16) | (profiler_data_buffer[riscID][ID_LL] & 0xFFFF);
+        profiler_data_buffer[riscID][ID_LL] = counterValue;
     }
 }
 

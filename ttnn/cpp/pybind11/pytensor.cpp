@@ -38,11 +38,7 @@ namespace detail {
 
 #ifdef DEBUG
 
-void log_external_operation(
-    std::size_t operation_id,
-    std::size_t device_operation_id,
-    const operation::ExternalOperation& operation,
-    const std::vector<Tensor>& input_tensors) {
+void log_external_operation(const operation::ExternalOperation& operation, const std::vector<Tensor>& input_tensors) {
     tt::log_debug(tt::LogOp, "Launching External Operation: \"{}\"", operation.get_type_name());
 
     auto attributes = operation.attributes();
@@ -63,11 +59,7 @@ void log_external_operation(
 }
 #else
 
-void log_external_operation(
-    std::size_t operation_id,
-    std::size_t device_operation_id,
-    const operation::ExternalOperation& operation,
-    const std::vector<Tensor>& input_tensors) {}
+void log_external_operation(const operation::ExternalOperation& operation, const std::vector<Tensor>& input_tensors) {}
 
 #endif
 
@@ -675,16 +667,13 @@ void pytensor_module(py::module& m_tensor) {
             return py::cpp_function(std::function([function, function_name](
                                                       const py::args& args, const py::kwargs& kwargs) {
                 ZoneScopedN("TT_DNN_FALLBACK_OP");
-                uint32_t device_operation_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
                 auto [operation, input_tensors] =
                     detail::parse_external_operation(function, args, kwargs, function_name);
                 GraphTracker::instance().track_function_start(operation.get_type_name(), args, kwargs);
-                detail::log_external_operation(
-                    ttnn::CoreIDs::instance().get_python_operation_id(), device_operation_id, operation, input_tensors);
-
+                detail::log_external_operation(operation, input_tensors);
                 auto output = function(*args, **kwargs);
-
-                TracyOpTTNNExternal(device_operation_id, operation, input_tensors);
+                TracyOpTTNNExternal(
+                    operation, input_tensors, ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id());
                 GraphTracker::instance().track_function_end(output);
                 return output;
             }));

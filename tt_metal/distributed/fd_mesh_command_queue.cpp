@@ -8,6 +8,7 @@
 #include <mesh_event.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -37,6 +38,7 @@
 #include "tt_metal/impl/buffers/dispatch.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
+#include "tt_metal/impl/program/program_command_sequence.hpp"
 #include <umd/device/types/xy_pair.h>
 
 namespace tt {
@@ -249,7 +251,11 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
         if (sysmem_manager.get_bypass_mode()) {
             this->capture_program_trace_on_subgrid(
-                device_range, program_cmd_seq, dispatch_metadata.stall_first, dispatch_metadata.stall_before_program);
+                device_range,
+                program_cmd_seq,
+                dispatch_metadata.stall_first,
+                dispatch_metadata.stall_before_program,
+                program.get_runtime_id());
             active_sub_grids.push_back(device_range);
         } else {
             this->write_program_cmds_to_subgrid(
@@ -257,7 +263,8 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                 program_cmd_seq,
                 dispatch_metadata.stall_first,
                 dispatch_metadata.stall_before_program,
-                chip_ids_in_workload);
+                chip_ids_in_workload,
+                program.get_runtime_id());
         }
     }
     // Send go signals to devices not running a program to ensure consistent global state
@@ -573,19 +580,16 @@ void FDMeshCommandQueue::write_program_cmds_to_subgrid(
     ProgramCommandSequence& program_cmd_seq,
     bool stall_first,
     bool stall_before_program,
-    std::unordered_set<uint32_t>& chip_ids_in_workload) {
+    std::unordered_set<uint32_t>& chip_ids_in_workload,
+    uint32_t program_runtime_id) {
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
-
     for (const auto& coord : sub_grid) {
+        auto device = this->mesh_device_->get_device(coord);
+        this->update_launch_messages_for_device_profiler(program_cmd_seq, program_runtime_id, device);
         program_dispatch::write_program_command_sequence(
-            program_cmd_seq,
-            this->mesh_device_->get_device(coord)->sysmem_manager(),
-            id_,
-            dispatch_core_type,
-            stall_first,
-            stall_before_program);
-        chip_ids_in_workload.insert(this->mesh_device_->get_device(coord)->id());
+            program_cmd_seq, device->sysmem_manager(), id_, dispatch_core_type, stall_first, stall_before_program);
+        chip_ids_in_workload.insert(device->id());
     }
 }
 
@@ -614,12 +618,35 @@ void FDMeshCommandQueue::capture_program_trace_on_subgrid(
     const MeshCoordinateRange& sub_grid,
     ProgramCommandSequence& program_cmd_seq,
     bool stall_first,
-    bool stall_before_program) {
-    auto& sysmem_manager_for_trace = mesh_device_->get_device(sub_grid.start_coord())->sysmem_manager();
-    uint32_t sysmem_manager_offset = sysmem_manager_for_trace.get_issue_queue_write_ptr(id_);
-
+    bool stall_before_program,
+    uint32_t program_runtime_id) {
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
+
+#if defined(TRACY_ENABLE)
+    // Host Memory Intensive Path (when profiler is enabled): The launch messages across devices are unique, since
+    // the host_assigned_field in the launch_msg contains the physical device id (required by the performance profiler).
+    // Hence the trace per device must be uniquely captured.
+    for (const auto& coord : sub_grid) {
+        auto& sysmem_manager_for_trace = mesh_device_->get_device(coord)->sysmem_manager();
+        uint32_t sysmem_manager_offset = sysmem_manager_for_trace.get_issue_queue_write_ptr(id_);
+
+        auto device = this->mesh_device_->get_device(coord);
+        this->update_launch_messages_for_device_profiler(program_cmd_seq, program_runtime_id, device);
+        program_dispatch::write_program_command_sequence(
+            program_cmd_seq, sysmem_manager_for_trace, id_, dispatch_core_type, stall_first, stall_before_program);
+        auto mesh_trace_md = MeshTraceStagingMetadata{
+            MeshCoordinateRange(coord, coord),
+            coord,
+            sysmem_manager_offset,
+            sysmem_manager_for_trace.get_issue_queue_write_ptr(id_) - sysmem_manager_offset};
+        ordered_mesh_trace_md_.push_back(mesh_trace_md);
+    }
+#else
+    // Optimized Path (generic use-cases): Program dispatch commands across the entire sub-grid are identical.
+    // Capture once.
+    auto& sysmem_manager_for_trace = mesh_device_->get_device(sub_grid.start_coord())->sysmem_manager();
+    uint32_t sysmem_manager_offset = sysmem_manager_for_trace.get_issue_queue_write_ptr(id_);
 
     program_dispatch::write_program_command_sequence(
         program_cmd_seq, sysmem_manager_for_trace, id_, dispatch_core_type, stall_first, stall_before_program);
@@ -629,6 +656,7 @@ void FDMeshCommandQueue::capture_program_trace_on_subgrid(
         sysmem_manager_offset,
         sysmem_manager_for_trace.get_issue_queue_write_ptr(id_) - sysmem_manager_offset};
     ordered_mesh_trace_md_.push_back(mesh_trace_md);
+#endif
 }
 
 void FDMeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
@@ -731,6 +759,16 @@ void FDMeshCommandQueue::record_end() {
 
 SystemMemoryManager& FDMeshCommandQueue::reference_sysmem_manager() {
     return mesh_device_->get_device(0, 0)->sysmem_manager();
+}
+
+void FDMeshCommandQueue::update_launch_messages_for_device_profiler(
+    ProgramCommandSequence& program_cmd_seq, uint32_t program_runtime_id, IDevice* device) {
+#if defined(TRACY_ENABLE)
+    for (auto& launch_msg : program_cmd_seq.go_signals) {
+        launch_msg->kernel_config.host_assigned_id =
+            tt_metal::detail::EncodePerDeviceProgramID(program_runtime_id, device->id());
+    }
+#endif
 }
 
 }  // namespace tt::tt_metal::distributed
