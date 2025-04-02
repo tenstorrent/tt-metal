@@ -452,10 +452,17 @@ typename device_operation_t::tensor_return_value_t launch_on_multi_device(
     std::vector<tensor_return_value_t> outputs;
     outputs.reserve(num_shards);
 
-    for (auto shard_index = 0; shard_index < num_shards; shard_index++) {
-        auto device = storage.get_buffer_for_device_id(shard_index)->device();
-        auto shard_tensor_args = get_shard_tensor_args<device_operation_t>(shard_index, device, tensor_args);
+    for (int i = 0; i < storage.ordered_device_ids.size(); i++) {
+
+        auto device_id  =  storage.ordered_device_ids[i];
+
+
+        auto device = storage.get_buffer_for_device_id(device_id)->device();
+
+        auto shard_tensor_args = get_shard_tensor_args<device_operation_t>(i, device, tensor_args);
+
         outputs.push_back(launch_on_single_device<device_operation_t>(cq_id, operation_attributes, shard_tensor_args));
+
     }
 
     return make_tensor_return_value_from_shards(storage, outputs);
