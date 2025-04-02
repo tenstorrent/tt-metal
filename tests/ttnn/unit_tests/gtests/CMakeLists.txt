@@ -27,6 +27,7 @@ set(TTNN_CCL_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_sharded_address_generators_new.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_sharded_address_generators.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_ccl_reduce_scatter_host_helpers.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_multi_tensor_ccl.cpp
 )
 
 set(TTNN_FABRIC_EDM_SRC ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_fabric_edm.cpp)
