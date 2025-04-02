@@ -145,17 +145,17 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     using tt::tt_metal::CircularBufferConfig;
 
     uint32_t next_cb_index = CBIndex::c_0;
-    uint32_t buffering_factor = 2;
+    uint32_t buffering_factor = 2;  // only apply to intermediate buffers
 
     // input data is in a sharded CB
     uint32_t aligned_input_stick_nbytes = round_up_to_mul32(input_stick_nbytes);
     uint32_t in_cb_pagesize = aligned_input_stick_nbytes;
-    uint32_t in_cb_npages = halo_shard_shape[0] * buffering_factor;
+    uint32_t in_cb_npages = halo_shard_shape[0];
 
     auto [in_cb_id, cb_src0] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, in_cb_pagesize, in_cb_npages, input_cb_data_format, halo_in.buffer());
 
-    // intermediate tensor CB
+    // first intermediate CB
     uint32_t in_cb_id1 = next_cb_index++;
     tt::tt_metal::create_cb(
         in_cb_id1,
@@ -165,7 +165,7 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
         4 * buffering_factor,
         input_cb_data_format);  // since 4 pixels per page are needed for intermediate tensor.
 
-    // intermediate tensor CB
+    // second intermediate CB
     uint32_t in_cb_id2 = next_cb_index++;
     tt::tt_metal::create_cb(
         in_cb_id2,
@@ -175,7 +175,7 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
         4 * buffering_factor,
         input_cb_data_format);  // since 4 pixels per page are needed for intermediate tensor.
 
-    // scaler CB
+    // scalar intermediate CBs
     uint32_t in_scalar_cb_pagesize = tile_size(input_cb_data_format);
     uint32_t in_scalar_cb_npages = 1 * buffering_factor;
 
@@ -189,7 +189,7 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
 
     // output sharded CB with upsampled data
     uint32_t out_cb_pagesize = round_up_to_mul32(output_stick_nbytes);  // aligned output stick n bytes
-    uint32_t out_cb_npages = output_nsticks_per_core * buffering_factor;
+    uint32_t out_cb_npages = output_nsticks_per_core;
     auto [out_cb_id, out_cb] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, output_cb_data_format, output.buffer());
 
