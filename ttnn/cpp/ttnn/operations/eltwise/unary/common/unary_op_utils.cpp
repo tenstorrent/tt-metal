@@ -155,7 +155,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             break;
         case UnaryOpType::FMOD:
             op_init_and_name = {
-                "fmod_tile_init();",
+                fmt::format(
+                    "fmod_tile_init({:#x}u, {:#x}u);",
+                    std::bit_cast<uint32_t>(param0),
+                    std::bit_cast<uint32_t>(1.0f / param0)),
                 fmt::format(
                     "fmod_tile({}, {:#x}u, {:#x}u);",
                     idst,
