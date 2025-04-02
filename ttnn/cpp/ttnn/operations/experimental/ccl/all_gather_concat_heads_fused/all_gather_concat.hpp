@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,7 @@ struct ExecuteAllGatherConcat {
         const uint32_t num_heads,
         const uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
         bool enable_persistent_fabric_mode = false);
 
@@ -33,7 +33,7 @@ struct ExecuteAllGatherConcat {
         const uint32_t num_heads,
         const uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
         bool enable_persistent_fabric_mode = false);
 
@@ -48,7 +48,7 @@ struct ExecuteAllGatherConcat {
         const uint32_t num_heads,
         const std::optional<uint32_t> num_links = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
         bool enable_persistent_fabric_mode = false);
 
@@ -62,7 +62,7 @@ struct ExecuteAllGatherConcat {
         const uint32_t num_heads,
         const std::optional<uint32_t> num_links = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+        const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
         bool enable_persistent_fabric_mode = false);
 };

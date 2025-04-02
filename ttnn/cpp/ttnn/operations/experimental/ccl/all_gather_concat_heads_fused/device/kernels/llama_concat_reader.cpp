@@ -201,7 +201,6 @@ void kernel_main() {
         start_local,
         core_noc_x,
         core_noc_y);
-    DPRINT << "DONE LOCAL NLP\n";
 
     // 1. Wait for signal from All-Gather worker
     noc_semaphore_wait(signal_semaphore_addr_ptr, VALID);
@@ -222,6 +221,4 @@ void kernel_main() {
         start_local,
         core_noc_x,
         core_noc_y);
-
-    DPRINT << "DONE\n";
 }

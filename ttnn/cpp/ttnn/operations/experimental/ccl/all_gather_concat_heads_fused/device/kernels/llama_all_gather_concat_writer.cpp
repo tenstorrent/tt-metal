@@ -39,15 +39,15 @@ void kernel_main() {
     // Load the input tensor spec
     address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
     const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t num_tiles_per_core = 4;  // get_arg_val<uint32_t>(arg_idx++);
+    constexpr uint32_t num_tiles_per_core = 4;  // get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t first_core_tile_start_offset = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
     bool wait_output_semaphore = get_arg_val<uint32_t>(arg_idx++);
     bool reset_global_semaphore = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t out_ready_sem_noc0_x = 19;  // get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t out_ready_sem_noc0_y = 18;  // get_arg_val<uint32_t>(arg_idx++);
-    uint32_t out_ready_sem_wait_value = 12;   // get_arg_val<uint32_t>(arg_idx++);
+    constexpr uint8_t out_ready_sem_noc0_x = 19;       // get_arg_val<uint32_t>(arg_idx++);
+    constexpr uint8_t out_ready_sem_noc0_y = 18;       // get_arg_val<uint32_t>(arg_idx++);
+    constexpr uint32_t out_ready_sem_wait_value = 12;  // get_arg_val<uint32_t>(arg_idx++);
 
     const uint32_t concat_semaphore_send_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
@@ -69,40 +69,6 @@ void kernel_main() {
     auto fabric_connection =
         FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
             arg_idx);
-
-    DPRINT << "ct args: \n";
-    DPRINT << "my_chip_id: " << (uint32_t)my_chip_id << "\n";
-    DPRINT << "reserved_packet_header_cb_id: " << (uint32_t)reserved_packet_header_cb_id << "\n";
-    DPRINT << "num_packet_headers_storable: " << (uint32_t)num_packet_headers_storable << "\n";
-    DPRINT << "cb0_id: " << (uint32_t)cb0_id << "\n";
-    DPRINT << "packet_size_in_pages: " << (uint32_t)packet_size_in_pages << "\n";
-    DPRINT << "tensor0_page_size: " << (uint32_t)tensor0_page_size << "\n";
-    DPRINT << "num_targets_forward_direction: " << (uint32_t)num_targets_forward_direction << "\n";
-    DPRINT << "num_targets_backward_direction: " << (uint32_t)num_targets_backward_direction << "\n";
-
-    DPRINT << "rt args: \n";
-    DPRINT << "tensor_address0: " << (uint32_t)tensor_address0 << "\n";
-    DPRINT << "num_tiles_per_core: " << (uint32_t)num_tiles_per_core << "\n";
-    DPRINT << "num_tiles_to_read: " << (uint32_t)num_tiles_to_read << "\n";
-    DPRINT << "first_core_tile_start_offset: " << (uint32_t)first_core_tile_start_offset << "\n";
-    DPRINT << "num_cores: " << (uint32_t)num_cores << "\n";
-    for (uint32_t i = 0; i < num_cores; i++) {
-        DPRINT << "core_noc_x[" << i << "]: " << (uint32_t)core_noc_x[i] << "\n";
-        DPRINT << "core_noc_y[" << i << "]: " << (uint32_t)core_noc_y[i] << "\n";
-    }
-    DPRINT << "wait_output_semaphore: " << (uint32_t)wait_output_semaphore << "\n";
-    DPRINT << "reset_global_semaphore: " << (uint32_t)reset_global_semaphore << "\n";
-    DPRINT << "out_ready_sem_bank_addr: " << (uint32_t)out_ready_sem_bank_addr << "\n";
-    DPRINT << "out_ready_sem_noc0_x: " << (uint32_t)out_ready_sem_noc0_x << "\n";
-    DPRINT << "out_ready_sem_noc0_y: " << (uint32_t)out_ready_sem_noc0_y << "\n";
-    DPRINT << "out_ready_sem_wait_value: " << (uint32_t)out_ready_sem_wait_value << "\n";
-
-    DPRINT << "arg_for_fab: " << (uint32_t)arg_for_fab << "\n";
-    DPRINT << "fabric_connection arg 0" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
-    DPRINT << "fabric_connection arg 1" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
-    DPRINT << "fabric_connection arg 2" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
-    DPRINT << "fabric_connection arg 3" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
-    DPRINT << "fabric_connection arg 4" << get_arg_val<uint32_t>(arg_for_fab++) << "\n";
 
     uint32_t concat_arg_start = get_arg_val<uint32_t>(0);
     uint32_t in_tile_offset_by_head = get_arg_val<uint32_t>(concat_arg_start);
@@ -239,9 +205,6 @@ void kernel_main() {
     cb_push_back(reserved_packet_header_cb_id, 1);
     cb_reserve_back(reserved_packet_header_cb_id, 1);
 
-    DPRINT << "packet_header_buffer_addr_forward: " << (uint32_t)packet_header_buffer_addr_forward << "\n";
-    DPRINT << "packet_header_buffer_addr_backward: " << (uint32_t)packet_header_buffer_addr_backward << "\n";
-
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_forward);
@@ -323,12 +286,10 @@ void kernel_main() {
     uint64_t out_ready_sem_noc_addr =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
     noc_semaphore_inc(out_ready_sem_noc_addr, 1);
-    DPRINT << "inc done\n";
 
     // 3. wait for mcast output ready semaphore
     if (wait_output_semaphore) {
-        while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) < out_ready_sem_wait_value);
-        DPRINT << "waitval done\n";
+        while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) != out_ready_sem_wait_value);
     }
 
     // Set up for mcasting to concat workers
@@ -363,10 +324,7 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(concat_semaphore_send_addr);
         noc_semaphore_wait(signal_semaphore_addr_ptr, VALID);
-        // noc_semaphore_set(signal_semaphore_addr_ptr, 0);
     }
-
-    DPRINT << "START CONCAT HEADS\n";
 
     nlp_concat(
         head_size_num_tiles,
@@ -385,7 +343,6 @@ void kernel_main() {
     if (reset_global_semaphore) {
         const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem_bank_addr);
         noc_inline_dw_write(dest_noc_addr, 0);
-        DPRINT << "reset done\n";
     }
 
     // noc_async_read_barrier();
@@ -393,6 +350,4 @@ void kernel_main() {
         fabric_connection.close_finish();
     }
     noc_async_write_barrier();
-
-    DPRINT << "DONE\n";
 }

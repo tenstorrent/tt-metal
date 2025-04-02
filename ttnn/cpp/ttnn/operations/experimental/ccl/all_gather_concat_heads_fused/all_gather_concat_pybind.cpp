@@ -59,7 +59,7 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
             py::kw_only(),
             py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt,
-            py::arg("topology") = ttnn::ccl::Topology::Ring,
+            py::arg("topology") = ttnn::ccl::Topology::Linear,
             py::arg("subdevice_id") = std::nullopt,
             py::arg("enable_persistent_fabric_mode") = false,
             py::arg("queue_id") = DefaultQueueId},
@@ -104,7 +104,7 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
             py::kw_only(),
             py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt,
-            py::arg("topology") = ttnn::ccl::Topology::Ring,
+            py::arg("topology") = ttnn::ccl::Topology::Linear,
             py::arg("subdevice_id") = std::nullopt,
             py::arg("enable_persistent_fabric_mode") = false,
             py::arg("queue_id") = DefaultQueueId});

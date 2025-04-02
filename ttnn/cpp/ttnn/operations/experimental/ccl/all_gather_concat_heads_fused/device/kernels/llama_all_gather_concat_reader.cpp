@@ -33,7 +33,7 @@ void kernel_main() {
     // Load the input tensor spec
     address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
     uint32_t out_ready_sem_bank_addr_concat = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t num_tiles_per_core = 4;  // get_arg_val<uint32_t>(arg_idx++);
+    constexpr uint32_t num_tiles_per_core = 4;  // get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t first_core_tile_start_offset = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
@@ -41,23 +41,6 @@ void kernel_main() {
     arg_idx += num_cores;
     tt_l1_ptr uint32_t* core_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;
-
-    // print every compile and runtime arg in uint32_t
-    DPRINT << "ct args: \n";
-    DPRINT << "my_chip_id: " << (uint32_t)my_chip_id << "\n";
-    DPRINT << "cb0_id: " << (uint32_t)cb0_id << "\n";
-    DPRINT << "tensor0_page_size: " << (uint32_t)tensor0_page_size << "\n";
-
-    DPRINT << "rt args: \n";
-    DPRINT << "tensor_address0: " << (uint32_t)tensor_address0 << "\n";
-    DPRINT << "num_tiles_per_core: " << (uint32_t)num_tiles_per_core << "\n";
-    DPRINT << "num_tiles_to_read: " << (uint32_t)num_tiles_to_read << "\n";
-    DPRINT << "first_core_tile_start_offset: " << (uint32_t)first_core_tile_start_offset << "\n";
-    DPRINT << "num_cores: " << (uint32_t)num_cores << "\n";
-    for (uint32_t i = 0; i < num_cores; i++) {
-        DPRINT << "core_noc_x[" << i << "]: " << (uint32_t)core_noc_x[i] << "\n";
-        DPRINT << "core_noc_y[" << i << "]: " << (uint32_t)core_noc_y[i] << "\n";
-    }
 
     uint32_t concat_arg_start = get_arg_val<uint32_t>(0);
     uint32_t in_tile_offset_by_head = get_arg_val<uint32_t>(concat_arg_start);
@@ -84,17 +67,10 @@ void kernel_main() {
     constexpr uint32_t batch_end_2 = get_compile_time_arg_val(18);
     constexpr uint32_t start_local = get_compile_time_arg_val(19);
 
-    DPRINT << "batch_size: " << (uint32_t)batch_size << ENDL();
-    DPRINT << "batch_start_1: " << (uint32_t)batch_start_1 << ENDL();
-    DPRINT << "batch_end_1: " << (uint32_t)batch_end_1 << ENDL();
-    DPRINT << "batch_start_2: " << (uint32_t)batch_start_2 << ENDL();
-    DPRINT << "batch_end_2: " << (uint32_t)batch_end_2 << ENDL();
-    DPRINT << "start_local: " << (uint32_t)start_local << ENDL();
-
     uint32_t arg_sem_idx = 2 + 2 * in_num_cores;
-    uint32_t out_ready_sem_wait_value_concat = 12;  // get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx);
-    uint32_t out_ready_sem_noc0_x_concat = 19;      // get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 1);
-    uint32_t out_ready_sem_noc0_y_concat = 18;      // get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 2);
+    constexpr uint32_t out_ready_sem_wait_value_concat = 12;  // get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx);
+    constexpr uint32_t out_ready_sem_noc0_x_concat = 19;  // get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 1);
+    constexpr uint32_t out_ready_sem_noc0_y_concat = 18;  // get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 2);
     uint32_t is_drain_core = get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx);
     const uint32_t signal_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(concat_arg_start + arg_sem_idx + 1));
 
@@ -263,9 +239,6 @@ void kernel_main() {
         core_id++;
     }
 
-    DPRINT << "DONE ALL GATHER READ\n";
-
-    DPRINT << "START LOCAL NLP\n";
     nlp_concat(
         head_size_num_tiles,
         batch,
@@ -283,7 +256,6 @@ void kernel_main() {
         start_local,
         nlp_local_core_x,
         nlp_local_core_y);
-    DPRINT << "DONE LOCAL NLP\n";
 
     uint64_t out_ready_sem_noc_addr_concat =
         safe_get_noc_addr(out_ready_sem_noc0_x_concat, out_ready_sem_noc0_y_concat, out_ready_sem_bank_addr_concat);
@@ -308,6 +280,4 @@ void kernel_main() {
         start_local,
         nlp_local_core_x,
         nlp_local_core_y);
-
-    DPRINT << "DONE\n";
 }

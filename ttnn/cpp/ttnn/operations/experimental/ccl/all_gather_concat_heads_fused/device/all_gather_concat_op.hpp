@@ -25,10 +25,6 @@ namespace ttnn {
 
 using ccl::EriscDatamoverBuilder;
 
-enum class AllGatherConcatVersion {
-    LLAMA_MINIMAL_SHARDED = 2,
-};
-
 struct AllGatherConcat {
     std::optional<IDevice*> forward_device;
     std::optional<IDevice*> backward_device;
@@ -91,8 +87,6 @@ struct AllGatherConcat {
     tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
     const tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
-
-    AllGatherConcatVersion select_version(const Tensor& input_tensor) const;
 };
 
 namespace ccl {

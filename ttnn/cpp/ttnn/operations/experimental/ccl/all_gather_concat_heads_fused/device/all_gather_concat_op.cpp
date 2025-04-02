@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -130,15 +130,9 @@ std::vector<ttnn::TensorSpec> AllGatherConcat::compute_output_specs(const std::v
         output_shape, tt::tt_metal::TensorLayout(input_tensor.get_dtype(), tt::tt_metal::Layout::TILE, mem_config))};
 }
 
-AllGatherConcatVersion AllGatherConcat::select_version(const Tensor& input_tensor) const {
-    return AllGatherConcatVersion::LLAMA_MINIMAL_SHARDED;
-}
-
 tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     tt::log_debug(tt::LogOp, "DEBUG: create_program is called");
-
-    AllGatherConcatVersion version = select_version(input_tensors[0]);
 
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
 
@@ -164,7 +158,6 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program(
 const tt::tt_metal::operation::Hash AllGatherConcat::compute_program_hash(
     const std::vector<Tensor>& input_tensors) const {
     log_trace(tt::LogOp, "compute_program_hash is called");
-    AllGatherConcatVersion version = select_version(input_tensors[0]);
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
     auto input_shape = input_tensors[0].get_padded_shape();
     auto input_memory_layout = input_tensors[0].get_layout();
