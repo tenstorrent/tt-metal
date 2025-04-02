@@ -1,0 +1,53 @@
+name: "⚙️ Setup and Test"
+
+on:
+  workflow_call:
+    inputs:
+      chip_arch:
+        description: "The chip architecture"
+        required: true
+        type: string
+      docker_image:
+        description: "The Docker image to use for the container"
+        required: true
+        type: string
+      runs_on:
+        description: "The runner to use for the job"
+        required: true
+        type: string
+
+jobs:
+  setup-and-test:
+    name: "🦄 Run tests"
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: 40
+    container:
+      image: ${{ inputs.docker_image }}
+      options: "--device /dev/tenstorrent"
+
+    steps:
+      # Step 1: Checkout the repository
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history so 'origin/main' is available
+
+      # Step 2: Run the tests
+      - name: Run tests
+        env:
+          CHIP_ARCH: ${{ inputs.chip_arch }}
+        shell: bash
+        run: |
+          echo "CHIP_ARCH is set to $CHIP_ARCH"
+          cd tests && ./setup_sfpi.sh
+          # Run the tests
+          cd python_tests/
+          pytest --timeout=60 --color=yes --force-sugar .
+
+      # Step 3: Upload test log as an artifact
+      - name: Upload logs if tests fail
+        if: failure()  # Only upload the log if the previous step failed
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log
+          path: tests/python_tests/pytest_errors.log

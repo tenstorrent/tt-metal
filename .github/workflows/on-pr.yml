@@ -1,0 +1,50 @@
+name: 🛠️ PR Pipeline
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: ["main"]
+
+concurrency:
+  # Use github.run_id on main branch (or any protected branch)
+  # This ensures that no runs get cancelled on main.
+  # Use github.event.pull_request.number on pull requests, so it's unique per pull request
+  # and will cancel obsolete runs.
+  # Use github.ref on other branches, so it's unique per branch.
+  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id ||
+    github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pre-commit:
+    name: "🔍 Static checks"
+    uses: ./.github/workflows/pre-commit.yml
+
+  build-images:
+    name: "🐳️ Docker setup"
+    uses: ./.github/workflows/build-images.yml
+    needs: pre-commit
+    secrets: inherit
+
+  setup-and-test-wormhole:
+    name: "🧪 Perform checks (Wormhole)"
+    uses: ./.github/workflows/setup-and-test.yml
+    needs: build-images
+    with:
+      chip_arch: wormhole
+      docker_image: ${{ needs.build-images.outputs.docker-image }}
+      runs_on: tt-beta-ubuntu-2204-n150-large-stable
+
+  check-all-green:
+    name: "✅ Check all green"
+    if: always()
+    needs:
+      - pre-commit
+      - build-images
+      - setup-and-test-wormhole
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if the needed jobs succeeded or failed
+        uses: re-actors/alls-green@release/v1
+        with:
+          jobs: ${{ toJSON(needs) }}

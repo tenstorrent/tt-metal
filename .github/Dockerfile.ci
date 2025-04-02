@@ -1,0 +1,19 @@
+ARG FROM_TAG=latest
+FROM ghcr.io/tenstorrent/tt-llk/tt-llk-base-ubuntu-22-04:${FROM_TAG} AS ci-build
+SHELL ["/bin/bash", "-c"]
+
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Copy scripts into the image
+COPY .github/scripts/ /home/
+
+COPY tests/requirements.txt /tmp/requirements_tests.txt
+
+# Install pytest dependencies
+RUN ./home/install-tests-dependencies.sh
+
+# Install tt-exalens
+RUN ./home/install-exalens.sh
+
+# Install tt-smi
+RUN ./home/install-smi.sh

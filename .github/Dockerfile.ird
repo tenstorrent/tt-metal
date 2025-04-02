@@ -1,0 +1,37 @@
+FROM ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-amd64:latest
+SHELL ["/bin/bash", "-c"]
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    ssh \
+    rsync \
+    sudo \
+    wget \
+    vim \
+    nano \
+    tmux \
+    python3-dev \
+    python3-venv \
+    python3-pip \
+    clangd \
+    xxd
+
+# Clean up
+RUN apt-get clean
+
+# Copy scripts into the image
+COPY .github/scripts/ /home/
+
+COPY tests/requirements.txt /tmp/requirements_tests.txt
+
+# Install pytest dependencies
+RUN ./home/install-tests-dependencies.sh
+
+# Install tt-exalens
+RUN ./home/install-exalens.sh
+
+# Install tt-smi
+RUN ./home/install-smi.sh
