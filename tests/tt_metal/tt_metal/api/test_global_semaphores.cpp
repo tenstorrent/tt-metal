@@ -12,7 +12,6 @@
 
 #include "device.hpp"
 #include "dispatch_fixture.hpp"
-#include "gtest/gtest.h"
 #include "hal_types.hpp"
 #include "llrt.hpp"
 #include "tt_cluster.hpp"

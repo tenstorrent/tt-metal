@@ -17,7 +17,6 @@
 #include "buffer.hpp"
 #include "buffer_constants.hpp"
 #include "core_coord.hpp"
-#include "gtest/gtest.h"
 #include "mesh_buffer.hpp"
 #include "mesh_command_queue.hpp"
 #include "mesh_coord.hpp"

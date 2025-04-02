@@ -11,7 +11,6 @@
 
 #include "assert.hpp"
 #include "bfloat16.hpp"
-#include "gtest/gtest.h"
 #include "shape.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/device.hpp"

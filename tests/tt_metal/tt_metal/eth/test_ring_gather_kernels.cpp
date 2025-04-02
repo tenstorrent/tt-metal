@@ -28,7 +28,6 @@
 #include "device_fixture.hpp"
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
-#include "gtest/gtest.h"
 #include "hostdevcommon/common_values.hpp"
 #include "kernel_types.hpp"
 #include "llrt.hpp"

@@ -11,7 +11,6 @@
 
 #include "allocator_types.hpp"
 #include "device.hpp"
-#include "gtest/gtest.h"
 #include "hostdevcommon/common_values.hpp"
 #include "rtoptions.hpp"
 #include "system_memory_manager.hpp"

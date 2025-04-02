@@ -26,7 +26,6 @@
 #include "dispatch_fixture.hpp"
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
-#include "gtest/gtest.h"
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "kernel_types.hpp"

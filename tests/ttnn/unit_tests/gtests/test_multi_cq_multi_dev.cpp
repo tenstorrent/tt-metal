@@ -17,7 +17,6 @@
 #include "buffer_constants.hpp"
 #include "device.hpp"
 #include "fmt/base.h"
-#include "gtest/gtest.h"
 #include "host_api.hpp"
 #include "logger.hpp"
 #include "shape.hpp"

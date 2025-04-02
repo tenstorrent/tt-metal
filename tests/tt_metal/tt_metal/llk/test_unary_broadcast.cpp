@@ -26,7 +26,6 @@
 #include "core_coord.hpp"
 #include "data_types.hpp"
 #include "device_fixture.hpp"
-#include "gtest/gtest.h"
 #include "host_api.hpp"
 #include "kernel_types.hpp"
 #include "logger.hpp"

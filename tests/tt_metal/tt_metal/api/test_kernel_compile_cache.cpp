@@ -20,7 +20,6 @@
 #include "detail/kernel_cache.hpp"
 #include "device.hpp"
 #include "device_fixture.hpp"
-#include "gtest/gtest.h"
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "host_api.hpp"

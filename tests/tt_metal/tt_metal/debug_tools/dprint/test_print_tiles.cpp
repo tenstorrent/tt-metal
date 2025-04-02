@@ -25,7 +25,6 @@
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
 #include "device.hpp"
-#include "gtest/gtest.h"
 #include "host_api.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include "kernel_types.hpp"

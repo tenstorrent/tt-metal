@@ -19,7 +19,6 @@
 #include <vector>
 
 #include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "shape.hpp"
 #include "span.hpp"
 #include "ttnn/operations/functions.hpp"

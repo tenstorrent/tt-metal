@@ -9,7 +9,6 @@
 
 #include "buffer.hpp"
 #include "buffer_constants.hpp"
-#include "gtest/gtest.h"
 #include "host_api.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 

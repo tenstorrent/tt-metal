@@ -19,7 +19,6 @@
 #include "data_types.hpp"
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
-#include "gtest/gtest.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "kernel_types.hpp"
 #include "program_impl.hpp"

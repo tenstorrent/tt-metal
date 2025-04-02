@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "allocator_types.hpp"
-#include "gtest/gtest.h"
 #include "hal_types.hpp"
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 

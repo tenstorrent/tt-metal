@@ -13,8 +13,6 @@
 #include <utility>
 #include <vector>
 
-#include "gtest/gtest.h"
-
 // convenience alias that guarantees at least vector and deque will fit within the capacity
 MAKE_ANY_RANGE(IntRange, tt::stl::AnySizedRandomAccessRangeFor<int&, std::vector<int>, std::deque<int>>);
 

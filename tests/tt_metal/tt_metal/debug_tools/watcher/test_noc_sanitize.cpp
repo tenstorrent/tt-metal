@@ -26,7 +26,6 @@
 #include "data_types.hpp"
 #include "debug_tools_fixture.hpp"
 #include "device.hpp"
-#include "gtest/gtest.h"
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
 #include "llrt.hpp"

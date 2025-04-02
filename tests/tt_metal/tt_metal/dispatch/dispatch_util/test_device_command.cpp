@@ -9,7 +9,6 @@
 #include <utility>
 #include <vector>
 
-#include "gtest/gtest.h"
 #include "span.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"

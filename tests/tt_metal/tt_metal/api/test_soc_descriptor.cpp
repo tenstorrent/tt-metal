@@ -12,7 +12,6 @@
 
 #include "core_coord.hpp"
 #include "device.hpp"
-#include "gtest/gtest.h"
 #include "logger.hpp"
 #include "metal_soc_descriptor.h"
 #include "system_memory_manager.hpp"

@@ -9,8 +9,6 @@
 #include <initializer_list>
 #include <vector>
 
-#include "gtest/gtest.h"
-
 template <bool tilize_first, typename T>
 void tilize_untilize_helper(
     uint max_num_batches, uint max_num_row_tiles, uint max_num_col_tiles, uint TILE_HEIGHT, uint TILE_WIDTH) {

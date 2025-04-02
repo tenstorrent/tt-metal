@@ -17,7 +17,6 @@
 #include "buffer.hpp"
 #include "buffer_constants.hpp"
 #include "device.hpp"
-#include "gtest/gtest.h"
 #include "logger.hpp"
 #include "shape.hpp"
 #include "small_vector.hpp"

@@ -42,7 +42,6 @@
 #include "core_coord.hpp"
 #include "data_types.hpp"
 #include "device.hpp"
-#include "gtest/gtest.h"
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "host_api.hpp"

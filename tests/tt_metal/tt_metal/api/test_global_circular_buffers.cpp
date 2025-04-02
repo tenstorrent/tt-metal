@@ -19,7 +19,6 @@
 #include "circular_buffer_types.hpp"
 #include "data_types.hpp"
 #include "dispatch_fixture.hpp"
-#include "gtest/gtest.h"
 #include "kernel_types.hpp"
 #include "program_impl.hpp"
 #include "tt_backend_api_types.hpp"

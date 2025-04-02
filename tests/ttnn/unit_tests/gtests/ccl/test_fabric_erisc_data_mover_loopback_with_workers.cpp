@@ -25,7 +25,6 @@
 #include "device.hpp"
 #include "fabric_edm_packet_header.hpp"
 #include "fabric_edm_types.hpp"
-#include "gtest/gtest.h"
 #include "hal_types.hpp"
 #include "host_api.hpp"
 #include "logger.hpp"

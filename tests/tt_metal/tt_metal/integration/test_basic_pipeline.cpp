@@ -34,7 +34,6 @@
 #include "core_coord.hpp"
 #include "data_types.hpp"
 #include "fmt/base.h"
-#include "gtest/gtest.h"
 #include "hostdevcommon/common_values.hpp"
 #include "kernel_types.hpp"
 #include "logger.hpp"

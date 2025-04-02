@@ -27,7 +27,6 @@
 #include "data_types.hpp"
 #include "device.hpp"
 #include "fabric_fixture.hpp"
-#include "gtest/gtest.h"
 #include "hal.hpp"
 #include "host_api.hpp"
 #include "hostdevcommon/kernel_structs.h"

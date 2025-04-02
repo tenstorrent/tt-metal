@@ -13,7 +13,6 @@
 
 #include "core_coord.hpp"
 #include "device.hpp"
-#include "gtest/gtest.h"
 #include "multi_device_fixture.hpp"
 #include "system_memory_manager.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"

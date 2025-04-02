@@ -31,7 +31,6 @@
 #include "device.hpp"
 #include "env_lib.hpp"
 #include "global_semaphore.hpp"
-#include "gtest/gtest.h"
 #include "hal_types.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include "kernel_types.hpp"

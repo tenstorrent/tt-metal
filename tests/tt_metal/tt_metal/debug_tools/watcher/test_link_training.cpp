@@ -17,7 +17,6 @@
 #include "device.hpp"
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
-#include "gtest/gtest.h"
 #include "host_api.hpp"
 #include "llrt.hpp"
 #include "logger.hpp"

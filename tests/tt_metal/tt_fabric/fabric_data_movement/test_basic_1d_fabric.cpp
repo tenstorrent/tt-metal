@@ -22,7 +22,6 @@
 #include "device.hpp"
 #include "fabric_edm_packet_header.hpp"
 #include "fabric_fixture.hpp"
-#include "gtest/gtest.h"
 #include "hal.hpp"
 #include "host_api.hpp"
 #include "kernel_types.hpp"

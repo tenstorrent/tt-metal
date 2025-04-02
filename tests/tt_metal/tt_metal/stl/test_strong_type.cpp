@@ -12,7 +12,6 @@
 #include <utility>
 
 #include "gmock/gmock.h"
-#include "gtest/gtest.h"
 
 using MyIntId = tt::stl::StrongType<int, struct MyIntIdTag>;
 using MyStringId = tt::stl::StrongType<std::string, struct MyStringIdTag>;

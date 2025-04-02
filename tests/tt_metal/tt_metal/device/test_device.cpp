@@ -26,7 +26,6 @@
 #include "device.hpp"
 #include "device_fixture.hpp"
 #include "dispatch_mem_map.hpp"
-#include "gtest/gtest.h"
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "kernel_types.hpp"

@@ -34,7 +34,6 @@
 #include "device.hpp"
 #include "env_lib.hpp"
 #include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "hostdevcommon/kernel_structs.h"

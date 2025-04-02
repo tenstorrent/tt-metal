@@ -6,8 +6,6 @@
 #include <tt_stl/indestructible.hpp>
 #include <memory>
 
-#include "gtest/gtest.h"
-
 namespace tt::stl {
 namespace {
 

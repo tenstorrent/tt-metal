@@ -11,7 +11,6 @@
 
 #include "fabric_fixture.hpp"
 #include "fabric_types.hpp"
-#include "gtest/gtest.h"
 #include "mesh_coord.hpp"
 #include "rtoptions.hpp"
 #include "tt_cluster.hpp"

@@ -16,7 +16,6 @@
 #include "buffer_constants.hpp"
 #include "device.hpp"
 #include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "shape.hpp"
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/common/queue_id.hpp"

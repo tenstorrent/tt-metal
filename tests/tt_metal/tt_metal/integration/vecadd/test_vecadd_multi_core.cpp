@@ -24,7 +24,6 @@
 #include "data_types.hpp"
 #include "device.hpp"
 #include "dispatch_fixture.hpp"
-#include "gtest/gtest.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "kernel_types.hpp"
 #include "logger.hpp"

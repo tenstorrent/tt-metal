@@ -23,7 +23,6 @@
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
 #include "device.hpp"
-#include "gtest/gtest.h"
 #include "kernel_types.hpp"
 #include "program_impl.hpp"
 #include "span.hpp"

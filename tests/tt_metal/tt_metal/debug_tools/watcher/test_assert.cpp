@@ -19,7 +19,6 @@
 #include "debug_tools_fixture.hpp"
 #include "dev_msgs.h"
 #include "device.hpp"
-#include "gtest/gtest.h"
 #include "host_api.hpp"
 #include "kernel_types.hpp"
 #include "logger.hpp"

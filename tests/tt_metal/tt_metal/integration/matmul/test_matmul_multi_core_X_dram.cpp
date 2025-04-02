@@ -34,7 +34,6 @@
 #include "data_types.hpp"
 #include "device.hpp"
 #include "dispatch_fixture.hpp"
-#include "gtest/gtest.h"
 #include "hal_types.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include "kernel_types.hpp"

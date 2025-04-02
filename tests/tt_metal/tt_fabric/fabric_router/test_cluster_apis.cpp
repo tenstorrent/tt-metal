@@ -10,7 +10,6 @@
 #include <utility>
 
 #include "fabric_fixture.hpp"
-#include "gtest/gtest.h"
 #include "logger.hpp"
 #include "system_memory_manager.hpp"
 #include "tt_cluster.hpp"

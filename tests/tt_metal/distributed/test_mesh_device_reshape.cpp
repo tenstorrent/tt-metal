@@ -16,7 +16,6 @@
 #include "device.hpp"
 #include "dispatch_core_common.hpp"
 #include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "host_api.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "mesh_config.hpp"

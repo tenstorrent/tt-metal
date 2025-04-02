@@ -26,7 +26,6 @@
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"
 #include "env_lib.hpp"
-#include "gtest/gtest.h"
 #include "hostdevcommon/common_values.hpp"
 #include "mesh_buffer.hpp"
 #include "mesh_command_queue.hpp"

@@ -15,7 +15,6 @@
 #include "core_coord.hpp"
 #include "data_types.hpp"
 #include "device_fixture.hpp"
-#include "gtest/gtest.h"
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "kernel_types.hpp"

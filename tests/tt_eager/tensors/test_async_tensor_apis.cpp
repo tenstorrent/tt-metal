@@ -24,7 +24,6 @@
 #include "buffer.hpp"
 #include "device.hpp"
 #include "fmt/base.h"
-#include "gtest/gtest.h"
 #include "logger.hpp"
 #include "shape.hpp"
 #include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"

@@ -8,7 +8,6 @@
 #include <bit>
 #include <memory>
 
-#include "gtest/gtest.h"
 #include "tt_backend_api_types.hpp"
 
 namespace {

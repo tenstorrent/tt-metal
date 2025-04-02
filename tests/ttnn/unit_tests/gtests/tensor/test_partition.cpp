@@ -17,7 +17,6 @@
 #include <vector>
 
 #include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "ttnn/tensor/xtensor/partition.hpp"
 
 namespace tt {

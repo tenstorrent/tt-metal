@@ -11,8 +11,6 @@
 #include <string>
 #include <vector>
 
-#include "gtest/gtest.h"
-
 MAKE_SLOTMAP_KEY(IntKey, uint16_t, 10);
 using IntSlotMap = tt::stl::SlotMap<IntKey, int>;
 

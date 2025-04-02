@@ -30,7 +30,6 @@
 #include "dispatch_fixture.hpp"
 // FIXME: ARCH_NAME
 #include "eth_l1_address_map.h"
-#include "gtest/gtest.h"
 #include "kernel_types.hpp"
 #include "logger.hpp"
 #include "multi_device_fixture.hpp"

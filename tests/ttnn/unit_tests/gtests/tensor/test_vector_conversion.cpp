@@ -20,7 +20,6 @@
 #include "buffer_constants.hpp"
 #include "core_coord.hpp"
 #include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "shape.hpp"
 #include "span.hpp"
 #include "tests/ttnn/unit_tests/gtests/ttnn_test_fixtures.hpp"

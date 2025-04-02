@@ -14,7 +14,6 @@
 #include "core_coord.hpp"
 #include "device.hpp"
 #include "galaxy_fixture.hpp"
-#include "gtest/gtest.h"
 #include "system_memory_manager.hpp"
 #include "tt_cluster.hpp"
 #include "umd/device/types/cluster_descriptor_types.h"

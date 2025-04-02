@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "mesh_coord.hpp"
 #include "shape_base.hpp"
 #include "span.hpp"
