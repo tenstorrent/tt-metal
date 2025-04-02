@@ -29,7 +29,7 @@ jobs:
           {name: tools, cmd: ./tests/scripts/run_tools_tests.sh},
 
           {name: user kernel path, cmd: "rm -rf /tmp/kernels && TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api_${{ inputs.arch }} --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*"},
-          {name: api, cmd: "./build/test/tt_metal/unit_tests_api_${{ inputs.arch }}"},
+          {name: api, beta-runner: true,  cmd: "./build/test/tt_metal/unit_tests_api_${{ inputs.arch }}"},
           {name: debug_tools, cmd: "./build/test/tt_metal/unit_tests_debug_tools_${{ inputs.arch }}"},
           {name: device, cmd: "./build/test/tt_metal/unit_tests_device"},
           {name: dispatch, cmd: "./build/test/tt_metal/unit_tests_dispatch"},
@@ -49,8 +49,7 @@ jobs:
       LOGURU_LEVEL: INFO
     runs-on: >-
       ${{
-        startsWith(inputs.runner-label, 'tt-beta-ubuntu')
-        && fromJSON(format('["{0}"]', inputs.runner-label))
+        matrix.test-group.beta-runner == true && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
     steps:
