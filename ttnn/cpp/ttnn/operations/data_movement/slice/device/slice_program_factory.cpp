@@ -378,12 +378,14 @@ operation::ProgramWithCallbacks slice_rm_strided_single_core_n_dims(
             pages,
         });
 
-    auto override_address_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-                                         const Program& program,
-                                         const std::vector<Buffer*>& input_buffers,
-                                         const std::vector<Buffer*>& output_buffers) {
-        auto input_buffer = input_buffers.at(0);
-        auto output_buffer = output_buffers.at(0);
+    auto override_runtime_arguments_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
+            const void* operation,
+            Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<Tensor>& output_tensors) {
+            auto input_buffer = input_tensors.at(0).buffer();
+            auto output_buffer = output_tensors.at(0).buffer();
 
         CoreCoord core = {0, 0};
 
@@ -396,7 +398,7 @@ operation::ProgramWithCallbacks slice_rm_strided_single_core_n_dims(
         }
     };
 
-    return {.program = std::move(program), .override_addresses_callback = override_address_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 inline std::vector<std::vector<uint32_t>> group_contiguous_values(std::vector<uint32_t>& values) {

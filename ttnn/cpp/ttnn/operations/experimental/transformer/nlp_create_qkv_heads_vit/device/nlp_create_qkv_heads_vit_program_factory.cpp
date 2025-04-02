@@ -206,14 +206,16 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_vi
     }
 
     auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, num_cores, num_cores_y](
+                                              const void* operation,
                                               const Program& program,
-                                              const std::vector<tt::tt_metal::Buffer*>& input_buffers,
-                                              const std::vector<tt::tt_metal::Buffer*>& output_buffers) {
-        auto src_dram_buffer = input_buffers.at(0);
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_dram_buffer = input_tensors.at(0).buffer();
 
-        auto dst_dram_buffer_query = output_buffers.at(0);
-        auto dst_dram_buffer_key = output_buffers.at(1);
-        auto dst_dram_buffer_value = output_buffers.at(2);
+        auto dst_dram_buffer_query = output_tensors.at(0).buffer();
+        auto dst_dram_buffer_key = output_tensors.at(1).buffer();
+        auto dst_dram_buffer_value = output_tensors.at(2).buffer();
 
         for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
