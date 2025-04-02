@@ -449,6 +449,7 @@ def test_fabric_4chip_one_link_mcast_bw(
         fabric_mode=FabricTestMode.Linear,
         disable_sends_for_interior_workers=False,
         unidirectional=False,
+        senders_are_unidirectional=True,
     )
 
 
@@ -473,6 +474,7 @@ def test_fabric_4chip_one_link_bidirectional_single_producer_mcast_bw(
         fabric_mode=FabricTestMode.Linear,
         disable_sends_for_interior_workers=True,
         unidirectional=False,
+        senders_are_unidirectional=True,
     )
 
 
@@ -502,6 +504,7 @@ def test_fabric_4chip_one_link_unidirectional_single_producer_mcast_bw(
         fabric_mode=FabricTestMode.Linear,
         disable_sends_for_interior_workers=True,
         unidirectional=True,
+        senders_are_unidirectional=True,
     )
 
 
@@ -530,6 +533,7 @@ def test_fabric_4chip_two_link_mcast_bw(
         packet_size=packet_size,
         fabric_mode=FabricTestMode.Linear,
         disable_sends_for_interior_workers=False,
+        senders_are_unidirectional=True,
     )
 
 
