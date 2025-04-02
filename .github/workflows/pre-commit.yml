@@ -1,15 +1,17 @@
-# Run pre-commit hooks
-name: Run pre-commit hooks
+name: 🔍 Static checks
 
 on:
-  workflow_dispatch:
-  pull_request:
-  push:
-    branches: ["main"]
+  workflow_call:
+    inputs:
+      python_version:
+        description: "Python version to use for pre-commit"
+        required: false
+        type: string
+        default: "3.10"
 
 jobs:
   pre-commit:
-    name: Run pre-commit hooks
+    name: Pre-commit checks
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -20,7 +22,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: 3.8
+          python-version: ${{ inputs.python_version }}
 
       - name: Run pre-commit and fix issues
         uses: pre-commit/action@v3.0.1
