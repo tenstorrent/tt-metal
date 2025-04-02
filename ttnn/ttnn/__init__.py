@@ -95,9 +95,20 @@ def manage_config(name, value):
 
 
 from ttnn._ttnn.multi_device import (
+    CppMeshToTensor,
+    CppTensorToMesh,
+    Shard2dConfig,
+    Concat2dConfig,
     get_device_tensor,
     get_device_tensors,
     aggregate_as_tensor,
+    replicate_tensor_to_mesh_mapper,
+    shard_tensor_to_mesh_mapper,
+    shard_tensor_to_2d_mesh_mapper,
+    concat_mesh_to_tensor_composer,
+    concat_2d_mesh_to_tensor_composer,
+    aggregate_tensor,
+    distribute_tensor,
     get_t3k_physical_device_ids_ring,
 )
 
@@ -285,7 +296,6 @@ sub = ttnn.subtract
 sub_ = ttnn.subtract_
 mul = ttnn.multiply
 mul_ = ttnn.multiply_
-div_ = ttnn.divide_
 
 
 # TODO: pybind the overloaded operators below
