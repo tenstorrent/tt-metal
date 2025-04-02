@@ -57,7 +57,7 @@ def make_anchors(feats, strides, grid_cell_offset=0.5):
 @pytest.mark.parametrize(
     "use_pretrained_weight",
     [
-        # False,
+        False,
         True,
     ],
     ids=[
