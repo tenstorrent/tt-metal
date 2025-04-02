@@ -1,17 +1,18 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
 import logging
-from fastapi import FastAPI, File, UploadFile
+import os
+import time
 from io import BytesIO
-from PIL import Image
-from models.demos.yolov4.tests.yolov4_perfomant_webdemo import Yolov4Trace2CQ
-import ttnn
 
 import numpy as np
 import torch
-import time
+from fastapi import FastAPI, File, UploadFile
+from PIL import Image
+
+import ttnn
+from models.demos.yolov4.runner.performant_runner import YOLOv4PerformantRunner
 
 app = FastAPI(
     title="YOLOv4 object detection",
@@ -56,19 +57,17 @@ async def startup():
             num_command_queues=2,
         )
         ttnn.enable_program_cache(device)
-        model = Yolov4Trace2CQ()
-        model.initialize_yolov4_trace_2cqs_inference(device)
+        model = YOLOv4PerformantRunner(device)
     else:
         device_id = 0
         device = ttnn.CreateDevice(device_id, l1_small_size=24576, trace_region_size=3211264, num_command_queues=2)
         ttnn.enable_program_cache(device)
-        model = Yolov4Trace2CQ()
-        model.initialize_yolov4_trace_2cqs_inference(device)
+        model = YOLOv4PerformantRunner(device)
 
 
 @app.on_event("shutdown")
 async def shutdown():
-    model.release_yolov4_trace_2cqs_inference()
+    model.release()
 
 
 def process_output(output):
@@ -189,7 +188,7 @@ async def objdetection_v2(file: UploadFile = File(...)):
         exit(-1)
 
     t1 = time.time()
-    response = model.run_traced_inference(image)
+    response = model.run(image)
     t2 = time.time()
     logging.info("The inference on the sever side took: %.3f seconds", t2 - t1)
     conf_thresh = 0.6

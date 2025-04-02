@@ -2,9 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import math
+
 import numpy as np
+import torch
+
 import ttnn
 from models.utility_functions import _nearest_32
 
@@ -26,10 +28,12 @@ class TtGenBoxes:
         self.num_anchors = 3
         self.resolution = resolution
 
-        if resolution[0] == 320:
+        if resolution == (320, 320):
             h1, h2, h3 = 40, 20, 10
-        else:
+        elif resolution == (640, 640):
             h1, h2, h3 = 80, 40, 20
+        else:
+            raise ValueError(f"Unsupported resolution: {resolution}")
 
         self.grid_x = []
         self.grid_y = []
