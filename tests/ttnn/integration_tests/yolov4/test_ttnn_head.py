@@ -2,17 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
-from models.demos.yolov4.reference.head import Head
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_grayskull
-import pytest
 import time
+
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.demos.yolov4.common import load_torch_model
 from models.demos.yolov4.ttnn.head import TtHead
 from models.demos.yolov4.ttnn.model_preprocessing import create_head_model_parameters
-from loguru import logger
-import os
+from models.utility_functions import skip_for_grayskull
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @skip_for_grayskull()
@@ -26,19 +27,10 @@ import os
 )
 def test_head(device, reset_seeds, model_location_generator, resolution):
     torch.manual_seed(0)
-    model_path = model_location_generator("models", model_subdir="Yolo")
 
-    if model_path == "models":
-        if not os.path.exists("tests/ttnn/integration_tests/yolov4/yolov4.pth"):  # check if yolov4.th is availble
-            os.system(
-                "tests/ttnn/integration_tests/yolov4/yolov4_weights_download.sh"
-            )  # execute the yolov4_weights_download.sh file
+    torch_model = load_torch_model(model_location_generator, module="head")
 
-        weights_pth = "tests/ttnn/integration_tests/yolov4/yolov4.pth"
-    else:
-        weights_pth = str(model_path / "yolov4.pth")
-
-    if resolution[0] == 320:
+    if resolution == (320, 320):
         torch_input_tensor1 = torch.randn(1, 40, 40, 128, dtype=torch.float)
         torch_input_tensor2 = torch.randn(1, 10, 10, 512, dtype=torch.float)
         torch_input_tensor3 = torch.randn(1, 20, 20, 256, dtype=torch.float)
@@ -57,7 +49,7 @@ def test_head(device, reset_seeds, model_location_generator, resolution):
         ttnn_input_tensor3 = ttnn.reshape(ttnn_input_tensor3, (1, 1, 400, 256))
         ttnn_input_tensor3 = ttnn.to_layout(ttnn_input_tensor3, layout=ttnn.TILE_LAYOUT)
         ttnn_input_tensor3 = ttnn.to_device(ttnn_input_tensor3, device=device)
-    else:
+    elif resolution == (640, 640):
         torch_input_tensor1 = torch.randn(1, 80, 80, 128, dtype=torch.float)
         torch_input_tensor2 = torch.randn(1, 20, 20, 512, dtype=torch.float)
         torch_input_tensor3 = torch.randn(1, 40, 40, 256, dtype=torch.float)
@@ -76,20 +68,14 @@ def test_head(device, reset_seeds, model_location_generator, resolution):
         ttnn_input_tensor3 = ttnn.reshape(ttnn_input_tensor3, (1, 1, 1600, 256))
         ttnn_input_tensor3 = ttnn.to_layout(ttnn_input_tensor3, layout=ttnn.TILE_LAYOUT)
         ttnn_input_tensor3 = ttnn.to_device(ttnn_input_tensor3, device=device)
+    else:
+        raise ValueError(f"Unsupported resolution: {resolution}")
 
     ttnn_input_tensor = [ttnn_input_tensor1, ttnn_input_tensor2, ttnn_input_tensor3]
     torch_input_tensor1 = torch_input_tensor1.permute(0, 3, 1, 2)
     torch_input_tensor2 = torch_input_tensor2.permute(0, 3, 1, 2)
     torch_input_tensor3 = torch_input_tensor3.permute(0, 3, 1, 2)
     torch_input_tensor = [torch_input_tensor1, torch_input_tensor2, torch_input_tensor3]
-
-    torch_model = Head()
-
-    torch_dict = torch.load(weights_pth)
-    ds_state_dict = {k: v for k, v in torch_dict.items() if (k.startswith("head."))}
-    new_state_dict = dict(zip(torch_model.state_dict().keys(), ds_state_dict.values()))
-    torch_model.load_state_dict(new_state_dict)
-    torch_model.eval()
 
     ref1, ref2, ref3 = torch_model(torch_input_tensor[0], torch_input_tensor[1], torch_input_tensor[2])
 
@@ -124,9 +110,6 @@ def test_head(device, reset_seeds, model_location_generator, resolution):
     result_2 = result_2[:, :num_channels, :, :]
     result_3 = result_3[:, :num_channels, :, :]
 
-    pcc_passed, pcc_message = assert_with_pcc(result_1, ref1, 0.99)
-    logger.info(pcc_message)
-    pcc_passed, pcc_message = assert_with_pcc(result_2, ref2, 0.99)
-    logger.info(pcc_message)
-    pcc_passed, pcc_message = assert_with_pcc(result_3, ref3, 0.99)
-    logger.info(pcc_message)
+    assert_with_pcc(result_1, ref1, 0.99)
+    assert_with_pcc(result_2, ref2, 0.99)
+    assert_with_pcc(result_3, ref3, 0.99)

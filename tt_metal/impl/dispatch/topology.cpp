@@ -1037,7 +1037,7 @@ std::unique_ptr<Program> create_and_compile_1d_fabric_program(IDevice* device, b
     static constexpr std::size_t edm_buffer_size =
         tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
         sizeof(tt::tt_fabric::PacketHeader);
-    const auto edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+    const auto edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size);
 
     for (const auto& [direction, remote_chip_id] : chip_neighbors) {
         for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
