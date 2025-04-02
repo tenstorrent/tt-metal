@@ -7,6 +7,7 @@
 #include <vector>
 #include <cstdint>
 #include <limits>
+#include <tt-metalium/assert.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
