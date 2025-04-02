@@ -188,10 +188,11 @@ static inline
     low_latency_packet_header_t*
 #endif
     extract_packet_header(
-        T client_interface, uint32_t src_addr, uint16_t dst_mesh_id, uint16_t dst_dev_id, uint32_t header_id) {
+        T client_interface, uint32_t src_addr, uint16_t dst_mesh_id, uint16_t dst_dev_id, uint32_t header_id = 0) {
     static_assert(
-        std::is_same_v<T, volatile fabric_pull_client_interface_t*> ||
-            std::is_same_v<T, volatile fabric_push_client_interface_t*> || std::is_same_v<T, std::nullptr_t>,
+        (data_mode == ClientDataMode::RAW_DATA && (std::is_same_v<T, volatile fabric_pull_client_interface_t*> ||
+                                                   std::is_same_v<T, volatile fabric_push_client_interface_t*>)) ||
+            data_mode == ClientDataMode::PACKETIZED_DATA,
         "T must be either volatile fabric_pull_client_interface_t* or volatile fabric_push_client_interface_t*");
 #if defined(FVC_MODE_PULL) || !defined(LOW_LATENCY_ROUTING)
     packet_header_t* packet_header;
@@ -212,7 +213,7 @@ static inline
 }
 
 template <typename T>
-inline void fabric_async_write_add_header(
+static inline void fabric_async_write_add_header_impl(
     T packet_header,
     uint32_t src_addr,  // source address in sender’s memory
     uint16_t dst_mesh_id,
@@ -246,12 +247,12 @@ inline void fabric_async_write_add_header(
     uint16_t dst_dev_id,
     uint64_t dst_addr,
     uint32_t size,  // number of bytes to write to remote destination
-    uint32_t header_id) {
+    uint32_t header_id = 0) {
     static_assert(
         std::is_same_v<T, volatile fabric_pull_client_interface_t*> ||
             std::is_same_v<T, volatile fabric_push_client_interface_t*>,
         "T must be either volatile fabric_pull_client_interface_t* or volatile fabric_push_client_interface_t*");
-    fabric_async_write_add_header(
+    fabric_async_write_add_header_impl(
         extract_packet_header<T, data_mode>(client_interface, src_addr, dst_mesh_id, dst_dev_id, header_id),
         src_addr,
         dst_mesh_id,
@@ -646,7 +647,7 @@ inline void fabric_async_write_multicast(
 }
 
 template <typename T>
-inline void fabric_atomic_inc_add_header(
+static inline void fabric_atomic_inc_add_header_impl(
     T packet_header,
     uint32_t src_addr,  // source address in sender’s memory
     uint16_t dst_mesh_id,
@@ -683,8 +684,8 @@ inline void fabric_atomic_inc_add_header(
     uint64_t dst_addr,
     uint32_t atomic_inc,
     uint32_t wrap_boundary) {
-    fabric_atomic_inc_add_header(
-        extract_packet_header(nullptr, src_addr, dst_mesh_id, dst_dev_id, 0),
+    fabric_atomic_inc_add_header_impl(
+        extract_packet_header(nullptr, src_addr, dst_mesh_id, dst_dev_id),
         src_addr,
         dst_mesh_id,
         dst_dev_id,
@@ -740,7 +741,7 @@ inline void fabric_atomic_inc(
 }
 
 template <typename T>
-inline void fabric_async_write_atomic_inc_add_header(
+static inline void fabric_async_write_atomic_inc_add_header_impl(
     T packet_header,
     uint32_t src_addr,  // source address in sender’s memory
     uint16_t dst_mesh_id,
@@ -784,12 +785,12 @@ inline void fabric_async_write_atomic_inc_add_header(
     uint64_t dst_atomic_addr,
     uint32_t size,  // number of bytes to write to remote destination
     uint32_t atomic_inc,
-    uint32_t header_id) {
+    uint32_t header_id = 0) {
     static_assert(
         std::is_same_v<T, volatile fabric_pull_client_interface_t*> ||
             std::is_same_v<T, volatile fabric_push_client_interface_t*>,
         "T must be either volatile fabric_pull_client_interface_t* or volatile fabric_push_client_interface_t*");
-    fabric_async_write_atomic_inc_add_header(
+    fabric_async_write_atomic_inc_add_header_impl(
         extract_packet_header<T, data_mode>(client_interface, src_addr, dst_mesh_id, dst_dev_id, header_id),
         src_addr,
         dst_mesh_id,
