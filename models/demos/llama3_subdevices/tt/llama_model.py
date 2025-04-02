@@ -326,7 +326,8 @@ class TtTransformer(LightweightModule):
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         else:
             tt_out = ttnn.to_torch(tt_out).float()
-        tt_out = tt_out[:, :, :B, : self.vocab_size].view(B, S, -1)
+        print("ttout", tt_out.shape)
+        tt_out = tt_out[:, :, :B, : self.vocab_size].reshape(B, S, -1)
         return tt_out
 
     def ttnn_prefill_forward(
@@ -464,7 +465,6 @@ class TtTransformer(LightweightModule):
         get_last_token=-1,
         kv_cache=None,
     ):
-        self.mesh_device.enable_async(False)
         if mode == "decode":
             garbage_tensor = ttnn.dram_prefetcher(
                 self.tt_tensors,
@@ -472,6 +472,9 @@ class TtTransformer(LightweightModule):
                 global_cb=self.prefetcher_setup.global_circular_buffer,
             )
             self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
+            ttnn.synchronize_device(self.mesh_device)
+
+            print("done pf", self.prefetcher_setup.global_circular_buffer)
 
         if mode == "decode" and not self.args.is_galaxy:
             x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"])
@@ -490,6 +493,8 @@ class TtTransformer(LightweightModule):
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
             )
+        ttnn.synchronize_device(self.mesh_device)
+        print("done model")
         # ttnn.deallocate(h)
         if mode == "decode":
             ttnn.deallocate(garbage_tensor)

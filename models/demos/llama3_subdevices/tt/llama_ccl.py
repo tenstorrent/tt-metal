@@ -597,7 +597,7 @@ def tt_sharded_distributed_rmsnorm(
 
     # Run distributed rmsnorm part 1
     tt_stats = ttnn.rms_norm_pre_all_gather(inp, residual_input_tensor=res, program_config=ln_sharded_progcfg)
-    # print("tt_stats")
+    print("tt_stats", tt_stats)
     # All gather stats
     # tt_stats = ttnn.all_gather(
     #     tt_stats,
@@ -625,7 +625,7 @@ def tt_sharded_distributed_rmsnorm(
     )
     # ttnn.synchronize_device(tt_ccl.mesh_device, sub_device_ids=[tt_ccl.worker_sub_device_id])
     # ttnn.deallocate(tt_stats_dram)
-    # print("all gather stats", tt_global_stats.shape)
+    print("all gather stats", tt_global_stats_sharded)
 
     # tt_global_stats_sharded = ttnn.to_memory_config(tt_global_stats, memory_config=tt_stats_sharded_config)
     ttnn.deallocate(tt_stats)

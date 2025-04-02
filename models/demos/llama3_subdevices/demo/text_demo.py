@@ -307,7 +307,7 @@ def test_demo_text(
         pytest.skip("TG only supports batch 1 and 32")
 
     mesh_device.enable_async(True)
-    enable_trace = True  # Use tracing for better perf
+    enable_trace = False  # Use tracing for better perf
     print_to_file = False  # Enable this flag to print the output of all users to a file
 
     # Override parameters from command line if they are provided
@@ -436,8 +436,9 @@ def test_demo_text(
         )
         prefilled_token = torch.argmax(logits, dim=-1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
-        logger.info(f"Prefill finished")
-        prefilled_token = prefilled_token.repeat(batch_size, 1)
+        logger.info(f"Prefill finished", prefilled_token.shape)
+        if prefilled_token.shape[0] != 32:
+            prefilled_token = prefilled_token.repeat(batch_size, 1)
         # Keep track of generated outputs to print out every iteration
         all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(batch_size)]
         for user in range(batch_size):
@@ -471,18 +472,14 @@ def test_demo_text(
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
             # Run decode forward
-            try:
-                logits = generator.decode_forward_text(
-                    out_tok,
-                    current_pos,
-                    enable_trace=enable_trace,
-                    page_table=page_table,
-                    kv_cache=tt_kv_cache,
-                    argmax_on_device=argmax_on_device,
-                )
-            except Exception as e:
-                logger.error(f"Error during decoding: {str(e)}")
-                break
+            logits = generator.decode_forward_text(
+                out_tok,
+                current_pos,
+                enable_trace=enable_trace,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                argmax_on_device=argmax_on_device,
+            )
 
             # Get the next token
             if argmax_on_device:

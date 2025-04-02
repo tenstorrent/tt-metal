@@ -197,8 +197,8 @@ class Generator:
         read_from_device=True,
         argmax_on_device=False,
     ):
-        tokens[:, :] = tokens[0, :]
-        # print("decode tokens", tokens)
+        # tokens[:, :] = tokens[0, :]
+        print("decode tokens", tokens.shape)
         if self.model.is_decode_setup is False:
             self.model.switch_mode("decode")
         kv_cache = kv_cache[0]
@@ -214,7 +214,7 @@ class Generator:
             tt_logits = self._easy_trace_text(**decode_kwargs)
         else:
             tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
-        # print("tt_logits", tt_logits)
+        print("tt_logits", tt_logits)
         if read_from_device:
             return self.read_decode_output(tt_logits, tokens.shape[0], argmax_on_device)
         else:
