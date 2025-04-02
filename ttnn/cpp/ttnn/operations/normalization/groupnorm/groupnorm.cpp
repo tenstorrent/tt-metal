@@ -6,6 +6,7 @@
 #include "device/groupnorm_op.hpp"
 
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
 
 namespace ttnn::operations::normalization {
 
@@ -67,6 +68,11 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
         "Invalid tensor dimensions: The product of NHW dimensions ({}) must be divisible by the tile size ({}).",
         nhw,
         ttnn::types::TILE_SIZE);
+
+    // For 0V tensors
+    if (input_tensor.get_logical_volume() == 0) [[unlikely]] {
+        return ttnn::clone(input_tensor, /*dtype=*/std::nullopt, memory_config, /*compute_kernel_config=*/std::nullopt);
+    }
 
     const auto output_dtype = dtype.value_or(input_tensor.get_dtype());
 
