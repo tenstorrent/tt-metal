@@ -14,6 +14,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <cmath>
 
 class bfloat16 {
 private:
@@ -26,9 +27,23 @@ public:
     // create from float: no rounding, just truncate
     bfloat16(float float_num) {
         static_assert(sizeof float_num == 4, "float must have size 4");
-        float_num *= 1.001957f;  // Hack from https://stackoverflow.com/questions/55253233
+        if (std::isnan(float_num)) {
+            uint16_data = UINT16_C(0x7FC0);
+        } else {
+            union {
+                uint32_t u32;
+                float f32;
+            };
 
-        uint16_data = (*reinterpret_cast<uint32_t*>(&float_num)) >> 16;
+            f32 = float_num;
+            uint32_t lower_bits = u32 & 0xFFFF;
+            uint32_t guard_bit = (lower_bits >> 15) & 1;
+            uint32_t round_bit = (lower_bits >> 14) & 1;
+            uint32_t sticky_bit = (lower_bits & 0x3FFF) != 0;
+
+            uint16_data = static_cast<uint16_t>(u32 >> 16);
+            uint16_data += (guard_bit && (round_bit || sticky_bit || (uint16_data & 1)));
+        }
     }
 
     // store lower 16 as 16-bit uint
