@@ -326,6 +326,12 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
 
 
 @pytest.fixture()
+def ensure_devices_tg():
+    device_ids = ttnn.get_device_ids()
+    assert len(device_ids) == 32, f"Expected 32 devices, got {len(device_ids)}"
+
+
+@pytest.fixture()
 def clear_compile_cache():
     yield
     import ttnn
