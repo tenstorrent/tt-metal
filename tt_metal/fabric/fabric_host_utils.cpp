@@ -34,7 +34,7 @@ tt::tt_fabric::FabricEriscDatamoverConfig get_default_fabric_config() {
     constexpr std::size_t edm_buffer_size =
         tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
         sizeof(tt::tt_fabric::PacketHeader);
-    return tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+    return tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size);
 }
 
 }  // namespace

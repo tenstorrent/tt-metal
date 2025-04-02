@@ -24,6 +24,10 @@ constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(4);
 constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(5);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(6);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
+constexpr bool dynamic_alternate = get_compile_time_arg_val(8);
+constexpr uint32_t num_max_targets = std::max(num_targets_forward_direction, num_targets_backward_direction);
+constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_targets : num_targets_forward_direction;
+constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targets : num_targets_backward_direction;
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -123,6 +127,11 @@ void kernel_main() {
             fabric_connection,
             l1_read_addr,
             num_tiles_to_read_this_core * tensor0_page_size);
+        if constexpr (dynamic_alternate) {
+            std::swap(
+                pkt_hdr_forward->routing_fields.value,
+                pkt_hdr_backward->routing_fields.value);  // alternate the packet header distance for better balancing
+        }
 
         tiles_read += num_tiles_to_read_this_core;
         shard_tile_id += num_tiles_to_read_this_core;
@@ -147,7 +156,7 @@ void kernel_main() {
             32});
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
         pkt_hdr_fwd->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
+            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_sync_targets_forward)});
         fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
             reinterpret_cast<uint32_t>(pkt_hdr_fwd), sizeof(PACKET_HEADER_TYPE));
     }
@@ -160,7 +169,7 @@ void kernel_main() {
             static_cast<uint16_t>(1),  // increment 1
             32});
         pkt_hdr_bwd->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
+            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_sync_targets_backward)});
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
         fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
             reinterpret_cast<uint32_t>(pkt_hdr_bwd), sizeof(PACKET_HEADER_TYPE));
