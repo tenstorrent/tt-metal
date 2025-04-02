@@ -14,8 +14,6 @@ Tensor CumSumOperation::invoke(
     const int64_t dim,
     std::optional<ttnn::DataType> dtype,
     std::optional<Tensor> optional_output_tensor) {
-    // TODO
-
     return ttnn::prim::cumsum(queue_id, input_tensor, dim, dtype, optional_output_tensor);
 }
 

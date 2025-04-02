@@ -22,7 +22,7 @@ CumSumDeviceOperation::program_factory_t CumSumDeviceOperation::select_program_f
 void CumSumDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // Verify `dim` parameter (`-input.dims <= dim < input.dim`)
-    // Note: `args.dim` can be negative (but tensor rank() is unsigned)
+    // Note: `args.dim` can be negative (but tensor rank() is unsigned) which is why we cast to int64_t
     const auto& input_tensor = tensor_args.input_tensor;
     const int64_t tensor_rank = static_cast<int64_t>(input_tensor.get_logical_shape().rank());
     TT_FATAL(
@@ -34,8 +34,8 @@ void CumSumDeviceOperation::validate_on_program_cache_miss(
 
     if (tensor_args.preallocated_output.has_value()) {
         // Make sure preallocated tensor specs match expected specs
-        // 1) If that's the case => OK, no need to allocate memory
-        // 3) Otherwise =>  error (pytorch behaviour is to reallocate but this has been deprecated as of pytorch 2.8)
+        // If that's the case => OK, no need to allocate memory
+        // Otherwise =>  error (pytorch behaviour is to reallocate but this has been deprecated as of pytorch 2.6)
 
         TT_FATAL(
             tensor_args.preallocated_output->tensor_spec() == compute_output_specs(args, tensor_args),
@@ -64,7 +64,6 @@ CumSumDeviceOperation::tensor_return_value_t CumSumDeviceOperation::create_outpu
         return tensor_args.preallocated_output.value();
     }
 
-    // otherwise, create output tensor
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
 
@@ -74,7 +73,6 @@ CumSumDeviceOperation::invoke(
     int64_t dim,
     std::optional<ttnn::DataType> dtype,
     std::optional<Tensor> preallocated_output) {
-    // Scaffold => return copy of input tensor
     return {
         operation_attributes_t{.dim = dim, .dtype = dtype.value_or(input_tensor.dtype())},
         tensor_args_t{.input_tensor = input_tensor, .preallocated_output = std::move(preallocated_output)}};
