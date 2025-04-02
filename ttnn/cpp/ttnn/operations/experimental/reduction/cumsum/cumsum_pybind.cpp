@@ -12,6 +12,46 @@ namespace ttnn::operations::experimental::reduction::detail {
 namespace py = pybind11;
 
 void bind_cumsum_operation(py::module& module) {
+    auto docstring =
+        R"doc(
+        Returns cumulative sum of `input` along dimension `dim`
+
+        For a given `input` of size N, the `output` will also contain N elements and be such that:
+
+        ``y_i = x_0 + x_1 + ... = x_{i-1} + x_i``
+
+        This function is fundamentally identical to `torch.cumsum()`
+
+        Parameters:
+            * `input` (ttnn.Tensor) input tensor
+            * `dim` (int)
+
+        Keywords Arguments:
+            * `dtype` (ttnn.DataType, optional) desired output type. If specified then input tensor will be casted to `dtype` before processing.
+            * `output` (ttnn.Tensor, optional) preallocated output. If specified, `output` must have same shape as `input`, and must be on the same device.
+
+        Note:
+            If both `dtype` and `output` are specified then `output.dtype` must be `dtype`
+
+        Example:
+
+        .. code-block:: python
+            import torch
+            import ttnn
+
+            # Create tensor
+            torch_input = torch.rand([2, 3, 4])
+            tensor_input = ttnn.from_torch(torch_input, device=device)
+
+            # Apply `ttnn.experimental.cumsum()` on `dim=0`
+            tensor_output = ttnn.experimental.cumsum(tensor_input, dim=0)
+
+            # With preallocated output and dtype
+            preallocated_output = ttnn.from_torch(torch.rand([2, 3, 4]), dtype=ttnn.bfloat16, device=device)
+
+            tensor_output = ttnn.experimental.cumsum(tensor_input, dim=0, dtype=torch.bfloat16, output=preallocated_output)
+        )doc";
+
     using OperationType = decltype(ttnn::experimental::cumsum);
     bind_registered_operation(
         module,

@@ -13,8 +13,24 @@ import ttnn
 # 3) test with misc. tensor layouts
 
 
-@pytest.mark.parametrize("size", [[0, 0, 0], [2, 3, 4]])
-@pytest.mark.parametrize("dim", [0, 1, 2, -1, -2, -3])
+@pytest.mark.parametrize(
+    "size, dim",
+    [
+        ([], 0),
+        ([0], 0),
+        ([1], 0),
+        ([10], 0),
+        ([2, 3], 0),
+        ([2, 3], 1),
+        ([2, 3], -1),
+        ([2, 3], -2),
+        ([2, 3, 4], 0),
+        ([2, 3, 4], 2),
+        ([2, 3, 4], -3),
+        ([0, 0, 0], 0),
+        ([0, 0, 0], 1),
+    ],
+)
 @pytest.mark.parametrize("dtype", [None, ttnn.bfloat16, ttnn.float32])
 def test_cumsum(size, dim, dtype, device):
     torch_input_tensor = torch.rand(size, dtype=torch.float32)
@@ -36,8 +52,24 @@ def test_cumsum(size, dim, dtype, device):
         assert output_tensor.dtype == input_tensor.dtype
 
 
-@pytest.mark.parametrize("size", [[0, 0, 0], [2, 3, 4]])
-@pytest.mark.parametrize("dim", [0, 1, 2, -1, -2, -3])
+@pytest.mark.parametrize(
+    "size, dim",
+    [
+        ([], 0),
+        ([0], 0),
+        ([1], 0),
+        ([10], 0),
+        ([2, 3], 0),
+        ([2, 3], 1),
+        ([2, 3], -1),
+        ([2, 3], -2),
+        ([2, 3, 4], 0),
+        ([2, 3, 4], 2),
+        ([2, 3, 4], -3),
+        ([0, 0, 0], 0),
+        ([0, 0, 0], 1),
+    ],
+)
 @pytest.mark.parametrize("dtype", [None, ttnn.bfloat16, ttnn.float32])
 def test_cumsum_with_preallocated_output(size, dim, dtype, device):
     torch_input_tensor = torch.rand(size, dtype=torch.float32)

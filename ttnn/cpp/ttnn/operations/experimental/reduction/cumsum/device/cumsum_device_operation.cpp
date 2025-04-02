@@ -21,12 +21,13 @@ CumSumDeviceOperation::program_factory_t CumSumDeviceOperation::select_program_f
 
 void CumSumDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // TODO: Verify `dim` parameter (`-input.dims <= dim < input.dim`)
+    // Verify `dim` parameter (`-input.dims <= dim < input.dim`)
     // Note: `args.dim` can be negative (but tensor rank() is unsigned)
     const auto& input_tensor = tensor_args.input_tensor;
     const int64_t tensor_rank = static_cast<int64_t>(input_tensor.get_logical_shape().rank());
     TT_FATAL(
-        args.dim < tensor_rank && args.dim >= -tensor_rank,
+        (tensor_rank == 0 && args.dim == 0)  // input tensor can have a dim of 0 (c.f. torch implementation)
+            || (args.dim < tensor_rank && args.dim >= -tensor_rank),
         "Specified dim ({}) argument exceeds tensor dimensions ({})\n",
         args.dim,
         input_tensor.logical_shape().rank());
