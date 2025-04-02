@@ -158,7 +158,6 @@ def ttnn_vgg16(
                 bias_tensor=tt_bias,
                 **conv_kwargs,
                 compute_config=compute_config,
-                conv_op_cache=conv_op_cache,
             )
             tt_x = ttnn.from_device(tt_output_tensor_on_device)
             ttnn.deallocate(tt_output_tensor_on_device)
@@ -312,7 +311,6 @@ def ttnn_vgg11(
                 bias_tensor=tt_bias,
                 **conv_kwargs,
                 compute_config=compute_config,
-                conv_op_cache=conv_op_cache,
             )
             tt_x = ttnn.from_device(tt_output_tensor_on_device)
             ttnn.deallocate(tt_output_tensor_on_device)

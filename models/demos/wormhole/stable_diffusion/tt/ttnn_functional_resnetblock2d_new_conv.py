@@ -11,7 +11,6 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
     weight_to_bfp8,
 )
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    conv_cache,
     get_default_compute_config,
 )
 from loguru import logger
@@ -494,7 +493,6 @@ class resnetBlock2D:
                 bias_tensor=self.conv1s_bias[0],
                 **conv_kwargs_1,
                 compute_config=compute_config,
-                conv_op_cache=conv_cache,
             )
 
         else:
@@ -597,7 +595,6 @@ class resnetBlock2D:
                     bias_tensor=self.conv1s_bias[i],
                     **conv_kwargs_2,
                     compute_config=compute_config,
-                    conv_op_cache=conv_cache,
                     return_output_dim=True,
                     return_weights_and_bias=False,
                 )
@@ -744,7 +741,6 @@ class resnetBlock2D:
             bias_tensor=self.conv2_bias,
             **conv_kwargs_3,
             compute_config=compute_config,
-            conv_op_cache=conv_cache,
             return_output_dim=True,
             return_weights_and_bias=False,
         )
@@ -819,7 +815,6 @@ class resnetBlock2D:
                 bias_tensor=self.conv_shortcut_bias,
                 **conv_kwargs_4,
                 compute_config=compute_config,
-                conv_op_cache=conv_cache,
                 return_output_dim=True,
                 return_weights_and_bias=False,
             )

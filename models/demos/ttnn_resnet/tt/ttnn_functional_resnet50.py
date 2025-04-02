@@ -237,7 +237,6 @@ class resnet50Bottleneck:
                     math_fidelity=self.model_config["MATH_FIDELITY"],
                     packer_l1_acc=packer_l1_accum_enabled,
                 ),
-                conv_op_cache=conv_op_cache,
                 return_output_dim=False,
                 return_weights_and_bias=False,
             )
@@ -330,7 +329,6 @@ class resnet50Bottleneck:
                 math_fidelity=self.model_config["MATH_FIDELITY"],
                 packer_l1_acc=packer_l1_acc,
             ),
-            conv_op_cache=conv_op_cache,
             return_output_dim=True,
             return_weights_and_bias=False,
         )
@@ -474,7 +472,6 @@ class resnet50Bottleneck:
                 math_fidelity=self.model_config["MATH_FIDELITY"],
                 packer_l1_acc=packer_l1_acc,
             ),
-            conv_op_cache=conv_op_cache,
             return_output_dim=True,
             return_weights_and_bias=False,
         )
@@ -543,7 +540,6 @@ class resnet50Bottleneck:
                 math_fidelity=self.model_config["MATH_FIDELITY"],
                 packer_l1_acc=packer_l1_acc,
             ),
-            conv_op_cache=conv_op_cache,
             return_output_dim=False,
             return_weights_and_bias=False,
         )
@@ -918,7 +914,6 @@ class resnet50:
             bias_tensor=self.conv1_bias_tensor,
             **conv_kwargs,
             compute_config=self.conv1_compute_config,
-            conv_op_cache=conv_op_cache,
             return_output_dim=True,
             return_weights_and_bias=False,
         )

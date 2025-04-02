@@ -104,8 +104,6 @@ def ttnn_conv1d(
         input_length=tt_input_tensor.shape[1],
         conv_config=conv_config,
         compute_config=compute_config,
-        conv_op_cache={},
-        debug=debug,
         groups=groups,
         return_output_dim=True,
         return_weights_and_bias=True,

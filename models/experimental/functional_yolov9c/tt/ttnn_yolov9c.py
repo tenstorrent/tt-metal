@@ -111,7 +111,6 @@ class TtYOLOv9cConv2D:
             stride=self.stride,
             padding=self.padding,
             conv_config=self.conv_config,
-            conv_op_cache=self.cache,
             groups=self.groups,
             compute_config=self.compute_config,
             return_output_dim=True,

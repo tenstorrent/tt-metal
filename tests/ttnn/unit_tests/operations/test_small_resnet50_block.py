@@ -123,7 +123,6 @@ class resnet50Bottleneck:
                 device.arch(),
                 math_fidelity=self.model_config["MATH_FIDELITY"],
             ),
-            conv_op_cache=conv_op_cache,
             return_output_dim=True,
             return_weights_and_bias=True,
         )
@@ -150,7 +149,6 @@ class resnet50Bottleneck:
                 device.arch(),
                 math_fidelity=self.model_config["MATH_FIDELITY"],
             ),
-            conv_op_cache=conv_op_cache,
             return_output_dim=True,
             return_weights_and_bias=True,
         )
@@ -177,7 +175,6 @@ class resnet50Bottleneck:
                     device.arch(),
                     math_fidelity=self.model_config["MATH_FIDELITY"],
                 ),
-                conv_op_cache=conv_op_cache,
                 return_output_dim=False,
                 return_weights_and_bias=True,
             )
@@ -208,7 +205,6 @@ class resnet50Bottleneck:
                 device.arch(),
                 math_fidelity=self.model_config["MATH_FIDELITY"],
             ),
-            conv_op_cache=conv_op_cache,
             return_output_dim=True,
             return_weights_and_bias=True,
         )
@@ -236,7 +232,6 @@ class resnet50Bottleneck:
                 device.arch(),
                 math_fidelity=self.model_config["MATH_FIDELITY"],
             ),
-            conv_op_cache=conv_op_cache,
             return_output_dim=False,
             return_weights_and_bias=True,
         )

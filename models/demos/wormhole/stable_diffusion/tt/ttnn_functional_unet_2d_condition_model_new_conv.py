@@ -31,7 +31,6 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upblock_2d_new_co
 
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     pre_process_input,
-    conv_cache,
     get_default_compute_config,
 )
 
@@ -412,7 +411,6 @@ class UNet2DConditionModel:
             bias_tensor=self.conv_in_bias,
             **conv_kwargs,
             compute_config=compute_config,
-            conv_op_cache=conv_cache,
         )
         sample = ttnn.reallocate(sample)  # TODO: Test remove
 
@@ -698,7 +696,6 @@ class UNet2DConditionModel:
             weight_tensor=self.conv_out_weights,
             bias_tensor=self.conv_out_bias,
             compute_config=compute_config,
-            conv_op_cache=conv_cache,
         )
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
         sample = ttnn.clone(sample, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)

@@ -113,8 +113,6 @@ def run_conv(
         input_length=input_length,
         conv_config=conv_config,
         compute_config=compute_config,
-        conv_op_cache=reader_patterns_cache,
-        debug=debug,
         groups=groups,
         return_output_dim=True,
         return_weights_and_bias=True,

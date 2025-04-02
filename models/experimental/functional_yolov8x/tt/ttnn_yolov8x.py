@@ -168,8 +168,6 @@ class Conv:
             input_width=input_width,
             conv_config=self.conv_config,
             compute_config=self.compute_config,
-            conv_op_cache=self.cache,
-            debug=False,
             groups=self.groups,
             memory_config=None,
             return_weights_and_bias=True,

@@ -217,8 +217,6 @@ class ttnn_Conv:
             input_width=input_width,
             conv_config=self.conv_config,
             compute_config=self.compute_config,
-            conv_op_cache=self.cache,
-            debug=False,
             groups=self.groups,
             memory_config=ttnn.L1_MEMORY_CONFIG if self.change_shard == True else None,
             return_weights_and_bias=True,
