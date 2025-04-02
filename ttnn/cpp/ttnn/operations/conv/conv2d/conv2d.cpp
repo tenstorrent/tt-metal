@@ -106,6 +106,14 @@ Result conv2d(
     }
 }
 
+// This function is used for DRAM Slicing
+// It divides the output tensor into slices, and calculates the corresponding input slices.
+// Uses ttnn::slice to slice the input tensor and bring it to L1.
+// Calls conv2d_L1 to perform the convolution on the sliced input tensor.
+// Finally, it uses ttnn::experimental::slice_write to write the output tensor back to DRAM.
+// The function is called in a loop for each slice of the output tensor.
+// The Conv2dSliceConfig is used to determine the slicing configuration. The dimension along which it is sliced, and the
+// number of such slices.
 template <typename T>
 Result conv2d_DRAM(
     QueueId queue_id,
@@ -281,7 +289,10 @@ Result conv2d_DRAM(
                 compute_config);
             auto_shard = true;
         }
-
+        if (!first_run) {
+            // After the first run, never preprocess weights.
+            conv_config.always_preprocess_weights = false;
+        }
         auto sliced_input_tensor = ttnn::slice(
             queue_id,
             input_tensor,
