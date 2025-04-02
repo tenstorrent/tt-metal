@@ -106,10 +106,9 @@ def test_multiple_tiles(testname, formats, dest_acc, mathop, math_fidelity, tile
     run_shell_command(f"cd .. && {make_cmd}")
 
     run_elf_files(testname)
+    wait_for_tensix_operations_finished()
 
     run_shell_command("cd .. && make clean")
-
-    assert_tensix_operations_finished()
 
     # check resluts from multiple tiles
     res_from_L1 = []

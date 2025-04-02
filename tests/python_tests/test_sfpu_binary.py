@@ -71,6 +71,7 @@ def test_all(testname, formats, dest_acc, mathop):
     run_shell_command(f"cd .. && {make_cmd}")
 
     run_elf_files(testname)
+    wait_for_tensix_operations_finished()
 
     res_from_L1 = collect_results(
         formats
@@ -79,8 +80,6 @@ def test_all(testname, formats, dest_acc, mathop):
     assert len(res_from_L1) == len(golden)
 
     run_shell_command("cd .. && make clean")
-
-    assert_tensix_operations_finished()
 
     if formats.pack_dst in [
         DataFormat.Float16_b,

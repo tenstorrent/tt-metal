@@ -76,14 +76,12 @@ def test_eltwise_unary_sfpu(testname, formats, dest_acc, approx_mode, mathop):  
     run_shell_command(f"cd .. && {make_cmd}")
     run_elf_files(testname)
 
+    wait_for_tensix_operations_finished()
     res_from_L1 = collect_results(
         formats, sfpu=True
     )  # Bug patchup in (unpack.py): passing formats struct to check unpack_src with pack_dst and distinguish when input and output formats have different exponent widths then reading from L1 changes
-
-    run_shell_command("cd .. && make clean")
-
     assert len(res_from_L1) == len(golden)
-    assert_tensix_operations_finished()
+    run_shell_command("cd .. && make clean")
 
     golden_tensor = torch.tensor(
         golden,

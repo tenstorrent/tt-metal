@@ -79,8 +79,8 @@ def test_fill_dest(testname, formats, dest_acc):
 
     run_shell_command("cd .. && make clean")
 
+    wait_for_tensix_operations_finished()
     res_from_L1 = []
-
     for address in pack_addresses:
         res_from_L1.append(
             collect_results(formats, address)
@@ -88,7 +88,6 @@ def test_fill_dest(testname, formats, dest_acc):
     res_from_L1 = flatten_list(res_from_L1)
 
     assert len(res_from_L1) == len(golden)
-    assert_tensix_operations_finished()
 
     golden_tensor = torch.tensor(
         golden,
