@@ -3,10 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+from ttnn.model_preprocessing import (
+    fold_batch_norm2d_into_conv2d,
+    infer_ttnn_module_args,
+    preprocess_model_parameters,
+)
+
 import ttnn
-from ttnn.model_preprocessing import infer_ttnn_module_args
 from models.demos.yolov4.reference import yolov4
-from ttnn.model_preprocessing import preprocess_model_parameters, fold_batch_norm2d_into_conv2d
 from models.demos.yolov4.reference.resblock import ResBlock
 
 
@@ -215,7 +219,7 @@ def create_yolov4_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Ten
         parameters.conv_args.downsample1.c5["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
         parameters.conv_args.downsample1.c5["transpose_shards"] = False
 
-        parameters.conv_args.downsample1.c6["act_block_h"] = 240
+        parameters.conv_args.downsample1.c6["act_block_h"] = 256
         parameters.conv_args.downsample1.c6["enable_split_reader"] = False
         parameters.conv_args.downsample1.c6["enable_act_double_buffer"] = False
         parameters.conv_args.downsample1.c6["deallocate_activation"] = True
