@@ -16,6 +16,7 @@ from genmo.mochi_preview.pipelines import (
     decode_latents,
     decode_latents_tiled_full,
     decode_latents_tiled_spatial,
+    compute_packed_indices,
 )
 
 
@@ -40,8 +41,11 @@ def sample_model_tt(device, dit, conditioning, **args):
     SPATIAL_DOWNSAMPLE = 8
     TEMPORAL_DOWNSAMPLE = 6
     IN_CHANNELS = 12
+    PATCH_SIZE = 2
     latent_t = ((t - 1) // TEMPORAL_DOWNSAMPLE) + 1
     latent_w, latent_h = w // SPATIAL_DOWNSAMPLE, h // SPATIAL_DOWNSAMPLE
+    num_visual_tokens = latent_t * latent_h * latent_w // (PATCH_SIZE**2)
+    num_latents = latent_t * latent_h * latent_w
 
     z_BCTHW = torch.randn(
         (B, IN_CHANNELS, latent_t, latent_h, latent_w),
@@ -53,6 +57,7 @@ def sample_model_tt(device, dit, conditioning, **args):
     if "cond" in conditioning:
         cond_text = conditioning["cond"]
         cond_null = conditioning["null"]
+        cond_text["packed_indices"] = compute_packed_indices(device, cond_text["y_mask"][0], num_latents)
     else:
         assert False, "Batched mode not supported"
 
@@ -88,6 +93,9 @@ def sample_model_tt(device, dit, conditioning, **args):
     # Preparation before first iteration
     rope_cos_1HND, rope_sin_1HND, trans_mat = dit.prepare_rope_features(T=latent_t, H=latent_h, W=latent_w)
     # Note that conditioning contains list of len 1 to index into
+    num_text_tokens = cond_text["packed_indices"]["max_seqlen_in_batch_kv"] - num_visual_tokens
+    cond_text["y_feat"][0] = cond_text["y_feat"][0][:, :num_text_tokens, :]
+    cond_text["y_mask"][0] = cond_text["y_mask"][0][:, :num_text_tokens]
     cond_y_feat_1BLY, cond_y_pool_11BX = dit.prepare_text_features(
         t5_feat=cond_text["y_feat"][0], t5_mask=cond_text["y_mask"][0]
     )
