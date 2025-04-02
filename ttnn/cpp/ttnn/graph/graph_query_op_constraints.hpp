@@ -96,8 +96,9 @@ auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
     size_t cb_peak_size_per_core = extract_circular_buffers_peak_size_per_core(op_trace);
     size_t l1_buffers_peak_per_core =
         extract_l1_buffer_allocation_peak_size_per_core(op_trace, interleaved_storage_cores);
-    size_t l1_output_buffer_per_core =
-        extract_l1_output_buffer_allocation_size_per_core(output, interleaved_storage_cores);
+    size_t l1_output_buffer_per_core = output.buffer()->is_dram() ? 0
+                                                                  : extract_l1_output_buffer_allocation_size_per_core(
+                                                                        output, interleaved_storage_cores);
 
     return ConstraintQueryResponse{
         ExecutionStatus::Success,

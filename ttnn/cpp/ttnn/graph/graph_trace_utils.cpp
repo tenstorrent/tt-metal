@@ -242,12 +242,12 @@ size_t worst_case_per_core_allocation(size_t total_size, size_t page_size, size_
 }
 }  // namespace detail
 
-// This function returns the worst-case memory allocation per core for the output L1 buffer. 0 for DRAM buffers.
+// This function returns the worst-case memory allocation per core for the output L1 buffer. Throws for DRAM buffers.
 uint32_t extract_l1_output_buffer_allocation_size_per_core(
     const Tensor& output_tensor, size_t interleaved_storage_cores) {
     tt::tt_metal::Buffer* buffer = output_tensor.buffer();
     if (buffer->is_dram()) {
-        return 0;
+        TT_THROW("No L1 allocation. Tensor is in DRAM");
     }
 
     uint32_t output_buffer_allocate_total_size = buffer->size();
