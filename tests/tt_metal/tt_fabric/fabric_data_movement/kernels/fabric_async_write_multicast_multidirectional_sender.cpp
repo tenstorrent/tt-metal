@@ -28,6 +28,7 @@ void kernel_main() {
     uint32_t w_dst_device_id = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t w_depth = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t w_router_noc_xy = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+    uint32_t outbound_eth_chan = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     constexpr uint32_t num_dirs = 2;
 
     uint64_t dst_noc_addr = get_noc_addr_helper(dst_noc_offset, dst_addr);

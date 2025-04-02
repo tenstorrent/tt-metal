@@ -23,6 +23,7 @@ void kernel_main() {
     uint32_t e_dst_device_id = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t e_depth = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t e_router_noc_xy = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+    uint32_t outbound_eth_chan = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
 
     uint64_t dst_noc_addr = get_noc_addr_helper(dst_noc_offset, dst_addr);
     uint32_t packet_size_bytes = num_bytes + PACKET_HEADER_SIZE_BYTES;
