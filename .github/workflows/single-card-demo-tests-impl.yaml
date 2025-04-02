@@ -12,9 +12,9 @@ on:
       wheel-artifact-name:
         required: true
         type: string
-      arch:
-        required: true
-        type: string
+      # arch:
+      #   required: true
+      #   type: string
 
 jobs:
   single-card-demo-tests:
