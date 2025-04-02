@@ -292,12 +292,13 @@ inline void fabric_dim3_bf8_reminder36(
     uint32_t num_full_contig = (tile_cols_per_chip / (num_banks * packet_size_in_pages)) * num_banks;
     uint32_t num_2contig =
         ((tile_cols_per_chip - num_full_contig * packet_size_in_pages) / (num_banks * 2)) * num_banks;
+    uint32_t num_orphan = tile_cols_per_chip - num_full_contig * packet_size_in_pages - num_2contig * 2;
     uint32_t tile_id = tile_cols_per_chip * my_chip_id;
     for (uint32_t i = 0; i < row; i++) {
         fabric_send_full_contig(
             num_full_contig, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
         fabric_send_2contig_bf8(num_2contig, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
-        fabric_send_non_contig(num_banks, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+        fabric_send_non_contig(num_orphan, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
         tile_id += tile_cols_per_chip * (ring_size - 1);
     }
 }
@@ -717,7 +718,7 @@ void kernel_main() {
                     pkt_hdr_forward,
                     pkt_hdr_backward,
                     fabric_connection);
-            } else if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == BF8_DIM3_REMAINDER_32) {
+            } else if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == BF8_DIM3_REMAINDER_36) {
                 fabric_dim3_bf8_reminder36<is_dram>(
                     num_tiles_per_chip,
                     ring_size,
