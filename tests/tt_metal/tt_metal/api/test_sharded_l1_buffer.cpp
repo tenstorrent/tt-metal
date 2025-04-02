@@ -21,7 +21,7 @@
 #include "llrt.hpp"
 #include "span.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "umd/device/types/xy_pair.h"
 
@@ -84,7 +84,7 @@ std::pair<std::shared_ptr<Buffer>, std::vector<uint32_t>> l1_buffer_write_wait(
 
     tt::tt_metal::detail::WriteToBuffer(buffer, input);
 
-    tt::Cluster::instance().l1_barrier(device->id());
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
     return std::move(std::pair(buffer, input));
 }
 
@@ -207,7 +207,7 @@ TEST_F(DeviceFixture, TestUnorderedHeightShardReadWrite) {
         auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, total_size / sizeof(uint32_t));
 
         tt::tt_metal::detail::WriteToBuffer(buffer, input);
-        tt::Cluster::instance().l1_barrier(device->id());
+        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
         auto input_it = input.begin();
         for (const auto& physical_core : physical_cores) {
             auto readback = tt::llrt::read_hex_vec_from_core(device->id(), physical_core, buffer->address(), page_size);

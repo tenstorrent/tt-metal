@@ -6,7 +6,7 @@
 #include <tt-metalium/dispatch_settings.hpp>
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
-#include <tt-metalium/metal_context.hpp>
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"

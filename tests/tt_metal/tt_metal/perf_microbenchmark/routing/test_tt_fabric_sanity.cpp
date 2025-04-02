@@ -48,7 +48,7 @@
 #include "span.hpp"
 #include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "umd/device/tt_core_coordinates.h"
@@ -182,10 +182,10 @@ typedef struct test_board {
         }
         device_handle_map = tt::tt_metal::detail::CreateDevices(available_chip_ids);
         if (metal_fabric_init_level == 0) {
-            control_plane = tt::Cluster::instance().get_control_plane();
+            control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
             control_plane->write_routing_tables_to_all_chips();
         } else {
-            control_plane = tt::Cluster::instance().get_control_plane();
+            control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
         }
 
         if (num_chips_to_use != available_chip_ids.size()) {
@@ -339,7 +339,9 @@ typedef struct test_board {
         // for each physical chip id, store the neighbors
         // TDOD: update the logic to find inter-mesh neighbors
         for (auto chip_id : physical_chip_ids) {
-            auto neighbors = tt::Cluster::instance().get_ethernet_cores_grouped_by_connected_chips(chip_id);
+            auto neighbors =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(
+                    chip_id);
             for (const auto& [neighbor, cores] : neighbors) {
                 // only append valid chip IDs since the neighbors could include mmio chips (wh galaxy) or
                 // could be outside of the board type (in case of partial galaxy configurations)
@@ -532,7 +534,7 @@ typedef struct test_device {
         program_handle = tt_metal::CreateProgram();
         std::tie(mesh_id, logical_chip_id) = board_handle->get_mesh_chip_id(physical_chip_id);
         mesh_chip_id = (mesh_id << 16 | logical_chip_id);
-        soc_desc = tt::Cluster::instance().get_soc_desc(physical_chip_id);
+        soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(physical_chip_id);
 
         // initalize list of worker cores in 8X8 grid
         // TODO: remove hard-coding
@@ -546,7 +548,9 @@ typedef struct test_device {
         core_range_end_virtual = device_handle->worker_core_from_logical_core(CoreCoord(7, 7));
 
         // populate router cores
-        auto neighbors = tt::Cluster::instance().get_ethernet_cores_grouped_by_connected_chips(device_handle->id());
+        auto neighbors =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(
+                device_handle->id());
         for (const auto& [neighbor_chip, connected_logical_cores] : neighbors) {
             if (!(board_handle->is_valid_chip_id(neighbor_chip))) {
                 continue;
