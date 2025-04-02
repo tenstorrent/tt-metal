@@ -333,7 +333,7 @@ def run_unary_test_with_float(device, h, w, scalar, ttnn_function, pcc=0.9999):
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     golden_function = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_function(torch_input_tensor, scalar)
+    torch_output_tensor = golden_function(torch_input_tensor, scalar, device=device)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn_function(input_tensor, scalar)
