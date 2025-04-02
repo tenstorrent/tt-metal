@@ -10,6 +10,9 @@ from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 
+# Corresponding test ids for each test
+test_id_to_name = {0: "DRAM Interleaved Packet Sizes", 1: "DRAM Interleaved Core Locations", 2: "DRAM Sharded"}
+
 
 def run_dm_tests(profile, gtest_filter):
     log_file_path = f"{PROFILER_LOGS_DIR}/{PROFILER_DEVICE_SIDE_LOG}"
@@ -107,10 +110,10 @@ def run_dm_tests(profile, gtest_filter):
         logger.info(f"\n")
 
     # Analysis average stats per core (Not very meaningful)
-    for core in dm_stats["reader"]["analysis"]["stats"].keys():
-        logger.info(f"Averages for core: {core}")
-        logger.info(f"Reader stats: {dm_stats['reader']['analysis']['stats'][core]['Average']}")
-        logger.info(f"Writer stats: {dm_stats['writer']['analysis']['stats'][core]['Average']}\n")
+    # for core in dm_stats["reader"]["analysis"]["stats"].keys():
+    #     logger.info(f"Averages for core: {core}")
+    #     logger.info(f"Reader stats: {dm_stats['reader']['analysis']['stats'][core]['Average']}")
+    #     logger.info(f"Writer stats: {dm_stats['writer']['analysis']['stats'][core]['Average']}\n")
 
     # # # # # # Performance check method # # # # # #
     reader_cycles = dm_stats["reader"]["analysis"]["series"][0]["duration_cycles"]
@@ -149,66 +152,97 @@ def plot_dm_stats(dm_stats):
     reader_series = dm_stats["reader"]["analysis"]["series"]
     writer_series = dm_stats["writer"]["analysis"]["series"]
 
-    reader_durations = [entry["duration_cycles"] for entry in reader_series]
-    writer_durations = [entry["duration_cycles"] for entry in writer_series]
+    # Group data by Test id
+    test_ids = set()
+    for attributes in dm_stats["reader"]["attributes"].values():
+        test_ids.add(attributes["Test id"])
+    for attributes in dm_stats["writer"]["attributes"].values():
+        test_ids.add(attributes["Test id"])
 
-    reader_bandwidths = []
-    writer_bandwidths = []
-    reader_data_sizes = []
-    writer_data_sizes = []
-    reader_host_ids = []
-    writer_host_ids = []
+    test_ids = sorted(test_ids)  # Sort for consistent ordering
 
-    for i, entry in enumerate(reader_series):
-        run_host_id = entry["duration_type"][0]["run_host_id"]
-        attributes = dm_stats["reader"]["attributes"][run_host_id]
-        transaction_size = attributes["Transaction size in bytes"]
-        bandwidth = attributes["Number of transactions"] * transaction_size / entry["duration_cycles"]
-        reader_bandwidths.append(bandwidth)
-        reader_data_sizes.append(transaction_size)
-        reader_host_ids.append(run_host_id)
+    # Create the main figure
+    fig = plt.figure(layout="constrained", figsize=(18, 6 * len(test_ids)))
 
-    for i, entry in enumerate(writer_series):
-        run_host_id = entry["duration_type"][0]["run_host_id"]
-        attributes = dm_stats["writer"]["attributes"][run_host_id]
-        transaction_size = attributes["Transaction size in bytes"]
-        bandwidth = attributes["Number of transactions"] * transaction_size / entry["duration_cycles"]
-        writer_bandwidths.append(bandwidth)
-        writer_data_sizes.append(transaction_size)
-        writer_host_ids.append(run_host_id)
+    # Create subfigures for each Test id
+    subfigs = fig.subfigures(len(test_ids), 1)
 
-    # Plot durations
-    plt.figure(figsize=(18, 6))
-    plt.subplot(1, 3, 1)
-    plt.plot(reader_host_ids, reader_durations, label="Reader Duration (cycles)", marker="o")
-    plt.plot(writer_host_ids, writer_durations, label="Writer Duration (cycles)", marker="o")
-    plt.xlabel("Runtime Host ID")
-    plt.ylabel("Duration (cycles)")
-    plt.title("Kernel Durations")
-    plt.legend()
-    plt.grid()
+    for idx, (subfig, test_id) in enumerate(zip(subfigs, test_ids)):
+        # Add a title for the current Test id
+        test_name = test_id_to_name.get(test_id, f"Test ID {test_id}")
+        subfig.suptitle(test_name, fontsize=16, weight="bold")
 
-    # Plot bandwidth
-    plt.subplot(1, 3, 2)
-    plt.plot(reader_host_ids, reader_bandwidths, label="Reader Bandwidth (bytes/cycle)", marker="o")
-    plt.plot(writer_host_ids, writer_bandwidths, label="Writer Bandwidth (bytes/cycle)", marker="o")
-    plt.xlabel("Runtime Host ID")
-    plt.ylabel("Bandwidth (bytes/cycle)")
-    plt.title("Bandwidth Comparison")
-    plt.legend()
-    plt.grid()
+        # Create subplots within the subfigure
+        axes = subfig.subplots(1, 3)
 
-    # Plot size of data transferred vs bandwidth
-    plt.subplot(1, 3, 3)
-    plt.scatter(reader_data_sizes, reader_bandwidths, label="Reader", marker="o")
-    plt.scatter(writer_data_sizes, writer_bandwidths, label="Writer", marker="o")
-    plt.xlabel("Transaction Size (bytes)")
-    plt.ylabel("Bandwidth (bytes/cycle)")
-    plt.title("Transaction Size vs Bandwidth")
-    plt.legend()
-    plt.grid()
+        # Filter data for the current Test id
+        reader_filtered = [
+            entry
+            for entry in reader_series
+            if dm_stats["reader"]["attributes"][entry["duration_type"][0]["run_host_id"]]["Test id"] == test_id
+        ]
+        writer_filtered = [
+            entry
+            for entry in writer_series
+            if dm_stats["writer"]["attributes"][entry["duration_type"][0]["run_host_id"]]["Test id"] == test_id
+        ]
 
-    plt.tight_layout()
+        # Aggregate data across all runtime_host_ids for the current Test id
+        reader_durations = [entry["duration_cycles"] for entry in reader_filtered]
+        writer_durations = [entry["duration_cycles"] for entry in writer_filtered]
+
+        reader_bandwidths = []
+        writer_bandwidths = []
+        reader_data_sizes = []
+        writer_data_sizes = []
+
+        for entry in reader_filtered:
+            runtime_host_id = entry["duration_type"][0]["run_host_id"]
+            attributes = dm_stats["reader"]["attributes"][runtime_host_id]
+            transaction_size = attributes["Transaction size in bytes"]
+            bandwidth = attributes["Number of transactions"] * transaction_size / entry["duration_cycles"]
+            reader_bandwidths.append(bandwidth)
+            reader_data_sizes.append(transaction_size)
+
+        for entry in writer_filtered:
+            runtime_host_id = entry["duration_type"][0]["run_host_id"]
+            attributes = dm_stats["writer"]["attributes"][runtime_host_id]
+            transaction_size = attributes["Transaction size in bytes"]
+            bandwidth = attributes["Number of transactions"] * transaction_size / entry["duration_cycles"]
+            writer_bandwidths.append(bandwidth)
+            writer_data_sizes.append(transaction_size)
+
+        # Plot durations
+        ax = axes[0]
+        ax.plot(reader_durations, label="Reader Duration (cycles)", marker="o")
+        ax.plot(writer_durations, label="Writer Duration (cycles)", marker="o")
+        ax.set_xlabel("Index")
+        ax.set_ylabel("Duration (cycles)")
+        ax.set_title("Kernel Durations")
+        ax.legend()
+        ax.grid()
+
+        # Plot bandwidth
+        ax = axes[1]
+        ax.plot(reader_bandwidths, label="Reader Bandwidth (bytes/cycle)", marker="o")
+        ax.plot(writer_bandwidths, label="Writer Bandwidth (bytes/cycle)", marker="o")
+        ax.set_xlabel("Index")
+        ax.set_ylabel("Bandwidth (bytes/cycle)")
+        ax.set_title("Bandwidth Comparison")
+        ax.legend()
+        ax.grid()
+
+        # Plot size of data transferred vs bandwidth
+        ax = axes[2]
+        ax.scatter(reader_data_sizes, reader_bandwidths, label="Reader", marker="o")
+        ax.scatter(writer_data_sizes, writer_bandwidths, label="Writer", marker="o")
+        ax.set_xlabel("Transaction Size (bytes)")
+        ax.set_ylabel("Bandwidth (bytes/cycle)")
+        ax.set_title("Data Size vs Bandwidth")
+        ax.legend()
+        ax.grid()
+
+    # Save the combined plot
     plt.savefig("dm_stats_plot.png")
     plt.close()
 

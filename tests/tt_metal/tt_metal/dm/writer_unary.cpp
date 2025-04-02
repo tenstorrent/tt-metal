@@ -13,11 +13,13 @@ void kernel_main() {
     constexpr uint32_t transaction_num_pages = get_compile_time_arg_val(3);
     constexpr uint32_t page_size_bytes = get_compile_time_arg_val(4);
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(5);
+    constexpr uint32_t test_id = get_compile_time_arg_val(6);
 
     constexpr uint32_t transaction_size_bytes = transaction_num_pages * page_size_bytes;
 
     DeviceTimestampedData("Number of transactions", num_of_transactions);
     DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
+    DeviceTimestampedData("Test id", test_id);
 
     for (uint32_t i = 0; i < num_of_transactions; i++) {
         // TODO: Change dst address to change DRAM/core locations (single/multiple core)
