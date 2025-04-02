@@ -13,6 +13,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include <tracy/Tracy.hpp>
+
 using namespace tt;
 using namespace tt::tt_metal;
 
