@@ -271,7 +271,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         wrap_mesh = False
     else:
         all_gather_topology = ttnn.Topology.Ring
-        wrap_mesh = True
+        wrap_mesh = False
 
     ttnn_persistent_output_tensor = None
     if use_persistent_output:
