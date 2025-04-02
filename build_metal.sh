@@ -40,7 +40,6 @@ show_help() {
     echo "  --configure-only                 Only configure the project, do not build."
     echo "  --enable-coverage                Instrument the binaries for code coverage."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
-    echo "  --python-executable              Specify the Python3 binary path to use during build."
 }
 
 clean() {
@@ -82,7 +81,6 @@ toolchain_path="cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
 configure_only="OFF"
 enable_coverage="OFF"
 with_python_bindings="ON"
-PYTHON3_EXECUTABLE=""
 
 declare -a cmake_args
 
@@ -123,7 +121,6 @@ toolchain-path:
 configure-only
 enable-coverage
 without-python-bindings
-python-executable:
 "
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
@@ -189,8 +186,6 @@ while true; do
             configure_only="ON";;
         --without-python-bindings)
             with_python_bindings="OFF";;
-        --python-executable)
-            PYTHON3_EXECUTABLE="$2";shift;;
         --disable-unity-builds)
 	    unity_builds="OFF";;
         --disable-light-metal-trace)
@@ -271,7 +266,6 @@ echo "INFO: Enable Unity builds: $unity_builds"
 echo "INFO: TTNN Shared sub libs : $ttnn_shared_sub_libs"
 echo "INFO: Enable Light Metal Trace: $light_metal_trace"
 echo "INFO: With python bindings: $with_python_bindings"
-echo "INFO: Python Executable: $PYTHON_EXECUTABLE"
 
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
@@ -399,10 +393,6 @@ if [ "$with_python_bindings" = "ON" ]; then
     cmake_args+=("-DWITH_PYTHON_BINDINGS=ON")
 else
     cmake_args+=("-DWITH_PYTHON_BINDINGS=OFF")
-fi
-
-if [ "$PYTHON3_EXECUTABLE" != "" ]; then
-    cmake_args+=("-DPython3_EXECUTABLE=$PYTHON3_EXECUTABLE")
 fi
 
 # toolchain and cxx_compiler settings would conflict with eachother
