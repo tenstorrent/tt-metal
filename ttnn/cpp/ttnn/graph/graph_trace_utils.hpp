@@ -6,6 +6,7 @@
 
 #include <nlohmann/json.hpp>
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 #include <vector>
 
