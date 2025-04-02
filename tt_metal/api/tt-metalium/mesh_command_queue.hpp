@@ -89,7 +89,7 @@ public:
     virtual void enqueue_write_shard_to_sub_grid(
         const MeshBuffer& buffer,
         const void* host_data,
-        const MeshCoordinateRange& device_range,
+        const MeshCoordinateRangeSet& device_range_set,
         bool blocking,
         std::optional<BufferRegion> region = std::nullopt) = 0;
     virtual void enqueue_write_mesh_buffer(
@@ -109,10 +109,10 @@ public:
 
     virtual MeshEvent enqueue_record_event(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-        const std::optional<MeshCoordinateRange>& device_range = std::nullopt) = 0;
+        const std::optional<MeshCoordinateRangeSet>& device_range_set = std::nullopt) = 0;
     virtual MeshEvent enqueue_record_event_to_host(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-        const std::optional<MeshCoordinateRange>& device_range = std::nullopt) = 0;
+        const std::optional<MeshCoordinateRangeSet>& device_range_set = std::nullopt) = 0;
     virtual void enqueue_wait_for_event(const MeshEvent& sync_event) = 0;
     virtual void finish(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
     virtual void reset_worker_state(

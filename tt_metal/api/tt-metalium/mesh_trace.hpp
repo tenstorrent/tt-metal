@@ -26,18 +26,40 @@ namespace tt::tt_metal::distributed {
 //   - The sysmem_manager coordinate the associated dispatch commands are stored in
 //   - The offset and size of the dispatch commands in the sysmem_manager
 //     staging vector
-struct MeshTraceStagingMetadata {
-    MeshCoordinateRange device_range = MeshCoordinateRange(MeshShape(0, 0));
-    MeshCoordinate sysmem_manager_coord = MeshCoordinate(0, 0);
-    std::size_t offset = 0;
-    std::size_t size = 0;
+class MeshTraceStagingMetadata {
+public:
+    MeshTraceStagingMetadata(
+        const MeshCoordinateRange& device_range,
+        const MeshCoordinate& sysmem_manager_coord,
+        std::size_t offset,
+        std::size_t size) :
+        device_range_(device_range), sysmem_manager_coord_(sysmem_manager_coord), offset_(offset), size_(size) {}
+
+    const MeshCoordinateRange& device_range() const { return device_range_; }
+    const MeshCoordinate& sysmem_manager_coord() const { return sysmem_manager_coord_; }
+    std::size_t offset() const { return offset_; }
+    std::size_t size() const { return size_; }
+
+private:
+    MeshCoordinateRange device_range_;
+    MeshCoordinate sysmem_manager_coord_;
+    std::size_t offset_ = 0;
+    std::size_t size_ = 0;
 };
 
 // Finalized/Consolidated dispatch commands on a device_range, corresponding
 // to a trace
-struct MeshTraceData {
-    MeshCoordinateRange device_range = MeshCoordinateRange(MeshShape(0, 0));
-    std::vector<uint32_t> data;
+class MeshTraceData {
+public:
+    MeshTraceData(const MeshCoordinateRange& range, std::vector<uint32_t> trace_data) :
+        device_range_(range), data_(std::move(trace_data)) {}
+
+    const MeshCoordinateRange& device_range() const { return device_range_; }
+    std::vector<uint32_t>& data() { return data_; }
+
+private:
+    MeshCoordinateRange device_range_;
+    std::vector<uint32_t> data_;
 };
 
 // Wrapper around the MeshTraceData. Captures the complete state of a MeshTrace

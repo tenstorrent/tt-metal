@@ -22,13 +22,13 @@ namespace tt::tt_metal::distributed {
 
 class MeshEvent {
 public:
-    MeshEvent(uint32_t id, MeshDevice* device, uint32_t mesh_cq_id, const MeshCoordinateRange& device_range);
+    MeshEvent(uint32_t id, MeshDevice* device, uint32_t mesh_cq_id, const MeshCoordinateRangeSet& device_range);
 
     // Returns references to the event data.
     uint32_t id() const;
     MeshDevice* device() const;
     uint32_t mesh_cq_id() const;
-    const MeshCoordinateRange& device_range() const;
+    const MeshCoordinateRangeSet& device_range_set() const;
 
     friend std::ostream& operator<<(std::ostream& os, const MeshEvent& event);
 
@@ -36,7 +36,7 @@ private:
     uint32_t id_ = 0;
     MeshDevice* device_ = nullptr;
     uint32_t mesh_cq_id_ = 0;
-    MeshCoordinateRange device_range_;
+    MeshCoordinateRangeSet device_range_set_;
 };
 
 }  // namespace tt::tt_metal::distributed

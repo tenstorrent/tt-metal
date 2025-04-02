@@ -8,17 +8,18 @@
 
 namespace tt::tt_metal::distributed {
 
-MeshEvent::MeshEvent(uint32_t id, MeshDevice* device, uint32_t mesh_cq_id, const MeshCoordinateRange& device_range) :
-    id_(id), device_(device), mesh_cq_id_(mesh_cq_id), device_range_(device_range) {}
+MeshEvent::MeshEvent(
+    uint32_t id, MeshDevice* device, uint32_t mesh_cq_id, const MeshCoordinateRangeSet& device_range_set) :
+    id_(id), device_(device), mesh_cq_id_(mesh_cq_id), device_range_set_(device_range_set) {}
 
 uint32_t MeshEvent::id() const { return id_; }
 MeshDevice* MeshEvent::device() const { return device_; }
 uint32_t MeshEvent::mesh_cq_id() const { return mesh_cq_id_; }
-const MeshCoordinateRange& MeshEvent::device_range() const { return device_range_; }
+const MeshCoordinateRangeSet& MeshEvent::device_range_set() const { return device_range_set_; }
 
 std::ostream& operator<<(std::ostream& os, const MeshEvent& event) {
     os << "MeshEvent(id=" << event.id() << ", device_id=" << event.device()->id()
-       << ", mesh_cq_id=" << event.mesh_cq_id() << ", device_range=" << event.device_range() << ")";
+       << ", mesh_cq_id=" << event.mesh_cq_id() << ", device_range_set=" << event.device_range_set() << ")";
     return os;
 }
 

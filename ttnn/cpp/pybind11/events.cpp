@@ -64,11 +64,11 @@ void py_module(py::module& module) {
             MeshDevice*,
             QueueId,
             const std::vector<SubDeviceId>&,
-            const std::optional<MeshCoordinateRange>&>(&record_mesh_event),
+            const std::optional<MeshCoordinateRangeSet>&>(&record_mesh_event),
         py::arg("mesh_device"),
         py::arg("cq_id"),
         py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
-        py::arg("device_range") = std::nullopt,
+        py::arg("device_range_set") = std::nullopt,
         R"doc(
             Records the completion of commands on this CQ, preceeding this call.
 
