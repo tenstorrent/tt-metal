@@ -48,7 +48,7 @@ std::string device_order_array_string(uint32_t ring_size, uint32_t ring_index) {
     return result;
 }
 
-std::string cores_to_string(std::vector<CoreCoord> cores) {
+std::string cores_to_string(const std::vector<CoreCoord>& cores) {
     std::string result = "{";
     for (const auto& core : cores) {
         result += "{" + std::to_string(core.x) + ", " + std::to_string(core.y) + "}, ";
@@ -190,7 +190,7 @@ uint32_t find_atomic_inc_core(std::vector<std::vector<ReadRequest>> schedule) {
     return atomic_inc_core;
 }
 
-std::vector<ReadRequest> flatten_schedule(std::vector<std::vector<ReadRequest>> schedule) {
+std::vector<ReadRequest> flatten_schedule(const std::vector<std::vector<ReadRequest>>& schedule) {
     // create a flattened schedule
     std::vector<ReadRequest> schedule_flattened;
     for (uint32_t i = 0; i < schedule.size(); ++i) {
@@ -199,7 +199,7 @@ std::vector<ReadRequest> flatten_schedule(std::vector<std::vector<ReadRequest>> 
     return schedule_flattened;
 }
 
-std::string schedule_to_string(std::vector<std::vector<ReadRequest>> schedule) {
+std::string schedule_to_string(const std::vector<std::vector<ReadRequest>>& schedule) {
     auto flattened_schedule = flatten_schedule(schedule);
     std::string result = "{";
     for (uint32_t i = 0; i < flattened_schedule.size(); ++i) {
@@ -211,7 +211,7 @@ std::string schedule_to_string(std::vector<std::vector<ReadRequest>> schedule) {
     return result;
 }
 
-uint32_t max_packets_per_worker(std::vector<std::vector<ReadRequest>> schedule) {
+uint32_t max_packets_per_worker(const std::vector<std::vector<ReadRequest>>& schedule) {
     uint32_t max_packets_per_worker = 0;
     for (const auto& worker_schedule : schedule) {
         max_packets_per_worker = std::max(max_packets_per_worker, (uint32_t)worker_schedule.size());

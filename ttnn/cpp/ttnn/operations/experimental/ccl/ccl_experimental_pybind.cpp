@@ -10,11 +10,9 @@
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter/llama_reduce_scatter_pybind.hpp"
 
-namespace py = pybind11;
-
 namespace ttnn::operations::experimental::ccl {
 
-void py_module(py::module& module) {
+void py_module(pybind11::module& module) {
     ccl::py_bind_all_gather_matmul(module);
     ccl::py_bind_all_reduce(module);
     ccl::py_bind_all_gather_async(module);
