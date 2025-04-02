@@ -23,9 +23,11 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
 
     std::pair<mesh_id_t, chip_id_t> src_mesh_chip_id;
     std::pair<mesh_id_t, chip_id_t> dst_mesh_chip_id;
+    chip_id_t not_used_1;
+    chip_id_t not_used_2;
     // Find a device with a neighbour in the East direction
-    bool connection_found =
-        find_device_with_neighbor_in_direction(src_mesh_chip_id, dst_mesh_chip_id, RoutingDirection::E);
+    bool connection_found = find_device_with_neighbor_in_direction(
+        src_mesh_chip_id, dst_mesh_chip_id, not_used_1, not_used_2, RoutingDirection::E);
     if (!connection_found) {
         GTEST_SKIP() << "No path found between sender and receivers";
     }
@@ -92,7 +94,7 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
     static constexpr std::size_t edm_buffer_size =
         tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
         sizeof(tt::tt_fabric::PacketHeader);
-    const auto edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+    const auto edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size);
 
     tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
         .edm_noc_x = edm_eth_core.x,
@@ -178,9 +180,11 @@ TEST_F(Fabric1DFixture, TestUnicastConnAPI) {
 
     std::pair<mesh_id_t, chip_id_t> src_mesh_chip_id;
     std::pair<mesh_id_t, chip_id_t> dst_mesh_chip_id;
+    chip_id_t not_used_1;
+    chip_id_t not_used_2;
     // Find a device with a neighbour in the East direction
-    bool connection_found =
-        find_device_with_neighbor_in_direction(src_mesh_chip_id, dst_mesh_chip_id, RoutingDirection::E);
+    bool connection_found = find_device_with_neighbor_in_direction(
+        src_mesh_chip_id, dst_mesh_chip_id, not_used_1, not_used_2, RoutingDirection::E);
     if (!connection_found) {
         GTEST_SKIP() << "No path found between sender and receivers";
     }

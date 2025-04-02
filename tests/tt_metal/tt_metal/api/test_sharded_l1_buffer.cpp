@@ -26,6 +26,8 @@ struct L1Config {
     TensorMemoryLayout buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED;
 
     bool sharded = true;
+    BufferType buffer_type = BufferType::L1;
+
     ShardSpecBuffer shard_spec() const {
         return ShardSpecBuffer(
             CoreRangeSet(std::set<CoreRange>(
@@ -45,19 +47,20 @@ namespace local_test_functions {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool l1_buffer_read_write(IDevice* device, const L1Config& test_config) {
-    bool pass = true;
-
+std::pair<std::shared_ptr<Buffer>, std::vector<uint32_t>> l1_buffer_write_wait(
+    IDevice* device, const L1Config& test_config) {
     auto buffer = test_config.sharded ? CreateBuffer(tt::tt_metal::ShardedBufferConfig{
                                             .device = device,
                                             .size = test_config.size_bytes,
                                             .page_size = test_config.page_size_bytes,
+                                            .buffer_type = test_config.buffer_type,
                                             .buffer_layout = test_config.buffer_layout,
                                             .shard_parameters = test_config.shard_spec()})
                                       : CreateBuffer(tt::tt_metal::BufferConfig{
                                             .device = device,
                                             .size = test_config.size_bytes,
                                             .page_size = test_config.page_size_bytes,
+                                            .buffer_type = test_config.buffer_type,
                                             .buffer_layout = test_config.buffer_layout});
 
     auto input =
@@ -66,9 +69,15 @@ bool l1_buffer_read_write(IDevice* device, const L1Config& test_config) {
     tt::tt_metal::detail::WriteToBuffer(buffer, input);
 
     tt::Cluster::instance().l1_barrier(device->id());
-    std::vector<uint32_t> output;
+    return std::move(std::pair(buffer, input));
+}
+
+bool l1_buffer_read(IDevice* device, const L1Config& test_config, const auto& write_info) {
+    auto buffer = write_info.first;
+    auto input = write_info.second;
+    auto output = std::vector<uint32_t>(input.size());
     tt::tt_metal::detail::ReadFromBuffer(buffer, output);
-    pass &= (output == input);
+    bool pass = (output == input);
 
     if (!pass) {
         if (input.size() != output.size()) {
@@ -89,6 +98,11 @@ bool l1_buffer_read_write(IDevice* device, const L1Config& test_config) {
     return pass;
 }
 
+bool l1_buffer_read_write(IDevice* device, const L1Config& test_config) {
+    auto write_info = l1_buffer_write_wait(device, test_config);
+    return l1_buffer_read(device, test_config, write_info);
+}
+
 }  // end namespace local_test_functions
 
 TEST_F(DeviceFixture, TestInterleavedReadWrite) {
@@ -107,11 +121,38 @@ TEST_F(DeviceFixture, TestHeightShardReadWrite) {
     }
 }
 
+TEST_F(DeviceFixtureWithL1Small, TestHeightShardReadWrite) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        L1Config test_config;
+        test_config.buffer_type = BufferType::L1;
+        auto l1_write_info = local_test_functions::l1_buffer_write_wait(this->devices_.at(id), test_config);
+        test_config.buffer_type = BufferType::L1_SMALL;
+        auto l1small_write_info = local_test_functions::l1_buffer_write_wait(this->devices_.at(id), test_config);
+
+        EXPECT_TRUE(local_test_functions::l1_buffer_read(this->devices_.at(id), test_config, l1_write_info));
+        EXPECT_TRUE(local_test_functions::l1_buffer_read(this->devices_.at(id), test_config, l1small_write_info));
+    }
+}
+
 TEST_F(DeviceFixture, TestWidthShardReadWrite) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         L1Config test_config;
         test_config.buffer_layout = TensorMemoryLayout::WIDTH_SHARDED;
         EXPECT_TRUE(local_test_functions::l1_buffer_read_write(this->devices_.at(id), test_config));
+    }
+}
+
+TEST_F(DeviceFixtureWithL1Small, TestWidthShardReadWrite) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        L1Config test_config;
+        test_config.buffer_layout = TensorMemoryLayout::WIDTH_SHARDED;
+        test_config.buffer_type = BufferType::L1;
+        auto l1_write_info = local_test_functions::l1_buffer_write_wait(this->devices_.at(id), test_config);
+        test_config.buffer_type = BufferType::L1_SMALL;
+        auto l1small_write_info = local_test_functions::l1_buffer_write_wait(this->devices_.at(id), test_config);
+
+        EXPECT_TRUE(local_test_functions::l1_buffer_read(this->devices_.at(id), test_config, l1_write_info));
+        EXPECT_TRUE(local_test_functions::l1_buffer_read(this->devices_.at(id), test_config, l1small_write_info));
     }
 }
 

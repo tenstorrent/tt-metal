@@ -196,7 +196,6 @@ add_compile_options(
     -Wreturn-type
     -Wswitch
     -Wuninitialized
-    -Wno-unused-parameter
     -mavx2
     -fPIC
     -fvisibility-inlines-hidden

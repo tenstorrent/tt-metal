@@ -3,10 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+from ttnn.model_preprocessing import (
+    fold_batch_norm2d_into_conv2d,
+    infer_ttnn_module_args,
+    preprocess_model_parameters,
+)
+
 import ttnn
-from ttnn.model_preprocessing import infer_ttnn_module_args
 from models.demos.yolov4.reference import yolov4
-from ttnn.model_preprocessing import preprocess_model_parameters, fold_batch_norm2d_into_conv2d
 from models.demos.yolov4.reference.resblock import ResBlock
 
 
@@ -109,7 +113,7 @@ def create_yolov4_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Ten
 
     # DS1
     parameters.downsample1["resolution"] = resolution
-    if resolution[0] == 320:
+    if resolution == (320, 320):
         parameters.conv_args.downsample1.c1["act_block_h"] = 128
         parameters.conv_args.downsample1.c1["enable_split_reader"] = True
         parameters.conv_args.downsample1.c1["enable_act_double_buffer"] = True
@@ -173,8 +177,7 @@ def create_yolov4_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Ten
         parameters.conv_args.downsample1.c8["reshard_if_not_optimal"] = False
         parameters.conv_args.downsample1.c8["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
         parameters.conv_args.downsample1.c8["transpose_shards"] = False
-
-    else:
+    elif resolution == (640, 640):
         parameters.conv_args.downsample1.c1["act_block_h"] = 128
         parameters.conv_args.downsample1.c1["enable_split_reader"] = True
         parameters.conv_args.downsample1.c1["enable_act_double_buffer"] = True
@@ -215,7 +218,7 @@ def create_yolov4_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Ten
         parameters.conv_args.downsample1.c5["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
         parameters.conv_args.downsample1.c5["transpose_shards"] = False
 
-        parameters.conv_args.downsample1.c6["act_block_h"] = 240
+        parameters.conv_args.downsample1.c6["act_block_h"] = 256
         parameters.conv_args.downsample1.c6["enable_split_reader"] = False
         parameters.conv_args.downsample1.c6["enable_act_double_buffer"] = False
         parameters.conv_args.downsample1.c6["deallocate_activation"] = True
@@ -238,6 +241,8 @@ def create_yolov4_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Ten
         parameters.conv_args.downsample1.c8["reshard_if_not_optimal"] = False
         parameters.conv_args.downsample1.c8["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
         parameters.conv_args.downsample1.c8["transpose_shards"] = False
+    else:
+        raise ValueError(f"Unsupported resolution: {resolution}")
 
     # DS2
     parameters.downsample2["resolution"] = resolution
@@ -860,7 +865,7 @@ def create_ds1_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor
     parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
 
     # DS1
-    if resolution[0] == 320:
+    if resolution == (320, 320):
         parameters.conv_args.c1["act_block_h"] = 128
         parameters.conv_args.c1["enable_split_reader"] = True
         parameters.conv_args.c1["enable_act_double_buffer"] = True
@@ -924,8 +929,8 @@ def create_ds1_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor
         parameters.conv_args.c8["reshard_if_not_optimal"] = False
         parameters.conv_args.c8["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
         parameters.conv_args.c8["transpose_shards"] = False
-    else:
-        parameters.conv_args.c1["act_block_h"] = 240
+    elif resolution == (640, 640):
+        parameters.conv_args.c1["act_block_h"] = 256
         parameters.conv_args.c1["enable_split_reader"] = False
         parameters.conv_args.c1["enable_act_double_buffer"] = False
         parameters.conv_args.c1["deallocate_activation"] = True
@@ -965,7 +970,7 @@ def create_ds1_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor
         parameters.conv_args.c5["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
         parameters.conv_args.c5["transpose_shards"] = False
 
-        parameters.conv_args.c6["act_block_h"] = 240
+        parameters.conv_args.c6["act_block_h"] = 256
         parameters.conv_args.c6["enable_split_reader"] = False
         parameters.conv_args.c6["enable_act_double_buffer"] = False
         parameters.conv_args.c6["deallocate_activation"] = True
@@ -988,6 +993,8 @@ def create_ds1_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor
         parameters.conv_args.c8["reshard_if_not_optimal"] = False
         parameters.conv_args.c8["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
         parameters.conv_args.c8["transpose_shards"] = False
+    else:
+        raise ValueError(f"Unsupported resolution: {resolution}")
 
     return parameters
 
@@ -1611,10 +1618,12 @@ def create_head_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tenso
     parameters.conv_args.c11["enable_act_double_buffer"] = False
     parameters.conv_args.c11["deallocate_activation"] = True
     parameters.conv_args.c11["reshard_if_not_optimal"] = True
-    if resolution[0] == 320:
+    if resolution == (320, 320):
         parameters.conv_args.c11["shard_layout"] = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    else:
+    elif resolution == (640, 640):
         parameters.conv_args.c11["shard_layout"] = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    else:
+        raise ValueError(f"Unsupported resolution: {resolution}")
     parameters.conv_args.c11["transpose_shards"] = False
 
     parameters.conv_args.c12["act_block_h"] = None
