@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,11 +6,6 @@ import torch
 import pytest
 
 import ttnn
-
-# Also TODO:
-# 1) test with preallocated output
-# 2) test with output.dtype != input.dtype
-# 3) test with misc. tensor layouts
 
 
 @pytest.mark.parametrize(
@@ -41,8 +36,6 @@ def test_cumsum(size, dim, dtype, device):
         output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, dtype=dtype)
     else:
         output_tensor = ttnn.experimental.cumsum(input_tensor, dim)
-
-    # TODO: Finish implementation of ttnn.cumsum() and test against torch.cumsum()
 
     assert output_tensor.shape == (size)
 

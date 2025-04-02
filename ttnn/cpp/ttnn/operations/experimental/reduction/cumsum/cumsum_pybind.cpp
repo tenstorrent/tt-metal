@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "cumsum_pybind.hpp"
 #include <optional>
 #include "pybind11/decorators.hpp"
