@@ -2,27 +2,61 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-#include <thread>
-
-#include "assert.hpp"
+#include <chrono>
+#include <emmintrin.h>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <tt-metalium/dispatch_settings.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "rtoptions.hpp"
-#include <tt-metalium/command_queue_interface.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
+#include <algorithm>
+#include <cstdlib>
+#include <cstring>
+#include <exception>
+#include <iomanip>
+#include <map>
+#include <memory>
+#include <optional>
+#include <set>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
+#include <variant>
+#include <vector>
+
+#include "allocator.hpp"
+#include "assert.hpp"
+#include "buffer_constants.hpp"
+#include "command_queue_common.hpp"
 #include "common.h"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "device.hpp"
+#include "dispatch_mem_map.hpp"
+#include "hal_types.hpp"
+#include "kernel_types.hpp"
+#include "llrt.hpp"
+#include "llrt/hal.hpp"
+#include "logger.hpp"
+#include "noc/noc_parameters.h"
+#include "program_impl.hpp"
+#include "rtoptions.hpp"
+#include "system_memory_manager.hpp"
+#include "test_common.hpp"
 #include "tt_cluster.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-
-#include "llrt/hal.hpp"
-#include "llrt.hpp"
-
-#include "test_common.hpp"
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/tt_io.hpp"
+#include "umd/device/tt_xy_pair.h"
+#include "umd/device/types/xy_pair.h"
+#include "utils.hpp"
 
 #define CQ_PREFETCH_CMD_BARE_MIN_SIZE tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::HOST)
 

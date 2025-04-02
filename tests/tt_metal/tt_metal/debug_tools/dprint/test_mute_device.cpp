@@ -2,11 +2,35 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug_tools_fixture.hpp"
+#include <gtest/gtest.h>
+#include <stdint.h>
 #include <tt-metalium/bfloat16.hpp>
-#include "debug_tools_test_utils.hpp"
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <fstream>
+#include <functional>
+#include <map>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "circular_buffer_types.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "debug_tools_fixture.hpp"
+#include "debug_tools_test_utils.hpp"
+#include "gtest/gtest.h"
+#include "hostdevcommon/kernel_structs.h"
+#include "kernel_types.hpp"
+#include "program_impl.hpp"
+#include "tt_backend_api_types.hpp"
+#include "utils.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A simple test for checking that disabling dprints on a device won't cause a hang.

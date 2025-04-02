@@ -2,14 +2,33 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <boost/move/utility_core.hpp>
+#include <gtest/gtest.h>
+#include <stdint.h>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <cstddef>
+#include <memory>
+#include <numeric>
+#include <optional>
+#include <utility>
+#include <vector>
 
-#include "tests/tt_metal/tt_metal/dispatch/dispatch_test_utils.hpp"
-#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "core_coord.hpp"
+#include "gtest/gtest.h"
+#include "mesh_buffer.hpp"
+#include "mesh_command_queue.hpp"
+#include "mesh_coord.hpp"
+#include "mesh_device.hpp"
+#include "mesh_event.hpp"
+#include "shape2d.hpp"
+#include "span.hpp"
 #include "tests/tt_metal/distributed/utils.hpp"
+#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "tt_backend_api_types.hpp"
+#include "util.hpp"
 
 namespace tt::tt_metal::distributed::test {
 namespace {

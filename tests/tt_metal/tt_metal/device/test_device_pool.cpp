@@ -3,12 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <memory>
+#include <vector>
 
+#include "allocator_types.hpp"
+#include "device.hpp"
+#include "gtest/gtest.h"
+#include "hostdevcommon/common_values.hpp"
 #include "rtoptions.hpp"
+#include "system_memory_manager.hpp"
 
 namespace tt::tt_metal {
 

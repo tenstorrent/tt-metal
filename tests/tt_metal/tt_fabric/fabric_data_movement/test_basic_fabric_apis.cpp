@@ -2,13 +2,47 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <memory>
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stdint.h>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/fabric_host_interface.h>
+#include <algorithm>
+#include <map>
+#include <memory>
+#include <numeric>
+#include <set>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "circular_buffer_types.hpp"
+#include "constants.hpp"
+#include "control_plane.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "device.hpp"
 #include "fabric_fixture.hpp"
-#include "tt_metal/llrt/tt_cluster.hpp"
+#include "gtest/gtest.h"
+#include "hal.hpp"
+#include "host_api.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "kernel_types.hpp"
+#include "logger.hpp"
+#include "mesh_graph.hpp"
+#include "program_impl.hpp"
+#include "span.hpp"
+#include "system_memory_manager.hpp"
 #include "test_common.hpp"
+#include "tt_backend_api_types.hpp"
+#include "tt_metal.hpp"
+#include "tt_metal/llrt/tt_cluster.hpp"
+#include "umd/device/types/xy_pair.h"
+#include "utils.hpp"
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {

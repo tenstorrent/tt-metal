@@ -2,11 +2,28 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stdint.h>
+#include <string>
+#include <thread>
+#include <unordered_set>
+#include <vector>
+
+#include "core_coord.hpp"
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
-
+#include "device.hpp"
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
+#include "gtest/gtest.h"
+#include "host_api.hpp"
+#include "llrt.hpp"
+#include "logger.hpp"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
+#include "utils.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher polling the eth link training counter.

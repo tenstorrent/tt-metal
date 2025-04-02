@@ -2,13 +2,46 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "rtoptions.hpp"
-#include "debug_tools_fixture.hpp"
-#include "debug_tools_test_utils.hpp"
-#include "llrt.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stddef.h>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <memory>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "circular_buffer_types.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "debug_tools_fixture.hpp"
+#include "dev_msgs.h"
+#include "device.hpp"
+#include "gtest/gtest.h"
+#include "hal_types.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "kernel_types.hpp"
+#include "llrt.hpp"
+#include "logger.hpp"
+#include "program_impl.hpp"
+#include "span.hpp"
+#include "tt_backend_api_types.hpp"
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/xy_pair.h"
+#include "utils.hpp"
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher NOC sanitization.

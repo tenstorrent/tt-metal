@@ -2,18 +2,50 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-
-#include "dispatch_fixture.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/bfloat16.hpp>
+#include <chrono>
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <sys/types.h>
 #include <tt-metalium/allocator.hpp>
-#include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/command_queue.hpp>
-#include "tests/tt_metal/test_utils/tilization.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstdlib>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <set>
+#include <string>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "assert.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "circular_buffer_types.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "device.hpp"
+#include "dispatch_fixture.hpp"
+#include "gtest/gtest.h"
+#include "hal_types.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "kernel_types.hpp"
+#include "logger.hpp"
 #include "matmul_test_utils.hpp"
+#include "program_impl.hpp"
+#include "span.hpp"
+#include "tests/tt_metal/test_utils/tilization.hpp"
+#include "tt_backend_api_types.hpp"
+#include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include "umd/device/types/arch.h"
 
 namespace tt::tt_metal {
 

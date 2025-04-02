@@ -1,15 +1,32 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+#include <chrono>
+#include <fmt/base.h>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <cstddef>
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <string>
+#include <variant>
+#include <vector>
+
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "device.hpp"
 #include "dispatch_fixture.hpp"
 #include "gtest/gtest.h"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include "tt_metal/test_utils/env_vars.hpp"
-#include <tt-metalium/command_queue.hpp>
+#include "kernel_types.hpp"
+#include "program_impl.hpp"
+#include "span.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/logger.hpp>
+#include "umd/device/types/arch.h"
 
 using namespace tt;
 

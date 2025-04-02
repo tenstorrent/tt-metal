@@ -3,15 +3,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-
+#include <stdint.h>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/global_circular_buffer_impl.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <exception>
+#include <map>
+#include <utility>
+#include <variant>
 #include <vector>
 
-#include "device_fixture.hpp"
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/global_circular_buffer_impl.hpp>
-#include <tt-metalium/global_circular_buffer.hpp>
+#include "buffer_constants.hpp"
+#include "circular_buffer_types.hpp"
+#include "data_types.hpp"
+#include "dispatch_fixture.hpp"
+#include "gtest/gtest.h"
+#include "kernel_types.hpp"
+#include "program_impl.hpp"
+#include "tt_backend_api_types.hpp"
 
 namespace tt::tt_metal {
 

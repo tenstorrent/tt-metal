@@ -18,11 +18,49 @@
 //      EnqueueProgram(p, device)
 // This makes it non-trivial to share the host-setup code across tests.
 
-#include <cmath>
-
-#include "command_queue_fixture.hpp"
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stdint.h>
 #include <tt-metalium/allocator.hpp>
+#include <cmath>
+#include <cstddef>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "bfloat16.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "circular_buffer_constants.h"
+#include "circular_buffer_types.hpp"
+#include "command_queue_fixture.hpp"
+#include "constants.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "device.hpp"
+#include "gtest/gtest.h"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "host_api.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "kernel_types.hpp"
+#include "logger.hpp"
+#include "program_impl.hpp"
+#include "runtime_args_data.hpp"
+#include "semaphore.hpp"
+#include "span.hpp"
 #include "tt_align.hpp"
+#include "tt_backend_api_types.hpp"
+#include "tt_cluster.hpp"
+#include "tt_metal.hpp"
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/arch.h"
+#include "util.hpp"
+#include "utils.hpp"
 
 namespace tt::tt_metal {
 struct CBConfig {

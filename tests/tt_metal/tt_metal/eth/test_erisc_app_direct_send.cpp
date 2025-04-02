@@ -2,25 +2,47 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
 #include <gtest/gtest.h>
-
+#include <stdlib.h>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/logger.hpp>
 #include <algorithm>
-#include <functional>
-#include <random>
+#include <cstdint>
+#include <iostream>
+#include <iterator>
+#include <map>
+#include <string>
+#include <thread>
+#include <tuple>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include "assert.hpp"
+#include "command_queue_fixture.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "device.hpp"
 #include "device_fixture.hpp"
 #include "dispatch_fixture.hpp"
-#include "multi_device_fixture.hpp"
-#include "command_queue_fixture.hpp"
-#include <tt-metalium/logger.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <thread>
-#include "tt_metal/test_utils/stimulus.hpp"
-#include "tt_metal/jit_build/build_env_manager.hpp"
-
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
+#include "gtest/gtest.h"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "jit_build/build.hpp"
+#include "kernel_types.hpp"
+#include "llrt.hpp"
+#include "multi_device_fixture.hpp"
+#include "program_impl.hpp"
+#include "span.hpp"
+#include "tt_cluster.hpp"
+#include "tt_memory.h"
+#include "tt_metal/jit_build/build_env_manager.hpp"
+#include "tt_metal/test_utils/stimulus.hpp"
+#include "umd/device/types/xy_pair.h"
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {

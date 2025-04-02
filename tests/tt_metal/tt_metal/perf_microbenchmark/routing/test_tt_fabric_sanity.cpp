@@ -2,23 +2,58 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/device_pool.hpp>
-#include <tt-metalium/device_impl.hpp>
-#include "rtoptions.hpp"
-#include <tt-metalium/mesh_graph.hpp>
+#include <chrono>
+#include <fmt/base.h>
+#include <nlohmann/json_fwd.hpp>
+#include <stdint.h>
 #include <tt-metalium/control_plane.hpp>
-//#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include "test_common.hpp"
-#include "routing_test_common.hpp"
-#include "eth_l1_address_map.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
-#include <numeric>
+#include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
-#include <random>
+#include <exception>
+#include <filesystem>
+#include <map>
+#include <memory>
+#include <numeric>
+#include <optional>
 #include <queue>
+#include <random>
+#include <set>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <unordered_map>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "assert.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "device.hpp"
+#include "fabric_host_interface.h"
+#include "fabric_types.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "kernel_types.hpp"
+#include "llrt.hpp"
+#include "logger.hpp"
+#include "metal_soc_descriptor.h"
+#include "program_impl.hpp"
+#include "routing_test_common.hpp"
+#include "rtoptions.hpp"
+#include "span.hpp"
+#include "system_memory_manager.hpp"
+#include "test_common.hpp"
+#include "tt_cluster.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/xy_pair.h"
+#include "utils.hpp"
 
 using std::vector;
 using namespace tt;

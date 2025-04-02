@@ -2,13 +2,40 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
+#include <assert.h>
+#include <chrono>
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdlib.h>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/bfloat16.hpp>
+#include <cstdint>
+#include <cstring>
+#include <exception>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <unordered_map>
+#include <variant>
+#include <vector>
+
+#include "assert.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "kernel_types.hpp"
+#include "logger.hpp"
+#include "program_impl.hpp"
+#include "span.hpp"
+#include "umd/device/types/xy_pair.h"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 // #include "tt_gdb/tt_gdb.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////

@@ -2,8 +2,30 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stdint.h>
+#include <functional>
+#include <initializer_list>
+#include <map>
+#include <set>
+#include <string>
+#include <unordered_set>
+#include <variant>
+#include <vector>
+
+#include "core_coord.hpp"
+#include "data_types.hpp"
 #include "debug_tools_fixture.hpp"
-#include "debug_tools_test_utils.hpp"
+#include "device.hpp"
+#include "host_api.hpp"
+#include "kernel_types.hpp"
+#include "logger.hpp"
+#include "program_impl.hpp"
+#include "span.hpp"
+#include "tt_cluster.hpp"
+#include "umd/device/types/xy_pair.h"
+#include "utils.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher pause feature.

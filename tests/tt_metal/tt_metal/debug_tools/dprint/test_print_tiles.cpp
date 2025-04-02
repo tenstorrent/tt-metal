@@ -2,10 +2,46 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
+#include <cstdint>
+#include <cstring>
+#include <functional>
+#include <map>
+#include <memory>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "bfloat16.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "circular_buffer_types.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
-#include <tt-metalium/bfloat8.hpp>
-#include <tt-metalium/bfloat4.hpp>
+#include "device.hpp"
+#include "gtest/gtest.h"
+#include "host_api.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "kernel_types.hpp"
+#include "program_impl.hpp"
+#include "rtoptions.hpp"
+#include "span.hpp"
+#include "tt_backend_api_types.hpp"
+#include "tt_metal.hpp"
+#include "util.hpp"
+#include "utils.hpp"
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A simple test for checking DPRINTs from all harts.

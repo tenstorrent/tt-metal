@@ -1,8 +1,27 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stdint.h>
+#include <functional>
+#include <map>
+#include <string>
+#include <variant>
+#include <vector>
+
+#include "core_coord.hpp"
+#include "data_types.hpp"
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
+#include "device.hpp"
+#include "gtest/gtest.h"
+#include "host_api.hpp"
+#include "kernel_types.hpp"
+#include "program_impl.hpp"
+#include "span.hpp"
+#include "tt_cluster.hpp"
+#include "utils.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking that the finish command can wait for the last dprint.

@@ -2,12 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/move/utility_core.hpp>
 #include <gtest/gtest.h>
-#include <gmock/gmock.h>
+#include <stdint.h>
+#include <optional>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 #include "gmock/gmock.h"
+#include "gtest/gtest.h"
 #include "mesh_coord.hpp"
+#include "shape_base.hpp"
+#include "span.hpp"
 
 namespace tt::tt_metal::distributed {
 namespace {

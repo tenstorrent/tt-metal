@@ -2,20 +2,41 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-#include <string>
-
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/command_queue.hpp>
+#include <chrono>
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <array>
+#include <cstring>
+#include <exception>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-
+#include "assert.hpp"
+#include "circular_buffer_types.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "device.hpp"
+#include "fmt/base.h"
+#include "hal_types.hpp"
+#include "kernel_types.hpp"
+#include "logger.hpp"
+#include "program_impl.hpp"
+#include "span.hpp"
 #include "test_common.hpp"
+#include "tt_backend_api_types.hpp"
+#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

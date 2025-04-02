@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <fmt/base.h>
 //////////////////////////////////////////////////////////////////////////////////////////
 // Tests data movement between N cores with proper use of semaphores for sync
 // Uses "reader_first_stage", "reader_intermediate_stage", "sender_intermediate_stage", "writer_last_stage" kernels
@@ -11,13 +13,44 @@
 // and number of repetitions
 //////////////////////////////////////////////////////////////////////////////////////////
 #include <gtest/gtest.h>
-
+#include <stddef.h>
+#include <stdint.h>
 #include <tt-metalium/bfloat16.hpp>
-#include "command_queue_fixture.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <map>
+#include <memory>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "assert.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "circular_buffer_types.hpp"
+#include "command_queue_fixture.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "fmt/base.h"
+#include "gtest/gtest.h"
+#include "hostdevcommon/common_values.hpp"
+#include "kernel_types.hpp"
+#include "logger.hpp"
+#include "program_impl.hpp"
+#include "span.hpp"
+#include "tt_backend_api_types.hpp"
+#include "tt_metal/test_utils/env_vars.hpp"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
+#include "utils.hpp"
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

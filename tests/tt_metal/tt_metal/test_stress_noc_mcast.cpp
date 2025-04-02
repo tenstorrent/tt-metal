@@ -8,25 +8,32 @@
 //  - rapidly grid of tensix workers generates random noc traffic
 //  - does not verify correct transactions, just runs til termination
 
+#include <fmt/base.h>
+#include <stdlib.h>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/metal_soc_descriptor.h>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <cstdint>
-#include <functional>
-#include <random>
+#include <map>
+#include <optional>
 #include <string>
+#include <unordered_set>
+#include <variant>
+#include <vector>
 
 #include "core_coord.hpp"
-#include "logger.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include "test_common.hpp"
-#include "rtoptions.hpp"
-#include <tt-metalium/metal_soc_descriptor.h>
-#include <tt-metalium/event.hpp>
-#include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/metal_soc_descriptor.h>
+#include "data_types.hpp"
+#include "device.hpp"
+#include "hal_types.hpp"
+#include "kernel_types.hpp"
 #include "llrt/hal.hpp"
+#include "logger.hpp"
+#include "program_impl.hpp"
+#include "span.hpp"
+#include "test_common.hpp"
 #include "tt_cluster.hpp"
+#include "umd/device/types/xy_pair.h"
 
 using namespace tt;
 

@@ -3,7 +3,66 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/container/vector.hpp>
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <algorithm>
+#include <functional>
+#include <memory>
+#include <numeric>
+#include <optional>
+#include <set>
+#include <unordered_map>
+#include <vector>
+
+#include "assert.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "core_coord.hpp"
+#include "device.hpp"
+#include "fabric_edm_packet_header.hpp"
+#include "fabric_edm_types.hpp"
+#include "gtest/gtest.h"
+#include "hal_types.hpp"
+#include "host_api.hpp"
+#include "logger.hpp"
+#include "mesh_coord.hpp"
+#include "mesh_device.hpp"
+#include "mesh_device_view.hpp"
+#include "program_impl.hpp"
+#include "shape.hpp"
+#include "shape_base.hpp"
+#include "span.hpp"
+#include "sub_device_types.hpp"
 #include "tests/ttnn/unit_tests/gtests/ccl/test_fabric_edm_common.hpp"
+#include "tile.hpp"
+#include "tt_backend_api_types.hpp"
+#include "tt_metal/test_utils/env_vars.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/distributed/api.hpp"
+#include "ttnn/distributed/distributed_tensor_config.hpp"
+#include "ttnn/global_semaphore.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
+#include "ttnn/operations/experimental/reshape/view.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "umd/device/types/arch.h"
 
 ////////////////////////////////////////////////////////////////////
 ///  MESSAGE COUNT TERMINATION MODE

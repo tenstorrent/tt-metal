@@ -2,13 +2,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <gmock/gmock.h>
-
-#include "mesh_device.hpp"
-#include "system_mesh.hpp"
 #include <tt-metalium/allocator.hpp>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
 
+#include "allocator_types.hpp"
+#include "buffer_constants.hpp"
+#include "device.hpp"
+#include "dispatch_core_common.hpp"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
+#include "hostdevcommon/common_values.hpp"
+#include "mesh_config.hpp"
+#include "mesh_coord.hpp"
+#include "mesh_device.hpp"
+#include "mesh_device_view.hpp"
+#include "shape_base.hpp"
+#include "system_mesh.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 namespace tt::tt_metal::distributed {

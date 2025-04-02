@@ -2,12 +2,39 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/device_pool.hpp>
-#include "rtoptions.hpp"
-#include <tt-metalium/bfloat16.hpp>
 #include <chrono>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <array>
+#include <exception>
+#include <map>
+#include <memory>
+#include <variant>
+#include <vector>
+
+#include "assert.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "device.hpp"
+#include "hostdevcommon/common_values.hpp"
+#include "kernel_types.hpp"
+#include "logger.hpp"
+#include "program_impl.hpp"
+#include "rtoptions.hpp"
+#include "span.hpp"
+#include "system_memory_manager.hpp"
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 /*
  * Similar to loopback programming example, except run on al devices and skip device teardown to check if we can

@@ -3,11 +3,36 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-
-#include "device_fixture.hpp"
+#include <stdint.h>
+#include <sys/types.h>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <map>
+#include <set>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "circular_buffer_types.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "device_fixture.hpp"
+#include "gtest/gtest.h"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "kernel_types.hpp"
+#include "program_impl.hpp"
+#include "semaphore.hpp"
+#include "tt_backend_api_types.hpp"
+#include "umd/device/tt_core_coordinates.h"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 using std::vector;
 using namespace tt;

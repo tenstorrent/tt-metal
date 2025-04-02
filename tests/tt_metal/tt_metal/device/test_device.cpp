@@ -2,13 +2,41 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
 #include <gtest/gtest.h>
-
-#include "device_fixture.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <stddef.h>
+#include <stdint.h>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <set>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <variant>
+#include <vector>
+
+#include "buffer_constants.hpp"
+#include "command_queue_common.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "device.hpp"
+#include "device_fixture.hpp"
+#include "dispatch_mem_map.hpp"
+#include "gtest/gtest.h"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "kernel_types.hpp"
+#include "logger.hpp"
+#include "program_impl.hpp"
+#include "system_memory_manager.hpp"
+#include "tt_cluster.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "umd/device/tt_core_coordinates.h"
+#include "utils.hpp"
 
 namespace tt::tt_metal {
 

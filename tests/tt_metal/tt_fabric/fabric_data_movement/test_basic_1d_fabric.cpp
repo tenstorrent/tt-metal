@@ -2,15 +2,39 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <gtest/gtest.h>
+#include <stdint.h>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/fabric_host_interface.h>
+#include <array>
+#include <cstddef>
+#include <map>
+#include <optional>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "device.hpp"
+#include "fabric_edm_packet_header.hpp"
 #include "fabric_fixture.hpp"
-#include "tt_metal/llrt/tt_cluster.hpp"
+#include "gtest/gtest.h"
+#include "hal.hpp"
+#include "host_api.hpp"
+#include "kernel_types.hpp"
+#include "mesh_coord.hpp"
+#include "mesh_graph.hpp"
+#include "span.hpp"
+#include "system_memory_manager.hpp"
+#include "tt_metal.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "tt_metal/llrt/tt_cluster.hpp"
+#include "umd/device/tt_core_coordinates.h"
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {

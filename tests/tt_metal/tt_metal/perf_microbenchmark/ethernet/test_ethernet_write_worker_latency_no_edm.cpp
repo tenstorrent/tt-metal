@@ -3,36 +3,49 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <limits>
-#include <random>
-#include <tuple>
-#include <map>
-
-#include "umd/device/types/arch.h"
-#include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include "tt_backend_api_types.hpp"
+#include <fmt/base.h>
+#include <magic_enum/magic_enum.hpp>
+#include <stdint.h>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
-
-#include <tt-metalium/persistent_kernel_cache.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <cstdlib>
+#include <exception>
+#include <limits>
+#include <map>
+#include <memory>
+#include <numeric>
+#include <optional>
+#include <set>
+#include <string>
+#include <string_view>
 #include <thread>
+#include <tuple>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#include "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_ubenchmark_types.hpp"
-
-// WARNING: ARCH_NAME specific
-#include "eth_l1_address_map.h"
+#include "assert.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "data_types.hpp"
+#include "device.hpp"
+#include "df/float32.hpp"
+#include "hal_types.hpp"
 #include "llrt/hal.hpp"
+#include "logger.hpp"
+#include "program_impl.hpp"
+#include "span.hpp"
+#include "system_memory_manager.hpp"
+#include "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_ubenchmark_types.hpp"
+#include "tt_backend_api_types.hpp"
+#include "tt_metal/test_utils/env_vars.hpp"
+#include "umd/device/tt_xy_pair.h"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
 
 using namespace tt;
 using namespace tt::test_utils;

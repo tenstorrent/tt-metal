@@ -4,6 +4,44 @@
 
 #include "test_utils.hpp"
 
+#include <fmt/base.h>
+#include <algorithm>
+#include <array>
+#include <functional>
+#include <iterator>
+#include <utility>
+
+#include "assert.hpp"
+#include "buffer_constants.hpp"
+#include "core_coord.hpp"
+#include "device.hpp"
+#include "fmt/base.h"
+#include "hal_types.hpp"
+#include "host_api.hpp"
+#include "logger.hpp"
+#include "span.hpp"
+#include "sub_device.hpp"
+#include "tt_metal.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+
+namespace ttnn {
+namespace operations {
+namespace unary {
+enum class UnaryOpType;
+struct UnaryWithParam;
+}  // namespace unary
+}  // namespace operations
+}  // namespace ttnn
+namespace tt {
+namespace tt_metal {
+namespace distributed {
+class MeshDevice;
+}  // namespace distributed
+}  // namespace tt_metal
+}  // namespace tt
+
 namespace ttnn::distributed::test {
 
 static constexpr size_t TEST_WORKERS_SUBDEVICE_INDEX = 0;

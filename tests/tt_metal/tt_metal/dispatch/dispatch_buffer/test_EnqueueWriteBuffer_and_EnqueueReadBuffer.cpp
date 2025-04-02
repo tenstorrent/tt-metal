@@ -2,23 +2,58 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
-#include <memory>
-
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "command_queue_fixture.hpp"
-#include "core_coord.hpp"
-#include "math.hpp"
-#include "shape2d.hpp"
-#include "multi_command_queue_fixture.hpp"
-#include "dispatch_test_utils.hpp"
-#include "gtest/gtest.h"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <chrono>
+#include <fmt/base.h>
+#include <magic_enum/magic_enum.hpp>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <exception>
+#include <functional>
+#include <initializer_list>
+#include <map>
+#include <memory>
+#include <optional>
+#include <set>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "assert.hpp"
+#include "bfloat16.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "command_queue_common.hpp"
+#include "command_queue_fixture.hpp"
+#include "constants.hpp"
+#include "core_coord.hpp"
+#include "dispatch_core_common.hpp"
+#include "dispatch_mem_map.hpp"
+#include "dispatch_test_utils.hpp"
+#include "gtest/gtest.h"
+#include "logger.hpp"
+#include "math.hpp"
+#include "multi_command_queue_fixture.hpp"
+#include "shape2d.hpp"
+#include "system_memory_manager.hpp"
+#include "tt_cluster.hpp"
+#include "umd/device/types/arch.h"
+
+enum class CoreType;
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

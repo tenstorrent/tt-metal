@@ -2,11 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug_tools_fixture.hpp"
-#include "gtest/gtest.h"
-#include "debug_tools_test_utils.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <fmt/base.h>
 #include <tt-metalium/host_api.hpp>
+#include <functional>
+#include <string>
+#include <unordered_set>
+#include <variant>
+#include <vector>
+
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "debug_tools_fixture.hpp"
+#include "debug_tools_test_utils.hpp"
+#include "device.hpp"
+#include "dprint_server.hpp"
+#include "gtest/gtest.h"
+#include "kernel_types.hpp"
+#include "logger.hpp"
+#include "program_impl.hpp"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
 
 ////////////////////////////////////////////////////////////////////////////////
 // A test for printing from ethernet cores.

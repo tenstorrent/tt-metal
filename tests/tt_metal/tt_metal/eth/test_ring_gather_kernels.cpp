@@ -2,26 +2,45 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
 #include <gtest/gtest.h>
-
-#include <algorithm>
-#include <functional>
-#include <random>
-#include <utility>
-
-#include "device_fixture.hpp"
-#include "multi_device_fixture.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <stddef.h>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <string>
 #include <thread>
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
+#include <tuple>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include "bfloat16.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "device.hpp"
+#include "device_fixture.hpp"
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
+#include "gtest/gtest.h"
+#include "hostdevcommon/common_values.hpp"
+#include "kernel_types.hpp"
+#include "llrt.hpp"
+#include "logger.hpp"
+#include "program_impl.hpp"
+#include "span.hpp"
+#include "system_memory_manager.hpp"
+#include "tt_backend_api_types.hpp"
+#include "tt_cluster.hpp"
+#include "tt_metal/test_utils/df/float32.hpp"
+#include "tt_metal/test_utils/stimulus.hpp"
+#include "umd/device/types/xy_pair.h"
 
 using std::vector;
 using namespace tt;

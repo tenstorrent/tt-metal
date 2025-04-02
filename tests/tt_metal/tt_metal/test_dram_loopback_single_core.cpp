@@ -2,13 +2,37 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
+#include <chrono>
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/bfloat16.hpp>
+#include <algorithm>
+#include <cstring>
+#include <exception>
+#include <map>
+#include <memory>
+#include <variant>
+#include <vector>
+
+#include "assert.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "kernel_types.hpp"
+#include "logger.hpp"
+#include "program_impl.hpp"
+#include "span.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // 1. Host writes data to buffer in DRAM

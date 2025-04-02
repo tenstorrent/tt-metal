@@ -2,20 +2,50 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-#include <math.h>
-
+#include <chrono>
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/bfloat16.hpp>
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <exception>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#include "llrt.hpp"
-
-#include "dprint_server.hpp"
-
+#include "assert.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "circular_buffer_types.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "kernel_types.hpp"
+#include "logger.hpp"
+#include "program_impl.hpp"
+#include "span.hpp"
 #include "test_common.hpp"
+#include "tt_backend_api_types.hpp"
+#include "utils.hpp"
+
+namespace tt {
+enum class ARCH;
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does

@@ -2,21 +2,39 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <stddef.h>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <algorithm>
 #include <cstdint>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <set>
+#include <string>
+#include <utility>
+#include <variant>
 #include <vector>
 
-#include "lightmetal_fixture.hpp"
-#include "env_lib.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include "env_lib.hpp"
+#include "assert.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "circular_buffer_types.hpp"
+#include "constants.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "device.hpp"
 #include "gtest/gtest.h"
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/program_impl.hpp>
-#include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/logger.hpp>
-#include <tt-metalium/host_api.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include "kernel_types.hpp"
+#include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal_capture_utils.hpp"
+#include "lightmetal_fixture.hpp"
+#include "span.hpp"
+#include "tt_backend_api_types.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
 using std::vector;

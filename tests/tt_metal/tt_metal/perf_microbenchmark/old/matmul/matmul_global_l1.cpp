@@ -2,22 +2,49 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <chrono>
-#include <functional>
-#include <map>
-#include <random>
-#include <string>
-#include <thread>
-
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdlib.h>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include "test_common.hpp"
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "dprint_server.hpp"
+#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/util.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
+#include <exception>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <optional>
+#include <ratio>
+#include <set>
+#include <string>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "assert.hpp"
+#include "base_types.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "circular_buffer_types.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "fmt/base.h"
+#include "hostdevcommon/common_values.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "kernel_types.hpp"
+#include "logger.hpp"
+#include "program_impl.hpp"
+#include "span.hpp"
+#include "test_common.hpp"
+#include "tt_backend_api_types.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
 using std::vector;

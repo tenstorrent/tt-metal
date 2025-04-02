@@ -2,20 +2,41 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
 #include <gtest/gtest.h>
+#include <stddef.h>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <cstdint>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <string>
+#include <unordered_set>
+#include <variant>
+#include <vector>
 
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
 #include "command_queue_fixture.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "device.hpp"
 #include "device_fixture.hpp"
 #include "dispatch_fixture.hpp"
-#include "multi_device_fixture.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
-#include "tt_metal/test_utils/stimulus.hpp"
-#include "llrt.hpp"
-
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
+#include "gtest/gtest.h"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "kernel_types.hpp"
+#include "llrt.hpp"
+#include "logger.hpp"
+#include "multi_device_fixture.hpp"
+#include "program_impl.hpp"
+#include "span.hpp"
+#include "tt_metal/test_utils/stimulus.hpp"
+#include "umd/device/types/arch.h"
 
 using namespace tt;
 using namespace tt::test_utils;

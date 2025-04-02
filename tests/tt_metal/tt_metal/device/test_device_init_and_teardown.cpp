@@ -3,13 +3,32 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/command_queue.hpp>
-#include "tt_metal/test_utils/env_vars.hpp"
+#include <stdlib.h>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <map>
+#include <variant>
+#include <vector>
+
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "gtest/gtest.h"
+#include "hostdevcommon/common_values.hpp"
+#include "kernel_types.hpp"
+#include "program_impl.hpp"
+#include "rtoptions.hpp"
+#include "system_memory_manager.hpp"
+#include "tt_backend_api_types.hpp"
+#include "tt_metal/test_utils/env_vars.hpp"
+#include "umd/device/types/arch.h"
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

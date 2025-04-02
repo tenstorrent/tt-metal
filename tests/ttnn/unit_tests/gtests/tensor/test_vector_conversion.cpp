@@ -2,23 +2,38 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/move/utility_core.hpp>
 #include <gtest/gtest.h>
-#include <gmock/gmock.h>
+#include <tt-metalium/bfloat16.hpp>
+#include <xtensor/xbuilder.hpp>
+#include <xtensor/xiterator.hpp>
+#include <xtensor/xlayout.hpp>
+#include <xtensor/xtensor_simd.hpp>
+#include <xtl/xiterator_base.hpp>
 #include <algorithm>
 #include <cstdint>
-
-#include "assert.hpp"
-#include "buffer_constants.hpp"
-#include "shape2d.hpp"
-#include "tests/ttnn/unit_tests/gtests/ttnn_test_fixtures.hpp"
-#include <tt-metalium/bfloat16.hpp>
+#include <iterator>
+#include <optional>
 #include <vector>
+
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "core_coord.hpp"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
+#include "shape.hpp"
+#include "span.hpp"
+#include "tests/ttnn/unit_tests/gtests/ttnn_test_fixtures.hpp"
+#include "tile.hpp"
+#include "ttnn/any_device.hpp"
 #include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/tensor/xtensor/conversion_utils.hpp"
-#include "ttnn/tensor/xtensor/xtensor_all_includes.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace {

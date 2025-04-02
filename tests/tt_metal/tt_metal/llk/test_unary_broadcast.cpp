@@ -2,15 +2,51 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <type_traits>
+#include <chrono>
+#include <fmt/base.h>
 #include <gtest/gtest.h>
-
-#include "device_fixture.hpp"
+#include <stdint.h>
 #include <tt-metalium/bfloat8.hpp>
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
+#include <cmath>
+#include <functional>
+#include <initializer_list>
+#include <map>
+#include <memory>
+#include <string>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "assert.hpp"
+#include "bfloat16.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "circular_buffer_types.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "device_fixture.hpp"
+#include "gtest/gtest.h"
+#include "host_api.hpp"
+#include "kernel_types.hpp"
+#include "logger.hpp"
+#include "program_impl.hpp"
+#include "span.hpp"
 #include "test_golden_impls.hpp"
+#include "tt_backend_api_types.hpp"
+#include "tt_metal.hpp"
+#include "tt_metal/test_utils/comparison.hpp"
+#include "tt_metal/test_utils/df/float32.hpp"
+#include "tt_metal/test_utils/packing.hpp"
+#include "tt_metal/test_utils/stimulus.hpp"
+#include "umd/device/types/arch.h"
+#include "utils.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

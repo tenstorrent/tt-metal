@@ -3,18 +3,29 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <gmock/gmock.h>
-#include <cstddef>
-#include <array>
-
-#include "host_api.hpp"
+#include <stdlib.h>
 #include <tt_stl/indestructible.hpp>
-#include "mesh_config.hpp"
-#include "mesh_device.hpp"
-#include "mesh_coord.hpp"
+#include <algorithm>
+#include <cstddef>
+#include <memory>
+#include <optional>
+#include <stdexcept>
+#include <tuple>
+#include <vector>
 
+#include "device.hpp"
+#include "dispatch_core_common.hpp"
+#include "gmock/gmock.h"
+#include "gtest/gtest.h"
+#include "host_api.hpp"
+#include "hostdevcommon/common_values.hpp"
+#include "mesh_config.hpp"
+#include "mesh_coord.hpp"
+#include "mesh_device.hpp"
 #include "system_mesh.hpp"
 #include "tests/tt_metal/test_utils/env_vars.hpp"
+#include "tt_backend_api_types.hpp"
+#include "umd/device/types/arch.h"
 
 namespace tt::tt_metal::distributed {
 namespace {

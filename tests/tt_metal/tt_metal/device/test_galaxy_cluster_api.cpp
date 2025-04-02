@@ -3,10 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <ostream>
+#include <tuple>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
+#include "core_coord.hpp"
+#include "device.hpp"
 #include "galaxy_fixture.hpp"
+#include "gtest/gtest.h"
+#include "system_memory_manager.hpp"
 #include "tt_cluster.hpp"
-#include <tt-metalium/host_api.hpp>
+#include "umd/device/types/cluster_descriptor_types.h"
+#include "umd/device/types/xy_pair.h"
 
 namespace tt::tt_metal {
 

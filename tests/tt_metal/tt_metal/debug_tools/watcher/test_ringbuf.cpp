@@ -2,8 +2,28 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <functional>
+#include <map>
+#include <string>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "core_coord.hpp"
+#include "data_types.hpp"
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
+#include "dev_msgs.h"
+#include "device.hpp"
+#include "gtest/gtest.h"
+#include "host_api.hpp"
+#include "kernel_types.hpp"
+#include "logger.hpp"
+#include "program_impl.hpp"
+#include "umd/device/types/xy_pair.h"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking debug ring buffer feature.

@@ -2,35 +2,62 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <chrono>
-#include <functional>
-#include <random>
-
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdlib.h>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/allocator.hpp>
-
-#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
-#include <tt-metalium/constants.hpp>
-#include <optional>
-
-#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
-#include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "tests/tt_metal/test_utils/tilization.hpp"
-#include "tt_metal/tt_metal/common/matmul_test_utils.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstring>
+#include <exception>
+#include <functional>
+#include <iostream>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <optional>
+#include <random>
+#include <ratio>
+#include <set>
+#include <string>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include "assert.hpp"
+#include "base_types.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "circular_buffer_types.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "device.hpp"
+#include "fmt/base.h"
+#include "hal_types.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "kernel_types.hpp"
+#include "logger.hpp"
+#include "program_impl.hpp"
+#include "span.hpp"
 #include "test_common.hpp"
+#include "tests/tt_metal/test_utils/tilization.hpp"
+#include "tt_backend_api_types.hpp"
+#include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
+#include "umd/device/types/arch.h"
+#include "utils.hpp"
 
 using std::vector;
 using namespace tt;

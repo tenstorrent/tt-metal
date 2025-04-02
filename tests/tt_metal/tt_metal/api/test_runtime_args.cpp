@@ -2,14 +2,38 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
 #include <gtest/gtest.h>
-
-#include "device_fixture.hpp"
-#include "kernel_types.hpp"
+#include <stddef.h>
+#include <stdint.h>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <algorithm>
+#include <map>
+#include <memory>
+#include <set>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "assert.hpp"
+#include "base_types.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "device.hpp"
+#include "device_fixture.hpp"
+#include "gtest/gtest.h"
+#include "hal_types.hpp"
+#include "kernel_types.hpp"
+#include "logger.hpp"
+#include "program_impl.hpp"
+#include "span.hpp"
+#include "tt_backend_api_types.hpp"
+#include "umd/device/types/xy_pair.h"
+#include "utils.hpp"
 
 using namespace tt;
 

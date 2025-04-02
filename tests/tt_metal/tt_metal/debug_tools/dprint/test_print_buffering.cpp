@@ -2,13 +2,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <vector>
-#include "core_coord.hpp"
-#include "debug_tools_fixture.hpp"
-#include "gtest/gtest.h"
-#include "debug_tools_test_utils.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <fmt/base.h>
 #include <tt-metalium/host_api.hpp>
+#include <algorithm>
+#include <functional>
+#include <map>
+#include <string>
+#include <variant>
+#include <vector>
+
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "debug_tools_fixture.hpp"
+#include "debug_tools_test_utils.hpp"
+#include "device.hpp"
+#include "gtest/gtest.h"
+#include "kernel_types.hpp"
+#include "logger.hpp"
+#include "program_impl.hpp"
+#include "span.hpp"
+#include "umd/device/types/xy_pair.h"
+#include "utils.hpp"
 
 ////////////////////////////////////////////////////////////////////////////////
 // A test for checking that prints are properly buffered before being displayed to the user.

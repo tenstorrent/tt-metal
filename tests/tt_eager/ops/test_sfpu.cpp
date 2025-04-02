@@ -2,24 +2,51 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <cmath>
-#include <cstdint>
-#include <functional>
-#include <random>
-#include <map>
-#include <sstream>
-#include <string>
-#include <vector>
-
+#include <chrono>
+#include <ctype.h>
+#include <errno.h>
+#include <fmt/base.h>
 #include <magic_enum/magic_enum.hpp>
-
+#include <stdlib.h>
+#include <sys/types.h>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/bfloat16.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
+#include <exception>
+#include <functional>
+#include <map>
+#include <memory>
+#include <optional>
+#include <sstream>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "assert.hpp"
+#include "buffer_constants.hpp"
+#include "circular_buffer_types.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "kernel_types.hpp"
+#include "logger.hpp"
+#include "program_impl.hpp"
+#include "span.hpp"
 #include "tests_common/sfpu_helper/sfpu_helper.hpp"
+#include "tt_backend_api_types.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 // #include "tt_gdb/tt_gdb.hpp"
 
 using std::vector;

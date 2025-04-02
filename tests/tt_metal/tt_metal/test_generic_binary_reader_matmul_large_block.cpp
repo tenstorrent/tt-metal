@@ -2,17 +2,51 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-#include <string>
-
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <chrono>
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdlib.h>
+#include <sys/types.h>
 #include <tt-metalium/bfloat16.hpp>
-#include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstring>
+#include <exception>
+#include <iostream>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <set>
+#include <string>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "assert.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "circular_buffer_types.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "kernel_types.hpp"
+#include "logger.hpp"
+#include "program_impl.hpp"
+#include "span.hpp"
+#include "tt_backend_api_types.hpp"
+#include "tt_metal/test_utils/deprecated/tensor.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
+
 //////////////////////////////////////////////////////////////////////////////////////////
 // This test is similar to test_matmul_large_block.
 // The only difference is that it uses generic_binary_reader_kernel instead of reader_matmul_blocked kernel.

@@ -3,10 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <tt-metalium/vector_aligned.hpp>
+#include <utility>
+#include <vector>
+
+#include "gtest/gtest.h"
+#include "span.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include <tt-metalium/vector_aligned.hpp>
 
 namespace tt::tt_metal {
 
