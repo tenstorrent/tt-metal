@@ -43,26 +43,6 @@ void bind_all_reduce(pybind11::module& module, const ccl_operation_t& operation,
             py::arg("memory_config") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Ring,
             py::arg("num_workers") = std::nullopt,
-            py::arg("num_buffers_per_channel") = std::nullopt},
-        ttnn::pybind_overload_t{
-            [](const ccl_operation_t& self,
-               const std::vector<ttnn::Tensor>& input_tensors,
-               ttnn::operations::reduction::ReduceType math_op,
-               const uint32_t num_links,
-               const ttnn::MemoryConfig& memory_config,
-               ttnn::ccl::Topology topology,
-               const std::optional<size_t> num_workers,
-               const std::optional<size_t> num_buffers_per_channel) -> std::vector<ttnn::Tensor> {
-                return self(
-                    input_tensors, math_op, num_links, memory_config, topology, num_workers, num_buffers_per_channel);
-            },
-            py::arg("input_tensor"),
-            py::arg("math_op"),
-            py::kw_only(),
-            py::arg("num_links") = 1,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("topology") = ttnn::ccl::Topology::Ring,
-            py::arg("num_workers") = std::nullopt,
             py::arg("num_buffers_per_channel") = std::nullopt});
 }
 
