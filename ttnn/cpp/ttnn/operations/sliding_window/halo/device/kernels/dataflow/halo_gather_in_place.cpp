@@ -299,4 +299,5 @@ void kernel_main() {
 
     noc_async_read_barrier();
     noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }
