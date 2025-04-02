@@ -182,7 +182,7 @@ void add_reader_writer_kernels(
             break;
         }
         case ReduceDim::HW: {
-            scaler = sqrt(scaler);
+            scaler = std::sqrt(scaler);
         }  // Needed because AVG pool multiplies twice by the scaler
         case ReduceDim::W: {
             auto unary_reader_kernel = tt_metal::CreateKernel(
