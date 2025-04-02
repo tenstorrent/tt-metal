@@ -56,9 +56,9 @@ jobs:
           { name: "mamba", runner-label: "N300", performance: true, cmd: run_mamba_perf, owner_id: U06ECNVR0EN}, # Evan Smal
           { name: "whisper", runner-label: "N300", performance: true, cmd: run_whisper_perf, owner_id: U05RWH3QUPM}, # Salar Hosseini
         ]
-    name: ${{ matrix.test-group.name }}-${{ matrix.test-group.runner-label }}
+    name: ${{ matrix.test-group.name }}-${{ matrix.test-group.runner-label }}-${{ matrix.test-group.performance && 'perf' || 'func' }}
     env:
-      ARCH_NAME: ${{ inputs.arch }}
+      #ARCH_NAME: ${{ inputs.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: 
@@ -97,9 +97,9 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=${{ inputs.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -v /mnt/MLPerf:/mnt/MLPerf:ro
+          #  -e ARCH_NAME=${{ inputs.arch }}
           install_wheel: true
           run_args: |
             source ${{ github.workspace }}/tests/scripts/single_card/run_single_card_demo_tests.sh
@@ -114,9 +114,9 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=${{ inputs.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -v /mnt/MLPerf:/mnt/MLPerf:ro
+          #  -e ARCH_NAME=${{ inputs.arch }}
           install_wheel: true
           run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
       - name: Upload benchmark data
