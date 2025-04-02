@@ -21,7 +21,7 @@ namespace ttnn::operations::experimental::ccl {
 struct LlamaReduceScatterDeviceOperation {
     struct operation_attributes_t {
         const uint32_t dim;
-        const GlobalSemaphore cross_device_semaphore;
+        const std::optional<GlobalSemaphore> cross_device_semaphore;
         const std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
         const uint32_t cluster_axis;
         const std::optional<MemoryConfig> output_mem_config;

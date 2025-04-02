@@ -633,7 +633,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
     uint32_t local_page = 0;
 
     std::vector<uint32_t> reader_runtime_args = {
-        cross_device_semaphore.address(), local_semaphore, false, false, 0, false, 0, 0};
+        cross_device_semaphore->address(), local_semaphore, false, false, 0, false, 0, 0};
     uint32_t is_reader_sender_core_idx = 2;
     uint32_t is_reader_worker_core_idx = 3;
     uint32_t is_linear_input_packet_start_idx = 4;
@@ -652,7 +652,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
 
     for (auto core : all_cores) {
         std::vector<uint32_t> writer_runtime_args = {
-            cross_device_semaphore.address(), local_semaphore, false, false, 0, 0, 0};
+            cross_device_semaphore->address(), local_semaphore, false, false, 0, 0, 0};
 
         if (sender_core_grid.contains(core)) {
             reader_runtime_args[is_reader_sender_core_idx] = true;
@@ -748,9 +748,9 @@ void LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::override_runtime_
 
         for (const auto& core : cores) {
             auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
-            writer_runtime_args[0] = (uint32_t)operation_attributes.cross_device_semaphore.address();
+            writer_runtime_args[0] = (uint32_t)operation_attributes.cross_device_semaphore->address();
             auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, core);
-            reader_runtime_args[0] = (uint32_t)operation_attributes.cross_device_semaphore.address();
+            reader_runtime_args[0] = (uint32_t)operation_attributes.cross_device_semaphore->address();
         }
     }
 }

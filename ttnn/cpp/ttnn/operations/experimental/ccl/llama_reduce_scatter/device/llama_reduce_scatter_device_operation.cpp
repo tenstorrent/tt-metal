@@ -26,6 +26,7 @@ void LlamaReduceScatterDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(attributes.dim == 3, "dim must be 1, got {}", attributes.dim);
     TT_FATAL(attributes.cluster_axis == 1, "cluster_axis must be 1, got {}", attributes.cluster_axis);
     TT_FATAL(attributes.ring_devices == 4, "ring_devices must be 4, got {}", attributes.ring_devices);
+    TT_FATAL(attributes.cross_device_semaphore.has_value(), "Cross device semaphore is not present");
 
     TT_FATAL(input_tensor.shard_spec().has_value(), "input_tensor must have a shard spec");
     TT_FATAL(
