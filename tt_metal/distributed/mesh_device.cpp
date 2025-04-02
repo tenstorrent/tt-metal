@@ -36,6 +36,8 @@
 #include "tt_metal/api/tt-metalium/device_pool.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/distributed/sd_mesh_command_queue.hpp"
+#include "tracy/Tracy.hpp"
+#include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 
 #include "llrt/hal.hpp"
 #include <mesh_coord.hpp>
@@ -728,7 +730,10 @@ std::shared_ptr<MeshTraceBuffer>& MeshDevice::create_mesh_trace(const MeshTraceI
     return trace->second;
 }
 
-void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id) { trace_buffer_pool_.erase(trace_id); }
+void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id) {
+    TracyTTMetalReleaseMeshTrace(this->get_device_ids(), *trace_id);
+    trace_buffer_pool_.erase(trace_id);
+}
 
 std::shared_ptr<MeshTraceBuffer> MeshDevice::get_mesh_trace(const MeshTraceId& trace_id) {
     auto trace = trace_buffer_pool_.find(trace_id);
@@ -739,17 +744,20 @@ std::shared_ptr<MeshTraceBuffer> MeshDevice::get_mesh_trace(const MeshTraceId& t
 }
 
 void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
+    TracyTTMetalBeginMeshTrace(this->get_device_ids(), *trace_id);
     auto& mesh_trace_buffer = this->create_mesh_trace(trace_id);
     mesh_command_queues_[cq_id]->record_begin(trace_id, mesh_trace_buffer->desc);
 }
 
 void MeshDevice::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
+    TracyTTMetalEndMeshTrace(this->get_device_ids(), *trace_id);
     auto trace_buffer = this->get_mesh_trace(trace_id);
     mesh_command_queues_[cq_id]->record_end();
     MeshTrace::populate_mesh_buffer(*(mesh_command_queues_[cq_id]), trace_buffer);
 }
 
 void MeshDevice::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) {
+    TracyTTMetalReplayMeshTrace(this->get_device_ids(), *trace_id);
     mesh_command_queues_[cq_id]->enqueue_trace(trace_id, blocking);
 }
 

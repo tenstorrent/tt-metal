@@ -287,6 +287,22 @@ void SetDeviceProfilerDir(const std::string& output_dir = "");
 void FreshProfilerDeviceLog();
 
 /**
+ * Generate a (unique) per device ID for a program (potentially) running across multiple devices. The generated ID is
+ * used by the performance profiler.
+ *
+ * Return value: uint32_t
+ *
+ * | Argument             | Description                                                                         |  Data
+ * type            | Valid range              | required |
+ * |----------------------|-------------------------------------------------------------------------------------|-----------------------|--------------------------|----------|
+ * | base_program_id      | ID assigned to a program or an op by the user, for use by the performance profiler  |
+ * uint32_t              | 0 - 2^21 - 1             | yes      | | device_id            | The device id this op will be
+ * launched on (0 if this op runs on host only)          | uint32_t              | 0 - 2^32 - 1             | yes      |
+ * | is_host_fallback_op  | (Optional): Specifies if this op runs entirely on host                              | bool
+ * |                          | no       |
+ */
+uint32_t EncodePerDeviceProgramID(uint32_t base_program_id, uint32_t device_id, bool is_host_fallback_op = false);
+/**
  * Copies data from a host buffer into a buffer within the device DRAM channel
  *
  * Return value: bool

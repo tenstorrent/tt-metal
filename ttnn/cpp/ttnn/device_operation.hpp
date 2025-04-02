@@ -375,16 +375,15 @@ void enqueue_mesh_workload(
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     distributed::MeshDevice* mesh_device,
     tt::tt_metal::distributed::MeshWorkload& workload) {
-    // Important! `TT_DNN_DEVICE_OP` must be used in conjunction with `TracyOpMeshWorkload` to feed profiler
-    // regresion
-    // tests well-formed data.
-    ZoneScopedN("TT_DNN_DEVICE_OP");
-    mesh_device_operation_utils::set_runtime_id(workload, mesh_device);
+    mesh_device_operation_utils::set_runtime_id(workload);
     if (mesh_device_operation_utils::track_workload(workload, mesh_device)) {
         return;
     }
+    {
+        ZoneScopedN("EnqueueMeshWorkload");
+        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(*cq_id), workload, false);
+    }
 
-    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(*cq_id), workload, false);
 
     TracyOpMeshWorkload(
         mesh_device, workload, mesh_device_operation_t{}, operation_attributes, tensor_args, tensor_return_value);
