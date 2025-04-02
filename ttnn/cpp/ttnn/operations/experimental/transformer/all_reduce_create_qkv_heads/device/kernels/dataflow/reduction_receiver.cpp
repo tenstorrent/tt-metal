@@ -118,20 +118,24 @@ void kernel_main() {
 
     constexpr uint32_t tile_size = head_size / head_size_num_tiles;
     constexpr uint32_t HALF_TILE_ELEMENTS = FACE_HEIGHT * TILE_WIDTH;
+    constexpr uint32_t TILE_ELEMENTS = 2 * HALF_TILE_ELEMENTS;
     constexpr uint32_t SUBTILE_ROWS = FACE_HEIGHT;
 
     // 3.2.1 read the QV/K data from the noc
     for (uint32_t i_tile_per_core = 0; i_tile_per_core < block_num_tiles; i_tile_per_core++) {
         for (uint32_t i_output_core = 0; i_output_core < q_num_cores;
              ++i_output_core) {  // i_output_core is also the row number modulo 8 from input tile
+
+            uint32_t tile_index_all_cores = i_tile_per_core + index_in_cores * block_num_tiles;
             DeviceZoneScopedN("ALL-CORE-LOOP");
             uint32_t device_batch_offset_per_output_core = device_batch_offset + i_output_core;
             uint32_t in_tile_offset_by_batch =
                 device_batch_offset_per_output_core < 16
                     ? device_batch_offset_per_output_core * SUBTILE_LINE_BYTES
                     : (device_batch_offset_per_output_core - 16) * SUBTILE_LINE_BYTES + 512 * ELEMENT_SIZE;
-            uint32_t tile_index_all_cores = i_tile_per_core + index_in_cores * block_num_tiles;
-            uint32_t read_addr = get_read_ptr(cb_id_reduction_out) + in_tile_offset_by_batch;
+
+            uint32_t read_addr =
+                get_read_ptr(cb_id_reduction_out) + in_tile_offset_by_batch + i_tile_per_core * TILE_ELEMENTS * 2;
             uint64_t write_addr = 0;
             uint32_t head_index = 0, tile_index = 0, wptr_offset = 0;
             if (tile_index_all_cores < num_q_heads * head_size_num_tiles) {
