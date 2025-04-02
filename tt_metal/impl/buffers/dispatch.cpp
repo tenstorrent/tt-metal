@@ -2,20 +2,35 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/core/span.hpp>
 #include <device.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
+#include <algorithm>
+#include <array>
+#include <optional>
+#include <stack>
+#include <type_traits>
+#include <utility>
+
 #include "assert.hpp"
+#include "buffer_constants.hpp"
 #include "dispatch.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
+#include "dispatch/kernels/cq_commands.hpp"
+#include "dispatch_mem_map.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "logger.hpp"
+#include "math.hpp"
+#include "strong_type.hpp"
+#include "sub_device_types.hpp"
+#include "tt_align.hpp"
+#include "tt_cluster.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 
-#include <stack>
-#include <tt-metalium/command_queue_interface.hpp>
-#include "tt_metal/impl/dispatch/device_command.hpp"
-#include <tt-metalium/dispatch_settings.hpp>
-#include <tt-metalium/program_impl.hpp>
-#include <tt-metalium/allocator.hpp>
-
-#include "tt_cluster.hpp"
+enum class CoreType;
 
 namespace tt::tt_metal {
 namespace buffer_dispatch {
@@ -254,7 +269,7 @@ int32_t calculate_num_pages_available_in_cq(
 
 uint32_t calculate_max_data_size(const CoreType& dispatch_core_type) {
     return DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size() -
-           (hal.get_alignment(HalMemType::HOST) * 2);  // * 2 to account for issue
+           (hal_ref.get_alignment(HalMemType::HOST) * 2);  // * 2 to account for issue
 }
 
 bool are_pages_larger_than_max_prefetch_cmd_size(const Buffer& buffer) {
@@ -278,7 +293,7 @@ BufferDispatchConstants generate_buffer_dispatch_constants(
 void update_offset_on_issue_wait_cmd(uint32_t& byte_offset, bool issue_wait, uint32_t num_sub_devices) {
     if (issue_wait) {
         // commands prefixed with CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-        byte_offset += (hal.get_alignment(HalMemType::HOST) * num_sub_devices);
+        byte_offset += (hal_ref.get_alignment(HalMemType::HOST) * num_sub_devices);
     }
 }
 
@@ -314,7 +329,7 @@ ShardedBufferWriteDispatchParams initialize_sharded_buf_dispatch_params(
 uint32_t calculate_partial_page_size(const Buffer& buffer) {
     const HalMemType buffer_mem_type = buffer.memory_type();
     const uint32_t partial_page_size = tt::align(
-        DispatchSettings::BASE_PARTIAL_PAGE_SIZE_DISPATCH, hal.get_common_alignment_with_pcie(buffer_mem_type));
+        DispatchSettings::BASE_PARTIAL_PAGE_SIZE_DISPATCH, hal_ref.get_common_alignment_with_pcie(buffer_mem_type));
     return partial_page_size;
 }
 
@@ -472,7 +487,7 @@ void issue_buffer_dispatch_command_sequence(
     CoreType dispatch_core_type) {
     uint32_t num_worker_counters = sub_device_ids.size();
     uint32_t data_size_bytes = dispatch_params.pages_per_txn * dispatch_params.page_size_to_write;
-    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
+    uint32_t pcie_alignment = hal_ref.get_alignment(HalMemType::HOST);
     uint32_t cmd_sequence_sizeB = align(
         sizeof(CQPrefetchCmd) +      // CQ_PREFETCH_CMD_RELAY_INLINE
             sizeof(CQDispatchCmd) +  // CQ_DISPATCH_CMD_WRITE_PAGED or CQ_DISPATCH_CMD_WRITE_LINEAR
@@ -517,8 +532,8 @@ void write_interleaved_buffer_to_device(
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     CoreType dispatch_core_type) {
     uint32_t byte_offset_in_cq =
-        hal.get_alignment(HalMemType::HOST);  // data appended after CQ_PREFETCH_CMD_RELAY_INLINE
-                                              // + CQ_DISPATCH_CMD_WRITE_PAGED
+        hal_ref.get_alignment(HalMemType::HOST);  // data appended after CQ_PREFETCH_CMD_RELAY_INLINE
+                                                  // + CQ_DISPATCH_CMD_WRITE_PAGED
     while (dispatch_params.total_pages_to_write > 0) {
         dispatch_params.calculate_issue_wait();
 
@@ -845,12 +860,12 @@ void issue_read_buffer_dispatch_command_sequence(
     uint32_t num_worker_counters = sub_device_ids.size();
     // accounts for padding
     uint32_t cmd_sequence_sizeB =
-        hal.get_alignment(HalMemType::HOST) *
-            num_worker_counters +              // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-        hal.get_alignment(HalMemType::HOST) +  // CQ_PREFETCH_CMD_STALL
-        hal.get_alignment(
+        hal_ref.get_alignment(HalMemType::HOST) *
+            num_worker_counters +                  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
+        hal_ref.get_alignment(HalMemType::HOST) +  // CQ_PREFETCH_CMD_STALL
+        hal_ref.get_alignment(
             HalMemType::HOST) +  // CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH + CQ_DISPATCH_CMD_WRITE_LINEAR_HOST
-        hal.get_alignment(HalMemType::HOST);  // CQ_PREFETCH_CMD_RELAY_LINEAR or CQ_PREFETCH_CMD_RELAY_PAGED
+        hal_ref.get_alignment(HalMemType::HOST);  // CQ_PREFETCH_CMD_RELAY_LINEAR or CQ_PREFETCH_CMD_RELAY_PAGED
 
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);

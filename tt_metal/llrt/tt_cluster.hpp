@@ -4,20 +4,46 @@
 
 #pragma once
 
-#include <cstdint>
-#include <functional>
-
+#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/dev_msgs.h>
+#include <tt-metalium/fabric_host_interface.h>
+#include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/fabric_host_interface.h>
-#include <tt-metalium/control_plane.hpp>
-#include "umd/device/device_api_metal.h"
-#include "umd/device/tt_cluster_descriptor.h"
-#include "umd/device/tt_xy_pair.h"
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <memory>
+#include <optional>
+#include <ostream>
+#include <set>
+#include <tuple>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
-#include <tt-metalium/dev_msgs.h>
+#include "assert.hpp"
+#include "core_coord.hpp"
+#include "llrt/hal.hpp"
+#include <umd/device/cluster.h>
+#include <umd/device/device_api_metal.h>
+#include <umd/device/tt_cluster_descriptor.h>
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_io.hpp>
+#include <umd/device/tt_silicon_driver_common.hpp>
+#include <umd/device/tt_soc_descriptor.h>
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/harvesting.h>
 
-#include "hal.hpp"
+namespace tt {
+enum class ARCH;
+namespace tt_fabric {
+class ControlPlane;
+}  // namespace tt_fabric
+}  // namespace tt
+struct tt_device_params;
 
 static constexpr std::uint32_t SW_VERSION = 0x00020000;
 
@@ -52,8 +78,6 @@ enum class EthRouterMode : uint32_t {
     BI_DIR_TUNNELING = 1,
     FABRIC_ROUTER = 2,
 };
-
-enum class FabricConfig : uint32_t { DISABLED = 0, FABRIC_1D = 1, FABRIC_2D = 2, FABRIC_2D_PUSH = 3, CUSTOM = 4 };
 
 class Cluster {
 public:
@@ -257,7 +281,7 @@ public:
 
     tt::tt_fabric::ControlPlane* get_control_plane();
 
-    void initialize_fabric_config(FabricConfig fabric_config);
+    void initialize_fabric_config(tt_metal::FabricConfig fabric_config);
 
     // Returns whether we are running on Galaxy.
     bool is_galaxy_cluster() const;
@@ -267,7 +291,7 @@ public:
 
     ClusterType get_cluster_type() const;
 
-    FabricConfig get_fabric_config() const;
+    tt_metal::FabricConfig get_fabric_config() const;
 
     // Get all fabric ethernet cores
     std::set<tt_fabric::chan_id_t> get_fabric_ethernet_channels(chip_id_t chip_id) const;
@@ -345,7 +369,7 @@ private:
     // Releases all reserved ethernet cores for fabric routers
     void release_ethernet_cores_for_fabric_routers();
 
-    FabricConfig fabric_config_ = FabricConfig::DISABLED;
+    tt_metal::FabricConfig fabric_config_ = tt_metal::FabricConfig::DISABLED;
 
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
 

@@ -28,14 +28,14 @@ jobs:
               runs-on: ["cloud-virtual-machine", "N150", "in-service"],
               cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
               timeout: 70
-            },
+            }, # Nathan Sidwell
             {
               name: "WH N300 ttnn nightly",
               arch: wormhole_b0,
               runs-on: ["cloud-virtual-machine", "N300", "in-service"],
               cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
               timeout: 70
-            },
+            }, # Nathan Sidwell
           ]
     defaults:
       run:
@@ -88,7 +88,7 @@ jobs:
       fail-fast: false
       matrix:
         card: [N150, N300]
-        model: [common_models, functional_unet, llama3.2-1B, qwen, mistral7b, mistral7b_eth, resnet50, yolov4, whisper]
+        model: [common_models, functional_unet, llama3.2-1B, qwen, mistral7b, mistral7b_eth, resnet50, yolov4, whisper,yolov8s_world]
     name: Nightly ${{ matrix.card }} ${{ matrix.model }}
     defaults:
       run:

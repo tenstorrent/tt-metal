@@ -2,21 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/core/span.hpp>
 #include <tt-metalium/blockfloat_common.hpp>
-
-#include <algorithm>
-#include <iostream>
-#include <random>
+#include <tt_stl/span.hpp>
+#include <array>
 #include <vector>
-#include <immintrin.h>
 
 #include "assert.hpp"
-#include "tt_backend_api_types.hpp"
-#include "tracy/Tracy.hpp"
+#include "constants.hpp"
+#include "hal_types.hpp"
+#include "llrt/hal.hpp"
+#include "math.hpp"
 #include "tile.hpp"
-#include <tt_stl/span.hpp>
-
-#include "hal.hpp"
+#include "tracy/Tracy.hpp"
+#include "tt_backend_api_types.hpp"
 
 uint8_t get_max_exp(const std::vector<uint32_t>& vec, bool is_exp_a) {
     TT_ASSERT(vec.size() == 16);
@@ -330,7 +329,7 @@ std::vector<uint32_t> pack_fp32_vec_as_bfp_tiles(
     auto subtile_rows = face_H;
     auto subtile_cols = face_W;
 
-    uint32_t l1_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1);
+    uint32_t l1_alignment = tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::L1);
     bool exponent_padding = (subtile_rows * subtiles_in_tile_col * subtiles_in_tile_row) < l1_alignment;
 
     int num_float_in_tile = tile_HW;

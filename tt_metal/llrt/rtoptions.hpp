@@ -11,12 +11,18 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
+#include <map>
+#include <set>
 #include <string>
 #include <unordered_set>
 #include <vector>
 
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"  // For DispatchCoreConfig
+#include <umd/device/types/xy_pair.h>
+
+enum class CoreType;
 
 namespace tt {
 
@@ -90,6 +96,7 @@ class RunTimeOptions {
     bool watcher_auto_unpause = false;
     bool watcher_noinline = false;
     bool watcher_phys_coords = false;
+    bool watcher_text_start = false;
     bool record_noc_transfer_data = false;
 
     TargetSelection feature_targets[RunTimeDebugFeatureCount];
@@ -174,6 +181,8 @@ public:
     inline void set_watcher_noinline(bool noinline) { watcher_noinline = noinline; }
     inline int get_watcher_phys_coords() { return watcher_phys_coords; }
     inline void set_watcher_phys_coords(bool phys_coords) { watcher_phys_coords = phys_coords; }
+    inline int get_watcher_text_start() { return watcher_text_start; }
+    inline void set_watcher_text_start(bool text_start) { watcher_text_start = text_start; }
     inline std::set<std::string>& get_watcher_disabled_features() { return watcher_disabled_features; }
     inline bool watcher_status_disabled() { return watcher_feature_disabled(watcher_waypoint_str); }
     inline bool watcher_noc_sanitize_disabled() { return watcher_feature_disabled(watcher_noc_sanitize_str); }

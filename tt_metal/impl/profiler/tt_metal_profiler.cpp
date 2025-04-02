@@ -1,30 +1,67 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include <chrono>
-#include <thread>
-#include <cmath>
-
-#include <hal.hpp>
-#include <host_api.hpp>
-#include <dispatch_core_common.hpp>
 #include <core_descriptor.hpp>
-
-#include <profiler.hpp>
-#include "hostdevcommon/profiler_common.h"
-
-#include <tt_metal.hpp>
-
-#include "tracy/Tracy.hpp"
-#include "tracy/TracyTTDevice.hpp"
 #include <device.hpp>
 #include <device_pool.hpp>
+#include <dispatch_core_common.hpp>
+#include <host_api.hpp>
+#include <profiler.hpp>
 #include <tt_cluster.hpp>
+#include <tt_metal.hpp>
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <exception>
+#include <filesystem>
+#include <functional>
+#include <iterator>
+#include <limits>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <ostream>
+#include <set>
+#include <string>
+#include <thread>
+#include <tuple>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#include "llrt.hpp"
-
+#include "assert.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "dev_msgs.h"
 #include "dprint_server.hpp"
+#include "hal_types.hpp"
+#include "hostdevcommon/profiler_common.h"
+#include "kernel_types.hpp"
+#include "llrt.hpp"
+#include "llrt/hal.hpp"
+#include "logger.hpp"
+#include "metal_soc_descriptor.h"
+#include "profiler_optional_metadata.hpp"
+#include "profiler_paths.hpp"
+#include "profiler_state.hpp"
+#include "profiler_types.hpp"
+#include "program_impl.hpp"
 #include "rtoptions.hpp"
+#include "system_memory_manager.hpp"
+#include "tracy/Tracy.hpp"
+#include "tracy/TracyTTDevice.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/xy_pair.h>
+#include "utils.hpp"
 
 namespace tt {
 
@@ -36,11 +73,11 @@ void DumpDeviceProfileResults(IDevice* device, const Program& program) {
     std::vector<CoreCoord> eth_cores_in_program;
 
     std::vector<std::vector<CoreCoord>> logical_cores = program.logical_cores();
-    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
-        if (hal.get_core_type(index) == CoreType::WORKER) {
+    for (uint32_t index = 0; index < hal_ref.get_programmable_core_type_count(); index++) {
+        if (hal_ref.get_core_type(index) == CoreType::WORKER) {
             worker_cores_in_program = device->worker_cores_from_logical_cores(logical_cores[index]);
         }
-        if (hal.get_core_type(index) == CoreType::ETH) {
+        if (hal_ref.get_core_type(index) == CoreType::ETH) {
             eth_cores_in_program = device->ethernet_cores_from_logical_cores(logical_cores[index]);
         }
     }
@@ -93,7 +130,7 @@ void setControlBuffer(chip_id_t device_id, std::vector<uint32_t>& control_buffer
                 CoreType = tt_metal::HalProgrammableCoreType::IDLE_ETH;
             }
         }
-        profiler_msg_t* profiler_msg = hal.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
+        profiler_msg_t* profiler_msg = hal_ref.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
 
         control_buffer[kernel_profiler::FLAT_ID] = core.second;
         tt::llrt::write_hex_vec_to_core(
@@ -708,7 +745,7 @@ void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_co
                                                       : tt_metal::HalProgrammableCoreType::IDLE_ETH;
                     }
                     profiler_msg_t* profiler_msg =
-                        hal.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
+                        hal_ref.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
                     for (int i = 0; i < maxLoopCount; i++) {
                         std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
                             device_id,

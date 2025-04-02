@@ -3,14 +3,37 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/move/utility_core.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_coord.hpp>
 #include <mesh_trace.hpp>
-
+#include <stdint.h>
 #include <tt-metalium/allocator.hpp>
+#include <algorithm>
+#include <atomic>
+#include <cstddef>
+#include <functional>
+#include <iterator>
+#include <memory>
+#include <optional>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
+#include "allocator_types.hpp"
+#include "assert.hpp"
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "device.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "math.hpp"
+#include "mesh_buffer.hpp"
+#include "mesh_device.hpp"
+#include "mesh_trace_id.hpp"
+#include "system_memory_manager.hpp"
+#include "trace_buffer.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
-#include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 
 namespace tt::tt_metal::distributed {
@@ -84,7 +107,7 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
     MeshCoordinateRange bcast_device_range(mesh_device->shape());
     std::vector<uint32_t> exec_buf_end = {};
 
-    DeviceCommand command_sequence(hal.get_alignment(HalMemType::HOST));
+    DeviceCommand command_sequence(hal_ref.get_alignment(HalMemType::HOST));
     command_sequence.add_prefetch_exec_buf_end();
 
     for (int i = 0; i < command_sequence.size_bytes() / sizeof(uint32_t); i++) {

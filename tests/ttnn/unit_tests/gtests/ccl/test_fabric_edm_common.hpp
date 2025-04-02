@@ -453,7 +453,7 @@ bool RunLoopbackTest(
     const auto& worker_core = worker_cores.at(0);
     log_trace(tt::LogTest, "Worker {}. On Core x={},y={}", 0, worker_core.x, worker_core.y);
 
-    const auto& edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+    const auto& edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size);
     const std::vector<tt::tt_fabric::edm_termination_info_t>& edm_termination_infos =
         enable_persistent_fabric ? std::vector<tt::tt_fabric::edm_termination_info_t>{}
                                  : std::vector<tt::tt_fabric::edm_termination_info_t>{
@@ -1082,7 +1082,8 @@ void setup_test_with_persistent_fabric(
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& line_fabric,
     bool enable_persistent_fabric,
     std::optional<size_t> num_links = std::nullopt,
-    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear) {
+    ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
+    size_t switch_interval = 0) {
     if (enable_persistent_fabric) {
         log_info(tt::LogTest, "Enabling persistent fabric");
         fabric_programs = std::vector<Program>(devices.size());
@@ -1098,7 +1099,7 @@ void setup_test_with_persistent_fabric(
 
     line_fabric = ttnn::ccl::EdmLineFabricOpInterface(
         devices, fabric_program_ptrs, enable_persistent_fabric, num_links.value_or(1), false, topology);
-    line_fabric->set_firmware_context_switch_interval(0);
+    line_fabric->set_firmware_context_switch_interval(switch_interval);
 
     if (enable_persistent_fabric) {
         TT_FATAL(fabric_programs.has_value(), "Fabric programs must be set if fabric is enabled");
@@ -1260,7 +1261,7 @@ int TestLoopbackEntrypoint(
         tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + PACKET_HEADER_SIZE_BYTES;
     const chip_id_t local_chip_id = 0;
     const chip_id_t remote_chip_id = 1;
-    const auto& edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+    const auto& edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size);
     auto chip_0_edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
         sender_device,
         fabric_sender_program,
@@ -2190,17 +2191,119 @@ struct WriteThroughputStabilityTestWithPersistentFabricParams {
     size_t num_devices_with_workers = 0;
     bool line_sync = true;
     FabricTestMode fabric_mode = FabricTestMode::Linear;
+
+    // True if you only want the workers on the end to send
+    bool disable_sends_for_interior_workers = false;
+
+    bool disable_end_workers_in_backward_direction = false;
+    bool senders_are_unidirectional = false;
 };
 
-void RunWriteThroughputStabilityTestWithPersistentFabric(
-    size_t num_mcasts,
-    size_t num_unicasts,
+std::vector<CoreCoord> compute_top_row_ethernet_cores(
+    IDevice* device,
+    bool has_fwd_connection,
+    bool has_bwd_connection,
+    IDevice* forward_device,
+    IDevice* backward_device) {
+    std::vector<CoreCoord> reordered_ethernet_cores;
+    if (has_fwd_connection) {
+        for (auto core : device->get_ethernet_sockets(forward_device->id())) {
+            auto core_virtual = device->virtual_core_from_logical_core(core, CoreType::ETH);
+            reordered_ethernet_cores.push_back(core_virtual);
+        }
+        std::sort(reordered_ethernet_cores.begin(), reordered_ethernet_cores.end(), [](auto& a, auto& b) {
+            return a.x < b.x;
+        });
+    } else if (has_bwd_connection) {
+        for (auto core : device->get_ethernet_sockets(backward_device->id())) {
+            auto core_virtual = device->virtual_core_from_logical_core(core, CoreType::ETH);
+            reordered_ethernet_cores.push_back(core_virtual);
+        }
+        std::sort(reordered_ethernet_cores.begin(), reordered_ethernet_cores.end(), [](auto& a, auto& b) {
+            return a.x < b.x;
+        });
+    }
+    for (auto& eth_core : reordered_ethernet_cores) {
+        eth_core.y = 16;
+    }
+    return reordered_ethernet_cores;
+}
+
+CoreCoord wh_glx_physical_worker_core_from_logical_core(CoreCoord logical_core) {
+    auto physical_x = logical_core.x <= 3 ? logical_core.x + 1 : logical_core.x + 2;
+    auto physical_y = logical_core.y <= 4 ? logical_core.y + 1 : logical_core.y + 2;
+    return CoreCoord(physical_x, physical_y);
+}
+
+CoreRangeSet get_optimal_worker_core_placement(
+    IDevice* device, std::vector<CoreCoord> ethernet_cores_virtual, uint32_t num_links) {
+    std::vector<CoreCoord> sender_worker_cores;
+    std::vector<CoreCoord> sender_worker_cores_physical;
+
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    // Get all logical cores in the worker grid
+    std::vector<CoreCoord> compute_cores_logical;
+    for (int i = 0; i < num_cores_x; ++i) {
+        for (int j = 0; j < num_cores_y; ++j) {
+            compute_cores_logical.push_back(CoreCoord(i, j));
+        }
+    }
+
+    for (uint32_t link = 0; link < num_links; link++) {
+        auto core_virtual = ethernet_cores_virtual[link];
+        CoreCoord eth_core_physical;
+        eth_core_physical.x = core_virtual.x >= 22 ? (core_virtual.x - 16) : (core_virtual.x - 17);
+        eth_core_physical.y = (core_virtual.y - 16) * 6;
+        // shift down the worker core
+        auto worker_core_physical = CoreCoord(eth_core_physical.x, eth_core_physical.y + 1);
+        sender_worker_cores_physical.push_back(worker_core_physical);
+    }
+
+    // Convert to physical worker coordinates to logical.
+    for (int i = 0; i < sender_worker_cores_physical.size(); ++i) {
+        for (int j = 0; j < compute_cores_logical.size(); ++j) {
+            auto core = wh_glx_physical_worker_core_from_logical_core(compute_cores_logical[j]);
+            if (sender_worker_cores_physical[i] == core) {
+                sender_worker_cores.push_back(compute_cores_logical[j]);
+            }
+        }
+    }
+
+    std::set<CoreRange> sender_worker_cores_set;
+    for (int i = 0; i < sender_worker_cores.size(); ++i) {
+        sender_worker_cores_set.insert(CoreRange(sender_worker_cores[i]));
+    }
+    CoreRangeSet sender_worker_corerangeset = CoreRangeSet(sender_worker_cores_set);
+
+    return sender_worker_corerangeset;
+}
+
+struct Fabric1DPacketSendTestSpec {
+    tt::tt_fabric::ChipSendType chip_send_type = tt::tt_fabric::CHIP_UNICAST;
+    tt::tt_fabric::NocSendType noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
+    size_t num_messages = 0;
+    size_t packet_payload_size_bytes = 0;
+    bool flush = true;
+};
+
+void Run1DFabricPacketSendTest(
     size_t num_links,
     size_t num_op_invocations,
+    const std::vector<Fabric1DPacketSendTestSpec>& test_specs,
     const WriteThroughputStabilityTestWithPersistentFabricParams& params = {},
-    size_t packet_payload_size_bytes = tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes) {
+    size_t fabric_context_switch_interval =
+        tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval) {
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+    TT_FATAL(
+        !params.disable_sends_for_interior_workers || params.fabric_mode == FabricTestMode::Linear,
+        "This test can only be run with disable_sends_for_interior_workers set to true or fabric_mode set to Linear");
+    TT_FATAL(
+        !params.disable_end_workers_in_backward_direction || params.fabric_mode == FabricTestMode::Linear,
+        "This test can only be run with disable_end_workers_in_backward_direction set to true or fabric_mode set to "
+        "Linear");
     bool use_tg = num_devices == 32;
     if (num_devices < 4) {
         log_info("This test can only be run on T3000 devices");
@@ -2236,7 +2339,11 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
     static constexpr uint32_t source_payload_cb_index = tt::CB::c_in1;
     static constexpr size_t packet_header_cb_size_in_headers = 5;
     static constexpr bool enable_persistent_fabric_mode = true;
-    size_t dest_buffer_size = packet_payload_size_bytes * 4;
+    auto max_packet_payload_size_bytes =
+        std::max_element(test_specs.begin(), test_specs.end(), [](const auto& a, const auto& b) {
+            return a.packet_payload_size_bytes < b.packet_payload_size_bytes;
+        })->packet_payload_size_bytes;
+    size_t dest_buffer_size = max_packet_payload_size_bytes * 4;
     static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;
 
     T3000TestDevice test_fixture;
@@ -2245,15 +2352,43 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
     // Get the inner 4 device ring on a WH T3K device so that we can use both links for all devices
     std::vector<IDevice*> devices_;
     if (use_tg) {
-        devices_ = {
-            view.get_device(MeshCoordinate(0, 0)),
-            view.get_device(MeshCoordinate(1, 0)),
-            view.get_device(MeshCoordinate(2, 0)),
-            view.get_device(MeshCoordinate(3, 0)),
-            view.get_device(MeshCoordinate(4, 0)),
-            view.get_device(MeshCoordinate(5, 0)),
-            view.get_device(MeshCoordinate(6, 0)),
-            view.get_device(MeshCoordinate(7, 0))};
+        if (line_size <= 4) {
+            if (topology == ttnn::ccl::Topology::Ring) {
+                devices_ = {
+                    view.get_device(MeshCoordinate(0, 0)),
+                    view.get_device(MeshCoordinate(1, 0)),
+                    view.get_device(MeshCoordinate(1, 1)),
+                    view.get_device(MeshCoordinate(0, 1))};
+            } else {
+                devices_ = {
+                    view.get_device(MeshCoordinate(0, 0)),
+                    view.get_device(MeshCoordinate(1, 0)),
+                    view.get_device(MeshCoordinate(2, 0)),
+                    view.get_device(MeshCoordinate(3, 0))};
+            }
+        } else {
+            if (topology == ttnn::ccl::Topology::Ring) {
+                devices_ = {
+                    view.get_device(MeshCoordinate(0, 0)),
+                    view.get_device(MeshCoordinate(1, 0)),
+                    view.get_device(MeshCoordinate(2, 0)),
+                    view.get_device(MeshCoordinate(3, 0)),
+                    view.get_device(MeshCoordinate(3, 1)),
+                    view.get_device(MeshCoordinate(2, 1)),
+                    view.get_device(MeshCoordinate(1, 1)),
+                    view.get_device(MeshCoordinate(0, 1))};
+            } else {
+                devices_ = {
+                    view.get_device(MeshCoordinate(0, 0)),
+                    view.get_device(MeshCoordinate(1, 0)),
+                    view.get_device(MeshCoordinate(2, 0)),
+                    view.get_device(MeshCoordinate(3, 0)),
+                    view.get_device(MeshCoordinate(4, 0)),
+                    view.get_device(MeshCoordinate(5, 0)),
+                    view.get_device(MeshCoordinate(6, 0)),
+                    view.get_device(MeshCoordinate(7, 0))};
+            }
+        }
     } else {
         // Choosing pcie devices so that more links are supported. More links == more (likelihood of) congestion.
         if (line_size <= 4) {
@@ -2296,11 +2431,11 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
         fabric_handle,
         enable_persistent_fabric_mode,
         num_links,
-        topology);
+        topology,
+        tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval);
 
     // Other boiler plate setup
-    CoreRangeSet worker_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_links - 1, 0)));
-    auto worker_cores_vec = corerange_to_cores(worker_cores, std::nullopt, false);
+    std::vector<std::vector<CoreCoord>> worker_cores_vec_per_device;
     std::vector<CoreCoord> dest_core_coord;
     dest_core_coord.reserve(num_links);
     for (size_t l = 0; l < num_links; l++) {
@@ -2359,19 +2494,17 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
         const size_t line_index = i;
         auto& program = programs[i];
         auto* device = devices[i];
-        const size_t sync_core_noc_x = device->worker_core_from_logical_core(sync_core_coord).x;
-        const size_t sync_core_noc_y = device->worker_core_from_logical_core(sync_core_coord).y;
 
         IDevice* backward_device;
         IDevice* forward_device;
         bool has_forward_connection;
         bool has_backward_connection;
         bool unicast_forward;
-        size_t mcast_fwd_hops;
-        size_t mcast_bwd_hops;
+        size_t num_fwd_hops;
+        size_t num_bwd_hops;
         size_t unicast_hops;
-        size_t sync_mcast_fwd_hops;
-        size_t sync_mcast_bwd_hops;
+        size_t sync_num_fwd_hops;
+        size_t sync_num_bwd_hops;
         size_t sync_count_per_link;
         if (topology == ttnn::ccl::Topology::Ring) {
             backward_device = i == 0 ? devices.back() : devices[i - 1];
@@ -2382,26 +2515,26 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
             has_backward_connection = true;
             unicast_forward = true;
             // Have the sync for ring always use the same algorithm as HalfRing
-            sync_mcast_fwd_hops = tt::div_up(line_size - 1, 2);
-            sync_mcast_bwd_hops = line_size - 1 - sync_mcast_fwd_hops;
+            sync_num_fwd_hops = tt::div_up(line_size - 1, 2);
+            sync_num_bwd_hops = line_size - 1 - sync_num_fwd_hops;
             if (i % 2 == 0) {
-                std::swap(sync_mcast_fwd_hops, sync_mcast_bwd_hops);
+                std::swap(sync_num_fwd_hops, sync_num_bwd_hops);
             }
             if (fabric_mode == FabricTestMode::HalfRing) {
-                mcast_fwd_hops = tt::div_up(line_size - 1, 2);
-                mcast_bwd_hops = line_size - 1 - mcast_fwd_hops;
+                num_fwd_hops = tt::div_up(line_size - 1, 2);
+                num_bwd_hops = line_size - 1 - num_fwd_hops;
                 if (i % 2 == 0) {
-                    std::swap(mcast_fwd_hops, mcast_bwd_hops);
+                    std::swap(num_fwd_hops, num_bwd_hops);
                 }
-                sync_mcast_fwd_hops = mcast_fwd_hops;
-                sync_mcast_bwd_hops = mcast_bwd_hops;
+                sync_num_fwd_hops = num_fwd_hops;
+                sync_num_bwd_hops = num_bwd_hops;
                 // We will get 1 inc per remote chip + 1 local
                 sync_count_per_link = num_devices_with_workers;
             } else if (fabric_mode == FabricTestMode::FullRing) {
-                mcast_fwd_hops = line_size - 1;
-                mcast_bwd_hops = line_size - 1;
-                sync_mcast_fwd_hops = mcast_fwd_hops;
-                sync_mcast_bwd_hops = mcast_bwd_hops;
+                num_fwd_hops = line_size - 1;
+                num_bwd_hops = line_size - 1;
+                sync_num_fwd_hops = num_fwd_hops;
+                sync_num_bwd_hops = num_bwd_hops;
                 // We will get 2 inc per remote chip + 1 local
                 sync_count_per_link = 2 * (num_devices_with_workers - 1) + 1;
             } else if (fabric_mode == FabricTestMode::SaturateChipToChipRing) {
@@ -2411,37 +2544,37 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
                 // Mcast 3 hops from chip 0 F and chip 3 B, which is S1 -> R0
                 // Mcast 4 hops from Chip 3 F and chip 0 B, which is S2 -> R1
                 if (line_index == line_size - 1) {
-                    mcast_fwd_hops = line_size - 1;
+                    num_fwd_hops = line_size - 1;
                 } else {
-                    mcast_fwd_hops = line_size - 2 - line_index;
+                    num_fwd_hops = line_size - 2 - line_index;
                 }
                 if (line_index == 0) {
-                    mcast_bwd_hops = line_size - 1;
+                    num_bwd_hops = line_size - 1;
                 } else {
-                    mcast_bwd_hops = line_index - 1;
+                    num_bwd_hops = line_index - 1;
                 }
                 // The above calculations calculates the number of hops to land on the dest chip
                 // Extend by one so we mcast through them
-                if (mcast_fwd_hops != 0) {
-                    mcast_fwd_hops++;
+                if (num_fwd_hops != 0) {
+                    num_fwd_hops++;
                 }
-                if (mcast_bwd_hops != 0) {
-                    mcast_bwd_hops++;
+                if (num_bwd_hops != 0) {
+                    num_bwd_hops++;
                 }
                 // Flush all the way around the ring
-                sync_mcast_fwd_hops = line_size;
-                sync_mcast_bwd_hops = line_size;
+                sync_num_fwd_hops = line_size;
+                sync_num_bwd_hops = line_size;
                 // We will get 2 inc for all chips + 1 local
                 sync_count_per_link = 2 * num_devices_with_workers + 1;
             } else {
                 TT_THROW("Invalid fabric mode");
             }
-            if (mcast_fwd_hops >= mcast_bwd_hops) {
+            if (num_fwd_hops >= num_bwd_hops) {
                 unicast_forward = true;
-                unicast_hops = mcast_fwd_hops;
+                unicast_hops = num_fwd_hops;
             } else {
                 unicast_forward = false;
-                unicast_hops = mcast_bwd_hops;
+                unicast_hops = num_bwd_hops;
             }
         } else {
             backward_device = i == 0 ? nullptr : devices[i - 1];
@@ -2452,15 +2585,42 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
             bool end_of_line = line_index == line_size - 1;
             has_forward_connection = !end_of_line;
             has_backward_connection = !start_of_line;
-            unicast_forward = !end_of_line;
-            mcast_fwd_hops = line_size - line_index - 1;
-            mcast_bwd_hops = line_index;
-            unicast_hops = unicast_forward ? mcast_fwd_hops : mcast_bwd_hops;
-            sync_mcast_fwd_hops = mcast_fwd_hops;
-            sync_mcast_bwd_hops = mcast_bwd_hops;
+            unicast_forward = line_index < (line_size / 2);
+            num_fwd_hops = line_size - line_index - 1;
+            num_bwd_hops = line_index;
+            sync_num_fwd_hops = num_fwd_hops;
+            sync_num_bwd_hops = num_bwd_hops;
+
+            // Do this AFTER sync_num_fwd_hops and sync_num_bwd_hops are set
+            // otherwise sync hops will be misconfigured - you'll get a hang because
+            // setup/teardown will be done incorrectly
+
+            if (params.senders_are_unidirectional) {
+                if (unicast_forward) {
+                    num_bwd_hops = 0;
+                } else {
+                    num_fwd_hops = 0;
+                }
+            }
             // We will get 1 inc per remote chip + 1 local
             sync_count_per_link = num_devices_with_workers;
         }
+
+        // compute worker based on ethernet cores
+        CoreRangeSet worker_cores = {};
+        if (use_tg and topology == ttnn::ccl::Topology::Linear) {
+            std::vector<CoreCoord> ethernet_cores_virtual = compute_top_row_ethernet_cores(
+                device, has_forward_connection, has_backward_connection, forward_device, backward_device);
+            worker_cores = get_optimal_worker_core_placement(device, ethernet_cores_virtual, num_links);
+        } else {
+            worker_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_links - 1, 0)));
+        }
+        auto worker_cores_vec = corerange_to_cores(worker_cores, std::nullopt, false);
+        worker_cores_vec_per_device.push_back(worker_cores_vec);
+
+        // sync core
+        const size_t sync_core_noc_x = device->worker_core_from_logical_core(worker_cores_vec[0]).x;
+        const size_t sync_core_noc_y = device->worker_core_from_logical_core(worker_cores_vec[0]).y;
 
         auto local_device_fabric_handle =
             ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
@@ -2475,8 +2635,8 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
         CBHandle sender_workers_cb = CreateCircularBuffer(program, worker_cores, cb_src0_config);
 
         tt_metal::CircularBufferConfig cb_src1_config =
-            tt_metal::CircularBufferConfig(packet_payload_size_bytes, {{source_payload_cb_index, cb_df}})
-                .set_page_size(source_payload_cb_index, packet_payload_size_bytes);
+            tt_metal::CircularBufferConfig(max_packet_payload_size_bytes, {{source_payload_cb_index, cb_df}})
+                .set_page_size(source_payload_cb_index, max_packet_payload_size_bytes);
         CBHandle sender_workers_payload_cb = CreateCircularBuffer(program, worker_cores, cb_src1_config);
 
         TT_FATAL(
@@ -2491,7 +2651,10 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
             program,
             "tests/ttnn/unit_tests/gtests/ccl/kernels/edm_fabric_writer.cpp",
             worker_cores,
-            tt_metal::WriterDataMovementConfig(worker_ct_args));
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt_metal::NOC::NOC_0,
+                .compile_args = worker_ct_args});
         worker_kernel_ids.push_back(worker_kernel_id);
         for (size_t l = 0; l < num_links; l++) {
             auto worker_core = worker_cores_vec[l];
@@ -2517,24 +2680,65 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
                 }
             };
             // RT ARGS
+            bool disable_sends_for_worker =
+                (params.disable_sends_for_interior_workers && (i != 0) && (i != line_size - 1)) ||
+                (params.disable_end_workers_in_backward_direction && (i == line_size - 1));
+            // Get forward and backward destination coordinates
+            const size_t dest_noc_x_fwd = device->worker_core_from_logical_core(dest_core_coord[l]).x;
+            const size_t dest_noc_y_fwd = device->worker_core_from_logical_core(dest_core_coord[l]).y;
+            const size_t dest_noc_x_bwd = device->worker_core_from_logical_core(dest_core_coord[l]).x;
+            const size_t dest_noc_y_bwd = device->worker_core_from_logical_core(dest_core_coord[l]).y;
+
+            // New format for send types
+            std::vector<size_t> send_types;
+            std::vector<size_t> chip_send_types;
+            std::vector<size_t> send_counts_per_type;
+            std::vector<size_t> num_fwd_hops_per_type;
+            std::vector<size_t> num_bwd_hops_per_type;
+            std::vector<size_t> send_type_payload_sizes;
+            std::vector<bool> flush_send;
+            if (!disable_sends_for_worker) {
+                for (const auto& test_spec : test_specs) {
+                    send_types.push_back(static_cast<size_t>(test_spec.noc_send_type));
+                    chip_send_types.push_back(static_cast<size_t>(test_spec.chip_send_type));
+                    send_counts_per_type.push_back(test_spec.num_messages);
+                    num_fwd_hops_per_type.push_back(num_fwd_hops);
+                    num_bwd_hops_per_type.push_back(num_bwd_hops);
+                    send_type_payload_sizes.push_back(test_spec.packet_payload_size_bytes);
+                    flush_send.push_back(test_spec.flush);
+                }
+            }
+
+            size_t num_send_types = disable_sends_for_worker ? 0 : test_specs.size();
             std::vector<uint32_t> rt_args = {
                 dest_bank_addr,
-                packet_payload_size_bytes,
-                dest_noc_x,
-                dest_noc_y,
-
-                num_mcasts,
-                mcast_fwd_hops,
-                mcast_bwd_hops,
-
-                num_unicasts,
-                unicast_hops,
-                unicast_forward,
-
-                source_payload_cb_index,  // source_l1_buffer_address,
-                packet_header_cb_index,
-                packet_header_cb_size_in_headers,
+                dest_noc_x_fwd,
+                dest_noc_y_fwd,
+                dest_noc_x_bwd,
+                dest_noc_y_bwd,
+                num_send_types,
             };
+
+            // Reserve space for all arrays upfront
+            rt_args.reserve(
+                rt_args.size() + num_send_types * 6 +  // 6 arrays of size num_send_types
+                3 +                                    // CB indices
+                (has_forward_connection ? 10 : 1) +    // Forward connection args
+                (has_backward_connection ? 10 : 1) +   // Backward connection args
+                (params.line_sync ? 6 : 0));           // Line sync args
+
+            // Add send types arrays using std::copy
+            std::copy(send_types.begin(), send_types.end(), std::back_inserter(rt_args));
+            std::copy(chip_send_types.begin(), chip_send_types.end(), std::back_inserter(rt_args));
+            std::copy(send_counts_per_type.begin(), send_counts_per_type.end(), std::back_inserter(rt_args));
+            std::copy(num_fwd_hops_per_type.begin(), num_fwd_hops_per_type.end(), std::back_inserter(rt_args));
+            std::copy(num_bwd_hops_per_type.begin(), num_bwd_hops_per_type.end(), std::back_inserter(rt_args));
+            std::copy(send_type_payload_sizes.begin(), send_type_payload_sizes.end(), std::back_inserter(rt_args));
+            std::copy(flush_send.begin(), flush_send.end(), std::back_inserter(rt_args));
+
+            rt_args.push_back(source_payload_cb_index);
+            rt_args.push_back(packet_header_cb_index);
+            rt_args.push_back(packet_header_cb_size_in_headers);
 
             build_connection_args(has_forward_connection, ttnn::ccl::EdmLineFabricOpInterface::FORWARD, rt_args);
             build_connection_args(has_backward_connection, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD, rt_args);
@@ -2548,8 +2752,8 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
                 TT_FATAL(global_semaphore_addrs.at(0) != -1, "Invalid test setup. Global semaphore address is -1");
                 rt_args.push_back(global_semaphore_addrs.at(0));
                 rt_args.push_back(num_links * sync_count_per_link);
-                rt_args.push_back(sync_mcast_fwd_hops);
-                rt_args.push_back(sync_mcast_bwd_hops);
+                rt_args.push_back(sync_num_fwd_hops);
+                rt_args.push_back(sync_num_bwd_hops);
             }
 
             tt_metal::SetRuntimeArgs(program, worker_kernel_id, worker_core, rt_args);
@@ -2563,7 +2767,8 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
                 auto& worker_rt_args_by_core = GetRuntimeArgs(programs[k], worker_kernel_ids[k]);
                 auto global_sem_addr_rt_arg_idx = per_device_global_sem_addr_rt_arg[k];
                 for (size_t l = 0; l < num_links; l++) {
-                    auto& worker_rt_args = worker_rt_args_by_core[worker_cores_vec[l].x][worker_cores_vec[l].y];
+                    auto& worker_rt_args = worker_rt_args_by_core[worker_cores_vec_per_device[k][l].x]
+                                                                 [worker_cores_vec_per_device[k][l].y];
                     worker_rt_args.at(global_sem_addr_rt_arg_idx) =
                         global_semaphore_addrs[i % global_semaphore_addrs.size()];
                 }
@@ -2591,6 +2796,31 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
         detail::DumpDeviceProfileResults(d);
     }
     log_info(tt::LogTest, "Finished");
+}
+
+void RunWriteThroughputStabilityTestWithPersistentFabric(
+    size_t num_mcasts,
+    size_t num_unicasts,
+    size_t num_links,
+    size_t num_op_invocations,
+    const WriteThroughputStabilityTestWithPersistentFabricParams& params = {},
+    size_t packet_payload_size_bytes = tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes) {
+    std::vector<Fabric1DPacketSendTestSpec> test_specs;
+    if (num_mcasts > 0) {
+        test_specs.push_back(
+            {.chip_send_type = tt::tt_fabric::ChipSendType::CHIP_MULTICAST,
+             .noc_send_type = tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE,
+             .num_messages = num_mcasts,
+             .packet_payload_size_bytes = packet_payload_size_bytes});
+    }
+    if (num_unicasts > 0) {
+        test_specs.push_back(
+            {.chip_send_type = tt::tt_fabric::ChipSendType::CHIP_UNICAST,
+             .noc_send_type = tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE,
+             .num_messages = num_unicasts,
+             .packet_payload_size_bytes = packet_payload_size_bytes});
+    }
+    Run1DFabricPacketSendTest(num_links, num_op_invocations, test_specs, params, 0);
 }
 
 void RunRingDeadlockStabilityTestWithPersistentFabric(
@@ -2663,7 +2893,8 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
         fabric_handle,
         enable_persistent_fabric_mode,
         num_links,
-        topology);
+        topology,
+        tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval);
 
     // Other boiler plate setup
     CoreRangeSet worker_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_links - 1, 0)));
@@ -2800,26 +3031,56 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
                     std::copy(new_rt_args.begin(), new_rt_args.end(), std::back_inserter(rt_args_out));
                 }
             };
+
+            // Define the send type parameters
+            // There is no atomic in
+            bool flush_writes_before_atomic_inc = false;
+            const size_t num_send_types = 1;
+            std::vector<uint32_t> send_types = {static_cast<uint32_t>(tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE)};
+            std::vector<uint32_t> chip_send_types = {static_cast<uint32_t>(tt::tt_fabric::CHIP_MULTICAST)};
+            std::vector<uint32_t> send_counts_per_type = {static_cast<uint32_t>(num_mcasts)};
+            std::vector<uint32_t> num_fwd_hops_per_type = {
+                static_cast<uint32_t>(has_forward_connection ? mcast_fwd_hops : 0)};
+            std::vector<uint32_t> num_bwd_hops_per_type = {
+                static_cast<uint32_t>(has_backward_connection ? mcast_bwd_hops : 0)};
+            std::vector<uint32_t> send_type_payload_sizes = {static_cast<uint32_t>(packet_payload_size_bytes)};
+            std::vector<uint32_t> flush_send = {static_cast<uint32_t>(flush_writes_before_atomic_inc)};
+
+            // Initialize the base runtime args
             // RT ARGS
             std::vector<uint32_t> rt_args = {
                 dest_bank_addr,
-                packet_payload_size_bytes,
+                dest_noc_x,
+                dest_noc_y,
                 dest_noc_x,
                 dest_noc_y,
 
-                num_mcasts,
-                mcast_fwd_hops,
-                mcast_bwd_hops,
+                // Number of send types
+                num_send_types};
 
-                num_unicasts,
-                unicast_hops,
-                unicast_forward,
+            // Reserve space for all the arrays we'll add
+            rt_args.reserve(
+                rt_args.size() + num_send_types * 6 +  // 6 arrays of size num_send_types
+                3 +                                    // CB indices
+                (has_forward_connection ? 10 : 1) +    // Forward connection args
+                (has_backward_connection ? 10 : 1) +   // Backward connection args
+                (line_sync ? 6 : 0));                  // Line sync args
 
-                source_payload_cb_index,  // source_l1_buffer_address,
-                packet_header_cb_index,
-                packet_header_cb_size_in_headers,
-            };
+            // Copy in all the send type arrays
+            std::copy(send_types.begin(), send_types.end(), std::back_inserter(rt_args));
+            std::copy(chip_send_types.begin(), chip_send_types.end(), std::back_inserter(rt_args));
+            std::copy(send_counts_per_type.begin(), send_counts_per_type.end(), std::back_inserter(rt_args));
+            std::copy(num_fwd_hops_per_type.begin(), num_fwd_hops_per_type.end(), std::back_inserter(rt_args));
+            std::copy(num_bwd_hops_per_type.begin(), num_bwd_hops_per_type.end(), std::back_inserter(rt_args));
+            std::copy(send_type_payload_sizes.begin(), send_type_payload_sizes.end(), std::back_inserter(rt_args));
+            std::copy(flush_send.begin(), flush_send.end(), std::back_inserter(rt_args));
 
+            // Add CB indices
+            rt_args.push_back(source_payload_cb_index);
+            rt_args.push_back(packet_header_cb_index);
+            rt_args.push_back(packet_header_cb_size_in_headers);
+
+            // Add fabric connection args
             build_connection_args(has_forward_connection, ttnn::ccl::EdmLineFabricOpInterface::FORWARD, rt_args);
             build_connection_args(has_backward_connection, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD, rt_args);
 

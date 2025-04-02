@@ -205,11 +205,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
     uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
 
-    uint32_t pad_h = (uint32_t)sliding_window_config.pad_hw.first;
-    uint32_t pad_w = (uint32_t)sliding_window_config.pad_hw.second;
+    uint32_t pad_h = (uint32_t)sliding_window_config.get_pad_h();
+    uint32_t pad_w = (uint32_t)sliding_window_config.get_pad_w();
 
-    uint32_t input_size_h = conv_act_size_h + (pad_h * 2);
-    uint32_t input_size_w = conv_act_size_w + (pad_w * 2);
+    uint32_t input_size_h = conv_act_size_h + pad_h;
+    uint32_t input_size_w = conv_act_size_w + pad_w;
     if (sliding_window_config.is_transpose) {
         auto input_shape = sliding_window_config.get_transposed_full_input_shape();
         input_size_h = input_shape[1];
@@ -574,10 +574,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     compute_defines["WIDTH_SHARDED"] = "1";
 
-    if (output.memory_config().is_sharded()) {
-        writer_defines["SHARDED_OUT"] = "1";
-        writer_mcast_sender_defines["SHARDED_OUT"] = "1";
-    }
     if (output_num_cores == 1) {
         writer_mcast_sender_defines["SKIP_MCAST"] = "1";
     }
@@ -797,7 +793,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     };
 
     activation_kernel_compile_args = {
-        (uint32_t)0,  // Never in DRAM
         (uint32_t)stride_h,
         (uint32_t)stride_w,
         (uint32_t)dilation_h,

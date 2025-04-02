@@ -6,6 +6,9 @@
 // Contains utility functions for partitioning shards work between multiple cores.
 //
 
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/logger.hpp>
+
 #include "sharding_utilities.hpp"
 
 namespace tt::tt_metal {
@@ -242,12 +245,12 @@ NewShardingConfig get_shard_specs(int32_t start_stick, int32_t end_stick, const 
     // First partial right-aligned row
     int32_t image_row_start_left_width = start_stick % pc.in_w;
     if (to_print) {
-        log_debug("image_row_start_left_width: {}", image_row_start_left_width);
+        tt::log_debug("image_row_start_left_width: {}", image_row_start_left_width);
     }
     int32_t first_partial_right_aligned_row_width =
         image_row_start_left_width > 0 ? pc.in_w - image_row_start_left_width : 0;
     if (to_print) {
-        log_debug("first_partial_right_aligned_row_width: {}", first_partial_right_aligned_row_width);
+        tt::log_debug("first_partial_right_aligned_row_width: {}", first_partial_right_aligned_row_width);
     }
 
     if (first_partial_right_aligned_row_width > nsticks_per_core) {
@@ -265,11 +268,11 @@ NewShardingConfig get_shard_specs(int32_t start_stick, int32_t end_stick, const 
     // Last partial left-aligned row
     int32_t sticks_after_first_partial_row = nsticks_per_core - first_partial_right_aligned_row_width;
     if (to_print) {
-        log_debug("sticks_after_first_partial_row: {}", sticks_after_first_partial_row);
+        tt::log_debug("sticks_after_first_partial_row: {}", sticks_after_first_partial_row);
     }
     int32_t last_partial_left_aligned_row_width = sticks_after_first_partial_row % pc.in_w;
     if (to_print) {
-        log_debug("last_partial_left_aligned_row_width: {}", last_partial_left_aligned_row_width);
+        tt::log_debug("last_partial_left_aligned_row_width: {}", last_partial_left_aligned_row_width);
     }
 
     // Figure out how to allocate full image rows to first partial image, full images, or last partial image
@@ -310,7 +313,7 @@ NewShardingConfig get_shard_specs(int32_t start_stick, int32_t end_stick, const 
     int32_t image_rows_after_first_partial_image =
         sticks_after_first_partial_row / pc.in_w - first_partial_image_num_rows;
     if (to_print) {
-        log_debug("image_rows_after_first_partial_image: {}", image_rows_after_first_partial_image);
+        tt::log_debug("image_rows_after_first_partial_image: {}", image_rows_after_first_partial_image);
     }
     int32_t num_full_images = image_rows_after_first_partial_image / pc.in_h;
     int32_t skip_after_full_image = num_full_images > 0 ? pc.pad_h * (pc.in_w + 2 * pc.pad_w) : 0;

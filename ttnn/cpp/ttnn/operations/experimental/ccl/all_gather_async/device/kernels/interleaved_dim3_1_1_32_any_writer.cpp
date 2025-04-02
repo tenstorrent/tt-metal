@@ -26,9 +26,30 @@ constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(5);
 constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(6);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(7);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(8);
-constexpr bool last_dim = get_compile_time_arg_val(9);
-constexpr uint32_t num_banks = get_compile_time_arg_val(10);
-constexpr uint32_t bf8_dim3_type = get_compile_time_arg_val(11);
+constexpr bool dynamic_alternate = get_compile_time_arg_val(9);
+constexpr uint32_t num_max_targets = std::max(num_targets_forward_direction, num_targets_backward_direction);
+constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_targets : num_targets_forward_direction;
+constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targets : num_targets_backward_direction;
+constexpr bool last_dim = get_compile_time_arg_val(10);
+constexpr uint32_t num_banks = get_compile_time_arg_val(11);
+constexpr uint32_t bf8_dim3_type = get_compile_time_arg_val(12);
+
+// for performance experiment by dynamic_alternate switch
+inline void fabric_write_wrapper(
+    uint64_t noc0_dest_noc_addr,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
+    FabricConnectionManager& fabric_connection,
+    size_t l1_read_addr,
+    size_t tensor_size) {
+    fabric_write_wrapper(
+        noc0_dest_noc_addr, pkt_hdr_forward, pkt_hdr_backward, fabric_connection, l1_read_addr, tensor_size);
+    if constexpr (dynamic_alternate) {
+        std::swap(
+            pkt_hdr_forward->routing_fields.value,
+            pkt_hdr_backward->routing_fields.value);  // alternate the packet header distance for better balancing
+    }
+}
 
 template <bool DRAM>
 inline void fabric_send_contig_tiles_dim3_bf16(
@@ -54,7 +75,7 @@ inline void fabric_send_contig_tiles_dim3_bf16(
             if (dim3_was_stride_sent(
                     abs_tile_id, total_cols, tile_cols_per_chip, packet_size_in_pages * num_banks, my_chip_id)) {
                 cb_wait_front(cb0_id, packet_size_in_pages);
-                write_and_advance_local_read_address_for_fabric_write(
+                fabric_write_wrapper(
                     noc0_dest_noc_addr,
                     pkt_hdr_forward,
                     pkt_hdr_backward,
@@ -73,7 +94,7 @@ inline void fabric_send_contig_tiles_dim3_bf16(
             // check whether there is contiguous tile, the tile is in the local chip/buffer
             if ((abs_tile_id + num_banks) <= end_abs_tile_id &&
                 dim3_is_tile_in_local(abs_tile_id + num_banks, total_cols, tile_cols_per_chip, my_chip_id)) {
-                write_and_advance_local_read_address_for_fabric_write(
+                fabric_write_wrapper(
                     noc0_dest_noc_addr,
                     pkt_hdr_forward,
                     pkt_hdr_backward,
@@ -83,7 +104,7 @@ inline void fabric_send_contig_tiles_dim3_bf16(
                 tile_id++;
                 total += packet_size_in_pages;
             } else {
-                write_and_advance_local_read_address_for_fabric_write(
+                fabric_write_wrapper(
                     noc0_dest_noc_addr,
                     pkt_hdr_forward,
                     pkt_hdr_backward,
@@ -112,7 +133,7 @@ inline void fabric_send_full_contig(
         cb_wait_front(cb0_id, packet_size_in_pages);
         size_t l1_read_addr = get_read_ptr(cb0_id);
         uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, addrgen, 0 /*offset*/, 0 /*noc_id*/);
-        write_and_advance_local_read_address_for_fabric_write(
+        fabric_write_wrapper(
             noc0_dest_noc_addr,
             pkt_hdr_forward,
             pkt_hdr_backward,
@@ -142,7 +163,7 @@ inline void fabric_send_2contig_bf8(
         cb_wait_front(cb0_id, 2);
         size_t l1_read_addr = get_read_ptr(cb0_id);
         uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, addrgen, 0 /*offset*/, 0 /*noc_id*/);
-        write_and_advance_local_read_address_for_fabric_write(
+        fabric_write_wrapper(
             noc0_dest_noc_addr,
             pkt_hdr_forward,
             pkt_hdr_backward,
@@ -174,7 +195,7 @@ inline void fabric_send_non_contig(
         size_t l1_read_addr = get_read_ptr(cb0_id);
         for (uint32_t i = 0; i < tiles_in_packet; i++) {
             uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, addrgen, 0 /*offset*/, 0 /*noc_id*/);
-            write_and_advance_local_read_address_for_fabric_write(
+            fabric_write_wrapper(
                 noc0_dest_noc_addr,
                 pkt_hdr_forward,
                 pkt_hdr_backward,
@@ -443,7 +464,7 @@ inline void fabric_send_dim2_bf8(
         uint32_t id = total + tile_id_start;
         for (uint32_t j = 0; j < num_2contig; j++) {
             uint64_t noc0_dest_noc_addr = get_noc_addr(id, tensor0_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-            write_and_advance_local_read_address_for_fabric_write(
+            fabric_write_wrapper(
                 noc0_dest_noc_addr,
                 pkt_hdr_forward,
                 pkt_hdr_backward,
@@ -753,14 +774,14 @@ void kernel_main() {
     if (fabric_connection.has_forward_connection()) {
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
         pkt_hdr->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
+            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_sync_targets_forward)});
         fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
     // Write the mcast packet (backward)
     if (fabric_connection.has_backward_connection()) {
         pkt_hdr->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
+            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_sync_targets_backward)});
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
         fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));

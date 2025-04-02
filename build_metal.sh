@@ -2,6 +2,11 @@
 
 set -eo pipefail
 
+FLAVOR=`grep '^ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
+VERSION=`grep '^VERSION_ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
+MAJOR=${VERSION%.*}
+ARCH=`uname -m`
+
 # Function to display help
 show_help() {
     echo "Usage: $0 [options]..."
@@ -77,7 +82,14 @@ cpm_source_cache=""
 cpm_use_local_packages="OFF"
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
-toolchain_path="cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+toolchain_path="cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+
+# Requested handling for 20.04 -> 22.04 migration
+if [[ "$FLAVOR" == "ubuntu" && "$VERSION" == "20.04" ]]; then
+    echo "WARNING: You are using Ubuntu 20.04 which is end of life. Default toolchain is set to libcpp, which is an unsupported configuration. This default behavior will be removed by June 2025."
+    toolchain_path="cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+fi
+
 configure_only="OFF"
 enable_coverage="OFF"
 with_python_bindings="ON"

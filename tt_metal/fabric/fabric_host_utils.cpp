@@ -2,12 +2,29 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
-#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <array>
+#include <cstddef>
+#include <map>
+#include <optional>
+#include <set>
+#include <unordered_map>
+#include <variant>
 
+#include "assert.hpp"
+#include "control_plane.hpp"
+#include "fabric_edm_packet_header.hpp"
 #include "fabric_host_utils.hpp"
+#include "metal_soc_descriptor.h"
+#include "tt_cluster.hpp"
+#include <umd/device/types/xy_pair.h>
+
+namespace tt {
+namespace tt_metal {
+class Program;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_fabric {
 
@@ -17,7 +34,7 @@ tt::tt_fabric::FabricEriscDatamoverConfig get_default_fabric_config() {
     constexpr std::size_t edm_buffer_size =
         tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
         sizeof(tt::tt_fabric::PacketHeader);
-    return tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+    return tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size);
 }
 
 }  // namespace

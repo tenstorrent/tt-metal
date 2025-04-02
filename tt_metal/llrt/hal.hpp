@@ -9,14 +9,15 @@
 // level APIs
 //
 
-#include <cstdint>
-#include <functional>
-#include <variant>
-#include <vector>
-#include <memory>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/utils.hpp>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <type_traits>
+#include <variant>
+#include <vector>
 
 enum class CoreType;
 
@@ -355,25 +356,27 @@ public:
     }
 };
 
-inline auto& hal = HalSingleton::getInstance();  // inline variable requires C++17
+inline auto& hal_ref = HalSingleton::getInstance();  // inline variable requires C++17
 
 uint32_t generate_risc_startup_addr(uint32_t firmware_base);  // used by Tensix initializers to build HalJitBuildConfig
 
 }  // namespace tt_metal
 }  // namespace tt
 
-#define HAL_MEM_L1_BASE \
-    tt::tt_metal::hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE)
-#define HAL_MEM_L1_SIZE \
-    tt::tt_metal::hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE)
+#define HAL_MEM_L1_BASE                 \
+    tt::tt_metal::hal_ref.get_dev_addr( \
+        tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE)
+#define HAL_MEM_L1_SIZE                 \
+    tt::tt_metal::hal_ref.get_dev_size( \
+        tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE)
 
-#define HAL_MEM_ETH_BASE                                   \
-    ((tt::tt_metal::hal.get_arch() == tt::ARCH::GRAYSKULL) \
-         ? 0                                               \
-         : tt::tt_metal::hal.get_dev_addr(                 \
+#define HAL_MEM_ETH_BASE                                       \
+    ((tt::tt_metal::hal_ref.get_arch() == tt::ARCH::GRAYSKULL) \
+         ? 0                                                   \
+         : tt::tt_metal::hal_ref.get_dev_addr(                 \
                tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::BASE))
-#define HAL_MEM_ETH_SIZE                                   \
-    ((tt::tt_metal::hal.get_arch() == tt::ARCH::GRAYSKULL) \
-         ? 0                                               \
-         : tt::tt_metal::hal.get_dev_size(                 \
+#define HAL_MEM_ETH_SIZE                                       \
+    ((tt::tt_metal::hal_ref.get_arch() == tt::ARCH::GRAYSKULL) \
+         ? 0                                                   \
+         : tt::tt_metal::hal_ref.get_dev_size(                 \
                tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::BASE))

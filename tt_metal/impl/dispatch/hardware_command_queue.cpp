@@ -5,27 +5,47 @@
 #include "hardware_command_queue.hpp"
 
 #include <device.hpp>
-#include "dprint_server.hpp"
 #include <event.hpp>
-#include <tt_stl/overloaded.hpp>
-#include <trace_buffer.hpp>
-#include <tt-metalium/command_queue_interface.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
-
-#include "tt_cluster.hpp"
-
-#include "work_executor.hpp"
-
 // Because we are a Friend of Program, accessing Program::get_program_transfer_info() and Program::get_kernels_buffer()
 // MUST REMOVE
 #include <program_impl.hpp>
+#include <trace_buffer.hpp>
+#include <tracy/Tracy.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
+#include <tt_stl/overloaded.hpp>
+#include <algorithm>
+#include <array>
+#include <type_traits>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
+#include "assert.hpp"
+#include "buffers/dispatch.hpp"
+#include "dispatch/device_command.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
+#include "dispatch/host_runtime_commands.hpp"
+#include "dprint_server.hpp"
+#include "event/dispatch.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "logger.hpp"
+#include "program_device_map.hpp"
+#include "rtoptions.hpp"
+#include "strong_type.hpp"
+#include "system_memory_manager.hpp"
+#include "tt_cluster.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include <umd/device/tt_xy_pair.h>
+#include "work_executor.hpp"
 
-#include "rtoptions.hpp"
+namespace tt {
+namespace tt_metal {
+enum NOC : uint8_t;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 namespace {
@@ -103,7 +123,7 @@ std::optional<uint32_t> HWCommandQueue::tid() const { return this->tid_; }
 SystemMemoryManager& HWCommandQueue::sysmem_manager() { return this->manager_; }
 
 void HWCommandQueue::reset_worker_state(
-    bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_memcpy_aligned<uint32_t>& go_signal_noc_data) {
+    bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_aligned<uint32_t>& go_signal_noc_data) {
     TT_FATAL(!this->manager_.get_bypass_mode(), "Cannot reset worker state during trace capture");
     // TODO: This could be further optimized by combining all of these into a single prefetch entry
     // Currently each one will be pushed into its own prefetch entry
@@ -130,7 +150,7 @@ void HWCommandQueue::reset_worker_state(
 }
 
 void HWCommandQueue::set_go_signal_noc_data_and_dispatch_sems(
-    uint32_t num_dispatch_sems, const vector_memcpy_aligned<uint32_t>& noc_mcast_unicast_data) {
+    uint32_t num_dispatch_sems, const vector_aligned<uint32_t>& noc_mcast_unicast_data) {
     program_dispatch::set_num_worker_sems_on_dispatch(device_, this->manager_, id_, num_dispatch_sems);
     program_dispatch::set_go_signal_noc_data_on_dispatch(device_, noc_mcast_unicast_data, this->manager_, id_);
 }
@@ -558,7 +578,7 @@ void HWCommandQueue::record_end() {
     auto& trace_data = this->trace_ctx_->data;
     trace_data = std::move(this->manager_.get_bypass_data());
     // Add trace end command to terminate the trace buffer
-    DeviceCommand command_sequence(hal.get_alignment(HalMemType::HOST));
+    DeviceCommand command_sequence(hal_ref.get_alignment(HalMemType::HOST));
     command_sequence.add_prefetch_exec_buf_end();
     for (int i = 0; i < command_sequence.size_bytes() / sizeof(uint32_t); i++) {
         trace_data.push_back(((uint32_t*)command_sequence.data())[i]);

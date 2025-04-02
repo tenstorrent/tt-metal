@@ -4,32 +4,55 @@
 
 #include "watcher_server.hpp"
 
-#include <unistd.h>
-
-#include <chrono>
-#include <ctime>
-#include <filesystem>
-#include <mutex>
-#include <thread>
-
-#include <hal.hpp>
 #include <dev_msgs.h>
-#include "llrt.hpp"
 #include <rtoptions.hpp>
+#include <unistd.h>
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <filesystem>
+#include <functional>
+#include <initializer_list>
+#include <map>
+#include <mutex>
+#include <set>
+#include <stdexcept>
+#include <string_view>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
+#include "assert.hpp"
+#include "core_coord.hpp"
 #include "debug/ring_buffer.h"
-#include "watcher_device_reader.hpp"
 #include "debug_helpers.hpp"
+#include "hal_types.hpp"
+#include "llrt.hpp"
+#include "llrt/hal.hpp"
+#include "logger.hpp"
+#include "metal_soc_descriptor.h"
+#include "span.hpp"
+#include "tt_cluster.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/xy_pair.h>
+#include "utils.hpp"
+#include "watcher_device_reader.hpp"
 
 using namespace tt::tt_metal;
 
 namespace tt {
 namespace watcher {
 
-#define GET_WATCHER_TENSIX_DEV_ADDR() hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::WATCHER)
+#define GET_WATCHER_TENSIX_DEV_ADDR() hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::WATCHER)
 
-#define GET_WATCHER_ERISC_DEV_ADDR() hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::WATCHER)
+#define GET_WATCHER_ERISC_DEV_ADDR() \
+    hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::WATCHER)
 
-#define GET_WATCHER_IERISC_DEV_ADDR() hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::WATCHER)
+#define GET_WATCHER_IERISC_DEV_ADDR() hal_ref.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::WATCHER)
 
 static std::atomic<bool> enabled = false;
 static std::atomic<bool> server_running = false;
@@ -217,7 +240,7 @@ void watcher_init(chip_id_t device_id) {
     }
 
     // Initialize debug sanity L1/NOC addresses to sentinel "all ok"
-    const auto NUM_NOCS = tt::tt_metal::hal.get_num_nocs();
+    const auto NUM_NOCS = tt::tt_metal::hal_ref.get_num_nocs();
     for (int i = 0; i < NUM_NOCS; i++) {
         data->sanitize_noc[i].noc_addr = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_64;
         data->sanitize_noc[i].l1_addr = watcher::DEBUG_SANITIZE_NOC_SENTINEL_OK_32;

@@ -3,12 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "host_utils.hpp"
+
+#include <tt_cluster.hpp>
+#include <algorithm>
+#include <chrono>
 #include <limits>
 #include <random>
-#include <chrono>
-#include <algorithm>
-#include <numa.h>
-#include <tt_cluster.hpp>
+#include <unordered_set>
 
 namespace tt::tt_metal::tools::mem_bench {
 
@@ -26,12 +27,12 @@ uint32_t get_hugepage_size(int device_id) {
     return cluster.get_host_channel_size(mmio_device_id, channel);
 }
 
-tt::tt_metal::vector_memcpy_aligned<uint32_t> generate_random_src_data(uint32_t num_bytes) {
+tt::tt_metal::vector_aligned<uint32_t> generate_random_src_data(uint32_t num_bytes) {
     std::uniform_int_distribution<uint32_t> distribution(
         std::numeric_limits<uint32_t>::min(), std::numeric_limits<uint32_t>::max());
     std::default_random_engine generator;
 
-    tt::tt_metal::vector_memcpy_aligned<uint32_t> vec(num_bytes / sizeof(uint32_t));
+    tt::tt_metal::vector_aligned<uint32_t> vec(num_bytes / sizeof(uint32_t));
     std::generate(vec.begin(), vec.end(), [&]() { return distribution(generator); });
 
     return vec;

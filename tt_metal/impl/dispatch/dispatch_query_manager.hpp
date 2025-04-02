@@ -2,9 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <stdint.h>
 #include <mutex>
+#include <vector>
 
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "dispatch_core_common.hpp"
 #include "dispatch_core_manager.hpp"
+#include <umd/device/tt_xy_pair.h>
 
 namespace tt::tt_metal {
 

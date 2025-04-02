@@ -4,11 +4,19 @@
 
 #pragma once
 
+#include <tt_stl/indestructible.hpp>
 #include <memory>
+#include <optional>
 #include <vector>
 
-#include "mesh_coord.hpp"
-#include <tt_stl/indestructible.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+
+namespace tt {
+namespace stl {
+template <typename T>
+class Indestructible;
+}  // namespace stl
+}  // namespace tt
 
 namespace tt::tt_metal::distributed {
 
@@ -18,6 +26,7 @@ namespace tt::tt_metal::distributed {
 class SystemMesh {
 private:
     class Impl;  // Forward declaration only
+
     std::unique_ptr<Impl> pimpl_;
     SystemMesh();
 

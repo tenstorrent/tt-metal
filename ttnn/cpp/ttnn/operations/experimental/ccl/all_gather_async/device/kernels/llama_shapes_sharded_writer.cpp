@@ -24,6 +24,10 @@ constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(4);
 constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(5);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(6);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
+constexpr bool dynamic_alternate = get_compile_time_arg_val(8);
+constexpr uint32_t num_max_targets = std::max(num_targets_forward_direction, num_targets_backward_direction);
+constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_targets : num_targets_forward_direction;
+constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targets : num_targets_backward_direction;
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -52,7 +56,10 @@ void kernel_main() {
     tt_l1_ptr uint32_t* core_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;
     size_t arg_for_fab = arg_idx;
-    auto fabric_connection = FabricConnectionManager::build_from_args(arg_idx);
+    constexpr bool connect_to_fabric_when_creating = true;
+    auto fabric_connection =
+        FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
+            arg_idx);
 
     DPRINT << "ct args: \n";
     DPRINT << "my_chip_id: " << (uint32_t)my_chip_id << "\n";
@@ -112,9 +119,7 @@ void kernel_main() {
     pkt_hdr_backward->to_chip_multicast(
         tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
 
-    if (fabric_connection.is_logically_connected()) {
-        fabric_connection.open();
-    }
+    fabric_connection.open_finish();
 
     // 1. mcast via fabric to remote tensor addresses
     uint32_t tiles_read = 0;
@@ -146,6 +151,11 @@ void kernel_main() {
             fabric_connection,
             l1_read_addr,
             num_tiles_to_read_this_core * tensor0_page_size);
+        if constexpr (dynamic_alternate) {
+            std::swap(
+                pkt_hdr_forward->routing_fields.value,
+                pkt_hdr_backward->routing_fields.value);  // alternate the packet header distance for better balancing
+        }
         noc_async_writes_flushed();
 
         cb_pop_front(cb0_id, num_tiles_to_read_this_core);
@@ -169,18 +179,19 @@ void kernel_main() {
     if (fabric_connection.has_forward_connection()) {
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
         pkt_hdr->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
+            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_sync_targets_forward)});
         fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
     // Write the mcast packet (backward)
     if (fabric_connection.has_backward_connection()) {
         pkt_hdr->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
+            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_sync_targets_backward)});
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
         fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
+    fabric_connection.close();
     // increment locally
     uint64_t out_ready_sem_noc_addr =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
@@ -198,10 +209,6 @@ void kernel_main() {
         const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem_bank_addr);
         noc_inline_dw_write(dest_noc_addr, 0);
         DPRINT << "reset done\n";
-    }
-
-    if (fabric_connection.is_logically_connected()) {
-        fabric_connection.close();
     }
 
     noc_async_write_barrier();

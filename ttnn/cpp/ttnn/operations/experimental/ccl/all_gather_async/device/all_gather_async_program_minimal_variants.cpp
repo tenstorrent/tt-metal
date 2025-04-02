@@ -104,6 +104,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
     size_t num_targets_forward = 0;
     size_t num_targets_backward = 0;
+    bool dynamic_alternate = false;
     if (topology == ccl::Topology::Linear) {
         LineTopology line_topology(ring_size, ring_index);
         num_targets_forward =
@@ -114,9 +115,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         // TODO: Commonize
         num_targets_forward = tt::div_up(ring_size - 1, 2);
         num_targets_backward = ring_size - 1 - num_targets_forward;
-        if (ring_index % 2 == 0) {
-            std::swap(num_targets_forward, num_targets_backward);
+        constexpr bool static_alternate = true;
+        if constexpr (static_alternate) {
+            if (ring_index % 2 == 0) {
+                std::swap(num_targets_forward, num_targets_backward);
+            }
         }
+        // Even ring size will result in uneven fwd/backward distances
+        dynamic_alternate = ring_size % 2 == 0;
     }
 
     // Get worker cores, assuming 1 worker per link
@@ -206,11 +212,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         op_config.get_page_size(),                         // tensor0_page_size
         num_targets_forward,                               // num_targets_forward_direction
         num_targets_backward,                              // num_targets_backward_direction
+        dynamic_alternate,                                 // alternate
         last_dim,                                          // last_dim
         num_banks,                                         // num_bansks
         static_cast<uint32_t>(bf8_dim3_type),              // bf8_dim3_type
     };
-    log_trace(tt::LogOp, "Writer Compile Args:");
     for (const auto& arg : writer_kernel_config.compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
     }
@@ -264,7 +270,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
         // Set writer runtime args
         bool wait_output_semaphore = (link == 0) && !enable_async_output_tensor;
         bool reset_global_semaphore = (link == 0) && !enable_async_output_tensor;
-        uint32_t out_ready_sem_wait_value = ring_size * num_links;
+        uint32_t out_ready_sem_wait_value = (dynamic_alternate ? (ring_size + 1) : ring_size) * num_links;
         uint32_t output_tile_id_start = ring_index * input_tensor_num_pages + input_tile_id_start;
         uint32_t output_tile_id_end = ring_index * input_tensor_num_pages + input_tile_id_end;
         num_tiles_per_chip = input_tensor_shape[2] * input_tensor_shape[3] / 1024;
@@ -370,6 +376,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
     size_t num_targets_forward = 0;
     size_t num_targets_backward = 0;
+    bool dynamic_alternate = false;
     if (topology == ccl::Topology::Linear) {
         LineTopology line_topology(ring_size, ring_index);
         num_targets_forward =
@@ -380,9 +387,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         // TODO: Commonize
         num_targets_forward = tt::div_up(ring_size - 1, 2);
         num_targets_backward = ring_size - 1 - num_targets_forward;
-        if (ring_index % 2 == 0) {
-            std::swap(num_targets_forward, num_targets_backward);
+        constexpr bool static_alternate = true;
+        if constexpr (static_alternate) {
+            if (ring_index % 2 == 0) {
+                std::swap(num_targets_forward, num_targets_backward);
+            }
         }
+        // Even ring size will result in uneven fwd/backward distances
+        dynamic_alternate = ring_size % 2 == 0;
     }
 
     // Get worker cores, assuming 1 worker per link
@@ -462,6 +474,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         op_config.get_page_size(),        // tensor0_page_size
         num_targets_forward,              // num_targets_forward_direction
         num_targets_backward,             // num_targets_backward_direction
+        dynamic_alternate                 // dynamic_alternate
     };
     log_trace(tt::LogOp, "Writer Compile Args:");
     for (const auto& arg : writer_kernel_config.compile_args) {
@@ -567,7 +580,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         // Set writer runtime args
         bool wait_output_semaphore = (link == 0) && !enable_async_output_tensor;
         bool reset_global_semaphore = (link == 0) && !enable_async_output_tensor;
-        uint32_t out_ready_sem_wait_value = ring_size * num_links;
+        uint32_t out_ready_sem_wait_value = (dynamic_alternate ? (ring_size + 1) : ring_size) * num_links;
         std::vector<uint32_t> writer_rt_args = {
             output_tensor.buffer()->address(),    // tensor_address0
             semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)

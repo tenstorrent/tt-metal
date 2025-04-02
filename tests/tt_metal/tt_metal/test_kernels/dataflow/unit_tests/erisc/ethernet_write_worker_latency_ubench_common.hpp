@@ -206,7 +206,7 @@ FORCE_INLINE void write_worker(
     noc_async_write(buffer_slot_addr, worker_noc_addr, message_size);
     noc_async_writes_flushed();
 #else
-    noc_async_write_one_packet_with_trid_with_state(
+    noc_async_write_one_packet_with_trid_with_state<false, false>(
         buffer_slot_addr, worker_noc_addr, message_size, curr_trid_to_write);
 #endif
     // reset sync

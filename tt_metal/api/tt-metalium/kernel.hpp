@@ -4,27 +4,47 @@
 
 #pragma once
 
-#include <string_view>
-#include <vector>
-#include <map>
-#include <variant>
-#include <type_traits>
-#include <memory>
-
-#include "base_types.hpp"
-#include "core_coord.hpp"
-#include "jit_build_settings.hpp"
-#include "jit_build_options.hpp"
-#include "kernel_types.hpp"
-#include "tt_memory.h"
+#include <magic_enum/magic_enum.hpp>
+#include <stdint.h>
 #include <tt_stl/span.hpp>
-#include "runtime_args_data.hpp"
+#include <cstddef>
+#include <functional>
+#include <map>
+#include <memory>
+#include <ostream>
+#include <set>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#include <unordered_map>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/jit_build_options.hpp>
+#include <tt-metalium/jit_build_settings.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tt_memory.h>
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/xy_pair.h>
+#include <tt-metalium/utils.hpp>
+
+namespace ll_api {
+class memory;
+}  // namespace ll_api
 
 namespace tt {
 
 namespace tt_metal {
 
 class IDevice;
+class JitBuildOptions;
+enum class DataMovementProcessor;
 
 constexpr uint32_t max_runtime_args = 256;
 
@@ -103,8 +123,8 @@ class Kernel : public JitBuildSettings {
     virtual void generate_binaries(IDevice* device, JitBuildOptions &build_options) const = 0;
     uint32_t get_binary_packed_size(IDevice* device, int index) const;
     uint32_t get_binary_text_size(IDevice* device, int index) const;
-    void set_binary_path(const std::string &binary_path) { binary_path_ = binary_path; }
     void set_binaries(uint32_t build_key, std::vector<ll_api::memory const*>&& binaries);
+    virtual bool binaries_exist_on_disk(const IDevice* device) const = 0;
     virtual void read_binaries(IDevice* device) = 0;
 
     void validate_runtime_args_size(size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core);
@@ -119,7 +139,7 @@ class Kernel : public JitBuildSettings {
     const string& get_full_kernel_name() const override;
     void add_defines(const std::map<std::string, std::string>& defines);
     void process_defines(const std::function<void (const string& define, const string &value)>) const override;
-    void process_compile_time_args(const std::function<void (int i, uint32_t value)>) const override;
+    void process_compile_time_args(const std::function<void(const std::vector<uint32_t>& values)>) const override;
 
     bool is_idle_eth() const;
 
@@ -128,7 +148,6 @@ class Kernel : public JitBuildSettings {
     KernelSource kernel_src_;
     std::string kernel_full_name_;  // Name + hash
     CoreRangeSet core_range_set_;
-    std::string binary_path_;
     // DataMovement kernels have one binary each and Compute kernels have three binaries
     // Different set of binaries per device because kernel compilation is device dependent
     // TODO: break this dependency by https://github.com/tenstorrent/tt-metal/issues/3381
@@ -166,6 +185,7 @@ class DataMovementKernel : public Kernel {
     RISCV processor() const override;
 
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    bool binaries_exist_on_disk(const IDevice* device) const override;
     void read_binaries(IDevice* device) override;
 
     bool configure(IDevice* device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
@@ -198,6 +218,7 @@ class EthernetKernel : public Kernel {
     RISCV processor() const override;
 
     void generate_binaries(IDevice* device, JitBuildOptions &build_options) const override;
+    bool binaries_exist_on_disk(const IDevice* device) const override;
     void read_binaries(IDevice* device) override;
 
     bool configure(IDevice* device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
@@ -231,6 +252,7 @@ class ComputeKernel : public Kernel {
 
     void set_build_options(JitBuildOptions& build_options) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    bool binaries_exist_on_disk(const IDevice* device) const override;
     void read_binaries(IDevice* device) override;
 
     bool configure(IDevice* device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const override;

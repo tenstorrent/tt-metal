@@ -3,14 +3,33 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/event/dispatch.hpp"
+
+#include <boost/core/span.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
+#include <tt_align.hpp>
+#include <utility>
+#include <vector>
+
+#include "assert.hpp"
+#include "command_queue_common.hpp"
+#include "core_coord.hpp"
+#include "device.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
+#include "dispatch/kernels/cq_commands.hpp"
+#include "dispatch_core_common.hpp"
+#include "dispatch_mem_map.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "logger.hpp"
+#include "strong_type.hpp"
+#include "sub_device_types.hpp"
+#include "tt_cluster.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
-#include <tt-metalium/program_impl.hpp>
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
-#include <tt_align.hpp>
+#include <umd/device/tt_xy_pair.h>
 
-#include "tt_cluster.hpp"
+enum class CoreType;
 
 namespace tt::tt_metal {
 
@@ -35,8 +54,8 @@ void issue_record_event_commands(
     std::vector<uint32_t> event_payload(DispatchSettings::EVENT_PADDED_SIZE / sizeof(uint32_t), 0);
     event_payload[0] = event_id;
 
-    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
-    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+    uint32_t pcie_alignment = hal_ref.get_alignment(HalMemType::HOST);
+    uint32_t l1_alignment = hal_ref.get_alignment(HalMemType::L1);
     uint32_t packed_event_payload_sizeB =
         align(sizeof(CQDispatchCmd) + num_command_queues * sizeof(CQDispatchWritePackedUnicastSubCmd), l1_alignment) +
         (align(DispatchSettings::EVENT_PADDED_SIZE, l1_alignment) * num_command_queues);
@@ -44,7 +63,7 @@ void issue_record_event_commands(
     uint32_t num_worker_counters = sub_device_ids.size();
 
     uint32_t cmd_sequence_sizeB =
-        hal.get_alignment(HalMemType::HOST) *
+        hal_ref.get_alignment(HalMemType::HOST) *
             num_worker_counters +  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
         packed_write_sizeB +       // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PACKED +
                                    // unicast subcmds + event payload
@@ -121,7 +140,7 @@ void issue_record_event_commands(
 void issue_wait_for_event_commands(
     uint8_t cq_id, uint8_t event_cq_id, SystemMemoryManager& sysmem_manager, uint32_t event_id) {
     uint32_t cmd_sequence_sizeB =
-        hal.get_alignment(HalMemType::HOST);  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
+        hal_ref.get_alignment(HalMemType::HOST);  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
 
     auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();

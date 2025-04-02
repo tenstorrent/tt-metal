@@ -9,7 +9,6 @@ from loguru import logger
 import pytest
 import ttnn
 import evaluate
-from torch import Generator
 
 from models.utility_functions import (
     profiler,

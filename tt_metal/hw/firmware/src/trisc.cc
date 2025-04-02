@@ -93,6 +93,10 @@ void init_sync_registers() {
 }
 
 int main(int argc, char *argv[]) {
+    // Workaround for tt-metal#16439, making sure gathering is disabled
+#ifdef ARCH_BLACKHOLE
+    disable_gathering();
+#endif
     configure_l1_data_cache();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
@@ -118,6 +122,12 @@ int main(int argc, char *argv[]) {
                     *trisc_run = RUN_SYNC_MSG_DONE;
                 }
             }
+#if defined(ARCH_WORMHOLE)
+            // Avoid hammering L1 while other cores are trying to work. Seems not to
+            // be needed on Blackhole, probably because invalidate_l1_cache takes
+            // time.
+            asm volatile("nop; nop; nop; nop; nop");
+#endif
             invalidate_l1_cache();
         }
         DeviceZoneScopedMainN("TRISC-FW");

@@ -8,18 +8,17 @@
 
 #pragma once
 
-#include <cstdint>
-#include <vector>
-#include <optional>
-#include <concepts>
-#include <type_traits>
-
-#include <tt_stl/span.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/assert.hpp>
-#include <tt-metalium/math.hpp>
-
 #include <tracy/Tracy.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt_stl/span.hpp>
+#include <array>
+#include <concepts>
+#include <cstdint>
+#include <optional>
+#include <type_traits>
+#include <vector>
 
 namespace tests::utils {
 enum class TensorLayoutType {

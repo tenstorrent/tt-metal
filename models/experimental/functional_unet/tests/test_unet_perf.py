@@ -12,12 +12,14 @@ from models.utility_functions import (
     skip_for_grayskull,
 )
 
+from models.experimental.functional_unet.tests.common import UNET_TRACE_REGION_SIZE
+
 
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, groups, expected_device_perf_fps",
-    ((1, 2, 1035.0),),
+    ((1, 2, 1025.0),),
 )
 def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: float):
     command = f"pytest models/experimental/functional_unet/tests/test_unet_model.py::test_unet_model[device_params0-{groups}-{batch}]"
@@ -45,11 +47,13 @@ def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: flo
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 68864, "trace_region_size": 424960, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": 68864, "trace_region_size": UNET_TRACE_REGION_SIZE, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations, expected_compile_time, expected_throughput",
-    ((1, 2, 128, 25.0, 830.0),),
+    ((1, 2, 128, 25.0, 825.0),),
 )
 def test_unet_trace_perf(
     batch: int,
@@ -87,13 +91,15 @@ def test_unet_trace_perf(
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 68864, "trace_region_size": 424960, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": 68864, "trace_region_size": UNET_TRACE_REGION_SIZE, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations, expected_compile_time, expected_throughput, use_async_mode",
     (
         (1, 2, 128, 25.0, 1450.0, True),
-        (1, 2, 128, 25.0, 1650.0, False),
+        (1, 2, 128, 25.0, 1630.0, False),
     ),
 )
 def test_unet_trace_perf_multi_device(

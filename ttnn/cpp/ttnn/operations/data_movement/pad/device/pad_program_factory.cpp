@@ -7,10 +7,9 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_log.h>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/tt_align.hpp>
@@ -18,7 +17,6 @@
 static const uint32_t max_read_size = 2048;  // max read size in bytes for reader and writer kernels
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -156,11 +154,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
     tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, cores, writer_rt_args);
 
     auto override_runtime_args_callback = [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto src_buffer = input_buffers.at(0);
-        auto dst_buffer = output_buffers.at(0);
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_buffer = input_tensors.at(0).buffer();
+        auto dst_buffer = output_tensors.at(0).buffer();
         CoreCoord core = {0, 0};
         {
             auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
@@ -285,12 +285,14 @@ operation::ProgramWithCallbacks pad_tile(
     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_kernel_args);
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto src_dram_buffer = input_buffers.at(0);
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_dram_buffer = input_tensors.at(0).buffer();
 
-        auto dst_dram_buffer = output_buffers.at(0);
+        auto dst_dram_buffer = output_tensors.at(0).buffer();
 
         CoreCoord core = {0, 0};
 
@@ -516,7 +518,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
     // uint32_t cb_npages = 1; // multibuffering for perf
     uint32_t cb_page_alignment = std::max(tt::constants::TILE_WIDTH, src0_buffer->alignment());
     uint32_t cb_pagesize =
-        static_cast<uint32_t>(ceil((float)dst_nbytes_per_core_w / cb_page_alignment)) * cb_page_alignment;
+        static_cast<uint32_t>(std::ceil((float)dst_nbytes_per_core_w / cb_page_alignment)) * cb_page_alignment;
     tt::DataFormat in_df = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::tt_metal::CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(cb_npages * cb_pagesize, {{cb_id, in_df}}).set_page_size(cb_id, cb_pagesize);
@@ -673,11 +675,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
                                            writer_kernel_id = writer_kernel_id,
                                            ncores_h = ncores_h,
                                            ncores_w = ncores_w](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto src_buffer = input_buffers.at(0);
-        auto dst_buffer = output_buffers.at(0);
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_buffer = input_tensors.at(0).buffer();
+        auto dst_buffer = output_tensors.at(0).buffer();
 
         for (uint32_t j = 0; j < ncores_h; ++j) {
             for (uint32_t i = 0; i < ncores_w; ++i) {
