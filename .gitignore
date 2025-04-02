@@ -13,3 +13,4 @@ compile_commands.json
 .vscode/
 *.log
 *.csv
+*.whl

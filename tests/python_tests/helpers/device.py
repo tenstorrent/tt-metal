@@ -131,23 +131,31 @@ def get_result_from_device(
         raise ValueError(f"Unsupported format: {formats.pack_dst}")
 
 
-def assert_value_with_timeout(core_loc, mailbox_addr, timeout=0, poll_interval=0.1):
-    end_time = time.time() + timeout
+def wait_until_tensix_complete(core_loc, mailbox_addr, timeout=30, max_backoff=5):
+    """
+    Polls a value from the device with an exponential backoff timer and fails if it doesn't read 1 within the timeout.
 
-    while time.time() < end_time:
-        if read_word_from_device(core_loc, mailbox_addr) == 1:
-            return True
-        time.sleep(poll_interval)
+    Args:
+        core_loc: The location of the core to poll.
+        mailbox_addr: The mailbox address to read from.
+        timeout: Maximum time to wait (in seconds) before timing out. Default is 30 seconds.
+        max_backoff: Maximum backoff time (in seconds) between polls. Default is 5 seconds.
+    """
+    start_time = time.time()
+    backoff = 0.1  # Initial backoff time in seconds
 
-    # If the loop finishes without breaking, that means the condition was never true
-    assert (
-        read_word_from_device(core_loc, mailbox_addr) == 1
-    ), f"Value at mailbox {hex(mailbox_addr)} was not 1 after waiting {timeout} seconds."
+    while time.time() - start_time < timeout:
+        if read_word_from_device(core_loc, mailbox_addr.value) == 1:
+            return
+
+        time.sleep(backoff)
+        backoff = min(backoff * 2, max_backoff)  # Exponential backoff with a cap
+
+    assert False, f"Timeout reached: waited {timeout} seconds for {mailbox_addr.name}"
 
 
-def assert_tensix_operations_finished(core_loc: str = "0,0"):
+def wait_for_tensix_operations_finished(core_loc: str = "0,0"):
 
-    tensix_L1_mailboxes = [0x19FF4, 0x19FF8, 0x19FFC]  # L1 Mailbox addresses
-    assert_value_with_timeout(core_loc, tensix_L1_mailboxes[0])
-    assert_value_with_timeout(core_loc, tensix_L1_mailboxes[1])
-    assert_value_with_timeout(core_loc, tensix_L1_mailboxes[2])
+    wait_until_tensix_complete(core_loc, Mailbox.Packer)
+    wait_until_tensix_complete(core_loc, Mailbox.Math)
+    wait_until_tensix_complete(core_loc, Mailbox.Unpacker)

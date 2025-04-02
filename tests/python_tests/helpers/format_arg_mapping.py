@@ -133,3 +133,9 @@ class TileCount(Enum):
     Two = 2
     Three = 3
     Four = 4
+
+
+class Mailbox(Enum):
+    Unpacker = 0x19FFC
+    Math = 0x19FF8
+    Packer = 0x19FF4

@@ -69,13 +69,12 @@ def test_matmul(testname, formats, dest_acc, math_fidelity):
 
     run_elf_files(testname)
 
+    wait_for_tensix_operations_finished()
     res_from_L1 = collect_results(
         formats
     )  # Bug patchup in (unpack.py): passing formats struct to check unpack_src with pack_dst and distinguish when input and output formats have different exponent widths then reading from L1 changes
-    run_shell_command("cd .. && make clean")
-
     assert len(res_from_L1) == len(golden_tensor)
-    assert_tensix_operations_finished()
+    run_shell_command("cd .. && make clean")
 
     res_tensor = torch.tensor(
         res_from_L1,

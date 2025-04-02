@@ -36,7 +36,7 @@ from .device import (
     run_elf_files,
     write_stimuli_to_l1,
     get_result_from_device,
-    assert_tensix_operations_finished,
+    wait_for_tensix_operations_finished,
 )
 from .param_config import (
     generate_format_combinations,
