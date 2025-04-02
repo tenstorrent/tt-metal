@@ -14,7 +14,6 @@ from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.common import (
     get_prefill_rot_mat,
-    get_rot_transformation_mat,
     get_single_rot_mat,
 )
 from models.utility_functions import (
@@ -63,8 +62,16 @@ def test_cross_attention_transformer_text_inference(
     model_args = ModelArgs(mesh_device, max_batch_size=batch)
     # Limit the max seqlen to 4k to avoid OOM on host
     model_args.max_seq_len = 4096
+    kv_cache_dtype = torch.float32
+    n_iter = 10
+    if model_args.is_90b:
+        # [INFO] use bfloat16 for in reference model to avoid OOM on host
+        torch.set_default_dtype(torch.bfloat16)
+        kv_cache_dtype = torch.bfloat16
+        # [INFO] n_iter = 3 is sufficient to exercise both prefill and decode phases
+        n_iter = 3
 
-    state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
+    state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = "text_model."
@@ -76,8 +83,9 @@ def test_cross_attention_transformer_text_inference(
     head_dim = model_args.head_dim
     n_heads = model_args.n_heads
     n_kv_heads = model_args.n_kv_heads
+
     reference_model = llama_reference_mod.CrossAttentionTransformerText(args=model_args)
-    reference_model.setup_cache(model_args.max_batch_size, torch.float32)
+    reference_model.setup_cache(model_args.max_batch_size, kv_cache_dtype)
     reference_model.load_state_dict(partial_state_dict)
 
     num_chunks = 4
@@ -119,7 +127,6 @@ def test_cross_attention_transformer_text_inference(
     # Test forward pass of the model
 
     prev_pos = 0
-    n_iter = 10
     # tokens = torch.randint(100, 1000, (batch, text_seq_len+n_iter), dtype=torch.long)#, device="cuda"
     tokens = torch.randint(0, model_args.vocab_size, (batch, text_seq_len + n_iter), dtype=torch.long)
     for i in range(n_iter):
