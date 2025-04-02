@@ -54,10 +54,10 @@ jobs:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
-        LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+        LD_LIBRARY_PATH: /work/build/lib
         GTEST_OUTPUT: xml:generated/test_reports/
         TT_METAL_SLOW_DISPATCH_MODE: 1
-        TT_METAL_HOME: ${{ github.workspace }}
+        TT_METAL_HOME: /work
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
