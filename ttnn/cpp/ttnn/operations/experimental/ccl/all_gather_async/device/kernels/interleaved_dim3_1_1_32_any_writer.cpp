@@ -280,7 +280,7 @@ inline void fabric_send_dim3_bf16_rest8_optimized(
 }
 
 template <bool DRAM>
-inline void fabric_send_llama_8b_n300(
+inline void fabric_dim3_bf8_reminder36(
     uint32_t num_tiles,
     uint32_t ring_size,
     uint32_t tile_cols_per_chip,
@@ -288,14 +288,18 @@ inline void fabric_send_llama_8b_n300(
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
     FabricConnectionManager& fabric_connection) {
-    static const uint32_t input_width = 2004;
-    constexpr uint32_t num_full_contig = 41 * 12;
-    constexpr uint32_t num_2contig = 12;
-    constexpr uint32_t rest_tiles = 12;
-    uint32_t tile_id = input_width * my_chip_id;
-    fabric_send_full_contig(num_full_contig, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
-    fabric_send_2contig_bf8(num_2contig, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
-    fabric_send_non_contig(rest_tiles, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+    uint32_t row = num_tiles / tile_cols_per_chip;
+    uint32_t num_full_contig = (tile_cols_per_chip / (num_banks * packet_size_in_pages)) * num_banks;
+    uint32_t num_2contig =
+        ((tile_cols_per_chip - num_full_contig * packet_size_in_pages) / (num_banks * 2)) * num_banks;
+    uint32_t tile_id = tile_cols_per_chip * my_chip_id;
+    for (uint32_t i = 0; i < row; i++) {
+        fabric_send_full_contig(
+            num_full_contig, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+        fabric_send_2contig_bf8(num_2contig, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+        fabric_send_non_contig(num_banks, tile_id, addrgen, pkt_hdr_forward, pkt_hdr_backward, fabric_connection);
+        tile_id += tile_cols_per_chip * (ring_size - 1);
+    }
 }
 
 template <bool DRAM>
@@ -713,8 +717,8 @@ void kernel_main() {
                     pkt_hdr_forward,
                     pkt_hdr_backward,
                     fabric_connection);
-            } else if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == LLAMA_8B_N300) {
-                fabric_send_llama_8b_n300<is_dram>(
+            } else if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == BF8_DIM3_REMAINDER_32) {
+                fabric_dim3_bf8_reminder36<is_dram>(
                     num_tiles_per_chip,
                     ring_size,
                     tile_cols_per_chip,

@@ -140,20 +140,6 @@ inline void pack_non_contig(uint32_t num_tiles, uint32_t& tile_id, InterleavedAd
 }
 
 template <bool DRAM>
-inline void pack_llama_8b_n300(
-    uint32_t num_tiles, uint32_t ring_size, uint32_t tile_cols_per_chip, InterleavedAddrGenFast<DRAM>& addrgen) {
-    static const uint32_t input_width = 2004;
-    constexpr uint32_t num_full_contig = 41 * 12;
-    constexpr uint32_t num_2contig = 12;
-    constexpr uint32_t rest_tiles = 12;
-    uint32_t tile_id = 0;
-    uint32_t total = 0;
-    pack_full_contig(num_full_contig, tile_id, addrgen);
-    pack_2contig_bf8(num_2contig, tile_id, addrgen);
-    pack_non_contig(rest_tiles, tile_id, addrgen);
-}
-
-template <bool DRAM>
 inline void pack_dim3_bf16_rest16_optimized(
     uint32_t num_tiles, uint32_t ring_size, uint32_t tile_cols_per_chip, InterleavedAddrGenFast<DRAM>& addrgen) {
     uint32_t tile_id = 0;
@@ -216,6 +202,21 @@ inline void pack_dim3_bf16_rest8_optimized(
                 pack_non_contig(8, tile_id, addrgen);
             }
         }
+    }
+}
+
+template <bool DRAM>
+inline void pack_dim3_bf8_reminder36(
+    uint32_t num_tiles, uint32_t ring_size, uint32_t tile_cols_per_chip, InterleavedAddrGenFast<DRAM>& addrgen) {
+    uint32_t tile_id = 0;
+    uint32_t row = num_tiles / tile_cols_per_chip;
+    uint32_t num_full_contig = (tile_cols_per_chip / (num_banks * packet_size_in_pages)) * num_banks;
+    uint32_t num_2contig =
+        ((tile_cols_per_chip - num_full_contig * packet_size_in_pages) / (num_banks * 2)) * num_banks;
+    for (uint32_t i = 0; i < row; i++) {
+        pack_full_contig(num_full_contig, tile_id, addrgen);
+        pack_2contig_bf8(num_2contig, tile_id, addrgen);
+        pack_non_contig(num_banks, tile_id, addrgen);
     }
 }
 
@@ -430,8 +431,8 @@ void kernel_main() {
         } else {
             if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == BF8_DIM3_REMAINDER_32) {
                 pack_dim3_bf8_reminder32<is_dram>(num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
-            } else if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == LLAMA_8B_N300) {
-                pack_llama_8b_n300<is_dram>(num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
+            } else if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == BF8_DIM3_REMAINDER_32) {
+                pack_dim3_bf8_reminder36<is_dram>(num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
             } else {
                 // assert or handle default case
             }
