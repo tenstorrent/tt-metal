@@ -109,31 +109,21 @@ struct ExecuteDivLikeOps {
 struct ExecuteDiv {
     static Tensor invoke(
         QueueId queue_id,
-        const Tensor& lhs,
-        const Tensor& rhs,
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
         bool accurate_mode = false,
         const std::optional<std::string>& round_mode = std::nullopt,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> output = std::nullopt,
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
-        const std::optional<bool>& use_legacy = std::nullopt);
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
 
     static Tensor invoke(
         QueueId queue_id,
-        const Tensor& lhs,
-        float rhs,
+        const Tensor& input_tensor,
+        float value,
         bool accurate_mode = false,
         const std::optional<std::string>& round_mode = std::nullopt,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> output = std::nullopt,
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
-        const std::optional<bool>& use_legacy = std::nullopt);
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 
 template <BinaryOpType binary_op_type>
@@ -145,10 +135,8 @@ struct ExecuteBiasGelu {
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt) {
+        std::optional<unary::FusedActivations> activations = std::nullopt,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
         return BinaryOperation<binary_op_type>::invoke(
             queue_id,
             input_tensor_a_arg,
@@ -156,10 +144,8 @@ struct ExecuteBiasGelu {
             output_dtype,
             memory_config,
             optional_output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy);
+            activations,
+            input_tensor_a_activation);
     }
 
     static Tensor invoke(
@@ -169,60 +155,14 @@ struct ExecuteBiasGelu {
         const std::optional<const DataType>& dtype = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt) {
+        std::optional<unary::FusedActivations> activations = std::nullopt,
+        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
         return ttnn::gelu(
             queue_id,
             ttnn::add(queue_id, input_tensor_a, bias, std::nullopt, memory_config, optional_output_tensor),
             true,
             memory_config,
             optional_output_tensor);
-    }
-
-    static Tensor invoke(
-        QueueId queue_id,
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& output = std::nullopt,
-        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> post_activations = {}) {
-        return BinaryOperation<binary_op_type>::invoke(
-            queue_id,
-            input_tensor_a,
-            input_tensor_b,
-            output_dtype,
-            memory_config,
-            output,
-            lhs_activations,
-            rhs_activations,
-            post_activations);
-    }
-
-    static Tensor invoke(
-        QueueId queue_id,
-        const Tensor& input_tensor_a,
-        float scalar,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& output = std::nullopt,
-        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> post_activations = {}) {
-        return BinaryOperation<binary_op_type>::invoke(
-            queue_id,
-            input_tensor_a,
-            scalar,
-            output_dtype,
-            memory_config,
-            output,
-            lhs_activations,
-            rhs_activations,
-            post_activations);
     }
 };
 
@@ -313,22 +253,15 @@ struct ExecuteRsub {
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        const std::optional<unary::FusedActivations>& activations = std::nullopt,
+        const std::optional<unary::UnaryWithParam>& input_tensor_a_activation = std::nullopt);
 
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
         float input_b,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
 struct ExecuteBitwiseAnd {
@@ -337,22 +270,14 @@ struct ExecuteBitwiseAnd {
         const Tensor& input_tensor_a_arg,
         const Tensor& input_tensor_b_arg,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
         int32_t input_b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
 struct ExecuteBitwiseOr {
@@ -361,22 +286,14 @@ struct ExecuteBitwiseOr {
         const Tensor& input_tensor_a_arg,
         const Tensor& input_tensor_b_arg,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
         int32_t input_b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
 struct ExecuteBitwiseXor {
@@ -385,22 +302,14 @@ struct ExecuteBitwiseXor {
         const Tensor& input_tensor_a_arg,
         const Tensor& input_tensor_b_arg,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
         int32_t input_b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
 struct ExecuteBitwiseLeftShift {
@@ -409,22 +318,14 @@ struct ExecuteBitwiseLeftShift {
         const Tensor& input_tensor_a_arg,
         const Tensor& input_tensor_b_arg,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
         int32_t input_b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
 struct ExecuteBitwiseRightShift {
@@ -433,22 +334,14 @@ struct ExecuteBitwiseRightShift {
         const Tensor& input_tensor_a_arg,
         const Tensor& input_tensor_b_arg,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
         int32_t input_b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::UnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
 }  // namespace binary
@@ -506,12 +399,9 @@ constexpr auto gcd = ttnn::register_operation_with_auto_launch_op<"ttnn::gcd", o
 constexpr auto lcm = ttnn::register_operation_with_auto_launch_op<"ttnn::lcm", operations::binary::ExecuteLCM>();
 constexpr auto prelu = ttnn::register_operation_with_auto_launch_op<"ttnn::prelu", operations::binary::ExecutePrelu>();
 constexpr auto rsub = ttnn::register_operation_with_auto_launch_op<"ttnn::rsub", operations::binary::ExecuteRsub>();
-constexpr auto bitwise_and =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::bitwise_and", operations::binary::ExecuteBitwiseAnd>();
-constexpr auto bitwise_or =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::bitwise_or", operations::binary::ExecuteBitwiseOr>();
-constexpr auto bitwise_xor =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::bitwise_xor", operations::binary::ExecuteBitwiseXor>();
+constexpr auto bitwise_and = ttnn::register_operation_with_auto_launch_op<"ttnn::bitwise_and", operations::binary::ExecuteBitwiseAnd>();
+constexpr auto bitwise_or = ttnn::register_operation_with_auto_launch_op<"ttnn::bitwise_or", operations::binary::ExecuteBitwiseOr>();
+constexpr auto bitwise_xor = ttnn::register_operation_with_auto_launch_op<"ttnn::bitwise_xor", operations::binary::ExecuteBitwiseXor>();
 constexpr auto bitwise_left_shift = ttnn::
     register_operation_with_auto_launch_op<"ttnn::bitwise_left_shift", operations::binary::ExecuteBitwiseLeftShift>();
 constexpr auto bitwise_right_shift = ttnn::
