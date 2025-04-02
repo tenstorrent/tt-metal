@@ -91,7 +91,6 @@ private:
     void logPacketData(
         std::ofstream& log_file_ofs,
         nlohmann::ordered_json& noc_trace_json_log,
-        uint32_t runID,
         uint32_t runHostID,
         const std::string& opname,
         chip_id_t device_id,
@@ -112,7 +111,6 @@ private:
         uint32_t timer_id,
         uint64_t timestamp,
         uint64_t data,
-        uint32_t run_id,
         uint32_t run_host_id,
         const std::string_view opname,
         const std::string_view zone_name,
@@ -131,7 +129,6 @@ private:
         uint32_t timer_id,
         uint64_t timestamp,
         uint64_t data,
-        uint32_t run_id,
         uint32_t run_host_id,
         const std::string_view opname,
         const std::string_view zone_name,
