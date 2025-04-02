@@ -214,7 +214,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libtbb-dev \
     libcapstone-dev \
     libgtest-dev \
-    libgl1-mesa-glx \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /tmp/iwyu \
@@ -292,6 +291,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nano \
     openssh-server \
     vim \
+    libgl1-mesa-glx \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 #############################################################
