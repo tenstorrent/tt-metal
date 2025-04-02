@@ -914,7 +914,7 @@ def run_test_sdpa_decode_paged_attention_single_iter(
     min_pcc = 0.99
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
