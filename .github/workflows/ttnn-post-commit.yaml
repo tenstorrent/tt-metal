@@ -101,7 +101,6 @@ jobs:
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on:
       - ${{ inputs.runner-label }}
-      - "in-service"
     container:
       image: ${{ inputs.docker-image }}
       env:

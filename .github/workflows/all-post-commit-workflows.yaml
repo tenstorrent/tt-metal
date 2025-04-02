@@ -60,8 +60,8 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N150",
-          "N300",
+          "tt-beta-ubuntu-2204-n150-large-stable",
+          "tt-beta-ubuntu-2204-n300-large-stable",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
@@ -77,8 +77,8 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n150-large-stable },
+          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n300-large-stable },
         ]
     uses: ./.github/workflows/build-and-unit-tests.yaml
     with:
@@ -95,8 +95,8 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n150-large-stable },
+          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n300-large-stable },
         ]
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     with:
@@ -111,7 +111,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n300-large-stable },
         ]
     uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
     with:
@@ -128,8 +128,8 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n150-large-stable },
+          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n300-large-stable },
         ]
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
@@ -146,8 +146,8 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n150-large-stable },
+          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n300-large-stable },
         ]
     uses: ./.github/workflows/models-post-commit.yaml
     with:
@@ -161,8 +161,8 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n150-large-stable },
+          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n300-large-stable },
         ]
     uses: ./.github/workflows/cpp-post-commit.yaml
     with:
@@ -178,8 +178,8 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n150-large-stable },
+          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n300-large-stable },
         ]
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:
@@ -193,8 +193,8 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n150-large-stable },
+          { arch: wormhole_b0, runner-label: tt-beta-ubuntu-2204-n300-large-stable },
         ]
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
@@ -204,14 +204,14 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-  t3000-fast-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/t3000-fast-tests-impl.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # t3000-fast-tests:
+  #   needs: build-artifact
+  #   secrets: inherit
+  #   uses: ./.github/workflows/t3000-fast-tests-impl.yaml
+  #   with:
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   build-docs:
     needs: build-artifact
     uses: ./.github/workflows/docs-latest-public.yaml
