@@ -522,13 +522,22 @@ class cross_attention:
                 is_causal_mask=False,
             )
         else:
-            attention_scores = ttnn.bcast(
-                attention_scores,
-                self.scale,
-                math_op=ttnn.BcastOpMath.MUL,
-                dim=ttnn.BcastOpDim.HW,
+            # This needs to be updated when optional output tensors are available
+            attention_scores_temp = attention_scores
+
+            # TODO DELETE THIS DEBUG STUFF
+            repeat_scale = ttnn.repeat(self.scale, [1, 16, 1, 1])
+            assert not (ttnn.to_torch(repeat_scale) == 0).any()
+            attention_scores = ttnn.multiply(
+                attention_scores_temp,
+                repeat_scale,
                 memory_config=attention_scores.memory_config(),
             )
+
+            # print(ttnn.to_torch(attention_scores))
+            # breakpoint()
+            attention_scores_temp.deallocate()
+
             attention_scores = ttnn.softmax_in_place(
                 attention_scores,
                 program_config=softmax_program_config,
