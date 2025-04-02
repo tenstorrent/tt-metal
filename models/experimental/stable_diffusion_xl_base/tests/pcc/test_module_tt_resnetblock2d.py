@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
@@ -11,13 +11,14 @@ from models.utility_functions import torch_random
 
 
 @pytest.mark.parametrize(
-    "input_shape, temb_shape, down_block_id",
+    "input_shape, temb_shape, down_block_id, resnet_id, conv_shortcut",
     [
-        ((1, 320, 128, 128), (1, 1280), 0),
+        ((1, 320, 128, 128), (1, 1280), 0, 0, False),
+        ((1, 320, 64, 64), (1, 1280), 1, 0, True),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_resnetblock2d(device, temb_shape, input_shape, down_block_id, use_program_cache):
+def test_resnetblock2d(device, temb_shape, input_shape, down_block_id, resnet_id, conv_shortcut, use_program_cache):
     pipe = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, variant="fp16"
     )
@@ -25,8 +26,8 @@ def test_resnetblock2d(device, temb_shape, input_shape, down_block_id, use_progr
     unet.eval()
     state_dict = unet.state_dict()
 
-    torch_resnet = unet.down_blocks[down_block_id].resnets[0]
-    tt_resnet = TtResnetBlock2D(device, state_dict, f"down_blocks.{down_block_id}.resnets.0")
+    torch_resnet = unet.down_blocks[down_block_id].resnets[resnet_id]
+    tt_resnet = TtResnetBlock2D(device, state_dict, f"down_blocks.{down_block_id}.resnets.{resnet_id}", conv_shortcut)
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_temb_tensor = torch_random(temb_shape, -0.1, 0.1, dtype=torch.float32)
@@ -41,9 +42,7 @@ def test_resnetblock2d(device, temb_shape, input_shape, down_block_id, use_progr
     ttnn_temb_tensor = ttnn.from_torch(torch_temb_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
     ttnn_output_tensor, output_shape = tt_resnet.forward(ttnn_input_tensor, ttnn_temb_tensor, [B, C, H, W])
     output_tensor = ttnn.to_torch(ttnn_output_tensor)
-    output_tensor = output_tensor.reshape(
-        input_shape[0], output_shape[0], output_shape[1], torch_output_tensor.shape[1]
-    )
+    output_tensor = output_tensor.reshape(input_shape[0], output_shape[1], output_shape[2], output_shape[0])
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.994)

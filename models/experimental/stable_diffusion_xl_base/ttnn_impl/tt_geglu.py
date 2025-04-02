@@ -1,11 +1,10 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
 import torch
 import ttnn
-from math import ceil
 
 
 class TtGEGLU(nn.Module):
@@ -29,5 +28,10 @@ class TtGEGLU(nn.Module):
             self.tt_weights,
             bias=self.tt_bias,
         )
-        hidden_states, gate = ttnn.split(hidden_states, ceil(hidden_states.shape[3] / 2), 3)
+        gate = hidden_states[:, :, :, hidden_states.shape[3] // 2 :]
+        hidden_states = hidden_states[:, :, :, : hidden_states.shape[3] // 2]
+
+        # ttnn.split not working properly
+        # hidden_states, gate = ttnn.split(hidden_states, ceil(hidden_states.shape[3] / 2), 3)
+
         return ttnn.multiply(hidden_states, ttnn.gelu(gate))

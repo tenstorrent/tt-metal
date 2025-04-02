@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
@@ -42,9 +42,7 @@ def test_downblock2d(device, temb_shape, input_shape, use_program_cache):
     ttnn_output_tensor, output_shape = tt_downblock.forward(ttnn_input_tensor, ttnn_temb_tensor, [B, C, H, W])
     output_tensor = ttnn.to_torch(ttnn_output_tensor)
 
-    output_tensor = output_tensor.reshape(
-        input_shape[0], output_shape[0], output_shape[1], torch_output_tensor.shape[1]
-    )
+    output_tensor = output_tensor.reshape(input_shape[0], output_shape[1], output_shape[2], output_shape[0])
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.994)

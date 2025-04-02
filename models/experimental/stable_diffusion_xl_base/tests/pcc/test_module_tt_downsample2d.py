@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
@@ -39,7 +39,7 @@ def test_downsample2d(device, input_shape, down_block_id, stride, padding, dilat
     ttnn_input_tensor = to_channel_last_ttnn(torch_input_tensor, ttnn.bfloat16, device, ttnn.DRAM_MEMORY_CONFIG)
     ttnn_output_tensor, output_shape = tt_downsample.forward(ttnn_input_tensor, input_shape)
     output_tensor = from_channel_last_ttnn(
-        ttnn_output_tensor, [input_shape[0], output_shape[0], output_shape[1], torch_output_tensor.shape[1]]
+        ttnn_output_tensor, [input_shape[0], output_shape[1], output_shape[2], output_shape[0]]
     )
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.998)

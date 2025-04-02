@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -24,8 +24,8 @@ class TtDownsample2D(nn.Module):
             ttnn.from_torch(bias.unsqueeze(0).unsqueeze(0).unsqueeze(0), ttnn.bfloat16) if bias is not None else None
         )
 
-        self.input_channels = self.tt_weights.shape[0]
-        self.output_channels = self.tt_weights.shape[1]
+        self.input_channels = self.tt_weights.shape[1]
+        self.output_channels = self.tt_weights.shape[0]
         self.kernel_w = self.tt_weights.shape[2]
         self.kernel_h = self.tt_weights.shape[3]
 
@@ -79,4 +79,4 @@ class TtDownsample2D(nn.Module):
             return_weights_and_bias=True,
         )
 
-        return tt_output_tensor_on_device, [out_height, out_width]
+        return tt_output_tensor_on_device, [self.output_channels, out_height, out_width]
