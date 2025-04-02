@@ -6,9 +6,13 @@
 #include "dataflow_api.h"
 #include "risc_attribs.h"
 #include <tt-metalium/constants.hpp>
+#include "tools/profiler/kernel_profiler.hpp"
+#include "debug/dprint.h"
+
 using namespace tt::constants;
 
 void kernel_main() {
+    DPRINT << "KERNEL-MAIN" << ENDL();
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
@@ -56,6 +60,36 @@ void kernel_main() {
     const uint32_t signal_semaphore_addr =
         get_semaphore(get_arg_val<uint32_t>(arg_idx + 2 * q_num_cores + 2 * q_num_cores + 2 * q_num_cores));
 
+    uint32_t device_batch_offset = 0;
+    if constexpr (PHASES_TO_READ == 2) {
+        {
+            DeviceZoneScopedN("BATCH-OFFSET-BRISC");
+
+            const InterleavedAddrGen<true> addrg = {
+                .bank_base_address = batch_offset_tensor_addr, .page_size = index_stick_size};
+            cb_reserve_back(cb_batch_offset_id, 1);
+            uint32_t index_cb_wr_ptr = get_write_ptr(cb_batch_offset_id);
+            // Read the batch offset 1 page to read
+            uint64_t batch_offset_index_noc_addr = get_noc_addr(0, addrg);
+            noc_async_read(batch_offset_index_noc_addr, index_cb_wr_ptr, index_stick_size);
+            noc_async_read_barrier();
+            cb_push_back(cb_batch_offset_id, 1);
+            volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
+            // Always pick 1st value in tensor as batch offset
+            device_batch_offset = index_ptr[0];
+        }
+    }
+    if constexpr (PHASES_TO_READ == 1) {
+        {
+            DeviceZoneScopedN("BATCH-OFFSET-NCRISC");
+            cb_wait_front(cb_batch_offset_id, 1);
+            uint32_t index_cb_wr_ptr = get_write_ptr(cb_batch_offset_id);
+            volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
+            // Always pick 1st value in tensor as batch offset
+            device_batch_offset = index_ptr[0];
+        }
+    }
+
     if constexpr (PHASES_TO_READ == 1) {  // only do the semaphore in reading kernel(NCRISC), as all reduce reduction
                                           // only has reading kernel
         volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr =
@@ -65,29 +99,22 @@ void kernel_main() {
         noc_semaphore_wait(signal_semaphore_addr_ptr, VALID);
         noc_semaphore_set(signal_semaphore_addr_ptr, 0);
 
+        {
+            DeviceZoneScopedN("SEMAPHORE-RESET");
+        }
+
         // 2. Signal compute kernel to start processing
         cb_push_back(cb_id, total_num_reduction_tiles);
     }
     // 3. QV/K read and write kernels start here:
     // 3.1 set up the device batch offset for each of the device.
 
-    uint32_t device_batch_offset = 0;
-    const InterleavedAddrGen<true> addrg = {
-        .bank_base_address = batch_offset_tensor_addr, .page_size = index_stick_size};
-    cb_reserve_back(cb_batch_offset_id, 1);
-    uint32_t index_cb_wr_ptr = get_write_ptr(cb_batch_offset_id);
-    // Read the batch offset 1 page to read
-    uint64_t batch_offset_index_noc_addr = get_noc_addr(0, addrg);
-    noc_async_read(batch_offset_index_noc_addr, index_cb_wr_ptr, index_stick_size);
-    noc_async_read_barrier();
-    cb_push_back(cb_batch_offset_id, 1);
-    volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
-    // Always pick 1st value in tensor as batch offset
-    device_batch_offset = index_ptr[0];
-
     // 3.2 start to process the reading side of data(half of the data processed in NCRISC kernel and half on BRISC
     // kernel)
-    cb_wait_front(cb_id_reduction_out, block_num_tiles);
+    {
+        DeviceZoneScopedN("CB-WAIT");
+        cb_wait_front(cb_id_reduction_out, block_num_tiles);
+    }
 
     constexpr uint32_t tile_size = head_size / head_size_num_tiles;
     constexpr uint32_t HALF_TILE_ELEMENTS = FACE_HEIGHT * TILE_WIDTH;
@@ -97,7 +124,7 @@ void kernel_main() {
     for (uint32_t i_tile_per_core = 0; i_tile_per_core < block_num_tiles; i_tile_per_core++) {
         for (uint32_t i_output_core = 0; i_output_core < q_num_cores;
              ++i_output_core) {  // i_output_core is also the row number modulo 8 from input tile
-
+            DeviceZoneScopedN("ALL-CORE-LOOP");
             uint32_t device_batch_offset_per_output_core = device_batch_offset + i_output_core;
             uint32_t in_tile_offset_by_batch =
                 device_batch_offset_per_output_core < 16
@@ -141,13 +168,15 @@ void kernel_main() {
             }
 
             if constexpr (PHASES_TO_READ == 1) {  // reader kernel (NCRISC)
+
                 noc_async_write(read_addr, write_addr, SUBTILE_LINE_BYTES);
             }
             if constexpr (PHASES_TO_READ == 2) {  // writer kernel(BRISC)
+
                 noc_async_write(
                     read_addr + FACE_HW * ELEMENT_SIZE, write_addr + FACE_HW * ELEMENT_SIZE, SUBTILE_LINE_BYTES);
             }
         }
     }
-    noc_async_read_barrier();
+    noc_async_write_barrier();
 }

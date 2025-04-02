@@ -1244,7 +1244,7 @@ def run_all_reduce_qkv_heads_fuse_impl(
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links, input_num_cores, output_num_cores",
     [
-        ([1, 1, 32, 1280], 1, 3, 24, 40),  # QKV all reduce
+        ([1, 1, 32, 1280], 1, 3, 24, 10),  # QKV all reduce
     ],
 )
 @pytest.mark.parametrize(
@@ -1293,7 +1293,7 @@ def test_all_reduce_qkv_heads(
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links, input_num_cores, output_num_cores",
     [
-        ([1, 1, 32, 1280], 1, 3, 24, 40),  # QKV all reduce
+        ([1, 1, 32, 1280], 1, 3, 24, 10),  # QKV all reduce
     ],
 )
 @pytest.mark.parametrize(
@@ -1345,7 +1345,7 @@ def test_all_reduce_qkv_heads_fuse(
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links, input_num_cores, output_num_cores",
     [
-        ([1, 1, 32, 1280], 1, 3, 24, 40),  # QKV all reduce
+        ([1, 1, 32, 1280], 1, 3, 24, 10),  # QKV all reduce
     ],
 )
 @pytest.mark.parametrize(
@@ -1366,7 +1366,7 @@ def test_all_reduce_qkv_heads_fuse(
     [{"trace_region_size": 23887872}],
     indirect=True,
 )
-def test_all_reduce_create_qkv_heads_perf(
+def test_all_reduce_qkv_heads_perf(
     mesh_device,
     output_shape,
     cluster_axis,
@@ -1409,7 +1409,7 @@ def test_all_reduce_create_qkv_heads_perf(
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links, input_num_cores, output_num_cores",
     [
-        ([1, 1, 32, 1280], 1, 3, 24, 40),  # QKV all reduce
+        ([1, 1, 32, 1280], 1, 3, 24, 10),  # QKV all reduce
     ],
 )
 @pytest.mark.parametrize(
@@ -1430,7 +1430,7 @@ def test_all_reduce_create_qkv_heads_perf(
     [{"trace_region_size": 23887872}],
     indirect=True,
 )
-def test_all_reduce_create_qkv_heads_fuse_perf(
+def test_all_reduce_qkv_heads_fuse_perf(
     mesh_device,
     output_shape,
     cluster_axis,
