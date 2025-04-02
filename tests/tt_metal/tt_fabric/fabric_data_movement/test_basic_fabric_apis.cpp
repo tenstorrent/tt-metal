@@ -23,13 +23,13 @@ using tt::tt_metal::ShardedBufferConfig;
 using tt::tt_metal::ShardOrientation;
 using tt::tt_metal::ShardSpecBuffer;
 
-void ValidateBuffer(const std::vector<uint32_t>& expected_data, std::shared_ptr<tt_metal::Buffer> buffer) {
+void ValidateBuffer(const std::vector<uint32_t>& expected_data, std::shared_ptr<tt_metal::Buffer>& buffer) {
     std::vector<uint32_t> actual_data;
     tt::tt_metal::detail::ReadFromBuffer(buffer, actual_data);
     EXPECT_EQ(expected_data, actual_data);
 }
 
-void ValidateBuffer(const uint32_t& expected_data, std::shared_ptr<tt_metal::Buffer> buffer) {
+void ValidateBuffer(const uint32_t& expected_data, std::shared_ptr<tt_metal::Buffer>& buffer) {
     std::vector<uint32_t> actual_data;
     tt::tt_metal::detail::ReadFromBuffer(buffer, actual_data);
     EXPECT_EQ(expected_data, actual_data[0]);
