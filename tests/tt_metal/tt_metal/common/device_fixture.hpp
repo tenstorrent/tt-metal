@@ -47,13 +47,20 @@ protected:
 
     void create_devices(const std::vector<chip_id_t>& device_ids) {
         const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
-        tt::DevicePool::initialize(
-            device_ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
+        tt::DevicePool::initialize(device_ids, 1, l1_small_size_, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
         this->devices_ = tt::DevicePool::instance().get_all_active_devices();
         this->num_devices_ = this->devices_.size();
     }
 
+    DeviceFixture(size_t l1_small_size = DEFAULT_L1_SMALL_SIZE, size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) :
+        DispatchFixture(l1_small_size, trace_region_size) {}
+
     size_t num_devices_;
+};
+
+class DeviceFixtureWithL1Small : public DeviceFixture {
+public:
+    DeviceFixtureWithL1Small() : DeviceFixture(24 * 1024) {}
 };
 
 class DeviceSingleCardFixture : public DispatchFixture {
