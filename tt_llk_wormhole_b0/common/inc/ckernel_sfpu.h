@@ -9,7 +9,6 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_globals.h"
-#include "noc_nonblocking_api.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_abs.h"
 #include "sfpu/ckernel_sfpu_add_int32.h"
