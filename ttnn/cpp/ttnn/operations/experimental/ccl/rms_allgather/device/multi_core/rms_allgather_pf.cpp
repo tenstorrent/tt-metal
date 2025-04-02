@@ -657,7 +657,7 @@ operation::ProgramWithCallbacks frmsnorm_pre_multi_core_sharded(
             .compile_args = writer_compile_time_args});
     KernelHandle writer_mcast_receiver_kernels_id = -1;
     if (num_none_all_to_all_workers > 0) {
-        writer_compile_time_args.at(1) = 0;
+        writer_compile_time_args.at(0) = 0;
         writer_mcast_receiver_kernels_id = CreateKernel(
             program,
             writer_kernel,
