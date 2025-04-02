@@ -285,7 +285,6 @@ sub = ttnn.subtract
 sub_ = ttnn.subtract_
 mul = ttnn.multiply
 mul_ = ttnn.multiply_
-div_ = ttnn.divide_
 
 
 # TODO: pybind the overloaded operators below
