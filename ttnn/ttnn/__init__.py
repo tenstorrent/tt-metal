@@ -99,7 +99,6 @@ from ttnn._ttnn.multi_device import (
     CppTensorToMesh,
     Shard2dConfig,
     Concat2dConfig,
-    get_device_tensor,
     get_device_tensors,
     aggregate_as_tensor,
     replicate_tensor_to_mesh_mapper,
