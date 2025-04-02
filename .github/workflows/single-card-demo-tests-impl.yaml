@@ -19,24 +19,23 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          # {
-          #   name: "N150",
-          #   arch: wormhole_b0,
-          #   runs-on: ["cloud-virtual-machine", "N150", "in-service"],
-          #   cmd: run_n150_tests
-          # }, # group of owners; working on splitting up
-          # {
-          #   name: "N300_functionality",
-          #   arch: wormhole_b0,
-          #   runs-on: ["cloud-virtual-machine", "N300", "in-service"],
-          #   cmd: run_n300_func_tests
-          # }, # group of owners; working on splitting up
+          {
+            name: "N150",
+            arch: wormhole_b0,
+            runs-on: ["cloud-virtual-machine", "N150", "in-service"],
+            cmd: run_n150_tests
+          }, # group of owners; working on splitting up
+          {
+            name: "N300_functionality",
+            arch: wormhole_b0,
+            runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+            cmd: run_n300_func_tests
+          }, # group of owners; working on splitting up
           {
             name: "N300_performance",
             arch: wormhole_b0,
             runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"],
-            cmd: run_mamba_perf
-            #cmd: run_n300_perf_tests
+            cmd: run_n300_perf_tests
           } # group of owners; working on splitting up
         ]
     name: ${{ matrix.test-group.name }}
