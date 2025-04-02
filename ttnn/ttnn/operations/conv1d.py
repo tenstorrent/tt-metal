@@ -11,7 +11,7 @@ import ttnn
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
 
-@ttnn.register_python_operation(name="ttnn.Conv1d")
+@ttnn.register_python_operation(name="ttnn.conv1d")
 def Conv1d(
     *,
     input_tensor: ttnn.Tensor,  # may or may not be sharded
