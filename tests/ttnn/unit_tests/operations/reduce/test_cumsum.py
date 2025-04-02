@@ -89,11 +89,15 @@ def test_cumsum_with_preallocated_output(size, dim, dtype, device):
     if dtype is not None:
         preallocated_output_tensor = ttnn.from_torch(torch_output_tensor, device=device, dtype=dtype)
         output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, dtype=dtype, output=preallocated_output_tensor)
+
+        assert output_tensor.dtype == dtype
+        assert preallocated_output_tensor.dtype == dtype
     else:
         preallocated_output_tensor = ttnn.from_torch(torch_output_tensor, device=device)
         output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, output=preallocated_output_tensor)
 
-    assert output_tensor.shape == (size)
+        assert output_tensor.dtype == input_tensor.dtype
+        assert preallocated_output_tensor.dtype == input_tensor.dtype
 
-    if dtype is not None:
-        assert output_tensor.dtype == dtype
+    assert output_tensor.shape == (size)
+    assert preallocated_output_tensor.shape == (size)
