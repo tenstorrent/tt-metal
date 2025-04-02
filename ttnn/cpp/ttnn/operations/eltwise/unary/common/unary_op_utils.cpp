@@ -170,11 +170,20 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("exp_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("exp_tile<{1}u>({0});", idst, (uint32_t)param0)};
             break;
-        case UnaryOpType::SIGMOID:
-            op_init_and_name = {
-                "sigmoid_tile_init();",
-                fmt::format("sigmoid_tile<{1}, {2}u>({0});", idst, (int32_t)param0, (uint32_t)params[1])};
+        case UnaryOpType::SIGMOID: {
+            TT_FATAL(param0 == 2 || param0 == 4, "Sigmoid accepts only vector mode C and RC");
+            auto param1 = (uint32_t)params[1];
+            if (param1) {
+                op_init_and_name = {
+                    fmt::format("sigmoid_approx_tile_init<{}u>();", param1),
+                    fmt::format("sigmoid_approx_tile<{1}, {2}u>({0});", idst, (int32_t)param0, param1)};
+            } else {
+                op_init_and_name = {
+                    fmt::format("sigmoid_tile_init<{}u>();", param1),
+                    fmt::format("sigmoid_tile<{1}u>({0});", idst, param1)};
+            }
             break;
+        }
         case UnaryOpType::ERF:
             op_init_and_name = {
                 fmt::format("erf_tile_init<{}u>();", (uint32_t)param0),
@@ -224,11 +233,6 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             op_init_and_name = {
                 "unary_lt_tile_init();",
                 fmt::format("unary_lt_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
-            break;
-        case UnaryOpType::SIGMOID:
-            op_init_and_name = {
-                fmt::format("sigmoid_tile_init<{}u>();", (uint32_t)param0),
-                fmt::format("sigmoid_tile<{1}u>({0});", idst, (uint32_t)param0)};
             break;
         case UnaryOpType::SOFTPLUS: {
             TT_ASSERT(params.size() == 2, "Expected softplus to take 2 parameters");
@@ -397,7 +401,7 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     } else if (name == "sigmoid") {
         return UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(4), static_cast<float>(false)});
     } else if (name == "sigmoid_approx") {
-        return UnaryWithParam(UnaryOpType::SIGMOID, static_cast<float>(true));
+        return UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(4), static_cast<float>(true)});
     } else if (name == "sqrt") {
         return UnaryWithParam(UnaryOpType::SQRT);
     } else if (name == "exp") {

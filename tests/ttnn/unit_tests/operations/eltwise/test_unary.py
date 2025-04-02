@@ -37,7 +37,7 @@ def run_unary_with_approx_mode_test(device, h, w, ttnn_function, approx_mode, pc
     torch_output_tensor = golden_function(torch_input_tensor, device=device)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn_function(input_tensor, fast_and_approximate_mode=approx_mode)
+    output_tensor = ttnn_function(input_tensor, vector_mode=4, fast_and_approximate_mode=approx_mode)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)

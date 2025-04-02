@@ -209,7 +209,7 @@ Tensor LogSigmoid::invoke(
     return detail::unary_impl(
         queue_id,
         input,
-        {UnaryWithParam(UnaryOpType::SIGMOID, 0), UnaryWithParam(UnaryOpType::LOG)},
+        {UnaryWithParam(UnaryOpType::SIGMOID, {4, 0}), UnaryWithParam(UnaryOpType::LOG)},
         memory_config,
         optional_output_tensor);
 }
