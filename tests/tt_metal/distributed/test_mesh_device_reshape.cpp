@@ -13,17 +13,17 @@
 #include <tuple>
 #include <vector>
 
-#include "device.hpp"
-#include "dispatch_core_common.hpp"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
 #include "gmock/gmock.h"
-#include "host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/common_values.hpp"
-#include "mesh_config.hpp"
-#include "mesh_coord.hpp"
-#include "mesh_device.hpp"
-#include "system_mesh.hpp"
+#include <tt-metalium/mesh_config.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/system_mesh.hpp>
 #include "tests/tt_metal/test_utils/env_vars.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "umd/device/types/arch.h"
 
 namespace tt::tt_metal::distributed {

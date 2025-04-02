@@ -15,15 +15,15 @@
 #include <variant>
 #include <vector>
 
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
 #include "command_queue_fixture.hpp"
 #include "gtest/gtest.h"
-#include "hal_types.hpp"
-#include "host_api.hpp"
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "llrt.hpp"
 #include "span.hpp"
-#include "sub_device_types.hpp"
+#include <tt-metalium/sub_device_types.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "umd/device/types/xy_pair.h"
 

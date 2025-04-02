@@ -11,8 +11,8 @@
 #include <unordered_set>
 #include <vector>
 
-#include "core_coord.hpp"
-#include "program_impl.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/program_impl.hpp>
 
 namespace tt {
 namespace tt_metal {

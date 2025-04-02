@@ -13,16 +13,16 @@
 #include <variant>
 #include <vector>
 
-#include "circular_buffer_constants.h"
+#include <tt-metalium/circular_buffer_constants.h>
 #include "circular_buffer_test_utils.hpp"
-#include "circular_buffer_types.hpp"
-#include "core_coord.hpp"
-#include "device.hpp"
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include "program_impl.hpp"
+#include <tt-metalium/program_impl.hpp>
 #include "umd/device/tt_core_coordinates.h"
 
 namespace tt {

@@ -11,10 +11,10 @@
 #include <unordered_set>
 #include <vector>
 
-#include "core_coord.hpp"
-#include "device.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
 #include "multi_device_fixture.hpp"
-#include "system_memory_manager.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/types/xy_pair.h"

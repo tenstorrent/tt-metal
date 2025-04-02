@@ -19,21 +19,21 @@
 #include <variant>
 #include <vector>
 
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "circular_buffer_types.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
 #include "command_queue_fixture.hpp"
-#include "core_coord.hpp"
-#include "data_types.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
 #include "dispatch_test_utils.hpp"
 #include "env_lib.hpp"
 #include "gtest/gtest.h"
 #include "hostdevcommon/kernel_structs.h"
-#include "kernel_types.hpp"
+#include <tt-metalium/kernel_types.hpp>
 #include "multi_command_queue_fixture.hpp"
 #include "random_program_fixture.hpp"
-#include "trace_buffer.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/trace_buffer.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/common/scoped_timer.hpp"
 #include "umd/device/tt_core_coordinates.h"
 

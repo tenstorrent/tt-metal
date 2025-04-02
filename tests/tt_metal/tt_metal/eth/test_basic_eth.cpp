@@ -16,23 +16,23 @@
 #include <variant>
 #include <vector>
 
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
 #include "command_queue_fixture.hpp"
-#include "core_coord.hpp"
-#include "data_types.hpp"
-#include "device.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include "dispatch_fixture.hpp"
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
-#include "hal.hpp"
-#include "hal_types.hpp"
-#include "kernel_types.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
-#include "logger.hpp"
+#include <tt-metalium/logger.hpp>
 #include "multi_device_fixture.hpp"
-#include "program_impl.hpp"
+#include <tt-metalium/program_impl.hpp>
 #include "span.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "umd/device/types/arch.h"

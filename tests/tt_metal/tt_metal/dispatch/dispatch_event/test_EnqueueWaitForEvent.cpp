@@ -16,15 +16,15 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "command_queue.hpp"
-#include "dispatch_settings.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
 #include "dispatch_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "multi_command_queue_fixture.hpp"
-#include "system_memory_manager.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
 #include "tt_cluster.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "umd/device/types/arch.h"

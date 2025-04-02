@@ -18,11 +18,11 @@
 #include <tuple>
 #include <vector>
 
-#include "assert.hpp"
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
 #include "fmt/base.h"
-#include "logger.hpp"
+#include <tt-metalium/logger.hpp>
 #include "test_common.hpp"
 
 namespace tt {

@@ -12,14 +12,14 @@
 #include <variant>
 #include <vector>
 
-#include "core_coord.hpp"
-#include "data_types.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
 #include "device_fixture.hpp"
-#include "hal.hpp"
-#include "hal_types.hpp"
-#include "kernel_types.hpp"
-#include "program_impl.hpp"
-#include "utils.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/utils.hpp>
 
 namespace tt {
 namespace tt_metal {

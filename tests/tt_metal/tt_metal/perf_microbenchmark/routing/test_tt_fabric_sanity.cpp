@@ -30,30 +30,30 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
-#include "core_coord.hpp"
-#include "data_types.hpp"
-#include "device.hpp"
-#include "fabric_host_interface.h"
-#include "fabric_types.hpp"
-#include "hal.hpp"
-#include "hal_types.hpp"
-#include "kernel_types.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/fabric_host_interface.h>
+#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
-#include "logger.hpp"
-#include "metal_soc_descriptor.h"
-#include "program_impl.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/metal_soc_descriptor.h>
+#include <tt-metalium/program_impl.hpp>
 #include "routing_test_common.hpp"
 #include "rtoptions.hpp"
 #include "span.hpp"
-#include "system_memory_manager.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
 #include "tt_cluster.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/types/xy_pair.h"
-#include "utils.hpp"
+#include <tt-metalium/utils.hpp>
 
 using std::vector;
 using namespace tt;

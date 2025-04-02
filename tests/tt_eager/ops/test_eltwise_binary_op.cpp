@@ -6,11 +6,11 @@
 #include <tt-metalium/constants.hpp>
 #include <functional>
 
-#include "assert.hpp"
-#include "bfloat16.hpp"
-#include "device.hpp"
-#include "host_api.hpp"
-#include "shape.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/shape.hpp>
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/functions.hpp"

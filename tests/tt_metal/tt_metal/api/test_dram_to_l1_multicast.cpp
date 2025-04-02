@@ -15,15 +15,15 @@
 #include <variant>
 #include <vector>
 
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "core_coord.hpp"
-#include "data_types.hpp"
-#include "device.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "dispatch_fixture.hpp"
 #include "gtest/gtest.h"
-#include "kernel_types.hpp"
-#include "program_impl.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "span.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "umd/device/types/arch.h"

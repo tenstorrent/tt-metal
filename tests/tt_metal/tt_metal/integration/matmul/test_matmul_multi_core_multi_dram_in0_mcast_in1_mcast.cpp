@@ -24,22 +24,22 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
-#include "circular_buffer_types.hpp"
-#include "core_coord.hpp"
-#include "data_types.hpp"
-#include "device.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "dispatch_fixture.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include "hostdevcommon/kernel_structs.h"
-#include "kernel_types.hpp"
-#include "logger.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
 #include "matmul_test_utils.hpp"
-#include "program_impl.hpp"
+#include <tt-metalium/program_impl.hpp>
 #include "span.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
 namespace tt::tt_metal {

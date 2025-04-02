@@ -14,11 +14,11 @@
 #include <stdexcept>
 #include <vector>
 
-#include "assert.hpp"
-#include "device.hpp"
-#include "logger.hpp"
-#include "shape.hpp"
-#include "shape_base.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/decorators.hpp"

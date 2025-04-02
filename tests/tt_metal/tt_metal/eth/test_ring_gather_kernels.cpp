@@ -19,23 +19,23 @@
 #include <variant>
 #include <vector>
 
-#include "bfloat16.hpp"
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "core_coord.hpp"
-#include "data_types.hpp"
-#include "device.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
 #include "hostdevcommon/common_values.hpp"
-#include "kernel_types.hpp"
+#include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
-#include "logger.hpp"
-#include "program_impl.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "span.hpp"
-#include "system_memory_manager.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_cluster.hpp"
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"

@@ -10,9 +10,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <vector>
 
-#include "device.hpp"
+#include <tt-metalium/device.hpp>
 #include "dispatch_fixture.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "llrt.hpp"
 #include "tt_cluster.hpp"
 #include "umd/device/types/xy_pair.h"

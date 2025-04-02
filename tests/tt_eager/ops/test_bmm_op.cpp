@@ -11,10 +11,10 @@
 #include <exception>
 #include <optional>
 
-#include "assert.hpp"
-#include "logger.hpp"
-#include "shape.hpp"
-#include "tile.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/tile.hpp>
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operation.hpp"

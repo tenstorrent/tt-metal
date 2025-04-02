@@ -27,29 +27,29 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "circular_buffer_types.hpp"
-#include "core_coord.hpp"
-#include "data_types.hpp"
-#include "dev_msgs.h"
-#include "device.hpp"
-#include "dispatch_core_common.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/dev_msgs.h>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include "jit_build/build.hpp"
-#include "kernel_types.hpp"
+#include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
-#include "logger.hpp"
-#include "program_impl.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "umd/device/types/arch.h"
-#include "utils.hpp"
+#include <tt-metalium/utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does

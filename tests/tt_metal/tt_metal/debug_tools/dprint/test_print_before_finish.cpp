@@ -10,17 +10,17 @@
 #include <variant>
 #include <vector>
 
-#include "core_coord.hpp"
-#include "data_types.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
-#include "device.hpp"
-#include "host_api.hpp"
-#include "kernel_types.hpp"
-#include "program_impl.hpp"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "span.hpp"
 #include "tt_cluster.hpp"
-#include "utils.hpp"
+#include <tt-metalium/utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking that the finish command can wait for the last dprint.

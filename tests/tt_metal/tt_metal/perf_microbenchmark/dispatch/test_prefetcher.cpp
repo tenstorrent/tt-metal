@@ -30,24 +30,24 @@
 #include <variant>
 #include <vector>
 
-#include "allocator.hpp"
-#include "assert.hpp"
-#include "buffer_constants.hpp"
-#include "command_queue_common.hpp"
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/command_queue_common.hpp>
 #include "common.h"
-#include "core_coord.hpp"
-#include "data_types.hpp"
-#include "device.hpp"
-#include "dispatch_mem_map.hpp"
-#include "hal_types.hpp"
-#include "kernel_types.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_mem_map.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
-#include "logger.hpp"
+#include <tt-metalium/logger.hpp>
 #include "noc/noc_parameters.h"
-#include "program_impl.hpp"
+#include <tt-metalium/program_impl.hpp>
 #include "rtoptions.hpp"
-#include "system_memory_manager.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
 #include "tt_cluster.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
@@ -56,7 +56,7 @@
 #include "umd/device/tt_io.hpp"
 #include "umd/device/tt_xy_pair.h"
 #include "umd/device/types/xy_pair.h"
-#include "utils.hpp"
+#include <tt-metalium/utils.hpp>
 
 #define CQ_PREFETCH_CMD_BARE_MIN_SIZE tt::tt_metal::hal_ref.get_alignment(tt::tt_metal::HalMemType::HOST)
 

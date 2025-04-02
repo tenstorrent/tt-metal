@@ -17,27 +17,27 @@
 #include <variant>
 #include <vector>
 
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "circular_buffer_types.hpp"
-#include "core_coord.hpp"
-#include "data_types.hpp"
-#include "device.hpp"
-#include "global_semaphore.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include "kernel_types.hpp"
+#include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
-#include "mesh_buffer.hpp"
-#include "mesh_coord.hpp"
-#include "mesh_device.hpp"
-#include "program_impl.hpp"
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "span.hpp"
-#include "sub_device_types.hpp"
+#include <tt-metalium/sub_device_types.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/dispatch/sub_device_test_utils.hpp"
-#include "tt_backend_api_types.hpp"
-#include "util.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/util.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {

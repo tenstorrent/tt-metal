@@ -21,19 +21,19 @@
 #include <variant>
 #include <vector>
 
-#include "core_coord.hpp"
-#include "data_types.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
 #include "hw/inc/tt_fabric_status.h"
-#include "kernel_types.hpp"
+#include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
-#include "logger.hpp"
-#include "program_impl.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "routing_test_common.hpp"
 #include "rtoptions.hpp"
 #include "test_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "umd/device/types/xy_pair.h"
-#include "utils.hpp"
+#include <tt-metalium/utils.hpp>
 
 int main(int argc, char **argv) {
     using std::vector;

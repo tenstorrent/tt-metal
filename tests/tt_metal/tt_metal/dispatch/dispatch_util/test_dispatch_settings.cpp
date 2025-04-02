@@ -12,7 +12,7 @@
 #include <stdexcept>
 
 #include "gtest/gtest.h"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "llrt/hal.hpp"
 #include "tt_cluster.hpp"
 #include "umd/device/tt_core_coordinates.h"

@@ -4,7 +4,7 @@
 #include <map>
 #include <vector>
 
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "debug_tools_fixture.hpp"
 #include "gtest/gtest.h"
 #include "rtoptions.hpp"

@@ -11,18 +11,18 @@
 #include <unordered_set>
 #include <vector>
 
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
-#include "device.hpp"
+#include <tt-metalium/device.hpp>
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
-#include "host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "llrt.hpp"
-#include "logger.hpp"
+#include <tt-metalium/logger.hpp>
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
-#include "utils.hpp"
+#include <tt-metalium/utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher polling the eth link training counter.

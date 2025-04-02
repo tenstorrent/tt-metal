@@ -22,14 +22,14 @@
 #include <variant>
 #include <vector>
 
-#include "core_coord.hpp"
-#include "data_types.hpp"
-#include "device.hpp"
-#include "hal_types.hpp"
-#include "kernel_types.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "llrt/hal.hpp"
-#include "logger.hpp"
-#include "program_impl.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "span.hpp"
 #include "test_common.hpp"
 #include "tt_cluster.hpp"

@@ -18,10 +18,10 @@
 #include <tuple>
 #include <vector>
 
-#include "assert.hpp"
-#include "core_coord.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include "fmt/base.h"
-#include "logger.hpp"
+#include <tt-metalium/logger.hpp>
 #include "test_common.hpp"
 
 namespace tt {

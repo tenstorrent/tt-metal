@@ -7,9 +7,9 @@
 #include <stddef.h>
 #include <memory>
 
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "host_api.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 namespace tt::tt_metal::distributed::test {

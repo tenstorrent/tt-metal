@@ -13,14 +13,14 @@
 #include <utility>
 #include <vector>
 
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "device.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
 #include "fmt/base.h"
-#include "host_api.hpp"
-#include "logger.hpp"
-#include "shape.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/common/queue_id.hpp"

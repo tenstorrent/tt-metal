@@ -16,16 +16,16 @@
 #include <variant>
 #include <vector>
 
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
 #include "command_queue_fixture.hpp"
-#include "device.hpp"
-#include "dispatch_settings.hpp"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
 #include "gtest/gtest.h"
 #include "impl/debug/watcher_server.hpp"
-#include "logger.hpp"
+#include <tt-metalium/logger.hpp>
 #include "rtoptions.hpp"
-#include "system_memory_manager.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
 #include "tt_cluster.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 

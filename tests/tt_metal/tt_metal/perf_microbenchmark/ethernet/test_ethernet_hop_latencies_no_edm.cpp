@@ -25,16 +25,16 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
-#include "device.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/device.hpp>
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
-#include "mesh_config.hpp"
-#include "mesh_coord.hpp"
-#include "program_impl.hpp"
+#include <tt-metalium/mesh_config.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "span.hpp"
-#include "system_memory_manager.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/types/arch.h"

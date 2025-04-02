@@ -17,20 +17,20 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "core_coord.hpp"
-#include "data_types.hpp"
-#include "device.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "dispatch_fixture.hpp"
 #include "gtest/gtest.h"
-#include "hal.hpp"
-#include "hal_types.hpp"
-#include "kernel_types.hpp"
-#include "program_impl.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "span.hpp"
-#include "tt_align.hpp"
+#include <tt-metalium/tt_align.hpp>
 #include "umd/device/types/xy_pair.h"
 
 using namespace tt;

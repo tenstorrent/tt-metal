@@ -10,11 +10,11 @@
 #include <vector>
 
 #include "fabric_fixture.hpp"
-#include "fabric_types.hpp"
-#include "mesh_coord.hpp"
+#include <tt-metalium/fabric_types.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include "rtoptions.hpp"
 #include "tt_cluster.hpp"
-#include "tt_metal.hpp"
+#include <tt-metalium/tt_metal.hpp>
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {

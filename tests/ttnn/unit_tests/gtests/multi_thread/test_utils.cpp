@@ -11,17 +11,17 @@
 #include <iterator>
 #include <utility>
 
-#include "assert.hpp"
-#include "buffer_constants.hpp"
-#include "core_coord.hpp"
-#include "device.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
 #include "fmt/base.h"
-#include "hal_types.hpp"
-#include "host_api.hpp"
-#include "logger.hpp"
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/logger.hpp>
 #include "span.hpp"
-#include "sub_device.hpp"
-#include "tt_metal.hpp"
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"

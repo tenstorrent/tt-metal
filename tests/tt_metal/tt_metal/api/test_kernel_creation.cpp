@@ -14,16 +14,16 @@
 #include <vector>
 
 #include "compile_program_with_kernel_path_env_var_fixture.hpp"
-#include "data_types.hpp"
-#include "device.hpp"
-#include "dispatch_core_common.hpp"
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
 #include "dispatch_fixture.hpp"
 #include "gtest/gtest.h"
-#include "kernel_types.hpp"
-#include "program_impl.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/types/xy_pair.h"
-#include "utils.hpp"
+#include <tt-metalium/utils.hpp>
 
 namespace tt::tt_metal {
 

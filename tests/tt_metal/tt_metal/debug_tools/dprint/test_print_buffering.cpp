@@ -11,18 +11,18 @@
 #include <variant>
 #include <vector>
 
-#include "core_coord.hpp"
-#include "data_types.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
-#include "device.hpp"
+#include <tt-metalium/device.hpp>
 #include "gtest/gtest.h"
-#include "kernel_types.hpp"
-#include "logger.hpp"
-#include "program_impl.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "span.hpp"
 #include "umd/device/types/xy_pair.h"
-#include "utils.hpp"
+#include <tt-metalium/utils.hpp>
 
 ////////////////////////////////////////////////////////////////////////////////
 // A test for checking that prints are properly buffered before being displayed to the user.

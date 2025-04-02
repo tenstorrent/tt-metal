@@ -20,12 +20,12 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
-#include "buffer.hpp"
-#include "device.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/device.hpp>
 #include "fmt/base.h"
-#include "logger.hpp"
-#include "shape.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
 #include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/reshape/view.hpp"

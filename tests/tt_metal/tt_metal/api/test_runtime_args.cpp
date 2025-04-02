@@ -19,20 +19,20 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
-#include "base_types.hpp"
-#include "core_coord.hpp"
-#include "data_types.hpp"
-#include "device.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
-#include "hal_types.hpp"
-#include "kernel_types.hpp"
-#include "logger.hpp"
-#include "program_impl.hpp"
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "span.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "umd/device/types/xy_pair.h"
-#include "utils.hpp"
+#include <tt-metalium/utils.hpp>
 
 using namespace tt;
 

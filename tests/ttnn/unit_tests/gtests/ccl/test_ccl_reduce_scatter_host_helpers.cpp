@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "gtest/gtest.h"
-#include "logger.hpp"
+#include <tt-metalium/logger.hpp>
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"

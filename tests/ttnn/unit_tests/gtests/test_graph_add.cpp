@@ -16,13 +16,13 @@
 #include <unordered_set>
 #include <vector>
 
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "core_coord.hpp"
-#include "device.hpp"
-#include "graph_tracking.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/graph_tracking.hpp>
 #include "gtest/gtest.h"
-#include "shape.hpp"
+#include <tt-metalium/shape.hpp>
 #include "ttnn/decorators.hpp"
 #include "ttnn/graph/graph_operation_queries.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"

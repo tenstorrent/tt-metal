@@ -15,22 +15,22 @@
 #include <variant>
 #include <vector>
 
-#include "core_coord.hpp"
-#include "data_types.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
 #include "detail/kernel_cache.hpp"
-#include "device.hpp"
+#include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
-#include "hal.hpp"
-#include "hal_types.hpp"
-#include "host_api.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
-#include "kernel.hpp"
-#include "kernel_types.hpp"
-#include "persistent_kernel_cache.hpp"
-#include "program_impl.hpp"
-#include "tt_metal.hpp"
-#include "utils.hpp"
+#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/persistent_kernel_cache.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/utils.hpp>
 
 using namespace tt::tt_metal;
 

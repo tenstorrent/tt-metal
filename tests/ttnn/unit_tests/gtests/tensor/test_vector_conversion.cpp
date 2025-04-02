@@ -16,14 +16,14 @@
 #include <optional>
 #include <vector>
 
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "core_coord.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include "gmock/gmock.h"
-#include "shape.hpp"
+#include <tt-metalium/shape.hpp>
 #include "span.hpp"
 #include "tests/ttnn/unit_tests/gtests/ttnn_test_fixtures.hpp"
-#include "tile.hpp"
+#include <tt-metalium/tile.hpp>
 #include "ttnn/any_device.hpp"
 #include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"

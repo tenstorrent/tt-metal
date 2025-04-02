@@ -22,20 +22,20 @@
 #include <variant>
 #include <vector>
 
-#include "circular_buffer_types.hpp"
-#include "core_coord.hpp"
-#include "data_types.hpp"
-#include "dispatch_core_common.hpp"
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
 #include "hostdevcommon/common_values.hpp"
-#include "kernel_types.hpp"
-#include "logger.hpp"
-#include "program_impl.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "rtoptions.hpp"
-#include "semaphore.hpp"
+#include <tt-metalium/semaphore.hpp>
 #include "span.hpp"
-#include "system_memory_manager.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include "umd/device/types/xy_pair.h"
 

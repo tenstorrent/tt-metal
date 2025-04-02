@@ -16,9 +16,9 @@
 #include <tuple>
 #include <vector>
 
-#include "graph_tracking.hpp"
+#include <tt-metalium/graph_tracking.hpp>
 #include "gtest/gtest.h"
-#include "shape.hpp"
+#include <tt-metalium/shape.hpp>
 #include "ttnn/decorators.hpp"
 #include "ttnn/graph/graph_consts.hpp"
 #include "ttnn/graph/graph_processor.hpp"

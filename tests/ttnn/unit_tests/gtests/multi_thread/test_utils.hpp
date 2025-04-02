@@ -12,9 +12,9 @@
 #include <unordered_map>
 #include <vector>
 
-#include "fabric_edm_packet_header.hpp"
-#include "sub_device_types.hpp"
-#include "system_memory_manager.hpp"
+#include <tt-metalium/fabric_edm_packet_header.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/common/queue_id.hpp"

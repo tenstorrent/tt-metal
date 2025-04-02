@@ -8,11 +8,11 @@
 #include <memory>
 #include <optional>
 
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
 #include "common_tensor_test_utils.hpp"
 #include "gtest/gtest.h"
-#include "shape.hpp"
+#include <tt-metalium/shape.hpp>
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/alignment.hpp"

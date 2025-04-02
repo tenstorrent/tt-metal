@@ -8,9 +8,9 @@
 #include <memory>
 #include <vector>
 
-#include "device.hpp"
+#include <tt-metalium/device.hpp>
 #include "gtest/gtest.h"
-#include "host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"

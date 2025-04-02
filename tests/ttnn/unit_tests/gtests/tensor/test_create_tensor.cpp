@@ -15,12 +15,12 @@
 #include <tuple>
 #include <vector>
 
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
 #include "common_tensor_test_utils.hpp"
 #include "fmt/base.h"
 #include "gtest/gtest.h"
-#include "shape.hpp"
+#include <tt-metalium/shape.hpp>
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/enum_types.hpp"

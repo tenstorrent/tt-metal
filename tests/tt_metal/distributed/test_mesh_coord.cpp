@@ -11,8 +11,8 @@
 #include <vector>
 
 #include "gmock/gmock.h"
-#include "mesh_coord.hpp"
-#include "shape_base.hpp"
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/shape_base.hpp>
 #include "span.hpp"
 
 namespace tt::tt_metal::distributed {

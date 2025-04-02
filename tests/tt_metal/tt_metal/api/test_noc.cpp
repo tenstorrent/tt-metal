@@ -15,25 +15,25 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
-#include "core_coord.hpp"
-#include "data_types.hpp"
-#include "device.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
-#include "hal.hpp"
-#include "hal_types.hpp"
-#include "kernel_types.hpp"
-#include "logger.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
 // FIXME: ARCH_NAME
 #include "noc/noc_parameters.h"
-#include "program_impl.hpp"
+#include <tt-metalium/program_impl.hpp>
 #include "span.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
-#include "utils.hpp"
+#include <tt-metalium/utils.hpp>
 
 using namespace tt;
 using namespace tt::test_utils;

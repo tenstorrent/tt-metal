@@ -9,11 +9,11 @@
 #include <cstring>
 #include <exception>
 
-#include "assert.hpp"
-#include "bfloat16.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "fmt/base.h"
-#include "logger.hpp"
-#include "shape.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"

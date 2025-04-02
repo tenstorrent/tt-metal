@@ -8,10 +8,10 @@
 #include <string>
 #include <vector>
 
-#include "assert.hpp"
-#include "fabric_edm_packet_header.hpp"
-#include "host_api.hpp"
-#include "logger.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/fabric_edm_packet_header.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/logger.hpp>
 #include "tests/ttnn/unit_tests/gtests/ccl/test_fabric_edm_common.hpp"
 
 int main(int argc, char** argv) {

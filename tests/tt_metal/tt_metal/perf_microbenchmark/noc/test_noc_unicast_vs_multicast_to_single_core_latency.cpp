@@ -13,14 +13,14 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
-#include "core_coord.hpp"
-#include "data_types.hpp"
-#include "kernel_types.hpp"
-#include "program_impl.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "tt_cluster.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
-#include "utils.hpp"
+#include <tt-metalium/utils.hpp>
 
 using namespace tt;
 

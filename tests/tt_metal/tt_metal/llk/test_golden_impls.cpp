@@ -10,7 +10,7 @@
 #include <limits>
 #include <set>
 
-#include "assert.hpp"
+#include <tt-metalium/assert.hpp>
 #include "test_golden_impls.hpp"
 #include "tests/tt_metal/test_utils/packing.hpp"
 

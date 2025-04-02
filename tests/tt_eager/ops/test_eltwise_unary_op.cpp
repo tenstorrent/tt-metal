@@ -9,13 +9,13 @@
 #include <algorithm>
 #include <cmath>
 
-#include "assert.hpp"
-#include "bfloat16.hpp"
-#include "buffer_constants.hpp"
-#include "device.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
 #include "fmt/base.h"
-#include "logger.hpp"
-#include "shape.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
 #include "ttnn/decorators.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"

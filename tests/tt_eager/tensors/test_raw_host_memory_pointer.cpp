@@ -10,8 +10,8 @@
 #include <cstdlib>
 #include <functional>
 
-#include "assert.hpp"
-#include "shape.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/shape.hpp>
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"

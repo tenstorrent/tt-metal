@@ -16,25 +16,25 @@
 #include <variant>
 #include <vector>
 
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "circular_buffer_types.hpp"
-#include "core_coord.hpp"
-#include "data_types.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
-#include "dev_msgs.h"
-#include "device.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/dev_msgs.h>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include "kernel_types.hpp"
+#include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
-#include "logger.hpp"
-#include "program_impl.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "span.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/types/xy_pair.h"
-#include "utils.hpp"
+#include <tt-metalium/utils.hpp>
 
 namespace tt {
 namespace tt_metal {

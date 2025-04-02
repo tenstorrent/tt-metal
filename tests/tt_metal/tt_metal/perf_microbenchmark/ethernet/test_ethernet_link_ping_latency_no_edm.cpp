@@ -25,17 +25,17 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
-#include "data_types.hpp"
-#include "device.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "df/float32.hpp"
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
-#include "logger.hpp"
-#include "program_impl.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "span.hpp"
-#include "system_memory_manager.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "umd/device/tt_xy_pair.h"
 #include "umd/device/types/arch.h"

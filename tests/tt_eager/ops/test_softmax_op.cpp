@@ -5,10 +5,10 @@
 #include <fmt/base.h>
 #include <tt-metalium/host_api.hpp>
 
-#include "assert.hpp"
-#include "constants.hpp"
-#include "logger.hpp"
-#include "shape.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"

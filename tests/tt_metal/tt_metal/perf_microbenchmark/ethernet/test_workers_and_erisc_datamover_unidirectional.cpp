@@ -24,19 +24,19 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
-#include "buffer_constants.hpp"
-#include "circular_buffer_types.hpp"
-#include "data_types.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/data_types.hpp>
 #include "df/float32.hpp"
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
 #include "hostdevcommon/kernel_structs.h"
-#include "kernel_types.hpp"
-#include "logger.hpp"
-#include "program_impl.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "span.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_cluster.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"

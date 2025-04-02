@@ -19,7 +19,7 @@
 #include <vector>
 
 #include "gmock/gmock.h"
-#include "shape.hpp"
+#include <tt-metalium/shape.hpp>
 #include "span.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/enum_types.hpp"

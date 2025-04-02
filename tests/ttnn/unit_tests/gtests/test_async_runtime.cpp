@@ -14,12 +14,12 @@
 #include <variant>
 #include <vector>
 
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "device.hpp"
-#include "logger.hpp"
-#include "shape.hpp"
-#include "small_vector.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/small_vector.hpp>
 #include "strong_type.hpp"
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/common/queue_id.hpp"

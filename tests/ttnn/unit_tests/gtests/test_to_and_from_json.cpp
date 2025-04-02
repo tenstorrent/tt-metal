@@ -6,9 +6,9 @@
 #include <set>
 #include <variant>
 
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "core_coord.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include "gtest/gtest.h"
 #include "reflection.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"

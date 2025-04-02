@@ -9,10 +9,10 @@
 #include <cstring>
 #include <exception>
 
-#include "assert.hpp"
-#include "constants.hpp"
-#include "logger.hpp"
-#include "shape.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/normalization/layernorm/layernorm.hpp"
 #include "ttnn/tensor/enum_types.hpp"

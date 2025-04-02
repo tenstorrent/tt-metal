@@ -9,11 +9,11 @@
 #include <memory>
 #include <vector>
 
-#include "allocator_types.hpp"
-#include "device.hpp"
+#include <tt-metalium/allocator_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include "rtoptions.hpp"
-#include "system_memory_manager.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
 
 namespace tt::tt_metal {
 

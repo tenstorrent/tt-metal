@@ -26,34 +26,34 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
-#include "circular_buffer_constants.h"
-#include "circular_buffer_types.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/circular_buffer_types.hpp>
 #include "command_queue_fixture.hpp"
-#include "core_coord.hpp"
-#include "data_types.hpp"
-#include "device.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "dispatch_test_utils.hpp"
 #include "env_lib.hpp"
 #include "gtest/gtest.h"
-#include "hal.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
-#include "logger.hpp"
+#include <tt-metalium/logger.hpp>
 #include "multi_command_queue_fixture.hpp"
-#include "program_impl.hpp"
+#include <tt-metalium/program_impl.hpp>
 #include "random_program_fixture.hpp"
-#include "runtime_args_data.hpp"
-#include "semaphore.hpp"
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/semaphore.hpp>
 #include "span.hpp"
-#include "sub_device_types.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_cluster.hpp"
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
-#include "utils.hpp"
+#include <tt-metalium/utils.hpp>
 
 namespace tt {
 namespace tt_metal {

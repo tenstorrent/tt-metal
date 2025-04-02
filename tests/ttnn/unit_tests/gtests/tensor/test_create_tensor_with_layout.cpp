@@ -6,10 +6,10 @@
 #include <memory>
 #include <optional>
 
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
 #include "gtest/gtest.h"
-#include "shape.hpp"
+#include <tt-metalium/shape.hpp>
 #include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"

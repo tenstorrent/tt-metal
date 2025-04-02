@@ -28,23 +28,23 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
-#include "bfloat16.hpp"
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "command_queue_common.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/command_queue_common.hpp>
 #include "command_queue_fixture.hpp"
-#include "constants.hpp"
-#include "core_coord.hpp"
-#include "dispatch_core_common.hpp"
-#include "dispatch_mem_map.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/dispatch_mem_map.hpp>
 #include "dispatch_test_utils.hpp"
 #include "gtest/gtest.h"
-#include "logger.hpp"
-#include "math.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/math.hpp>
 #include "multi_command_queue_fixture.hpp"
-#include "shape2d.hpp"
-#include "system_memory_manager.hpp"
+#include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
 #include "tt_cluster.hpp"
 #include "umd/device/types/arch.h"
 

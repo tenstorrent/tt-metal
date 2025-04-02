@@ -14,16 +14,16 @@
 #include <string>
 #include <utility>
 
-#include "assert.hpp"
-#include "bfloat16.hpp"
-#include "buffer_constants.hpp"
-#include "core_coord.hpp"
-#include "device.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
 #include "fmt/base.h"
-#include "logger.hpp"
-#include "shape.hpp"
-#include "shape_base.hpp"
-#include "tile.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tile.hpp>
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"

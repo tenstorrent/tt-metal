@@ -12,7 +12,7 @@
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "shape.hpp"
+#include <tt-metalium/shape.hpp>
 
 namespace distribution_spec_tests {
 using tt::tt_metal::DistributionSpec;

@@ -16,19 +16,19 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "core_coord.hpp"
-#include "data_types.hpp"
-#include "device.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "hostdevcommon/common_values.hpp"
-#include "kernel_types.hpp"
-#include "logger.hpp"
-#include "program_impl.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "rtoptions.hpp"
 #include "span.hpp"
-#include "system_memory_manager.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
 
 namespace tt {
 namespace tt_metal {

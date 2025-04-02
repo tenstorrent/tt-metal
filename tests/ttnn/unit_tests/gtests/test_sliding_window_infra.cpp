@@ -6,7 +6,7 @@
 #include <string>
 
 #include "gtest/gtest.h"
-#include "logger.hpp"
+#include <tt-metalium/logger.hpp>
 #include "tt_metal/api/tt-metalium/core_coord.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 

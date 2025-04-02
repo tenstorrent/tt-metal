@@ -20,23 +20,23 @@
 #include <utility>
 #include <vector>
 
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "constants.hpp"
-#include "core_coord.hpp"
-#include "dispatch_core_common.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
 #include "env_lib.hpp"
 #include "hostdevcommon/common_values.hpp"
-#include "mesh_buffer.hpp"
-#include "mesh_command_queue.hpp"
-#include "mesh_config.hpp"
-#include "mesh_coord.hpp"
-#include "mesh_device.hpp"
-#include "shape2d.hpp"
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_config.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/shape2d.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_cluster.hpp"
-#include "util.hpp"
+#include <tt-metalium/util.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {

@@ -15,12 +15,12 @@
 #include <unordered_map>
 #include <utility>
 
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "core_coord.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include "gtest/gtest.h"
-#include "shape.hpp"
-#include "shape_base.hpp"
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
 #include "tt_cluster.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/graph/graph_query_op_constraints.hpp"

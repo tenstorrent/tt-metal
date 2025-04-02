@@ -32,34 +32,34 @@
 #include <variant>
 #include <vector>
 
-#include "bfloat16.hpp"
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "circular_buffer_constants.h"
-#include "circular_buffer_types.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/circular_buffer_types.hpp>
 #include "command_queue_fixture.hpp"
-#include "constants.hpp"
-#include "core_coord.hpp"
-#include "data_types.hpp"
-#include "device.hpp"
-#include "hal.hpp"
-#include "hal_types.hpp"
-#include "host_api.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include "kernel_types.hpp"
-#include "logger.hpp"
-#include "program_impl.hpp"
-#include "runtime_args_data.hpp"
-#include "semaphore.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/semaphore.hpp>
 #include "span.hpp"
-#include "tt_align.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_cluster.hpp"
-#include "tt_metal.hpp"
+#include <tt-metalium/tt_metal.hpp>
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/types/arch.h"
-#include "util.hpp"
-#include "utils.hpp"
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/utils.hpp>
 
 namespace tt::tt_metal {
 struct CBConfig {

@@ -13,15 +13,15 @@
 #include <utility>
 #include <vector>
 
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
 // FIXME: ARCH_NAME specific
 #include "dev_mem_map.h"
-#include "device.hpp"
+#include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
-#include "dispatch_core_common.hpp"
-#include "hal_types.hpp"
-#include "metal_soc_descriptor.h"
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/metal_soc_descriptor.h>
 #include "tt_cluster.hpp"
 
 namespace unit_tests::test_l1_banking_allocator {

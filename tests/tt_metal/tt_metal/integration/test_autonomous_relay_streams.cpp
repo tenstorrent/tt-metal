@@ -21,18 +21,18 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "circular_buffer_types.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
 #include "command_queue_fixture.hpp"
-#include "device.hpp"
+#include <tt-metalium/device.hpp>
 #include "gtest/gtest.h"
 #include "hostdevcommon/kernel_structs.h"
-#include "program_impl.hpp"
+#include <tt-metalium/program_impl.hpp>
 #include "span.hpp"
-#include "system_memory_manager.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "umd/device/tt_core_coordinates.h"

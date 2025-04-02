@@ -15,10 +15,10 @@
 #include <type_traits>
 #include <vector>
 
-#include "assert.hpp"
-#include "logger.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/logger.hpp>
 #include "span.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
 
 using namespace tt;
 

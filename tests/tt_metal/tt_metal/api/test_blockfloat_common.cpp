@@ -8,7 +8,7 @@
 #include <bit>
 #include <memory>
 
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
 
 namespace {
 

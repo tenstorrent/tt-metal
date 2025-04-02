@@ -22,28 +22,28 @@
 #include <variant>
 #include <vector>
 
-#include "allocator.hpp"
-#include "assert.hpp"
-#include "buffer_constants.hpp"
-#include "command_queue_common.hpp"
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/command_queue_common.hpp>
 #include "common.h"
-#include "core_coord.hpp"
-#include "data_types.hpp"
-#include "device.hpp"
-#include "dispatch_mem_map.hpp"
-#include "dispatch_settings.hpp"
-#include "kernel_types.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_mem_map.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
-#include "logger.hpp"
-#include "metal_soc_descriptor.h"
-#include "program_impl.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/metal_soc_descriptor.h>
+#include <tt-metalium/program_impl.hpp>
 #include "rtoptions.hpp"
 #include "span.hpp"
 #include "test_common.hpp"
 #include "tt_cluster.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "umd/device/tt_core_coordinates.h"
-#include "utils.hpp"
+#include <tt-metalium/utils.hpp>
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;

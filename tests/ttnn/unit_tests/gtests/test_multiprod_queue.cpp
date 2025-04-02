@@ -12,11 +12,11 @@
 #include <thread>
 #include <vector>
 
-#include "buffer.hpp"
-#include "buffer_constants.hpp"
-#include "device.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
 #include "gmock/gmock.h"
-#include "shape.hpp"
+#include <tt-metalium/shape.hpp>
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/enum_types.hpp"
