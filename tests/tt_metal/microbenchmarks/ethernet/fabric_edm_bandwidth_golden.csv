@@ -15,7 +15,7 @@ mcast_Linear,noc_unicast_write,2048,4,1,False,False,True,4.852616551636493,None
 mcast_Linear,noc_unicast_write,4096,4,1,False,False,True,9.690814916797427,2365921.6105462466
 mcast_Linear,noc_unicast_write,16,4,1,True,False,True,0.037437099676757554,2339818.729797347
 mcast_Linear,noc_unicast_write,2048,4,1,True,False,True,4.796370309296797,2341977.6900863266
-mcast_Linear,noc_unicast_write,4096,4,1,True,False,True,8.956388042640322,2186618.174472735
+mcast_Linear,noc_unicast_write,4096,4,1,True,False,True,8.930000000000000,2186618.174472735
 mcast_Linear,noc_unicast_write,16,4,1,True,True,True,0.049849932231353845,3115620.764459615
 mcast_Linear,noc_unicast_write,2048,4,1,True,True,True,6.29435814827175,3073417.0645858156
 mcast_Linear,noc_unicast_write,4096,4,1,True,True,True,11.43352047767663,2791386.835370271
