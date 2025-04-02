@@ -134,8 +134,6 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     tt::log_debug(tt::LogOp, "DEBUG: create_program is called");
 
-    log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
-
     log_trace(tt::LogOp, "Detected all gather specialized shape. all_gather_concat_llama_sharded is called");
     CoreCoord compute_with_storage_grid_size = input_tensors[0].device()->compute_with_storage_grid_size();
     return all_gather_concat_llama_sharded(
@@ -158,7 +156,6 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program(
 const tt::tt_metal::operation::Hash AllGatherConcat::compute_program_hash(
     const std::vector<Tensor>& input_tensors) const {
     log_trace(tt::LogOp, "compute_program_hash is called");
-    log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
     auto input_shape = input_tensors[0].get_padded_shape();
     auto input_memory_layout = input_tensors[0].get_layout();
     auto input_dtype = input_tensors[0].get_dtype();
