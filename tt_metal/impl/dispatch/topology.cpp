@@ -191,10 +191,10 @@ static const std::vector<DispatchKernelNode> two_chip_arch_1cq_fabric = {
     {4, 0, 1, 0, DISPATCH_H, {8, x, x, x}, {3, x, x, x}, k_dispatcher_noc},
 
     // Sender path PREFETCH_H -> PREFETCH_D
-    {5, 0, x, 0, FABRIC_ROUTER_VC, {3, 7, x, x}, {7, 3, x, x}},
+    {5, 0, x, 0, FABRIC_ROUTER_VC, {3, x, x, x}, {7, x, x, x}},
 
     // Return path DISPATCH_D -> DISPATCH_H
-    {6, 0, x, 0, FABRIC_ROUTER_VC, {8, 4, x, x}, {4, 8, x, x}},
+    {6, 0, x, 0, FABRIC_ROUTER_VC, {8, x, x, x}, {4, x, x, x}},
 
     {7, 1, 1, 0, PREFETCH_D, {3, x, x, x}, {8, 9, x, x}, k_prefetcher_noc},
     {8, 1, 1, 0, DISPATCH_D, {7, x, x, x}, {9, 4, x, x}, k_dispatcher_noc},

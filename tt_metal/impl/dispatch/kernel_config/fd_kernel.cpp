@@ -18,12 +18,14 @@
 #include "dprint_server.hpp"
 #include "eth_router.hpp"
 #include "eth_tunneler.hpp"
+#include "fabric_types.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
 #include "mux.hpp"
 #include "prefetch.hpp"
 #include "rtoptions.hpp"
+#include "tt_cluster.hpp"
 #include <umd/device/tt_core_coordinates.h>
 
 using namespace tt::tt_metal;
@@ -132,7 +134,7 @@ void FDKernel::configure_kernel_variant(
     if (rt_options.watcher_dispatch_disabled()) {
         defines["FORCE_WATCHER_OFF"] = "1";
     }
-    if (rt_options.get_fd_fabric()) {
+    if (tt::Cluster::instance().get_fabric_config() == FabricConfig::FABRIC_2D) {
         defines["FVC_MODE_PULL"] = "1";
     }
     if (!DPrintServerReadsDispatchCores(device_->id())) {

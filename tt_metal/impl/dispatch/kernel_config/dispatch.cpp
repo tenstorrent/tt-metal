@@ -26,6 +26,7 @@
 #include "llrt/hal.hpp"
 #include "mux.hpp"
 #include "prefetch.hpp"
+#include "rtoptions.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include <umd/device/types/xy_pair.h>
 #include "utils.hpp"
@@ -382,13 +383,14 @@ void DispatchKernel::CreateKernel() {
         dependent_config_.upstream_dev_id.value_or(0),
         dependent_config_.fabric_router_noc_xy.value_or(0),
         static_config_.client_interface_addr.value_or(0),
+        static_config_.header_rb_addr.value_or(0),
 
         static_config_.first_stream_used.value(),
 
         static_config_.is_d_variant.value(),
         static_config_.is_h_variant.value(),
     };
-    TT_ASSERT(compile_args.size() == 38);
+    TT_ASSERT(compile_args.size() == 39);
     auto my_virtual_core = device_->virtual_core_from_logical_core(logical_core_, GetCoreType());
     auto upstream_virtual_core =
         device_->virtual_core_from_logical_core(dependent_config_.upstream_logical_core.value(), GetCoreType());
@@ -456,4 +458,6 @@ void DispatchKernel::UpdateArgsForFabric(
     auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
     static_config_.client_interface_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_INTERFACE);
+    static_config_.header_rb_addr =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_HEADER_RB);
 }

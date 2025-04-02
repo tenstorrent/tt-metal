@@ -154,6 +154,13 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
             } else {
                 device_cq_addr_sizes_[dev_addr_idx] = 0;
             }
+        } else if (dev_addr_type == CommandQueueDeviceAddrType::FABRIC_HEADER_RB) {
+            // if (llrt::RunTimeOptions::get_instance().get_fd_fabric()) {
+            static constexpr uint32_t k_RbEntries = 64;
+            device_cq_addr_sizes_[dev_addr_idx] = tt_fabric::PACKET_HEADER_SIZE_BYTES * k_RbEntries;
+            // } else {
+            // device_cq_addr_sizes_[dev_addr_idx] = 0;
+            // }
         } else {
             device_cq_addr_sizes_[dev_addr_idx] = settings.other_ptrs_size;
         }
@@ -166,7 +173,9 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
         CommandQueueDeviceAddrType dev_addr_type = magic_enum::enum_value<CommandQueueDeviceAddrType>(dev_addr_idx);
         if (dev_addr_type == CommandQueueDeviceAddrType::UNRESERVED) {
             device_cq_addrs_[dev_addr_idx] = align(device_cq_addrs_[dev_addr_idx], pcie_alignment);
-        } else if (dev_addr_type == CommandQueueDeviceAddrType::FABRIC_INTERFACE) {
+        } else if (
+            dev_addr_type == CommandQueueDeviceAddrType::FABRIC_INTERFACE ||
+            dev_addr_type == CommandQueueDeviceAddrType::FABRIC_HEADER_RB) {
             device_cq_addrs_[dev_addr_idx] = align(device_cq_addrs_[dev_addr_idx], l1_alignment);
         }
     }

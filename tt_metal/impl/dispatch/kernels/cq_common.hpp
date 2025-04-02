@@ -376,20 +376,25 @@ FORCE_INLINE void move_rd_to_next_block_and_release_pages(uint32_t& block_noc_wr
 }
 
 template <uint16_t mesh_id, uint16_t dev_id, uint32_t routing, tt::tt_fabric::ClientDataMode data_mode, typename T>
-inline void relay_cb_async_write(T client_interface, uint32_t src_addr, uint64_t dst_addr, uint32_t size) {
+inline void relay_cb_async_write(
+    T client_interface, uint32_t header_addr, uint32_t src_addr, uint64_t dst_addr, uint32_t size) {
     if constexpr (use_fabric(routing)) {
-        tt::tt_fabric::fabric_async_write<data_mode>(
+        tt::tt_fabric::fabric_async_write_add_header<decltype(client_interface)>(
             client_interface,
-            routing,
             src_addr,
             mesh_id,
             dev_id,
             dst_addr,
-            size + tt::tt_fabric::PACKET_HEADER_SIZE_BYTES);
-        // We don't cycle headers yet. Need to wait for the header to be done
-        if constexpr (data_mode == tt::tt_fabric::ClientDataMode::RAW_DATA) {
-            tt::tt_fabric::fabric_wait_for_pull_request_bytes_flushed(client_interface, size);
-        }
+            size + tt::tt_fabric::PACKET_HEADER_SIZE_BYTES,
+            reinterpret_cast<tt::tt_fabric::packet_header_t*>(header_addr));
+        tt::tt_fabric::fabric_setup_pull_request<data_mode>(client_interface, src_addr, size);
+        tt::tt_fabric::fabric_send_pull_request<data_mode>(
+            client_interface,
+            routing,
+            mesh_id,
+            dev_id,
+            reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::packet_header_t*>(header_addr));
+        tt::tt_fabric::fabric_wait_for_pull_request_flushed(client_interface);
     } else {
         noc_async_write(src_addr, dst_addr, size);
     }
@@ -403,18 +408,25 @@ template <
     uint32_t noc_xy,
     uint32_t sem_id,
     typename T>
-inline void relay_cb_release_pages(T client_interface, uint32_t n) {
+inline void relay_cb_release_pages(T client_interface, uint32_t header, uint32_t n) {
     constexpr uint32_t k_WrapBoundary = 31;  // Same as NOC API
     if constexpr (use_fabric(routing)) {
-        tt::tt_fabric::fabric_atomic_inc<tt::tt_fabric::ClientDataMode::RAW_DATA>(
-            client_interface,
-            routing,
-            0 /* unused for inline */,
+        tt::tt_fabric::fabric_atomic_inc_add_header(
+            header,
             mesh_id,
             dev_id,
             get_noc_addr_helper(noc_xy, get_semaphore<fd_core_type>(sem_id)),
             n,
             k_WrapBoundary);
+        tt::tt_fabric::fabric_setup_pull_request<tt::tt_fabric::PACKETIZED_DATA>(
+            client_interface, header, tt::tt_fabric::PACKET_HEADER_SIZE_BYTES);
+        tt::tt_fabric::fabric_send_pull_request<tt::tt_fabric::PACKETIZED_DATA>(
+            client_interface,
+            routing,
+            mesh_id,
+            dev_id,
+            reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::packet_header_t*>(header));
+        tt::tt_fabric::fabric_wait_for_pull_request_flushed(client_interface);
     } else {
         cb_release_pages<noc_idx, noc_xy, sem_id>(n);
     }
@@ -431,10 +443,10 @@ template <
     uint32_t routing,
     typename T>
 FORCE_INLINE void relay_cb_move_rd_to_next_block_and_release_pages(
-    T client_interface, uint32_t& block_noc_writes_to_clear, uint32_t& rd_block_idx) {
+    T client_interface, uint32_t header, uint32_t& block_noc_writes_to_clear, uint32_t& rd_block_idx) {
     if constexpr (use_fabric(routing)) {
         relay_cb_release_pages<mesh_id, dev_id, routing, noc_idx, noc_xy, sem_id>(
-            client_interface, block_noc_writes_to_clear);
+            client_interface, header, block_noc_writes_to_clear);
     } else {
         cb_block_release_pages<noc_idx, noc_xy, sem_id, cb_pages_per_block>(block_noc_writes_to_clear);
     }

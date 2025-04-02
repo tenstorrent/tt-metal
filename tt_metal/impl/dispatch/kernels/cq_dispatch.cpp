@@ -62,11 +62,13 @@ constexpr uint32_t upstream_mesh_id = get_compile_time_arg_val(31);
 constexpr uint32_t upstream_dev_id = get_compile_time_arg_val(32);
 constexpr uint32_t fabric_router_noc_xy = get_compile_time_arg_val(33);
 constexpr uint32_t client_interface_addr = get_compile_time_arg_val(34);
+constexpr uint32_t header_rb = get_compile_time_arg_val(35);
+constexpr uint32_t header_rb_size = 64 * 48;
 
-constexpr uint32_t first_stream_used = get_compile_time_arg_val(35);
+constexpr uint32_t first_stream_used = get_compile_time_arg_val(36);
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(36);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(37);
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(37);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(38);
 
 constexpr uint8_t upstream_noc_index = UPSTREAM_NOC_INDEX;
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
@@ -88,6 +90,7 @@ constexpr uint32_t completion_queue_base_addr_16B = completion_queue_base_addr >
 constexpr uint32_t dispatch_cb_size = dispatch_cb_page_size * dispatch_cb_pages;
 constexpr uint32_t dispatch_cb_end = dispatch_cb_base + dispatch_cb_size;
 constexpr uint32_t downstream_cb_end = downstream_cb_base + downstream_cb_size;
+constexpr uint32_t header_rb_entries = header_rb_size / tt::tt_fabric::PACKET_HEADER_SIZE_BYTES;
 
 // Break buffer into blocks, 1/n of the total (dividing equally)
 // Do bookkeeping (release, etc) based on blocks
@@ -103,9 +106,22 @@ static uint32_t downstream_cb_data_ptr = downstream_cb_base;
 static uint32_t write_offset[3];  // added to write address on non-host writes
 
 static uint32_t upstream_total_acquired_page_count;
+static uint32_t fabric_header_rb_index = 0;
 
+#ifdef FVC_MODE_PULL
 static auto client_interface =
-    reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::fabric_pull_client_interface_t*>(client_interface_addr);
+    reinterpret_cast<volatile tt::tt_fabric::fabric_pull_client_interface_t*>(client_interface_addr);
+#else
+static auto client_interface =
+    reinterpret_cast<volatile tt::tt_fabric::fabric_push_client_interface_t*>(client_interface_addr);
+#endif
+
+inline uint32_t get_fabric_header() {
+    constexpr uint32_t header_rb_mask = header_rb_entries - 1;
+    uint32_t addr = header_rb + ((fabric_header_rb_index & header_rb_mask) * tt::tt_fabric::PACKET_HEADER_SIZE_BYTES);
+    fabric_header_rb_index = fabric_header_rb_index + 1;
+    return addr;
+}
 
 constexpr uint32_t packed_write_max_multicast_sub_cmds =
     get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
@@ -365,6 +381,7 @@ void relay_to_next_cb(
                             fabric_router_noc_xy,
                             tt::tt_fabric::ClientDataMode::RAW_DATA>(
                             client_interface,
+                            get_fabric_header(),
                             data_ptr,
                             get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr),
                             orphan_size);
@@ -389,7 +406,8 @@ void relay_to_next_cb(
                     dispatch_cb_blocks,
                     downstream_mesh_id,
                     downstream_dev_id,
-                    fabric_router_noc_xy>(client_interface, block_noc_writes_to_clear, rd_block_idx);
+                    fabric_router_noc_xy>(
+                    client_interface, get_fabric_header(), block_noc_writes_to_clear, rd_block_idx);
             }
 
             // Wait for dispatcher to supply a page (this won't go beyond the buffer end)
@@ -406,14 +424,18 @@ void relay_to_next_cb(
             downstream_dev_id,
             fabric_router_noc_xy,
             tt::tt_fabric::ClientDataMode::RAW_DATA>(
-            client_interface, data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr), xfer_size);
+            client_interface,
+            get_fabric_header(),
+            data_ptr,
+            get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr),
+            xfer_size);
         relay_cb_release_pages<
             downstream_mesh_id,
             downstream_dev_id,
             fabric_router_noc_xy,
             my_noc_index,
             downstream_noc_xy,
-            downstream_cb_sem_id>(client_interface, 1);
+            downstream_cb_sem_id>(client_interface, get_fabric_header(), 1);
 
         length -= xfer_size;
         data_ptr += xfer_size;
