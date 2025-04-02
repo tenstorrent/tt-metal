@@ -125,7 +125,7 @@ def test_model_inference(
             "llama31_8b": 0.9987 if mode_accuracy else 0.9850,
             "llama32_11b": 0.9987 if mode_accuracy else 0.9850,
             "llama31_70b": 0.9843 if mode_accuracy else 0.97607,
-            "mistralai/Mistral-7B": 0.95 if mode_accuracy else 0.95,
+            "Mistral-7B": 0.95 if mode_accuracy else 0.95,
         }[model_name]
 
         final_k_cache_pcc = {
@@ -134,7 +134,7 @@ def test_model_inference(
             "llama31_8b": 0.9997,
             "llama32_11b": 0.9995,
             "llama31_70b": 0.9997,
-            "mistralai/Mistral-7B": 0.68,
+            "Mistral-7B": 0.68,
         }[model_name]
         final_v_cache_pcc = {
             "llama32_1b": 0.9996,
@@ -142,7 +142,7 @@ def test_model_inference(
             "llama31_8b": 0.9997,
             "llama32_11b": 0.9996,
             "llama31_70b": 0.9997,
-            "mistralai/Mistral-7B": 0.68,
+            "Mistral-7B": 0.68,
         }[model_name]
 
         quick_iterations = {
@@ -151,7 +151,7 @@ def test_model_inference(
             "llama31_8b": 6,
             "llama32_11b": 6,
             "llama31_70b": 6,
-            "mistralai/Mistral-7B": 2,
+            "Mistral-7B": 2,
         }[model_name]
 
         iterations = quick_iterations
@@ -179,7 +179,7 @@ def test_model_inference(
     prompts = ["This is a test"] * model_args.max_batch_size
     if dummy_weights:
         # "This is a test" encoded prompt
-        if model_name == "mistralai/Mistral-7B":
+        if model_name == "Mistral-7B":
             encoded_prompts = [[1619, 1117, 1032, 2137]] * model_args.max_batch_size
         else:
             encoded_prompts = [[128000, 2028, 374, 264, 1296]] * model_args.max_batch_size
