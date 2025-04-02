@@ -2,15 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
+
 import ttnn
+from models.demos.yolov4.post_processing import gen_yolov4_boxes_confs
+from models.demos.yolov4.ttnn.genboxes import TtGenBoxes
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.demos.yolov4.ttnn.genboxes import TtGenBoxes
-from models.demos.yolov4.demo.demo import YoloLayer, get_region_boxes, gen_yolov4_boxes_confs
-
-import pytest
-import os
 
 
 @skip_for_grayskull()
@@ -25,7 +24,7 @@ import os
 def test_yolov4_post_processing(device, reset_seeds, model_location_generator, resolution):
     torch.manual_seed(0)
 
-    if resolution[0] == 320:
+    if resolution == (320, 320):
         torch_input_1 = torch.randn((1, 1, 1600, 256), dtype=torch.bfloat16)
         ttnn_input_1 = ttnn.from_torch(
             torch_input_1,
@@ -50,7 +49,7 @@ def test_yolov4_post_processing(device, reset_seeds, model_location_generator, r
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    else:
+    elif resolution == (640, 640):
         torch_input_1 = torch.randn((1, 1, 6400, 256), dtype=torch.bfloat16)
         ttnn_input_1 = ttnn.from_torch(
             torch_input_1,
@@ -75,8 +74,10 @@ def test_yolov4_post_processing(device, reset_seeds, model_location_generator, r
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+    else:
+        raise ValueError(f"Unsupported resolution: {resolution}")
 
-    if resolution[0] == 320:
+    if resolution == (320, 320):
         torch_input_1 = torch_input_1[:, :, :, :255]
         torch_input_1 = torch_input_1.reshape(1, 40, 40, 255)
         torch_input_1 = torch.permute(torch_input_1, (0, 3, 1, 2))
@@ -86,7 +87,7 @@ def test_yolov4_post_processing(device, reset_seeds, model_location_generator, r
         torch_input_3 = torch_input_3[:, :, :, :255]
         torch_input_3 = torch_input_3.reshape(1, 10, 10, 255)
         torch_input_3 = torch.permute(torch_input_3, (0, 3, 1, 2))
-    else:
+    elif resolution == (640, 640):
         torch_input_1 = torch_input_1[:, :, :, :255]
         torch_input_1 = torch_input_1.reshape(1, 80, 80, 255)
         torch_input_1 = torch.permute(torch_input_1, (0, 3, 1, 2))
@@ -96,6 +97,8 @@ def test_yolov4_post_processing(device, reset_seeds, model_location_generator, r
         torch_input_3 = torch_input_3[:, :, :, :255]
         torch_input_3 = torch_input_3.reshape(1, 20, 20, 255)
         torch_input_3 = torch.permute(torch_input_3, (0, 3, 1, 2))
+    else:
+        raise ValueError(f"Unsupported resolution: {resolution}")
 
     ref1, ref2, ref3 = gen_yolov4_boxes_confs([torch_input_1, torch_input_2, torch_input_3])
 
@@ -115,14 +118,16 @@ def test_yolov4_post_processing(device, reset_seeds, model_location_generator, r
     result_2_bb = result_2_bb.permute(0, 2, 3, 1)
     result_3_bb = result_3_bb.permute(0, 2, 3, 1)
 
-    if resolution[0] == 320:
+    if resolution == (320, 320):
         result_1_bb = result_1_bb.reshape(1, 4800, 1, 4)
         result_2_bb = result_2_bb.reshape(1, 1200, 1, 4)
         result_3_bb = result_3_bb.reshape(1, 300, 1, 4)
-    else:
+    elif resolution == (640, 640):
         result_1_bb = result_1_bb.reshape(1, 19200, 1, 4)
         result_2_bb = result_2_bb.reshape(1, 4800, 1, 4)
         result_3_bb = result_3_bb.reshape(1, 1200, 1, 4)
+    else:
+        raise ValueError(f"Unsupported resolution: {resolution}")
 
     result_1_conf = ttnn.to_torch(result_1[1])
     result_2_conf = ttnn.to_torch(result_2[1])
@@ -135,7 +140,3 @@ def test_yolov4_post_processing(device, reset_seeds, model_location_generator, r
     assert_with_pcc(ref1[1], result_1_conf, 0.99)
     assert_with_pcc(ref2[1], result_2_conf, 0.99)
     assert_with_pcc(ref3[1], result_3_conf, 0.99)
-
-    output = get_region_boxes(
-        [(result_1_bb, result_1_conf), (result_2_bb, result_2_conf), (result_3_bb, result_3_conf)]
-    )
