@@ -61,23 +61,28 @@ jobs:
           if [[ "${{ matrix.test-info.arch }}" == "wormhole_b0" ]]; then
             export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
           fi
-          pytest models/demos/wormhole/stable_diffusion/tests -m models_device_performance_bare_metal --timeout=600
-          pytest models/demos/distilbert/tests -m models_device_performance_bare_metal
-          pytest models/demos/vgg/tests/ -m models_device_performance_bare_metal
-          pytest models/demos/convnet_mnist/tests/ -m models_device_performance_bare_metal
-          pytest models/demos/bert_tiny/tests/ -m models_device_performance_bare_metal
-          pytest models/demos/mnist/tests -m models_device_performance_bare_metal
-          pytest models/demos/squeezebert/tests -m models_device_performance_bare_metal
-          pytest models/demos/roberta/tests/ -m models_device_performance_bare_metal
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/resnet50/tests -m models_device_performance_bare_metal
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/functional_unet/tests/test_unet_perf.py -m models_device_performance_bare_metal
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/mamba/tests -m models_device_performance_bare_metal
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/metal_BERT_large_11/tests -m models_device_performance_bare_metal
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/falcon7b_common/tests -m models_device_performance_bare_metal
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/bert_tiny/tests -m models_device_performance_bare_metal
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov4/tests -m models_device_performance_bare_metal
-          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/distilbert/tests -m models_device_performance_bare_metal
+          test_suite_exit_code=0
+          pytest models/demos/wormhole/stable_diffusion/tests -m models_device_performance_bare_metal --timeout=600 || test_suite_exit_code+=?
+          pytest models/demos/distilbert/tests -m models_device_performance_bare_metal || test_suite_exit_code+=?
+          pytest models/demos/vgg/tests/ -m models_device_performance_bare_metal || test_suite_exit_code+=?
+          pytest models/demos/convnet_mnist/tests/ -m models_device_performance_bare_metal || test_suite_exit_code+=?
+          pytest models/demos/bert_tiny/tests/ -m models_device_performance_bare_metal || test_suite_exit_code+=?
+          pytest models/demos/mnist/tests -m models_device_performance_bare_metal || test_suite_exit_code+=?
+          pytest models/demos/squeezebert/tests -m models_device_performance_bare_metal || test_suite_exit_code+=?
+          pytest models/demos/roberta/tests/ -m models_device_performance_bare_metal || test_suite_exit_code+=?
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/resnet50/tests -m models_device_performance_bare_metal || test_suite_exit_code+=?
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/functional_unet/tests/test_unet_perf.py -m models_device_performance_bare_metal || test_suite_exit_code+=?
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/mamba/tests -m models_device_performance_bare_metal || test_suite_exit_code+=?
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/metal_BERT_large_11/tests -m models_device_performance_bare_metal || test_suite_exit_code+=?
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/falcon7b_common/tests -m models_device_performance_bare_metal || test_suite_exit_code+=?
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/bert_tiny/tests -m models_device_performance_bare_metal || test_suite_exit_code+=?
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov4/tests -m models_device_performance_bare_metal || test_suite_exit_code+=?
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/distilbert/tests -m models_device_performance_bare_metal || test_suite_exit_code+=?
           python3 models/perf/merge_device_perf_results.py
+
+          if [[ $test_suite_exit_code -ne 0 ]]; then
+            echo "Device perf test suite failed somewhere, we should exit with an error here"
+          fi
 
       - name: Check device perf report exists
         id: check-device-perf-report
