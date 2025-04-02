@@ -6,18 +6,44 @@
 
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
-#include <optional>
 #include <tt-metalium/dispatch_settings.hpp>
+#include <algorithm>
+#include <array>
+#include <cstring>
+#include <functional>
+#include <optional>
+#include <type_traits>
+#include <utility>
 
+#include "assert.hpp"
 #include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "device.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
+#include "dispatch_core_common.hpp"
+#include "event/dispatch.hpp"
+#include "hal_types.hpp"
+#include "mesh_config.hpp"
 #include "mesh_coord.hpp"
+#include "mesh_workload.hpp"
+#include "program_impl.hpp"
+#include "shape2d.hpp"
+#include "strong_type.hpp"
+#include "system_memory_manager.hpp"
+#include "trace_buffer.hpp"
+#include "tt_cluster.hpp"
+#include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/buffers/dispatch.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
-#include "tt_metal/common/thread_pool.hpp"
-#include "tt_cluster.hpp"
+#include <umd/device/types/xy_pair.h>
+
+namespace tt {
+namespace tt_metal {
+struct ProgramCommandSequence;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal::distributed {
 

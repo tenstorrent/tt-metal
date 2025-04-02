@@ -6,6 +6,7 @@
 
 #include <unordered_map>
 
+#include <tt-metalium/program_impl.hpp>
 #include <tt_stl/unique_any.hpp>
 #include <tt_stl/overloaded.hpp>
 

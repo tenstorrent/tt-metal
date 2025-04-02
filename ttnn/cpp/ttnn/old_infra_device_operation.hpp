@@ -27,7 +27,6 @@ struct OldInfraDeviceOperation {
 
     struct ProgramFactory {
         struct shared_variables_t {
-            std::optional<operation::OverrideAddressesCallback> override_addresses_callback;
             std::optional<operation::OverrideRuntimeArgumentsCallback<OutputTensors>>
                 override_runtime_arguments_callback;
         };

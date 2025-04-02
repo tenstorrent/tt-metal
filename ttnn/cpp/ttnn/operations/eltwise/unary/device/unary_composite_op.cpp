@@ -611,7 +611,7 @@ Tensor _glu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig
         dim = 3;
     }
     std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
-    Tensor sigmoid_b = ttnn::sigmoid(ab[1], output_mem_config);
+    Tensor sigmoid_b = ttnn::sigmoid(ab[1], false, output_mem_config);
     Tensor glu_result = ttnn::multiply(ab[0], sigmoid_b, std::nullopt, output_mem_config);
     return glu_result;
 }

@@ -4,7 +4,19 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <tt-metalium/program_impl.hpp>
+#include <vector>
+
+#include "core_coord.hpp"
+#include "fabric_host_interface.h"
+#include "system_memory_manager.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Program;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_fabric {
 

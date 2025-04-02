@@ -145,6 +145,7 @@ class TtTransformerBlock(LightweightModule):
         # Attention takes replicated inputs and produces fractured outputs
         # pad attn input
         if mode == "decode":
+            attn_in = ttnn.to_memory_config(attn_in, ttnn.DRAM_MEMORY_CONFIG)
             attn_in_sharded = ttnn.to_memory_config(attn_in, self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"])
             attn_in.deallocate(True)
         else:
@@ -173,6 +174,7 @@ class TtTransformerBlock(LightweightModule):
 
         # MLP takes replicated inputs and produces fractured outputs
         if mode == "decode":
+            ff_in = ttnn.to_memory_config(ff_in, ttnn.DRAM_MEMORY_CONFIG)
             ff_in_sharded = ttnn.to_memory_config(ff_in, self.model_config["SHARDED_FF12_RING_MEMCFG"])
             ff_in.deallocate(True)
         else:

@@ -7,53 +7,6 @@
 #include "ttnn/operation.hpp"
 
 namespace tt::tt_metal::operation {
-namespace {
-
-template <class OutputTensors>
-void override_addresses(
-    const OverrideAddressesCallback& override_addresses_callback,
-    const Program& program,
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors,
-    const OutputTensors& output_tensors) {
-    std::vector<tt::tt_metal::Buffer*> input_buffers;
-    for (auto& tensor : input_tensors) {
-        input_buffers.push_back(tensor.buffer());
-    }
-    for (auto& tensor : optional_input_tensors) {
-        auto buffer = tensor.has_value() ? tensor.value().buffer() : nullptr;
-        input_buffers.push_back(buffer);
-    }
-
-    std::vector<tt::tt_metal::Buffer*> output_buffers;
-    for (auto& tensor : output_tensors) {
-        if constexpr (std::is_same_v<OptionalTensors, OutputTensors>) {
-            auto buffer = tensor.has_value() ? tensor.value().buffer() : nullptr;
-            output_buffers.push_back(buffer);
-        } else {
-            output_buffers.push_back(tensor.buffer());
-        }
-    }
-
-    override_addresses_callback(program, input_buffers, output_buffers);
-}
-
-// Explicit instantiations of override_addresses
-template void override_addresses<Tensors>(
-    const OverrideAddressesCallback& override_addresses_callback,
-    const Program& program,
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors,
-    const Tensors& output_tensors);
-
-template void override_addresses<OptionalTensors>(
-    const OverrideAddressesCallback& override_addresses_callback,
-    const Program& program,
-    const Tensors& input_tensors,
-    const OptionalConstTensors& optional_input_tensors,
-    const OptionalTensors& output_tensors);
-
-}  // namespace
 
 template <typename OutputTensors>
 typename OldInfraDeviceOperation<OutputTensors>::ProgramFactory::cached_program_t
@@ -65,9 +18,7 @@ OldInfraDeviceOperation<OutputTensors>::ProgramFactory::create(
         tensor_args.input_tensors, tensor_args.optional_input_tensors, tensor_return_value);
     return cached_program_t{
         std::move(program_with_callbacks.program),
-        shared_variables_t{
-            program_with_callbacks.override_addresses_callback,
-            program_with_callbacks.override_runtime_arguments_callback}};
+        shared_variables_t{program_with_callbacks.override_runtime_arguments_callback}};
 }
 
 template <typename OutputTensors>
@@ -76,19 +27,8 @@ void OldInfraDeviceOperation<OutputTensors>::ProgramFactory::override_runtime_ar
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    auto& override_addresses_callback = cached_program.shared_variables.override_addresses_callback;
     auto& override_runtime_arguments_callback = cached_program.shared_variables.override_runtime_arguments_callback;
     auto& program = cached_program.program;
-
-    if (override_addresses_callback.has_value()) {
-        // Deprecated
-        override_addresses(
-            override_addresses_callback.value(),
-            program,
-            tensor_args.input_tensors,
-            tensor_args.optional_input_tensors,
-            tensor_return_value);
-    }
 
     if (override_runtime_arguments_callback.has_value()) {
         operation_attributes.override_runtime_arguments(

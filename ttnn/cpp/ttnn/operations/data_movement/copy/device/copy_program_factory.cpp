@@ -164,12 +164,14 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
     }
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id, cores](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto src_buffer = input_buffers.at(0);
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_buffer = input_tensors.at(0).buffer();
 
-        auto dst_buffer = output_buffers.at(0);
+        auto dst_buffer = output_tensors.at(0).buffer();
 
         for (const auto& core : cores) {
             {

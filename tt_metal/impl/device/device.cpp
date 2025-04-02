@@ -2,48 +2,90 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <device_impl.hpp>
-
-#include <string>
-#include <thread>
-#include <tt_align.hpp>
-#include <tt-metalium/dispatch_mem_map.hpp>
-#include <tt-metalium/program_cache.hpp>
-
-#include "common/core_assignment.hpp"
-#include <host_api.hpp>
-#include <trace.hpp>
 #include <core_descriptor.hpp>
-#include <tt_metal.hpp>
-#include <utils.hpp>
 #include <dev_msgs.h>
+#include <device_impl.hpp>
 #include <device_pool.hpp>
+#include <host_api.hpp>
+#include <magic_enum/magic_enum.hpp>
 #include <persistent_kernel_cache.hpp>
-
-#include "llrt/hal.hpp"
-#include <hal.hpp>
 #include <sub_device.hpp>
 #include <sub_device_manager_tracker.hpp>
 #include <sub_device_types.hpp>
+#include <trace.hpp>
+#include <tt-metalium/dispatch_mem_map.hpp>
+#include <tt-metalium/program_cache.hpp>
+#include <tt_align.hpp>
+#include <tt_metal.hpp>
 #include <tt_stl/span.hpp>
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstring>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <set>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
-
-#include "tt_metal/impl/debug/watcher_server.hpp"
-#include "tt_metal/impl/dispatch/topology.hpp"
-#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
-#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
-#include "tt_metal/impl/dispatch/topology.hpp"
-#include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
-#include "tt_metal/jit_build/build_env_manager.hpp"
-
-#include "lightmetal/lightmetal_capture.hpp"
-#include "tracy/Tracy.hpp"
+#include "allocator.hpp"
+#include "allocator_types.hpp"
+#include "assert.hpp"
+#include "buffer_constants.hpp"
+#include "command_queue.hpp"
+#include "command_queue_common.hpp"
+#include "common/core_assignment.hpp"
+#include "core_coord.hpp"
+#include "device.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
+#include "dispatch_core_common.hpp"
+#include "dispatch_settings.hpp"
 #include "dprint_server.hpp"
+#include "hal_types.hpp"
+#include "jit_build/build.hpp"
+#include "launch_message_ring_buffer_state.hpp"
+#include "lightmetal/lightmetal_capture.hpp"
 #include "llrt.hpp"
+#include "llrt/hal.hpp"
+#include "logger.hpp"
+#include "metal_soc_descriptor.h"
+#include "multi_producer_single_consumer_queue.hpp"
+#include "profiler_types.hpp"
+#include "program_device_map.hpp"
+#include "program_impl.hpp"
+#include "rtoptions.hpp"
+#include "strong_type.hpp"
+#include "system_memory_manager.hpp"
+#include "trace_buffer.hpp"
+#include "tracy/Tracy.hpp"
+#include "tt_cluster.hpp"
+#include "tt_memory.h"
+#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
+#include "tt_metal/impl/debug/watcher_server.hpp"
+#include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
+#include "tt_metal/jit_build/build_env_manager.hpp"
+#include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
+#include <umd/device/coordinate_manager.h>
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_silicon_driver_common.hpp>
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/xy_pair.h>
 #include "work_executor.hpp"
+#include "work_executor_types.hpp"
 
 namespace tt {
+enum class ARCH;
 
 namespace tt_metal {
 

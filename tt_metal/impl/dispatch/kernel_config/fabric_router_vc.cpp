@@ -2,17 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <host_api.hpp>
-#include <tt_metal.hpp>
+#include <vector>
 
-#include <tt-metalium/command_queue_interface.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include "assert.hpp"
+#include "control_plane.hpp"
 #include "dispatch/kernel_config/dispatch.hpp"
+#include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch/kernel_config/prefetch.hpp"
-
 #include "fabric_router_vc.hpp"
+#include "tt_cluster.hpp"
 
 namespace tt::tt_metal {
 

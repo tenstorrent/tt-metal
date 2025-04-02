@@ -94,12 +94,14 @@ operation::ProgramWithCallbacks argmax_single_core(
     }
 
     auto override_runtime_args_callback = [reader_kernel_id, cores](
+                                              const void* operation,
                                               const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto src_buffer = input_buffers.at(0);
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_buffer = input_tensors.at(0).buffer();
 
-        auto dst_buffer = output_buffers.at(0);
+        auto dst_buffer = output_tensors.at(0).buffer();
 
         for (const auto& core : cores) {
             {
@@ -234,12 +236,14 @@ operation::ProgramWithCallbacks argmax_multi_core(
     }
 
     auto override_runtime_args_callback = [reader_kernel_id, cores](
+                                              const void* operation,
                                               const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto src_buffer = input_buffers.at(0);
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_buffer = input_tensors.at(0).buffer();
 
-        auto dst_buffer = output_buffers.at(0);
+        auto dst_buffer = output_tensors.at(0).buffer();
         uint32_t core_id = 0;
         for (const auto& core : cores) {
             {

@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include <vector>
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 
 namespace tt {
 

@@ -2,12 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "eth_tunneler.hpp"
-#include "eth_router.hpp"
-#include "demux.hpp"
-#include "mux.hpp"
 
-#include <host_api.hpp>
-#include <tt_metal.hpp>
+#include <map>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "assert.hpp"
+#include "demux.hpp"
+#include "device.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
+#include "dispatch/kernel_config/fd_kernel.hpp"
+#include "dispatch_core_common.hpp"
+#include "eth_router.hpp"
+#include "hal.hpp"
+#include "mux.hpp"
+#include "tt_cluster.hpp"
+#include <umd/device/tt_xy_pair.h>
+#include "utils.hpp"
 
 using namespace tt::tt_metal;
 
