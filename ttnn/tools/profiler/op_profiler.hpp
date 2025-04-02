@@ -493,10 +493,12 @@ inline std::string op_meta_data_serialized_json(
 
 #define TracyOpMeshWorkload(                                                                                   \
     mesh_device, mesh_workload, operation, operation_attributes, tensor_args, tensor_return_value)             \
+    auto base_op_id = mesh_workload.get_runtime_id();                                                          \
     for (const auto& [range, program] : mesh_workload.get_programs()) {                                        \
         for (auto coord : range) {                                                                             \
+            ZoneScopedN("TT_DNN_DEVICE_OP");                                                                   \
             auto device_id = mesh_device->get_device(coord)->id();                                             \
-            auto op_id = program.get_runtime_id();                                                             \
+            auto op_id = (base_op_id << 10) | (device_id);                                                     \
             std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(                  \
                 operation, op_id, device_id, program, operation_attributes, tensor_args, tensor_return_value); \
             std::string op_text = fmt::format("id:{}", op_id);                                                 \

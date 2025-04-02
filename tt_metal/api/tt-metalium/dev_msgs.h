@@ -119,7 +119,7 @@ struct kernel_config_msg_t {
     rta_offset_t rta_offset[DISPATCH_CLASS_MAX];
     volatile uint32_t kernel_text_offset[NUM_PROCESSORS_PER_CORE_TYPE];
 
-    volatile uint16_t host_assigned_id;
+    volatile uint8_t pad1[2];
 
     volatile uint8_t mode;  // dispatch mode host/dev
     volatile uint8_t brisc_noc_id;
@@ -130,9 +130,13 @@ struct kernel_config_msg_t {
     volatile uint8_t enables;
     volatile uint8_t sub_device_origin_x;  // Logical X coordinate of the sub device origin
     volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
-    volatile uint8_t pad2[6];
+    volatile uint32_t host_assigned_id;
+
+    volatile uint8_t pad2[2];
+
     volatile uint8_t preload;  // Must be at end, so it's only written when all other data is written.
 } __attribute__((packed));
+;
 
 struct go_msg_t {
     union {

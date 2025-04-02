@@ -37,6 +37,7 @@
 #include "tt_metal/impl/buffers/dispatch.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
+#include "tt_metal/impl/program/program_command_sequence.hpp"
 #include <umd/device/types/xy_pair.h>
 
 namespace tt {
@@ -254,7 +255,8 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                 program_cmd_seq,
                 dispatch_metadata.stall_first,
                 dispatch_metadata.stall_before_program,
-                chip_ids_in_workload);
+                chip_ids_in_workload,
+                mesh_workload.get_runtime_id());
         }
     }
     // Send go signals to devices not running a program to ensure consistent global state
@@ -567,19 +569,20 @@ void FDMeshCommandQueue::write_program_cmds_to_subgrid(
     ProgramCommandSequence& program_cmd_seq,
     bool stall_first,
     bool stall_before_program,
-    std::unordered_set<uint32_t>& chip_ids_in_workload) {
+    std::unordered_set<uint32_t>& chip_ids_in_workload,
+    uint32_t workload_runtime_id) {
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
-
     for (const auto& coord : sub_grid) {
+        auto device = this->mesh_device_->get_device(coord);
+#if defined(TRACY_ENABLE)
+        for (auto& launch_msg : program_cmd_seq.go_signals) {
+            launch_msg->kernel_config.host_assigned_id = (workload_runtime_id << 10) | (device->id());
+        }
+#endif
         program_dispatch::write_program_command_sequence(
-            program_cmd_seq,
-            this->mesh_device_->get_device(coord)->sysmem_manager(),
-            id_,
-            dispatch_core_type,
-            stall_first,
-            stall_before_program);
-        chip_ids_in_workload.insert(this->mesh_device_->get_device(coord)->id());
+            program_cmd_seq, device->sysmem_manager(), id_, dispatch_core_type, stall_first, stall_before_program);
+        chip_ids_in_workload.insert(device->id());
     }
 }
 

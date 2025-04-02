@@ -54,7 +54,8 @@ private:
         ProgramCommandSequence& program_cmd_seq,
         bool stall_first,
         bool stall_before_program,
-        std::unordered_set<uint32_t>& chip_ids_in_workload);
+        std::unordered_set<uint32_t>& chip_ids_in_workload,
+        uint32_t workload_runtime_id);
     // For a given MeshWorkload, a subgrid is unused if no programs are run on it.  Go signals
     // must be sent to this subgrid, to ensure consistent global state across the Virtual Mesh.
     // This function generates and writes dispatch commands forwarding go signals to these subgrids.
