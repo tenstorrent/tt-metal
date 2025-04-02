@@ -13,6 +13,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/decorators.hpp"
 #include "cpp/ttnn/global_semaphore.hpp"
+#include <tt-metalium/sub_device.hpp>
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -20,7 +21,7 @@ struct LlamaReduceScatterDeviceOperation {
     struct operation_attributes_t {
         const uint32_t dim;
         const std::optional<GlobalSemaphore> cross_device_semaphore;
-        const std::optional<SubDeviceId> subdevice_id;
+        const std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
         const uint32_t ring_index;
         const uint32_t cluster_axis;
         const std::optional<MemoryConfig> output_mem_config;
@@ -87,7 +88,7 @@ struct LlamaReduceScatterDeviceOperation {
         ttnn::Tensor& intermediate_packet_buffer,
         const int32_t dim,
         const GlobalSemaphore semaphore,
-        const SubDeviceId subdevice_id,
+        const tt::tt_metal::SubDeviceId subdevice_id,
         const uint32_t ring_index,
         const uint32_t cluster_axis,
         std::optional<IDevice*>& forward_device,

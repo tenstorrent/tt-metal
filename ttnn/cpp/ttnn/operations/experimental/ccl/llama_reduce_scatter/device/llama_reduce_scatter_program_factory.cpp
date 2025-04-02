@@ -14,6 +14,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
+#include <tt-metalium/sub_device.hpp>
 
 namespace ttnn::operations::experimental::ccl {
 

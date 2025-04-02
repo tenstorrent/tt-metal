@@ -10,6 +10,8 @@
 #include "device/llama_reduce_scatter_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include <tt-metalium/sub_device.hpp>
+
 namespace ttnn::operations::experimental::ccl {
 namespace detail {}  // namespace detail
 
@@ -19,7 +21,7 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
     ttnn::Tensor& intermediate_packet_buffer,
     const int32_t dim,
     const global_semaphore::MultiDeviceGlobalSemaphore& cross_device_semaphore,
-    const SubDeviceId& subdevice_id,
+    const tt::tt_metal::SubDeviceId& subdevice_id,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const uint32_t num_links,
@@ -33,7 +35,7 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
 
     ttnn::ccl::Topology ccl_topology = ttnn::ccl::Topology::Linear;
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
     uint32_t input_tensor_index = 0;
     for (const auto& tensor : {input_tensor, intermediate_packet_buffer}) {
         auto buffers = tensor.buffers();
@@ -52,7 +54,7 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
     }
 
     std::vector<GlobalSemaphore> semaphores = cross_device_semaphore.global_semaphores;
-    operation::launch_op(
+    tt::tt_metal::operation::launch_op(
         [dim, semaphores, subdevice_id, cluster_axis, ring_devices, memory_config, mesh_view, num_links](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,

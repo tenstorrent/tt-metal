@@ -126,7 +126,7 @@ LlamaReduceScatterDeviceOperation::invoke(
     ttnn::Tensor& intermediate_packet_buffer,
     const int32_t dim,
     const GlobalSemaphore semaphore,
-    const SubDeviceId subdevice_id,
+    const tt::tt_metal::SubDeviceId subdevice_id,
     const uint32_t ring_index,
     const uint32_t cluster_axis,
     std::optional<IDevice*>& forward_device,
