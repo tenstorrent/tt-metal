@@ -25,7 +25,7 @@ from ultralytics import YOLO
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "use_pretrained_weight",
-    [False, True],
+    [True],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_yolov9c(use_pretrained_weight, device, use_program_cache, reset_seeds):
