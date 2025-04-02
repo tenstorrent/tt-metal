@@ -10,6 +10,8 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 
+#include <tracy/Tracy.hpp>
+
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::binary {
