@@ -206,7 +206,7 @@ inline void pack_dim3_bf16_rest8_optimized(
 }
 
 template <bool DRAM>
-inline void pack_dim3_bf8_reminder36(
+inline void pack_dim3_bf8_dram_reminder0(
     uint32_t num_tiles, uint32_t ring_size, uint32_t tile_cols_per_chip, InterleavedAddrGenFast<DRAM>& addrgen) {
     uint32_t tile_id = 0;
     uint32_t row = num_tiles / tile_cols_per_chip;
@@ -432,8 +432,9 @@ void kernel_main() {
         } else {
             if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == BF8_DIM3_REMAINDER_32) {
                 pack_dim3_bf8_reminder32<is_dram>(num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
-            } else if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == BF8_DIM3_REMAINDER_36) {
-                pack_dim3_bf8_reminder36<is_dram>(num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
+            } else if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == BF8_DIM3_DRAM_REMAINDER_0) {
+                pack_dim3_bf8_dram_reminder0<is_dram>(
+                    num_tiles_per_chip, ring_size, tile_cols_per_chip, tensor0_addrgen);
             } else {
                 // assert or handle default case
             }

@@ -55,7 +55,7 @@ void append_fabric_connection_rt_args(
 
 enum BF8_DIM3_TYPE {
     NONE,
-    BF8_DIM3_REMAINDER_36,
+    BF8_DIM3_DRAM_REMAINDER_0,
     BF8_DIM3_REMAINDER_32,
 };
 
@@ -158,10 +158,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_interleav
     const auto output_tensor_page_layout = output_tensor.layout();
     BF8_DIM3_TYPE bf8_dim3_type = NONE;
     if (dim == 3 && num_pages_per_packet == 4) {
-        if (input_tensor_shape[2] % 32 == 0 && (input_tensor_shape[3] / 32) % 48 == 36) {
-            bf8_dim3_type = BF8_DIM3_REMAINDER_36;
-        } else if (input_tensor_shape[2] % 32 == 0 && (input_tensor_shape[3] / 32) % 48 == 24) {
-            bf8_dim3_type = BF8_DIM3_REMAINDER_36;
+        if (input_tensor_shape[2] % 32 == 0 && (input_tensor_shape[3] / 32) % 12 == 0) {
+            bf8_dim3_type = BF8_DIM3_DRAM_REMAINDER_0;
         } else if (input_tensor_shape[2] % 32 == 0 && (input_tensor_shape[3] / 32) % 48 == 32) {
             bf8_dim3_type = BF8_DIM3_REMAINDER_32;
         }

@@ -280,7 +280,7 @@ inline void fabric_send_dim3_bf16_rest8_optimized(
 }
 
 template <bool DRAM>
-inline void fabric_dim3_bf8_reminder36(
+inline void fabric_dim3_bf8_dram_reminder0(
     uint32_t num_tiles,
     uint32_t ring_size,
     uint32_t tile_cols_per_chip,
@@ -718,8 +718,8 @@ void kernel_main() {
                     pkt_hdr_forward,
                     pkt_hdr_backward,
                     fabric_connection);
-            } else if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == BF8_DIM3_REMAINDER_36) {
-                fabric_dim3_bf8_reminder36<is_dram>(
+            } else if constexpr ((BF8_DIM3_TYPE)bf8_dim3_type == BF8_DIM3_DRAM_REMAINDER_0) {
+                fabric_dim3_bf8_dram_reminder0<is_dram>(
                     num_tiles_per_chip,
                     ring_size,
                     tile_cols_per_chip,
