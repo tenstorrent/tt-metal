@@ -44,7 +44,7 @@ void kernel_main() {
 
     if constexpr (is_all_to_all_worker) {
         const uint32_t scalar_c = get_arg_val<uint32_t>(0);
-        wh_generate_reduce_scaler<false>(cb_in_4, scalar_c);
+        wh_generate_reduce_scaler<true>(cb_in_4, scalar_c);
     }
 
     const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out);

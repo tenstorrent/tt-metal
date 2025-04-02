@@ -26,11 +26,11 @@ void kernel_main() {
     constexpr uint32_t num_links = get_compile_time_arg_val(9);
     size_t arg_idx = 0;
     const uint32_t scalar_w = get_arg_val<uint32_t>(arg_idx++);
-    wh_generate_reduce_scaler<false>(cb_in_2, scalar_w);
+    wh_generate_reduce_scaler<true>(cb_in_2, scalar_w);
 
     if constexpr (is_all_to_all_worker) {
         const uint32_t scalar_c = get_arg_val<uint32_t>(arg_idx++);
-        wh_generate_reduce_scaler<false>(cb_in_4, scalar_c);
+        wh_generate_reduce_scaler<true>(cb_in_4, scalar_c);
     } else {
         arg_idx++;
     }
