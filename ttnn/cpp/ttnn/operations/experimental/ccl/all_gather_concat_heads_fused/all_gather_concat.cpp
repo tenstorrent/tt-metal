@@ -15,58 +15,6 @@ ttnn::Tensor ExecuteAllGatherConcat::invoke(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& buffer_tensor,
     const int32_t dim,
-    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
-    const uint32_t num_heads,
-    const uint32_t num_links,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    const ttnn::ccl::Topology topology,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    bool enable_persistent_fabric_mode) {
-    const std::array<uint32_t, 2> shard_shape = {32, 128};
-
-    return ttnn::operations::experimental::ccl::all_gather_concat(
-        input_tensor,
-        buffer_tensor,
-        dim,
-        multi_device_global_semaphore,
-        num_heads,
-        num_links,
-        memory_config,
-        topology,
-        subdevice_id,
-        enable_persistent_fabric_mode);
-}
-
-ttnn::Tensor ExecuteAllGatherConcat::invoke(
-    const ttnn::Tensor& input_tensor,
-    ttnn::Tensor& buffer_tensor,
-    const int32_t dim,
-    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
-    const uint32_t num_heads,
-    const uint32_t num_links,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    const ttnn::ccl::Topology topology,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    bool enable_persistent_fabric_mode) {
-    return invoke(
-        ttnn::DefaultQueueId,
-        input_tensor,
-        buffer_tensor,
-        dim,
-        multi_device_global_semaphore,
-        num_heads,
-        num_links,
-        memory_config,
-        topology,
-        subdevice_id,
-        enable_persistent_fabric_mode);
-}
-
-ttnn::Tensor ExecuteAllGatherConcat::invoke(
-    QueueId queue_id,
-    const ttnn::Tensor& input_tensor,
-    ttnn::Tensor& buffer_tensor,
-    const int32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,

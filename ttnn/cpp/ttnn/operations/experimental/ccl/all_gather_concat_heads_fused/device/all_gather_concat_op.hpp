@@ -153,25 +153,13 @@ Tensor all_gather_concat(
     const Tensor& input_tensor,
     Tensor& buffer_tensor,
     const uint32_t dim,
-    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
-    const uint32_t num_heads,
-    const uint32_t num_links = 1,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    bool enable_persistent_fabric_mode = false);
-
-Tensor all_gather_concat(
-    const Tensor& input_tensor,
-    Tensor& buffer_tensor,
-    const uint32_t dim,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const uint32_t num_heads,
     const std::optional<uint32_t> num_links = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+    const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
     bool enable_persistent_fabric_mode = false);
 
