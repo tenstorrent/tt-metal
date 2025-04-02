@@ -277,7 +277,7 @@ def test_llama_TG_perf_device(
     num_layers = 10
 
     command = f"pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_demo"
-    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL", "OP TO OP LATENCY"]
+    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     profiler.start("run")
     profiler.start(step_name)
     post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
@@ -483,7 +483,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
     num_layers = 10
 
     command = f"pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_demo"
-    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL", "OP TO OP LATENCY"]
+    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     profiler.start("run")
     profiler.start(step_name)
     post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
