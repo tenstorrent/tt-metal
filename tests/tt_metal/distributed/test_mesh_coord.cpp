@@ -47,9 +47,8 @@ TEST(MeshShapeTest, Construction) {
 }
 
 TEST(MeshShapeTest, ZeroShape) {
-    MeshShape shape({});
-    EXPECT_EQ(shape.dims(), 0);
-    EXPECT_EQ(shape.mesh_size(), 0);
+    // MeshShapes are not allowed to be empty.
+    EXPECT_ANY_THROW(MeshShape shape({}));
 }
 
 TEST(MeshShapeTest, Strides) {
@@ -313,30 +312,146 @@ TEST(MeshCoordinateRangeSetTest, MergeInvalidDimensions) {
 
 TEST(MeshCoordinateRangeSetTest, Merge1D) {
     MeshCoordinateRangeSet set;
+
     // Merge first range: [0, 3].
-    MeshCoordinateRange r1(MeshCoordinate(0), MeshCoordinate(3));
-    set.merge(r1);
+    set.merge(MeshCoordinateRange(MeshCoordinate(0), MeshCoordinate(3)));
+    EXPECT_THAT(set.ranges(), ElementsAre(MeshCoordinateRange(MeshCoordinate(0), MeshCoordinate(3))));
 
     // Merge an adjacent range: [4, 6] (adjacent to r1, since 3 and 4 touch).
-    MeshCoordinateRange r2(MeshCoordinate(4), MeshCoordinate(6));
-    set.merge(r2);
-    ASSERT_EQ(set.size(), 1);
-    auto merged_range = set.ranges().front();
-    EXPECT_EQ(merged_range.start_coord(), MeshCoordinate(0));
-    EXPECT_EQ(merged_range.end_coord(), MeshCoordinate(6));
+    set.merge(MeshCoordinateRange(MeshCoordinate(4), MeshCoordinate(6)));
+    EXPECT_THAT(set.ranges(), ElementsAre(MeshCoordinateRange(MeshCoordinate(0), MeshCoordinate(6))));
 
     // Merge a separate range: [8, 10].
-    MeshCoordinateRange r3(MeshCoordinate(8), MeshCoordinate(10));
-    set.merge(r3);
+    set.merge(MeshCoordinateRange(MeshCoordinate(8), MeshCoordinate(10)));
     ASSERT_EQ(set.size(), 2);
+    EXPECT_THAT(
+        set.ranges(),
+        ElementsAre(
+            Eq(MeshCoordinateRange(MeshCoordinate(0), MeshCoordinate(6))),
+            Eq(MeshCoordinateRange(MeshCoordinate(8), MeshCoordinate(10)))));
 
     // Merge a range bridging the gap: [7, 7] should merge all into one [0, 10].
-    MeshCoordinateRange r4(MeshCoordinate(7), MeshCoordinate(7));
-    set.merge(r4);
-    ASSERT_EQ(set.size(), 1);
-    merged_range = set.ranges().front();
-    EXPECT_EQ(merged_range.start_coord(), MeshCoordinate(0));
-    EXPECT_EQ(merged_range.end_coord(), MeshCoordinate(10));
+    set.merge(MeshCoordinateRange(MeshCoordinate(7), MeshCoordinate(7)));
+
+    EXPECT_THAT(set.ranges(), ElementsAre(Eq(MeshCoordinateRange(MeshCoordinate(0), MeshCoordinate(10)))));
+}
+
+TEST(MeshCoordinateRangeSetTest, MergeOrder) {
+    MeshCoordinateRangeSet set;
+    set.merge(MeshCoordinateRange(MeshCoordinate(5, 5), MeshCoordinate(6, 6)));
+
+    EXPECT_THAT(set.ranges(), ElementsAre(Eq(MeshCoordinateRange(MeshCoordinate(5, 5), MeshCoordinate(6, 6)))));
+
+    set.merge(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 1)));
+
+    EXPECT_THAT(
+        set.ranges(),
+        ElementsAre(
+            Eq(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 1))),
+            Eq(MeshCoordinateRange(MeshCoordinate(5, 5), MeshCoordinate(6, 6)))));
+
+    set.merge(MeshCoordinateRange(MeshCoordinate(0, 2), MeshCoordinate(1, 3)));
+
+    EXPECT_THAT(
+        set.ranges(),
+        ElementsAre(
+            Eq(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 3))),
+            Eq(MeshCoordinateRange(MeshCoordinate(5, 5), MeshCoordinate(6, 6)))));
+
+    set.merge(MeshCoordinateRange(MeshCoordinate(2, 0), MeshCoordinate(3, 1)));
+
+    EXPECT_THAT(
+        set.ranges(),
+        ElementsAre(
+            Eq(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 3))),
+            Eq(MeshCoordinateRange(MeshCoordinate(2, 0), MeshCoordinate(3, 1))),
+            Eq(MeshCoordinateRange(MeshCoordinate(5, 5), MeshCoordinate(6, 6)))));
+
+    set.merge(MeshCoordinateRange(MeshCoordinate(2, 2), MeshCoordinate(3, 3)));
+
+    EXPECT_THAT(
+        set.ranges(),
+        ElementsAre(
+            Eq(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(3, 3))),
+            Eq(MeshCoordinateRange(MeshCoordinate(5, 5), MeshCoordinate(6, 6)))));
+
+    set.merge(MeshCoordinateRange(MeshCoordinate(4, 0), MeshCoordinate(4, 6)));
+
+    EXPECT_THAT(
+        set.ranges(),
+        ElementsAre(
+            Eq(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(3, 3))),
+            Eq(MeshCoordinateRange(MeshCoordinate(4, 0), MeshCoordinate(4, 6))),
+            Eq(MeshCoordinateRange(MeshCoordinate(5, 5), MeshCoordinate(6, 6)))));
+
+    set.merge(MeshCoordinateRange(MeshCoordinate(5, 0), MeshCoordinate(6, 4)));
+
+    EXPECT_THAT(
+        set.ranges(),
+        ElementsAre(
+            Eq(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(3, 3))),
+            Eq(MeshCoordinateRange(MeshCoordinate(4, 0), MeshCoordinate(6, 6)))));
+
+    set.merge(MeshCoordinateRange(MeshCoordinate(0, 4), MeshCoordinate(3, 6)));
+
+    EXPECT_THAT(set.ranges(), ElementsAre(Eq(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(6, 6)))));
+}
+
+TEST(MeshCoordinateRangeSetTest, MergeWithOverlaps) {
+    MeshCoordinateRangeSet set;
+    set.merge(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 1)));
+    EXPECT_THAT(set.ranges(), ElementsAre(Eq(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 1)))));
+
+    set.merge(MeshCoordinateRange(MeshCoordinate(1, 1), MeshCoordinate(2, 2)));
+    EXPECT_THAT(
+        set.ranges(),
+        ElementsAre(
+            Eq(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 1))),
+            Eq(MeshCoordinateRange(MeshCoordinate(1, 0), MeshCoordinate(1, 0))),
+            Eq(MeshCoordinateRange(MeshCoordinate(1, 1), MeshCoordinate(2, 2)))));
+
+    set.merge(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(3, 3)));
+    EXPECT_THAT(set.ranges(), ElementsAre(Eq(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(3, 3)))));
+
+    set.merge(MeshCoordinateRange(MeshCoordinate(0, 4), MeshCoordinate(2, 6)));
+    EXPECT_THAT(
+        set.ranges(),
+        ElementsAre(
+            Eq(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(3, 3))),
+            Eq(MeshCoordinateRange(MeshCoordinate(0, 4), MeshCoordinate(2, 6)))));
+
+    set.merge(MeshCoordinateRange(MeshCoordinate(2, 2), MeshCoordinate(4, 4)));
+    EXPECT_THAT(
+        set.ranges(),
+        ElementsAre(
+            Eq(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 6))),
+            Eq(MeshCoordinateRange(MeshCoordinate(2, 0), MeshCoordinate(3, 1))),
+            Eq(MeshCoordinateRange(MeshCoordinate(2, 2), MeshCoordinate(4, 4))),
+            Eq(MeshCoordinateRange(MeshCoordinate(2, 5), MeshCoordinate(2, 6)))));
+
+    set.merge(MeshCoordinateRange(MeshCoordinate(0, 3), MeshCoordinate(1, 3)));
+    EXPECT_THAT(
+        set.ranges(),
+        ElementsAre(
+            Eq(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 6))),
+            Eq(MeshCoordinateRange(MeshCoordinate(2, 0), MeshCoordinate(3, 1))),
+            Eq(MeshCoordinateRange(MeshCoordinate(2, 2), MeshCoordinate(4, 4))),
+            Eq(MeshCoordinateRange(MeshCoordinate(2, 5), MeshCoordinate(2, 6)))));
+
+    set.merge(MeshCoordinateRange(MeshCoordinate(3, 0), MeshCoordinate(4, 2)));
+    EXPECT_THAT(
+        set.ranges(),
+        ElementsAre(
+            Eq(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 6))),
+            Eq(MeshCoordinateRange(MeshCoordinate(2, 0), MeshCoordinate(4, 2))),
+            Eq(MeshCoordinateRange(MeshCoordinate(2, 3), MeshCoordinate(2, 6))),
+            Eq(MeshCoordinateRange(MeshCoordinate(3, 3), MeshCoordinate(4, 4)))));
+
+    set.merge(MeshCoordinateRange(MeshCoordinate(1, 3), MeshCoordinate(4, 6)));
+    EXPECT_THAT(set.ranges(), ElementsAre(Eq(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(4, 6)))));
+
+    set.merge(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(5, 7)));
+    EXPECT_THAT(set.ranges(), ElementsAre(Eq(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(5, 7)))));
 }
 
 TEST(MeshCoordinateRangeSetTest, SubtractInvalidDimensions) {
@@ -370,17 +485,93 @@ TEST(MeshCoordinateRangeSetTest, Subtract1DAdjacentIntersection) {
 }
 
 TEST(MeshCoordinateRangeSetTest, Subtract2DNonAdjacentIntersection) {
-    // Parent [(0,0) to (2,2)] and intersection [(1,1) to (1,1)].
     MeshCoordinateRange parent(MeshCoordinate(0, 0), MeshCoordinate(2, 2));
     MeshCoordinateRange intersection(MeshCoordinate(1, 1), MeshCoordinate(1, 1));
 
     EXPECT_THAT(
         subtract(parent, intersection).ranges(),
-        UnorderedElementsAre(
+        ElementsAre(
             Eq(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 2))),
             Eq(MeshCoordinateRange(MeshCoordinate(1, 0), MeshCoordinate(2, 0))),
-            Eq(MeshCoordinateRange(MeshCoordinate(2, 1), MeshCoordinate(2, 1))),
-            Eq(MeshCoordinateRange(MeshCoordinate(1, 2), MeshCoordinate(2, 2)))));
+            Eq(MeshCoordinateRange(MeshCoordinate(1, 2), MeshCoordinate(2, 2))),
+            Eq(MeshCoordinateRange(MeshCoordinate(2, 1), MeshCoordinate(2, 1)))));
+}
+
+TEST(MeshCoordinateRangeSetTest, Equality) {
+    MeshCoordinateRangeSet set1;
+    set1.merge(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 1)));
+    set1.merge(MeshCoordinateRange(MeshCoordinate(3, 3), MeshCoordinate(4, 4)));
+
+    MeshCoordinateRangeSet set2;
+    // Add in different order, should still be equal due to sorting
+    set2.merge(MeshCoordinateRange(MeshCoordinate(3, 3), MeshCoordinate(4, 4)));
+    set2.merge(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 1)));
+
+    MeshCoordinateRangeSet set3;
+    set3.merge(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 1)));
+    set3.merge(MeshCoordinateRange(MeshCoordinate(3, 3), MeshCoordinate(5, 5)));
+
+    MeshCoordinateRangeSet set4;
+    set4.merge(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 1)));
+
+    EXPECT_EQ(set1, set2);
+    EXPECT_NE(set1, set3);
+    EXPECT_NE(set1, set4);
+    EXPECT_NE(set2, set3);
+    EXPECT_NE(set2, set4);
+    EXPECT_NE(set3, set4);
+}
+
+TEST(MeshCoordinateRangeSetTest, UnorderedSet) {
+    MeshCoordinateRangeSet set1;
+    set1.merge(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 1)));
+    set1.merge(MeshCoordinateRange(MeshCoordinate(3, 3), MeshCoordinate(4, 4)));
+
+    MeshCoordinateRangeSet set2;  // Same ranges as set1, added in different order
+    set2.merge(MeshCoordinateRange(MeshCoordinate(3, 3), MeshCoordinate(4, 4)));
+    set2.merge(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 1)));
+
+    MeshCoordinateRangeSet set3;  // Different set
+    set3.merge(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(2, 2)));
+
+    std::unordered_set<MeshCoordinateRangeSet> set;
+    EXPECT_TRUE(set.insert(set1).second);
+    EXPECT_FALSE(set.insert(set2).second);
+    EXPECT_TRUE(set.insert(set3).second);
+
+    EXPECT_THAT(set, UnorderedElementsAre(Eq(set1), Eq(set3)));
+}
+
+TEST(MeshCoordinateRangeSetTest, Coords) {
+    MeshCoordinateRangeSet set;
+
+    EXPECT_THAT(set.coords(), IsEmpty());
+
+    set.merge(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 1)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(1, 1), MeshCoordinate(1, 1)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(0, 3), MeshCoordinate(0, 3)));
+
+    EXPECT_THAT(
+        set.coords(),
+        ElementsAre(
+            MeshCoordinate(0, 0),  //
+            MeshCoordinate(0, 1),
+            MeshCoordinate(0, 3),
+            MeshCoordinate(1, 1)));
+
+    set.merge(MeshCoordinateRange(MeshCoordinate(0, 2), MeshCoordinate(1, 2)));
+    set.merge(MeshCoordinateRange(MeshCoordinate(1, 3), MeshCoordinate(1, 3)));
+
+    EXPECT_THAT(
+        set.coords(),
+        ElementsAre(
+            MeshCoordinate(0, 0),
+            MeshCoordinate(0, 1),
+            MeshCoordinate(0, 2),
+            MeshCoordinate(0, 3),
+            MeshCoordinate(1, 1),
+            MeshCoordinate(1, 2),
+            MeshCoordinate(1, 3)));
 }
 
 TEST(ToLinearIndexTest, Basic) {

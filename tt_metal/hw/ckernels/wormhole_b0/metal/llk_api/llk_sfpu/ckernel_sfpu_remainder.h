@@ -39,6 +39,9 @@ inline void calculate_remainder(const uint value, const uint recip) {
         vFloat quotient;
         vInt exp = exexp(v * recip_val);
         v_if(exp < 0) { quotient = vConst0; }
+        // Since fp32 has 23 mantissa bits, the LSB represents the fractional part when exp < 23.
+        // We effectively round off the fractional bits to zero by right shifting using (exp - 23) and then left
+        // shifting it back using (0 - (exp - 23)).
         v_elseif(exp < 23) {
             quotient =
                 reinterpret<vFloat>(shft((shft(reinterpret<vUInt>(v * recip_val), (exp - 23))), (0 - (exp - 23))));

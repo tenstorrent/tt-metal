@@ -7,11 +7,11 @@
 #include <string>
 
 #include "hostdevcommon/kernel_structs.h"
-#include "assert.hpp"
-#include "base_types.hpp"
-#include "tt_backend_api_types.hpp"
-#include "utils.hpp"
-#include "circular_buffer_constants.h"  // for NUM_CIRCULAR_BUFFERS
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/utils.hpp>
+#include <tt-metalium/circular_buffer_constants.h>  // for NUM_CIRCULAR_BUFFERS
 
 namespace tt {
 /**

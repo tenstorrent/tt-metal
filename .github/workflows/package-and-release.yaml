@@ -1,10 +1,11 @@
 name: Package and release
 on:
   workflow_dispatch:
-  schedule:
+  # NOTE: Tempoarily disabling due to workflow running against 0.57 branch
+  # schedule:
     # Create rc every day at EOD of PST Mon-Fri + night of Sunday to kick off
     # releases for beginning of work week
-    - cron: "0 1,14 * * *"
+    # - cron: "0 1,14 * * *"
 
 permissions:
   contents: write

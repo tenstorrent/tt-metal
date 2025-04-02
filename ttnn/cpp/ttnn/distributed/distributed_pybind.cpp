@@ -3,20 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/distributed/distributed_pybind.hpp"
+#include <pybind11/cast.h>
+#include <cstddef>
+#include <memory>
 #include <pybind11/pytypes.h>
-
-#include <ostream>
-
-#include <tt-metalium/command_queue.hpp>
 #include "tt-metalium/mesh_coord.hpp"
+#include "distributed_tensor.hpp"
+#include "distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/types.hpp"
+#include <tt-metalium/command_queue.hpp>
 
 // This is required for automatic conversions, as in the creation of mesh devices
 // https://github.com/tenstorrent/tt-metal/issues/18082
 #include "pybind11/stl.h"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 
@@ -25,11 +26,19 @@ namespace ttnn::distributed {
 namespace py = pybind11;
 
 void py_module_types(py::module& module) {
+    py::class_<MeshToTensor, std::unique_ptr<MeshToTensor>>(module, "CppMeshToTensor");
+    py::class_<TensorToMesh, std::unique_ptr<TensorToMesh>>(module, "CppTensorToMesh");
+
+    py::class_<Shard2dConfig>(module, "Shard2dConfig");
+    py::class_<Concat2dConfig>(module, "Concat2dConfig");
+
     py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice");
     py::class_<MeshSubDeviceManagerId>(module, "MeshSubDeviceManagerId");
     py::class_<MeshShape>(module, "MeshShape", "Shape of a mesh device.");
     py::class_<MeshCoordinate>(module, "MeshCoordinate", "Coordinate within a mesh device.");
     py::class_<MeshCoordinateRange>(module, "MeshCoordinateRange", "Range of coordinates within a mesh device.");
+    py::class_<MeshCoordinateRangeSet>(
+        module, "MeshCoordinateRangeSet", "Set of coordinate ranges within a mesh device.");
 }
 
 void py_module(py::module& module) {
@@ -111,6 +120,21 @@ void py_module(py::module& module) {
             "__iter__",
             [](const MeshCoordinateRange& mcr) { return py::make_iterator(mcr.begin(), mcr.end()); },
             py::keep_alive<0, 1>());
+
+    static_cast<py::class_<MeshCoordinateRangeSet>>(module.attr("MeshCoordinateRangeSet"))
+        .def(
+            py::init([]() { return MeshCoordinateRangeSet(); }),
+            "Default constructor for an empty MeshCoordinateRangeSet.")
+        .def(
+            py::init([](const MeshCoordinateRange& range) { return MeshCoordinateRangeSet(range); }),
+            "Constructor with specified range.",
+            py::arg("range"))
+        .def("merge", &MeshCoordinateRangeSet::merge, py::arg("range"))
+        .def("__repr__", [](const MeshCoordinateRangeSet& mcrs) {
+            std::ostringstream str;
+            str << mcrs;
+            return str.str();
+        });
 
     auto py_mesh_device = static_cast<py::class_<MeshDevice, std::shared_ptr<MeshDevice>>>(module.attr("MeshDevice"));
     py_mesh_device
@@ -356,6 +380,12 @@ void py_module(py::module& module) {
                back to all SubDevice IDs.
            )doc");
 
+    auto py_tensor_to_mesh =
+        static_cast<py::class_<TensorToMesh, std::unique_ptr<TensorToMesh>>>(module.attr("CppTensorToMesh"));
+
+    auto py_mesh_to_tensor =
+        static_cast<py::class_<MeshToTensor, std::unique_ptr<MeshToTensor>>>(module.attr("CppMeshToTensor"));
+
     module.def(
         "open_mesh_device",
         &open_mesh_device,
@@ -367,7 +397,6 @@ void py_module(py::module& module) {
         py::arg("offset"),
         py::arg("physical_device_ids"),
         py::arg("dispatch_core_config"));
-
     module.def("close_mesh_device", &close_mesh_device, py::arg("mesh_device"), py::kw_only());
     module.def(
         "get_device_tensor",
@@ -378,15 +407,23 @@ void py_module(py::module& module) {
         R"doc(
        Get the tensor shard corresponding to the device_id.
 
-
        Args:
            tensor (Tensor): The tensor to get the shard from.
            device_id (int): The device id to get the shard for.
 
+        Returns:
+            Tensor: The shard of the tensor corresponding to the device_id.
+    )doc");
 
-       Returns:
-           Tensor: The shard of the tensor corresponding to the device_id.
-   )doc");
+    auto py_shard2d_config = static_cast<py::class_<Shard2dConfig>>(module.attr("Shard2dConfig"));
+    py_shard2d_config.def(py::init<int, int>(), py::arg("row_dim"), py::arg("col_dim"))
+        .def_readwrite("row_dim", &Shard2dConfig::row_dim)
+        .def_readwrite("col_dim", &Shard2dConfig::col_dim);
+    auto py_concat2d_config = static_cast<py::class_<Concat2dConfig>>(module.attr("Concat2dConfig"));
+    py_concat2d_config.def(py::init<int, int>(), py::arg("row_dim"), py::arg("col_dim"))
+        .def_readwrite("row_dim", &Concat2dConfig::row_dim)
+        .def_readwrite("col_dim", &Concat2dConfig::col_dim);
+
     module.def(
         "get_device_tensor",
         py::overload_cast<const Tensor&, const IDevice*>(&ttnn::distributed::get_device_tensor),
@@ -396,7 +433,6 @@ void py_module(py::module& module) {
         R"doc(
        Get the tensor shard corresponding to the device.
 
-
        Args:
            tensor (Tensor): The tensor to get the shard from.
            device (Device): The device to get the shard for.
@@ -405,12 +441,164 @@ void py_module(py::module& module) {
        Returns:
            Tensor: The shard of the tensor corresponding to the device.
    )doc");
-    module.def("get_device_tensors", &get_device_tensors, py::arg("tensor"), py::kw_only());
+    module.def(
+        "get_device_tensors",
+        &get_device_tensors,
+        py::arg("tensor"),
+        py::kw_only(),
+        R"doc(
+       Get a list of tensor shards from a multidevice tensor.
+
+       Args:
+           tensor (Tensor): The tensor to get the shards from.
+
+       Returns:
+           List[Tensor]: The shards of the tensor corresponding to the devices.
+           )doc");
+    module.def(
+        "replicate_tensor_to_mesh_mapper",
+        [](MeshDevice& mesh_device) -> std::unique_ptr<TensorToMesh> {
+            return replicate_tensor_to_mesh_mapper(mesh_device);
+        },
+        py::arg("mesh_device"),
+        R"doc(
+       Returns a mapper replicating a tensor over the given mesh.
+
+       Args:
+           mesh_device (MeshDevice): The mesh to replicate over.
+
+
+       Returns:
+           TensorToMesh: A mapper providing the desired sharding.
+   )doc");
+    module.def(
+        "shard_tensor_to_mesh_mapper",
+        [](MeshDevice& mesh_device, int dim) -> std::unique_ptr<TensorToMesh> {
+            return shard_tensor_to_mesh_mapper(mesh_device, dim);
+        },
+        py::arg("mesh_device"),
+        py::arg("dim"),
+        R"doc(
+       Returns a mapper sharding a tensor over the given dimension for the given mesh.
+
+       Args:
+           mesh_device (MeshDevice): The mesh to replicate over.
+           dim (int): The dimension to shard over.
+
+       Returns:
+           TensorToMesh: A mapper providing the desired sharding.
+   )doc");
+    module.def(
+        "shard_tensor_to_2d_mesh_mapper",
+        [](MeshDevice& mesh_device,
+           const MeshShape& mesh_shape,
+           const Shard2dConfig& config) -> std::unique_ptr<TensorToMesh> {
+            return shard_tensor_to_2d_mesh_mapper(mesh_device, mesh_shape, config);
+        },
+        py::arg("mesh_device"),
+        py::arg("mesh_shape"),
+        py::arg("config"),
+        R"doc(
+       Returns a mapper sharding a tensor over the given dimension for the given mesh.
+
+       Args:
+           mesh_device (MeshDevice): The mesh to create the mapper for.
+           mesh_shape (MeshShape): The shape of the 2D mesh as (num_rows, num_cols).
+           config (Shard2dConfig): A config object representing the row and column to shard over.
+
+       Returns:
+           TensorToMesh: A mapper providing the desired sharding.
+   )doc");
+    module.def(
+        "concat_mesh_to_tensor_composer",
+        [](int dim) -> std::unique_ptr<MeshToTensor> { return concat_mesh_to_tensor_composer(dim); },
+        py::arg("dim"));
+    module.def(
+        "concat_2d_mesh_to_tensor_composer",
+        [](MeshDevice& mesh_device, const Concat2dConfig& config) -> std::unique_ptr<MeshToTensor> {
+            return concat_2d_mesh_to_tensor_composer(mesh_device, config);
+        },
+        py::arg("mesh_device"),
+        py::arg("config"),
+        R"doc(
+            Returns a Concat2dMeshToTensor composer with the given mesh device and dimensions.
+
+            Args:
+                mesh_device (MeshDevice): The mesh device to create the composer for.
+                config (Concat2dConfig): A config object representing the row and column to concat over.
+
+            Returns:
+                TensorToMesh: A composer providing the desired concatenation.
+   )doc");
+    module.def(
+        "distribute_tensor",
+        [](const Tensor& tensor,
+           const TensorToMesh& mapper,
+           std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt) -> Tensor {
+            return distribute_tensor(tensor, mapper, mesh_device);
+        },
+        py::arg("tensor"),
+        py::arg("mapper"),
+        py::arg("mesh_device") = py::none(),
+        R"doc(
+            Distributes a tensor across a mesh device according to provided mapper.
+
+            Args:
+                tensor (Tensor): The tensor to distribute.
+                mapper (TensorToMesh): The mapper to use for distribution.
+                mesh_device (MeshDevice): The mesh device to distribute the tensor over.
+
+            Returns:
+                Tensor: The distributed tensor.
+        )doc");
+    module.def(
+        "aggregate_tensor",
+        [](const Tensor& tensor, const MeshToTensor& composer) -> Tensor { return aggregate_tensor(tensor, composer); },
+        py::arg("tensor"),
+        py::arg("composer"),
+        R"doc(
+            Aggregates a set of shard tensors into a single host tensor using the provided composer.
+
+            Args:
+                tensor (Tensor): The tensor to aggregate.
+                composer (MeshToTensor): The composer to use for aggregation.
+
+            Returns:
+                Tensor: The aggregated tensor.
+            )doc");
+    module.def(
+        "aggregate_tensor",
+        [](const std::vector<Tensor>& tensors, const MeshToTensor& composer) -> Tensor {
+            Tensor aggregated_tensor = aggregate_as_tensor(tensors, AllGatherTensor{});
+
+            return aggregate_tensor(aggregated_tensor, composer);
+        },
+        py::arg("tensor"),
+        py::arg("composer"),
+        R"doc(
+            Aggregates a set of shard tensors into a single host tensor using the provided composer.
+
+            Args:
+                tensor (Tensor): The tensor to aggregate.
+                composer (MeshToTensor): The composer to use for aggregation.
+
+            Returns:
+                Tensor: The aggregated tensor.
+            )doc");
     module.def(
         "aggregate_as_tensor",
         [](const std::vector<Tensor>& tensors) -> Tensor { return aggregate_as_tensor(tensors, AllGatherTensor{}); },
         py::arg("tensors"),
-        py::kw_only());
+        py::kw_only(),
+        R"doc(
+            Aggregates a set of shards into one tensor. Device shards will remain on device and be packed into a multidevice storage object.
+
+            Args:
+                tensor (Tensor): The tensor to aggregate.
+
+            Returns:
+                Tensor: The aggregated tensor.
+            )doc");
     module.def("get_t3k_physical_device_ids_ring", &get_t3k_physical_device_ids_ring);
 }
 
