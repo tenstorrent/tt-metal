@@ -3,10 +3,29 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "core_descriptor.hpp"
-#include "rtoptions.hpp"
-#include "tt_cluster.hpp"
 
-#include "yaml-cpp/yaml.h"
+#include <yaml-cpp/yaml.h>
+#include <algorithm>
+#include <bitset>
+#include <cstdlib>
+#include <functional>
+#include <iterator>
+#include <stdexcept>
+#include <unordered_map>
+#include <unordered_set>
+
+#include "assert.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "metal_soc_descriptor.h"
+#include "rtoptions.hpp"
+#include "tt_backend_api_types.hpp"
+#include "tt_cluster.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/arch.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/xy_pair.h>
+#include "utils.hpp"
 
 namespace tt {
 
@@ -248,9 +267,9 @@ std::optional<uint32_t> get_storage_core_bank_size(
     const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(device_id);
     if (core_desc.storage_core_bank_size.has_value()) {
         TT_FATAL(
-            core_desc.storage_core_bank_size.value() % tt_metal::hal.get_alignment(tt_metal::HalMemType::L1) == 0,
+            core_desc.storage_core_bank_size.value() % tt_metal::hal_ref.get_alignment(tt_metal::HalMemType::L1) == 0,
             "Storage core bank size must be {} B aligned",
-            tt_metal::hal.get_alignment(tt_metal::HalMemType::L1));
+            tt_metal::hal_ref.get_alignment(tt_metal::HalMemType::L1));
     }
     return core_desc.storage_core_bank_size;
 }

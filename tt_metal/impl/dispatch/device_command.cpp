@@ -4,6 +4,15 @@
 
 #include "device_command.hpp"
 
+#include <cstring>
+
+#include "aligned_allocator.hpp"
+#include "assert.hpp"
+#include "dispatch/kernels/cq_commands.hpp"
+#include "dispatch/memcpy.hpp"
+#include "dispatch_settings.hpp"
+#include "tt_align.hpp"
+
 namespace tt::tt_metal {
 
 template <bool hugepage_write>
@@ -88,7 +97,7 @@ uint32_t DeviceCommand<hugepage_write>::write_offset_bytes() const {
 }
 
 template <bool hugepage_write>
-vector_memcpy_aligned<uint32_t> DeviceCommand<hugepage_write>::cmd_vector() const {
+vector_aligned<uint32_t> DeviceCommand<hugepage_write>::cmd_vector() const {
     return this->cmd_region_vector;
 }
 
@@ -456,7 +465,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_set_num_worker_sems(
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_set_go_signal_noc_data(
-    const vector_memcpy_aligned<uint32_t>& noc_mcast_unicast_data, DispatcherSelect dispatcher_type) {
+    const vector_aligned<uint32_t>& noc_mcast_unicast_data, DispatcherSelect dispatcher_type) {
     TT_ASSERT(
         noc_mcast_unicast_data.size() <= DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
         "Number of words {} exceeds maximum {}",

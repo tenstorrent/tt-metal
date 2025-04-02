@@ -2,12 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <math.h>
+
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include "cpp/ttnn/operations/data_movement/sharded/sharded_common.hpp"
 #include "cpp/ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.hpp"
+#include <tt-metalium/hal.hpp>
 
 using namespace tt;
 using namespace tt::constants;
@@ -232,8 +235,8 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
                     }
                 }
             }
-            uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
-            uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+            uint32_t dram_alignment = hal::get_dram_alignment();
+            uint32_t l1_alignment = hal::get_l1_alignment();
             uint32_t padded_shard_width = align(output_unit_size, dst_buffer->alignment());
             if(is_blackhole or is_l1_aligned) {
                 if(!dst_is_dram or is_l1_aligned)

@@ -106,6 +106,8 @@ FORCE_INLINE
 void dispatch_s_noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t noc_id, uint8_t be = 0xF) {
     WAYPOINT("NWIW");
     DEBUG_SANITIZE_NOC_ADDR(noc_id, addr, 4);
+    // Workaround for BH inline writes does not apply here because this writes to a stream register.
+    // See comment in `noc_get_interim_inline_value_addr` for more details.
     noc_fast_write_dw_inline<noc_mode>(
         noc_id,
         DISPATCH_S_WR_REG_CMD_BUF,
@@ -131,6 +133,7 @@ uint32_t stream_wrap_gt(uint32_t a, uint32_t b) {
 
 FORCE_INLINE
 void wait_for_workers(volatile CQDispatchCmd tt_l1_ptr* cmd) {
+    DeviceZoneScopedN("WAIT-FOR-WORKERS");
     volatile uint32_t* worker_sem =
         (volatile uint32_t*)STREAM_REG_ADDR(cmd->mcast.wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
     while (stream_wrap_gt(cmd->mcast.wait_count, *worker_sem)) {
@@ -202,8 +205,6 @@ void process_go_signal_mcast_cmd() {
         update_worker_completion_count_on_dispatch_d();
     }
     mcasts_sent++;  // Go signal sent -> update counter
-    // Wait until workers have completed before sending go signal
-    wait_for_workers(cmd);
 
     // The location of the go signal embedded in the command does not meet NOC alignment requirements.
     // cmd_ptr is guaranteed to meet the alignment requirements, since it is written to by prefetcher over NOC.
@@ -212,15 +213,31 @@ void process_go_signal_mcast_cmd() {
     // CQDispatchGoSignalMcastCmd).
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage = (volatile uint32_t tt_l1_ptr*)cmd_ptr;
     *aligned_go_signal_storage = cmd->mcast.go_signal;
-
     uint8_t go_signal_noc_data_idx = cmd->mcast.noc_data_start_index;
-    // send go signal update here
-    for (uint32_t i = 0, num_mcasts = cmd->mcast.num_mcast_txns; i < num_mcasts; ++i) {
-        uint64_t dst = get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], mcast_go_signal_addr);
-        // packed_write_max_unicast_sub_cmds is the total number of compute cores (num_mcast_dests for this txn)
-        noc_async_write_multicast_one_packet(
-            (uint32_t)(aligned_go_signal_storage), dst, sizeof(uint32_t), go_signal_noc_data[go_signal_noc_data_idx++]);
+
+    if (cmd->mcast.num_mcast_txns > 0) {
+        // Setup registers before waiting for workers so only the NOC_CMD_CTRL register needs to be touched after.
+        uint64_t dst_noc_addr_multicast =
+            get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], mcast_go_signal_addr);
+        uint32_t num_dests = go_signal_noc_data[go_signal_noc_data_idx++];
+        cq_noc_async_write_init_state<CQ_NOC_SNDL, true>(
+            (uint32_t)aligned_go_signal_storage, dst_noc_addr_multicast, sizeof(uint32_t));
+        noc_nonposted_writes_acked[noc_index] += num_dests;
+
+        wait_for_workers(cmd);
+        cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0);
+        // Send GO signal to remaining destinations. Only the destination NOC needs to be modified.
+        for (uint32_t i = 1, num_mcasts = cmd->mcast.num_mcast_txns; i < num_mcasts; ++i) {
+            uint64_t dst = get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], mcast_go_signal_addr);
+            uint32_t num_dests = go_signal_noc_data[go_signal_noc_data_idx++];
+            cq_noc_async_write_with_state<CQ_NOC_sNdl>(0, dst, 0);
+            noc_nonposted_writes_acked[noc_index] += num_dests;
+        }
+        noc_nonposted_writes_num_issued[noc_index] += cmd->mcast.num_mcast_txns;
+    } else {
+        wait_for_workers(cmd);
     }
+
     for (uint32_t i = 0, num_unicasts = cmd->mcast.num_unicast_txns; i < num_unicasts; ++i) {
         uint64_t dst = get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], unicast_go_signal_addr);
         noc_async_write_one_packet((uint32_t)(aligned_go_signal_storage), dst, sizeof(uint32_t));
@@ -297,9 +314,11 @@ void kernel_main() {
     bool done = false;
     uint32_t total_pages_acquired = 0;
     while (!done) {
+        DeviceZoneScopedN("CQ-DISPATCH-SLAVE");
         cb_acquire_pages_dispatch_s<my_noc_xy, my_dispatch_cb_sem_id>(1);
 
         volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
+        DeviceTimestampedData("process_cmd_d_dispatch_slave", (uint32_t)cmd->base.cmd_id);
         switch (cmd->base.cmd_id) {
             case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: process_go_signal_mcast_cmd(); break;
             case CQ_DISPATCH_SET_NUM_WORKER_SEMS: set_num_worker_sems(); break;

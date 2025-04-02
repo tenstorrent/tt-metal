@@ -5,25 +5,47 @@
 #include "hardware_command_queue.hpp"
 
 #include <device.hpp>
-#include "dprint_server.hpp"
 #include <event.hpp>
-#include <tt_stl/overloaded.hpp>
-#include <trace_buffer.hpp>
-#include <tt-metalium/command_queue_interface.hpp>
-#include <tt-metalium/dispatch_settings.hpp>
-
-#include "tt_cluster.hpp"
-
-#include "work_executor.hpp"
-
 // Because we are a Friend of Program, accessing Program::get_program_transfer_info() and Program::get_kernels_buffer()
 // MUST REMOVE
 #include <program_impl.hpp>
+#include <trace_buffer.hpp>
+#include <tracy/Tracy.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
+#include <tt_stl/overloaded.hpp>
+#include <algorithm>
+#include <array>
+#include <type_traits>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
+#include "assert.hpp"
+#include "buffers/dispatch.hpp"
+#include "dispatch/device_command.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
+#include "dispatch/host_runtime_commands.hpp"
+#include "dprint_server.hpp"
+#include "event/dispatch.hpp"
+#include "hal.hpp"
+#include "hal_types.hpp"
+#include "logger.hpp"
+#include "program_device_map.hpp"
+#include "rtoptions.hpp"
+#include "strong_type.hpp"
+#include "system_memory_manager.hpp"
+#include "tt_cluster.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include <umd/device/tt_xy_pair.h>
+#include "work_executor.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum NOC : uint8_t;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 namespace {
@@ -101,7 +123,7 @@ std::optional<uint32_t> HWCommandQueue::tid() const { return this->tid_; }
 SystemMemoryManager& HWCommandQueue::sysmem_manager() { return this->manager_; }
 
 void HWCommandQueue::reset_worker_state(
-    bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_memcpy_aligned<uint32_t>& go_signal_noc_data) {
+    bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_aligned<uint32_t>& go_signal_noc_data) {
     TT_FATAL(!this->manager_.get_bypass_mode(), "Cannot reset worker state during trace capture");
     // TODO: This could be further optimized by combining all of these into a single prefetch entry
     // Currently each one will be pushed into its own prefetch entry
@@ -128,7 +150,7 @@ void HWCommandQueue::reset_worker_state(
 }
 
 void HWCommandQueue::set_go_signal_noc_data_and_dispatch_sems(
-    uint32_t num_dispatch_sems, const vector_memcpy_aligned<uint32_t>& noc_mcast_unicast_data) {
+    uint32_t num_dispatch_sems, const vector_aligned<uint32_t>& noc_mcast_unicast_data) {
     program_dispatch::set_num_worker_sems_on_dispatch(device_, this->manager_, id_, num_dispatch_sems);
     program_dispatch::set_go_signal_noc_data_on_dispatch(device_, noc_mcast_unicast_data, this->manager_, id_);
 }
@@ -154,19 +176,15 @@ HWCommandQueue::~HWCommandQueue() {
 void HWCommandQueue::increment_num_entries_in_completion_q() {
     // Increment num_entries_in_completion_q and inform reader thread
     // that there is work in the completion queue to process
+    std::lock_guard lock(this->reader_thread_cv_mutex_);
     this->num_entries_in_completion_q_++;
-    {
-        std::lock_guard lock(this->reader_thread_cv_mutex_);
-        this->reader_thread_cv_.notify_one();
-    }
+    this->reader_thread_cv_.notify_one();
 }
 
 void HWCommandQueue::set_exit_condition() {
+    std::lock_guard lock(this->reader_thread_cv_mutex_);
     this->exit_condition_ = true;
-    {
-        std::lock_guard lock(this->reader_thread_cv_mutex_);
-        this->reader_thread_cv_.notify_one();
-    }
+    this->reader_thread_cv_.notify_one();
 }
 
 IDevice* HWCommandQueue::device() { return this->device_; }
@@ -454,16 +472,19 @@ void HWCommandQueue::read_completion_queue() {
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device_->id());
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
     while (true) {
+        uint32_t num_events_to_read = 0;
         {
             std::unique_lock<std::mutex> lock(this->reader_thread_cv_mutex_);
             this->reader_thread_cv_.wait(lock, [this] {
                 return this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_ or
                        this->exit_condition_;
             });
+            if (this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_) {
+                num_events_to_read = this->num_entries_in_completion_q_ - this->num_completed_completion_q_reads_;
+            }
         }
-        if (this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_) {
+        if (num_events_to_read > 0) {
             ZoneScopedN("CompletionQueueReader");
-            uint32_t num_events_to_read = this->num_entries_in_completion_q_ - this->num_completed_completion_q_reads_;
             for (uint32_t i = 0; i < num_events_to_read; i++) {
                 ZoneScopedN("CompletionQueuePopulated");
                 auto read_descriptor = *(this->issued_completion_q_reads_.pop());
@@ -496,9 +517,9 @@ void HWCommandQueue::read_completion_queue() {
                     },
                     read_descriptor);
             }
-            this->num_completed_completion_q_reads_ += num_events_to_read;
             {
                 std::unique_lock<std::mutex> lock(this->reads_processed_cv_mutex_);
+                this->num_completed_completion_q_reads_ += num_events_to_read;
                 this->reads_processed_cv_.notify_one();
             }
         } else if (this->exit_condition_) {
@@ -557,7 +578,7 @@ void HWCommandQueue::record_end() {
     auto& trace_data = this->trace_ctx_->data;
     trace_data = std::move(this->manager_.get_bypass_data());
     // Add trace end command to terminate the trace buffer
-    DeviceCommand command_sequence(hal.get_alignment(HalMemType::HOST));
+    DeviceCommand command_sequence(hal_ref.get_alignment(HalMemType::HOST));
     command_sequence.add_prefetch_exec_buf_end();
     for (int i = 0; i < command_sequence.size_bytes() / sizeof(uint32_t); i++) {
         trace_data.push_back(((uint32_t*)command_sequence.data())[i]);

@@ -2,11 +2,42 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/hal.hpp>
-#include "control_plane.hpp"
+#include <magic_enum/magic_enum.hpp>
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <initializer_list>
+#include <iomanip>
+#include <limits>
+#include <map>
+#include <memory>
+#include <ostream>
 #include <queue>
+#include <set>
+#include <string>
+#include <tuple>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
+#include "assert.hpp"
+#include "control_plane.hpp"
+#include "core_coord.hpp"
+#include "fabric_host_interface.h"
+#include "hal_types.hpp"
+#include "llrt/hal.hpp"
+#include "logger.hpp"
+#include "mesh_coord.hpp"
+#include "mesh_graph.hpp"
+#include "metal_soc_descriptor.h"
+#include "routing_table_generator.hpp"
 #include "tt_cluster.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/xy_pair.h>
 
 namespace tt::tt_fabric {
 
@@ -15,33 +46,72 @@ std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped
     return tt::Cluster::instance().get_ethernet_cores_grouped_by_connected_chips(chip_id);
 }
 
+// Get the physical chip ids for a mesh
+// TODO: get this from Cluster, once UMD unique id changes are merged
+std::uint32_t get_ubb_asic_id(chip_id_t physical_chip_id) {
+    std::vector<uint32_t> ubb_asic_loc_vec;
+    const auto& eth_cores = tt::Cluster::instance().get_virtual_eth_cores(physical_chip_id);
+    tt::Cluster::instance().read_core(
+        ubb_asic_loc_vec,
+        sizeof(uint32_t),
+        tt_cxy_pair(physical_chip_id, *eth_cores.begin()),
+        0x1ec0 + 65 * sizeof(uint32_t));
+    return ((ubb_asic_loc_vec[0] >> 24) & 0xFF);
+}
+
+bool is_external_ubb_cable(chip_id_t physical_chip_id, CoreCoord eth_core) {
+    auto chan_id = tt::Cluster::instance().get_soc_desc(physical_chip_id).logical_eth_core_to_chan_map.at(eth_core);
+    auto ubb_asic_id = get_ubb_asic_id(physical_chip_id);
+    bool is_external_cable = false;
+    if (ubb_asic_id == 1) {
+        // UBB 1 has external cables on channesl 0-7
+        is_external_cable = (chan_id >= 0 and chan_id <= 7);
+    } else if (ubb_asic_id >= 2 and ubb_asic_id <= 4) {
+        // UBB 2 to 4 has external cables on channesl 0-3
+        is_external_cable = (chan_id >= 0 and chan_id <= 3);
+    } else if (ubb_asic_id == 5) {
+        // UBB 5 has external cables on channesl 4-7
+        is_external_cable = (chan_id >= 4 and chan_id <= 7);
+    }
+    return is_external_cable;
+}
+
 bool is_chip_on_edge_of_mesh(
     chip_id_t physical_chip_id,
-    int chips_per_side,
+    int num_ports_per_side,
     const std::unordered_map<chip_id_t, std::vector<CoreCoord>>& ethernet_cores_grouped_by_connected_chips) {
-    // TODO: check if syseng chip routing info has this info
     // Chip is on edge if it does not have full connections to four sides
-    int i = 0;
-    for (const auto& [connected_chip_id, eth_ports] : ethernet_cores_grouped_by_connected_chips) {
-        if (eth_ports.size() == chips_per_side) {
-            i++;
+    if (tt::Cluster::instance().get_board_type(physical_chip_id) == BoardType::UBB) {
+        auto ubb_asic_id = get_ubb_asic_id(physical_chip_id);
+        return (ubb_asic_id >= 2) and (ubb_asic_id <= 5);
+    } else {
+        int i = 0;
+        for (const auto& [connected_chip_id, eth_ports] : ethernet_cores_grouped_by_connected_chips) {
+            if (eth_ports.size() == num_ports_per_side) {
+                i++;
+            }
         }
+        return (i == 3);
     }
-    return (i == 3);
 }
 
 bool is_chip_on_corner_of_mesh(
     chip_id_t physical_chip_id,
-    int chips_per_side,
+    int num_ports_per_side,
     const std::unordered_map<chip_id_t, std::vector<CoreCoord>>& ethernet_cores_grouped_by_connected_chips) {
-    // Chip is a corner if it has exactly 2 fully connected sides
-    int i = 0;
-    for (const auto& [connected_chip_id, eth_ports] : ethernet_cores_grouped_by_connected_chips) {
-        if (eth_ports.size() == chips_per_side) {
-            i++;
+    if (tt::Cluster::instance().get_board_type(physical_chip_id) == BoardType::UBB) {
+        auto ubb_asic_id = get_ubb_asic_id(physical_chip_id);
+        return (ubb_asic_id == 1);
+    } else {
+        // Chip is a corner if it has exactly 2 fully connected sides
+        int i = 0;
+        for (const auto& [connected_chip_id, eth_ports] : ethernet_cores_grouped_by_connected_chips) {
+            if (eth_ports.size() == num_ports_per_side) {
+                i++;
+            }
         }
+        return (i < 3);
     }
-    return (i < 3);
 }
 
 ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
@@ -58,11 +128,92 @@ ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
     this->print_ethernet_channels();
 }
 
+chip_id_t ControlPlane::get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_coord) const {
+    chip_id_t nw_chip_physical_chip_id = 0;
+    for (const auto& [physical_chip_id, coord] : tt::Cluster::instance().get_user_chip_ethernet_coordinates()) {
+        if (coord == eth_coord) {
+            return physical_chip_id;
+        }
+    }
+    TT_FATAL(false, "Physical chip id not found for eth coord");
+    return 0;
+}
+
+void ControlPlane::validate_mesh_connections(mesh_id_t mesh_id) const {
+    std::uint32_t mesh_ns_size = routing_table_generator_->get_mesh_ns_size(mesh_id);
+    std::uint32_t mesh_ew_size = routing_table_generator_->get_mesh_ew_size(mesh_id);
+    std::uint32_t num_ports_per_side = routing_table_generator_->get_chip_spec().num_eth_ports_per_direction;
+    for (int i = 0; i < mesh_ns_size; i++) {
+        for (int j = 0; j < mesh_ew_size - 1; j++) {
+            chip_id_t logical_chip_id = i * mesh_ew_size + j;
+            chip_id_t physical_chip_id = logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][logical_chip_id];
+            chip_id_t physical_chip_id_next =
+                logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][logical_chip_id + 1];
+            chip_id_t physical_chip_id_next_row =
+                logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][logical_chip_id + mesh_ew_size];
+
+            const auto& eth_links = get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
+            auto eth_links_to_next = eth_links.find(physical_chip_id_next);
+            TT_FATAL(
+                eth_links_to_next != eth_links.end(),
+                "Chip {} not connected to chip {}",
+                physical_chip_id,
+                physical_chip_id_next);
+            TT_FATAL(
+                eth_links_to_next->second.size() == num_ports_per_side,
+                "Chip {} to chip {} has {} links but expecting {}",
+                physical_chip_id,
+                physical_chip_id_next,
+                eth_links.at(physical_chip_id_next).size(),
+                num_ports_per_side);
+            if (i != mesh_ns_size - 1) {
+                auto eth_links_to_next_row = eth_links.find(physical_chip_id_next_row);
+                TT_FATAL(
+                    eth_links_to_next_row != eth_links.end(),
+                    "Chip {} not connected to chip {}",
+                    physical_chip_id,
+                    physical_chip_id_next_row);
+                TT_FATAL(
+                    eth_links_to_next_row->second.size() == num_ports_per_side,
+                    "Chip {} to chip {} has {} links but expecting {}",
+                    physical_chip_id,
+                    physical_chip_id_next_row,
+                    eth_links.at(physical_chip_id_next_row).size(),
+                    num_ports_per_side);
+            }
+        }
+    }
+}
+
 std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
     std::uint32_t mesh_ns_size,
     std::uint32_t mesh_ew_size,
-    std::uint32_t num_ports_per_side,
-    std::uint32_t nw_chip_physical_chip_id) {
+    chip_id_t nw_chip_physical_chip_id) const {
+    std::uint32_t num_ports_per_side = routing_table_generator_->get_chip_spec().num_eth_ports_per_direction;
+
+    const auto user_chips = tt::Cluster::instance().user_exposed_chip_ids();
+    std::set<chip_id_t> corner_chips;
+    std::set<chip_id_t> edge_chips;
+    // Check if user provided chip is on corner or edge of mesh
+    // Ideally we want to always enable an auto detected chip, but to preserve current pinning
+    // in MeshDevice, we pin a specific chip on the corner for TGs/T3ks
+    for (const auto& physical_chip_id : user_chips) {
+        const auto& connected_ethernet_cores = get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
+        if (is_chip_on_corner_of_mesh(physical_chip_id, num_ports_per_side, connected_ethernet_cores)) {
+            corner_chips.insert(physical_chip_id);
+        } else if (is_chip_on_edge_of_mesh(nw_chip_physical_chip_id, num_ports_per_side, connected_ethernet_cores)) {
+            edge_chips.insert(physical_chip_id);
+        }
+    }
+    if (corner_chips.find(nw_chip_physical_chip_id) == corner_chips.end()) {
+        log_warning(
+            tt::LogFabric,
+            "NW chip {} is not on corner of mesh, using detected chip {}",
+            nw_chip_physical_chip_id,
+            *corner_chips.begin());
+        nw_chip_physical_chip_id = *corner_chips.begin();
+    }
+
     // Get shortest paths to to all chips on edges
     std::unordered_map<chip_id_t, std::vector<std::vector<chip_id_t>>> paths;
     paths.insert({nw_chip_physical_chip_id, {{nw_chip_physical_chip_id}}});
@@ -81,10 +232,12 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
 
         auto eth_links = get_ethernet_cores_grouped_by_connected_chips(current_chip_id);
         for (const auto& [connected_chip_id, eth_ports] : eth_links) {
-            bool is_edge = is_chip_on_edge_of_mesh(
-                connected_chip_id,
-                num_ports_per_side,
-                get_ethernet_cores_grouped_by_connected_chips(connected_chip_id));
+            // Do not include any corner to corner links on UBB
+            if (tt::Cluster::instance().get_board_type(connected_chip_id) == BoardType::UBB) {
+                if (is_external_ubb_cable(current_chip_id, eth_ports[0])) {
+                    continue;
+                }
+            }
             if (eth_ports.size() == num_ports_per_side) {
                 if (visited_physical_chips.find(connected_chip_id) == visited_physical_chips.end()) {
                     q.push(connected_chip_id);
@@ -106,15 +259,23 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
 
                     paths.at(connected_chip_id)[paths.at(connected_chip_id).size() - 1].push_back(connected_chip_id);
                 }
+            } else {
+                log_debug(
+                    tt::LogFabric,
+                    "Number of eth ports {} does not match num ports specified in Mesh graph descriptor {}",
+                    eth_ports.size(),
+                    num_ports_per_side);
             }
         }
     }
 
     std::vector<chip_id_t> physical_chip_ids;
-    // TODO: if square mesh, we might need to pin another corner chip
+    // TODO: if square mesh, we might need to pin another corner chip, or potentially have multiple possible orientations
     for (const auto& [dest_id, equal_dist_paths] : paths) {
+        // TODO: can change this to not check for corner?
+        // Look for size of equal dist paths == mesh_ew_size and num paths == 1
         if (equal_dist_paths.size() == 1) {
-            auto dest_chip_id = equal_dist_paths[0][equal_dist_paths[0].size() - 1];
+            auto dest_chip_id = equal_dist_paths[0].back();
             bool is_corner = is_chip_on_corner_of_mesh(
                 dest_chip_id, num_ports_per_side, get_ethernet_cores_grouped_by_connected_chips(dest_chip_id));
             if (is_corner and equal_dist_paths[0].size() == mesh_ew_size) {
@@ -124,7 +285,7 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
         }
     }
 
-    TT_ASSERT(
+    TT_FATAL(
         physical_chip_ids.size() == mesh_ew_size,
         "Did not find edge with expected number of East-West chips {}",
         mesh_ew_size);
@@ -140,14 +301,17 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
             chip_id_t physical_chip_id_from_north = physical_chip_ids[(i - 1) * mesh_ew_size + j];
             auto eth_links_grouped_by_connected_chips =
                 get_ethernet_cores_grouped_by_connected_chips(physical_chip_id_from_north);
+            bool found_chip = false;
             for (const auto& [connected_chip_id, eth_ports] : eth_links_grouped_by_connected_chips) {
                 if (visited_physical_chips.find(connected_chip_id) == visited_physical_chips.end() and
                     eth_ports.size() == num_ports_per_side) {
                     physical_chip_ids[i * mesh_ew_size + j] = connected_chip_id;
                     visited_physical_chips.insert(connected_chip_id);
+                    found_chip = true;
                     break;
                 }
             }
+            TT_FATAL(found_chip, "Did not find chip for mesh row {} and column {}", i, j);
         }
     }
 
@@ -163,52 +327,49 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
 }
 
 void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_graph_desc_file) {
-    eth_coord_t nw_chip_eth_coord;
+    chip_id_t nw_chip_physical_id;
     std::uint32_t mesh_ns_size, mesh_ew_size;
     std::string mesh_graph_desc_filename = std::filesystem::path(mesh_graph_desc_file).filename().string();
     if (mesh_graph_desc_filename == "tg_mesh_graph_descriptor.yaml") {
         // Add the N150 MMIO devices
-        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back(this->get_mesh_physical_chip_ids(1, 1, 4, 0));
-        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back(this->get_mesh_physical_chip_ids(1, 1, 4, 1));
-        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back(this->get_mesh_physical_chip_ids(1, 1, 4, 2));
-        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back(this->get_mesh_physical_chip_ids(1, 1, 4, 3));
+        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({0});
+        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({1});
+        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({2});
+        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back({3});
 
-        nw_chip_eth_coord = {0, 3, 7, 0, 1};
+        nw_chip_physical_id = this->get_physical_chip_id_from_eth_coord({0, 3, 7, 0, 1});
         mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/4);
         mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/4);
-    } else if (mesh_graph_desc_filename == "quanta_galaxy_mesh_graph_descriptor.yaml") {
-        nw_chip_eth_coord = {0, 3, 7, 0, 0};
+        // Main board
+        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back(
+            this->get_mesh_physical_chip_ids(mesh_ns_size, mesh_ew_size, nw_chip_physical_id));
+    } else if (
+        mesh_graph_desc_filename == "quanta_galaxy_mesh_graph_descriptor.yaml" ||
+        mesh_graph_desc_filename == "p100_mesh_graph_descriptor.yaml" ||
+        mesh_graph_desc_filename == "p150_mesh_graph_descriptor.yaml" ||
+        mesh_graph_desc_filename == "p150_x2_mesh_graph_descriptor.yaml" ||
+        mesh_graph_desc_filename == "p150_x4_mesh_graph_descriptor.yaml") {
+        // TODO: update to pick out chip automatically
+        nw_chip_physical_id = 0;
         mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/0);
         mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/0);
-    } else if (mesh_graph_desc_filename == "t3k_mesh_graph_descriptor.yaml") {
-        nw_chip_eth_coord = {0, 0, 1, 0, 0};
+        // Main board
+        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back(
+            this->get_mesh_physical_chip_ids(mesh_ns_size, mesh_ew_size, nw_chip_physical_id));
+        this->validate_mesh_connections(0);
+    } else if (
+        mesh_graph_desc_filename == "t3k_mesh_graph_descriptor.yaml" ||
+        mesh_graph_desc_filename == "n150_mesh_graph_descriptor.yaml" ||
+        mesh_graph_desc_filename == "n300_mesh_graph_descriptor.yaml") {
+        nw_chip_physical_id = this->get_physical_chip_id_from_eth_coord({0, 0, 0, 0, 0});
         mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/0);
         mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/0);
-    } else if (mesh_graph_desc_filename == "n300_mesh_graph_descriptor.yaml") {
-        nw_chip_eth_coord = {0, 0, 0, 0, 0};
-        mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/0);
-        mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/0);
-    } else if (mesh_graph_desc_filename == "n150_mesh_graph_descriptor.yaml") {
-        nw_chip_eth_coord = {0, 0, 0, 0, 0};
-        mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/0);
-        mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/0);
+        // Main board
+        this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back(
+            this->get_mesh_physical_chip_ids(mesh_ns_size, mesh_ew_size, nw_chip_physical_id));
     } else {
         TT_THROW("Unsupported mesh graph descriptor file {}", mesh_graph_desc_file);
     }
-
-    // Must pin a NW chip
-    // TODO: need to rework how this is determined
-    chip_id_t nw_chip_physical_chip_id = 0;
-    for (const auto& [physical_chip_id, eth_coord] : tt::Cluster::instance().get_user_chip_ethernet_coordinates()) {
-        if (eth_coord == nw_chip_eth_coord) {
-            nw_chip_physical_chip_id = physical_chip_id;
-            break;
-        }
-    }
-    const std::uint32_t num_ports_per_side = routing_table_generator_->get_chip_spec().num_eth_ports_per_direction;
-    // Main board
-    this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back(
-        this->get_mesh_physical_chip_ids(mesh_ns_size, mesh_ew_size, num_ports_per_side, nw_chip_physical_chip_id));
 }
 
 routing_plane_id_t ControlPlane::get_routing_plane_id(chan_id_t eth_chan_id) const {
@@ -484,13 +645,15 @@ void ControlPlane::write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chi
 
             fabric_router_config.my_mesh_id = mesh_id;
             fabric_router_config.my_device_id = chip_id;
+            fabric_router_config.north_dim = this->routing_table_generator_->get_mesh_ns_size(mesh_id);
+            fabric_router_config.east_dim = this->routing_table_generator_->get_mesh_ew_size(mesh_id);
 
             // Write data to physical eth core
             CoreCoord virtual_eth_core =
                 tt::Cluster::instance().get_virtual_eth_core_from_channel(physical_chip_id, eth_chan);
 
             TT_ASSERT(
-                tt_metal::hal.get_dev_size(
+                tt_metal::hal_ref.get_dev_size(
                     tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::FABRIC_ROUTER_CONFIG) ==
                     sizeof(tt::tt_fabric::fabric_router_l1_config_t),
                 "ControlPlane: Fabric router config size mismatch");
@@ -504,7 +667,7 @@ void ControlPlane::write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chi
                 (void*)&fabric_router_config,
                 sizeof(tt::tt_fabric::fabric_router_l1_config_t),
                 tt_cxy_pair(physical_chip_id, virtual_eth_core),
-                tt_metal::hal.get_dev_addr(
+                tt_metal::hal_ref.get_dev_addr(
                     tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::FABRIC_ROUTER_CONFIG),
                 false);
         }
@@ -560,6 +723,30 @@ std::vector<chan_id_t> ControlPlane::get_valid_eth_chans_on_routing_plane(
         }
     }
     return valid_eth_chans;
+}
+
+eth_chan_directions ControlPlane::routing_direction_to_eth_direction(RoutingDirection direction) const {
+    eth_chan_directions dir;
+    switch (direction) {
+        case RoutingDirection::N: dir = eth_chan_directions::NORTH; break;
+        case RoutingDirection::S: dir = eth_chan_directions::SOUTH; break;
+        case RoutingDirection::E: dir = eth_chan_directions::EAST; break;
+        case RoutingDirection::W: dir = eth_chan_directions::WEST; break;
+        default: TT_FATAL(false, "Invalid Routing Direction");
+    }
+    return dir;
+}
+
+eth_chan_directions ControlPlane::get_eth_chan_direction(mesh_id_t mesh_id, chip_id_t chip_id, int chan) const {
+    for (const auto& [direction, eth_chans] :
+         this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id]) {
+        for (const auto& eth_chan : eth_chans) {
+            if (chan == eth_chan) {
+                return this->routing_direction_to_eth_direction(direction);
+            }
+        }
+    }
+    TT_THROW("Cannot Find Ethernet Channel Direction");
 }
 
 std::vector<std::pair<chip_id_t, chan_id_t>> ControlPlane::get_fabric_route(
@@ -683,7 +870,7 @@ void ControlPlane::write_routing_tables_to_all_chips() const {
 
 std::vector<mesh_id_t> ControlPlane::get_user_physical_mesh_ids() const {
     std::vector<mesh_id_t> physical_mesh_ids;
-    const auto user_chips = tt::Cluster::instance().get_user_chip_ethernet_coordinates();
+    const auto user_chips = tt::Cluster::instance().user_exposed_chip_ids();
     for (int mesh_id = 0; mesh_id < this->logical_mesh_chip_id_to_physical_chip_id_mapping_.size(); mesh_id++) {
         bool add_mesh = true;
         for (int chip_id = 0; chip_id < this->logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id].size();

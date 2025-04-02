@@ -4,10 +4,20 @@
 
 #include "mesh_graph.hpp"
 
+#include <magic_enum/magic_enum.hpp>
+#include <yaml-cpp/yaml.h>
+#include <array>
 #include <fstream>
-#include <iostream>
+#include <iomanip>
+#include <optional>
 
-#include "yaml-cpp/yaml.h"
+#include "assert.hpp"
+#include "logger.hpp"
+#include <umd/device/types/cluster_descriptor_types.h>
+
+namespace tt {
+enum class ARCH;
+}  // namespace tt
 
 namespace tt::tt_fabric {
 
@@ -115,7 +125,7 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
                      .connected_chip_ids = std::vector<chip_id_t>(this->chip_spec_.num_eth_ports_per_direction, W),
                      .weight = 0}});
         }
-    } else if (fabric_type == FabricType::TORUS) {
+    } else if (fabric_type == FabricType::TORUS_1D) {
         // TODO: add support
     }
     return valid_connections;

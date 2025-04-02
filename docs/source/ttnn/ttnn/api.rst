@@ -112,6 +112,7 @@ Pointwise Unary
    ttnn.deg2rad
    ttnn.digamma
    ttnn.experimental.dropout
+   ttnn.experimental.gelu_bw
    ttnn.elu
    ttnn.eqz
    ttnn.erf
@@ -398,6 +399,7 @@ Reduction
    :nosignatures:
    :template: function.rst
 
+   ttnn.experimental.cumprod
    ttnn.max
    ttnn.mean
    ttnn.min
@@ -407,6 +409,7 @@ Reduction
    ttnn.argmax
    ttnn.prod
    ttnn.topk
+   ttnn.experimental.sort
 
 Data Movement
 =============

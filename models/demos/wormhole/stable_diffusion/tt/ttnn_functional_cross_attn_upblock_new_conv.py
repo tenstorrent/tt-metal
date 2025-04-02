@@ -2,9 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import ttnn
-from typing import Optional, Dict
 
 
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upsample_2d_new_conv import upsample2d
@@ -16,13 +14,6 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_transformer_2d_ne
 )
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import dealloc_input
 from loguru import logger
-
-
-def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
-    input = ttnn.from_torch(input, ttnn.bfloat16)
-    input = ttnn.to_layout(input, layout)
-    input = ttnn.to_device(input, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    return input
 
 
 class cross_attention_upblock2d:

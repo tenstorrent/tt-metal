@@ -30,6 +30,8 @@ void py_module_types(py::module& module) {
     py::class_<MeshShape>(module, "MeshShape", "Shape of a mesh device.");
     py::class_<MeshCoordinate>(module, "MeshCoordinate", "Coordinate within a mesh device.");
     py::class_<MeshCoordinateRange>(module, "MeshCoordinateRange", "Range of coordinates within a mesh device.");
+    py::class_<MeshCoordinateRangeSet>(
+        module, "MeshCoordinateRangeSet", "Set of coordinate ranges within a mesh device.");
 }
 
 void py_module(py::module& module) {
@@ -112,6 +114,21 @@ void py_module(py::module& module) {
             [](const MeshCoordinateRange& mcr) { return py::make_iterator(mcr.begin(), mcr.end()); },
             py::keep_alive<0, 1>());
 
+    static_cast<py::class_<MeshCoordinateRangeSet>>(module.attr("MeshCoordinateRangeSet"))
+        .def(
+            py::init([]() { return MeshCoordinateRangeSet(); }),
+            "Default constructor for an empty MeshCoordinateRangeSet.")
+        .def(
+            py::init([](const MeshCoordinateRange& range) { return MeshCoordinateRangeSet(range); }),
+            "Constructor with specified range.",
+            py::arg("range"))
+        .def("merge", &MeshCoordinateRangeSet::merge, py::arg("range"))
+        .def("__repr__", [](const MeshCoordinateRangeSet& mcrs) {
+            std::ostringstream str;
+            str << mcrs;
+            return str.str();
+        });
+
     auto py_mesh_device = static_cast<py::class_<MeshDevice, std::shared_ptr<MeshDevice>>>(module.attr("MeshDevice"));
     py_mesh_device
         .def(
@@ -123,11 +140,7 @@ void py_module(py::module& module) {
                         const std::optional<MeshCoordinate>& offset,
                         const std::vector<chip_id_t>& physical_device_ids) {
                 return MeshDevice::create(
-                    MeshDeviceConfig{
-                        .mesh_shape = mesh_shape,
-                        .offset = offset,
-                        .physical_device_ids = physical_device_ids,
-                    },
+                    MeshDeviceConfig(mesh_shape, offset, physical_device_ids),
                     l1_small_size,
                     trace_region_size,
                     num_command_queues,

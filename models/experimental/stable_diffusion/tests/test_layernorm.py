@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-# Copyright (C) 2023, TensTorrent, Inc.
+# Copyright (C) 2023, Tenstorrent, Inc.
 # All rights reserved.
 
 # LayerNorm runs with tensor sizes for Stable Diffusion:
@@ -14,7 +14,6 @@
 import torch
 from loguru import logger
 
-from models.utility_functions import torch_to_tt_tensor, tt_to_torch_tensor
 
 from models.utility_functions import comp_pcc, comp_allclose_and_pcc
 

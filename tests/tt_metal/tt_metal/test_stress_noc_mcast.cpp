@@ -19,13 +19,13 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "test_common.hpp"
-#include <tt-metalium/rtoptions.hpp>
+#include "rtoptions.hpp"
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/event.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
-#include <tt-metalium/hal.hpp>
+#include "llrt/hal.hpp"
 #include "tt_cluster.hpp"
 
 using namespace tt;
@@ -62,7 +62,7 @@ void init(int argc, char** argv) {
         log_info(LogTest, "     -t: time in seconds (default {})", DEFAULT_SECONDS);
         log_info(LogTest, "     -x: grid top left x");
         log_info(LogTest, "     -y: grid top left y");
-        log_info(LogTest, " -width: unicast grid width (default {})", DEFAULT_TARGET_WIDTH);
+        log_info(LogTest, "-width: unicast grid width (default {})", DEFAULT_TARGET_WIDTH);
         log_info(LogTest, "-height: unicast grid height (default {})", DEFAULT_TARGET_HEIGHT);
         log_info(LogTest, "    -mx: mcast core x");
         log_info(LogTest, "    -my: mcast core y");
@@ -136,7 +136,7 @@ int main(int argc, char** argv) {
     }
 
     CoreCoord mcast_end = device->worker_core_from_logical_core(workers_logical.end_coord);
-    bool virtualization_enabled = tt::tt_metal::hal.is_coordinate_virtualization_enabled();
+    bool virtualization_enabled = tt::tt_metal::hal_ref.is_coordinate_virtualization_enabled();
     uint32_t num_dests = workers_logical.size();
     CoreCoord virtual_offset = virtualization_enabled
                                    ? device->worker_core_from_logical_core({0, 0})
@@ -156,8 +156,8 @@ int main(int argc, char** argv) {
         virtual_offset.y,
         N_RANDS,
         rnd_delay_g,
-        tt::tt_metal::hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
-        tt::tt_metal::hal.get_dev_addr(
+        tt::tt_metal::hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
+        tt::tt_metal::hal_ref.get_dev_addr(
             mcast_from_eth_g ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::TENSIX,
             HalL1MemAddrType::UNRESERVED),
     };

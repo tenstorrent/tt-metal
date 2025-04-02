@@ -15,6 +15,8 @@ namespace ttnn::operations::sliding_window {
 namespace halo {
 
 struct HaloDeviceOperation {
+    const int UNTILIZE_BLOCK_SIZE = 32;
+
     thread_local static std::unordered_map<std::size_t, std::uint32_t> sliding_window_max_out_nsticks_per_core;
     SlidingWindowConfig config_;
     ParallelConfig parallel_config_;
@@ -23,8 +25,10 @@ struct HaloDeviceOperation {
     bool transpose_mcast_;
     uint32_t reshard_num_cores_nhw_;
     uint32_t max_out_nsticks_per_core_;
+    uint32_t in_nsticks_per_core_;
     tt::tt_metal::MemoryConfig output_memory_config_;
     bool is_out_tiled_;
+    bool in_place_;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
@@ -41,7 +45,8 @@ struct HaloDeviceOperation {
         "reshard_num_cores_nhw_",
         "max_out_nsticks_per_core_",
         "output_memory_config_",
-        "is_out_tiled_");
+        "is_out_tiled_",
+        "in_place_");
     const auto attribute_values() const {
         return std::make_tuple(
             std::cref(config_),
@@ -52,7 +57,8 @@ struct HaloDeviceOperation {
             std::cref(reshard_num_cores_nhw_),
             std::cref(max_out_nsticks_per_core_),
             std::cref(output_memory_config_),
-            std::cref(is_out_tiled_));
+            std::cref(is_out_tiled_),
+            std::cref(in_place_));
     }
 };
 
@@ -64,7 +70,8 @@ Tensor halo_op(
     bool transpose_mcast = true,
     uint32_t reshard_num_cores_nhw = 0,
     const tt::tt_metal::MemoryConfig& output_memory_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    bool is_out_tiled = true);
+    bool is_out_tiled = true,
+    bool in_place = false);
 
 }  // namespace halo
 

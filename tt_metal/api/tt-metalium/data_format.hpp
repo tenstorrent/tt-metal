@@ -5,9 +5,9 @@
 #pragma once
 #include <cstdint>
 #include <vector>
-#include "tt_backend_api_types.hpp"              // for DataFormat
-#include "umd/device/types/arch.h"                      // for ARCH
-#include "circular_buffer_constants.h"  // for NUM_CIRCULAR_BUFFERS
+#include <tt-metalium/tt_backend_api_types.hpp>  // for DataFormat
+#include <umd/device/types/arch.h>               // for ARCH
+#include <tt-metalium/circular_buffer_constants.h>  // for NUM_CIRCULAR_BUFFERS
 
 enum class UnpackToDestMode : std::uint8_t;
 

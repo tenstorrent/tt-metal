@@ -9,10 +9,11 @@
 #include <memory>
 #include <thread>
 
-#include "worker_config_buffer.hpp"
-#include "trace_buffer.hpp"
-#include "memcpy.hpp"
-#include "command_queue_interface.hpp"
+#include <tt-metalium/worker_config_buffer.hpp>
+#include <tt-metalium/trace_buffer.hpp>
+#include <tt-metalium/command_queue_interface.hpp>
+
+#include <tt-metalium/vector_aligned.hpp>
 
 namespace tt::tt_metal {
 
@@ -30,12 +31,10 @@ public:
     virtual void record_end() = 0;
 
     virtual void reset_worker_state(
-        bool reset_launch_msg_state,
-        uint32_t num_sub_devices,
-        const vector_memcpy_aligned<uint32_t>& go_signal_noc_data) = 0;
+        bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_aligned<uint32_t>& go_signal_noc_data) = 0;
 
     virtual void set_go_signal_noc_data_and_dispatch_sems(
-        uint32_t num_dispatch_sems, const vector_memcpy_aligned<uint32_t>& noc_mcast_unicast_data) = 0;
+        uint32_t num_dispatch_sems, const vector_aligned<uint32_t>& noc_mcast_unicast_data) = 0;
 
     virtual uint32_t id() const = 0;
     virtual std::optional<uint32_t> tid() const = 0;

@@ -6,7 +6,7 @@
 
 #include "dispatch_fixture.hpp"
 
-#include <tt-metalium/hal.hpp>
+#include "llrt/hal.hpp"
 #include <tt-metalium/allocator.hpp>
 
 namespace tt::tt_metal {
@@ -66,7 +66,7 @@ static void test_sems_across_core_types(
 
             // Set up args
             vector<uint32_t> eth_rtas = {
-                tt::tt_metal::hal.noc_xy_encoding(phys_tensix_core.x, phys_tensix_core.y),
+                tt::tt_metal::hal_ref.noc_xy_encoding(phys_tensix_core.x, phys_tensix_core.y),
                 eth_sem_id,
                 tensix_sem_id,
                 eth_sem_init_val,
@@ -82,7 +82,7 @@ static void test_sems_across_core_types(
             SetRuntimeArgs(program, eth_kernel, eth_core, eth_rtas);
 
             vector<uint32_t> tensix_rtas = {
-                tt::tt_metal::hal.noc_xy_encoding(phys_eth_core.x, phys_eth_core.y),
+                tt::tt_metal::hal_ref.noc_xy_encoding(phys_eth_core.x, phys_eth_core.y),
                 tensix_sem_id,
                 eth_sem_id,
                 tensix_sem_init_val,
@@ -252,15 +252,15 @@ TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
         uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
 
-        bool addr_match_intermediate = cb_config_vector.at(intermediate_index) == ((cb_addr) >> 4);
-        bool size_match_intermediate = cb_config_vector.at(intermediate_index + 1) == (cb_size >> 4);
+        bool addr_match_intermediate = cb_config_vector.at(intermediate_index) == cb_addr;
+        bool size_match_intermediate = cb_config_vector.at(intermediate_index + 1) == cb_size;
         bool num_pages_match_intermediate = cb_config_vector.at(intermediate_index + 2) == num_tiles;
         bool pass_intermediate = (addr_match_intermediate and size_match_intermediate and num_pages_match_intermediate);
         EXPECT_TRUE(pass_intermediate);
 
         uint32_t out_index = out_cb * sizeof(uint32_t);
-        bool addr_match_out = cb_config_vector.at(out_index) == ((cb_addr) >> 4);
-        bool size_match_out = cb_config_vector.at(out_index + 1) == (cb_size >> 4);
+        bool addr_match_out = cb_config_vector.at(out_index) == cb_addr;
+        bool size_match_out = cb_config_vector.at(out_index + 1) == cb_size;
         bool num_pages_match_out = cb_config_vector.at(out_index + 2) == num_tiles;
         bool pass_out = (addr_match_out and size_match_out and num_pages_match_out);
         EXPECT_TRUE(pass_out);

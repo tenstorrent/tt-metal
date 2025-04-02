@@ -4,11 +4,15 @@
 
 #pragma once
 
-#include <cstdint>
 #include <magic_enum/magic_enum.hpp>
-#include <unordered_map>
-#include <tt-metalium/hal.hpp>
 #include <umd/device/tt_core_coordinates.h>
+#include <array>
+#include <cstdint>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+enum class CoreType;
 
 namespace tt {
 class Cluster;
@@ -128,11 +132,8 @@ public:
     // When page size of buffer to write/read exceeds the max prefetch command size, the PCIe-aligned page size is
     // broken down into equal sized partial pages. The base partial page size is incremented until it
     // is PCIE-aligned. If the resulting partial page size doesn't evenly divide the full page size, the last partial
-    // page size is padded appropriately. The base partial page size is different for tensix dispatch and eth dispatch
-    // because the max prefetch command size is different depending on the dispatch core type.
-    static constexpr uint32_t BASE_PARTIAL_PAGE_SIZE_TENSIX_DISPATCH = 4096;
-    static constexpr uint32_t BASE_PARTIAL_PAGE_SIZE_ETH_DISPATCH = BASE_PARTIAL_PAGE_SIZE_TENSIX_DISPATCH / 4;
-    static_assert(BASE_PARTIAL_PAGE_SIZE_TENSIX_DISPATCH % 4 == 0);
+    // page size is padded appropriately.
+    static constexpr uint32_t BASE_PARTIAL_PAGE_SIZE_DISPATCH = 4096;
 
     static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30;                                        // 1GB
     static constexpr uint32_t MAX_DEV_CHANNEL_SIZE = 1 << 28;                                     // 256 MB;

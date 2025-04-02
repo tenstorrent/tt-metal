@@ -203,13 +203,15 @@ tt_metal::operation::ProgramWithCallbacks create_program(
                                            num_cores_x,
                                            num_blocks_y,
                                            num_blocks_x](
-                                              const tt_metal::Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
-        auto src_dram_buffer_a = input_buffers.at(0);
-        auto src_dram_buffer_b = input_buffers.at(1);
+                                              const void* operation,
+                                              const tt::tt_metal::Program& program,
+                                              const std::vector<ttnn::Tensor>& input_tensors,
+                                              const std::vector<std::optional<const ttnn::Tensor>>&,
+                                              const std::vector<ttnn::Tensor>& output_tensors) {
+        auto src_dram_buffer_a = input_tensors.at(0).buffer();
+        auto src_dram_buffer_b = input_tensors.at(1).buffer();
 
-        auto dst_dram_buffer = output_buffers.at(0);
+        auto dst_dram_buffer = output_tensors.at(0).buffer();
 
         uint32_t num_blocks_read = 0;
         for (int output_idx_y = 0; output_idx_y < num_blocks_y; output_idx_y++) {

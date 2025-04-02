@@ -32,7 +32,7 @@ SUB_DEVICE_CRS = ttnn.CoreRangeSet(
     ]
 )
 
-QKV_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 40, SUB_DEVICE_CRS, row_wise=True)
+QKV_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 10, SUB_DEVICE_CRS, row_wise=True)
 
 RING_CRS = ttnn.CoreRangeSet(
     [
@@ -43,6 +43,8 @@ RING_CRS = ttnn.CoreRangeSet(
         for x, y in PREFETCHER_NOC1_GRID
     ]
 )
+
+FF1_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 28, SUB_DEVICE_CRS, row_wise=True)
 
 NORM_CRS = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 7))])
 
@@ -96,13 +98,27 @@ def run_all_reduce_impl(
     ##### Set up fabric stuff
     ##################################
 
+    linear = True
+    if linear:
+        all_reduce_topology = ttnn.Topology.Linear
+        wrap_mesh = False
+    else:
+        all_reduce_topology = ttnn.Topology.Ring
+        wrap_mesh = True
+
     worker_sub_device = ttnn.SubDevice([SUB_DEVICE_CRS])
 
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
     if create_persistent_fabric:
         mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-            mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
+            mesh_device,
+            [worker_sub_device],
+            0,
+            0,
+            enable_persistent_fabric,
+            wrap_fabric_around_mesh=wrap_mesh,
+            topology=all_reduce_topology,
         )
         mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
@@ -211,7 +227,7 @@ def run_all_reduce_impl(
                     mesh_device=mesh_device,
                     multi_device_global_semaphore=ccl_semaphore_handles[i % num_buffers],
                     memory_config=output_mem_config,
-                    topology=ttnn.Topology.Linear,
+                    topology=all_reduce_topology,
                     num_links=num_links,
                     subdevice_id=worker_sub_device_id,
                 )
@@ -318,7 +334,7 @@ def run_all_reduce_impl(
         if enable_persistent_fabric and teardown_persistent_fabric:
             mesh_device.reset_sub_device_stall_group()
             t1 = time()
-            teardown_fabric_interface(mesh_device)
+            teardown_fabric_interface(mesh_device, wrap_fabric_around_mesh=wrap_mesh, topology=all_reduce_topology)
             t2 = time()
             logger.info(f"Teardown time: {t2 - t1}")
 
@@ -329,12 +345,12 @@ def run_all_reduce_impl(
     "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
     [
         ([1, 1, 32, 2048], 0, 4, 24, RING_CRS, 16, NORM_CRS),  # FF2/DO all reduce
-        ([1, 1, 32, 1280], 1, 3, 24, RING_CRS, 40, QKV_CRS),  # QKV all reduce
-        ([1, 1, 32, 3584], 1, 3, 24, RING_CRS, 24, RING_CRS),  # FF1 all reduce
+        ([1, 1, 32, 1280], 1, 3, 24, RING_CRS, 10, QKV_CRS),  # QKV all reduce
+        ([1, 1, 32, 3584], 1, 3, 24, RING_CRS, 28, FF1_CRS),  # FF1 all reduce
         ([1, 1, 32, 2048], 0, 3, 24, RING_CRS, 16, NORM_CRS),  # FF2/DO all reduce
         ([1, 1, 32, 16 * 1024], 1, 3, 32, LM_HEAD_CRS, 32, LM_HEAD_CRS),  # LM Head all reduce
-        ([1, 1, 32, 1280], 1, 1, 24, RING_CRS, 40, QKV_CRS),  # QKV all reduce
-        ([1, 1, 32, 3584], 1, 1, 24, RING_CRS, 24, RING_CRS),  # FF1 all reduce
+        ([1, 1, 32, 1280], 1, 1, 24, RING_CRS, 10, QKV_CRS),  # QKV all reduce
+        ([1, 1, 32, 3584], 1, 1, 24, RING_CRS, 28, FF1_CRS),  # FF1 all reduce
         ([1, 1, 32, 2048], 0, 1, 24, RING_CRS, 16, NORM_CRS),  # FF2/DO all reduce
         ([1, 1, 32, 16 * 1024], 1, 1, 32, LM_HEAD_CRS, 32, LM_HEAD_CRS),  # LM Head all reduce
     ],
@@ -383,6 +399,8 @@ def test_all_reduce(
     use_program_cache,
     function_level_defaults,
 ):
+    if output_shape == [1, 1, 32, 16 * 1024] and input_dtype == ttnn.bfloat16:
+        pytest.skip("Skipping LM Head test with bfloat16 due to OOM")
     if len(mesh_device.get_devices()) != 32:
         pytest.skip("Not TG!")
 
@@ -420,8 +438,8 @@ def test_all_reduce(
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
     [
-        ([1, 1, 32, 1280], 1, 1, 24, RING_CRS, 40, QKV_CRS),  # QKV all reduce
-        ([1, 1, 32, 3584], 1, 1, 24, RING_CRS, 24, RING_CRS),  # FF1 all reduce
+        ([1, 1, 32, 1280], 1, 1, 24, RING_CRS, 10, QKV_CRS),  # QKV all reduce
+        ([1, 1, 32, 3584], 1, 1, 24, RING_CRS, 28, FF1_CRS),  # FF1 all reduce
         ([1, 1, 32, 2048], 0, 1, 24, RING_CRS, 16, NORM_CRS),  # FF2/DO all reduce
     ],
 )

@@ -3,16 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch.nn as nn
-import math
 import ttnn
 import os
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple, Union
 import torch
 import os
-from models.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-)
 from loguru import logger
 from models.utility_functions import is_grayskull
 
@@ -35,7 +30,6 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_downblock_2d_new_
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upblock_2d_new_conv import upblock_2d
 
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    pad_group_norm_weight,
     pre_process_input,
     conv_cache,
     get_default_compute_config,
@@ -66,19 +60,6 @@ def permute_conv_weights(weight, bias):
     weight = torch.permute(weight, (2, 3, 0, 1))
     bias = ttnn.to_torch(bias)
     return weight, bias
-
-
-def torch_to_ttnn(input, device, layout=ttnn.TILE_LAYOUT):
-    input = ttnn.from_torch(input, ttnn.bfloat16)
-    input = ttnn.to_layout(input, layout)
-    input = ttnn.to_device(input, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    return input
-
-
-def ttnn_to_torch(input):
-    input = ttnn.from_device(input)
-    input = ttnn.to_torch(input)
-    return input
 
 
 class UNet2DConditionModel:

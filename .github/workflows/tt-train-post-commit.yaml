@@ -12,6 +12,9 @@ on:
       docker-image:
         required: true
         type: string
+      build-artifact-name:
+        required: true
+        type: string
       timeout:
         required: false
         type: number
@@ -33,7 +36,7 @@ jobs:
       - cloud-virtual-machine
       - in-service
     container:
-      image: ${{ inputs.docker-image }}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
         LD_LIBRARY_PATH: /work/build/lib
@@ -48,18 +51,12 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
-      - uses: actions/download-artifact@v4
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
         timeout-minutes: 10
         with:
-          name: TTMetal_build_any
-          path: docker-job
-      - name: Extract files
-        run: tar -xvf ttm_any.tar
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |

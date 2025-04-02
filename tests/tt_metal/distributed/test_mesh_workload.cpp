@@ -135,7 +135,7 @@ void validate_sems(
         ::tt::tt_metal::detail::ReadFromDeviceL1(device, core, sem_buffer_base, sem_buffer_size, readback_sem_vals);
         uint32_t sem_idx = 0;
         for (uint32_t i = 0; i < readback_sem_vals.size();
-             i += (hal.get_alignment(HalMemType::L1) / sizeof(uint32_t))) {
+             i += (hal_ref.get_alignment(HalMemType::L1) / sizeof(uint32_t))) {
             EXPECT_EQ(readback_sem_vals[i], expected_semaphore_values[sem_idx]);
             sem_idx++;
         }
@@ -364,10 +364,6 @@ TEST_F(MeshWorkloadTestTG, SimultaneousMeshWorkloads) {
 }
 
 TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkload) {
-    // TODO: #19149 - Re-enable the test.
-    if (mesh_device_->num_devices() == 1) {
-        GTEST_SKIP() << "Skipping test for a unit-size mesh device";
-    }
     uint32_t num_programs = 60;
     uint32_t num_iterations = 1500;
     auto random_seed = 10;

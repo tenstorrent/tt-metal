@@ -2,38 +2,59 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <mesh_device.hpp>
-
-#include <cstddef>
-#include <memory>
-#include <unordered_map>
-#include <utility>
-#include <source_location>
-
-#include <logger.hpp>
-#include <host_api.hpp>
-#include <tt_metal.hpp>
-#include <system_mesh.hpp>
-#include <mesh_device_view.hpp>
-#include <mesh_command_queue.hpp>
+#include <boost/container/vector.hpp>
 #include <device_impl.hpp>
+#include <logger.hpp>
+#include <mesh_command_queue.hpp>
+#include <mesh_coord.hpp>
+#include <mesh_device.hpp>
+#include <mesh_device_view.hpp>
+#include <small_vector.hpp>
 #include <sub_device.hpp>
 #include <sub_device_manager_tracker.hpp>
+#include <system_mesh.hpp>
+#include <tt_metal.hpp>
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cstddef>
+#include <iterator>
+#include <memory>
+#include <source_location>
+#include <unordered_map>
+#include <utility>
 
-#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
+#include "allocator.hpp"
+#include "assert.hpp"
+#include "dispatch_settings.hpp"
+#include "launch_message_ring_buffer_state.hpp"
+#include "mesh_trace.hpp"
+#include "shape_base.hpp"
+#include "span.hpp"
+#include "strong_type.hpp"
 #include "tt_metal/common/thread_pool.hpp"
-
-#include <hal.hpp>
-#include <mesh_coord.hpp>
-#include <small_vector.hpp>
-
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
+#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
+#include <umd/device/types/xy_pair.h>
+
+enum class CoreType;
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+class SystemMemoryManager;
+namespace program_cache {
+namespace detail {
+struct ProgramCache;
+}  // namespace detail
+}  // namespace program_cache
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal::distributed {
-
 namespace {
-MeshDeviceID generate_unique_mesh_id() {
-    static std::atomic<MeshDeviceID> next_id{0};
+
+int generate_unique_mesh_id() {
+    static std::atomic<int> next_id{0};
     return next_id++;
 }
 
@@ -75,7 +96,9 @@ MeshDevice::ScopedDevices::ScopedDevices(
     const DispatchCoreConfig& dispatch_core_config,
     const MeshDeviceConfig& config) :
     ScopedDevices(
-        SystemMesh::instance().request_available_devices(config),
+        config.physical_device_ids().empty()
+            ? SystemMesh::instance().get_mapped_physical_device_ids(config.mesh_shape(), config.offset())
+            : config.physical_device_ids(),
         l1_small_size,
         trace_region_size,
         num_command_queues,
@@ -145,7 +168,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     tt::stl::Span<const std::uint32_t> l1_bank_remap) {
     auto scoped_devices = std::make_shared<ScopedDevices>(
         l1_small_size, trace_region_size, num_command_queues, dispatch_core_config, config);
-    MeshContainer<IDevice*> devices(config.mesh_shape, scoped_devices->root_devices());
+    MeshContainer<IDevice*> devices(config.mesh_shape(), scoped_devices->root_devices());
     auto mesh_device = std::make_shared<MeshDevice>(
         std::move(scoped_devices), std::make_unique<MeshDeviceView>(devices), std::shared_ptr<MeshDevice>());
 
@@ -349,8 +372,7 @@ std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_sha
         return view_->get_line_devices();
     }
 
-    auto new_physical_device_ids =
-        SystemMesh::instance().request_available_devices(MeshDeviceConfig{.mesh_shape = new_shape});
+    auto new_physical_device_ids = SystemMesh::instance().get_mapped_physical_device_ids(new_shape);
 
     for (size_t i = 0; i < new_physical_device_ids.size(); i++) {
         if (physical_device_id_to_linearized_index.find(new_physical_device_ids[i]) ==
@@ -381,6 +403,7 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
 }
 
 bool MeshDevice::close() {
+    mesh_command_queues_.clear();
     sub_device_manager_tracker_.reset();
     scoped_devices_.reset();
     parent_mesh_.reset();
@@ -397,7 +420,7 @@ const MeshDeviceView& MeshDevice::get_view() const {
     return *view_;
 }
 
-MeshDeviceID MeshDevice::id() const { return mesh_id_; }
+int MeshDevice::id() const { return mesh_id_; }
 // For a mesh, build id is the same as the device id for the reference device
 chip_id_t MeshDevice::build_id() const { return reference_device()->id(); }
 
@@ -486,16 +509,6 @@ CoreCoord MeshDevice::grid_size() const {
 CoreCoord MeshDevice::logical_grid_size() const {
     return validate_and_get_reference_value(
         scoped_devices_->root_devices(), [](const auto& device) { return device->logical_grid_size(); });
-}
-CoreType MeshDevice::core_type_from_virtual_core(const CoreCoord& virtual_coord) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [virtual_coord](const auto& device) {
-        return device->core_type_from_virtual_core(virtual_coord);
-    });
-}
-CoreCoord MeshDevice::virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const {
-    return validate_and_get_reference_value(scoped_devices_->root_devices(), [noc_index, coord](const auto& device) {
-        return device->virtual_noc_coordinate(noc_index, coord);
-    });
 }
 CoreCoord MeshDevice::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {
     return validate_and_get_reference_value(scoped_devices_->root_devices(), [noc_index, coord](const auto& device) {

@@ -1650,5 +1650,4 @@ def test_conv2d_localrun_conv1d(device, input_spec):
 
 failing_parameters_conv1d = [
     # [batch_size, output_channels, input_channels, input_length, kernel_size, stride, pad, groups, dilation, bias]
-    [1, 768, 768, 3000, 3, 2, 1, 1, 1, True],
 ]

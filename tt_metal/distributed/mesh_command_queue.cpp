@@ -2,21 +2,48 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/move/utility_core.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
-#include <optional>
 #include <tt-metalium/dispatch_settings.hpp>
+#include <algorithm>
+#include <array>
+#include <cstring>
+#include <functional>
+#include <optional>
+#include <type_traits>
+#include <utility>
 
+#include "assert.hpp"
 #include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "device.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
+#include "dispatch_core_common.hpp"
+#include "event/dispatch.hpp"
+#include "hal_types.hpp"
+#include "mesh_config.hpp"
 #include "mesh_coord.hpp"
+#include "mesh_workload.hpp"
+#include "program_impl.hpp"
+#include "shape2d.hpp"
+#include "strong_type.hpp"
+#include "system_memory_manager.hpp"
+#include "trace_buffer.hpp"
+#include "tt_cluster.hpp"
+#include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/buffers/dispatch.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
-#include "tt_metal/common/thread_pool.hpp"
-#include "tt_cluster.hpp"
+#include <umd/device/types/xy_pair.h>
+
+namespace tt {
+namespace tt_metal {
+struct ProgramCommandSequence;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal::distributed {
 
@@ -50,6 +77,16 @@ MeshCommandQueue::MeshCommandQueue(
 }
 
 MeshCommandQueue::~MeshCommandQueue() {
+    if (in_use_) {
+        // If the MeshCommandQueue is being used, have it clear worker state
+        // before going out of scope. This is a blocking operation - it waits
+        // for all queued up work to complete.
+        // This allows physical device close to proceed correctly, since we still
+        // rely on single device CQs during this step. Not needed for functionality
+        // once single device CQs are removed, however this is still good practice.
+        this->clear_expected_num_workers_completed();
+    }
+
     TT_FATAL(completion_queue_reads_.empty(), "The completion reader queue must be empty when closing devices.");
 
     for (auto& queue : read_descriptors_) {
@@ -107,7 +144,41 @@ CoreCoord MeshCommandQueue::virtual_program_dispatch_core() const { return this-
 
 CoreType MeshCommandQueue::dispatch_core_type() const { return this->dispatch_core_type_; }
 
+void MeshCommandQueue::clear_expected_num_workers_completed() {
+    auto sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, {});
+    auto& sysmem_manager = this->reference_sysmem_manager();
+    auto event =
+        MeshEvent(sysmem_manager.get_next_event(id_), mesh_device_, id_, MeshCoordinateRange(mesh_device_->shape()));
+
+    // Issue commands to clear expected_num_workers_completed counter(s) on the dispatcher
+    for (auto device : mesh_device_->get_devices()) {
+        event_dispatch::issue_record_event_commands(
+            mesh_device_,
+            event.id(),
+            id_,
+            mesh_device_->num_hw_cqs(),
+            device->sysmem_manager(),
+            sub_device_ids,
+            expected_num_workers_completed_,
+            true, /* notify_host */
+            true /* clear_count */);
+    }
+    // Clear counter(s) on host to reflect update device state
+    for (auto sub_device_id : sub_device_ids) {
+        expected_num_workers_completed_[*sub_device_id] = 0;
+    }
+
+    // Block after clearing counter(s) on dispatcher
+    completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
+        std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
+    this->increment_num_entries_in_completion_queue();
+    std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
+    reads_processed_cv_.wait(lock, [this] { return num_outstanding_reads_.load() == 0; });
+}
+
 void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
+    in_use_ = true;
+    uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
     std::unordered_set<SubDeviceId> sub_device_ids = mesh_workload.determine_sub_device_ids(mesh_device_);
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
     SubDeviceId sub_device_id = *(sub_device_ids.begin());
@@ -152,7 +223,7 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
     // current device state. Write the finalized program command sequence to each
     // physical device tied to the program.
     for (auto& [device_range, program] : mesh_workload.get_programs()) {
-        auto& program_cmd_seq = mesh_workload.get_dispatch_cmds_for_program(program);
+        auto& program_cmd_seq = mesh_workload.get_dispatch_cmds_for_program(program, command_hash);
         program_dispatch::update_program_dispatch_commands(
             program,
             program_cmd_seq,
@@ -239,6 +310,7 @@ void MeshCommandQueue::write_shard_to_device(
     const void* src,
     const BufferRegion& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
     auto device = shard_view->device();
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
@@ -252,6 +324,7 @@ void MeshCommandQueue::read_shard_from_device(
     const BufferRegion& region,
     std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
     auto device = shard_view->device();
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
@@ -541,6 +614,7 @@ MeshEvent MeshCommandQueue::enqueue_record_event_helper(
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     bool notify_host,
     const std::optional<MeshCoordinateRange>& device_range) {
+    in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
     auto& sysmem_manager = this->reference_sysmem_manager();
     auto event = MeshEvent(
@@ -580,6 +654,7 @@ MeshEvent MeshCommandQueue::enqueue_record_event_to_host(
 }
 
 void MeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
+    in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
     for (const auto& coord : sync_event.device_range()) {
         event_dispatch::issue_wait_for_event_commands(
@@ -673,7 +748,8 @@ void MeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& read
 }
 
 void MeshCommandQueue::reset_worker_state(
-    bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_memcpy_aligned<uint32_t>& go_signal_noc_data) {
+    bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_aligned<uint32_t>& go_signal_noc_data) {
+    in_use_ = true;
     for (auto device : mesh_device_->get_devices()) {
         program_dispatch::reset_worker_dispatch_state_on_device(
             mesh_device_,
@@ -791,6 +867,7 @@ void MeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
 }
 
 void MeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blocking) {
+    in_use_ = true;
     auto trace_inst = mesh_device_->get_mesh_trace(trace_id);
     auto descriptor = trace_inst->desc;
     auto buffer = trace_inst->mesh_buffer;

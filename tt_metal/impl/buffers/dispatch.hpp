@@ -4,11 +4,28 @@
 
 #pragma once
 
-#include <command_queue_interface.hpp>
-#include <sub_device_types.hpp>
 #include <command_queue.hpp>
+#include <command_queue_interface.hpp>
+#include <stdint.h>
+#include <sub_device_types.hpp>
+#include <atomic>
+#include <memory>
+#include <variant>
+#include <vector>
+
 #include "buffer.hpp"
+#include "core_coord.hpp"
+#include "span.hpp"
+#include "system_memory_manager.hpp"
 #include "tt_metal/impl/event/dispatch.hpp"
+
+enum class CoreType;
+namespace tt {
+namespace tt_metal {
+class IDevice;
+enum class TensorMemoryLayout;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -142,7 +159,7 @@ void copy_completion_queue_data_into_user_space(
     uint16_t channel,
     uint32_t cq_id,
     SystemMemoryManager& sysmem_manager,
-    volatile bool& exit_condition);
+    std::atomic<bool>& exit_condition);
 
 std::vector<CoreCoord> get_cores_for_sharded_buffer(
     bool width_split, const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping, Buffer& buffer);

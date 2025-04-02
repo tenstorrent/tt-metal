@@ -57,6 +57,38 @@ typedef struct _tt_routing {
 
 static_assert(sizeof(tt_routing) == 16);
 
+typedef struct _tt_low_latency_routing_vector {
+    static constexpr uint32_t FIELD_WIDTH = 8;
+    static constexpr uint32_t FIELD_MASK = 0b1111;
+    static constexpr uint32_t NOOP = 0b0000;
+    static constexpr uint32_t FORWARD_EAST = 0b0001;
+    static constexpr uint32_t FORWARD_WEST = 0b0010;
+    static constexpr uint32_t FORWARD_NORTH = 0b0100;
+    static constexpr uint32_t FORWARD_SOUTH = 0b1000;
+
+    static constexpr uint32_t FORWARD_ONLY = 0b10;
+    static constexpr uint32_t WRITE_AND_FORWARD = 0b11;
+    static constexpr uint32_t MAX_NUM_ENCODINGS = sizeof(uint32_t) * CHAR_BIT / FIELD_WIDTH;
+    static constexpr uint32_t FWD_ONLY_FIELD = 0xAAAAAAAA;
+    static constexpr uint32_t WR_ONLY_FIELD = 0x55555555;
+    uint32_t hop_index;
+    uint32_t value[4];
+} tt_low_latency_routing_vector;
+
+typedef struct _tt_low_latency_routing {
+    uint32_t packet_size_bytes;
+    uint32_t target_offset_l;
+    uint32_t target_offset_h;
+    uint32_t command;
+    tt_low_latency_routing_vector route_vector;
+    uint32_t atomic_offset_l;
+    uint32_t atomic_offset_h;
+    uint16_t atomic_increment;
+    uint16_t atomic_wrap;
+} tt_low_latency_routing;
+
+static_assert(sizeof(tt_low_latency_routing) == PACKET_HEADER_SIZE_BYTES);
+
 typedef struct _tt_session {
     uint32_t command;
     uint32_t target_offset_l;  // RDMA address
@@ -135,6 +167,11 @@ typedef struct _packet_header {
     packet_params packet_parameters;
 } packet_header_t;
 #endif
+typedef struct _low_latency_packet_header {
+    tt_low_latency_routing routing;
+} low_latency_packet_header_t;
+
+static_assert(sizeof(low_latency_packet_header_t) == PACKET_HEADER_SIZE_BYTES);
 
 static_assert(sizeof(packet_header_t) == PACKET_HEADER_SIZE_BYTES);
 
@@ -352,8 +389,9 @@ typedef struct _fabric_pull_client_interface {
     uint64_t pull_req_buf_addr;
     uint32_t num_routing_planes;
     uint32_t routing_tables_l1_offset;
-    uint32_t return_status[3];
+    uint32_t return_status[4];
     local_pull_request_t local_pull_request;
+    packet_header_t header_buffer[CLIENT_HEADER_BUFFER_ENTRIES];
 } fabric_pull_client_interface_t;
 
 static_assert(sizeof(fabric_client_interface_t) % 16 == 0);
@@ -361,6 +399,24 @@ static_assert(sizeof(fabric_client_interface_t) == CLIENT_INTERFACE_SIZE);
 
 static_assert(sizeof(fabric_pull_client_interface_t) % 16 == 0);
 static_assert(sizeof(fabric_pull_client_interface_t) == PULL_CLIENT_INTERFACE_SIZE);
+
+constexpr uint32_t FABRIC_ROUTER_CLIENT_QUEUE_SIZE = 48;
+typedef struct _fabric_push_client_queue {
+    chan_ptr client_idx_counter;
+    chan_ptr curr_client_idx;
+    chan_ptr router_wr_ptr;
+} fabric_push_client_queue_t;
+static_assert(sizeof(fabric_push_client_queue_t) % 16 == 0);
+static_assert(sizeof(fabric_push_client_queue_t) == FABRIC_ROUTER_CLIENT_QUEUE_SIZE);
+
+constexpr uint32_t FABRIC_ROUTER_CLIENT_QUEUE_LOCAL_SIZE = 48;
+typedef struct _fabric_push_client_queue_local {
+    chan_ptr my_client_idx;
+    chan_ptr remote_curr_client_idx;
+    chan_ptr remote_router_wr_ptr;
+} fabric_push_client_queue_local_t;
+static_assert(sizeof(fabric_push_client_queue_local_t) % 16 == 0);
+static_assert(sizeof(fabric_push_client_queue_local_t) == FABRIC_ROUTER_CLIENT_QUEUE_LOCAL_SIZE);
 
 typedef struct _fabric_push_client_interface {
     uint32_t num_routing_planes;
@@ -373,6 +429,8 @@ typedef struct _fabric_push_client_interface {
     uint32_t router_space;
     uint32_t update_router_space;
     uint32_t reserved[3];
+    fabric_push_client_queue_local_t local_client_req_entry;
+    packet_header_t header_buffer[CLIENT_HEADER_BUFFER_ENTRIES];
 } fabric_push_client_interface_t;
 
 static_assert(sizeof(fabric_push_client_interface_t) % 16 == 0);
@@ -393,10 +451,20 @@ constexpr uint32_t FVCC_IN_BUF_START = FVCC_SYNC_BUF_START + FVCC_SYNC_BUF_SIZE;
 constexpr uint32_t FVCC_IN_BUF_SIZE = FVCC_BUF_SIZE_BYTES;
 
 // Fabric Virtual Channel start/size
-constexpr uint32_t FABRIC_ROUTER_REQ_QUEUE_START = FVCC_IN_BUF_START + FVCC_IN_BUF_SIZE;
+constexpr uint32_t FABRIC_ROUTER_CLIENT_QUEUE_START = FVCC_IN_BUF_START + FVCC_IN_BUF_SIZE;
+constexpr uint32_t FABRIC_ROUTER_REQ_QUEUE_START = FABRIC_ROUTER_CLIENT_QUEUE_START + FABRIC_ROUTER_CLIENT_QUEUE_SIZE;
 constexpr uint32_t FABRIC_ROUTER_REQ_QUEUE_SIZE = sizeof(chan_req_buf);
 constexpr uint32_t FABRIC_ROUTER_DATA_BUF_START = FABRIC_ROUTER_REQ_QUEUE_START + FABRIC_ROUTER_REQ_QUEUE_SIZE;
-constexpr uint32_t FABRIC_ROUTER_OUTBOUND_BUF_SIZE = 0x4000;
-constexpr uint32_t FABRIC_ROUTER_INBOUND_BUF_SIZE = 0x8000;
+constexpr uint32_t FABRIC_ROUTER_BUF_SLOT_SIZE = 0x1000 + PACKET_HEADER_SIZE_BYTES;
+constexpr uint32_t FABRIC_ROUTER_OUTBOUND_BUF_SIZE = 4 * FABRIC_ROUTER_BUF_SLOT_SIZE;
+constexpr uint32_t FABRIC_ROUTER_INBOUND_BUF_SIZE = 8 * FABRIC_ROUTER_BUF_SLOT_SIZE;
+constexpr uint32_t FABRIC_ROUTER_OUTBOUND_BUF_SLOTS = FABRIC_ROUTER_OUTBOUND_BUF_SIZE / FABRIC_ROUTER_BUF_SLOT_SIZE;
+constexpr uint32_t FABRIC_ROUTER_INBOUND_BUF_SLOTS = FABRIC_ROUTER_INBOUND_BUF_SIZE / FABRIC_ROUTER_BUF_SLOT_SIZE;
+
+// Select the correct client interface for push vs pull router
+template <uint32_t router_mode>
+struct ClientInterfaceSelector {
+    using type = std::conditional_t<router_mode == 0, fabric_pull_client_interface_t*, fabric_push_client_interface_t*>;
+};
 
 }  // namespace tt::tt_fabric

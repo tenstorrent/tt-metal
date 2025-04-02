@@ -4,20 +4,42 @@
 
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <thread>
+#include <variant>
 
+#include "buffer.hpp"
 #include "command_queue.hpp"
-#include "host_runtime_commands.hpp"
 #include "command_queue_interface.hpp"
+#include "core_coord.hpp"
+#include "dispatch_settings.hpp"
+#include "event.hpp"
+#include "host_runtime_commands.hpp"
+#include "launch_message_ring_buffer_state.hpp"
 #include "multi_producer_single_consumer_queue.hpp"
-#include "worker_config_buffer.hpp"
 #include "program_impl.hpp"
+#include "span.hpp"
+#include "sub_device_types.hpp"
 #include "trace_buffer.hpp"
-
 #include "tt_metal/impl/buffers/dispatch.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include "vector_aligned.hpp"
+#include "worker_config_buffer.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+class Program;
+class SystemMemoryManager;
+enum NOC : uint8_t;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -40,10 +62,10 @@ public:
     void reset_worker_state(
         bool reset_launch_msg_state,
         uint32_t num_sub_devices,
-        const vector_memcpy_aligned<uint32_t>& go_signal_noc_data) override;
+        const vector_aligned<uint32_t>& go_signal_noc_data) override;
 
     void set_go_signal_noc_data_and_dispatch_sems(
-        uint32_t num_dispatch_sems, const vector_memcpy_aligned<uint32_t>& noc_mcast_unicast_data) override;
+        uint32_t num_dispatch_sems, const vector_aligned<uint32_t>& noc_mcast_unicast_data) override;
 
     uint32_t id() const override;
     std::optional<uint32_t> tid() const override;
@@ -97,11 +119,11 @@ private:
     //  call
     DispatchArray<uint32_t> expected_num_workers_completed_;
 
-    volatile bool exit_condition_;
-    volatile uint32_t num_entries_in_completion_q_;  // issue queue writer thread increments this when an issued command
-                                                     // is expected back in the completion queue
-    volatile uint32_t num_completed_completion_q_reads_;  // completion queue reader thread increments this after
-                                                          // reading an entry out of the completion queue
+    std::atomic<bool> exit_condition_;
+    std::atomic<uint32_t> num_entries_in_completion_q_;  // issue queue writer thread increments this when an issued
+                                                         // command is expected back in the completion queue
+    std::atomic<uint32_t> num_completed_completion_q_reads_;  // completion queue reader thread increments this after
+                                                              // reading an entry out of the completion queue
 
     MultiProducerSingleConsumerQueue<CompletionReaderVariant> issued_completion_q_reads_;
     // These values are used to reset the host side launch message wptr after a trace is captured

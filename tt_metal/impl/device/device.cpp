@@ -2,50 +2,96 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <device_impl.hpp>
-
-#include <string>
-#include <thread>
-#include <tt_align.hpp>
-#include <tt-metalium/dispatch_mem_map.hpp>
-#include <tt-metalium/program_cache.hpp>
-
-#include "common/core_assignment.hpp"
-#include <host_api.hpp>
-#include <trace.hpp>
 #include <core_descriptor.hpp>
-#include <tt_metal.hpp>
-#include <utils.hpp>
 #include <dev_msgs.h>
+#include <device_impl.hpp>
 #include <device_pool.hpp>
+#include <host_api.hpp>
+#include <magic_enum/magic_enum.hpp>
 #include <persistent_kernel_cache.hpp>
-
-#include <hal.hpp>
-#include <hal_exp.hpp>
 #include <sub_device.hpp>
 #include <sub_device_manager_tracker.hpp>
 #include <sub_device_types.hpp>
+#include <trace.hpp>
+#include <tt-metalium/dispatch_mem_map.hpp>
+#include <tt-metalium/program_cache.hpp>
+#include <tt_align.hpp>
+#include <tt_metal.hpp>
 #include <tt_stl/span.hpp>
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstring>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <set>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
-
-#include "tt_metal/impl/debug/watcher_server.hpp"
-#include "tt_metal/impl/dispatch/topology.hpp"
-#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
-#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
-#include "tt_metal/impl/dispatch/topology.hpp"
-#include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
-#include "tt_metal/jit_build/build_env_manager.hpp"
-
-#include "lightmetal/lightmetal_capture.hpp"
-#include "tracy/Tracy.hpp"
+#include "allocator.hpp"
+#include "allocator_types.hpp"
+#include "assert.hpp"
+#include "buffer_constants.hpp"
+#include "command_queue.hpp"
+#include "command_queue_common.hpp"
+#include "common/core_assignment.hpp"
+#include "core_coord.hpp"
+#include "device.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
+#include "dispatch_core_common.hpp"
+#include "dispatch_settings.hpp"
 #include "dprint_server.hpp"
+#include "hal_types.hpp"
+#include "jit_build/build.hpp"
+#include "launch_message_ring_buffer_state.hpp"
+#include "lightmetal/lightmetal_capture.hpp"
 #include "llrt.hpp"
+#include "llrt/hal.hpp"
+#include "logger.hpp"
+#include "metal_soc_descriptor.h"
+#include "multi_producer_single_consumer_queue.hpp"
+#include "profiler_types.hpp"
+#include "program_device_map.hpp"
+#include "program_impl.hpp"
+#include "rtoptions.hpp"
+#include "strong_type.hpp"
+#include "system_memory_manager.hpp"
+#include "trace_buffer.hpp"
+#include "tracy/Tracy.hpp"
+#include "tt_cluster.hpp"
+#include "tt_memory.h"
+#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
+#include "tt_metal/impl/debug/watcher_server.hpp"
+#include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
+#include "tt_metal/jit_build/build_env_manager.hpp"
+#include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
+#include <umd/device/coordinate_manager.h>
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_silicon_driver_common.hpp>
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/xy_pair.h>
 #include "work_executor.hpp"
+#include "work_executor_types.hpp"
 
 namespace tt {
+enum class ARCH;
 
 namespace tt_metal {
+
+uint64_t IDevice::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
+    return hal_ref.get_dev_addr(this->get_programmable_core_type(virtual_core), addr_type);
+}
 
 Device::Device(Device&& other) = default;
 Device& Device::operator=(Device&& other) = default;
@@ -283,23 +329,23 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_views()),
          .dram_bank_size = soc_desc.dram_view_size,
          .dram_bank_offsets = {},
-         .dram_unreserved_base =
-             hal.get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) + hal.get_dev_size(HalDramMemAddrType::DRAM_BARRIER),
-         .dram_alignment = hal.get_alignment(HalMemType::DRAM),
+         .dram_unreserved_base = hal_ref.get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) +
+                                 hal_ref.get_dev_size(HalDramMemAddrType::DRAM_BARRIER),
+         .dram_alignment = hal_ref.get_alignment(HalMemType::DRAM),
          .l1_unreserved_base = align(
-             hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
-             hal.get_alignment(HalMemType::DRAM)),
+             hal_ref.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
+             hal_ref.get_alignment(HalMemType::DRAM)),
          .worker_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(logical_size.x - 1, logical_size.y - 1))),
          .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
          .storage_core_bank_size = get_storage_core_bank_size(id_, num_hw_cqs_, dispatch_core_config),
-         .l1_small_size = align(l1_small_size, hal.get_alignment(HalMemType::DRAM)),
-         .trace_region_size = align(trace_region_size, hal.get_alignment(HalMemType::DRAM)),
+         .l1_small_size = align(l1_small_size, hal_ref.get_alignment(HalMemType::DRAM)),
+         .trace_region_size = align(trace_region_size, hal_ref.get_alignment(HalMemType::DRAM)),
          .core_type_from_noc_coord_table = {},  // Populated later
          .worker_log_to_virtual_routing_x = tt::Cluster::instance().get_worker_logical_to_virtual_x(this->id()),
          .worker_log_to_virtual_routing_y = tt::Cluster::instance().get_worker_logical_to_virtual_y(this->id()),
          .l1_bank_remap = {l1_bank_remap.begin(), l1_bank_remap.end()},
          .compute_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(compute_size.x - 1, compute_size.y - 1))),
-         .l1_alignment = hal.get_alignment(HalMemType::L1),
+         .l1_alignment = hal_ref.get_alignment(HalMemType::L1),
          .disable_interleaved = false});
     TT_FATAL(config.l1_small_size < (config.storage_core_bank_size.has_value() ? config.storage_core_bank_size.value() : config.worker_l1_size - config.l1_unreserved_base),
             "Reserved size must be less than bank size");
@@ -352,8 +398,8 @@ void Device::initialize_device_bank_to_noc_tables(const HalProgrammableCoreType 
     const uint32_t dram_offset_sz_in_bytes = dram_bank_offset_map_.size() * sizeof(int32_t);
     const uint32_t l1_offset_sz_in_bytes = l1_bank_offset_map_.size() * sizeof(int32_t);
 
-    const uint64_t mem_bank_to_noc_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
-    const uint32_t mem_bank_to_noc_size = hal.get_dev_size(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
+    const uint64_t mem_bank_to_noc_addr = hal_ref.get_dev_addr(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
+    const uint32_t mem_bank_to_noc_size = hal_ref.get_dev_size(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
 
     TT_ASSERT((dram_to_noc_sz_in_bytes + l1_to_noc_sz_in_bytes + dram_offset_sz_in_bytes + l1_offset_sz_in_bytes) <= mem_bank_to_noc_size,
         "Size of bank_to_noc table is greater than available space");
@@ -372,9 +418,10 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
     ZoneScoped;
 
     this->initialize_device_bank_to_noc_tables(core_type, virtual_core);
-    uint32_t core_type_idx = hal.get_programmable_core_type_index(core_type);
-    uint32_t processor_class_count = hal.get_processor_classes_count(core_type);
-    auto jit_build_config = hal.get_jit_build_config(core_type_idx, 0, 0); // Only the first risc needs to be programmed
+    uint32_t core_type_idx = hal_ref.get_programmable_core_type_index(core_type);
+    uint32_t processor_class_count = hal_ref.get_processor_classes_count(core_type);
+    auto jit_build_config =
+        hal_ref.get_jit_build_config(core_type_idx, 0, 0);  // Only the first risc needs to be programmed
 
     switch (core_type) {
         case HalProgrammableCoreType::TENSIX: {
@@ -428,12 +475,12 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                     reset_val & static_cast<TensixSoftResetOptions>(
                                     ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
             }
-            if (is_idle_eth or !hal.get_eth_fw_is_cooperative()) {
+            if (is_idle_eth or !hal_ref.get_eth_fw_is_cooperative()) {
                 tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), virtual_core), reset_val);
             }
             if (not llrt::RunTimeOptions::get_instance().get_skip_loading_fw()) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
-                    auto num_build_states = hal.get_processor_types_count(core_type_idx, processor_class);
+                    auto num_build_states = hal_ref.get_processor_types_count(core_type_idx, processor_class);
                     for (uint32_t eriscv_id = 0; eriscv_id < num_build_states; eriscv_id++) {
                         auto fw_path = BuildEnvManager::get_instance()
                                            .get_firmware_build_state(id_, core_type_idx, processor_class, eriscv_id)
@@ -492,8 +539,9 @@ void Device::reset_cores() {
             (this->arch() == ARCH::WORMHOLE_B0) and
                 (tt::Cluster::instance().is_ethernet_core(virtual_core, this->id())),
             "Invalid core type for context switch check");
-        auto core_type_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
-        std::uint32_t launch_erisc_addr = tt::tt_metal::hal.get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr;
+        auto core_type_idx = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+        std::uint32_t launch_erisc_addr =
+            tt::tt_metal::hal_ref.get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr;
         auto data =
             tt::llrt::read_hex_vec_from_core(this->id(), virtual_core, launch_erisc_addr, sizeof(std::uint32_t));
         return (data[0] != 0);
@@ -504,13 +552,13 @@ void Device::reset_cores() {
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> dispatch_cores, other_dispatch_cores, device_to_early_exit_cores;
     go_msg_t go_msg;
     std::memset(&go_msg, 0, sizeof(go_msg_t));
-    if (hal.get_eth_fw_is_cooperative()) {
+    if (hal_ref.get_eth_fw_is_cooperative()) {
         for (const auto& eth_core : this->get_active_ethernet_cores()) {
             CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
             if (erisc_app_still_running(virtual_core)) {
                 std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
                 DeviceAddr launch_addr =
-                    hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH);
+                    hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH);
 
                 data = tt::llrt::read_hex_vec_from_core(this->id(), virtual_core, launch_addr, sizeof(launch_msg_t));
                 launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
@@ -549,7 +597,7 @@ void Device::reset_cores() {
                         id_and_cores.first);
                     std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
                     DeviceAddr launch_addr =
-                        hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::LAUNCH);
+                        hal_ref.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::LAUNCH);
                     data = tt::llrt::read_hex_vec_from_core(
                         id_and_cores.first, virtual_core, launch_addr, sizeof(launch_msg_t));
                     launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
@@ -646,7 +694,7 @@ void Device::initialize_and_launch_firmware() {
     for (const tt::umd::CoreCoord& core : eth_cores) {
         core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::ETH};
     }
-    if (hal.is_coordinate_virtualization_enabled()) {
+    if (hal_ref.is_coordinate_virtualization_enabled()) {
         // Track Virtual Non Worker Cores (In this case only Eth) separately
         uint32_t virtual_non_worker_cores_idx = 0;
         for (const tt::umd::CoreCoord& core : eth_cores) {
@@ -671,8 +719,10 @@ void Device::initialize_and_launch_firmware() {
         core_info->harvested_y[idx] = (idx < harvested_rows.size()) ? harvested_rows[idx] : CORE_COORD_INVALID;
         // Populate harvested rows in virtual coordinate space if virtualization is supported by HW.
         // Harvested rows in the virtual space are placed at the end of the worker grid,
-        if (hal.is_coordinate_virtualization_enabled() and idx < harvested_rows.size()) {
-            core_info->virtual_harvested_y[idx] = (hal.get_virtual_worker_start_y() + this->logical_grid_size().y + harvested_rows.size() - (idx + 1));
+        if (hal_ref.is_coordinate_virtualization_enabled() and idx < harvested_rows.size()) {
+            core_info->virtual_harvested_y[idx] =
+                (hal_ref.get_virtual_worker_start_y() + this->logical_grid_size().y + harvested_rows.size() -
+                 (idx + 1));
         } else {
             core_info->virtual_harvested_y[idx] = CORE_COORD_INVALID;
         }
@@ -709,13 +759,18 @@ void Device::initialize_and_launch_firmware() {
 
     // Clear erisc sync info
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
-
-        static std::vector<uint32_t> zero_vec_erisc_init(hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO) / sizeof(uint32_t), 0);
+        static std::vector<uint32_t> zero_vec_erisc_init(
+            hal_ref.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO) /
+                sizeof(uint32_t),
+            0);
 
         CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
 
         llrt::write_hex_vec_to_core(
-            this->id(), virtual_core, zero_vec_erisc_init, hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO));
+            this->id(),
+            virtual_core,
+            zero_vec_erisc_init,
+            hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO));
     }
 
     // Load erisc app base FW to eth cores on WH and active_erisc FW on second risc of BH active eth cores
@@ -727,7 +782,7 @@ void Device::initialize_and_launch_firmware() {
         tt::llrt::write_hex_vec_to_core(
             this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalL1MemAddrType::CORE_INFO));
         this->initialize_firmware(HalProgrammableCoreType::ACTIVE_ETH, phys_eth_core, &launch_msg, &go_msg);
-        if (!hal.get_eth_fw_is_cooperative()) {
+        if (!hal_ref.get_eth_fw_is_cooperative()) {
             active_eth_cores.insert(phys_eth_core);
             not_done_cores.insert(phys_eth_core);
         }
@@ -791,14 +846,13 @@ void Device::clear_l1_state() {
     // Clear erisc sync info
     for (const auto& eth_core : this->get_active_ethernet_cores()) {
         static const uint32_t max_l1_loading_size =
-            hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED) +
-            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+            hal_ref.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
         static uint32_t zero_vec_size = max_l1_loading_size;
         auto zero_vec_addr = HalL1MemAddrType::UNRESERVED;
-        if (hal.get_eth_fw_is_cooperative()) {
+        if (hal_ref.get_eth_fw_is_cooperative()) {
             zero_vec_size -=
-                hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::TILE_HEADER_BUFFER);
+                hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::TILE_HEADER_BUFFER);
             zero_vec_addr = HalL1MemAddrType::TILE_HEADER_BUFFER;
         }
 
@@ -807,7 +861,10 @@ void Device::clear_l1_state() {
         CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
 
         llrt::write_hex_vec_to_core(
-            this->id(), virtual_core, zero_vec, hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, zero_vec_addr));
+            this->id(),
+            virtual_core,
+            zero_vec,
+            hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, zero_vec_addr));
     }
     // TODO: clear idle eriscs as well
     tt::Cluster::instance().l1_barrier(this->id());
@@ -918,9 +975,9 @@ void Device::init_command_queue_device() {
 
     // TODO: should get a const ref
     std::vector<std::vector<CoreCoord>>logical_cores = command_queue_program.logical_cores();
-    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+    for (uint32_t index = 0; index < hal_ref.get_programmable_core_type_count(); index++) {
         const auto& logical_dispatch_cores = logical_cores[index];
-        CoreType core_type = hal.get_core_type(index);
+        CoreType core_type = hal_ref.get_core_type(index);
         for (const CoreCoord &logical_dispatch_core : logical_dispatch_cores) {
             launch_msg_t msg = command_queue_program.kernels_on_core(logical_dispatch_core, index)->launch_msg;
             go_msg_t go_msg = command_queue_program.kernels_on_core(logical_dispatch_core, index)->go_msg;
@@ -955,7 +1012,7 @@ void Device::init_fabric() {
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = fabric_program_->logical_cores();
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
          programmable_core_type_index++) {
-        CoreType core_type = hal.get_core_type(programmable_core_type_index);
+        CoreType core_type = hal_ref.get_core_type(programmable_core_type_index);
         for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
             launch_msg_t* msg =
                 &fabric_program_->kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
@@ -1032,8 +1089,8 @@ bool Device::close() {
 
     llrt::internal_::wait_until_cores_done(mmio_device_id, RUN_MSG_GO, wait_for_cores);
 
-    DprintServerDetach(this);
-    watcher_detach(this);
+    DprintServerDetach(this->id());
+    watcher_detach(this->id());
 
     // Assert worker cores
     CoreCoord grid_size = this->logical_grid_size();
@@ -1052,7 +1109,7 @@ bool Device::close() {
         }
     }
 
-    if (!hal.get_eth_fw_is_cooperative()) {
+    if (!hal_ref.get_eth_fw_is_cooperative()) {
         for (const auto& eth_core : this->get_active_ethernet_cores()) {
             CoreCoord virtual_eth_core = this->ethernet_core_from_logical_core(eth_core);
             TensixSoftResetOptions reset_val =
@@ -1124,24 +1181,6 @@ CoreCoord Device::compute_with_storage_grid_size() const {
     return tt::get_compute_grid_size(id_, num_hw_cqs_, dispatch_core_config);
 }
 
-CoreType Device::core_type_from_physical_core(const CoreCoord &physical_coord) const {
-    const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    CoreType core_type = soc_desc.translate_coord_to(physical_coord, CoordSystem::PHYSICAL, CoordSystem::PHYSICAL).core_type;
-    if (core_type == CoreType::TENSIX) {
-        core_type = CoreType::WORKER;
-    }
-    return core_type;
-}
-
-CoreType Device::core_type_from_virtual_core(const CoreCoord &virtual_coord) const {
-    if (tt::Cluster::instance().is_worker_core(virtual_coord, this->id_)) {
-        return CoreType::WORKER;
-    } else if (tt::Cluster::instance().is_ethernet_core(virtual_coord, this->id_)) {
-        return CoreType::ETH;
-    }
-    return this->core_type_from_physical_core(virtual_coord);
-}
-
 CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {
     if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
@@ -1152,27 +1191,9 @@ CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) co
         coord = this->virtual_core_from_physical_core(coord);
         // Derive virtual coord in noc_index space.
         CoreCoord virtual_coord = {
-            hal.noc_coordinate(noc_index, grid_size.x, coord.x),
-            hal.noc_coordinate(noc_index, grid_size.y, coord.y)
-        };
+            hal_ref.noc_coordinate(noc_index, grid_size.x, coord.x),
+            hal_ref.noc_coordinate(noc_index, grid_size.y, coord.y)};
         return virtual_coord;
-    }
-}
-
-CoreCoord Device::virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const {
-     if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y) {
-        // Coordinate already in virtual space: NOC0 and NOC1 are the same
-        return coord;
-    } else {
-        const auto& grid_size = this->grid_size();
-        // Coordinate passed in can be NOC0 or NOC1. The noc_index corresponds to
-        // the system this coordinate belongs to.
-        // Use this to convert to NOC0 coordinates and then derive Virtual Coords from it.
-        CoreCoord physical_coord = {
-            hal.noc_coordinate(noc_index, grid_size.x, coord.x),
-            hal.noc_coordinate(noc_index, grid_size.y, coord.y)
-        };
-        return this->virtual_core_from_physical_core(physical_coord);
     }
 }
 
@@ -1219,10 +1240,7 @@ CoreCoord Device::logical_core_from_ethernet_core(const CoreCoord &ethernet_core
 
 uint32_t Device::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const {
     auto virtual_noc_coord = this->virtual_noc0_coordinate(noc_index, core);
-    return tt::tt_metal::hal.noc_xy_encoding(
-        virtual_noc_coord.x,
-        virtual_noc_coord.y
-    );
+    return tt::tt_metal::hal_ref.noc_xy_encoding(virtual_noc_coord.x, virtual_noc_coord.y);
 }
 
 uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const {
@@ -1231,19 +1249,11 @@ uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& 
 
     // NOC 1 mcasts from bottom left to top right, so we need to reverse the coords
     if (noc_index == 0) {
-        return tt::tt_metal::hal.noc_multicast_encoding(
-            virtual_noc_start.x,
-            virtual_noc_start.y,
-            virtual_noc_end.x,
-            virtual_noc_end.y
-        );
+        return tt::tt_metal::hal_ref.noc_multicast_encoding(
+            virtual_noc_start.x, virtual_noc_start.y, virtual_noc_end.x, virtual_noc_end.y);
     } else {
-        return tt::tt_metal::hal.noc_multicast_encoding(
-            virtual_noc_end.x,
-            virtual_noc_end.y,
-            virtual_noc_start.x,
-            virtual_noc_start.y
-        );
+        return tt::tt_metal::hal_ref.noc_multicast_encoding(
+            virtual_noc_end.x, virtual_noc_end.y, virtual_noc_start.x, virtual_noc_start.y);
     }
 }
 
@@ -1496,26 +1506,28 @@ void Device::generate_device_bank_to_noc_tables()
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(this->id());
 
     dram_bank_to_noc_xy_.clear();
-    dram_bank_to_noc_xy_.reserve(tt::tt_metal::hal.get_num_nocs() * dram_noc_coord_per_bank.size());
-    for (unsigned int noc = 0; noc < tt::tt_metal::hal.get_num_nocs(); noc++) {
+    dram_bank_to_noc_xy_.reserve(tt::tt_metal::hal_ref.get_num_nocs() * dram_noc_coord_per_bank.size());
+    for (unsigned int noc = 0; noc < tt::tt_metal::hal_ref.get_num_nocs(); noc++) {
         for (unsigned int bank_id = 0; bank_id < dram_noc_coord_per_bank.size(); bank_id++) {
-            uint16_t noc_x = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.x, dram_noc_coord_per_bank[bank_id].x);
-            uint16_t noc_y = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord_per_bank[bank_id].y);
-            uint16_t xy = ((noc_y << tt::tt_metal::hal.get_noc_addr_node_id_bits()) | noc_x)
-                          << tt::tt_metal::hal.get_noc_coord_reg_offset();
+            uint16_t noc_x =
+                tt::tt_metal::hal_ref.noc_coordinate(noc, soc_d.grid_size.x, dram_noc_coord_per_bank[bank_id].x);
+            uint16_t noc_y =
+                tt::tt_metal::hal_ref.noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord_per_bank[bank_id].y);
+            uint16_t xy = ((noc_y << tt::tt_metal::hal_ref.get_noc_addr_node_id_bits()) | noc_x)
+                          << tt::tt_metal::hal_ref.get_noc_coord_reg_offset();
             dram_bank_to_noc_xy_.push_back(xy);
         }
     }
 
     l1_bank_to_noc_xy_.clear();
-    l1_bank_to_noc_xy_.reserve(tt::tt_metal::hal.get_num_nocs() * l1_noc_coord_per_bank.size());
-    for (unsigned int noc = 0; noc < tt::tt_metal::hal.get_num_nocs(); noc++) {
+    l1_bank_to_noc_xy_.reserve(tt::tt_metal::hal_ref.get_num_nocs() * l1_noc_coord_per_bank.size());
+    for (unsigned int noc = 0; noc < tt::tt_metal::hal_ref.get_num_nocs(); noc++) {
         for (unsigned int bank_id = 0; bank_id < l1_noc_coord_per_bank.size(); bank_id++) {
             auto l1_noc_coords = this->virtual_noc0_coordinate(noc, l1_noc_coord_per_bank[bank_id]);
             uint16_t noc_x = l1_noc_coords.x;
             uint16_t noc_y = l1_noc_coords.y;
-            uint16_t xy = ((noc_y << tt::tt_metal::hal.get_noc_addr_node_id_bits()) | noc_x)
-                          << tt::tt_metal::hal.get_noc_coord_reg_offset();
+            uint16_t xy = ((noc_y << tt::tt_metal::hal_ref.get_noc_addr_node_id_bits()) | noc_x)
+                          << tt::tt_metal::hal_ref.get_noc_coord_reg_offset();
             l1_bank_to_noc_xy_.push_back(xy);
         }
     }

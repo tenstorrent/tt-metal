@@ -22,9 +22,11 @@ jobs:
   create-docker-release-image:
     strategy:
       matrix:
-        os: [ubuntu-20.04]
+        os: [ubuntu-22.04]
     runs-on:
       - ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.generate-tag-name.outputs.TAG_NAME }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -48,6 +50,7 @@ jobs:
           echo "REPO_IMAGE_NAME=$REPO_IMAGE_NAME" >> $GITHUB_ENV
           TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
           echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
+          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_OUTPUT
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -63,7 +66,7 @@ jobs:
     needs: create-docker-release-image
     strategy:
       matrix:
-        os: [ubuntu-20.04]
+        os: [ubuntu-22.04]
         test_group:
           [
               {
@@ -79,7 +82,7 @@ jobs:
           ]
     runs-on: ${{ matrix.test_group.runs-on }}
     container:
-      image: ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release:${{ inputs.version }}
+      image: ${{ needs.create-docker-release-image.outputs.tag_name || 'docker-image-unresolved!' }}
       env:
         LOGURU_LEVEL: INFO
         ARCH_NAME: ${{ matrix.test_group.arch }}
@@ -110,7 +113,7 @@ jobs:
     needs: [smoke-test-docker-image, create-docker-release-image]
     strategy:
       matrix:
-        os: [ubuntu-20.04]
+        os: [ubuntu-22.04]
     runs-on:
       - ubuntu-latest
     steps:

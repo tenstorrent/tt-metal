@@ -53,14 +53,15 @@ tests/scripts/tgg/ @tenstorrent/metalium-developers-infra
 tt_metal/api @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @cfjchu @omilyutin-tt
 
 # metal - base
-tt_metal/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @cfjchu @omilyutin-tt
-tt_metal/host_api.hpp @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @davorchap @cfjchu @omilyutin-tt
-tt_metal/impl/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @davorchap @cfjchu @omilyutin-tt @nhuang-tt
-tt_metal/impl/device/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @davorchap @cfjchu @omilyutin-tt @nhuang-tt
+tt_metal/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @cfjchu @omilyutin-tt @jbaumanTT
+tt_metal/host_api.hpp @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @davorchap @cfjchu @omilyutin-tt @jbaumanTT
+tt_metal/impl/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @davorchap @cfjchu @omilyutin-tt @nhuang-tt @jbaumanTT
+tt_metal/impl/device/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @davorchap @cfjchu @omilyutin-tt @nhuang-tt @jbaumanTT
 tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra
 
 # fabric
-tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho
+tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT
+tests/tt_metal/microbenchmarks/ethernet/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT
 
 # metal - dispatch
 tt_metal/impl/dispatch/kernels/packet_* @ubcheema @aliuTT
@@ -76,13 +77,13 @@ tests/tt_metal/distributed/**/requirements*.txt @tenstorrent/metalium-developers
 # metal - fw, llks, risc-v
 tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
 tt_metal/hw/cmake/sfpi-version.cmake @nathan-TT
-tt_metal/hw/firmware/riscv/common/dataflow_internals.h @davorchap @mywoodstock
+tt_metal/hw/firmware/riscv/common/dataflow_internals.h @davorchap @aliuTT @ubcheema
 tt_metal/hw/firmware/src/*erisc* @aliuTT @ubcheema
 tt_metal/hw/inc/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
-tt_metal/include/compute_kernel_api.h @davorchap @mywoodstock
+tt_metal/include/compute_kernel_api.h @davorchap @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
 tt_metal/include/compute_kernel_api/ @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
-tt_metal/include/dataflow_kernel_api.h @davorchap @mywoodstock @ntarafdar
+tt_metal/include/dataflow_kernel_api.h @davorchap @ntarafdar @rtawfik01 @rdjogoTT @ttmtrajkovic @nvelickovicTT
 tt_metal/third_party/tt_llk @rtawfik01 @ttmtrajkovic @rdjogoTT @nvelickovicTT
 tt_metal/tt_stl/ @patrickroberts @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt @omilyutin-tt
 
@@ -117,16 +118,16 @@ ttnn/cpp/ttnn/operations/ccl/ @SeanNijjar @cfjchu @jvegaTT @tt-aho
 ttnn/cpp/ttnn/operations/pool/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/conv/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/sliding_window/ @tenstorrent/metalium-developers-convolutions
-ttnn/cpp/ttnn/operations/data_movement/ @ntarafdar @sjameelTT @jaykru-tt @yugi957 @jvegaTT @llongTT @nardoTT
+ttnn/cpp/ttnn/operations/data_movement/ @ntarafdar @sjameelTT @yugi957 @jvegaTT @llongTT @nardoTT
 ttnn/cpp/ttnn/operations/data_movement/fold/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/ @tenstorrent/metalium-developers-convolutions
-ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT
+ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT @nsorabaTT
 ttnn/cpp/ttnn/operations/experimental/ccl/ @SeanNijjar @jvegaTT @tt-aho
 ttnn/cpp/ttnn/operations/experimental/conv3d/ @tenstorrent/metalium-developers-convolutions
-ttnn/cpp/ttnn/operations/experimental/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT
+ttnn/cpp/ttnn/operations/experimental/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT @nsorabaTT
 ttnn/cpp/ttnn/operations/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
-ttnn/cpp/ttnn/operations/reduction/ @bbradelTT @sjameelTT @vsureshTT @edwinleeTT
-ttnn/cpp/ttnn/operations/normalization/ @yugaoTT @tt-aho @bbradelTT @vsureshTT @edwinleeTT
+ttnn/cpp/ttnn/operations/reduction/ @bbradelTT @sjameelTT @vsureshTT @edwinleeTT @nsorabaTT
+ttnn/cpp/ttnn/operations/normalization/ @yugaoTT @tt-aho @bbradelTT @vsureshTT @edwinleeTT @nsorabaTT
 ttnn/cpp/ttnn/operations/embedding/ @ntarafdar @tt-aho @TT-BrianLiu @yugi957 @sjameelTT @jaykru-tt @llongTT @nardoTT
 ttnn/cpp/ttnn/operations/embedding_backward/ @ntarafdar @tt-aho @TT-BrianLiu @yugi957 @sjameelTT @jaykru-tt @llongTT @nardoTT
 ttnn/cpp/ttnn/operations/transformer/sdpa/ @tenstorrent/metallium-maintainers-llama-models
@@ -145,16 +146,20 @@ tests/ttnn/unit_tests/operations/ccl/ @SeanNijjar @jvegaTT @tt-aho
 tests/ttnn/unit_tests/operations/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
 tests/ttnn/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions
 tests/ttnn/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions
+tests/ttnn/unit_tests/operations/matmul/ @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT
+tests/ttnn/unit_tests/operations/fused/ @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT
+tests/ttnn/unit_tests/operations/reduce/ @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT
 tests/ttnn/nightly/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions
 tests/ttnn/nightly/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions
+tests/ttnn/integration_tests/resnet/ @tenstorrent/metalium-developers-convolutions
 tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
 tests/sweep_framework/sweeps
 tests/sweep_framework/sweeps/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
 tests/sweep_framework/sweeps/conv2d/  @tenstorrent/metalium-developers-convolutions
 tests/sweep_framework/sweeps/data_movement/  @sjameelTT @ntarafdar @jaykru-tt @yugi957 @llongTT @jvegaTT @nardoTT
-tests/sweep_framework/sweeps/fused/  @bbradelTT @sjameelTT @vsureshTT @edwinleeTT
-tests/sweep_framework/sweeps/matmul/  @bbradelTT @sjameelTT @vsureshTT @edwinleeTT
-tests/sweep_framework/sweeps/reduction/  @bbradelTT @sjameelTT @vsureshTT @edwinleeTT
+tests/sweep_framework/sweeps/fused/  @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT
+tests/sweep_framework/sweeps/matmul/  @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT
+tests/sweep_framework/sweeps/reduction/  @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT
 
 # TTNN Distributed
 ttnn/cpp/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @omilyutin-tt
@@ -166,8 +171,18 @@ tests/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @omilyutin-tt
 /models/*/**
 models/conv_on_device_utils*.py @tenstorrent/metalium-developers-convolutions
 functional_*/ @uaydonat @esmalTT
+models/common @yieldthought @mtairum @uaydonat
+models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat
 models/demos @uaydonat
+models/**/bert*/ @TT-BrianLiu @uaydonat
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
+models/*/convnet_mnist/ @sjameelTT @uaydonat
+models/**/distilbert/ @tt-aho @uaydonat
+models/*/mnist/ @esmalTT @uaydonat
+models/*/roberta/ @sraizada-tt @uaydonat
+models/*/squeezebert/ @cfjchu @uaydonat
+models/demos/ttnn_falcon7b @cfjchu @uaydonat
+models/*/vgg/ @bbradelTT @uaydonat
 models/demos/wormhole @uaydonat
 models/demos/t3000 @uaydonat
 models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat
@@ -179,6 +194,7 @@ models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar
 models/demos/wormhole/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/wormhole/mistral7b @yieldthought @uaydonat @mtairum
 models/demos/wormhole/stable_diffusion @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions
+models/demos/blackhole/stable_diffusion @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions
 models/demos/t3000/falcon40b @uaydonat @djordje-tt @johanna-rock-tt
 models/demos/t3000/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/t3000/llama2_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
@@ -191,12 +207,17 @@ models/demos/grayskull @uaydonat
 models/demos/yolov4 @dvartaniansTT @mbahnasTT @tenstorrent/metalium-developers-convolutions
 models/demos/wormhole/yolov4 @dvartaniansTT @mbahnasTT @tenstorrent/metalium-developers-convolutions
 models/demos/**/*resnet*  @tt-aho @tenstorrent/metalium-developers-convolutions
+models/experimental/ @sminakov-tt @dgomezTT @jmalone-tt @ayerofieiev-tt @uaydonat
 models/experimental/functional_unet @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions
-models/experimental/functional_vit @mbahnasTT @uaydonat
+models/experimental/grok @yieldthought @uaydonat
+models/demos/wormhole/vit @mbahnasTT @dvartaniansTT @uaydonat
+models/demos/vit  @mbahnasTT @dvartaniansTT @uaydonat
+models/experimental/*yolo*/ @mbahnasTT @uaydonat
+models/experimental/stable_diffusion @mbahnasTT @uaydonat
 models/demos/segformer @mbahnasTT @uaydonat @tenstorrent/metalium-developers-convolutions
-models/perf/ @uaydonat
+models/perf/ @yieldthought @uaydonat
 models/perf/perf_report.py @yieldthought @uaydonat
-models/perf/benchmarking_utils.py @skhorasganiTT
+models/perf/benchmarking_utils.py @skhorasganiTT @williamlyTT @uaydonat
 models/demos/utils/llm_demo_utils.py @skhorasganiTT @mtairum @uaydonat
 
 # docs
@@ -215,4 +236,4 @@ ttnn/CMakeLists.txt @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt
 
 
 # tt-train
-tt-train/** @dmakoviichuk-tt @rfurko-tt
+tt-train/** @dmakoviichuk-tt @rfurko-tt @ayerofieiev-tt

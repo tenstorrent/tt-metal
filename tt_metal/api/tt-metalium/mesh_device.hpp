@@ -4,21 +4,53 @@
 
 #pragma once
 
+#include <tt_stl/span.hpp>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <ostream>
+#include <set>
+#include <string>
+#include <tuple>
 #include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
-#include "device.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include "hostdevcommon/common_values.hpp"
+#include <tt-metalium/mesh_config.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
+#include <tt-metalium/program_device_map.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/trace_buffer.hpp>
+#include <umd/device/types/arch.h>
+#include <tt-metalium/work_executor_types.hpp>
 
-#include "mesh_config.hpp"
-#include "mesh_coord.hpp"
-#include "mesh_device_view.hpp"
-#include "mesh_trace_id.hpp"
-#include "small_vector.hpp"
-#include "sub_device_types.hpp"
-#include <tt_stl/span.hpp>
+enum class CoreType;
+namespace tt {
+namespace tt_metal {
+class Allocator;
+class CommandQueue;
+class SubDevice;
+class SystemMemoryManager;
+namespace program_cache {
+namespace detail {
+struct ProgramCache;
+}  // namespace detail
+}  // namespace program_cache
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -31,6 +63,8 @@ class MeshCommandQueue;
 class MeshDeviceView;
 class MeshSubDeviceManagerId;
 class MeshTraceBuffer;
+
+using DeviceIds = std::vector<int>;
 
 class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevice> {
 private:
@@ -65,7 +99,7 @@ private:
     };
 
     std::shared_ptr<ScopedDevices> scoped_devices_;
-    MeshDeviceID mesh_id_;
+    int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
     // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
     std::shared_ptr<MeshDevice> parent_mesh_;
@@ -104,7 +138,7 @@ public:
 
     // IDevice interface implementation
     tt::ARCH arch() const override;
-    MeshDeviceID id() const override;
+    int id() const override;
     chip_id_t build_id() const override;
     uint8_t num_hw_cqs() const override;
     bool is_initialized() const override;
@@ -116,8 +150,6 @@ public:
     CoreCoord grid_size() const override;
     CoreCoord logical_grid_size() const override;
     CoreCoord dram_grid_size() const override;
-    CoreType core_type_from_virtual_core(const CoreCoord& virtual_coord) const override;
-    CoreCoord virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const override;
     CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const override;
 
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>&logical_cores) const override;

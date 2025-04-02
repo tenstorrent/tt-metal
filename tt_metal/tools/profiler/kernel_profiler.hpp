@@ -32,10 +32,8 @@
     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));
 
-#if defined(PROFILE_KERNEL) &&                                                                     \
-    (!defined(DISPATCH_KERNEL) ||                                                                  \
-     (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES)) &&           \
-     (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_ERISC)))
+#if defined(PROFILE_KERNEL) && \
+    (!defined(DISPATCH_KERNEL) || (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES)))
 namespace kernel_profiler {
 
 extern uint32_t wIndex;
@@ -197,7 +195,7 @@ FORCE_INLINE
 void profiler_noc_async_flush_posted_write(uint8_t noc = noc_index) {
     WAYPOINT("NPPW");
     while (!ncrisc_noc_posted_writes_sent(noc));
-    WAYPOINT("NPPD")
+    WAYPOINT("NPPD");
 }
 
 #endif
@@ -412,24 +410,24 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
 #include "noc_event_profiler.hpp"
 
 // Not dispatch
-#if (                            \
-    !defined(DISPATCH_KERNEL) || \
-    !(defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_ERISC)))
+#if (!defined(DISPATCH_KERNEL))
 
 #define DeviceZoneScopedN(name)                                                \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
     kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
 
-#define DeviceTimestampedData(data_id, data) kernel_profiler::timeStampedData<data_id>(data);
+#define DeviceTimestampedData(name, data)                                          \
+    {                                                                              \
+        DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+        auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
+        kernel_profiler::timeStampedData<hash>(data);                              \
+    }
 
 #define DeviceRecordEvent(event_id) kernel_profiler::recordEvent(event_id);
 
 // Dispatch and enabled
-#elif (                                                                                                 \
-    defined(DISPATCH_KERNEL) &&                                                                       \
-    (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_ERISC)) && \
-    (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES))
+#elif (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES))
 
 #define DeviceZoneScopedN(name)                                                         \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                         \
@@ -437,9 +435,14 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
     kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH> zone = \
         kernel_profiler::profileScope<hash, kernel_profiler::DoingDispatch::DISPATCH>();
 
-#define DeviceTimestampedData(data_id, data) kernel_profiler::timeStampedData<data_id, true>(data);
+#define DeviceTimestampedData(name, data)                                                       \
+    {                                                                                           \
+        DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                                            \
+        auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));              \
+        kernel_profiler::timeStampedData<hash, kernel_profiler::DoingDispatch::DISPATCH>(data); \
+    }
 
-#define DeviceRecordEvent(event_id) kernel_profiler::recordEvent<true>(event_id);
+#define DeviceRecordEvent(event_id) kernel_profiler::recordEvent<kernel_profiler::DoingDispatch::DISPATCH>(event_id);
 
 // Dispatch but disabled
 #else

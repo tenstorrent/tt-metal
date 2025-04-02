@@ -4,13 +4,19 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <list>
+#include <optional>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
-#include "core_descriptor.hpp"
 #include "core_coord.hpp"
+#include "core_descriptor.hpp"
 #include "dispatch_core_common.hpp"
+#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/cluster_descriptor_types.h>
 
 namespace tt::tt_metal {
 
@@ -170,6 +176,8 @@ public:
     CoreType get_dispatch_core_type();
 
     DispatchCoreConfig get_dispatch_core_config();
+
+    uint8_t get_num_hw_cqs() { return this->num_hw_cqs; }
 
     // TODO: remove this API, we should read the core descriptor once, should not have backdoors like this to add cores
     void add_dispatch_core_to_device(chip_id_t device_id, const CoreCoord& core);

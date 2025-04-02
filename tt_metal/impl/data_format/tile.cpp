@@ -3,6 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/tile.hpp>
+#include <algorithm>
+#include <stdexcept>
+
+#include "assert.hpp"
+#include "hal_types.hpp"
+#include "llrt/hal.hpp"
+#include "math.hpp"
+#include "tt_backend_api_types.hpp"
 
 namespace tt::tt_metal {
 
@@ -41,7 +49,7 @@ Tile::Tile(std::array<uint32_t, 2> tile_shape, bool transpose_tile) : tile_shape
 }
 
 const uint32_t Tile::get_tile_size(const DataFormat& format) const {
-    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
+    uint32_t l1_alignment = hal_ref.get_alignment(HalMemType::L1);
     uint32_t aligned_exp_size = tt::round_up(face_shape[0] * num_faces, l1_alignment);
     switch (format) {
         case DataFormat::Bfp2:

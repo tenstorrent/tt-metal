@@ -14,7 +14,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/kernel.hpp>
 #include <tt-metalium/device_pool.hpp>
-#include <tt-metalium/hal.hpp>
+#include "llrt/hal.hpp"
 #include <thread>
 #include "tt_metal/jit_build/build_env_manager.hpp"
 
@@ -142,7 +142,7 @@ int main(int argc, char** argv) {
             ////////////////////////////////////////////////////////////////////////////
             // Check that binary memory objects in the kernel match the ones obtained from the persistent cache
             uint32_t programmable_core_index =
-                tt_metal::hal.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::TENSIX);
+                tt_metal::hal_ref.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::TENSIX);
             const tt_metal::KernelGroup* kernel_group = program.kernels_on_core(core, programmable_core_index);
             TT_FATAL(
                 kernel_group != nullptr && kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].has_value() and
@@ -202,8 +202,8 @@ int main(int argc, char** argv) {
                                             .get_device_build_env(device->build_id())
                                             .build_key;
                         tt_metal::detail::CompileProgram(device, program);
-                        uint32_t programmable_core_index =
-                            tt_metal::hal.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::TENSIX);
+                        uint32_t programmable_core_index = tt_metal::hal_ref.get_programmable_core_type_index(
+                            tt_metal::HalProgrammableCoreType::TENSIX);
                         const tt_metal::KernelGroup* kernel_group =
                             program.kernels_on_core(core, programmable_core_index);
                         auto compute_kernel = tt_metal::detail::GetKernel(
