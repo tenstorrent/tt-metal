@@ -3,13 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include <iostream>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_types.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include "generic_op_device_operation.hpp"
-
+#include "tt-metalium/kernel_types.hpp"
 
 namespace ttnn::operations::generic {
 GenericOpDeviceOperation::GenericProgram::cached_program_t GenericOpDeviceOperation::GenericProgram::create(
@@ -19,28 +18,26 @@ GenericOpDeviceOperation::GenericProgram::cached_program_t GenericOpDeviceOperat
     using namespace tt;
     using namespace tt::tt_metal;
 
-    // // just debug print
-    // std::cout << "input buffer 0x" << std::hex << tensor_args.io_tensors.front().buffer()->address() << std::dec << std::endl;
-    // std::cout << "output buffer 0x" << std::hex << tensor_args.io_tensors.back().buffer()->address() << std::dec << std::endl;
-    // size_t i = 0;
-    // for (const auto& tensor : tensor_args.io_tensors) {
-    //     std::cout << "[" << i++ << "] 0x=" << tensor.buffer()->address() << std::endl;
-    // }
-    // // end of debug
-
     tt::tt_metal::Program program{};
 
     // create circular buffers
     std::map<uint8_t, tt::tt_metal::CBHandle> cb_handles;
     for (const auto& [buffer_index, circular_buffer_attributes] : operation_attributes.circular_buffer_attributes) {
-        tt::tt_metal::CircularBufferConfig cb_config = tt::tt_metal::CircularBufferConfig(
-            circular_buffer_attributes.total_size,
-            {{buffer_index, circular_buffer_attributes.data_format}})
-            .set_page_size(buffer_index, circular_buffer_attributes.page_size);
+        tt::DataFormat resolved_data_format;
+        if (std::holds_alternative<tt::DataFormat>(circular_buffer_attributes.data_format)) {
+            resolved_data_format = std::get<tt::DataFormat>(circular_buffer_attributes.data_format);
+        } else {
+            resolved_data_format = tt::tt_metal::datatype_to_dataformat_converter(
+                std::get<ttnn::DataType>(circular_buffer_attributes.data_format));
+        }
 
-        // used for sharding to point to the existing buffer: WIP
+        tt::tt_metal::CircularBufferConfig cb_config =
+            tt::tt_metal::CircularBufferConfig(
+                circular_buffer_attributes.total_size, {{buffer_index, resolved_data_format}})
+                .set_page_size(buffer_index, circular_buffer_attributes.page_size);
+
+        // WIP: Sharding
         // if (circular_buffer_attributes.set_globally_allocated_address.has_value()) {
-
         //     cb_config.set_globally_allocated_address(*tensor_args.io_tensors[circular_buffer_attributes.set_globally_allocated_address.value()].buffer());
         // }
 
@@ -98,7 +95,7 @@ void GenericOpDeviceOperation::GenericProgram::override_runtime_arguments(
     auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
 
-    // Not implemented
+    // Not needed yet.
     // const auto& input_tensor = tensor_args.io_tensors.front();
     // auto& output_tensor = tensor_args.io_tensors.back();
 
