@@ -7,7 +7,9 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
+#include <variant>
 
 #include <tt-metalium/buffer_constants.hpp>
 
@@ -33,9 +35,6 @@ using sliding_window::SlidingWindowConfig;
 
 namespace conv1d {
 
-using OutputLength = uint32_t;
-using Result = std::tuple<ttnn::Tensor, OutputLength, ttnn::Tensor, std::optional<ttnn::Tensor>>;
-
 template <typename T>
 Result conv1d(
     const ttnn::Tensor& input_tensor,
@@ -53,13 +52,16 @@ Result conv1d(
     std::optional<const ttnn::Tensor> bias_tensor,
     const std::optional<const Conv1dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const MemoryConfig>& memory_config) {
+    const std::optional<const MemoryConfig>& memory_config,
+    bool return_output_dim,
+    bool return_weights_and_bias) {
     // reshape input tensor to 4D, if it is not already
     const ttnn::Tensor& input_tensor_4d =
         (input_tensor.get_logical_shape().rank() < 4)
             ? ttnn::reshape(input_tensor, Shape({batch_size, input_length, 1, in_channels}))
             : input_tensor;
 
+    // TODO move this to prepare weights
     // reshape input tensor to 4D, if it is not already
     const ttnn::Tensor& weight_tensor_4d =
         (weight_tensor.get_logical_shape().rank() < 4)
@@ -101,9 +103,17 @@ Result conv1d(
         compute_config_,
         memory_config);
 
-    return Result(output_tensor, output_height, weight_tensor_on_device, bias_tensor_on_device);
-};
-
+    if (return_output_dim && return_weights_and_bias) {
+        return Result(
+            std::tuple(output_tensor, output_height, std::tuple(weight_tensor_on_device, bias_tensor_on_device)));
+    } else if (return_output_dim) {
+        return Result(std::tuple(output_tensor, output_height));
+    } else if (return_weights_and_bias) {
+        return Result(std::tuple(output_tensor, std::tuple(weight_tensor_on_device, bias_tensor_on_device)));
+    } else {
+        return Result(output_tensor);
+    };
+}
 Result Conv1dOperation::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
@@ -121,7 +131,9 @@ Result Conv1dOperation::invoke(
     std::optional<const ttnn::Tensor> bias_tensor,
     const std::optional<const Conv1dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const MemoryConfig>& memory_config) {
+    const std::optional<const MemoryConfig>& memory_config,
+    bool return_output_dim,
+    bool return_weights_and_bias) {
     return conv1d(
         input_tensor,
         weight_tensor,
@@ -138,7 +150,9 @@ Result Conv1dOperation::invoke(
         std::move(bias_tensor),
         std::move(conv_config_),
         std::move(compute_config_),
-        memory_config);
+        memory_config,
+        return_output_dim,
+        return_weights_and_bias);
 }
 
 Result Conv1dOperation::invoke(
@@ -158,7 +172,9 @@ Result Conv1dOperation::invoke(
     std::optional<const ttnn::Tensor> bias_tensor,
     const std::optional<const Conv1dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const MemoryConfig>& memory_config) {
+    const std::optional<const MemoryConfig>& memory_config,
+    bool return_output_dim,
+    bool return_weights_and_bias) {
     return conv1d(
         input_tensor,
         weight_tensor,
@@ -175,7 +191,9 @@ Result Conv1dOperation::invoke(
         std::move(bias_tensor),
         std::move(conv_config_),
         std::move(compute_config_),
-        memory_config);
+        memory_config,
+        return_output_dim,
+        return_weights_and_bias);
 }
 
 }  // namespace conv1d

@@ -96,21 +96,23 @@ def run_conv(
             conv_config.override_sharding_config = True
             print("Setting num_cores_nhw to 98")
 
-    [tt_output_tensor_on_device, out_length, weights_device, bias_device] = ttnn.conv1d(
+    [tt_output_tensor_on_device, out_length, [weights_device, bias_device]] = ttnn.conv1d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
-        device=device,
         in_channels=input_channels,
         out_channels=output_channels,
-        batch_size=batch_size,
-        input_length=input_length,
+        device=device,
+        bias_tensor=tt_bias_tensor,
         kernel_size=kernel_size,
         stride=stride,
         padding=padding,
+        batch_size=batch_size,
+        input_length=input_length,
         conv_config=conv_config,
         compute_config=compute_config,
         groups=groups,
-        bias_tensor=tt_bias_tensor,
+        return_output_dim=True,
+        return_weights_and_bias=True,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)

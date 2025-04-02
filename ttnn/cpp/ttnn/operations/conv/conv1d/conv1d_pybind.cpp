@@ -21,26 +21,28 @@ void py_bind_conv1d(py::module& module) {
         ttnn::conv1d,
         R"doc(
         Conv 1D
-        +-------------------+-------------------------------+-----------------------------+-------------+----------+
-        | Argument          | Description                   | Data type                   | Valid range | Required |
-        +===================+===============================+=============================+=============+==========+
-        | input_tensor      | Input activations tensor      | Tensor                      |             | Yes      |
-        | weight_tensor     | Weight tensor                 | Tensor                      |             | Yes      |
-        | device            | Device                        | Device                      |             | Yes      |
-        | in_channels       | Input channels                | uint32_t                    |             | Yes      |
-        | out_channels      | Output channels               | uint32_t                    |             | Yes      |
-        | batch_size        | Batch size                    | uint32_t                    |             | Yes      |
-        | input_length      | Input length                  | uint32_t                    |             | Yes      |
-        | kernel_size       | Kernel size                   | uint32_t                    |             | Yes      |
-        | stride            | Stride                        | uint32_t                    |             | Yes      |
-        | padding           | Padding                       | uint32_t                    |             | Yes      |
-        | dilation          | Dilation                      | uint32_t                    |             | No       |
-        | groups            | Groups                        | uint32_t                    |             | No       |
-        | bias_tensor       | Bias tensor                   | Tensor                      |             | No       |
-        | conv_config       | Conv config                   | Conv1dConfig                |             | No       |
-        | compute_config    | Compute config                | DeviceComputeKernelConfig   |             | No       |
-        | memory_config     | Memory config                 | MemoryConfig                |             | No       |
-        +-------------------+-------------------------------+-----------------------------+------------------------+
+        +-------------------------+-------------------------------+-----------------------------+-------------+----------+
+        | Argument                | Description                   | Data type                   | Valid range | Required |
+        +=========================+===============================+=============================+=============+==========+
+        | input_tensor            | Input activations tensor      | Tensor                      |             | Yes      |
+        | weight_tensor           | Weight tensor                 | Tensor                      |             | Yes      |
+        | device                  | Device                        | Device                      |             | Yes      |
+        | in_channels             | Input channels                | uint32_t                    |             | Yes      |
+        | out_channels            | Output channels               | uint32_t                    |             | Yes      |
+        | batch_size              | Batch size                    | uint32_t                    |             | Yes      |
+        | input_length            | Input length                  | uint32_t                    |             | Yes      |
+        | kernel_size             | Kernel size                   | uint32_t                    |             | Yes      |
+        | stride                  | Stride                        | uint32_t                    |             | Yes      |
+        | padding                 | Padding                       | uint32_t                    |             | Yes      |
+        | dilation                | Dilation                      | uint32_t                    |             | No       |
+        | groups                  | Groups                        | uint32_t                    |             | No       |
+        | bias_tensor             | Bias tensor                   | Tensor                      |             | No       |
+        | conv_config             | Conv config                   | Conv1dConfig                |             | No       |
+        | compute_config          | Compute config                | DeviceComputeKernelConfig   |             | No       |
+        | memory_config           | Memory config                 | MemoryConfig                |             | No       |
+        | return_output_dim       | Return output dim             | bool                        |             | No       |
+        | return_weights_and_bias | Return weights and bias       | bool                        |             | No       |
+        +-------------------------+-------------------------------+-----------------------------+------------------------+
 
         )doc",
         ttnn::pybind_overload_t{
@@ -61,6 +63,8 @@ void py_bind_conv1d(py::module& module) {
                const std::optional<const Conv1dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
+               bool return_output_dim,
+               bool return_weights_and_bias,
                QueueId queue_id) -> Result {
                 return self(
                     queue_id,
@@ -79,7 +83,9 @@ void py_bind_conv1d(py::module& module) {
                     bias_tensor,
                     conv_config,
                     compute_config,
-                    memory_config);
+                    memory_config,
+                    return_output_dim,
+                    return_weights_and_bias);
             },
             py::kw_only(),
             py::arg("input_tensor"),
@@ -98,6 +104,8 @@ void py_bind_conv1d(py::module& module) {
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
+            py::arg("return_output_dim") = false,
+            py::arg("return_weights_and_bias") = false,
             py::arg("queue_id") = DefaultQueueId},
 
         ttnn::pybind_overload_t{
@@ -118,6 +126,8 @@ void py_bind_conv1d(py::module& module) {
                const std::optional<const Conv1dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
+               bool return_output_dim,
+               bool return_weights_and_bias,
                QueueId queue_id) -> Result {
                 return self(
                     queue_id,
@@ -136,7 +146,9 @@ void py_bind_conv1d(py::module& module) {
                     bias_tensor,
                     conv_config,
                     compute_config,
-                    memory_config);
+                    memory_config,
+                    return_output_dim,
+                    return_weights_and_bias);
             },
             py::kw_only(),
             py::arg("input_tensor"),
@@ -155,6 +167,8 @@ void py_bind_conv1d(py::module& module) {
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
+            py::arg("return_output_dim") = false,
+            py::arg("return_weights_and_bias") = false,
             py::arg("queue_id") = DefaultQueueId});
 }
 }  // namespace conv1d

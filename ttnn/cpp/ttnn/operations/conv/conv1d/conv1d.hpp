@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <tuple>
 
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -17,7 +18,11 @@ namespace operations::conv {
 namespace conv1d {
 
 using OutputLength = uint32_t;
-using Result = std::tuple<ttnn::Tensor, OutputLength, ttnn::Tensor, std::optional<ttnn::Tensor>>;
+using Result = std::variant<
+    ttnn::Tensor,
+    std::tuple<ttnn::Tensor, OutputLength>,
+    std::tuple<ttnn::Tensor, std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>,
+    std::tuple<ttnn::Tensor, OutputLength, std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>>;
 using Conv1dConfig = ttnn::operations::conv::conv2d::Conv2dConfig;
 
 template <typename T>
@@ -37,7 +42,9 @@ Result conv1d(
     std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
     const std::optional<const Conv1dConfig>& conv_config_ = std::nullopt,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
-    const std::optional<const MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+    bool return_output_dim = true,
+    bool return_weights_and_bias = true);
 
 // Conv1dOperation is a wrapper around Conv2dOperation to handle 1D convolutions.
 // It uses the same logic as Conv2dOperation but with 1D-specific parameters.
@@ -60,7 +67,9 @@ struct Conv1dOperation {
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
         const std::optional<const Conv1dConfig>& conv_config_ = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
-        const std::optional<const MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+        bool return_output_dim = true,
+        bool return_weights_and_bias = true);
 
     static Result invoke(
         QueueId queue_id,
@@ -79,7 +88,9 @@ struct Conv1dOperation {
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
         const std::optional<const Conv1dConfig>& conv_config_ = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
-        const std::optional<const MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+        bool return_output_dim = true,
+        bool return_weights_and_bias = true);
 };
 }  // namespace conv1d
 }  // namespace operations::conv
