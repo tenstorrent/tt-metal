@@ -1215,7 +1215,8 @@ class ModelArgs:
                 normalized_path = os.path.normpath(params["_name_or_path"])
                 # For HF paths, we might to end with `<model_name>/snapshots/<snapshot_id>/`
                 if "snapshots" in normalized_path:
-                    self.model_name = normalized_path.split(os.path.sep)[-3]
+                    full_model_name = normalized_path.split(os.path.sep)[-3]
+                    self.model_name = full_model_name.split("--")[-1]
                 else:
                     self.model_name = os.path.basename(params["_name_or_path"])
             else:
