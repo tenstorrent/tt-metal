@@ -25,9 +25,6 @@ static Hash hash_operation(const Types&... objects) {
     return stl::hash::hash_objects_with_default_seed(tt::stl::hash::type_hash<OperationType>, objects...);
 }
 
-using OverrideAddressesCallback = std::function<void(
-    const Program&, const std::vector<tt::tt_metal::Buffer*>&, const std::vector<tt::tt_metal::Buffer*>&)>;
-
 using Tensors = std::vector<Tensor>;
 using OptionalTensors = std::vector<std::optional<Tensor>>;
 using OptionalConstTensors = std::vector<std::optional<const Tensor>>;
@@ -38,13 +35,8 @@ using OverrideRuntimeArgumentsCallback = std::function<void(
 
 template <typename OutputTensors = Tensors>
 struct CacheableProgram {
-    Program program{};
-    std::optional<OverrideAddressesCallback> override_addresses_callback = std::nullopt;
+    Program program;
     std::optional<OverrideRuntimeArgumentsCallback<OutputTensors>> override_runtime_arguments_callback = std::nullopt;
-
-    bool supports_program_cache() const {
-        return this->override_addresses_callback.has_value() or this->override_runtime_arguments_callback.has_value();
-    }
 };
 
 template <typename... Args>

@@ -268,12 +268,15 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
     }
 
     auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_ids, cores](
+                                              const void* operation,
                                               const tt::tt_metal::Program& program,
-                                              const std::vector<tt::tt_metal::Buffer*>& input_buffers,
-                                              const std::vector<tt::tt_metal::Buffer*>& output_buffers) {
-        auto input_values_buffer = input_buffers.at(0);
-        auto input_indices_buffer = input_buffers.at(1);
-        auto output_buffer = output_buffers.at(0);
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto input_values_buffer = input_tensors.at(0).buffer();
+        auto input_indices_buffer = input_tensors.at(1).buffer();
+
+        auto output_buffer = output_tensors.at(0).buffer();
 
         for (uint32_t i = 0; i < cores.size(); ++i) {
             const auto& core = cores[i];
