@@ -23,13 +23,13 @@ using tt::tt_metal::ShardedBufferConfig;
 using tt::tt_metal::ShardOrientation;
 using tt::tt_metal::ShardSpecBuffer;
 
-void ValidateBuffer(std::vector<uint32_t> expected_data, std::shared_ptr<tt_metal::Buffer> buffer) {
+void ValidateBuffer(const std::vector<uint32_t>& expected_data, std::shared_ptr<tt_metal::Buffer> buffer) {
     std::vector<uint32_t> actual_data;
     tt::tt_metal::detail::ReadFromBuffer(buffer, actual_data);
     EXPECT_EQ(expected_data, actual_data);
 }
 
-void ValidateBuffer(uint32_t expected_data, std::shared_ptr<tt_metal::Buffer> buffer) {
+void ValidateBuffer(const uint32_t& expected_data, std::shared_ptr<tt_metal::Buffer> buffer) {
     std::vector<uint32_t> actual_data;
     tt::tt_metal::detail::ReadFromBuffer(buffer, actual_data);
     EXPECT_EQ(expected_data, actual_data[0]);
@@ -37,10 +37,10 @@ void ValidateBuffer(uint32_t expected_data, std::shared_ptr<tt_metal::Buffer> bu
 
 void CreateSenderKernel(
     tt::tt_metal::Program& sender_program,
-    std::string sender_kernel_name,
+    const std::string& sender_kernel_name,
     std::vector<uint32_t>&& sender_compile_time_args,
-    CoreCoord& sender_logical_core,
-    std::map<string, string>& defines,
+    const CoreCoord& sender_logical_core,
+    const std::map<string, string>& defines,
     std::vector<uint32_t>&& sender_runtime_args) {
     // Allocate space for the client interface
     uint32_t client_interface_cb_index = tt::CBIndex::c_0;
@@ -67,10 +67,10 @@ void CreateSenderKernel(
 
 void CreateReceiverKernel(
     tt::tt_metal::Program& receiver_program,
-    CoreCoord& receiver_logical_core,
-    std::map<string, string> defines,
-    uint32_t address,
-    uint32_t data_size) {
+    const CoreCoord& receiver_logical_core,
+    const std::map<string, string>& defines,
+    const uint32_t address,
+    const uint32_t data_size) {
     auto receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
         "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver.cpp",
@@ -88,7 +88,7 @@ void CreateReceiverKernel(
 }
 
 std::shared_ptr<tt_metal::Buffer> PrepareBuffer(
-    tt::tt_metal::IDevice* device, uint32_t size, CoreRangeSet& logical_crs, std::vector<uint32_t> fill_data) {
+    tt::tt_metal::IDevice* device, uint32_t size, CoreRangeSet& logical_crs, const std::vector<uint32_t>& fill_data) {
     auto shard_parameters = ShardSpecBuffer(logical_crs, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
     ShardedBufferConfig shard_config = {
         .device = device,
