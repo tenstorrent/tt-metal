@@ -432,6 +432,34 @@ def run_conv_with_split(
             torch_conv_output_tensor = torch_conv_output_tensor.reshape(
                 batch_size, out_height, out_width, split_output_channels
             )
+<<<<<<< HEAD
+=======
+        torch_input_tensor = torch.permute(split_input_tensors[i], (0, 2, 3, 1))
+        tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+        # tt_input_tensor_on_device = convs[i].copy_input_to_device(tt_input_tensor)
+        # tt_output_tensor_on_device = convs[i](tt_input_tensor_on_device)
+        [tt_output_tensor_on_device, [out_height, out_width]] = ttnn.conv2d(
+            input_tensor=tt_input_tensor,
+            weight_tensor=tt_weight_tensor,
+            in_channels=split_input_channels,
+            out_channels=output_channels,
+            device=device,
+            bias_tensor=tt_bias_tensor,
+            kernel_size=(filter_height, filter_width),
+            stride=(stride_h, stride_w),
+            padding=(pad_top, pad_bottom, pad_left, pad_right),
+            batch_size=batch_size,
+            input_height=input_height,
+            input_width=input_width,
+            conv_config=conv_config,
+            compute_config=compute_config,
+            return_output_dim=True,
+        )
+        tt_conv_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
+        torch_conv_output_tensor = ttnn.to_torch(tt_conv_output_tensor)
+        print(f"Output shape : {batch_size} {out_height} {out_width} {output_channels}")
+        torch_conv_output_tensor = torch_conv_output_tensor.reshape(batch_size, out_height, out_width, output_channels)
+>>>>>>> e4a66ae2dd (removed unused conv_op_cache and debug args from python conv ops)
 
             # torch_output_tensor is in row major layout and NHWC shape
             # NHWC to NCHW
