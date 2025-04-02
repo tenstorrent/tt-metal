@@ -17,6 +17,8 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/distributed/api.hpp"
 
+#include <tracy/Tracy.hpp>
+
 using namespace tt::tt_metal;
 
 namespace tt {

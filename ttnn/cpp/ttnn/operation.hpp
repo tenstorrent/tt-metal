@@ -13,6 +13,8 @@
 #include <tt_stl/reflection.hpp>
 #include "ttnn/config.hpp"
 
+#include <tracy/Tracy.hpp>
+
 namespace tt {
 
 namespace tt_metal {

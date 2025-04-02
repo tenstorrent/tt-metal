@@ -8,6 +8,8 @@
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/types.hpp"
 
+#include <tracy/Tracy.hpp>
+
 namespace tt {
 
 namespace tt_metal {
