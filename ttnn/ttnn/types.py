@@ -83,3 +83,9 @@ BinaryOpType = ttnn._ttnn.operations.binary.BinaryOpType
 
 BcastOpMath = ttnn._ttnn.types.BcastOpMath
 BcastOpDim = ttnn._ttnn.types.BcastOpDim
+
+CircularBufferAttributes = ttnn._ttnn.operations.generic.CircularBufferAttributes
+DataMovementAttributes = ttnn._ttnn.operations.generic.DataMovementAttributes
+ComputeAttributes = ttnn._ttnn.operations.generic.ComputeAttributes
+ProgramAttributes = ttnn._ttnn.operations.generic.ProgramAttributes
+CBIndex = ttnn._ttnn.operations.generic.CBIndex
