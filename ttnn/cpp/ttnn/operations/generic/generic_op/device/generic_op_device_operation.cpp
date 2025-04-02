@@ -36,8 +36,9 @@ GenericOpDeviceOperation::tensor_return_value_t GenericOpDeviceOperation::create
     //     compute_output_specs(operation_attributes, tensor_args), tensor_args.output_tensor.device());
 }
 
-std::tuple<GenericOpDeviceOperation::operation_attributes_t, GenericOpDeviceOperation::tensor_args_t> 
-GenericOpDeviceOperation::invoke(const std::vector<Tensor>& io_tensors, const operation_attributes_t& operation_attributes) {
+std::tuple<GenericOpDeviceOperation::operation_attributes_t, GenericOpDeviceOperation::tensor_args_t>
+GenericOpDeviceOperation::invoke(
+    const std::vector<Tensor>& io_tensors, const operation_attributes_t& operation_attributes) {
     // const std::vector<Tensor> input_tensors(io_tensors.begin(), io_tensors.end() - 1);
     // const Tensor output_tensor = io_tensors.back();
     if (io_tensors.empty()) {

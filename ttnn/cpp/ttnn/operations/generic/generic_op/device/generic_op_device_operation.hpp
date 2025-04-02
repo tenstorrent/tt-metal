@@ -76,9 +76,7 @@ struct GenericOpDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const std::vector<Tensor>& io_tensors, 
-        const operation_attributes_t& operation_attributes
-    );
+        const std::vector<Tensor>& io_tensors, const operation_attributes_t& operation_attributes);
 
     // static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };  // struct GenericOpDeviceOperation
@@ -86,6 +84,6 @@ struct GenericOpDeviceOperation {
 }  // namespace ttnn::operations::generic
 
 namespace ttnn::prim {
-constexpr auto generic_op = 
+constexpr auto generic_op =
     ttnn::register_operation<"ttnn::prim::generic_op", ttnn::operations::generic::GenericOpDeviceOperation>();
 }  // namespace ttnn::prim
