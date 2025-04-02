@@ -95,8 +95,6 @@ void Allocator::init_compute_and_storage_l1_bank_manager() {
     };
 
     // Define the bank assignment here.
-    // Only l1_banks are shuffled, l1_small_banks are just contiguous and don't
-    // need remapping since they are only for compute cores
     std::vector<uint32_t> shuffled_bank_id = {};
     if (not config_.l1_bank_remap.empty()) {
         TT_ASSERT(
@@ -116,6 +114,11 @@ void Allocator::init_compute_and_storage_l1_bank_manager() {
     }
 
     std::unordered_map<uint32_t, int64_t> bank_id_to_bank_offset;
+    std::unordered_map<uint32_t, int64_t> small_bank_id_to_bank_offset;
+    if (config_.l1_small_size > 0) {
+        TT_ASSERT(num_banks.num_l1_small_banks > 0);
+    }
+
     // If l1_small_size exists, then it gets the top of L1 (offset 0)
     // and the regular L1 region is offset just below it
     uint32_t bank_id = 0;
@@ -128,6 +131,11 @@ void Allocator::init_compute_and_storage_l1_bank_manager() {
             logical_core_to_bank_ids_[BufferType::L1].insert({logical_core, {remapped_bank_id}});
             bank_id_to_logical_core_.insert({remapped_bank_id, logical_core});
             bank_id_to_bank_offset.insert({remapped_bank_id, 0});
+            if (config_.l1_small_size > 0) {
+                // Now map the L1-small bank id
+                logical_core_to_bank_ids_[BufferType::L1_SMALL].insert({logical_core, {remapped_bank_id}});
+                small_bank_id_to_bank_offset.insert({remapped_bank_id, 0});
+            }
             bank_id++;
         } else if (config_.core_type_from_noc_coord_table.at(noc_core) == AllocCoreType::StorageOnly) {
             std::vector<uint32_t> bank_ids;
@@ -155,24 +163,6 @@ void Allocator::init_compute_and_storage_l1_bank_manager() {
         }
     }
     TT_ASSERT(bank_id == shuffled_bank_id.size());
-
-    std::unordered_map<uint32_t, int64_t> small_bank_id_to_bank_offset;
-    if (config_.l1_small_size > 0) {
-        TT_ASSERT(num_banks.num_l1_small_banks > 0);
-        for (const auto& logical_core : cores) {
-            CoreCoord noc_core = logical_to_noc_coord(logical_core);
-
-            if (config_.core_type_from_noc_coord_table.at(noc_core) != AllocCoreType::ComputeAndStore) {
-                continue;
-            }
-
-            logical_core_to_bank_ids_[BufferType::L1_SMALL].insert({logical_core, {bank_id}});
-            bank_id_to_logical_core_.insert({bank_id, logical_core});
-            small_bank_id_to_bank_offset.insert({bank_id, 0});
-            bank_id++;
-        }
-    }
-
     TT_ASSERT(bank_id_to_bank_offset.size() == num_banks.num_l1_banks);
     TT_ASSERT(small_bank_id_to_bank_offset.size() == num_banks.num_l1_small_banks);
     TT_ASSERT(
@@ -205,9 +195,31 @@ void Allocator::init_compute_and_storage_l1_bank_manager() {
         config_.l1_alignment,
         config_.l1_unreserved_base,
         config_.disable_interleaved);
+    log_debug(
+        tt::LogMetal,
+        "Configured partition params: mem_mailbox_base:0x{:X}, storage_core_bank_size:0x{:X}, worker_l1_size:0x{:X}, "
+        "l1_unreserved_base:0x{:X}, l1_small_size:0x{:X}, disable_interleaved:{}, l1_alignment:{}",
+        mem_mailbox_base,
+        config_.storage_core_bank_size.has_value() ? config_.storage_core_bank_size.value() : 0,
+        config_.worker_l1_size,
+        config_.l1_unreserved_base,
+        config_.l1_small_size,
+        config_.disable_interleaved,
+        config_.l1_alignment);
 
     uint64_t small_interleaved_address_limit = config_.worker_l1_size - config_.l1_small_size;
     uint64_t small_alloc_offset = config_.l1_unreserved_base + allocatable_l1_size;
+    log_debug(
+        tt::LogMetal,
+        "Derived partition params: storage_core_unreserved_base:0x{:X}, l1_bank_size:0x{:X}, "
+        "interleaved_address_limit:0x{:X}, "
+        "allocatable_l1_size:0x{:X}, small_interleaved_address_limit:0x{:X}, small_alloc_offset:0x{:X}",
+        storage_core_unreserved_base,
+        l1_bank_size,
+        interleaved_address_limit,
+        allocatable_l1_size,
+        small_interleaved_address_limit,
+        small_alloc_offset);
     TT_ASSERT(
         (config_.l1_unreserved_base + config_.l1_small_size) <= config_.worker_l1_size,
         "L1 small region extends past L1 size");
