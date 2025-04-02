@@ -33,6 +33,7 @@
 #include "ttnn/operations/experimental/experimental_pybind.hpp"
 #include "ttnn/operations/full/full_pybind.hpp"
 #include "ttnn/operations/full_like/full_like_pybind.hpp"
+#include "ttnn/operations/generic/generic_op/generic_op_pybind.hpp"
 #include "ttnn/operations/index_fill/index_fill_pybind.hpp"
 #include "ttnn/operations/kv_cache/kv_cache_pybind.hpp"
 #include "ttnn/operations/loss/loss_pybind.hpp"
@@ -172,6 +173,10 @@ void py_module(py::module& module) {
 
     auto m_bernoulli = module.def_submodule("bernoulli", "bernoulli operations");
     bernoulli::bind_bernoulli_operation(m_bernoulli);
+
+    auto m_generic = module.def_submodule("generic", "generic operations");
+    generic::py_module_types(m_generic);
+    generic::py_module(m_generic);
 }
 }  // namespace operations
 
