@@ -20,6 +20,10 @@ def test_manage_device():
         pass
 
 
+def test_l1_size():
+    assert ttnn.get_max_worker_l1_unreserved_size() > 1024 * 1024
+
+
 @pytest.mark.parametrize(
     "device_params",
     [{"worker_l1_size": 16385}],

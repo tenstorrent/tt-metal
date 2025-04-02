@@ -666,6 +666,11 @@ void device_module(py::module& m_device) {
     m_device.attr("DEFAULT_TRACE_REGION_SIZE") = py::int_(DEFAULT_TRACE_REGION_SIZE);
     m_device.attr("DEFAULT_WORKER_L1_SIZE") = py::int_(DEFAULT_WORKER_L1_SIZE);
 
+    m_device.def(
+        "get_max_worker_l1_unreserved_size",
+        &tt::tt_metal::hal::get_max_worker_l1_unreserved_size,
+        "Return the maximum size of the worker L1 unreserved memory.");
+
     m_device.attr("DefaultQueueId") = ttnn::DefaultQueueId;
 }
 

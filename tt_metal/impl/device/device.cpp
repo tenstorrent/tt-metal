@@ -1143,6 +1143,7 @@ bool Device::initialize(
         "Worker L1 size {} is larger than max size {}",
         worker_l1_size,
         max_worker_l1_size);
+    log_debug(tt::LogMetal, "Worker L1 size: {} Max: {}", worker_l1_size, max_worker_l1_size);
     std::uint32_t max_alignment =
         std::max(hal_ref.get_alignment(HalMemType::DRAM), hal_ref.get_alignment(HalMemType::L1));
     uint32_t worker_l1_unreserved_start = tt::align(
