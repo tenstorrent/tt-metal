@@ -19,9 +19,10 @@ uint32_t runtime_host_id = 0;
 
 // Test config
 struct DmConfig {
-    size_t num_of_transactions = 0;
-    size_t transaction_size_pages = 0;
-    size_t page_size_bytes = 0;
+    uint32_t test_id = 0;
+    uint32_t num_of_transactions = 0;
+    uint32_t transaction_size_pages = 0;
+    uint32_t page_size_bytes = 0;
     DataFormat l1_data_format = DataFormat::Invalid;
     CoreRangeSet cores = CoreRangeSet();
     array<uint32_t, 2> tensor_shape_in_pages = {0, 0};
@@ -44,10 +45,8 @@ bool run_dm(IDevice* device, const DmConfig& test_config) {
         .device = device, .size = total_size_bytes, .page_size = total_size_bytes, .buffer_type = BufferType::DRAM};
     std::shared_ptr<Buffer> input_dram_buffer;
     if (!test_config.num_dram_banks[0]) {
-        log_info("Using interleaved config");
         input_dram_buffer = CreateBuffer(interleaved_dram_config);
     } else {
-        log_info("Using sharded config");
         ShardSpecBuffer shard_spec = ShardSpecBuffer(
             test_config.cores,
             {test_config.tensor_shape_in_pages[0] * 4 / test_config.num_dram_banks[0],
@@ -85,8 +84,8 @@ bool run_dm(IDevice* device, const DmConfig& test_config) {
         (uint32_t)test_config.num_of_transactions,
         (uint32_t)test_config.transaction_size_pages,
         (uint32_t)test_config.page_size_bytes,
-        (uint8_t)l1_cb_index,
-    };
+        (uint32_t)l1_cb_index,
+        (uint32_t)test_config.test_id};
 
     vector<uint32_t> writer_compile_args = {
         (uint32_t)output_dram_byte_address,
@@ -94,8 +93,8 @@ bool run_dm(IDevice* device, const DmConfig& test_config) {
         (uint32_t)test_config.num_of_transactions,
         (uint32_t)test_config.transaction_size_pages,
         (uint32_t)test_config.page_size_bytes,
-        (uint8_t)l1_cb_index,
-    };
+        (uint32_t)l1_cb_index,
+        (uint32_t)test_config.test_id};
 
     // Create circular buffers
     CircularBufferConfig l1_cb_config =
@@ -123,6 +122,7 @@ bool run_dm(IDevice* device, const DmConfig& test_config) {
             .compile_args = writer_compile_args});
 
     // Assign unique id
+    log_info("Results for test id: {}", test_config.test_id);
     log_info("Results for run id: {}", runtime_host_id);
     program.set_runtime_id(runtime_host_id++);
 
@@ -144,12 +144,12 @@ bool run_dm(IDevice* device, const DmConfig& test_config) {
 }
 }  // namespace unit_tests::dm
 
-/* ========== Test case for varying transaction numbers and sizes ========== */
+/* ========== Test case for varying transaction numbers and sizes; Test id = 0 ========== */
 TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPacketSizes) {
     // Parameters
-    size_t max_transactions = 2;            // Bound for testing different number of transactions
-    size_t max_transaction_size_pages = 2;  // Bound for testing different transaction sizes
-    size_t page_size_bytes = 32;            // Page size in bytes (=flit size): 32 bytes for WH, 64 for BH
+    uint32_t max_transactions = 2;            // Bound for testing different number of transactions
+    uint32_t max_transaction_size_pages = 2;  // Bound for testing different transaction sizes
+    uint32_t page_size_bytes = 32;            // Page size in bytes (=flit size): 32 bytes for WH, 64 for BH
     if (arch_ == tt::ARCH::BLACKHOLE) {
         page_size_bytes *= 2;
     }
@@ -158,11 +158,12 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPacketSizes) {
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (size_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
-        for (size_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
+    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
+        for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
              transaction_size_pages *= 2) {
             // Test config
             unit_tests::dm::DmConfig test_config = {
+                .test_id = 0,
                 .num_of_transactions = num_of_transactions,
                 .transaction_size_pages = transaction_size_pages,
                 .page_size_bytes = page_size_bytes,
@@ -177,11 +178,11 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPacketSizes) {
     }
 }
 
-/* ========== Test case for varying core locations ========== */
+/* ========== Test case for varying core locations; Test id = 1 ========== */
 TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedCoreLocations) {
-    size_t num_of_transactions = 1;     // Bound for testing different number of transactions
-    size_t transaction_size_pages = 1;  // Bound for testing different transaction sizes
-    size_t page_size_bytes = 32;        // Page size in bytes (=flit size): 32 bytes for WH, 64 for BH
+    uint32_t num_of_transactions = 1;     // Bound for testing different number of transactions
+    uint32_t transaction_size_pages = 1;  // Bound for testing different transaction sizes
+    uint32_t page_size_bytes = 32;        // Page size in bytes (=flit size): 32 bytes for WH, 64 for BH
     if (arch_ == tt::ARCH::BLACKHOLE) {
         page_size_bytes *= 2;
     }
@@ -197,6 +198,7 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedCoreLocations) {
 
                 // Test config
                 unit_tests::dm::DmConfig test_config = {
+                    .test_id = 1,
                     .num_of_transactions = num_of_transactions,
                     .transaction_size_pages = transaction_size_pages,
                     .page_size_bytes = page_size_bytes,
@@ -210,11 +212,11 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedCoreLocations) {
     }
 }
 
-/* ========== Sharded dram buffer test ========== */
+/* ========== Sharded dram buffer test; Test id = 2 ========== */
 TEST_F(DeviceFixture, TensixDataMovementDRAMSharded) {
     // Parameters
-    size_t max_tensor_dim_pages = 4;  // Arbitrary tensor for sharding
-    size_t page_size_bytes = 32;      // Page size in bytes (=flit size): 32 bytes for WH, 64 for BH
+    uint32_t max_tensor_dim_pages = 4;  // Arbitrary tensor for sharding
+    uint32_t page_size_bytes = 32;      // Page size in bytes (=flit size): 32 bytes for WH, 64 for BH
     if (arch_ == tt::ARCH::BLACKHOLE) {
         page_size_bytes *= 2;
     }
@@ -223,16 +225,17 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMSharded) {
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    size_t transaction_size_pages = 1;
-    for (size_t tensor_dim_size = 1; tensor_dim_size <= max_tensor_dim_pages; tensor_dim_size *= 2) {
+    uint32_t transaction_size_pages = 1;
+    for (uint32_t tensor_dim_size = 1; tensor_dim_size <= max_tensor_dim_pages; tensor_dim_size *= 2) {
         array<uint32_t, 2> tensor_shape_in_pages = {tensor_dim_size, tensor_dim_size};
-        size_t num_of_transactions = tensor_dim_size * tensor_dim_size / transaction_size_pages;
-        for (size_t dram_banks_dim_ratio = 1; dram_banks_dim_ratio <= 2; dram_banks_dim_ratio *= 2) {
+        uint32_t num_of_transactions = tensor_dim_size * tensor_dim_size / transaction_size_pages;
+        for (uint32_t dram_banks_dim_ratio = 1; dram_banks_dim_ratio <= 2; dram_banks_dim_ratio *= 2) {
             uint32_t dram_banks_dim_size = tensor_dim_size / dram_banks_dim_ratio;
             array<uint32_t, 2> num_dram_banks = {dram_banks_dim_size, dram_banks_dim_size};
 
             // Test config
             unit_tests::dm::DmConfig test_config = {
+                .test_id = 2,
                 .num_of_transactions = num_of_transactions,
                 .transaction_size_pages = transaction_size_pages,
                 .page_size_bytes = page_size_bytes,
