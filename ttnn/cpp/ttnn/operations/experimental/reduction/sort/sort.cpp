@@ -5,11 +5,7 @@
 #include "sort.hpp"
 #include "device/sort_device_operation.hpp"
 
-#include "ttnn/common/queue_id.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/types.hpp"
-
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::operations::experimental::reduction::sort {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
@@ -31,16 +27,14 @@ std::vector<Tensor> ExecuteSort::invoke(
     const bool stable,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors) {
-    auto output_vectors = tt::tt_metal::operation::run(
-        SortDeviceOperation{dim, descending, stable, memory_config.value_or(input_tensor.memory_config())},
-        {input_tensor},
-        {},
-        optional_output_tensors.has_value()
-            ? CMAKE_UNIQUE_NAMESPACE::tuple_to_vector_optional(optional_output_tensors.value())
-            : std::vector<std::optional<Tensor>>{},
-        queue_id);
-
-    return output_vectors;
+    const auto memory_config_value = memory_config.has_value() ? memory_config.value() : input_tensor.memory_config();
+    std::vector<std::optional<Tensor>> output_tensors =
+        optional_output_tensors.has_value() ? CMAKE_UNIQUE_NAMESPACE::tuple_to_vector_optional(*optional_output_tensors)
+                                            : std::vector<std::optional<Tensor>>{
+                                                  std::nullopt,  // Placeholder for values tensor
+                                                  std::nullopt   // Placeholder for indices tensor
+                                              };
+    return ttnn::prim::sort(queue_id, input_tensor, dim, descending, stable, memory_config_value, output_tensors);
 }
 
 std::vector<Tensor> ExecuteSort::create_async_output_tensors(
@@ -51,4 +45,4 @@ std::vector<Tensor> ExecuteSort::create_async_output_tensors(
         Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
 }
 
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::operations::experimental::reduction::sort

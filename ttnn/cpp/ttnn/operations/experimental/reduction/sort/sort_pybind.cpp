@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
 #include "sort_pybind.hpp"
+
+#include "sort.hpp"
 
 #include "pybind11/decorators.hpp"
 
-#include "sort.hpp"
-#include "device/sort_device_operation.hpp"
-
-namespace ttnn::operations::experimental::reduction::detail {
+namespace ttnn::operations::experimental::reduction::sort::detail {
 namespace py = pybind11;
 
 void bind_reduction_sort_operation(py::module& module) {
@@ -66,7 +66,7 @@ void bind_reduction_sort_operation(py::module& module) {
                const bool stable,
                std::optional<std::tuple<ttnn::Tensor, ttnn::Tensor>> optional_output_tensors,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               QueueId queue_id) {
+               QueueId queue_id) -> std::vector<ttnn::Tensor> {
                 return self(queue_id, input_tensor, dim, descending, stable, memory_config, optional_output_tensors);
             },
             py::arg("input_tensor").noconvert(),
@@ -79,4 +79,4 @@ void bind_reduction_sort_operation(py::module& module) {
             py::arg("queue_id") = DefaultQueueId});
 }
 
-}  // namespace ttnn::operations::experimental::reduction::detail
+}  // namespace ttnn::operations::experimental::reduction::sort::detail
