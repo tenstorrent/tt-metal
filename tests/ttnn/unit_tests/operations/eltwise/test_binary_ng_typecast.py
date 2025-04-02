@@ -6,16 +6,16 @@ import torch
 import pytest
 import ttnn
 
-from models.utility_functions import torch_random
+from models.utility_functions import skip_for_grayskull, torch_random
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 binary_fns = {
-    "ge",
+    "gte",
     "gt",
-    "le",
+    "lte",
     "lt",
     "eq",
     "ne",
@@ -34,6 +34,7 @@ binary_fns = {
 }
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -59,7 +60,7 @@ binary_fns = {
 def test_opt_output_no_typecast(input_shapes, dtype, layout, ttnn_fn, device):
     torch.manual_seed(0)
     a_shape, b_shape, out_shape = input_shapes
-    ttnn_op = getattr(ttnn, ttnn_fn)
+    ttnn_op = getattr(ttnn.experimental, ttnn_fn)
 
     torch_input_tensor_a = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), dtype)(
         a_shape
@@ -77,7 +78,7 @@ def test_opt_output_no_typecast(input_shapes, dtype, layout, ttnn_fn, device):
     )
     out_tt = ttnn.from_torch(out, dtype=dtype, device=device, layout=layout, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     cq_id = 0
-    ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
+    ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)
@@ -86,6 +87,7 @@ def test_opt_output_no_typecast(input_shapes, dtype, layout, ttnn_fn, device):
     assert status >= 0.999
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -107,7 +109,7 @@ def test_opt_output_no_typecast(input_shapes, dtype, layout, ttnn_fn, device):
 def test_opt_output_bf8b(input_shapes, dtype, ttnn_fn, device):
     torch.manual_seed(0)
     a_shape, b_shape, out_shape = input_shapes
-    ttnn_op = getattr(ttnn, ttnn_fn)
+    ttnn_op = getattr(ttnn.experimental, ttnn_fn)
 
     torch_input_tensor_a = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), dtype)(
         a_shape
@@ -127,7 +129,7 @@ def test_opt_output_bf8b(input_shapes, dtype, ttnn_fn, device):
         out, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     cq_id = 0
-    ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
+    ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)
@@ -136,6 +138,7 @@ def test_opt_output_bf8b(input_shapes, dtype, ttnn_fn, device):
     assert status >= 0.999
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -171,15 +174,16 @@ def test_sub_typecast(input_shapes, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cq_id = 0
-    output_tensor = ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, use_legacy=False)
+    output_tensor = ttnn.experimental.sub(input_tensor_a, input_tensor_b, queue_id=cq_id)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    golden_fn = ttnn.get_golden_function(ttnn.sub)
+    golden_fn = ttnn.get_golden_function(ttnn.experimental.sub)
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
     status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
     assert status >= 0.999
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -215,15 +219,16 @@ def test_sub_typecast_a(input_shapes, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cq_id = 0
-    output_tensor = ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, use_legacy=False)
+    output_tensor = ttnn.experimental.sub(input_tensor_a, input_tensor_b, queue_id=cq_id)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    golden_fn = ttnn.get_golden_function(ttnn.sub)
+    golden_fn = ttnn.get_golden_function(ttnn.experimental.sub)
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
     status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
     assert status >= 0.999
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -259,15 +264,16 @@ def test_sub_typecast_b(input_shapes, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cq_id = 0
-    output_tensor = ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, use_legacy=False)
+    output_tensor = ttnn.experimental.sub(input_tensor_a, input_tensor_b, queue_id=cq_id)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    golden_fn = ttnn.get_golden_function(ttnn.sub)
+    golden_fn = ttnn.get_golden_function(ttnn.experimental.sub)
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
     status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
     assert status >= 0.999
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -307,15 +313,16 @@ def test_sub_opt_output_typecast_inputs(input_shapes, device):
         out, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     cq_id = 0
-    ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
+    ttnn.experimental.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
-    golden_fn = ttnn.get_golden_function(ttnn.sub)
+    golden_fn = ttnn.get_golden_function(ttnn.experimental.sub)
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
     status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
     assert status >= 0.999
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -355,15 +362,16 @@ def test_sub_opt_output_typecast_out(input_shapes, device):
         out, dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     cq_id = 0
-    ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
+    ttnn.experimental.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
-    golden_fn = ttnn.get_golden_function(ttnn.sub)
+    golden_fn = ttnn.get_golden_function(ttnn.experimental.sub)
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
     status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
     assert status >= 0.999
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -403,15 +411,16 @@ def test_sub_opt_output_typecast_a(input_shapes, device):
         out, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     cq_id = 0
-    ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
+    ttnn.experimental.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
-    golden_fn = ttnn.get_golden_function(ttnn.sub)
+    golden_fn = ttnn.get_golden_function(ttnn.experimental.sub)
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
     status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
     assert status >= 0.999
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -451,15 +460,16 @@ def test_sub_opt_output_typecast_b(input_shapes, device):
         out, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     cq_id = 0
-    ttnn.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
+    ttnn.experimental.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
-    golden_fn = ttnn.get_golden_function(ttnn.sub)
+    golden_fn = ttnn.get_golden_function(ttnn.experimental.sub)
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
     status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
     assert status >= 0.999
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -495,15 +505,16 @@ def test_inplace_sub_typecast(input_shapes, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cq_id = 0
-    ttnn.sub_(input_tensor_a, input_tensor_b, queue_id=cq_id, use_legacy=False)
+    ttnn.experimental.sub_(input_tensor_a, input_tensor_b, queue_id=cq_id)
     output_tensor = ttnn.to_torch(input_tensor_a)
 
-    golden_fn = ttnn.get_golden_function(ttnn.sub_)
+    golden_fn = ttnn.get_golden_function(ttnn.experimental.sub_)
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
     status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
     assert status >= 0.999
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -539,15 +550,16 @@ def test_inplace_sub_typecast_a(input_shapes, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cq_id = 0
-    ttnn.sub_(input_tensor_a, input_tensor_b, queue_id=cq_id, use_legacy=False)
+    ttnn.experimental.sub_(input_tensor_a, input_tensor_b, queue_id=cq_id)
     output_tensor = ttnn.to_torch(input_tensor_a)
 
-    golden_fn = ttnn.get_golden_function(ttnn.sub_)
+    golden_fn = ttnn.get_golden_function(ttnn.experimental.sub_)
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
     status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
     assert status >= 0.999
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -583,15 +595,16 @@ def test_inplace_sub_typecast_b(input_shapes, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cq_id = 0
-    ttnn.sub_(input_tensor_a, input_tensor_b, queue_id=cq_id, use_legacy=False)
+    ttnn.experimental.sub_(input_tensor_a, input_tensor_b, queue_id=cq_id)
     output_tensor = ttnn.to_torch(input_tensor_a)
 
-    golden_fn = ttnn.get_golden_function(ttnn.sub_)
+    golden_fn = ttnn.get_golden_function(ttnn.experimental.sub_)
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
     status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
     assert status >= 0.999
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -611,8 +624,8 @@ def test_inplace_sub_typecast_b(input_shapes, device):
         "rsub",
         "gt",
         "lt",
-        "le",
-        "ge",
+        "lte",
+        "gte",
         "eq",
         "ne",
         "squared_difference",
@@ -623,7 +636,7 @@ def test_inplace_sub_typecast_b(input_shapes, device):
 def test_opt_output_scalar(input_shapes, ttnn_fn, scalar, device):
     torch.manual_seed(0)
     a_shape, out_shape = input_shapes
-    ttnn_op = getattr(ttnn, ttnn_fn)
+    ttnn_op = getattr(ttnn.experimental, ttnn_fn)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat8_b
@@ -652,6 +665,7 @@ def test_opt_output_scalar(input_shapes, ttnn_fn, scalar, device):
     assert status >= 0.999
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("input_shape", [(1, 1, 1, 1), (3, 3, 15, 15), (3, 3, 17, 17), (3, 3, 33, 33)])
 @pytest.mark.parametrize(
     "memory_config",
@@ -677,7 +691,7 @@ def test_edgecase_dims_eltwise_scalar_matrix_math(input_shape, scalar, ttnn_fn, 
     torch.manual_seed(0)
     a_shape = input_shape
 
-    ttnn_op = getattr(ttnn, ttnn_fn)
+    ttnn_op = getattr(ttnn.experimental, ttnn_fn)
     torch_input_tensor_a = torch.randn(a_shape, dtype=torch.bfloat16)
 
     input_tensor_a = ttnn.from_torch(
@@ -688,7 +702,7 @@ def test_edgecase_dims_eltwise_scalar_matrix_math(input_shape, scalar, ttnn_fn, 
         memory_config=memory_config,
     )
 
-    output = ttnn_op(input_tensor_a, scalar, use_legacy=False)
+    output = ttnn_op(input_tensor_a, scalar)
     tt_output_tensor = ttnn.to_torch(output)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)
@@ -697,6 +711,7 @@ def test_edgecase_dims_eltwise_scalar_matrix_math(input_shape, scalar, ttnn_fn, 
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("input_shape", [(1, 1, 1, 1), (3, 3, 15, 15), (3, 3, 17, 17), (3, 3, 33, 33)])
 @pytest.mark.parametrize(
     "memory_config",
@@ -708,8 +723,8 @@ def test_edgecase_dims_eltwise_scalar_matrix_math(input_shape, scalar, ttnn_fn, 
     [
         "gt",
         "lt",
-        "le",
-        "ge",
+        "lte",
+        "gte",
         "eq",
         "ne",
     ],
@@ -722,10 +737,10 @@ def test_edgecase_dims_eltwise_scalar_logical(input_shape, scalar, ttnn_fn, memo
     torch.manual_seed(0)
     a_shape = input_shape
 
-    ttnn_op = getattr(ttnn, ttnn_fn)
+    ttnn_op = getattr(ttnn.experimental, ttnn_fn)
     torch_input_tensor_a = torch.randint(low=-50, high=50, size=a_shape, dtype=torch.bfloat16)
     # guarantee a few equal values
-    if (ttnn_fn == "eq" or ttnn_fn == "ne" or ttnn_fn == "ge" or ttnn_fn == "le") and input_shape != (1, 1, 1, 1):
+    if (ttnn_fn == "eq" or ttnn_fn == "ne" or ttnn_fn == "gte" or ttnn_fn == "lte") and input_shape != (1, 1, 1, 1):
         torch_input_tensor_a[0, 0, 0, 0] = scalar
         torch_input_tensor_a[-1, -1, -1, -1] = scalar
 
@@ -746,6 +761,7 @@ def test_edgecase_dims_eltwise_scalar_logical(input_shape, scalar, ttnn_fn, memo
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     [
@@ -778,7 +794,7 @@ def test_edgecase_dims_eltwise_broadcast_matrix_math(input_shapes, ttnn_fn, memo
     torch.manual_seed(0)
     a_shape, b_shape = input_shapes
 
-    ttnn_op = getattr(ttnn, ttnn_fn)
+    ttnn_op = getattr(ttnn.experimental, ttnn_fn)
     torch_input_tensor_a = torch.randn(a_shape, dtype=torch.bfloat16)
     torch_input_tensor_b = torch.randn(b_shape, dtype=torch.bfloat16)
 
@@ -801,7 +817,7 @@ def test_edgecase_dims_eltwise_broadcast_matrix_math(input_shapes, ttnn_fn, memo
         memory_config=memory_config,
     )
 
-    output = ttnn_op(input_tensor_a, input_tensor_b, dtype=ttnn.float32, use_legacy=False)
+    output = ttnn_op(input_tensor_a, input_tensor_b, dtype=ttnn.float32)
     tt_output_tensor = ttnn.to_torch(output)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)
@@ -810,6 +826,7 @@ def test_edgecase_dims_eltwise_broadcast_matrix_math(input_shapes, ttnn_fn, memo
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     [
@@ -827,8 +844,8 @@ def test_edgecase_dims_eltwise_broadcast_matrix_math(input_shapes, ttnn_fn, memo
     [
         "gt",
         "lt",
-        "le",
-        "ge",
+        "lte",
+        "gte",
         "eq",
         "ne",
     ],
@@ -841,11 +858,11 @@ def test_edgecase_dims_eltwise_broadcast_logical(input_shapes, ttnn_fn, memory_c
     torch.manual_seed(0)
     a_shape, b_shape = input_shapes
 
-    ttnn_op = getattr(ttnn, ttnn_fn)
+    ttnn_op = getattr(ttnn.experimental, ttnn_fn)
     torch_input_tensor_a = torch.randn(a_shape, dtype=torch.bfloat16)
     torch_input_tensor_b = torch.randn(b_shape, dtype=torch.bfloat16)
     # guarantee at least one equal value
-    if ttnn_fn == "eq" or ttnn_fn == "ne" or ttnn_fn == "ge" or ttnn_fn == "le":
+    if ttnn_fn == "eq" or ttnn_fn == "ne" or ttnn_fn == "gte" or ttnn_fn == "lte":
         torch_input_tensor_a[0, 0, 0, 0] = torch_input_tensor_b[0, 0, 0, 0]
 
     input_tensor_a = ttnn.from_torch(
@@ -864,7 +881,7 @@ def test_edgecase_dims_eltwise_broadcast_logical(input_shapes, ttnn_fn, memory_c
         memory_config=memory_config,
     )
 
-    output = ttnn_op(input_tensor_a, input_tensor_b, dtype=ttnn.float32, use_legacy=False)
+    output = ttnn_op(input_tensor_a, input_tensor_b, dtype=ttnn.float32)
     tt_output_tensor = ttnn.to_torch(output)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)
@@ -873,6 +890,7 @@ def test_edgecase_dims_eltwise_broadcast_logical(input_shapes, ttnn_fn, memory_c
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shape, input_layout, input_shard_grid, input_shard_orientation, input_sharding_scheme",
     [
@@ -915,5 +933,5 @@ def test_binary_div(
     input_tensor_b = ttnn.from_torch(
         torch_input_b, layout=input_layout, memory_config=memory_config, dtype=input_dtype, device=device
     )
-    output_tensor = ttnn.div(input_tensor_a, input_tensor_b, dtype=output_dtype, use_legacy=False)
+    output_tensor = ttnn.experimental.div(input_tensor_a, input_tensor_b, dtype=output_dtype)
     assert_with_pcc(torch_output, ttnn.to_torch(output_tensor), 0.999)
