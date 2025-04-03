@@ -50,12 +50,13 @@ std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped
 // TODO: get this from Cluster, once UMD unique id changes are merged
 std::uint32_t get_ubb_asic_id(chip_id_t physical_chip_id) {
     std::vector<uint32_t> ubb_asic_loc_vec;
-    const auto& eth_cores = tt::Cluster::instance().get_virtual_eth_cores(physical_chip_id);
+    const auto& eth_cores = tt::Cluster::instance().get_active_ethernet_cores(physical_chip_id, false);
+    auto virtual_eth_core = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(
+        physical_chip_id, *eth_cores.begin(), CoreType::ETH);
+
+    std::uint32_t addr = 0x1ec0 + 65 * sizeof(uint32_t);
     tt::Cluster::instance().read_core(
-        ubb_asic_loc_vec,
-        sizeof(uint32_t),
-        tt_cxy_pair(physical_chip_id, *eth_cores.begin()),
-        0x1ec0 + 65 * sizeof(uint32_t));
+        ubb_asic_loc_vec, sizeof(uint32_t), tt_cxy_pair(physical_chip_id, virtual_eth_core), addr);
     return ((ubb_asic_loc_vec[0] >> 24) & 0xFF);
 }
 
@@ -527,8 +528,10 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
         auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][chip_id];
         auto fabric_router_channels_on_chip = tt::Cluster::instance().get_fabric_ethernet_channels(physical_chip_id);
         auto chan_id = tt::Cluster::instance().get_soc_desc(physical_chip_id).logical_eth_core_to_chan_map.at(eth_core);
+        // TODO: remove this from Cluster, manage retraining links only in control plane
+        auto active_eth_cores = tt::Cluster::instance().get_active_ethernet_cores(physical_chip_id, false);
         // TODO: add logic here to disable unsed routers, e.g. Mesh on Torus system
-        if (fabric_router_channels_on_chip.contains(chan_id)) {
+        if (fabric_router_channels_on_chip.contains(chan_id) and active_eth_cores.contains(eth_core)) {
             this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id][direction].push_back(chan_id);
         } else {
             log_debug(
