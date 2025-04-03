@@ -87,37 +87,13 @@ if [[ "$REUSE" == false ]]; then
     echo "Installing required Python packages..."
     pip install -r requirements.txt
 
-    # Detect architecture for chip
-    echo "Running tt-smi -ls to detect architecture..."
-    ARCH_DUMP=$(mktemp)
-    tt-smi -ls > "$ARCH_DUMP"
-    result=$(python3 helpers/find_arch.py "Wormhole" "Blackhole" "$ARCH_DUMP")
-    rm -f "$ARCH_DUMP"
-    echo "Detected architecture: $result"
-
-    if [ -z "$result" ]; then
-        echo "Error: Architecture detection failed!"
-        exit 1
-    fi
-
-    export CHIP_ARCH="$result"
-    echo "CHIP_ARCH is: $CHIP_ARCH"
-
     # Install tt-exalens
     echo "Installing tt-exalens..."
     wget -O ttexalens-0.1.250326+dev.0c4381a-cp38-cp38-linux_x86_64.whl https://github.com/tenstorrent/tt-exalens/releases/download/0.1/ttexalens-0.1.250326+dev.0c4381a-cp38-cp38-linux_x86_64.whl
     pip install ttexalens-0.1.250326+dev.0c4381a-cp38-cp38-linux_x86_64.whl
 
     # Download and extract SFPI release
-    if [ ! -f "sfpi-release.tgz" ]; then
-        echo "Downloading SFPI release..."
-        wget "$SFPI_RELEASE_URL" -O sfpi-release.tgz
-    else
-        echo "SFPI release already downloaded. Skipping."
-    fi
-    echo "Extracting SFPI release..."
-    tar -xzvf sfpi-release.tgz
-    rm -f sfpi-release.tgz
+    ./setup_testing_env.sh
 else   # Reuse existing environment setup
     # Deactivate any active virtual environment
     if [[ -n "$VIRTUAL_ENV" ]]; then
@@ -126,22 +102,6 @@ else   # Reuse existing environment setup
     fi
     echo "Reusing existing virtual environment setup..."
     source .venv/bin/activate
-
-    echo "Running tt-smi -ls to detect architecture..."
-    ARCH_DUMP=$(mktemp)
-    tt-smi -ls > "$ARCH_DUMP"
-    result=$(python3 helpers/find_arch.py "Wormhole" "Blackhole" "$ARCH_DUMP")
-    rm -f "$ARCH_DUMP"
-    echo "Detected architecture: $result"
-
-    if [ -z "$result" ]; then
-        echo "Error: Architecture detection failed!"
-        exit 1
-    fi
-
-    echo "Setting CHIP_ARCH variable..."
-    export CHIP_ARCH="$result"
-    echo "CHIP_ARCH is: $CHIP_ARCH"
 fi
 
 echo "Setup completed successfully!"
