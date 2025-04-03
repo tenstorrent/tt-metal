@@ -15,6 +15,8 @@ from infra.data_collection import junit_xml_utils, pydantic_models
 
 
 smi_pattern = re.compile(r'.*"tt_smi":\s*"([a-zA-Z0-9\-\.]+)"')
+# Define a regex pattern to match timestamps in ISO 8601 format (e.g., 2025-03-26T19:18:31.7521333Z)
+timestamp_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z")
 
 
 def search_for_tt_smi_version_in_log_file_(log_file):
@@ -48,6 +50,80 @@ def get_github_job_ids_to_tt_smi_versions(workflow_outputs_dir, workflow_run_id:
             github_job_id = int(github_job_id)
             github_job_ids_to_tt_smi_versions[github_job_id] = tt_smi_version
     return github_job_ids_to_tt_smi_versions
+
+
+def parse_github_log_timestamp(line):
+    timestamp_str = line.split("T")[0] + "T" + line.split("T")[1].split("Z")[0]
+    # Wacky github workaround: truncate to 26 chars because github's timestamp
+    # is 7 digits for fractional seconds instead of 6, which is the ISO format
+    # E.g. 2024-09-25T14:33:11.1060679Z -> 2024-09-25T14:33:11.106067
+    return datetime.fromisoformat(timestamp_str[:26])
+
+
+def is_job_hanging_from_job_log(error_snippet, workflow_outputs_dir, workflow_run_id: int, workflow_job_id: int):
+    """
+    Read the job output log to determine if a job is hanging or genuinely timed out.
+    For each line, we store the associated github timestamp (if it exists)
+    When we encounter the timeout error message, compare the timestamp of the generated message
+    against the last output line, as well as the last line against the 2nd last.
+
+    We calculate two time deltas because some hangs can generate a line of output the moment the process is terminated/timed out.
+    Therefore we need to also check the second-last line's timestamp to confirm a hang has occurred.
+
+    If the time delta between the lines is greater than 5 minutes** (max_time_delta_seconds)
+    then consider the job as a hang. Otherwise it's most likely a regular timeout.
+
+    ** Threshold may be reduced in the future
+    """
+    log_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
+    log_file = log_dir.joinpath(str(workflow_job_id) + ".log")
+    max_time_delta_seconds = 300
+
+    if not log_file.exists():
+        logger.warning(f"Unable to find github job log file: {log_file}")
+        return False
+
+    log_lines = []
+    last_ts, second_last_ts = None, None
+    with open(log_file, "r", encoding="utf-8-sig") as log_f:
+        log_lines = log_f.readlines()
+
+    for line in log_lines:
+        # Skip lines that are empty or do not start with a valid timestamp
+        if not line.strip() or not timestamp_pattern.match(line):
+            continue
+
+        if error_snippet in line:
+            timeout_timestamp = parse_github_log_timestamp(line)
+
+            # Check if we have the previous two timestamps
+            if last_ts is None or second_last_ts is None:
+                logger.warning("Not enough previous lines to compare time deltas.")
+                return False
+
+            # Compare with the last two timestamps
+            # Hang message vs last output line
+            delta_1 = timeout_timestamp - last_ts
+            # Last output line vs 2nd last output line
+            delta_2 = last_ts - second_last_ts
+
+            # Check if any of the deltas is greater than 5 minutes
+            if delta_1.total_seconds() > max_time_delta_seconds or delta_2.total_seconds() > max_time_delta_seconds:
+                logger.info(f"Time difference between the timeout line and previous lines is greater than 5 minutes.")
+                logger.info(f"Timeout timestamp: {timeout_timestamp}")
+                logger.info(f"Previous timestamps: {second_last_ts}, {last_ts}")
+                logger.info(f"Hang detected for job: {str(workflow_job_id)}")
+                return True
+            else:
+                logger.info(
+                    f"No hang detected for job: {str(workflow_job_id)}, Time differences are within the expected range."
+                )
+                return False
+
+        # Update the second last and last timestamps
+        second_last_ts = last_ts
+        last_ts = parse_github_log_timestamp(line)
+    return False
 
 
 def get_workflow_run_uuids_to_test_reports_paths_(workflow_outputs_dir, workflow_run_id: int):
