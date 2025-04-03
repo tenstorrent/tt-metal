@@ -486,13 +486,23 @@ def test_demo_text(
     if data_parallel > num_devices or num_devices % data_parallel != 0:
         pytest.skip(f"Invalid number of DP groups: {data_parallel}, for {num_devices} devices")
 
-    llama_dir = os.getenv("LLAMA_DIR")
-    if is_ci_env and num_devices == 32 and (data_parallel > 4 or (data_parallel == 4 and "3.1-70B" not in llama_dir)):
-        pytest.skip("CI runs only Llama3 70b DP = 4, TP = 8 on TG")
-    if is_ci_env and num_devices == 8 and data_parallel > 1 and not ("3.2-1B" in llama_dir or "3.1-8B" in llama_dir):
-        pytest.skip("CI runs only hybrid Llama3 1b and 8b on T3K")
-    if is_ci_env and data_parallel > 1 and batch_size > 1:
-        pytest.skip("CI runs only hybrid with batch 1 per submesh")
+    model_dir = os.getenv("LLAMA_DIR")
+    if model_dir:
+        if (
+            is_ci_env
+            and num_devices == 32
+            and (data_parallel > 4 or (data_parallel == 4 and "3.1-70B" not in model_dir))
+        ):
+            pytest.skip("CI runs only Llama3 70b DP = 4, TP = 8 on TG")
+        if (
+            is_ci_env
+            and num_devices == 8
+            and data_parallel > 1
+            and not ("3.2-1B" in model_dir or "3.1-8B" in model_dir)
+        ):
+            pytest.skip("CI runs only hybrid Llama3 1b and 8b on T3K")
+        if is_ci_env and data_parallel > 1 and batch_size > 1:
+            pytest.skip("CI runs only hybrid with batch 1 per submesh")
 
     if not stop_at_eos:
         logger.info(f"The decode generation will only stop at the max_generated_tokens limit == {max_generated_tokens}")

@@ -326,7 +326,7 @@ class ModelArgs:
         elif HF_MODEL:
             self.CKPT_DIR = HF_MODEL
             self.TOKENIZER_PATH = HF_MODEL
-            self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
+            self.CACHE_PATH = os.getenv("TT_CACHE_PATH") + "/" + self.device_name
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
             self.model_name = HF_MODEL  # May be overridden by config
@@ -1188,7 +1188,7 @@ class ModelArgs:
         )
         return xs_1BSH
 
-    def _set_params_from_dict(self, params):
+    def _set_params_from_dict(self, params, is_hf=False):
         # Common params with different names between Meta and HF
         self.dim = params.get("dim", params.get("hidden_size"))
         self.n_heads = params.get("n_heads", params.get("num_attention_heads"))
@@ -1211,7 +1211,16 @@ class ModelArgs:
             self.hidden_dim = calculate_hidden_dim(self.dim, self.ffn_dim_multiplier, self.multiple_of)
 
         if "_name_or_path" in params:
-            self.model_name = os.path.basename(params["_name_or_path"])
+            if is_hf:
+                normalized_path = os.path.normpath(params["_name_or_path"])
+                # For HF paths, we might to end with `<model_name>/snapshots/<snapshot_id>/`
+                if "snapshots" in normalized_path:
+                    full_model_name = normalized_path.split(os.path.sep)[-3]
+                    self.model_name = full_model_name.split("--")[-1]
+                else:
+                    self.model_name = os.path.basename(params["_name_or_path"])
+            else:
+                self.model_name = os.path.basename(params["_name_or_path"])
 
         if self.base_model_name == "Qwen2.5-7B" and self.num_devices not in [0, 2, 4]:
             raise AssertionError(
@@ -1335,7 +1344,7 @@ class ModelArgs:
             assert os.path.exists(config_file), f"config.json file not found at {config_file}"
             with open(config_file, "r") as f:
                 config = json.load(f)
-        self._set_params_from_dict(config)
+        self._set_params_from_dict(config, is_hf=True)
 
     def __repr__(self):
         return f"""ModelArgs(
@@ -1388,29 +1397,40 @@ class ModelArgs:
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
         if self.dummy_weights:
-            reference_model = Transformer(self)
-            state_dict = reference_model.state_dict()
-            state_dict_prefix = self.get_state_dict_prefix("", None)
-            state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
+            if self.checkpoint_type == CheckpointType.HuggingFace:
+                from transformers import AutoConfig, AutoModelForCausalLM
+
+                config = AutoConfig.from_pretrained(self.CKPT_DIR)
+                config.num_layers = self.n_layers
+                config.num_hidden_layers = self.n_layers
+                model = AutoModelForCausalLM.from_config(config)
+                state_dict = model.state_dict()
+            else:
+                reference_model = Transformer(self)
+                state_dict = reference_model.state_dict()
+                state_dict_prefix = self.get_state_dict_prefix("", None)
+                state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
         elif self.checkpoint_type == CheckpointType.Meta:
             state_dict = load_meta_state_dict(self.CKPT_DIR, self.n_layers)
         else:
             assert self.checkpoint_type == CheckpointType.HuggingFace
             if self.from_hf_url:
-                from transformers import AutoModelForCausalLM
+                from transformers import AutoConfig, AutoModelForCausalLM
 
                 model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
                 state_dict = model.state_dict()
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
+
+        if self.checkpoint_type == CheckpointType.HuggingFace:
             state_dict = standardize_hf_keys(state_dict)
             state_dict = convert_hf_to_meta(state_dict, self.head_dim)
+
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
         for k in keys_dict:
             if any([r in k for r in remv]):
                 state_dict.pop(k)
-
         return state_dict
 
     def create_dram_sharded_mem_config(self, k, n):
@@ -1782,6 +1802,7 @@ class ModelArgs:
             if self.dummy_weights and not load_checkpoint:
                 config = AutoConfig.from_pretrained(self.CKPT_DIR)
                 config.num_layers = self.n_layers
+                config.num_hidden_layers = self.n_layers
                 model = AutoModelForCausalLM.from_config(config)
             else:
                 model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
@@ -2046,6 +2067,29 @@ class HfModelWrapper:
 
     def eval(self):
         self.model.eval()
+
+    @property
+    def cache_k(self):
+        [(k, v)] = self.past_key_values.to_legacy_cache()
+        hf_k = k.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
+        batch_size, seq_len, n_heads, head_dim = hf_k.shape
+
+        meta_k = torch.zeros_like(hf_k)
+        for b in range(batch_size):
+            for s in range(seq_len):
+                # Flatten just heads and head_dim
+                flat = hf_k[b, s].flatten()
+                # Apply reverse_permute
+                transformed = reverse_permute(flat.unsqueeze(-1), n_heads, flat.shape[0], 1).squeeze(-1)
+                # Restore heads and head_dim shape
+                meta_k[b, s] = transformed.reshape(n_heads, head_dim)
+
+        return meta_k
+
+    @property
+    def cache_v(self):
+        [(k, v)] = self.past_key_values.to_legacy_cache()
+        return v.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
 
 def num_to_corerange(x):
