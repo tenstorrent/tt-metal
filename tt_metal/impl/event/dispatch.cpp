@@ -199,15 +199,6 @@ void read_events_from_completion_queue(
         event_descriptor.event_id,
         event_completed);
     sysmem_manager.completion_queue_pop_front(1, cq_id);
-    std::cout << fmt::format(
-        "Completion queue popped event {}, global {}, cq_event {}, read_ptr {}, dispatch_cmd_and_event ",
-        event_completed,
-        event_descriptor.get_global_event_id(),
-        sysmem_manager.get_last_completed_event(cq_id),
-        read_ptr);
-    std::copy(
-        dispatch_cmd_and_event.begin(), dispatch_cmd_and_event.end(), std::ostream_iterator<uint32_t>(std::cout, " "));
-    std::cout << std::endl;
     sysmem_manager.set_last_completed_event(cq_id, event_descriptor.get_global_event_id());
     log_trace(
         LogAlways,
