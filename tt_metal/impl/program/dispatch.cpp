@@ -469,7 +469,9 @@ uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
 void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_command_sequence) {
     // Initialize an empty preamble command in the Program Dispatch Cmd Sequence, which will be
     // updated with the correct write offsets when the program is enqueued
-    uint32_t preamble_cmd_sizeB = hal_ref.get_alignment(HalMemType::HOST);
+    tt::tt_metal::DeviceCommandCalculator calculator;
+    calculator.add_dispatch_set_write_offsets();
+    const uint32_t preamble_cmd_sizeB = calculator.write_offset_bytes();
     program_command_sequence.preamble_command_sequence = HostMemDeviceCommand(preamble_cmd_sizeB);
     program_command_sequence.preamble_command_sequence.add_dispatch_set_write_offsets(0, 0, 0);
 }
@@ -478,9 +480,13 @@ void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDevi
     // Initialize stall command sequences for this program.
     auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
     auto dispatch_core_type = dispatch_core_config.get_core_type();
-    uint32_t uncached_stall_cmd_sizeB =
-        hal_ref.get_alignment(HalMemType::HOST) + hal_ref.get_alignment(HalMemType::HOST);
-    uint32_t cached_stall_cmd_seqB = hal_ref.get_alignment(HalMemType::HOST);
+    tt::tt_metal::DeviceCommandCalculator calculator;
+    calculator.add_dispatch_wait_with_prefetch_stall();
+    const uint32_t uncached_stall_cmd_sizeB = calculator.write_offset_bytes();
+    calculator.clear();
+
+    calculator.add_dispatch_wait();
+    const uint32_t cached_stall_cmd_seqB = calculator.write_offset_bytes();
 
     program_command_sequence.stall_command_sequences[UncachedStallSequenceIdx] =
         HostMemDeviceCommand(uncached_stall_cmd_sizeB);
@@ -2053,19 +2059,25 @@ void reset_worker_dispatch_state_on_device(
         uint32_t pcie_alignment = hal_ref.get_alignment(HalMemType::HOST);
         go_signals_cmd_size = align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) * num_sub_devices;
     }
-    uint32_t cmd_sequence_sizeB =
-        reset_launch_msg_state * DispatchQueryManager::instance().dispatch_s_enabled() *
-            hal_ref.get_alignment(
-                HalMemType::HOST) +  // dispatch_d -> dispatch_s sem update (send only if dispatch_s is running)
-        go_signals_cmd_size +        // go signal cmd
-        (hal_ref.get_alignment(
-             HalMemType::HOST) +  // wait to ensure that reset go signal was processed (dispatch_d)
-                                  // when dispatch_s and dispatch_d are running on 2 cores, workers update dispatch_s.
-                                  // dispatch_s is responsible for resetting worker count and giving dispatch_d the
-                                  // latest worker state. This is encapsulated in the dispatch_s wait command (only to
-                                  // be sent when dispatch is distributed on 2 cores)
-         DispatchQueryManager::instance().distributed_dispatcher() * hal_ref.get_alignment(HalMemType::HOST)) *
-            num_sub_devices;
+
+    tt::tt_metal::DeviceCommandCalculator calculator;
+    if (reset_launch_msg_state) {
+        for (int i = 0; i < num_sub_devices; ++i) {
+            calculator.add_dispatch_go_signal_mcast();
+        }
+        if (DispatchQueryManager::instance().dispatch_s_enabled()) {
+            calculator.add_notify_dispatch_s_go_signal_cmd();
+        }
+    }
+    for (uint32_t i = 0; i < num_sub_devices; ++i) {
+        if (DispatchQueryManager::instance().distributed_dispatcher()) {
+            calculator.add_dispatch_wait();
+        }
+        calculator.add_dispatch_wait();
+    }
+
+    const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
+
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
@@ -2134,7 +2146,9 @@ void set_num_worker_sems_on_dispatch(
     if (!DispatchQueryManager::instance().dispatch_s_enabled()) {
         return;
     }
-    uint32_t cmd_sequence_sizeB = hal_ref.get_alignment(HalMemType::HOST);
+    tt::tt_metal::DeviceCommandCalculator calculator;
+    calculator.add_dispatch_set_num_worker_sems();
+    const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
     command_sequence.add_dispatch_set_num_worker_sems(num_worker_sems, DispatcherSelect::DISPATCH_SLAVE);
@@ -2148,9 +2162,9 @@ void set_go_signal_noc_data_on_dispatch(
     const vector_aligned<uint32_t>& go_signal_noc_data,
     SystemMemoryManager& manager,
     uint8_t cq_id) {
-    uint32_t pci_alignment = hal_ref.get_alignment(HalMemType::HOST);
-    uint32_t cmd_sequence_sizeB = align(
-        sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + go_signal_noc_data.size() * sizeof(uint32_t), pci_alignment);
+    tt::tt_metal::DeviceCommandCalculator calculator;
+    calculator.add_dispatch_set_go_signal_noc_data(go_signal_noc_data.size());
+    const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
     DispatcherSelect dispatcher_for_go_signal = DispatchQueryManager::instance().dispatch_s_enabled()
