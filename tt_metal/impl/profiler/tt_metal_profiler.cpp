@@ -7,7 +7,7 @@
 #include <dispatch_core_common.hpp>
 #include <host_api.hpp>
 #include <profiler.hpp>
-#include <tt_cluster.hpp>
+#include "impl/context/metal_context.hpp"
 #include <tt_metal.hpp>
 #include <algorithm>
 #include <atomic>
@@ -108,25 +108,30 @@ constexpr CoreCoord SYNC_CORE = {0, 0};
 
 void setControlBuffer(chip_id_t device_id, std::vector<uint32_t>& control_buffer) {
 #if defined(TRACY_ENABLE)
-    const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device_id);
+    const metal_SocDescriptor& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
 
     control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM] = soc_d.profiler_ceiled_core_count_perf_dram_bank;
 
-    for (auto core : tt::Cluster::instance().get_virtual_routing_to_profiler_flat_id(device_id)) {
+    for (auto core :
+         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_routing_to_profiler_flat_id(device_id)) {
         HalProgrammableCoreType CoreType;
         auto curr_core = core.first;
-        if (tt::Cluster::instance().is_worker_core(curr_core, device_id)) {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(curr_core, device_id)) {
             CoreType = HalProgrammableCoreType::TENSIX;
         } else {
             CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
-            auto active_eth_cores = tt::Cluster::instance().get_active_ethernet_cores(device_id);
-            if (active_eth_cores.find(tt::Cluster::instance().get_logical_ethernet_core_from_virtual(
-                    device_id, curr_core)) != active_eth_cores.end()) {
+            auto active_eth_cores =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
+            if (active_eth_cores.find(
+                    tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
+                        device_id, curr_core)) != active_eth_cores.end()) {
                 CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
             }
-            auto idle_eth_cores = tt::Cluster::instance().get_inactive_ethernet_cores(device_id);
-            if (idle_eth_cores.find(tt::Cluster::instance().get_logical_ethernet_core_from_virtual(
-                    device_id, curr_core)) != idle_eth_cores.end()) {
+            auto idle_eth_cores =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_inactive_ethernet_cores(device_id);
+            if (idle_eth_cores.find(
+                    tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
+                        device_id, curr_core)) != idle_eth_cores.end()) {
                 CoreType = tt_metal::HalProgrammableCoreType::IDLE_ETH;
             }
         }
@@ -147,7 +152,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     auto device_id = device->id();
     auto core = device->worker_core_from_logical_core(logical_core);
 
-    const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(device_id);
+    const metal_SocDescriptor& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
     auto phys_core = soc_desc.translate_coord_to(core, CoordSystem::TRANSLATED, CoordSystem::PHYSICAL);
 
     deviceHostTimePair.emplace(device_id, (std::vector<std::pair<uint64_t, uint64_t>>){});
@@ -194,7 +199,8 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         int64_t writeStart = TracyGetCpuTime();
         uint32_t sinceStart = writeStart - hostStartTime;
 
-        tt::Cluster::instance().write_reg(&sinceStart, tt_cxy_pair(device_id, core), control_addr);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
+            &sinceStart, tt_cxy_pair(device_id, core), control_addr);
         writeTimes[i] = (TracyGetCpuTime() - writeStart);
     }
 
@@ -392,7 +398,8 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
         chip_id_t device_id_receiver_curr = std::numeric_limits<chip_id_t>::max();
         while ((device_id_receiver != device_id_receiver_curr) and (eth_sender_core_iter != active_eth_cores.end())) {
             eth_sender_core = *eth_sender_core_iter;
-            if (not tt::Cluster::instance().is_ethernet_link_up(device_sender->id(), eth_sender_core)) {
+            if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
+                    device_sender->id(), eth_sender_core)) {
                 eth_sender_core_iter++;
                 continue;
             }
@@ -500,7 +507,7 @@ void ProfilerSync(ProfilerSyncState state) {
     if (state == ProfilerSyncState::INIT) {
         do_sync_on_close = true;
         sync_set_devices.clear();
-        auto ethernet_connections = tt::Cluster::instance().get_ethernet_connections();
+        auto ethernet_connections = tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connections();
         std::set<chip_id_t> visited_devices = {};
         constexpr int TOTAL_DEVICE_COUNT = 36;
         for (int sender_device_id = 0; sender_device_id < TOTAL_DEVICE_COUNT; sender_device_id++) {
@@ -512,7 +519,8 @@ void ProfilerSync(ProfilerSyncState state) {
                 tt_xy_pair receiver_eth_core;
                 bool doSync = true;
                 for (auto& sender_eth_core : active_eth_cores) {
-                    if (not tt::Cluster::instance().is_ethernet_link_up(sender_device_id, sender_eth_core)) {
+                    if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
+                            sender_device_id, sender_eth_core)) {
                         continue;
                     }
                     doSync = false;
@@ -637,9 +645,12 @@ void InitDeviceProfiler(IDevice* device) {
             }
         }
 
-        uint32_t dramBankCount = tt::Cluster::instance().get_soc_desc(device_id).get_num_dram_views();
-        uint32_t coreCountPerDram =
-            tt::Cluster::instance().get_soc_desc(device_id).profiler_ceiled_core_count_perf_dram_bank;
+        uint32_t dramBankCount =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).get_num_dram_views();
+        uint32_t coreCountPerDram = tt::tt_metal::MetalContext::instance()
+                                        .get_cluster()
+                                        .get_soc_desc(device_id)
+                                        .profiler_ceiled_core_count_perf_dram_bank;
 
         uint32_t pageSize = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * PROFILER_RISC_COUNT * coreCountPerDram;
 
@@ -733,13 +744,16 @@ void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_co
                     auto curr_core = device->virtual_core_from_logical_core(dispatchCores[0], dispatch_core_type);
 
                     HalProgrammableCoreType CoreType;
-                    if (tt::Cluster::instance().is_worker_core(curr_core, device_id)) {
+                    if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(curr_core, device_id)) {
                         CoreType = HalProgrammableCoreType::TENSIX;
                     } else {
-                        auto active_eth_cores = tt::Cluster::instance().get_active_ethernet_cores(device_id);
+                        auto active_eth_cores =
+                            tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_id);
                         bool is_active_eth_core =
-                            active_eth_cores.find(tt::Cluster::instance().get_logical_ethernet_core_from_virtual(
-                                device_id, curr_core)) != active_eth_cores.end();
+                            active_eth_cores.find(tt::tt_metal::MetalContext::instance()
+                                                      .get_cluster()
+                                                      .get_logical_ethernet_core_from_virtual(device_id, curr_core)) !=
+                            active_eth_cores.end();
 
                         CoreType = is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH
                                                       : tt_metal::HalProgrammableCoreType::IDLE_ETH;

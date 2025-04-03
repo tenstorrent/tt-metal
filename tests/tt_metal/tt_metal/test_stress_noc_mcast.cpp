@@ -32,7 +32,7 @@
 #include <tt-metalium/program_impl.hpp>
 #include "span.hpp"
 #include "test_common.hpp"
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "umd/device/types/xy_pair.h"
 
 using namespace tt;
@@ -236,13 +236,16 @@ int main(int argc, char** argv) {
         CoreCoord mcast_physical;
         if (mcast_from_eth_g) {
             mcast_virtual = device->ethernet_core_from_logical_core(mcast_logical);
-            mcast_physical = tt::Cluster::instance()
+            mcast_physical = tt::tt_metal::MetalContext::instance()
+                                 .get_cluster()
                                  .get_soc_desc(device_num_g)
                                  .get_physical_ethernet_core_from_logical(mcast_logical);
         } else {
             mcast_virtual = device->worker_core_from_logical_core(mcast_logical);
-            mcast_physical =
-                tt::Cluster::instance().get_soc_desc(device_num_g).get_physical_tensix_core_from_logical(mcast_logical);
+            mcast_physical = tt::tt_metal::MetalContext::instance()
+                                 .get_cluster()
+                                 .get_soc_desc(device_num_g)
+                                 .get_physical_tensix_core_from_logical(mcast_logical);
         }
 
         log_info(

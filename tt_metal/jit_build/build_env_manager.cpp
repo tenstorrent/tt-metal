@@ -24,11 +24,11 @@
 #include "dispatch_mem_map.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
-#include "impl/dispatch/dispatch_core_manager.hpp"
+#include "impl/context/metal_context.hpp"
 #include "jit_build/build.hpp"
 #include "metal_soc_descriptor.h"
 #include "system_memory_manager.hpp"
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include <umd/device/tt_core_coordinates.h>
 
 namespace tt::tt_metal {
@@ -57,11 +57,11 @@ BuildEnvManager::BuildEnvManager() {
 std::map<std::string, std::string> initialize_device_kernel_defines(chip_id_t device_id, uint8_t num_hw_cqs) {
     std::map<std::string, std::string> device_kernel_defines;
 
-    const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device_id);
+    const metal_SocDescriptor& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
     const size_t num_dram_banks = static_cast<size_t>(soc_d.get_num_dram_views());
     // # of L1 banks needs to match allocator. For L1BankingAllocator this is the # of storage cores. TODO: when
     // allocator is pulled out of device, use it to get that info here.
-    const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
+    const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     const size_t num_compute_and_storage_cores =
         tt::get_logical_compute_cores(device_id, num_hw_cqs, dispatch_core_config).size();
     const size_t num_storage_only_cores =
@@ -119,7 +119,7 @@ uint32_t compute_build_key(chip_id_t device_id, uint8_t num_hw_cqs) {
 
     // num_hw_cqs, dispatch_core_axis, dispatch_core_type all change the number of banks, so need to be part of the
     // build key since we have defines based on number of banks.
-    const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
+    const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     build_key = (static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_type())
                  << (harvesting_map_bits + num_hw_cq_bits + dispatch_core_axis_bits)) |
                 (static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_axis())
@@ -128,18 +128,20 @@ uint32_t compute_build_key(chip_id_t device_id, uint8_t num_hw_cqs) {
     if (not hal_ref.is_coordinate_virtualization_enabled()) {
         // Coordinate virtualization is not enabled. For a single program, its associated binaries will vary across
         // devices with different cores harvested.
-        build_key |= tt::Cluster::instance().get_harvesting_mask(device_id);
+        build_key |= tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id);
     } else {
         // Coordinate Virtualization is enabled. Track only the number of harvested cores, instead of the exact
         // harvesting configuration (this is not needed).
-        build_key |= (std::bitset<harvesting_map_bits>(tt::Cluster::instance().get_harvesting_mask(device_id)).count());
+        build_key |= (std::bitset<harvesting_map_bits>(
+                          tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id))
+                          .count());
     }
     return build_key;
 }
 
 JitBuildStateSet create_build_state(JitBuildEnv& build_env, chip_id_t device_id, uint8_t num_hw_cqs, bool is_fw) {
     // Get the dispatch message address for this device
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
+    CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
     uint32_t dispatch_message_addr =
         DispatchMemMap::get(dispatch_core_type, num_hw_cqs).get_dispatch_message_addr_start();
 
@@ -227,7 +229,8 @@ void BuildEnvManager::add_build_env(chip_id_t device_id, uint8_t num_hw_cqs) {
     auto device_kernel_defines = initialize_device_kernel_defines(device_id, num_hw_cqs);
 
     device_id_to_build_env_[device_id].build_key = build_key;
-    device_id_to_build_env_[device_id].build_env.init(build_key, tt::Cluster::instance().arch(), device_kernel_defines);
+    device_id_to_build_env_[device_id].build_env.init(
+        build_key, tt::tt_metal::MetalContext::instance().get_cluster().arch(), device_kernel_defines);
     device_id_to_build_env_[device_id].firmware_build_states =
         create_build_state(device_id_to_build_env_[device_id].build_env, device_id, num_hw_cqs, true);
     device_id_to_build_env_[device_id].kernel_build_states =

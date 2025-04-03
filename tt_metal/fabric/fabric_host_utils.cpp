@@ -17,7 +17,7 @@
 #include "fabric_edm_packet_header.hpp"
 #include "fabric_host_utils.hpp"
 #include "metal_soc_descriptor.h"
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.h>
 
 namespace tt {
@@ -52,7 +52,7 @@ void append_fabric_connection_rt_args(
         src_chip_id,
         dst_chip_id);
 
-    auto* control_plane = tt::Cluster::instance().get_control_plane();
+    auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     // for now, both the src and dest chips should be on the same mesh
     auto [src_mesh_id, src_logical_chip_id] = control_plane->get_mesh_chip_id_from_physical_chip_id(src_chip_id);
@@ -65,14 +65,15 @@ void append_fabric_connection_rt_args(
 
     // currently the src and dest should be adjacent, until the control plane has enough logic to check on the same line
     const auto& neighbor_chips_and_cores =
-        tt::Cluster::instance().get_ethernet_cores_grouped_by_connected_chips(src_chip_id);
+        tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(src_chip_id);
     const auto& dst_chip_and_cores = neighbor_chips_and_cores.find(dst_chip_id);
     TT_FATAL(dst_chip_and_cores != neighbor_chips_and_cores.end(), "Src and Dst chips are not physically adjacent");
 
-    const auto& fabric_ethernet_channels = tt::Cluster::instance().get_fabric_ethernet_channels(src_chip_id);
+    const auto& fabric_ethernet_channels =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(src_chip_id);
     const auto& candidate_ethernet_cores = dst_chip_and_cores->second;
     const auto& logical_eth_core_to_chan_map =
-        tt::Cluster::instance().get_soc_desc(src_chip_id).logical_eth_core_to_chan_map;
+        tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(src_chip_id).logical_eth_core_to_chan_map;
 
     std::optional<chan_id_t> fabric_router_channel;
 
@@ -96,7 +97,8 @@ void append_fabric_connection_rt_args(
 
     const auto& edm_config = get_default_fabric_config();
     CoreCoord fabric_router_virtual_core =
-        tt::Cluster::instance().get_virtual_eth_core_from_channel(src_chip_id, fabric_router_channel.value());
+        tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
+            src_chip_id, fabric_router_channel.value());
 
     tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
         .edm_noc_x = fabric_router_virtual_core.x,

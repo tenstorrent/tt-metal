@@ -26,7 +26,7 @@
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/shape_base.hpp>
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/common/queue_id.hpp"
@@ -92,16 +92,16 @@ std::vector<Tensor> run_operation(
 }  // namespace async_detail
 
 bool is_tg_system() {
-    const bool is_galaxy_system = tt::Cluster::instance().is_galaxy_cluster();
-    const size_t num_mmio_devices = tt::Cluster::instance().number_of_pci_devices();
-    const size_t num_devices = tt::Cluster::instance().number_of_user_devices();
+    const bool is_galaxy_system = tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
+    const size_t num_mmio_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices();
+    const size_t num_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_user_devices();
     return is_galaxy_system && (num_mmio_devices == 4) && (num_devices == 32);
 }
 
 bool is_tgg_system() {
-    const bool is_galaxy_system = tt::Cluster::instance().is_galaxy_cluster();
-    const size_t num_mmio_devices = tt::Cluster::instance().number_of_pci_devices();
-    const size_t num_devices = tt::Cluster::instance().number_of_user_devices();
+    const bool is_galaxy_system = tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
+    const size_t num_mmio_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices();
+    const size_t num_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_user_devices();
     return is_galaxy_system && (num_mmio_devices == 8) && (num_devices == 64);
 }
 
@@ -116,9 +116,9 @@ ttnn::MeshShape get_mesh_shape() {
 }
 
 void validate_num_tunnels_and_tunnel_depth() {
-    const uint32_t num_devices_in_tunnel = tt::Cluster::instance().get_mmio_device_max_tunnel_depth(0);
-    const uint32_t num_mmio_devices = tt::Cluster::instance().number_of_pci_devices();
-    const uint32_t cluster_tunnel_count = tt::Cluster::instance().get_mmio_device_tunnel_count(0);
+    const uint32_t num_devices_in_tunnel = tt::tt_metal::MetalContext::instance().get_cluster().get_mmio_device_max_tunnel_depth(0);
+    const uint32_t num_mmio_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices();
+    const uint32_t cluster_tunnel_count = tt::tt_metal::MetalContext::instance().get_cluster().get_mmio_device_tunnel_count(0);
     TT_FATAL(
         num_devices_in_tunnel == 4,
         "Expected Galaxy to have tunnel depth of 4, detected tunnel depth of {}",
@@ -141,7 +141,7 @@ std::shared_ptr<bfloat16[]> create_container_for_readback_data(const uint32_t bu
 }
 
 TEST(GalaxyTests, TestAllGatherDeadlock) {
-    if (not tt::Cluster::instance().is_galaxy_cluster()) {
+    if (not tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
         GTEST_SKIP() << "Skipping Galaxy test, since this is not a Galaxy System";
     }
     tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
@@ -232,7 +232,7 @@ TEST(GalaxyTests, TestAllGatherDeadlock) {
 }
 
 TEST(GalaxyTests, TestReduceScatterDeadlock) {
-    if (not tt::Cluster::instance().is_galaxy_cluster()) {
+    if (not tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
         GTEST_SKIP() << "Skipping Galaxy test, since this is not a Galaxy System";
     }
     tt::tt_metal::detail::InitializeFabricConfig(tt::tt_metal::FabricConfig::DISABLED);

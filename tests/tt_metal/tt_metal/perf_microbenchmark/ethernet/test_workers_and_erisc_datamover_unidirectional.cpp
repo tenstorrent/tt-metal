@@ -29,6 +29,8 @@
 #include <tt-metalium/circular_buffer_types.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "df/float32.hpp"
+#include "impl/context/metal_context.hpp"
+
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
 #include "hostdevcommon/kernel_structs.h"
@@ -37,7 +39,7 @@
 #include <tt-metalium/program_impl.hpp>
 #include "span.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "umd/device/tt_core_coordinates.h"
@@ -64,7 +66,7 @@ public:
                 auto* device = tt::tt_metal::CreateDevice(id);
                 devices_.push_back(device);
             }
-            tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
+            tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(true);
 
         } else {
             TT_THROW("This suite can only be run on N300 Wormhole devices");
@@ -79,7 +81,7 @@ public:
 
     void TearDown() {
         device_open = false;
-        tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
+        tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
         for (unsigned int id = 0; id < devices_.size(); id++) {
             tt::tt_metal::CloseDevice(devices_.at(id));
         }

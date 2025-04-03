@@ -9,7 +9,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "rtoptions.hpp"
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
@@ -64,7 +64,7 @@ public:
         chip_id_t& src_physical_device_id,
         chip_id_t& dst_physical_device_id,
         RoutingDirection direction) {
-        auto* control_plane = tt::Cluster::instance().get_control_plane();
+        auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
         for (auto* device : devices_) {
             src_mesh_chip_id = control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
 
@@ -89,7 +89,7 @@ public:
         chip_id_t& src_physical_device_id,
         std::unordered_map<RoutingDirection, std::vector<chip_id_t>>& dst_physical_device_ids_by_dir,
         const std::unordered_map<RoutingDirection, uint32_t>& mcast_hops) {
-        auto control_plane = tt::Cluster::instance().get_control_plane();
+        auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
         // Find a device with enough neighbours in the specified direction
         bool connection_found = false;

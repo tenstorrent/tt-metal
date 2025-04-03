@@ -22,12 +22,13 @@
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace unit_tests::test_l1_banking_allocator {
 
 uint64_t get_alloc_limit(const tt::tt_metal::IDevice* device) {
-    const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(device->id());
+    const metal_SocDescriptor& soc_desc =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
     uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     auto dispatch_core_config = tt::tt_metal::get_dispatch_core_config();
     auto storage_core_bank_size =

@@ -16,7 +16,7 @@
 #include "assert.hpp"
 #include "buffer_constants.hpp"
 #include "dispatch.hpp"
-#include "dispatch/dispatch_core_manager.hpp"
+#include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch_mem_map.hpp"
 #include "hal_types.hpp"
@@ -25,7 +25,7 @@
 #include "strong_type.hpp"
 #include "sub_device_types.hpp"
 #include "tt_align.hpp"
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
@@ -273,7 +273,7 @@ uint32_t calculate_max_data_size(const CoreType& dispatch_core_type) {
 }
 
 bool are_pages_larger_than_max_prefetch_cmd_size(const Buffer& buffer) {
-    const CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
+    const CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
     const uint32_t max_data_size = calculate_max_data_size(dispatch_core_type);
     return buffer.aligned_page_size() > max_data_size;
 }
@@ -1084,7 +1084,7 @@ void copy_completion_queue_data_into_user_space(
             void* contiguous_dst = (void*)(uint64_t(dst) + contig_dst_offset);
             if (page_size == padded_page_size) {
                 uint32_t data_bytes_xfered = bytes_xfered - offset_in_completion_q_data;
-                tt::Cluster::instance().read_sysmem(
+                tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
                     contiguous_dst,
                     data_bytes_xfered,
                     completion_q_read_ptr + offset_in_completion_q_data,
@@ -1133,7 +1133,7 @@ void copy_completion_queue_data_into_user_space(
                         num_bytes_to_copy = page_size;
                     }
 
-                    tt::Cluster::instance().read_sysmem(
+                    tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
                         (char*)(uint64_t(contiguous_dst) + dst_offset_bytes),
                         num_bytes_to_copy,
                         completion_q_read_ptr + src_offset_bytes,
@@ -1206,7 +1206,7 @@ void copy_completion_queue_data_into_user_space(
                     }
                 }
 
-                tt::Cluster::instance().read_sysmem(
+                tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
                     (char*)(uint64_t(dst) + dst_offset_bytes),
                     num_bytes_to_copy,
                     completion_q_read_ptr + src_offset_bytes,

@@ -36,7 +36,7 @@
 #include "hostdevcommon/dprint_common.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "llrt.hpp"
-#include "llrt/tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_backend_api_types.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_soc_descriptor.h>
@@ -613,8 +613,9 @@ void DebugPrintServerContext::AttachDevice(chip_id_t device_id) {
     // skip prints entirely to prevent kernel code from hanging waiting for the print buffer to be
     // flushed from the host.
     for (auto& logical_core : all_cores) {
-        CoreCoord virtual_core = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(
-            device_id, logical_core.coord, logical_core.type);
+        CoreCoord virtual_core =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                device_id, logical_core.coord, logical_core.type);
         for (int risc_index = 0; risc_index < tt::tt_metal::GetNumRiscs(logical_core); risc_index++) {
             WriteInitMagic(device_id, virtual_core, risc_index, false);
         }
@@ -687,8 +688,10 @@ void DebugPrintServerContext::AttachDevice(chip_id_t device_id) {
                 CoreCoord virtual_core;
                 bool valid_logical_core = true;
                 try {
-                    virtual_core = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(
-                        device_id, logical_core, core_type);
+                    virtual_core =
+                        tt::tt_metal::MetalContext::instance()
+                            .get_cluster()
+                            .get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, core_type);
                 } catch (std::runtime_error& error) {
                     valid_logical_core = false;
                 }
@@ -717,8 +720,9 @@ void DebugPrintServerContext::AttachDevice(chip_id_t device_id) {
 
     // Write print enable magic for the cores the user specified.
     for (auto& logical_core : print_cores_sanitized) {
-        CoreCoord virtual_core = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(
-            device_id, logical_core.coord, logical_core.type);
+        CoreCoord virtual_core =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                device_id, logical_core.coord, logical_core.type);
         for (int risc_index = 0; risc_index < tt::tt_metal::GetNumRiscs(logical_core); risc_index++) {
             if (RiscEnabled(logical_core, risc_index)) {
                 WriteInitMagic(device_id, virtual_core, risc_index, true);
@@ -766,8 +770,9 @@ void DebugPrintServerContext::DetachDevice(chip_id_t device_id) {
         // Check all dprint-enabled cores on this device for outstanding prints.
         outstanding_prints = false;
         for (auto& logical_core : device_to_core_range_.at(device_id)) {
-            CoreCoord virtual_core = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(
-                device_id, logical_core.coord, logical_core.type);
+            CoreCoord virtual_core =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                    device_id, logical_core.coord, logical_core.type);
             for (int risc_id = 0; risc_id < tt::tt_metal::GetNumRiscs(logical_core); risc_id++) {
                 if (RiscEnabled(logical_core, risc_id)) {
                     // No need to check if risc is not dprint-enabled.
@@ -829,8 +834,9 @@ void DebugPrintServerContext::DetachDevice(chip_id_t device_id) {
     // When detaching a device, disable prints on it.
     tt::tt_metal::CoreDescriptorSet all_cores = tt::tt_metal::GetAllCores(device_id);
     for (auto& logical_core : all_cores) {
-        CoreCoord virtual_core = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(
-            device_id, logical_core.coord, logical_core.type);
+        CoreCoord virtual_core =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                device_id, logical_core.coord, logical_core.type);
         for (int risc_index = 0; risc_index < tt::tt_metal::GetNumRiscs(logical_core); risc_index++) {
             WriteInitMagic(device_id, virtual_core, risc_index, false);
         }
@@ -860,8 +866,9 @@ void DebugPrintServerContext::ClearSignals() {
 bool DebugPrintServerContext::PeekOneHartNonBlocking(
     chip_id_t device_id, const CoreDescriptor& logical_core, int risc_id, bool new_data_this_iter) {
     // If init magic isn't cleared for this risc, then dprint isn't enabled on it, don't read it.
-    CoreCoord virtual_core = tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(
-        device_id, logical_core.coord, logical_core.type);
+    CoreCoord virtual_core =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            device_id, logical_core.coord, logical_core.type);
     if (!CheckInitMagicCleared(device_id, virtual_core, risc_id)) {
         return false;
     }

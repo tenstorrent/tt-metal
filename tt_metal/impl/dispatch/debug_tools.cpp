@@ -21,7 +21,7 @@
 #include "logger.hpp"
 #include "system_memory_cq_interface.hpp"
 #include "system_memory_manager.hpp"
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "utils.hpp"
 
@@ -311,8 +311,10 @@ void print_progress_bar(float progress, bool init = false) {
 
 void dump_completion_queue_entries(
     std::ofstream& cq_file, SystemMemoryManager& sysmem_manager, SystemMemoryCQInterface& cq_interface) {
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(sysmem_manager.get_device_id());
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(sysmem_manager.get_device_id());
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(sysmem_manager.get_device_id());
+    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
+        sysmem_manager.get_device_id());
     uint32_t completion_write_ptr =
         get_cq_completion_wr_ptr<true>(sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size())
         << 4;
@@ -338,7 +340,8 @@ void dump_completion_queue_entries(
     print_progress_bar(0.0, true);
     for (uint32_t page_offset = 0; page_offset < completion_q_bytes;) {  // page_offset increment at end of loop
         uint32_t page_addr = base_addr + page_offset;
-        tt::Cluster::instance().read_sysmem(read_data.data(), read_data.size(), page_addr, mmio_device_id, channel);
+        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+            read_data.data(), read_data.size(), page_addr, mmio_device_id, channel);
 
         // Check if this page starts with a valid command id
         CQDispatchCmd* cmd = (CQDispatchCmd*)read_data.data();
@@ -406,8 +409,10 @@ void dump_completion_queue_entries(
 
 void dump_issue_queue_entries(
     std::ofstream& iq_file, SystemMemoryManager& sysmem_manager, SystemMemoryCQInterface& cq_interface) {
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(sysmem_manager.get_device_id());
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(sysmem_manager.get_device_id());
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(sysmem_manager.get_device_id());
+    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
+        sysmem_manager.get_device_id());
     // TODO: Issue Q read ptr is not prefetcly updated 0 try to read it out from chip on dump?
     uint32_t issue_read_ptr =
         get_cq_issue_rd_ptr<true>(sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size()) << 4;
@@ -432,7 +437,8 @@ void dump_issue_queue_entries(
     uint32_t first_page_addr = issue_q_base_addr - (issue_q_base_addr % DispatchSettings::TRANSFER_PAGE_SIZE);
     uint32_t end_of_curr_page =
         first_page_addr + DispatchSettings::TRANSFER_PAGE_SIZE - 1;  // To track offset of latest page read out
-    tt::Cluster::instance().read_sysmem(read_data.data(), read_data.size(), first_page_addr, mmio_device_id, channel);
+    tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+        read_data.data(), read_data.size(), first_page_addr, mmio_device_id, channel);
     for (uint32_t offset = 0; offset < issue_q_bytes;) {  // offset increments at end of loop
         uint32_t curr_addr = issue_q_base_addr + offset;
         uint32_t page_offset = curr_addr % DispatchSettings::TRANSFER_PAGE_SIZE;
@@ -440,7 +446,8 @@ void dump_issue_queue_entries(
         // Check if we need to read a new page
         if (curr_addr > end_of_curr_page) {
             uint32_t page_base = curr_addr - (curr_addr % DispatchSettings::TRANSFER_PAGE_SIZE);
-            tt::Cluster::instance().read_sysmem(read_data.data(), read_data.size(), page_base, mmio_device_id, channel);
+            tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+                read_data.data(), read_data.size(), page_base, mmio_device_id, channel);
             end_of_curr_page = page_base + DispatchSettings::TRANSFER_PAGE_SIZE - 1;
         }
 
@@ -496,7 +503,7 @@ void dump_issue_queue_entries(
                     if (dispatch_curr_addr > end_of_curr_page) {
                         uint32_t page_base =
                             dispatch_curr_addr - (dispatch_curr_addr % DispatchSettings::TRANSFER_PAGE_SIZE);
-                        tt::Cluster::instance().read_sysmem(
+                        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
                             read_data.data(), read_data.size(), page_base, mmio_device_id, channel);
                         end_of_curr_page = page_base + DispatchSettings::TRANSFER_PAGE_SIZE - 1;
                     }
@@ -545,8 +552,10 @@ void dump_command_queue_raw_data(
     SystemMemoryManager& sysmem_manager,
     SystemMemoryCQInterface& cq_interface,
     cq_queue_t queue_type) {
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(sysmem_manager.get_device_id());
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(sysmem_manager.get_device_id());
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(sysmem_manager.get_device_id());
+    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
+        sysmem_manager.get_device_id());
 
     // The following variables depend on completion Q vs issue Q
     uint32_t write_ptr, read_ptr, base_addr, bytes_to_read = 0;
@@ -597,7 +606,8 @@ void dump_command_queue_raw_data(
         print_progress_bar((float)page_offset / bytes_to_read + 0.005);
 
         // Print in 16B per line
-        tt::Cluster::instance().read_sysmem(read_data.data(), read_data.size(), page_addr, mmio_device_id, channel);
+        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+            read_data.data(), read_data.size(), page_addr, mmio_device_id, channel);
         TT_ASSERT(read_data.size() % 16 == 0);
         for (uint32_t line_offset = 0; line_offset < read_data.size(); line_offset += 16) {
             uint32_t line_addr = page_addr + line_offset;
@@ -628,7 +638,8 @@ void dump_command_queue_raw_data(
 
 void dump_cqs(std::ofstream& cq_file, std::ofstream& iq_file, SystemMemoryManager& sysmem_manager, bool dump_raw_data) {
     for (SystemMemoryCQInterface& cq_interface : sysmem_manager.get_cq_interfaces()) {
-        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(sysmem_manager.get_device_id());
+        chip_id_t mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(
+            sysmem_manager.get_device_id());
         // Dump completion queue + issue queue
         dump_completion_queue_entries(cq_file, sysmem_manager, cq_interface);
         dump_issue_queue_entries(iq_file, sysmem_manager, cq_interface);

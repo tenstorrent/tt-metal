@@ -13,14 +13,14 @@
 
 #include "assert.hpp"
 #include "device.hpp"
-#include "dispatch/dispatch_core_manager.hpp"
+#include "impl/context/metal_context.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch_mem_map.hpp"
 #include "eth_tunneler.hpp"
 #include "hal.hpp"
 #include "prefetch.hpp"
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "utils.hpp"
 
 using namespace tt::tt_metal;
@@ -28,12 +28,13 @@ using namespace tt::tt_metal;
 void EthRouterKernel::GenerateStaticConfigs() {
     auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
     if (as_mux_) {
-        uint16_t channel =
-            tt::Cluster::instance().get_assigned_channel_for_device(servicing_device_id_);  // TODO: can be mmio
-        logical_core_ = dispatch_core_manager::instance().mux_core(servicing_device_id_, channel, placement_cq_id_);
+        uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
+            servicing_device_id_);  // TODO: can be mmio
+        logical_core_ = MetalContext::instance().get_dispatch_core_manager().mux_core(
+            servicing_device_id_, channel, placement_cq_id_);
         static_config_.rx_queue_start_addr_words = my_dispatch_constants.dispatch_buffer_base() >> 4;
         // TODO: why is this hard-coded NUM_CQS=1 for galaxy?
-        if (tt::Cluster::instance().is_galaxy_cluster()) {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
             static_config_.rx_queue_size_words = my_dispatch_constants.mux_buffer_size(1) >> 4;
         } else {
             static_config_.rx_queue_size_words = my_dispatch_constants.mux_buffer_size(device_->num_hw_cqs()) >> 4;
@@ -58,8 +59,10 @@ void EthRouterKernel::GenerateStaticConfigs() {
         // Mux fowrads all VCs
         static_config_.fwd_vc_count = this->static_config_.vc_count;
     } else {
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_->id());
-        logical_core_ = dispatch_core_manager::instance().demux_d_core(device_->id(), channel, placement_cq_id_);
+        uint16_t channel =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
+        logical_core_ =
+            MetalContext::instance().get_dispatch_core_manager().demux_d_core(device_->id(), channel, placement_cq_id_);
         static_config_.rx_queue_start_addr_words = my_dispatch_constants.dispatch_buffer_base() >> 4;
         static_config_.rx_queue_size_words = 0x8000 >> 4;
 

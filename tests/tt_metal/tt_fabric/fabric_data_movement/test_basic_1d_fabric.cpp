@@ -30,9 +30,10 @@
 #include "span.hpp"
 #include <tt-metalium/system_memory_manager.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include "tt_metal/llrt/tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "umd/device/tt_core_coordinates.h"
 
 namespace tt::tt_fabric {
@@ -42,7 +43,7 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
 
-    auto* control_plane = tt::Cluster::instance().get_control_plane();
+    auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     std::pair<mesh_id_t, chip_id_t> src_mesh_chip_id;
     std::pair<mesh_id_t, chip_id_t> dst_mesh_chip_id;
@@ -66,8 +67,8 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
     }
 
     auto edm_port = eth_chans[0];
-    CoreCoord edm_eth_core =
-        tt::Cluster::instance().get_virtual_eth_core_from_channel(src_physical_device_id, edm_port);
+    CoreCoord edm_eth_core = tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
+        src_physical_device_id, edm_port);
 
     auto* sender_device = DevicePool::instance().get_active_device(src_physical_device_id);
     auto* receiver_device = DevicePool::instance().get_active_device(dst_physical_device_id);
@@ -199,7 +200,7 @@ TEST_F(Fabric1DFixture, TestUnicastConnAPI) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
 
-    auto* control_plane = tt::Cluster::instance().get_control_plane();
+    auto* control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     std::pair<mesh_id_t, chip_id_t> src_mesh_chip_id;
     std::pair<mesh_id_t, chip_id_t> dst_mesh_chip_id;
@@ -320,7 +321,7 @@ TEST_F(Fabric1DFixture, TestMCastConnAPI) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
 
-    auto control_plane = tt::Cluster::instance().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     // use control plane to find a mesh with 3 devices
     auto user_meshes = control_plane->get_user_physical_mesh_ids();

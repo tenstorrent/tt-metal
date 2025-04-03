@@ -86,7 +86,8 @@ public:
     Cluster(const Cluster&) = delete;
     Cluster(Cluster&& other) noexcept = delete;
 
-    static Cluster& instance();
+    Cluster();
+    ~Cluster();
 
     // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatch, so user_devices are meant
     // for user facing host apis
@@ -307,9 +308,6 @@ public:
     const std::unordered_map<CoreCoord, int32_t>& get_virtual_routing_to_profiler_flat_id(chip_id_t chip_id) const;
 
 private:
-    Cluster();
-    ~Cluster();
-
     void detect_arch_and_target();
     void generate_cluster_descriptor();
     void initialize_device_drivers();
