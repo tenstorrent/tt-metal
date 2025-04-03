@@ -243,6 +243,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             dispatch_metadata,
             mesh_workload.get_program_binary_status(mesh_device_id),
             std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores));
+
         if (sysmem_manager.get_bypass_mode()) {
             this->capture_program_trace_on_subgrid(
                 device_range, program_cmd_seq, dispatch_metadata.stall_first, dispatch_metadata.stall_before_program);
