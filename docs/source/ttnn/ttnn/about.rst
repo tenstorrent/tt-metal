@@ -1,5 +1,5 @@
 What is TT-NN?
-#############
+##############
 
 :doc:`TT-NN </ttnn/about>` is an open source library of neural network operations built on the ``tt-metal`` programming model.
 
