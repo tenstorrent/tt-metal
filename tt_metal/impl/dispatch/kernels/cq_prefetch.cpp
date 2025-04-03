@@ -66,9 +66,9 @@ constexpr uint32_t dispatch_s_cb_log_page_size = get_compile_time_arg_val(25);
 
 // used for fd on fabric
 constexpr uint32_t downstream_mesh_id = get_compile_time_arg_val(26);
-constexpr uint32_t downstream_chip_id = get_compile_time_arg_val(27);
+constexpr uint32_t downstream_dev_id = get_compile_time_arg_val(27);
 constexpr uint32_t upstream_mesh_id = get_compile_time_arg_val(28);
-constexpr uint32_t upstream_chip_id = get_compile_time_arg_val(29);
+constexpr uint32_t upstream_dev_id = get_compile_time_arg_val(29);
 constexpr uint32_t fabric_router_noc_xy = get_compile_time_arg_val(30);
 constexpr uint32_t client_interface_addr = get_compile_time_arg_val(31);
 
@@ -1477,6 +1477,9 @@ void kernel_main_hd() {
 
 void kernel_main() {
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start" << ENDL();
+    if constexpr (use_fabric(fabric_router_noc_xy)) {
+        tt::tt_fabric::fabric_endpoint_init(client_interface, 0 /*unused*/);
+    }
 
     if (is_h_variant and is_d_variant) {
         kernel_main_hd();

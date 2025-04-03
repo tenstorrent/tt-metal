@@ -121,6 +121,8 @@ enum CQNocSend {
     CQ_NOC_SEND = 1,
 };
 
+constexpr bool use_fabric(uint64_t fabric_router_xy) { return fabric_router_xy != 0; }
+
 template <
     enum CQNocFlags flags,
     enum CQNocWait wait = CQ_NOC_WAIT,
