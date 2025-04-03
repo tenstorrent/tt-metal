@@ -383,7 +383,7 @@ void PrefetchKernel::CreateKernel() {
         dependent_config_.downstream_chip_id.value_or(0),
         dependent_config_.upstream_mesh_id.value_or(0),
         dependent_config_.upstream_chip_id.value_or(0),
-        dependent_config_.fabric_router_noc_xy.value_or(0xdeadbeef),
+        dependent_config_.fabric_router_noc_xy.value_or(0),
         static_config_.client_interface_addr.value_or(0),
         static_config_.is_d_variant.value(),
         static_config_.is_h_variant.value(),
