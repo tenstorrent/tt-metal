@@ -509,8 +509,6 @@ Convolution
    ttnn.conv2d
    ttnn.conv_transpose2d
 
-   ttnn.Conv2dConfig
-
 Pooling
 =======
 
