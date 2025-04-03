@@ -54,14 +54,14 @@ runs:
       shell: bash
 
     - name: 🧪 Download Python Wheel
-      if: ${{ inputs.wheel-artifact-name != '' && !inputs.create-venv }}
+      if: ${{ inputs.wheel-artifact-name != '' && inputs.create-venv != true }}
       uses: actions/download-artifact@v4
       with:
         name: ${{ inputs.wheel-artifact-name }}
         path: ${{ inputs.path }}
 
     - name: 💿 Install Wheel
-      if: ${{ inputs.wheel-artifact-name != '' && !inputs.create-venv }}
+      if: ${{ inputs.wheel-artifact-name != '' && inputs.create-venv != true }}
       working-directory: ${{ inputs.path }}
       run: |
         echo "📂 In directory: $(pwd)"
