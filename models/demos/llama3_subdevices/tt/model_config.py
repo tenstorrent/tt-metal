@@ -107,7 +107,7 @@ class LlamaOptimizations:
         """Configuration optimized for accuracy
         Only 3.1-70B uses bfp4 MLPs in this configuration
         """
-        return cls(bfp4_mlp=model_name == "3.1-70B")
+        return cls(bfp4_mlp="70B" in model_name)
 
     @classmethod
     def performance(cls, model_name):

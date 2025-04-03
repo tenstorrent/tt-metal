@@ -537,7 +537,7 @@ def run_llama3_demo(
             0,  # start_pos
         ),
         (  # 10 layers for devive perf measurements
-            "random",
+            "instruct",
             10,
             "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
             True,  # instruct mode
