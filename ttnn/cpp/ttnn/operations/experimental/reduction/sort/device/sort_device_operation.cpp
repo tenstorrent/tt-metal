@@ -22,6 +22,21 @@ void SortDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // Validate shapes of input and output tensors
     const auto input_tensor_shape = tensor_args.input_tensor.get_padded_shape();
+
+    TT_FATAL(
+        tensor_args.input_tensor.buffer() != nullptr,
+        "Operands need to be allocated in buffers on the device. Buffer is null.");
+    TT_FATAL(
+        tensor_args.input_tensor.storage_type() == StorageType::DEVICE,
+        "Operation requires input to be on Device. Input storage type: {}",
+        static_cast<int>(tensor_args.input_tensor.storage_type()));
+
+    TT_FATAL(input_tensor_shape.rank() == 4, "Input shape must be 4D, got {}", input_tensor_shape.rank());
+
+    TT_FATAL(attributes.output_mem_config.is_sharded() == false, "Sharded implementation not supported yet");
+
+    TT_FATAL(tensor_args.input_tensor.get_layout() == Layout::TILE, "The input must be in tiled format");
+
     if (tensor_args.output_tensors.size() == 2) {
         if (tensor_args.output_tensors.at(0).has_value() && tensor_args.output_tensors.at(1).has_value()) {
             const auto output_tensor_shape = tensor_args.output_tensors.at(0)->get_padded_shape();
