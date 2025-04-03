@@ -12,7 +12,7 @@ def nearest_16(x):
     return math.ceil(x / 16) * 16
 
 
-def determine_num_cores_for_upsample(nhw: int, width: int, max_cores=64) -> int:
+def determine_num_cores_for_upsample(nhw: int, width: int, max_cores=110) -> int:
     gcd_nhw_width = math.gcd(nhw, width)
     cores = nhw // gcd_nhw_width
     if cores > max_cores:
@@ -23,7 +23,7 @@ def determine_num_cores_for_upsample(nhw: int, width: int, max_cores=64) -> int:
     return cores
 
 
-def get_core_grid_from_num_cores(num_cores: int, grid_rows: int = 8, grid_cols: int = 8):
+def get_core_grid_from_num_cores(num_cores: int, grid_rows: int = 11, grid_cols: int = 10):
     rows = num_cores // grid_cols
     assert rows <= grid_rows, "Not enough cores for specified core grid"
     ranges = []
@@ -134,7 +134,7 @@ class UNetConv2D:
         mesh_mapper=None,
         reallocate_halo_output=False,
     ):
-        assert is_valid_device_for_unet(device), "UNet Shallow requires an 8x8 grid on all devices"
+        # assert is_valid_device_for_unet(device), "UNet Shallow requires an 8x8 grid on all devices"
 
         self.device = device
         self.batch_size = conv.batch_size
@@ -330,7 +330,7 @@ class UNetUpblock:
         else:
             x = ttnn.interleaved_to_sharded(x, shardspec)
 
-        upsampled = ttnn.upsample(x, (2, 2), memory_config=x.memory_config())
+        upsampled = ttnn.upsample(x, (2, 2))
         ttnn.deallocate(x)
         return ttnn.reshape(
             upsampled,
@@ -378,7 +378,7 @@ class UNetUpblock:
 
 class UNet:
     def __init__(self, parameters: ParameterDict, device, mesh_mapper=None):
-        assert is_valid_device_for_unet(device), "UNet Shallow requires an 8x8 grid on all devices"
+        # assert is_valid_device_for_unet(device), "UNet Shallow requires an 8x8 grid on all devices"
 
         self.device = device
         self.conv_cache = {}

@@ -135,6 +135,7 @@ operation::ProgramWithCallbacks upsample_multi_core(
     // NOTE: input is assumed to have channels last format: {N, H, W, C}, {N, 1, H * W, C}, {1, 1, N * H * W, C}
     // NOTE: Bfp8_b/TILE is not yet supported
 
+    tt::log_info("INPUT SHAPE {} {}", input.get_logical_shape(), input.memory_config().shard_spec);
     uint32_t input_stick_nbytes = input.get_padded_shape()[-1] * input.element_size();
     uint32_t output_stick_nbytes = output.get_padded_shape()[-1] * output.element_size();
     TT_FATAL(input_stick_nbytes == output_stick_nbytes, "Input and output sticks should have same size");
@@ -246,6 +247,7 @@ operation::ProgramWithCallbacks upsample_multi_core(
 
     // Kernels
 
+    tt::log_info("all cores = {}", all_cores);
     std::vector<uint32_t> writer_compile_time_args = {
         in_cb_id,
         out_cb_id,
@@ -291,11 +293,11 @@ operation::ProgramWithCallbacks upsample_multi_core(
             start_input_stick_id += input_nsticks_per_core;
         }
     } else if (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        for (int32_t core = 0; core < ncores_nhw; ++core) {
-            CoreCoord core_coord(core % ncores_x, core / ncores_x);  // logical
+        auto cores = corerange_to_cores(all_cores);
+        for (auto core : cores) {
             writer_rt_args[6] = start_input_stick_id;
-            SetRuntimeArgs(program, writer_kernel, core_coord, writer_rt_args);
-            SetRuntimeArgs(program, reader_kernel, core_coord, writer_rt_args);
+            SetRuntimeArgs(program, writer_kernel, core, writer_rt_args);
+            SetRuntimeArgs(program, reader_kernel, core, writer_rt_args);
             start_input_stick_id += input_nsticks_per_core;
         }
     } else {
