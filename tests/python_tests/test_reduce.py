@@ -116,7 +116,6 @@ def test_reduce(testname, formats, dest_acc, reduce_dim, pool_type):
         formats
     )  # Bug patchup in (unpack.py): passing formats struct to check unpack_src with pack_dst and distinguish when input and output formats have different exponent widths then reading from L1 changes
     assert len(res_from_L1) == len(golden_tensor)
-    run_shell_command("cd .. && make clean")
 
     res_tensor = torch.tensor(
         res_from_L1,

@@ -79,8 +79,6 @@ def test_all(testname, formats, dest_acc, mathop):
 
     assert len(res_from_L1) == len(golden)
 
-    run_shell_command("cd .. && make clean")
-
     if formats.pack_dst in [
         DataFormat.Float16_b,
         DataFormat.Float16,
