@@ -91,7 +91,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@blozano-test-venv
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
