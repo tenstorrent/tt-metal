@@ -37,9 +37,20 @@ void CumSumDeviceOperation::validate_on_program_cache_miss(
         // If that's the case => OK, no need to allocate memory
         // Otherwise =>  error (pytorch behaviour is to reallocate but this has been deprecated as of pytorch 2.6)
 
+        const auto& preallocated_tensor_specs = tensor_args.preallocated_output->tensor_spec();
+        const auto& expected_tensor_specs = compute_output_specs(args, tensor_args);
+
         TT_FATAL(
-            tensor_args.preallocated_output->tensor_spec() == compute_output_specs(args, tensor_args),
-            "Preallocated output specs mismatch expected specs");
+            preallocated_tensor_specs.data_type() == expected_tensor_specs.data_type(),
+            "Preallocated tensor data type ({}) mismatch expected data type ({})",
+            preallocated_tensor_specs.data_type(),
+            expected_tensor_specs.data_type());
+
+        TT_FATAL(
+            preallocated_tensor_specs.logical_shape() == expected_tensor_specs.logical_shape(),
+            "Preallocated tensor shape ({}) mismatch expected tensor shape ({})",
+            preallocated_tensor_specs.logical_shape(),
+            expected_tensor_specs.logical_shape());
     }
 }
 
