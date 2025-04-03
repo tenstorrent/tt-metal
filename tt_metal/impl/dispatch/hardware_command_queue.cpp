@@ -23,6 +23,7 @@
 
 #include "assert.hpp"
 #include "buffers/dispatch.hpp"
+#include "profiler/dispatch.hpp"
 #include "dispatch/device_command.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/host_runtime_commands.hpp"
@@ -301,6 +302,33 @@ CoreType HWCommandQueue::get_dispatch_core_type() {
     return MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
 }
 
+void HWCommandQueue::enqueue_read_profiler_control_vector(
+    const CoreCoord& virtual_core, void* dst, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScopedN("HWCommandQueue_enqueue_read_profiler_control_vector");
+
+    const HalProgrammableCoreType core_type = this->device_->get_programmable_core_type(virtual_core);
+    profiler_msg_t* profiler_msg = MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
+
+    sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
+    profiler_dispatch::ProfilerDispatchParams dispatch_params(
+        virtual_core,
+        reinterpret_cast<DeviceAddr>(profiler_msg->control_vector),
+        this->device_,
+        this->id_,
+        this->get_dispatch_core_type(),
+        this->expected_num_workers_completed_,
+        sub_device_ids);
+    profiler_dispatch::issue_read_profiler_control_vector_command_sequence(dispatch_params);
+
+    this->issued_completion_q_reads_.push(
+        std::make_shared<CompletionReaderVariant>(std::in_place_type<ReadProfilerControlVectorDescriptor>, dst));
+    this->increment_num_entries_in_completion_q();
+
+    if (blocking) {
+        this->finish(sub_device_ids);
+    }
+}
+
 void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_program");
     std::vector<SubDeviceId> sub_device_ids = {program.determine_sub_device_ids(device_)};
@@ -530,6 +558,10 @@ void HWCommandQueue::read_completion_queue() {
                         } else if constexpr (std::is_same_v<T, ReadEventDescriptor>) {
                             ZoneScopedN("CompletionQueueReadEvent");
                             event_dispatch::read_events_from_completion_queue(
+                                read_descriptor, mmio_device_id, channel, this->id_, this->manager_);
+                        } else if constexpr (std::is_same_v<T, ReadProfilerControlVectorDescriptor>) {
+                            ZoneScopedN("CompletionQueueReadProfilerControlVector");
+                            profiler_dispatch::read_profiler_control_vector_from_completion_queue(
                                 read_descriptor, mmio_device_id, channel, this->id_, this->manager_);
                         }
                     },

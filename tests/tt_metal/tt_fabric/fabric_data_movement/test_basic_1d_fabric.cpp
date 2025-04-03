@@ -80,7 +80,7 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
     uint32_t packet_header_address = 0x25000;
     uint32_t source_l1_buffer_address = 0x30000;
     uint32_t packet_payload_size_bytes = 4096;
-    uint32_t num_packets = 10;
+    uint32_t num_packets = 300;
     uint32_t num_hops = 1;
     uint32_t test_results_address = 0x100000;
     uint32_t test_results_size_bytes = 128;
@@ -158,6 +158,10 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
     // Launch sender and receiver programs and wait for them to finish
     this->RunProgramNonblocking(receiver_device, receiver_program);
     this->RunProgramNonblocking(sender_device, sender_program);
+
+    tt_metal::DumpDeviceProfileResults(receiver_device, receiver_program);
+    tt_metal::DumpDeviceProfileResults(sender_device, sender_program);
+
     this->WaitForSingleProgramDone(sender_device, sender_program);
     this->WaitForSingleProgramDone(receiver_device, receiver_program);
 

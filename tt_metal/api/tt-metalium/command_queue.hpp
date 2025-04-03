@@ -71,12 +71,19 @@ public:
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
 
+    virtual void enqueue_read_profiler_control_vector(
+        const CoreCoord& virtual_core,
+        void* dst,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
+
     virtual void finish(tt::stl::Span<const SubDeviceId> sub_device_ids) = 0;
 };
 
 struct ReadBufferDescriptor;
 struct ReadEventDescriptor;
-
-using CompletionReaderVariant = std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor>;
+struct ReadProfilerControlVectorDescriptor;
+using CompletionReaderVariant =
+    std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor, ReadProfilerControlVectorDescriptor>;
 
 }  // namespace tt::tt_metal

@@ -19,6 +19,8 @@
 #include <iostream>
 
 #include "assert.hpp"
+#include "command_queue.hpp"
+#include "dispatch/device_command.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
@@ -44,42 +46,39 @@ static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
     return static_cast<kernel_profiler::PacketTypes>((timer_id >> 16) & 0x7);
 }
 
-distributed::AnyBuffer get_control_buffer_view(
-    IDevice* device, uint32_t address, uint32_t size, CoreCoord logical_worker_core) {
-    auto shard_parameters = ShardSpecBuffer({logical_worker_core}, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
-    auto mesh_device = device->get_mesh_device();
-    auto buffer_config = ShardedBufferConfig(
-        {mesh_device ? mesh_device.get() : device,
-         size,
-         size,
-         BufferType::L1,
-         TensorMemoryLayout::HEIGHT_SHARDED,
-         shard_parameters});
-    return distributed::AnyBuffer::create(buffer_config, address);
-}
-
-void issue_fd_write_to_profiler_buffer(distributed::AnyBuffer& buffer, IDevice* device, std::vector<uint32_t>& data) {
-    if (auto mesh_device = device->get_mesh_device()) {
-        auto device_coord = mesh_device->get_view().find_device(device->id());
-        WriteShard(mesh_device->mesh_command_queue(), buffer.get_mesh_buffer(), data, device_coord, true);
+std::vector<uint32_t> read_control_buffer_from_core(
+    IDevice* device, const CoreCoord& core, const profiler_msg_t* profiler_msg, const ProfilerDumpState state) {
+    std::vector<uint32_t> control_buffer;
+    if (device->dispatch_firmware_active()) {
+        if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
+            if (MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores()) {
+                control_buffer = tt::llrt::read_hex_vec_from_core(
+                    device->id(),
+                    core,
+                    reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+                    kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+            }
+        } else {
+            control_buffer.resize(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
+            device->command_queue().enqueue_read_profiler_control_vector(core, control_buffer.data(), true);
+        }
     } else {
-        EnqueueWriteBuffer(device->command_queue(), *(buffer.get_buffer()), data, true);
+        if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
+            control_buffer = tt::llrt::read_hex_vec_from_core(
+                device->id(),
+                core,
+                reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+                kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+        }
     }
-}
 
-void issue_fd_read_from_profiler_buffer(
-    distributed::AnyBuffer& buffer, IDevice* device, std::vector<uint32_t>& host_data) {
-    if (auto mesh_device = device->get_mesh_device()) {
-        auto device_coord = mesh_device->get_view().find_device(device->id());
-        distributed::ReadShard(mesh_device->mesh_command_queue(), host_data, buffer.get_mesh_buffer(), device_coord);
-    } else {
-        EnqueueReadBuffer(device->command_queue(), *(buffer.get_buffer()), host_data.data(), true);
-    }
+    return control_buffer;
 }
 
 void DeviceProfiler::readRiscProfilerResults(
     IDevice* device,
     const CoreCoord& worker_core,
+    const ProfilerDumpState state,
     const std::optional<ProfilerOptionalMetadata>& metadata,
     std::ofstream& log_file_ofs,
     nlohmann::ordered_json& noc_trace_json_log) {
@@ -106,38 +105,21 @@ void DeviceProfiler::readRiscProfilerResults(
 
         riscCount = 1;
     }
+
     profiler_msg_t* profiler_msg =
         MetalContext::instance().hal().get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
+
+    std::vector<uint32_t> control_buffer = read_control_buffer_from_core(device, worker_core, profiler_msg, state);
+    
+    if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
+        (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
+        return;
+    }
 
     uint32_t coreFlatID =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_routing_to_profiler_flat_id(device_id).at(
             worker_core);
     uint32_t startIndex = coreFlatID * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
-
-    std::vector<uint32_t> control_buffer;
-    if (device->dispatch_firmware_active() && CoreType == HalProgrammableCoreType::TENSIX) {
-        // TODO: Currently only using FD reads on worker cores. Use FD reads across all core types, once we have a
-        // generic API to read from an address instead of a buffer. (#15015)
-        control_buffer.resize(kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE / sizeof(uint32_t));
-        auto logical_worker_core =
-            soc_desc.translate_coord_to(worker_core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
-        auto control_buffer_view = get_control_buffer_view(
-            device,
-            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
-            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE,
-            CoreCoord(logical_worker_core.x, logical_worker_core.y));
-        issue_fd_read_from_profiler_buffer(control_buffer_view, device, control_buffer);
-    } else {
-        control_buffer = tt::llrt::read_hex_vec_from_core(
-            device_id,
-            worker_core,
-            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
-            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
-    }
-    if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
-        (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
-        return;
-    }
 
     // helper function to lookup opname from runtime id if metadata is available
     auto getOpNameIfAvailable = [&metadata](auto device_id, auto runtime_id) {
@@ -843,7 +825,7 @@ void DeviceProfiler::dumpResults(
             log_error("Could not open kernel profiler dump file '{}'", log_path);
         } else {
             for (const auto& worker_core : worker_cores) {
-                readRiscProfilerResults(device, worker_core, metadata, log_file_ofs, noc_trace_json_log);
+                readRiscProfilerResults(device, worker_core, state, metadata, log_file_ofs, noc_trace_json_log);
             }
 
             // if defined, used profiler_noc_events_report_path to write json log. otherwise use output_dir

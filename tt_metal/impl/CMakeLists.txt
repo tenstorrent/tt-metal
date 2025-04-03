@@ -31,6 +31,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_descriptors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/tt_metal_profiler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/profiler/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/debug_tools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/device_command.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/host_runtime_commands.cpp

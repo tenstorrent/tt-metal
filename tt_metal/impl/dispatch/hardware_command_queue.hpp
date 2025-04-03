@@ -97,6 +97,12 @@ public:
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
 
+    void enqueue_read_profiler_control_vector(
+        const CoreCoord& virtual_core,
+        void* dst,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
+
     void finish(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
 
     IDevice* device() override;
