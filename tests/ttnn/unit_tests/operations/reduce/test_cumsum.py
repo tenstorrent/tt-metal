@@ -36,6 +36,8 @@ import ttnn
 )
 @pytest.mark.parametrize("dtype", [None, ttnn.bfloat16, ttnn.float32])
 def test_cumsum(size, dim, dtype, device):
+    torch.manual_seed(29112024)
+
     torch_input_tensor = torch.rand(size, dtype=torch.float32)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device)
@@ -81,6 +83,8 @@ def test_cumsum(size, dim, dtype, device):
 )
 @pytest.mark.parametrize("dtype", [None, ttnn.bfloat16, ttnn.float32])
 def test_cumsum_with_preallocated_output(size, dim, dtype, device):
+    torch.manual_seed(29112024)
+
     torch_input_tensor = torch.rand(size, dtype=torch.float32)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device)
