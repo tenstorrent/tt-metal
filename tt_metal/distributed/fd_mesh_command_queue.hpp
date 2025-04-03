@@ -36,7 +36,8 @@ private:
         const MeshCoordinateRange& sub_grid,
         ProgramCommandSequence& program_cmd_seq,
         bool stall_first,
-        bool stall_before_program);
+        bool stall_before_program,
+        uint32_t workload_runtime_id);
     // For a given MeshWorkload, a subgrid is unused if no programs are run on it. Go signals
     // must be sent to this subgrid, to ensure consistent global state across the Virtual Mesh.
     // When running trace, the dispatch commands responsible for forwarding go signals must be
