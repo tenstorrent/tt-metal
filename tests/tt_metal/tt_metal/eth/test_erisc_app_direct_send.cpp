@@ -37,7 +37,7 @@
 #include "multi_device_fixture.hpp"
 #include <tt-metalium/program_impl.hpp>
 #include "span.hpp"
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_memory.h>
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -542,7 +542,8 @@ TEST_F(DeviceFixture, ActiveEthKernelsDirectSendAllConnectedChips) {
                 continue;
             }
             for (const auto& sender_core : sender_device->get_active_ethernet_cores(true)) {
-                if (not tt::Cluster::instance().is_ethernet_link_up(sender_device->id(), sender_core)) {
+                if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
+                        sender_device->id(), sender_core)) {
                     continue;
                 }
                 auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);
@@ -599,7 +600,7 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
     const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
     for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
-        if (not tt::Cluster::instance().is_ethernet_link_up(device_0->id(), sender_core)) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), sender_core)) {
             continue;
         }
         CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
@@ -623,7 +624,7 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
             sender_core));
     }
     for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
-        if (not tt::Cluster::instance().is_ethernet_link_up(device_0->id(), sender_core)) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), sender_core)) {
             continue;
         }
         CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
@@ -647,7 +648,7 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
             sender_core));
     }
     for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
-        if (not tt::Cluster::instance().is_ethernet_link_up(device_0->id(), sender_core)) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), sender_core)) {
             continue;
         }
         CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
@@ -671,7 +672,7 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
             sender_core));
     }
     for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
-        if (not tt::Cluster::instance().is_ethernet_link_up(device_0->id(), sender_core)) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), sender_core)) {
             continue;
         }
         CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
@@ -705,7 +706,7 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsRepeatedDirectSends) {
     const size_t dst_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
     for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
-        if (not tt::Cluster::instance().is_ethernet_link_up(device_0->id(), sender_core)) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), sender_core)) {
             continue;
         }
         CoreCoord receiver_core = std::get<1>(device_0->get_connected_ethernet_core(sender_core));
@@ -756,7 +757,8 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
         const auto& send_chip = devices_.at(std::get<0>(it->first));
         CoreCoord sender_core = std::get<1>(it->first);
 
-        if (not tt::Cluster::instance().is_ethernet_link_up(send_chip->id(), sender_core)) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
+                send_chip->id(), sender_core)) {
             continue;
         }
 
@@ -791,14 +793,14 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsRandomEthPacketSizeDirectSendTests) {
 
     std::map<std::tuple<int, CoreCoord>, std::tuple<int, CoreCoord>> connectivity = {};
     for (const auto& sender_core : device_0->get_active_ethernet_cores(true)) {
-        if (not tt::Cluster::instance().is_ethernet_link_up(device_0->id(), sender_core)) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), sender_core)) {
             continue;
         }
         const auto& receiver_core = device_0->get_connected_ethernet_core(sender_core);
         connectivity.insert({{0, sender_core}, receiver_core});
     }
     for (const auto& sender_core : device_1->get_active_ethernet_cores(true)) {
-        if (not tt::Cluster::instance().is_ethernet_link_up(device_1->id(), sender_core)) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_1->id(), sender_core)) {
             continue;
         }
         const auto& receiver_core = device_1->get_connected_ethernet_core(sender_core);
@@ -853,7 +855,8 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConne
                 continue;
             }
             for (const auto& sender_core : sender_device->get_active_ethernet_cores(true)) {
-                if (not tt::Cluster::instance().is_ethernet_link_up(sender_device->id(), sender_core)) {
+                if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
+                        sender_device->id(), sender_core)) {
                     continue;
                 }
                 auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);

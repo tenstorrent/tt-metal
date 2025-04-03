@@ -86,7 +86,8 @@ public:
     Cluster(const Cluster&) = delete;
     Cluster(Cluster&& other) noexcept = delete;
 
-    static Cluster& instance();
+    Cluster();
+    ~Cluster();
 
     // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatch, so user_devices are meant
     // for user facing host apis
@@ -307,9 +308,6 @@ public:
     const std::unordered_map<CoreCoord, int32_t>& get_virtual_routing_to_profiler_flat_id(chip_id_t chip_id) const;
 
 private:
-    Cluster();
-    ~Cluster();
-
     void detect_arch_and_target();
     void generate_cluster_descriptor();
     void initialize_device_drivers();
@@ -326,6 +324,10 @@ private:
     void reserve_ethernet_cores_for_tunneling();
 
     void initialize_ethernet_sockets();
+
+    // Disable ethernet cores that retrain
+    // This should be removed when we handle retraining or dropped links in control plane properly
+    void disable_ethernet_cores_with_retrain();
 
     // Initialize control plane, which has mapping of physical device id to MeshGraph config
     void initialize_control_plane();
@@ -359,6 +361,7 @@ private:
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_worker_cores_;
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> virtual_eth_cores_;
     std::unordered_map<BoardType, std::unordered_map<CoreCoord, int32_t>> virtual_routing_to_profiler_flat_id_;
+    std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> frequent_retrain_cores_;
     // Flag to tell whether we are on a TG type of system.
     // If any device has to board type of GALAXY, we are on a TG cluster.
     ClusterType cluster_type_ = ClusterType::INVALID;

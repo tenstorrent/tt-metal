@@ -37,7 +37,7 @@
 #include "core_coord.hpp"
 #include "device.hpp"
 #include "dispatch/device_command.hpp"
-#include "dispatch/dispatch_core_manager.hpp"
+#include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch_mem_map.hpp"
@@ -55,7 +55,7 @@
 #include "tt_memory.h"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
@@ -469,18 +469,24 @@ uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
 void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_command_sequence) {
     // Initialize an empty preamble command in the Program Dispatch Cmd Sequence, which will be
     // updated with the correct write offsets when the program is enqueued
-    uint32_t preamble_cmd_sizeB = hal_ref.get_alignment(HalMemType::HOST);
+    tt::tt_metal::DeviceCommandCalculator calculator;
+    calculator.add_dispatch_set_write_offsets();
+    const uint32_t preamble_cmd_sizeB = calculator.write_offset_bytes();
     program_command_sequence.preamble_command_sequence = HostMemDeviceCommand(preamble_cmd_sizeB);
     program_command_sequence.preamble_command_sequence.add_dispatch_set_write_offsets(0, 0, 0);
 }
 
 void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, IDevice* device) {
     // Initialize stall command sequences for this program.
-    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
+    auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     auto dispatch_core_type = dispatch_core_config.get_core_type();
-    uint32_t uncached_stall_cmd_sizeB =
-        hal_ref.get_alignment(HalMemType::HOST) + hal_ref.get_alignment(HalMemType::HOST);
-    uint32_t cached_stall_cmd_seqB = hal_ref.get_alignment(HalMemType::HOST);
+    tt::tt_metal::DeviceCommandCalculator calculator;
+    calculator.add_dispatch_wait_with_prefetch_stall();
+    const uint32_t uncached_stall_cmd_sizeB = calculator.write_offset_bytes();
+    calculator.clear();
+
+    calculator.add_dispatch_wait();
+    const uint32_t cached_stall_cmd_seqB = calculator.write_offset_bytes();
 
     program_command_sequence.stall_command_sequences[UncachedStallSequenceIdx] =
         HostMemDeviceCommand(uncached_stall_cmd_sizeB);
@@ -636,7 +642,7 @@ BatchedTransfers assemble_runtime_args_commands(
     ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device) {
     static const uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
     NOC noc_index = k_dispatch_downstream_noc;
-    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
+    auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     auto dispatch_core_type = dispatch_core_config.get_core_type();
     const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
 
@@ -982,7 +988,7 @@ void assemble_device_commands(
     ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id) {
     BatchedTransfers batched_transfers = assemble_runtime_args_commands(program_command_sequence, program, device);
     DeviceCommandCalculator calculator;
-    auto dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
+    auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     auto dispatch_core_type = dispatch_core_config.get_core_type();
     NOC noc_index = k_dispatch_downstream_noc;
     const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
@@ -1414,7 +1420,7 @@ void assemble_device_commands(
         multicast_go_signal_sub_cmds.size() > 0 ? device->num_noc_mcast_txns(sub_device_id) : 0;
     const auto& num_noc_unicast_txns =
         unicast_go_signal_sub_cmds.size() > 0 ? device->num_noc_unicast_txns(sub_device_id) : 0;
-    if (tt_metal::DispatchQueryManager::instance().dispatch_s_enabled()) {
+    if (tt_metal::MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
         calculator.add_notify_dispatch_s_go_signal_cmd();
     } else {
         // Wait Noc Write Barrier, wait for binaries/configs and launch_msg to be written to worker cores
@@ -1599,7 +1605,7 @@ void assemble_device_commands(
 
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
     auto sub_device_index = *sub_device_id;
-    if (tt_metal::DispatchQueryManager::instance().dispatch_s_enabled()) {
+    if (tt_metal::MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
         // dispatch_d signals dispatch_s to send the go signal, use a barrier if there are cores active
         uint16_t index_bitmask = 0;
         index_bitmask |= 1 << sub_device_index;
@@ -2053,26 +2059,32 @@ void reset_worker_dispatch_state_on_device(
         uint32_t pcie_alignment = hal_ref.get_alignment(HalMemType::HOST);
         go_signals_cmd_size = align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) * num_sub_devices;
     }
-    uint32_t cmd_sequence_sizeB =
-        reset_launch_msg_state * DispatchQueryManager::instance().dispatch_s_enabled() *
-            hal_ref.get_alignment(
-                HalMemType::HOST) +  // dispatch_d -> dispatch_s sem update (send only if dispatch_s is running)
-        go_signals_cmd_size +        // go signal cmd
-        (hal_ref.get_alignment(
-             HalMemType::HOST) +  // wait to ensure that reset go signal was processed (dispatch_d)
-                                  // when dispatch_s and dispatch_d are running on 2 cores, workers update dispatch_s.
-                                  // dispatch_s is responsible for resetting worker count and giving dispatch_d the
-                                  // latest worker state. This is encapsulated in the dispatch_s wait command (only to
-                                  // be sent when dispatch is distributed on 2 cores)
-         DispatchQueryManager::instance().distributed_dispatcher() * hal_ref.get_alignment(HalMemType::HOST)) *
-            num_sub_devices;
+
+    tt::tt_metal::DeviceCommandCalculator calculator;
+    if (reset_launch_msg_state) {
+        for (int i = 0; i < num_sub_devices; ++i) {
+            calculator.add_dispatch_go_signal_mcast();
+        }
+        if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
+            calculator.add_notify_dispatch_s_go_signal_cmd();
+        }
+    }
+    for (uint32_t i = 0; i < num_sub_devices; ++i) {
+        if (MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher()) {
+            calculator.add_dispatch_wait();
+        }
+        calculator.add_dispatch_wait();
+    }
+
+    const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
+
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
-    const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
+    const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
     if (reset_launch_msg_state) {
-        if (DispatchQueryManager::instance().dispatch_s_enabled()) {
+        if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
             uint16_t index_bitmask = 0;
             for (uint32_t i = 0; i < num_sub_devices; ++i) {
                 index_bitmask |= 1 << i;
@@ -2109,7 +2121,7 @@ void reset_worker_dispatch_state_on_device(
             expected_num_workers += device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id) +
                                     device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
         }
-        if (DispatchQueryManager::instance().distributed_dispatcher()) {
+        if (MetalContext::instance().get_dispatch_query_manager().distributed_dispatcher()) {
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
                 0,
@@ -2131,10 +2143,12 @@ void reset_worker_dispatch_state_on_device(
 void set_num_worker_sems_on_dispatch(
     IDevice* device, SystemMemoryManager& manager, uint8_t cq_id, uint32_t num_worker_sems) {
     // Not needed for regular dispatch kernel
-    if (!DispatchQueryManager::instance().dispatch_s_enabled()) {
+    if (!MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
         return;
     }
-    uint32_t cmd_sequence_sizeB = hal_ref.get_alignment(HalMemType::HOST);
+    tt::tt_metal::DeviceCommandCalculator calculator;
+    calculator.add_dispatch_set_num_worker_sems();
+    const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
     command_sequence.add_dispatch_set_num_worker_sems(num_worker_sems, DispatcherSelect::DISPATCH_SLAVE);
@@ -2148,14 +2162,14 @@ void set_go_signal_noc_data_on_dispatch(
     const vector_aligned<uint32_t>& go_signal_noc_data,
     SystemMemoryManager& manager,
     uint8_t cq_id) {
-    uint32_t pci_alignment = hal_ref.get_alignment(HalMemType::HOST);
-    uint32_t cmd_sequence_sizeB = align(
-        sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + go_signal_noc_data.size() * sizeof(uint32_t), pci_alignment);
+    tt::tt_metal::DeviceCommandCalculator calculator;
+    calculator.add_dispatch_set_go_signal_noc_data(go_signal_noc_data.size());
+    const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
-    DispatcherSelect dispatcher_for_go_signal = DispatchQueryManager::instance().dispatch_s_enabled()
-                                                    ? DispatcherSelect::DISPATCH_SLAVE
-                                                    : DispatcherSelect::DISPATCH_MASTER;
+    DispatcherSelect dispatcher_for_go_signal =
+        MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled() ? DispatcherSelect::DISPATCH_SLAVE
+                                                                                   : DispatcherSelect::DISPATCH_MASTER;
     command_sequence.add_dispatch_set_go_signal_noc_data(go_signal_noc_data, dispatcher_for_go_signal);
     manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
     manager.fetch_queue_reserve_back(cq_id);

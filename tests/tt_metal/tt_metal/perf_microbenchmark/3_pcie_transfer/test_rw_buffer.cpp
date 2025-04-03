@@ -26,7 +26,7 @@
 #include "fmt/base.h"
 #include <tt-metalium/logger.hpp>
 #include "test_common.hpp"
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 using namespace tt;
@@ -104,7 +104,7 @@ int main(int argc, char** argv) {
             page_size);
 
         // Device setup
-        if (device_id >= tt::Cluster::instance().number_of_devices()) {
+        if (device_id >= tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices()) {
             log_info(LogTest, "Skip! Device id {} is not applicable on this system", device_id);
             return 1;
         }

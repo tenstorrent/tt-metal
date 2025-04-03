@@ -17,7 +17,7 @@ from tests.ttnn.unit_tests.operations.test_distributed_layernorm_sharded import 
     compute_post_allgather_output,
 )
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_scaled_dot_product_attention_decode import (
-    run_test_sdpa_decode_single_iter,
+    run_test_sdpa_decode_paged_attention_single_iter,
 )
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_nlp_create_qkv_heads_decode import (
     run_test_create_min_width_shard,
@@ -150,7 +150,7 @@ def test_llama_tg_LayerNorm(
 )
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d, grid_size",
-    ([8, 8, 1, 256, 128, (8, 4)],),  # Llama2-70B
+    ([8, 8, 1, 4096, 128, (8, 4)],),  # Llama2-70B
 )
 @pytest.mark.parametrize(
     "start_core, sub_core_grids",
@@ -170,7 +170,7 @@ def test_llama_tg_ScaledDotProductAttentionDecode(
     mesh_device, use_program_cache, b, nh, nkv, s, d, dtype, grid_size, q_dtype, start_core, sub_core_grids
 ):
     device = mesh_device.get_device(mesh_device.get_device_ids()[0])
-    run_test_sdpa_decode_single_iter(
+    run_test_sdpa_decode_paged_attention_single_iter(
         device,
         b,
         nh,
@@ -180,12 +180,14 @@ def test_llama_tg_ScaledDotProductAttentionDecode(
         dtype,
         grid_size,
         q_dtype,
+        cur_pos=127,
+        block_size=32,
+        q_chunk_size=256,
+        k_chunk_size=256,
         sharded_in=True,
         sharded_out=True,
         start_core=start_core,
         sub_core_grids=sub_core_grids,
-        override_q_chunk_size=256,
-        override_k_chunk_size=256,
     )
     assert device.num_program_cache_entries() == 1
 
