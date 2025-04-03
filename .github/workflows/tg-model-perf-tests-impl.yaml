@@ -12,6 +12,10 @@ on:
       docker-image:
         required: true
         type: string
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
 
 jobs:
   tg-model-perf-tests:
@@ -23,14 +27,14 @@ jobs:
             name: "TG LLM model perf tests",
             model-type: "LLM",
             arch: wormhole_b0,
-            runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-perf"],
+            runs-on: ["arch-wormhole_b0", "config-tg", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type llm_model_perf_tg_device --dispatch-mode ""'
           },  # Austin Ho
           {
             name: "TG CNN model perf tests",
             model-type: "CNN",
             arch: wormhole_b0,
-            runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-perf"],
+            runs-on: ["arch-wormhole_b0", "config-tg", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type cnn_model_perf_tg_device --dispatch-mode ""'
           },  # Austin Ho
           {
@@ -39,7 +43,7 @@ jobs:
             cmd: 'pytest models/demos/llama3_subdevices/tests/tg_perf_unit_tests',
             timeout: 100,
             tracy: true,
-            runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-perf"],
+            runs-on: ["arch-wormhole_b0", "config-tg", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
             owner_id: U071CKL4AFK # Ammar Vora
           }
         ]
