@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>What is ttnn? &mdash; TT-NN  documentation</title>
+  <title>What is TT-NN? &mdash; TT-NN  documentation</title>
       <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../_static/tt_theme.css" type="text/css" />
@@ -52,20 +52,17 @@
         </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
               <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
 <ul class="current">
-<li class="toctree-l1 current"><a class="current reference internal" href="#">What is ttnn?</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="#key-features-of-ttnn">Key features of <span class="xref std std-doc">ttnn</span></a></li>
-</ul>
-</li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">What is TT-NN?</a></li>
 <li class="toctree-l1"><a class="reference internal" href="get_started.html">Getting Started</a></li>
 <li class="toctree-l1"><a class="reference internal" href="installing.html">Install</a></li>
-<li class="toctree-l1"><a class="reference internal" href="usage.html">Using ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="usage.html">Using TT-NN</a></li>
 <li class="toctree-l1"><a class="reference internal" href="tensor.html">Tensor</a></li>
 <li class="toctree-l1"><a class="reference internal" href="api.html">APIs</a></li>
 <li class="toctree-l1"><a class="reference internal" href="tutorials.html">Tutorials</a></li>
 <li class="toctree-l1"><a class="reference internal" href="onboarding.html">Onboarding New Functionality</a></li>
-<li class="toctree-l1"><a class="reference internal" href="converting_torch_model_to_ttnn.html">Converting torch Model to ttnn</a></li>
-<li class="toctree-l1"><a class="reference internal" href="adding_new_ttnn_operation.html">Adding New ttnn Operation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="profiling_ttnn_operations.html">Profiling ttnn Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
 <li class="toctree-l1"><a class="reference internal" href="dependencies/index.html">Dependencies</a></li>
 <li class="toctree-l1"><a class="reference internal" href="demos.html">Building and Uplifting Demos</a></li>
 </ul>
@@ -94,7 +91,7 @@
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
       <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
-      <li class="breadcrumb-item active">What is ttnn?</li>
+      <li class="breadcrumb-item active">What is TT-NN?</li>
       <li class="wy-breadcrumbs-aside">
             <a href="../_sources/ttnn/about.rst.txt" rel="nofollow"> View page source</a>
       </li>
@@ -104,30 +101,21 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="what-is-ttnn">
-<h1>What is ttnn?<a class="headerlink" href="#what-is-ttnn" title="Permalink to this heading"></a>
+  <section id="what-is-tt-nn">
+<h1>What is TT-NN?<a class="headerlink" href="#what-is-tt-nn" title="Permalink to this heading"></a>
 </h1>
-<p><a class="reference internal" href="#"><span class="doc">ttnn</span></a> is a library that provides a user-friendly interface to operations that run on Tenstorrent’s hardware using <code class="docutils literal notranslate"><span class="pre">tt-metal</span></code> programming model.</p>
-<p><a class="reference internal" href="#"><span class="doc">ttnn</span></a> is designed to be intuitive to an user that is familiar with <a class="reference external" href="https://pytorch.org/">PyTorch</a>.</p>
-<p><a class="reference internal" href="#"><span class="doc">ttnn</span></a>’s primary dependency is <a class="reference internal" href="dependencies/tt_lib.html"><span class="doc">tt_lib</span></a> which provides the implementation for all of the operations used by <a class="reference internal" href="#"><span class="doc">ttnn</span></a>.</p>
-<p>We trust that this library will be valuable to helping you on your journey to take full advantage of our devices!</p>
-<section id="key-features-of-ttnn">
-<h2>Key features of <a class="reference internal" href="#"><span class="doc">ttnn</span></a><a class="headerlink" href="#key-features-of-ttnn" title="Permalink to this heading"></a>
-</h2>
-<dl class="simple">
-<dt>Key features of <a class="reference internal" href="#"><span class="doc">ttnn</span></a>:</dt>
-<dd>
+<p><a class="reference internal" href="#"><span class="doc">TT-NN</span></a> is an open source library of neural network operations built on the <code class="docutils literal notranslate"><span class="pre">tt-metal</span></code> programming model.</p>
+<p>It can be used in C++ and Python projects, and is designed to feel familiar to developers experienced with <a class="reference external" href="https://pytorch.org/">PyTorch</a>.</p>
+<p>Key features of <a class="reference internal" href="#"><span class="doc">TT-NN</span></a> include:</p>
 <ul class="simple">
-<li><p>Support for N-D tensors.</p></li>
-<li><p>Intuitive way of converting between <a class="reference internal" href="tensor.html#ttnn-row-major-layout"><span class="std std-ref">ttnn.ROW_MAJOR_LAYOUT</span></a> and <a class="reference internal" href="tensor.html#ttnn-tile-layout"><span class="std std-ref">ttnn.TILE_LAYOUT</span></a> using <a class="reference internal" href="api/ttnn.to_layout.html#id1"><span class="std std-ref">ttnn.to_layout</span></a></p></li>
-<li><p>Stable APIs.</p></li>
-<li><p>The computation graph of <a class="reference internal" href="#"><span class="doc">ttnn</span></a> operations can be traced and then visualized or used in any other way. The graph is <cite>networkx</cite> compatible. Refer to <a class="reference internal" href="tutorials/ttnn-tracer.html#ttnn-tracer"><span class="std std-ref">ttnn Tracer</span></a> for examples</p></li>
-<li><p>Infrastructure for converting parameters and some sub-modules from a <cite>torch.nn.Module</cite> object. This infrastructure supports caching of the converted parameters which could significantly speed up repeated runs.</p></li>
-<li><p>Ability to compare the result of each operation to the equivalent <a class="reference external" href="https://pytorch.org/">PyTorch</a> operation. Very useful for debugging.</p></li>
+<li><p>More than 200 <a class="reference internal" href="api.html"><span class="doc">operations</span></a> (matrix multiplication, convolution, reduction, CCL, fused Transformer operations, etc.)</p></li>
+<li><p>A Tensor type that enables <a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_layouts/tensor_layouts.md">different ways</a> to represent, distribute and access data on device</p></li>
+<li><p>The ability for developers to register custom operations</p></li>
+<li><p>Native support for a <a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md">mesh of devices</a></p></li>
+<li><p>Tools to trace and <a class="reference external" href="https://github.com/tenstorrent/ttnn-visualizer">visualize</a> the computation <a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/graph-tracing.md">graph</a></p></li>
+<li><p>Utilities to cache converted parameters, significantly speeding up model loading on repeated runs</p></li>
+<li><p>A <a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/comparison-mode.md">comparison mode</a> that enables debugging of long operation sequences against a known reference</p></li>
 </ul>
-</dd>
-</dl>
-</section>
 </section>
 
 

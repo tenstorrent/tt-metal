@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Using ttnn &mdash; TT-NN  documentation</title>
+  <title>Using TT-NN &mdash; TT-NN  documentation</title>
       <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../_static/tt_theme.css" type="text/css" />
@@ -52,10 +52,10 @@
         </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
               <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
 <ul class="current">
-<li class="toctree-l1"><a class="reference internal" href="about.html">What is ttnn?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="about.html">What is TT-NN?</a></li>
 <li class="toctree-l1"><a class="reference internal" href="get_started.html">Getting Started</a></li>
 <li class="toctree-l1"><a class="reference internal" href="installing.html">Install</a></li>
-<li class="toctree-l1 current"><a class="current reference internal" href="#">Using ttnn</a><ul>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Using TT-NN</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="#basic-examples">Basic Examples</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="#converting-from-and-to-torch-tensor">1. Converting from and to torch tensor</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#running-an-operation-on-the-device">2. Running an operation on the device</a></li>
@@ -63,7 +63,7 @@
 <li class="toctree-l3"><a class="reference internal" href="#enabling-program-cache">4. Enabling program cache</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#debugging-intermediate-tensors">5. Debugging intermediate tensors</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#tracing-the-graph-of-operations">6. Tracing the graph of operations</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#using-tt-lib-operation-in-ttnn">7. Using tt_lib operation in ttnn</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#using-tt-lib-operation-in-tt-nn">7. Using tt_lib operation in TT-NN</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#enabling-logging">8. Enabling Logging</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#supported-python-operators">9. Supported Python Operators</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#changing-the-string-representation-of-the-tensor">10. Changing the string representation of the tensor</a></li>
@@ -80,9 +80,9 @@
 <li class="toctree-l1"><a class="reference internal" href="api.html">APIs</a></li>
 <li class="toctree-l1"><a class="reference internal" href="tutorials.html">Tutorials</a></li>
 <li class="toctree-l1"><a class="reference internal" href="onboarding.html">Onboarding New Functionality</a></li>
-<li class="toctree-l1"><a class="reference internal" href="converting_torch_model_to_ttnn.html">Converting torch Model to ttnn</a></li>
-<li class="toctree-l1"><a class="reference internal" href="adding_new_ttnn_operation.html">Adding New ttnn Operation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="profiling_ttnn_operations.html">Profiling ttnn Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
 <li class="toctree-l1"><a class="reference internal" href="dependencies/index.html">Dependencies</a></li>
 <li class="toctree-l1"><a class="reference internal" href="demos.html">Building and Uplifting Demos</a></li>
 </ul>
@@ -111,7 +111,7 @@
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
       <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
-      <li class="breadcrumb-item active">Using ttnn</li>
+      <li class="breadcrumb-item active">Using TT-NN</li>
       <li class="wy-breadcrumbs-aside">
             <a href="../_sources/ttnn/usage.rst.txt" rel="nofollow"> View page source</a>
       </li>
@@ -121,8 +121,8 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="using-ttnn">
-<span id="id1"></span><h1>Using ttnn<a class="headerlink" href="#using-ttnn" title="Permalink to this heading"></a>
+  <section id="using-tt-nn">
+<span id="using-ttnn"></span><h1>Using TT-NN<a class="headerlink" href="#using-tt-nn" title="Permalink to this heading"></a>
 </h1>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
@@ -302,11 +302,11 @@ updating the API for other architectures, like Wormhole.</p>
 </pre></div>
 </div>
 </section>
-<section id="using-tt-lib-operation-in-ttnn">
-<h3>7. Using tt_lib operation in ttnn<a class="headerlink" href="#using-tt-lib-operation-in-ttnn" title="Permalink to this heading"></a>
+<section id="using-tt-lib-operation-in-tt-nn">
+<h3>7. Using tt_lib operation in TT-NN<a class="headerlink" href="#using-tt-lib-operation-in-tt-nn" title="Permalink to this heading"></a>
 </h3>
-<p><cite>tt_lib</cite> operations are missing some of the features of ttnn operations such as graph tracing and in order to support these features, ttnn provides a different to call <cite>tt_lib</cite> operations that enabled the missing features.</p>
-<p><cite>tt_lib</cite> operations are missing some of the features of ttnn operations such as graph tracing and in order to support these features, ttnn provides a different to call <cite>tt_lib</cite> operations that enabled the missing features.</p>
+<p><cite>tt_lib</cite> operations are missing some of the features of TT-NN operations such as graph tracing and in order to support these features, TT-NN provides a different to call <cite>tt_lib</cite> operations that enabled the missing features.</p>
+<p><cite>tt_lib</cite> operations are missing some of the features of TT-NN operations such as graph tracing and in order to support these features, TT-NN provides a different to call <cite>tt_lib</cite> operations that enabled the missing features.</p>
 <div class="highlight-python notranslate">
 <div class="highlight"><pre><span></span><span class="c1"># SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.</span>
 
@@ -333,16 +333,16 @@ updating the API for other architectures, like Wormhole.</p>
 <h3>8. Enabling Logging<a class="headerlink" href="#enabling-logging" title="Permalink to this heading"></a>
 </h3>
 <div class="highlight-bash notranslate">
-<div class="highlight"><pre><span></span><span class="c1"># To print currently executing ttnn operations</span>
+<div class="highlight"><pre><span></span><span class="c1"># To print currently executing TT-NN operations</span>
 <span class="nb">export</span><span class="w"> </span><span class="nv">TTNN_CONFIG_OVERRIDES</span><span class="o">=</span><span class="s1">'{"enable_fast_runtime_mode": false, "enable_logging": true}'</span>
 
-<span class="c1"># To print the currently executing ttnn and tt_lib operation and its input tensors to stdout</span>
+<span class="c1"># To print the currently executing TT-NN and tt_lib operation and its input tensors to stdout</span>
 <span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_LOGGER_TYPES</span><span class="o">=</span>Op
 <span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_LOGGER_LEVEL</span><span class="o">=</span>Debug
 </pre></div>
 </div>
 <p>Logging is not a substitute for profiling.
-Please refer to <a class="reference internal" href="profiling_ttnn_operations.html"><span class="doc">Profiling ttnn Operations</span></a> for instructions on how to profile operations.</p>
+Please refer to <a class="reference internal" href="profiling_ttnn_operations.html"><span class="doc">Profiling TT-NN Operations</span></a> for instructions on how to profile operations.</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
 <p>The logging is only available when compiling with CONFIG=assert or CONFIG=debug.</p>

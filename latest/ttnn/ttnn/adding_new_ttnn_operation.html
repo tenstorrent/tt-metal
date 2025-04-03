@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Adding New ttnn Operation &mdash; TT-NN  documentation</title>
+  <title>Adding New TT-NN Operation &mdash; TT-NN  documentation</title>
       <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../_static/tt_theme.css" type="text/css" />
@@ -23,8 +23,8 @@
     <script src="../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Profiling ttnn Operations" href="profiling_ttnn_operations.html" />
-    <link rel="prev" title="Converting torch Model to ttnn" href="converting_torch_model_to_ttnn.html" /> 
+    <link rel="next" title="Profiling TT-NN Operations" href="profiling_ttnn_operations.html" />
+    <link rel="prev" title="Converting PyTorch Model to TT-NN" href="converting_torch_model_to_ttnn.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -52,20 +52,20 @@
         </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
               <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
 <ul class="current">
-<li class="toctree-l1"><a class="reference internal" href="about.html">What is ttnn?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="about.html">What is TT-NN?</a></li>
 <li class="toctree-l1"><a class="reference internal" href="get_started.html">Getting Started</a></li>
 <li class="toctree-l1"><a class="reference internal" href="installing.html">Install</a></li>
-<li class="toctree-l1"><a class="reference internal" href="usage.html">Using ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="usage.html">Using TT-NN</a></li>
 <li class="toctree-l1"><a class="reference internal" href="tensor.html">Tensor</a></li>
 <li class="toctree-l1"><a class="reference internal" href="api.html">APIs</a></li>
 <li class="toctree-l1"><a class="reference internal" href="tutorials.html">Tutorials</a></li>
 <li class="toctree-l1"><a class="reference internal" href="onboarding.html">Onboarding New Functionality</a></li>
-<li class="toctree-l1"><a class="reference internal" href="converting_torch_model_to_ttnn.html">Converting torch Model to ttnn</a></li>
-<li class="toctree-l1 current"><a class="current reference internal" href="#">Adding New ttnn Operation</a><ul>
+<li class="toctree-l1"><a class="reference internal" href="converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Adding New TT-NN Operation</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="#faq">FAQ</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="#what-is-a-ttnn-operation">What is a ttnn operation?</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#what-steps-are-needed-to-add-ttnn-operation-in-c">What steps are needed to add ttnn operation in C++?</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#what-steps-are-needed-to-add-ttnn-operation-in-python">What steps are needed to add ttnn operation in Python?</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#what-is-a-tt-nn-operation">What is a TT-NN operation?</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#what-steps-are-needed-to-add-tt-nn-operation-in-c">What steps are needed to add TT-NN operation in C++?</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#what-steps-are-needed-to-add-tt-nn-operation-in-python">What steps are needed to add TT-NN operation in Python?</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#example-of-adding-a-new-device-operation">Example of Adding a new Device Operation</a><ul>
@@ -83,7 +83,7 @@
 </li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="profiling_ttnn_operations.html">Profiling ttnn Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
 <li class="toctree-l1"><a class="reference internal" href="dependencies/index.html">Dependencies</a></li>
 <li class="toctree-l1"><a class="reference internal" href="demos.html">Building and Uplifting Demos</a></li>
 </ul>
@@ -112,7 +112,7 @@
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
       <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
-      <li class="breadcrumb-item active">Adding New ttnn Operation</li>
+      <li class="breadcrumb-item active">Adding New TT-NN Operation</li>
       <li class="wy-breadcrumbs-aside">
             <a href="../_sources/ttnn/adding_new_ttnn_operation.rst.txt" rel="nofollow"> View page source</a>
       </li>
@@ -122,8 +122,8 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="adding-new-ttnn-operation">
-<h1>Adding New ttnn Operation<a class="headerlink" href="#adding-new-ttnn-operation" title="Permalink to this heading"></a>
+  <section id="adding-new-tt-nn-operation">
+<h1>Adding New TT-NN Operation<a class="headerlink" href="#adding-new-tt-nn-operation" title="Permalink to this heading"></a>
 </h1>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
@@ -134,13 +134,13 @@ Wormhole, or others).</p>
 <section id="faq">
 <h2>FAQ<a class="headerlink" href="#faq" title="Permalink to this heading"></a>
 </h2>
-<section id="what-is-a-ttnn-operation">
-<h3>What is a ttnn operation?<a class="headerlink" href="#what-is-a-ttnn-operation" title="Permalink to this heading"></a>
+<section id="what-is-a-tt-nn-operation">
+<h3>What is a TT-NN operation?<a class="headerlink" href="#what-is-a-tt-nn-operation" title="Permalink to this heading"></a>
 </h3>
-<p>A ttnn operation is a function that takes in one or more input tensors and produces one or more output tensors. It is implemented in C++ and can be called from Python.</p>
+<p>A TT-NN operation is a function that takes in one or more input tensors and produces one or more output tensors. It is implemented in C++ and can be called from Python.</p>
 </section>
-<section id="what-steps-are-needed-to-add-ttnn-operation-in-c">
-<h3>What steps are needed to add ttnn operation in C++?<a class="headerlink" href="#what-steps-are-needed-to-add-ttnn-operation-in-c" title="Permalink to this heading"></a>
+<section id="what-steps-are-needed-to-add-tt-nn-operation-in-c">
+<h3>What steps are needed to add TT-NN operation in C++?<a class="headerlink" href="#what-steps-are-needed-to-add-tt-nn-operation-in-c" title="Permalink to this heading"></a>
 </h3>
 <ol class="arabic simple">
 <li><p>There are 2 options for writing a new operation. Optiona <code class="docutils literal notranslate"><span class="pre">a</span></code> is to write a device operation and option <code class="docutils literal notranslate"><span class="pre">b</span></code> is to write a composite operation
@@ -149,8 +149,8 @@ b. Implement a composite operation in C++. Composite operation simply defines <c
 <li><p>Register the struct using <cite>ttnn::register_operation</cite>.</p></li>
 </ol>
 </section>
-<section id="what-steps-are-needed-to-add-ttnn-operation-in-python">
-<h3>What steps are needed to add ttnn operation in Python?<a class="headerlink" href="#what-steps-are-needed-to-add-ttnn-operation-in-python" title="Permalink to this heading"></a>
+<section id="what-steps-are-needed-to-add-tt-nn-operation-in-python">
+<h3>What steps are needed to add TT-NN operation in Python?<a class="headerlink" href="#what-steps-are-needed-to-add-tt-nn-operation-in-python" title="Permalink to this heading"></a>
 </h3>
 <ol class="arabic simple">
 <li><p>Take an existing registered C++ operation and add a Python binding for it using <cite>ttnn::bind_registered_operation</cite>.
@@ -875,8 +875,8 @@ The operation will be auto-registered in python. If the operation is called <cit
     <span class="n">output_tensor</span><span class="p">:</span>  <span class="s2">"torch.Tensor"</span> <span class="o">=</span> <span class="o">...</span>
     <span class="k">return</span> <span class="n">output_tensor</span>
 
-<span class="c1"># ttnn Tensors are converted to torch tensors before calling the golden function automatically</span>
-<span class="c1"># And the outputs are converted back to ttnn Tensors</span>
+<span class="c1"># TT-NN Tensors are converted to torch tensors before calling the golden function automatically</span>
+<span class="c1"># And the outputs are converted back to TT-NN Tensors</span>
 <span class="c1"># But in some cases you may need to preprocess the inputs and postprocess the outputs manually</span>
 
 <span class="c1"># In order to preprocess the inputs manually, use the following signature</span>
@@ -916,8 +916,8 @@ The operation will be auto-registered in python. If the operation is called <cit
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="converting_torch_model_to_ttnn.html" class="btn btn-neutral float-left" title="Converting torch Model to ttnn" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="profiling_ttnn_operations.html" class="btn btn-neutral float-right" title="Profiling ttnn Operations" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="converting_torch_model_to_ttnn.html" class="btn btn-neutral float-left" title="Converting PyTorch Model to TT-NN" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="profiling_ttnn_operations.html" class="btn btn-neutral float-right" title="Profiling TT-NN Operations" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
