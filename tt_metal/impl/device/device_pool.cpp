@@ -505,7 +505,7 @@ void DevicePool::wait_for_fabric_router_sync() const {
             }
         }
     } else if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
-        auto fabric_router_sync_sem_addr =
+        auto fabric_router_misc_base =
             hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
         std::vector<std::uint32_t> master_router_status{0};
@@ -520,19 +520,24 @@ void DevicePool::wait_for_fabric_router_sync() const {
                 tt::Cluster::instance().get_virtual_eth_core_from_channel(dev->id(), fabric_master_router_chan);
             auto fabric_master_router_core = dev->logical_core_from_ethernet_core(virtual_eth_core);
 
-            auto [mesh_id, chip_id] =
-                tt::Cluster::instance().get_control_plane()->get_mesh_chip_id_from_physical_chip_id(dev->id());
-            auto num_routers =
-                tt::Cluster::instance().get_control_plane()->get_num_active_fabric_routers(mesh_id, chip_id);
-            while (master_router_status[0] != num_routers) {
+            while (master_router_status[0] != static_cast<uint32_t>(tt_fabric::fabric_router_status::Ready)) {
                 tt_metal::detail::ReadFromDeviceL1(
                     dev,
                     fabric_master_router_core,
-                    fabric_router_sync_sem_addr,
+                    fabric_router_misc_base + tt_fabric::FABRIC_ROUTER_STATUS_PTR_OFFSET,
                     4,
                     master_router_status,
                     CoreType::ETH);
             }
+
+            std::vector<uint32_t> signal(
+                1, static_cast<uint32_t>(tt_fabric::fabric_router_host_signal::Process_Traffic));
+            tt_metal::detail::WriteToDeviceL1(
+                dev,
+                fabric_master_router_core,
+                fabric_router_misc_base + tt_fabric::FABRIC_ROUTER_HOST_SIGNAL_PTR_OFFSET,
+                signal,
+                CoreType::ETH);
         }
     }
 }
@@ -744,8 +749,9 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
                 dev, fabric_master_router_core, fabric_router_sync_sem_addr, signal, CoreType::ETH);
         }
     } else if (fabric_config == FabricConfig::FABRIC_2D || fabric_config == FabricConfig::FABRIC_2D_PUSH) {
-        std::vector<uint32_t> master_router_terminate(1, 0);
-        auto fabric_router_sync_sem_addr =
+        std::vector<uint32_t> master_router_terminate(
+            1, static_cast<uint32_t>(tt_fabric::fabric_router_host_signal::Terminate));
+        auto fabric_router_misc_base =
             hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
         for (const auto& dev : this->get_all_active_devices()) {
             auto fabric_ethernet_channels = tt::Cluster::instance().get_fabric_ethernet_channels(dev->id());
@@ -758,7 +764,26 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
                 tt::Cluster::instance().get_virtual_eth_core_from_channel(dev->id(), fabric_master_router_chan);
             auto fabric_master_router_core = dev->logical_core_from_ethernet_core(virtual_eth_core);
             tt_metal::detail::WriteToDeviceL1(
-                dev, fabric_master_router_core, fabric_router_sync_sem_addr, master_router_terminate, CoreType::ETH);
+                dev,
+                fabric_master_router_core,
+                fabric_router_misc_base + tt_fabric::FABRIC_ROUTER_HOST_SIGNAL_PTR_OFFSET,
+                master_router_terminate,
+                CoreType::ETH);
+
+            std::vector<std::uint32_t> master_router_status{0};
+            while (true) {
+                tt_metal::detail::ReadFromDeviceL1(
+                    dev,
+                    fabric_master_router_core,
+                    fabric_router_misc_base + tt_fabric::FABRIC_ROUTER_STATUS_PTR_OFFSET,
+                    4,
+                    master_router_status,
+                    CoreType::ETH);
+                if (master_router_status[0] == static_cast<uint32_t>(tt_fabric::fabric_router_status::Terminating) ||
+                    master_router_status[0] == static_cast<uint32_t>(tt_fabric::fabric_router_status::Terminated)) {
+                    break;
+                }
+            }
         }
     }
 

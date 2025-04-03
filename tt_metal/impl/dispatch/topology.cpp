@@ -986,11 +986,27 @@ void configure_2d_fabric_cores(IDevice* device) {
         CoreCoord virtual_eth_core =
             tt::Cluster::instance().get_virtual_eth_core_from_channel(device->id(), router_chan);
         auto router_logical_core = device->logical_core_from_ethernet_core(virtual_eth_core);
-        // initialize the semaphore
-        auto fabric_router_sync_sem_addr =
+        // initialize the semaphore, router status ptr and host signal ptr
+        auto fabric_router_misc_base =
             hal_ref.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
         detail::WriteToDeviceL1(
-            device, router_logical_core, fabric_router_sync_sem_addr, router_zero_buf, CoreType::ETH);
+            device,
+            router_logical_core,
+            fabric_router_misc_base + tt_fabric::FABRIC_ROUTER_SYNC_SEM_OFFSET,
+            router_zero_buf,
+            CoreType::ETH);
+        detail::WriteToDeviceL1(
+            device,
+            router_logical_core,
+            fabric_router_misc_base + tt_fabric::FABRIC_ROUTER_STATUS_PTR_OFFSET,
+            router_zero_buf,
+            CoreType::ETH);
+        detail::WriteToDeviceL1(
+            device,
+            router_logical_core,
+            fabric_router_misc_base + tt_fabric::FABRIC_ROUTER_HOST_SIGNAL_PTR_OFFSET,
+            router_zero_buf,
+            CoreType::ETH);
     }
 }
 
