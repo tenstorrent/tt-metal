@@ -67,10 +67,13 @@ def is_job_hanging_from_job_log(error_snippet, workflow_outputs_dir, workflow_ru
     When we encounter the timeout error message, compare the timestamp of the generated message
     against the last output line, as well as the last line against the 2nd last.
 
+    We calculate two time deltas because some hangs can generate a line of output the moment the process is terminated/timed out.
+    Therefore we need to also check the second-last line's timestamp to confirm a hang has occurred.
+
     If the time delta between the lines is greater than 5 minutes** (max_time_delta_seconds)
     then consider the job as a hang. Otherwise it's most likely a regular timeout.
 
-    ** Threshold may want to be reduced in the future
+    ** Threshold may be reduced in the future
     """
     log_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
     log_file = log_dir.joinpath(str(workflow_job_id) + ".log")
