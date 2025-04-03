@@ -294,7 +294,7 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
     mesh_workload.set_last_used_command_queue_for_testing(this);
 
     if (blocking) {
-        this->finish();
+        this->finish({sub_device_id});
     }
 }
 
