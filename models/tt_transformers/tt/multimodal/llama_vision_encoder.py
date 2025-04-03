@@ -228,7 +228,7 @@ class TtLlamaVisionEncoder(LightweightModule):
         attn_mask = encoder_utils.build_encoder_attention_mask(fake_x, ar, ntok, num_chunks, 1)
         # Mask stripes for the extra padding required on TT hardware
         attn_mask = mask_tile_padding(attn_mask, ntok, npad, num_chunks)
-        attn_mask = ttnn.as_tensor(
+        attn_mask = ttnn.from_torch(
             attn_mask,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
