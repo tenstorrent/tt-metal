@@ -10,6 +10,8 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/base_types.hpp>
 
+#include "ttnn/device.hpp"  // NEEDED ONLY IN DEBUG MODE FOR TT_ASSERT ?
+
 #define DATUMS_PER_ROW 16
 
 // This parameter is the same for all supported architectures
