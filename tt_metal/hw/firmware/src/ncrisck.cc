@@ -56,6 +56,7 @@ void kernel_launch(uint32_t kernel_base_addr) {
     WAYPOINT("K");
     kernel_main();
     WAYPOINT("KD");
+#ifndef DISPATCH_KERNEL
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
         WAYPOINT("NKFW");
         // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed and the NOC
@@ -67,5 +68,6 @@ void kernel_launch(uint32_t kernel_base_addr) {
         ASSERT(ncrisc_noc_posted_writes_sent(NOC_INDEX));
         WAYPOINT("NKFD");
     }
+#endif
 #endif
 }
