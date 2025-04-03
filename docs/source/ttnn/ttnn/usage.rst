@@ -1,7 +1,7 @@
 .. _Using ttnn:
 
 Using TT-NN
-##########
+###########
 
 .. note::
    These basic snippets currently work on Grayskull only. We are working on
@@ -71,7 +71,7 @@ Basic Examples
 
 
 7. Using tt_lib operation in TT-NN
----------------------------------
+----------------------------------
 
 `tt_lib` operations are missing some of the features of TT-NN operations such as graph tracing and in order to support these features, TT-NN provides a different to call `tt_lib` operations that enabled the missing features.
 
