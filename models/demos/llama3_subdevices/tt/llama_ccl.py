@@ -595,8 +595,19 @@ def tt_sharded_distributed_rmsnorm(
     # inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
 
     # Run distributed rmsnorm part 1
-    cluster_axis = 1
-    semaphore = tt_ccl.gather_semaphore_handles[cluster_axis][tt_ccl.gather_idx[cluster_axis]]
+    tt_stats = ttnn.rms_norm_pre_all_gather(inp, residual_input_tensor=res, program_config=ln_sharded_progcfg)
+    # print("tt_stats")
+    # All gather stats
+    # tt_stats = ttnn.all_gather(
+    #     tt_stats,
+    #     3,
+    #     num_links=1,
+    #     cluster_axis=1,
+    #     mesh_device=mesh_device,
+    #     memory_config=ln_sharded_stats_memcfg,
+    #     topology=ttnn.Topology.Linear,
+    # )
+    # tt_stats_dram = ttnn.to_memory_config(tt_stats, ttnn.DRAM_MEMORY_CONFIG)
     grid_offset = ttnn.CoreCoord(1, 0)
     tt_stats_sharded_config = ttnn.create_sharded_memory_config(
         shape=(32, 128),
@@ -604,26 +615,28 @@ def tt_sharded_distributed_rmsnorm(
         strategy=ttnn.ShardStrategy.WIDTH,
         use_height_and_width_as_shard_shape=True,
     )
-    tt_stats = ttnn.fused_rms_1_1_32_8192(
-        inp,
-        ln_sharded_progcfg,
-        cluster_axis,
-        tt_ccl.mesh_device,
-        semaphore,
-        residual_input_tensor=res,
-        num_links=1,
-        memory_config=tt_stats_sharded_config,
-        is_pre=True,
+
+    # print("mem cfg")
+
+    # Note: Persistent output buffer used, do not deallocate output!
+    tt_global_stats_sharded = tt_ccl.line_all_gather(
+        tt_stats, dim=3, cluster_axis=1, num_links=1, memory_config=tt_stats_sharded_config, buffer_key="LAYERNORM"
     )
-    tt_out = ttnn.fused_rms_1_1_32_8192(
+    # ttnn.synchronize_device(tt_ccl.mesh_device, sub_device_ids=[tt_ccl.worker_sub_device_id])
+    # ttnn.deallocate(tt_stats_dram)
+    # print("all gather stats", tt_global_stats.shape)
+
+    # tt_global_stats_sharded = ttnn.to_memory_config(tt_global_stats, memory_config=tt_stats_sharded_config)
+    ttnn.deallocate(tt_stats)
+    # print("sharded stats")
+
+    # Run distributed rmsnorm part 2
+    tt_out = ttnn.rms_norm_post_all_gather(
         inp,
-        ln_sharded_progcfg,
-        cluster_axis,
-        tt_ccl.mesh_device,
-        semaphore,
         epsilon=epsilon,
         weight=gamma,
-        stats=tt_stats,
-        is_pre=False,
+        program_config=ln_sharded_progcfg,
+        stats=tt_global_stats_sharded,
     )
+    # print("rmsnorm post all gather", tt_out.shape)
     return tt_out, inp
