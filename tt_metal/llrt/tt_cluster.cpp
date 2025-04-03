@@ -106,6 +106,8 @@ Cluster::Cluster() {
 
     this->initialize_device_drivers();
 
+    this->disable_ethernet_cores_with_retrain();
+
     this->reserve_ethernet_cores_for_tunneling();
 
     this->initialize_ethernet_sockets();
@@ -874,6 +876,38 @@ void Cluster::initialize_ethernet_sockets() {
     }
 }
 
+void Cluster::disable_ethernet_cores_with_retrain() {
+    std::vector<uint32_t> read_vec;
+    const auto& chips = this->cluster_desc_->get_all_chips();
+    for (const auto& chip_id : chips) {
+        if (this->frequent_retrain_cores_.find(chip_id) == this->frequent_retrain_cores_.end()) {
+            this->frequent_retrain_cores_.insert({chip_id, {}});
+        }
+        const auto& connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
+        for (const auto& [other_chip_id, eth_cores] : connected_chips) {
+            for (const auto& eth_core : eth_cores) {
+                if (llrt::RunTimeOptions::get_instance().get_skip_eth_cores_with_retrain() and
+                    this->cluster_desc_->get_board_type(chip_id) == BoardType::UBB) {
+                    tt_cxy_pair virtual_eth_core(
+                        chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
+                    auto retrain_count_addr = tt::tt_metal::hal_ref.get_dev_addr(
+                        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH,
+                        tt::tt_metal::HalL1MemAddrType::RETRAIN_COUNT);
+                    this->read_core(read_vec, sizeof(uint32_t), virtual_eth_core, retrain_count_addr);
+                    if (read_vec[0] != 0) {
+                        log_warning(
+                            LogDevice,
+                            "Disabling active eth core {} due to retraining (count={})",
+                            virtual_eth_core.str(),
+                            read_vec[0]);
+                        this->frequent_retrain_cores_[chip_id].insert(eth_core);
+                    }
+                }
+            }
+        }
+    }
+}
+
 void Cluster::reserve_ethernet_cores_for_tunneling() {
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
@@ -973,6 +1007,11 @@ std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
                     skip_reserved_tunnel_cores) {
                     continue;
                 }
+                if (this->frequent_retrain_cores_.at(chip_id).find(eth_core) !=
+                    this->frequent_retrain_cores_.at(chip_id).end()) {
+                    continue;
+                }
+
                 active_ethernet_cores.insert(eth_core);
             }
         }
