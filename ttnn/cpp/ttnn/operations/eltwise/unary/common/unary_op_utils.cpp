@@ -171,17 +171,13 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("exp_tile<{1}u>({0});", idst, (uint32_t)param0)};
             break;
         case UnaryOpType::SIGMOID: {
-            TT_FATAL(param0 == 2 || param0 == 4, "Sigmoid accepts only vector mode C and RC");
-            auto param1 = (uint32_t)params[1];
-            if (param1) {
-                op_init_and_name = {
-                    fmt::format("sigmoid_approx_tile_init<{}u>();", param1),
-                    fmt::format("sigmoid_approx_tile<{1}, {2}u>({0});", idst, (int32_t)param0, param1)};
-            } else {
-                op_init_and_name = {
-                    fmt::format("sigmoid_tile_init<{}u>();", param1),
-                    fmt::format("sigmoid_tile<{1}u>({0});", idst, param1)};
-            }
+            uint32_t param1 = (uint32_t)params[1];
+            TT_FATAL(
+                (int32_t)param0 == (int32_t)VecMode::C || (int32_t)param0 == (int32_t)VecMode::RC,
+                "Sigmoid accepts only vector mode C and RC");
+            op_init_and_name = {
+                fmt::format("sigmoid_tile_init<{}u>();", param1),
+                fmt::format("sigmoid_tile<{1}, {2}u>({0});", idst, (int32_t)param0, param1)};
             break;
         }
         case UnaryOpType::ERF:

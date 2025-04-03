@@ -48,7 +48,7 @@ struct ExecuteUnaryWithVectorAndFastAndApproximateMode {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
-        const int mode = 4,
+        const int vector_mode = (int32_t)VecMode::RC,
         const bool parameter = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);

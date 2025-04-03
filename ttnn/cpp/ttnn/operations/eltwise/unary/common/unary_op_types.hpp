@@ -94,7 +94,15 @@ enum class UnaryOpType {
     ZERO_POINT,
     MISH,
     MAXIMUM,
-    SIGMOID_MODE,
+};
+
+enum class VecMode {
+    None = 0,
+    R = 1,
+    C = 2,
+    RC = 4,
+    RC_custom = 6,
+    Invalid = 0xFF,
 };
 
 struct UnaryWithParam {
