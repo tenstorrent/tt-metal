@@ -58,7 +58,6 @@ jobs:
         ]
     name: ${{ matrix.test-group.name }}-${{ matrix.test-group.runner-label }}-${{ matrix.test-group.performance && 'perf' || 'func' }}
     env:
-      #ARCH_NAME: ${{ inputs.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: 
