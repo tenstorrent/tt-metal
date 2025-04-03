@@ -345,7 +345,7 @@ static Tensor prod_result_computation_WH_B0(
     const MemoryConfig& output_mem_config = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) {
     const auto& s_a = input_tensor.get_padded_shape();
-    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(s_a.volume());  // ouput
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(1);  // output
     auto input_buffer = detail::to_host_buffer<T>(input_tensor);
     const ttnn::Shape input_tensor_strides = input_tensor.strides();
     auto result = static_cast<T>(1.0f);
@@ -361,20 +361,16 @@ static Tensor prod_result_computation_WH_B0(
                                             l == s_a[3] - 1)) {  // to access 4*16 elements placed alternatively
                                                                  // starting from index 17W in TILE layout
                         result = result * static_cast<T>(input_buffer[input_index]);
-                        owned_buffer[input_index] = static_cast<T>(0.0f);
-                    } else {
-                        owned_buffer[input_index] = static_cast<T>(0.0f);
                     }
                 }
             }
         }
     }
-    owned_buffer[0] = result;  // store the result at the first position of the tensor,and the rest of the values as
-                               // 0.0f
+    owned_buffer[0] = result;  // output will only have one element - the product of the entire tensor
     auto output = Tensor(
                       OwnedStorage{owned_buffer},
                       TensorSpec(
-                          input_tensor.get_logical_shape(),
+                          ttnn::Shape({1, 1, 1, 1}),
                           TensorLayout::fromPaddedShape(
                               data_type,
                               PageConfig(Layout::ROW_MAJOR),
