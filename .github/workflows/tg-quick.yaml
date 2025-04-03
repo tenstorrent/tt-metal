@@ -12,13 +12,17 @@ on:
       build-artifact-name:
         required: true
         type: string
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
 
 jobs:
   tg-quick:
     runs-on:
-      - in-service
       - config-tg
       - arch-wormhole_b0
+      - ${{ inputs.extra-tag }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
