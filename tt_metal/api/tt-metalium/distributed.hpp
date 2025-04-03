@@ -98,12 +98,12 @@ void EnqueueReadMeshBuffer(
 MeshEvent EnqueueRecordEvent(
     MeshCommandQueue& mesh_cq,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-    const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
+    const std::optional<MeshCoordinateRangeSet>& device_range_set = std::nullopt);
 
 MeshEvent EnqueueRecordEventToHost(
     MeshCommandQueue& mesh_cq,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-    const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
+    const std::optional<MeshCoordinateRangeSet>& device_range_set = std::nullopt);
 
 void EnqueueWaitForEvent(MeshCommandQueue& mesh_cq, const MeshEvent& event);
 

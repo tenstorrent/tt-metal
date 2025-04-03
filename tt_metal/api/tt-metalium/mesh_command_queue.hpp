@@ -86,13 +86,16 @@ private:
         tt::stl::Span<const SubDeviceId> sub_device_ids = {});
     void submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking);
     void increment_num_entries_in_completion_queue();
+
     // Helper functions for read and write entire Sharded-MeshBuffers
     void write_sharded_buffer(const MeshBuffer& buffer, const void* src);
     void read_sharded_buffer(MeshBuffer& buffer, void* dst);
+
     MeshEvent enqueue_record_event_helper(
         tt::stl::Span<const SubDeviceId> sub_device_ids,
         bool notify_host,
-        const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
+        const std::optional<MeshCoordinateRangeSet>& device_range_set = std::nullopt);
+
     // Trace capture utility functions
     // Captures dispatch commands associated with running a program on a Virtual Mesh subgrid
     // inside the appropriate trace staging vector (corresponding to the specified subgrid)
@@ -101,24 +104,27 @@ private:
         ProgramCommandSequence& program_cmd_seq,
         bool stall_first,
         bool stall_before_program);
+
     // For a given MeshWorkload, a subgrid is unused if no programs are run on it. Go signals
     // must be sent to this subgrid, to ensure consistent global state across the Virtual Mesh.
     // When running trace, the dispatch commands responsible for forwarding go signals must be
     // captured on these subgrids.
     void capture_go_signal_trace_on_unused_subgrids(
-        const MeshCoordinateRange& active_sub_grids,
+        const MeshCoordinateRange& active_sub_grid,
         const SubDeviceId& sub_device_id,
         uint32_t expected_num_workers_completed,
         bool mcast_go_signals,
         bool unicast_go_signals);
+
     // Workload dispatch utility functions
     // Write dispatch commands associated with running a program on a Virtual Mesh subgrid
     void write_program_cmds_to_subgrid(
-        const MeshCoordinateRange& sub_grid,
+        const MeshCoordinateRangeSet& sub_grid,
         ProgramCommandSequence& program_cmd_seq,
         bool stall_first,
         bool stall_before_program,
         std::unordered_set<uint32_t>& chip_ids_in_workload);
+
     // For a given MeshWorkload, a subgrid is unused if no programs are run on it.  Go signals
     // must be sent to this subgrid, to ensure consistent global state across the Virtual Mesh.
     // This function generates and writes dispatch commands forwarding go signals to these subgrids.
@@ -128,8 +134,10 @@ private:
         uint32_t expected_num_workers_completed,
         bool mcast_go_signals,
         bool unicast_go_signals);
+
     // Clear the num_workers_completed counter on the dispatcher cores corresponding to this CQ.
     void clear_expected_num_workers_completed();
+
     // Access a reference system memory manager, which acts as a global host side state manager for
     // specific MeshCommandQueue attributes.
     // TODO: All Mesh level host state managed by this class should be moved out, since its not
@@ -221,7 +229,7 @@ public:
     void enqueue_write_shard_to_sub_grid(
         const MeshBuffer& buffer,
         const void* host_data,
-        const MeshCoordinateRange& device_range,
+        const MeshCoordinateRangeSet& device_range_set,
         bool blocking,
         std::optional<BufferRegion> region = std::nullopt);
     void enqueue_write_mesh_buffer(const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking);
@@ -239,11 +247,12 @@ public:
 
     MeshEvent enqueue_record_event(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-        const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
+        const std::optional<MeshCoordinateRangeSet>& device_range_set = std::nullopt);
     MeshEvent enqueue_record_event_to_host(
         tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-        const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
+        const std::optional<MeshCoordinateRangeSet>& device_range_set = std::nullopt);
     void enqueue_wait_for_event(const MeshEvent& sync_event);
+
     void drain_events_from_completion_queue();
     void verify_reported_events_after_draining(const MeshEvent& event);
     void finish(tt::stl::Span<const SubDeviceId> sub_device_ids = {});

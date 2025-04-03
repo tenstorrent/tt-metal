@@ -29,23 +29,25 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
 MeshEvent EnqueueRecordEvent(
     MeshCommandQueue& mesh_cq,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    const std::optional<MeshCoordinateRange>& device_range) {
-    return mesh_cq.enqueue_record_event(sub_device_ids, device_range);
+    const std::optional<MeshCoordinateRangeSet>& device_range_set) {
+    return mesh_cq.enqueue_record_event(sub_device_ids, device_range_set);
 }
 
 MeshEvent EnqueueRecordEventToHost(
     MeshCommandQueue& mesh_cq,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    const std::optional<MeshCoordinateRange>& device_range) {
-    return mesh_cq.enqueue_record_event_to_host(sub_device_ids, device_range);
+    const std::optional<MeshCoordinateRangeSet>& device_range_set) {
+    return mesh_cq.enqueue_record_event_to_host(sub_device_ids, device_range_set);
 }
 
 void EnqueueWaitForEvent(MeshCommandQueue& mesh_cq, const MeshEvent& event) { mesh_cq.enqueue_wait_for_event(event); }
 
 void EventSynchronize(const MeshEvent& event) {
-    for (const auto& coord : event.device_range()) {
-        auto physical_device = event.device()->get_device(coord);
-        while (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id());
+    for (const auto& range : event.device_range_set().ranges()) {
+        for (const auto& coord : range) {
+            auto physical_device = event.device()->get_device(coord);
+            while (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id());
+        }
     }
 }
 

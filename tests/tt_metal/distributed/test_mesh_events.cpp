@@ -234,8 +234,9 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
 
         std::vector<std::vector<uint32_t>> readback_vecs = {};
 
-        mesh_device_->mesh_command_queue(1).enqueue_write_shard_to_sub_grid(*buf, src_vec.data(), devices_0, false);
-        auto event0 = EnqueueRecordEvent(mesh_device_->mesh_command_queue(1), {}, devices_0);
+        mesh_device_->mesh_command_queue(1).enqueue_write_shard_to_sub_grid(
+            *buf, src_vec.data(), MeshCoordinateRangeSet{devices_0}, false);
+        auto event0 = EnqueueRecordEvent(mesh_device_->mesh_command_queue(1), {}, MeshCoordinateRangeSet{devices_0});
         EnqueueWaitForEvent(mesh_device_->mesh_command_queue(0), event0);
 
         for (const auto& coord : devices_0) {
@@ -244,8 +245,10 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
             ReadShard(mesh_device_->mesh_command_queue(0), readback_vecs.back(), buf, coord);
         }
 
-        mesh_device_->mesh_command_queue(1).enqueue_write_shard_to_sub_grid(*buf, src_vec.data(), devices_1, false);
-        auto event1 = EnqueueRecordEventToHost(mesh_device_->mesh_command_queue(1), {}, devices_1);
+        mesh_device_->mesh_command_queue(1).enqueue_write_shard_to_sub_grid(
+            *buf, src_vec.data(), MeshCoordinateRangeSet{devices_1}, false);
+        auto event1 =
+            EnqueueRecordEventToHost(mesh_device_->mesh_command_queue(1), {}, MeshCoordinateRangeSet{devices_1});
         EventSynchronize(event1);
 
         for (const auto& coord : devices_1) {
