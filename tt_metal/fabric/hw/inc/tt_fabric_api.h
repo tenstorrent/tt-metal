@@ -188,7 +188,11 @@ static inline
     low_latency_packet_header_t*
 #endif
     extract_packet_header(
-        T client_interface, uint32_t src_addr, uint16_t dst_mesh_id, uint16_t dst_dev_id, uint32_t header_id = 0) {
+        tt_l1_ptr T client_interface,
+        uint32_t src_addr,
+        uint16_t dst_mesh_id,
+        uint16_t dst_dev_id,
+        uint32_t header_id = 0) {
     static_assert(
         (data_mode == ClientDataMode::RAW_DATA && (std::is_same_v<T, volatile fabric_pull_client_interface_t*> ||
                                                    std::is_same_v<T, volatile fabric_push_client_interface_t*>)) ||
@@ -241,7 +245,7 @@ static inline void fabric_async_write_add_header_impl(
 
 template <typename T, ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA>
 inline void fabric_async_write_add_header(
-    T client_interface,
+    tt_l1_ptr T client_interface,
     uint32_t src_addr,  // source address in sender’s memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
@@ -475,7 +479,7 @@ template <
     AsyncWriteMode mode = AsyncWriteMode::ALL,
     RoutingType routing_type = RoutingType::ROUTER_XY>
 inline void fabric_async_write(
-    T client_interface,
+    tt_l1_ptr T client_interface,
     uint32_t routing,   // routing refers to router noc xy or routing plane
                         // and the routing plane to use when using ROUTING_TABLE
                         // or the network plane to use for this transaction for push mode
@@ -529,7 +533,7 @@ inline void fabric_async_write(
 
 template <typename T, ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA>
 inline void fabric_async_write_multicast_add_header(
-    T client_interface,
+    tt_l1_ptr T client_interface,
     uint32_t src_addr,  // source address in sender’s memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
@@ -594,7 +598,7 @@ template <
     AsyncWriteMode mode = AsyncWriteMode::ALL,
     RoutingType routing_type = RoutingType::ROUTER_XY>
 inline void fabric_async_write_multicast(
-    T client_interface,
+    tt_l1_ptr T client_interface,
     uint32_t routing,   // routing refers to the router noc xy to use when using ROUTER_XY,
                         // and the routing plane to use when using ROUTING_TABLE
     uint32_t src_addr,  // source address in sender’s memory
@@ -702,7 +706,7 @@ template <
     AsyncWriteMode mode = AsyncWriteMode::ALL,
     RoutingType routing_type = RoutingType::ROUTER_XY>
 inline void fabric_atomic_inc(
-    T client_interface,
+    tt_l1_ptr T client_interface,
     uint32_t routing,   // routing refers to the router noc xy to use when using ROUTER_XY,
                         // and the routing plane to use when using ROUTING_TABLE
     uint32_t src_addr,  // source address in sender’s memory
@@ -777,7 +781,7 @@ static inline void fabric_async_write_atomic_inc_add_header_impl(
 
 template <typename T, ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA>
 inline void fabric_async_write_atomic_inc_add_header(
-    T client_interface,
+    tt_l1_ptr T client_interface,
     uint32_t src_addr,  // source address in sender’s memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
@@ -809,7 +813,7 @@ template <
     AsyncWriteMode mode = AsyncWriteMode::ALL,
     RoutingType routing_type = RoutingType::ROUTER_XY>
 inline void fabric_async_write_atomic_inc(
-    T client_interface,
+    tt_l1_ptr T client_interface,
     uint32_t routing,   // routing refers to the router noc xy to use when using ROUTER_XY,
                         // and the routing plane to use when using ROUTING_TABLE
     uint32_t src_addr,  // source address in sender’s memory
@@ -872,7 +876,7 @@ inline void fabric_async_write_atomic_inc(
 }
 
 template <typename T = volatile fabric_pull_client_interface_t*, RoutingType routing_type = RoutingType::ROUTER_XY>
-inline void fabric_endpoint_init(T client_interface, uint32_t outbound_eth_chan) {
+inline void fabric_endpoint_init(tt_l1_ptr T client_interface, uint32_t outbound_eth_chan) {
     static_assert(
         std::is_same_v<T, volatile fabric_pull_client_interface_t*> ||
             std::is_same_v<T, volatile fabric_push_client_interface_t*>,
