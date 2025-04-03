@@ -23,6 +23,7 @@ from models.tt_transformers.tt.common import (
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.demos.utils.llm_demo_utils import create_benchmark_data
+import torch.nn.functional as F
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -582,6 +583,17 @@ def test_demo_text(
                     k_cache, v_cache = layer.attention.layer_past
                     k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
                     v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
+
+        max_padding = 0
+        for i, prefill_pt_u in enumerate(input_tokens_prefill_pt):
+            max_padding = max(max_padding, prefill_pt_u.shape[-1])
+
+        for i, prefill_pt_u in enumerate(input_tokens_prefill_pt):
+            pad = max_padding - prefill_pt_u.shape[-1]
+            if pad:
+                input_tokens_prefill_pt[i] = F.pad(
+                    input=input_tokens_prefill_pt[i], pad=(0, pad), mode="constant", value=0
+                )
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
 
