@@ -58,7 +58,6 @@ def ttnn_conv1d(
     use_shallow_conv_variant=False,
     fp32_accum=False,
     packer_l1_acc=False,
-    debug=False,
     groups=4,
     math_approx=True,
     activation="",

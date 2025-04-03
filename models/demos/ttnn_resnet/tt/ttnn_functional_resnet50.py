@@ -164,7 +164,6 @@ class resnet50Bottleneck:
         batch_size,
         input_height,
         input_width,
-        conv_op_cache,
         reshard_if_not_optimal=False,
         height_sharding=None,
         transpose_shards=True,
@@ -253,7 +252,6 @@ class resnet50Bottleneck:
         batch_size,
         input_height,
         input_width,
-        conv_op_cache,
         reshard_if_not_optimal=False,
         height_sharding=None,
         eltwise_binary_out_in_place=True,
@@ -358,7 +356,6 @@ class resnet50Bottleneck:
                 batch_size,
                 ds_input_height,
                 ds_input_width,
-                conv_op_cache,
                 reshard_if_not_optimal,
                 height_sharding,
                 transpose_shards=transpose_shards,
@@ -551,7 +548,6 @@ class resnet50Bottleneck:
                 batch_size,
                 ds_input_height,
                 ds_input_width,
-                conv_op_cache,
                 reshard_if_not_optimal,
                 height_sharding,
                 transpose_shards=transpose_shards,
@@ -606,7 +602,6 @@ class resnet50:
         self.conv_input_face_shape_hw = conv_input_face_shape_hw
         self.batch_size = batch_size
         self.model_config = model_config
-        self.conv_op_cache = {}
         self.inplanes = 64
         self.final_output_mem_config = final_output_mem_config
         compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -840,11 +835,10 @@ class resnet50:
             input_tensor,
             device,
             ops_parallel_config,
-            {} if not ops_parallel_config else self.conv_op_cache,
         )
 
     ## merged runs (first and optimized)
-    def run(self, input_tensor, device, ops_parallel_config, conv_op_cache={}) -> ttnn.Tensor:
+    def run(self, input_tensor, device, ops_parallel_config) -> ttnn.Tensor:
         is_first_run = False
         if not ops_parallel_config:
             is_first_run = True
@@ -983,7 +977,6 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
-            conv_op_cache,
             reshard_if_not_optimal=reshard,
             height_sharding=height_shard,
             transpose_shards=self.transpose_shards,
@@ -1009,7 +1002,6 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
-            conv_op_cache,
             transpose_shards=self.transpose_shards,
             enable_act_double_buffer=False,
             enable_split_reader=True,
@@ -1024,7 +1016,6 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
-            conv_op_cache,
             transpose_shards=self.transpose_shards,
             enable_act_double_buffer=False,
             enable_split_reader=True,
@@ -1067,7 +1058,6 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
-            conv_op_cache,
             reshard_if_not_optimal=reshard,
             height_sharding=height_shard,
             transpose_shards=self.transpose_shards,
@@ -1094,7 +1084,6 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
-            conv_op_cache,
             transpose_shards=self.transpose_shards,
             enable_act_double_buffer=True,
             enable_split_reader=True,
@@ -1109,7 +1098,6 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
-            conv_op_cache,
             transpose_shards=self.transpose_shards,
             enable_act_double_buffer=True,
             enable_split_reader=True,
@@ -1124,7 +1112,6 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
-            conv_op_cache,
             transpose_shards=self.transpose_shards,
             enable_act_double_buffer=True,
             enable_split_reader=True,
@@ -1163,7 +1150,6 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
-            conv_op_cache,
             reshard_if_not_optimal=reshard,
             height_sharding=height_shard,
             transpose_shards=self.transpose_shards,
@@ -1189,7 +1175,6 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
-            conv_op_cache,
             transpose_shards=self.transpose_shards,
             enable_act_double_buffer=True,
             enable_split_reader=False,
@@ -1203,7 +1188,6 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
-            conv_op_cache,
             transpose_shards=self.transpose_shards,
             enable_act_double_buffer=True,
             enable_split_reader=False,
@@ -1218,7 +1202,6 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
-            conv_op_cache,
             transpose_shards=self.transpose_shards,
             enable_act_double_buffer=True,
             enable_split_reader=False,
@@ -1233,7 +1216,6 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
-            conv_op_cache,
             transpose_shards=self.transpose_shards,
             enable_act_double_buffer=True,
             enable_split_reader=False,
@@ -1248,7 +1230,6 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
-            conv_op_cache,
             eltwise_binary_out_in_place=True,
             transpose_shards=self.transpose_shards,
             enable_act_double_buffer=True,
@@ -1297,7 +1278,6 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
-            conv_op_cache,
             reshard_if_not_optimal=reshard,
             height_sharding=height_shard,
             transpose_shards=self.transpose_shards,
@@ -1315,7 +1295,6 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
-            conv_op_cache,
             transpose_shards=self.transpose_shards,
             enable_act_double_buffer=True,
             enable_split_reader=False,
@@ -1330,7 +1309,6 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
-            conv_op_cache,
             transpose_shards=self.transpose_shards,
             enable_act_double_buffer=True,
             enable_split_reader=False,
