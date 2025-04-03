@@ -39,7 +39,7 @@ jobs:
         shell: bash
         run: |
           echo "CHIP_ARCH is set to $CHIP_ARCH"
-          cd tests && ./setup_sfpi.sh
+          cd tests && ./setup_testing_env.sh
           # Run the tests
           cd python_tests/
           pytest --timeout=60 --color=yes --force-sugar .
