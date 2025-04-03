@@ -135,15 +135,17 @@ uint32_t wrap_index(int index, int size) { return index < 0 ? size + index : ind
 ttnn::Shape compute_padded_shape(
     const ttnn::Shape& logical_shape, const uint32_t tile_height, const uint32_t tile_width) {
     if (logical_shape.rank() == 1) {
-        // ttnn::SmallVector<uint32_t> output_shape_vec = {tile_height, tile_width};
         return ttnn::Shape{tile_height, tile_width};
     }
 
     ttnn::SmallVector<uint32_t> output_shape_vec(logical_shape.rank());
 
     std::copy(logical_shape.cbegin(), logical_shape.cend(), output_shape_vec.begin());
-    std::for_each(output_shape_vec.rbegin(), output_shape_vec.rbegin() + 2, [](auto& x) {
-        x = tt::round_up(x, tt::constants::TILE_HEIGHT);
+
+    const std::array<uint32_t, 2> tile_shape = {tt::constants::TILE_WIDTH, tt::constants::TILE_HEIGHT};
+    auto shapeit = tile_shape.rbegin();
+    std::for_each(output_shape_vec.rbegin(), output_shape_vec.rbegin() + 2, [&shapeit](auto& x) {
+        x = tt::round_up(x, *(shapeit++));
     });
 
     return ttnn::Shape(output_shape_vec);

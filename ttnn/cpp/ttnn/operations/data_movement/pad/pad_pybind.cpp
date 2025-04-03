@@ -17,9 +17,11 @@ void bind_pad(py::module& module) {
             Equivalent pytorch code:
 
             .. code-block:: python
+                input_tensor = ttnn.ones([1,8,20,20])
+                input_tensor=ttnn.pad(pad_input, [(0,0),(0,0),(0,12),(0,12)], 0)
 
-                torch.pad(input_tensor, padding, value)
-                torch.pad(input_tensor, output_tensor_shape, input_tensor_start, value)
+                # row/col 20-32 == 0
+                assert input_tensor.shape == Shape([1,8,32,32])
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
