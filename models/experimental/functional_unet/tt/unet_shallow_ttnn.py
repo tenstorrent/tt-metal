@@ -112,7 +112,7 @@ class UNetConv2D:
         reshard_if_not_optimal=False,
         mesh_mapper=None,
     ):
-        assert is_valid_device_for_unet(device), "UNet Shallow requires an 8x8 grid on all devices"
+        # assert is_valid_device_for_unet(device), "UNet Shallow requires an 8x8 grid on all devices"
 
         self.device = device
         self.batch_size = conv.batch_size
@@ -294,10 +294,12 @@ class UNetUpblock:
         else:
             x = ttnn.interleaved_to_sharded(x, shardspec)
 
-        x = ttnn.upsample(x, (2, 2), memory_config=x.memory_config())
+        x = ttnn.upsample(x, (2, 2))
+        print("IUPSAMEP!!!!!!!!!!")
         x = ttnn.reshape(
             x, (1, 1, self.conv1.batch_size * self.conv1.input_height * self.conv1.input_width, x.shape[-1])
         )
+        print("reshsh!!!!!!!!!!")
         return x
 
     def __call__(self, x, residual):

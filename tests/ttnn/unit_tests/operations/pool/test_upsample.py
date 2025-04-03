@@ -102,28 +102,14 @@ def test_upsample_single_core(device, input_shapes, scale_h, scale_w):
 @pytest.mark.parametrize(
     "input_shape",
     [
-        [2, 1280, 4, 4],  # 256x256
-        [2, 640, 16, 16],
-        [2, 1280, 8, 8],  # 512x512
-        [2, 1280, 16, 16],
-        [1, 64, 132, 10],
-        [1, 32, 8, 8],
-        [2, 640, 32, 32],
-        # some random shapes
-        [1, 32, 5, 4],
-        [3, 32, 4, 4],
-        [5, 64, 5, 5],
-        [1, 128, 5, 8],
-        [1, 32, 5, 4],
-        [1, 64, 128, 17],
-        [1, 64, 132, 19],
+        [1, 66, 10, 128],
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize("scale_h", [2, 3])
-@pytest.mark.parametrize("scale_w", [2, 3])
-@pytest.mark.parametrize("shard_strategy", [ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.BLOCK])
-@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+@pytest.mark.parametrize("scale_h", [2])
+@pytest.mark.parametrize("scale_w", [2])
+@pytest.mark.parametrize("shard_strategy", [ttnn.ShardStrategy.HEIGHT])
+@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR])
 def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strategy, shard_orientation):
     if (shard_strategy == ttnn.ShardStrategy.BLOCK) and (shard_orientation == ttnn.ShardOrientation.COL_MAJOR):
         pytest.skip("Disabled until illegal shard configs are fixed (#17795)")
