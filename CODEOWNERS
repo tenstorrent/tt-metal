@@ -219,6 +219,7 @@ models/perf/ @yieldthought @uaydonat
 models/perf/perf_report.py @yieldthought @uaydonat
 models/perf/benchmarking_utils.py @skhorasganiTT @williamlyTT @uaydonat
 models/demos/utils/llm_demo_utils.py @skhorasganiTT @mtairum @uaydonat
+models/experimental/functional_mobilenetv2 @ssinghalTT @dvartaniansTT
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra
