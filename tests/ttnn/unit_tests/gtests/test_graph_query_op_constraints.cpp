@@ -375,6 +375,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
     {
         tt::tt_metal::IDevice* device = device_;
         const auto& output_spec = input_spec_a;
+        constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             ttnn::add,
@@ -382,7 +383,12 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
             input_spec_a,
             input_spec_b,
             output_spec.data_type(),
-            output_spec.tensor_layout().get_memory_config());
+            output_spec.tensor_layout().get_memory_config(),
+            std::nullopt,
+            none,
+            none,
+            none,
+            false);
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, expected_resource_usage.cb_peak_size_per_core);

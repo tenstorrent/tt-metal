@@ -114,106 +114,6 @@ inline auto preprocess_inputs(BinaryOpType binary_op_type, Tensor a, Tensor b) {
     return std::make_tuple(a, b);
 }
 
-inline auto is_block_format(DataType dtype) {
-    using enum DataType;
-    switch (dtype) {
-        case BFLOAT4_B:
-        case BFLOAT8_B: return true;
-        default: return false;
-    }
-}
-
-inline auto any_row_broadcasted(const Tensor& a, const auto& b) {
-    if constexpr (requires { b.get_logical_shape(); }) {
-        const auto& a_shape = a.get_logical_shape();
-        const auto& b_shape = b.get_logical_shape();
-
-        return (a_shape[-2] == 1 and b_shape[-2] > 1) or (b_shape[-2] == 1 and a_shape[-2] > 1);
-    }
-
-    return false;
-}
-
-inline auto any_sharded_block_format(const Tensor& a, const auto& b) {
-    if (a.is_sharded() and is_block_format(a.get_dtype())) {
-        return true;
-    }
-
-    if constexpr (requires { b.is_sharded(); }) {
-        if (b.is_sharded() and is_block_format(b.get_dtype())) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-inline auto any_subtile_broadcasted_block_format(const Tensor& a, const auto& b) {
-    if constexpr (requires { b.get_logical_shape(); }) {
-        const auto& a_shape = a.get_logical_shape();
-        const auto& b_shape = b.get_logical_shape();
-
-        if (is_block_format(a.get_dtype()) and
-            (a_shape[-2] == 1 and b_shape[-2] > 1 or a_shape[-1] == 1 and b_shape[-1] > 1)) {
-            return true;
-        }
-
-        if (is_block_format(b.get_dtype()) and
-            (b_shape[-2] == 1 and a_shape[-2] > 1 or b_shape[-1] == 1 and a_shape[-1] > 1)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-inline auto any_non_height_sharded(const Tensor& a, const auto& b, const MemoryConfig& c) {
-    if (a.is_sharded()) {
-        return a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED;
-    }
-
-    if constexpr (requires { b.is_sharded(); }) {
-        if (b.is_sharded()) {
-            return b.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED;
-        }
-    }
-
-    if (c.is_sharded()) {
-        return c.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED;
-    }
-
-    return false;
-}
-
-inline auto is_uneven(const Tensor& t) {
-    if (not t.is_sharded()) {
-        return false;
-    }
-
-    const auto& shape = t.get_padded_shape();
-    const auto& shard = t.shard_spec()->shape;
-
-    return (shape[-4] * shape[-3] * shape[-2] % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
-}
-
-inline auto any_uneven(const Tensor& a, const auto& b, const std::optional<Tensor>& c) {
-    if (is_uneven(a)) {
-        return true;
-    }
-
-    if constexpr (requires { is_uneven(b); }) {
-        if (is_uneven(b)) {
-            return true;
-        }
-    }
-
-    if (c.has_value() and is_uneven(*c)) {
-        return true;
-    }
-
-    return false;
-}
-
 inline auto invoke_binary_ng(
     QueueId queue_id,
     const Tensor& lhs,
@@ -228,25 +128,7 @@ inline auto invoke_binary_ng(
     const std::optional<bool>& use_legacy) {
     const auto& output_mem_cfg = memory_config ? *memory_config : output ? output->memory_config() : MemoryConfig{};
 
-    const auto legacy_only = [&] {
-        if (detail::any_row_broadcasted(lhs, rhs) or detail::any_sharded_block_format(lhs, rhs) or
-            detail::any_subtile_broadcasted_block_format(lhs, rhs) or
-            detail::any_non_height_sharded(lhs, rhs, output_mem_cfg) or detail::any_uneven(lhs, rhs, output)) {
-            TT_FATAL(
-                lhs_activations.size() <= 1,
-                "lhs_activations support maximum of 1 for legacy-only configuration; Override with use_legacy=False "
-                "but note there may be issues");
-            TT_FATAL(
-                rhs_activations.empty(),
-                "rhs_activations not supported for legacy-only configuration; Override with use_legacy=False but note "
-                "there may be issues");
-            return true;
-        }
-
-        return false;
-    };
-
-    if (use_legacy ? *use_legacy : legacy_only()) {
+    if (use_legacy.value_or(true)) {
         const std::vector activations(post_activations.begin(), post_activations.end());
         const std::optional lhs_activation =
             lhs_activations.empty() ? std::nullopt : std::optional{lhs_activations.front()};
@@ -450,7 +332,7 @@ Tensor RelationalBinary<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy) {
-    if (use_legacy and *use_legacy) {
+    if (use_legacy.value_or(true)) {
         return detail::binary_impl(DefaultQueueId, binary_op_type, lhs, rhs, dtype, memory_config, output);
     }
 

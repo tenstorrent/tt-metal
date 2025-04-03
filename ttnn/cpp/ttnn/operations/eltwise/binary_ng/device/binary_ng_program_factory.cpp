@@ -401,7 +401,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
-    const auto is_sfpu_op = operation_attributes.is_sfpu;
+    const bool is_sfpu_op = operation_attributes.is_sfpu;
     const bool is_quant_op = operation_attributes.is_quant_op;
     if (is_quant_op) {
         TT_FATAL(is_sfpu_op, "Quantization op is SFPU-only");

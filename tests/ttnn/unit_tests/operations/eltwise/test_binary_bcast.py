@@ -252,7 +252,7 @@ def test_binary_scalar_ops_invalid_bcast(a_shape, b_shape, ttnn_fn, device):
 
     with pytest.raises(RuntimeError) as e:
         cq_id = 0
-        _ = ttnn_op(a_tt, b_tt, queue_id=cq_id)
+        _ = ttnn_op(a_tt, b_tt, queue_id=cq_id, use_legacy=False)
         assert "Broadcasting rule violation" in str(e.value)
 
 

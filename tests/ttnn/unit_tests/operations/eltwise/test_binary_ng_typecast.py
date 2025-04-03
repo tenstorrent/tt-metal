@@ -642,7 +642,7 @@ def test_opt_output_scalar(input_shapes, ttnn_fn, scalar, device):
     )
 
     cq_id = 0
-    ttnn_op(input_tensor_a, scalar, queue_id=cq_id, output_tensor=out_tt)
+    ttnn_op(input_tensor_a, scalar, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
     output_tensor = ttnn.to_torch(out_tt)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)
@@ -737,7 +737,7 @@ def test_edgecase_dims_eltwise_scalar_logical(input_shape, scalar, ttnn_fn, memo
         memory_config=memory_config,
     )
 
-    output = ttnn_op(input_tensor_a, scalar, dtype=ttnn.uint32)
+    output = ttnn_op(input_tensor_a, scalar, dtype=ttnn.uint32, use_legacy=False)
     tt_output_tensor = ttnn.to_torch(output)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)

@@ -149,7 +149,9 @@ autograd::TensorPtr scaled_dot_product_attention(
     auto groups = value->get_value().get_logical_shape().to_array_4D()[1];
 
     const float scale = 1.0F / std::sqrt(static_cast<float>(embedding_dim));
-    auto q_scaled = ttnn::multiply(query->get_value(), scale);
+    constexpr auto none = tt::stl::Span<const ttnn::operations::unary::UnaryWithParam>{};
+    auto q_scaled =
+        ttnn::multiply(query->get_value(), scale, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
     auto key_tensor = key->get_value();
 
     // σQ @ K
@@ -158,8 +160,25 @@ autograd::TensorPtr scaled_dot_product_attention(
     if (mask.has_value()) {
         auto mask_tensor = mask.value()->get_value();
         // ttnn::where when mask is not of the same shape as qk_scaled
-        qk_scaled =
-            ttnn::add(ttnn::multiply(mask_tensor, qk_scaled), ttnn::multiply(ttnn::subtract(mask_tensor, 1.F), 1e9F));
+        qk_scaled = ttnn::add(
+            ttnn::multiply(mask_tensor, qk_scaled, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+            ttnn::multiply(
+                ttnn::subtract(mask_tensor, 1.F, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+                1e9F,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                none,
+                none,
+                none,
+                false),
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            none,
+            none,
+            none,
+            false);
     }
     // (B, H, S, S)
     auto attention_weights = ttnn_fixed::softmax(qk_scaled, /* axis */ 3);
@@ -172,6 +191,7 @@ autograd::TensorPtr scaled_dot_product_attention(
 
     ttml::autograd::GradFunction grad =
         [scale, query, key, value, attention_weights, out, mask, batch_num, heads, seq_len, embedding_dim, groups]() {
+            constexpr auto none = tt::stl::Span<const ttnn::operations::unary::UnaryWithParam>{};
             auto dL_dout = out->get_grad();  // (B, H, S, embedding_dim)
             // dL_d(softmax(σQK+mask)) = dL_dout @ value^T
             ttnn::Tensor dL_dattention_weights =
@@ -188,7 +208,8 @@ autograd::TensorPtr scaled_dot_product_attention(
                 /* compute_kernel_config */ core::ComputeKernelConfig::precise());
             dL_dattention_weights.deallocate();
 
-            dL_dscaled_dot = ttnn::multiply(dL_dscaled_dot, scale);  // [B,H,S,S]
+            dL_dscaled_dot = ttnn::multiply(
+                dL_dscaled_dot, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);  // [B,H,S,S]
 
             // dL_dQ = dL_dscaled_dot @ key
             ttnn::Tensor dL_dQ =
