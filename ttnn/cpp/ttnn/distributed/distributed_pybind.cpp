@@ -4,10 +4,7 @@
 
 #include "ttnn/distributed/distributed_pybind.hpp"
 
-#include <abstract.h>
 #include <boost/move/utility_core.hpp>
-#include <floatobject.h>
-#include <longobject.h>
 #include <pybind11/attr.h>
 #include <pybind11/cast.h>
 #include <pybind11/pytypes.h>

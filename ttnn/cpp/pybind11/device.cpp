@@ -6,11 +6,8 @@
 
 #include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 
-#include <abstract.h>
 #include <boost/container/vector.hpp>
-#include <floatobject.h>
 #include <fmt/base.h>
-#include <longobject.h>
 #include <pybind11/cast.h>
 #include <pybind11/operators.h>
 #include <pybind11/pybind11.h>
