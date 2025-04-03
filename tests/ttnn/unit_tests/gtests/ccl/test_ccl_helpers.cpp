@@ -2,12 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "umd/device/tt_xy_pair.h"
+#include <stdint.h>
+#include <algorithm>
+#include <cstddef>
+#include <vector>
+
 #include "gtest/gtest.h"
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "tests/tt_metal/test_utils/env_vars.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "tests/tt_metal/test_utils/env_vars.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "umd/device/tt_xy_pair.h"
+#include "umd/device/types/arch.h"
 
 TEST(CclHelpers, CreateEriscDatamoverBuilder_Chan4_PageSize2048_RRBufferSharingMode) {
     std::size_t num_channels = 4;

@@ -3,7 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <tt-metalium/allocator.hpp>
+#include <stddef.h>
+#include <optional>
+#include <utility>
+#include <vector>
+
+#include <tt-metalium/allocator_types.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 
 // UDL to convert integer literals to SI units

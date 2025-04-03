@@ -2,23 +2,37 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/constants.hpp>
-#include "gtest/gtest.h"
-#include <tt-metalium/event.hpp>
-#include <tt-metalium/program_impl.hpp>
-#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
+#include <fmt/base.h>
 #include <tt-metalium/logger.hpp>
+#include <cstdlib>
+#include <memory>
+#include <tuple>
+
+#include "gtest/gtest.h"
+#include <tt-metalium/host_api.hpp>
+#include "hostdevcommon/common_values.hpp"
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/test_utils/env_vars.hpp"
+#include "ttnn/decorators.hpp"
 #include "ttnn/device.hpp"
-#include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/graph/graph_query_op_runtime.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn_test_fixtures.hpp"
+#include "umd/device/types/arch.h"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::binary::test {
 

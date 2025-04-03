@@ -2,12 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <array>
-#include <stdexcept>
-#include <tt-metalium/logger.hpp>
-#include "gtest/gtest.h"
-#include "llrt/hal.hpp"
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/dispatch_settings.hpp>
+#include <tt-metalium/logger.hpp>
+#include <array>
+#include <functional>
+#include <memory>
+#include <stdexcept>
+
+#include "gtest/gtest.h"
+#include <tt-metalium/hal_types.hpp>
+#include "llrt/hal.hpp"
 #include "tt_cluster.hpp"
 #include "umd/device/tt_core_coordinates.h"
 

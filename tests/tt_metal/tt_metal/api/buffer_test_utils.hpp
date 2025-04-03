@@ -4,7 +4,12 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <vector>
+
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 namespace tt::test::buffer::detail {
 inline void writeL1Backdoor(

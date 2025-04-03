@@ -2,18 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "gtest/gtest.h"
-
-#include "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/tensor/types.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
-
-#include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
-
-#include <vector>
+#include <fmt/base.h>
+#include <cstddef>
 #include <cstdint>
+#include <vector>
+
+#include "gtest/gtest.h"
+#include <tt-metalium/logger.hpp>
+#include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "umd/device/tt_xy_pair.h"
 
 using ttnn::ccl::generate_slice_sequence_on_dim;
 using ttnn::ccl::cmd::CclCommandArg;

@@ -2,14 +2,38 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <assert.h>
+#include <chrono>
+#include <fmt/base.h>
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
+#include <stdint.h>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "rtoptions.hpp"
-#include <tt-metalium/device.hpp>
-#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "test_common.hpp"
+#include <exception>
+#include <fstream>
+#include <map>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "hw/inc/tt_fabric_status.h"
+#include <tt-metalium/kernel_types.hpp>
+#include "llrt.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "routing_test_common.hpp"
+#include "rtoptions.hpp"
+#include "test_common.hpp"
+#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/utils.hpp>
 
 int main(int argc, char **argv) {
     using std::vector;

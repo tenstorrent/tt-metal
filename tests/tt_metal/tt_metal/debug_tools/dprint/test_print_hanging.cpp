@@ -2,12 +2,30 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug_tools_fixture.hpp"
-#include <tt-metalium/bfloat16.hpp>
-#include "gtest/gtest.h"
-#include "debug_tools_test_utils.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <fmt/base.h>
 #include <tt-metalium/host_api.hpp>
+#include <functional>
+#include <map>
+#include <stdexcept>
+#include <string>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "debug_tools_fixture.hpp"
+#include "debug_tools_test_utils.hpp"
+#include "gtest/gtest.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/utils.hpp>
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking that we can handle an invalid WAIT command.

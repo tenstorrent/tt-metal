@@ -2,25 +2,50 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <emmintrin.h>
+#include <errno.h>
+#include <fmt/base.h>
+#include <immintrin.h>
+#include <smmintrin.h>
+#include <stdlib.h>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
-#include <functional>
-#include <random>
+#include <cstdint>
+#include <cstring>
+#include <exception>
+#include <map>
+#include <memory>
+#include <optional>
 #include <string>
+#include <thread>
+#include <tuple>
+#include <variant>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/command_queue_interface.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <thread>
-
-#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-
-#include "test_common.hpp"
-
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/command_queue_common.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "dispatch/memcpy.hpp"
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/dispatch_mem_map.hpp>
+#include "fmt/base.h"
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include "test_common.hpp"
+#include "tt_cluster.hpp"
+#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
+#include "umd/device/tt_xy_pair.h"
+
+enum class CoreType;
 
 using namespace tt;
 using namespace tt::tt_metal;

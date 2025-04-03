@@ -2,14 +2,37 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device_fixture.hpp"
-#include "gtest/gtest.h"
-#include "circular_buffer_test_utils.hpp"
+#include <chrono>
+#include <stdint.h>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/circular_buffer_constants.h>
+#include <algorithm>
+#include <map>
+#include <memory>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include "circular_buffer_test_utils.hpp"
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include "device_fixture.hpp"
+#include "gtest/gtest.h"
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include "span.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/util.hpp>
 
 using std::vector;
 using namespace tt::tt_metal;

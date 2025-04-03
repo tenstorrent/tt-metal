@@ -2,15 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <tt-metalium/device.hpp>
-#include "dprint_server.hpp"
-#include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <map>
+#include <string>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "tt_cluster.hpp"
+#include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
+#include <tt-metalium/utils.hpp>
 
 using namespace tt;
 

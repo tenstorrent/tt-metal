@@ -2,11 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <memory>
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <map>
+#include <tuple>
+#include <unordered_map>
+#include <utility>
+
 #include "fabric_fixture.hpp"
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/mesh_graph.hpp>
-#include <tt-metalium/routing_table_generator.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include "tt_cluster.hpp"
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {

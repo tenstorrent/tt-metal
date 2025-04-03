@@ -2,34 +2,50 @@
 
 // SPDX-License-Identifier: Apache-2.0
 
-#include "gtest/gtest.h"
-#include "ttnn/device.hpp"
-#include <vector>
-#include <utility>
-#include <iostream>
-#include <vector>
-#include <fstream>
-#include <string>
 #include <chrono>
-
+#include <fmt/base.h>
+#include <tracy/Tracy.hpp>
 #include <tt-metalium/logger.hpp>
-#include "ttnn_test_fixtures.hpp"
+#include <algorithm>
+#include <array>
+#include <cstdlib>
+#include <fstream>
+#include <functional>
+#include <optional>
+#include <sstream>
+#include <string>
+#include <tuple>
+#include <vector>
 
-#include "tools/profiler/op_profiler.hpp"
-#include "ttnn/cpp/ttnn/operations/creation.hpp"
-#include "ttnn/tensor/tensor_spec.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
-
-#include "shape2d.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/cpp/ttnn/operations/functions.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include "gtest/gtest.h"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape2d.hpp>
+#include "span.hpp"
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/tile.hpp>
+#include "tt_metal/llrt/tt_cluster.hpp"
+#include "ttnn/any_device.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/cpp/ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/common.hpp"
-
-#include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/cpp/ttnn/operations/functions.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/trace.hpp"
-
-#include "tt_metal/llrt/tt_cluster.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn_test_fixtures.hpp"
 
 std::string dtype_to_string(DataType dtype) {
     switch (dtype) {

@@ -2,15 +2,41 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stddef.h>
 #include <tt-metalium/bfloat16.hpp>
-#include "dispatch_fixture.hpp"
-#include <tt-metalium/tilize_utils.hpp>
-#include "tests/tt_metal/test_utils/print_helpers.hpp"
-#include "tests/tt_metal/test_utils/tilization.hpp"
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <random>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include "dispatch_fixture.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include "span.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/deprecated/tensor.hpp"
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

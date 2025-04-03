@@ -2,11 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stdint.h>
+#include <array>
+#include <memory>
+#include <optional>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/shape.hpp>
+#include "ttnn/decorators.hpp"
 #include "ttnn/device.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/functions.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
 namespace ttnn {

@@ -2,19 +2,51 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "gtest/gtest.h"
-
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <tt-metalium/bfloat16.hpp>
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
-#include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
-#include "ttnn/cpp/ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
-#include "ttnn/distributed/types.hpp"
-#include "ttnn/distributed/api.hpp"
-#include "ttnn/async_runtime.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include <algorithm>
+#include <memory>
+#include <optional>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/fabric_types.hpp>
+#include "fmt/base.h"
+#include "gtest/gtest.h"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
 #include "tt_cluster.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include "ttnn/async_runtime.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/cpp/ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
+#include "ttnn/distributed/api.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt;
 using namespace tt_metal;

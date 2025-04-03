@@ -2,13 +2,46 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <memory>
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stdint.h>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/fabric_host_interface.h>
+#include <algorithm>
+#include <map>
+#include <memory>
+#include <numeric>
+#include <set>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "fabric_fixture.hpp"
-#include "tt_metal/llrt/tt_cluster.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include "span.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "tt_metal/llrt/tt_cluster.hpp"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/utils.hpp>
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {

@@ -2,15 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <nlohmann/json.hpp>
+#include <map>
+#include <optional>
+#include <vector>
+
+#include <tt-metalium/graph_tracking.hpp>
 #include "gtest/gtest.h"
-#include "ttnn_test_fixtures.hpp"
-#include "ttnn/device.hpp"
+#include <tt-metalium/shape.hpp>
+#include "ttnn/decorators.hpp"
 #include "ttnn/graph/graph_processor.hpp"
-#include "ttnn/graph/graph_consts.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/moreh/moreh_dot/moreh_dot.hpp"
-#include <optional>
-#include <string>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn_test_fixtures.hpp"
 
 namespace ttnn::graph::arguments::test {
 namespace {

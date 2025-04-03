@@ -1,12 +1,29 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "debug_tools_fixture.hpp"
-#include "gtest/gtest.h"
-#include "dprint_server.hpp"
-#include "debug_tools_test_utils.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <stdint.h>
 #include <tt-metalium/host_api.hpp>
+#include <functional>
+#include <map>
+#include <string>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "debug_tools_fixture.hpp"
+#include "debug_tools_test_utils.hpp"
+#include "dprint_server.hpp"
+#include "gtest/gtest.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include "span.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking that the DPRINT server can be muted/unmuted.

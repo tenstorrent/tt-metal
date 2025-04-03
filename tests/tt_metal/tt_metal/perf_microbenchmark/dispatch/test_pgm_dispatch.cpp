@@ -2,21 +2,42 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <random>
-
-#include <map>
-#include <string>
-
-#include "umd/device/types/cluster_descriptor_types.h"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include "test_common.hpp"
+#include <benchmark/benchmark.h>
+#include <chrono>
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <cstdlib>
+#include <exception>
+#include <map>
+#include <optional>
+#include <random>
+#include <string>
+#include <tuple>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include "hostdevcommon/common_values.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "rtoptions.hpp"
-#include <benchmark/benchmark.h>
+#include <tt-metalium/semaphore.hpp>
+#include "span.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
+#include "test_common.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
+#include "umd/device/types/xy_pair.h"
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;

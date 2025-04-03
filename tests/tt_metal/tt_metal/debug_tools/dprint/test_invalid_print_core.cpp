@@ -1,10 +1,21 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "gtest/gtest.h"
+#include <map>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
 #include "debug_tools_fixture.hpp"
-#include <tt-metalium/host_api.hpp>
+#include "gtest/gtest.h"
 #include "rtoptions.hpp"
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/xy_pair.h"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking that the DPRINT server can detect an invalid core.

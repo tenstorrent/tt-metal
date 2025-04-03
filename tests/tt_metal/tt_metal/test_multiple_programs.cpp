@@ -2,16 +2,47 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <map>
-#include <random>
-#include <string>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <chrono>
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <tt-metalium/bfloat16.hpp>
-#include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <cstring>
+#include <exception>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <string>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include "span.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/test_utils/deprecated/tensor.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 using std::vector;
 using namespace tt;

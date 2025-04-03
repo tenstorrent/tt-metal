@@ -2,32 +2,41 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
-#include <functional>
-#include <limits>
-#include <random>
-#include <tuple>
+#include <map>
+#include <memory>
+#include <numeric>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#include "gtest/gtest.h"
-#include "umd/device/types/arch.h"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
 #include "command_queue_fixture.hpp"
-#include <tt-metalium/logger.hpp>
-#include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/circular_buffer.hpp>
-#include <tt-metalium/data_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
+#include <tt-metalium/device.hpp>
+#include "gtest/gtest.h"
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/program_impl.hpp>
+#include "span.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <tt-metalium/persistent_kernel_cache.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/arch.h"
 
 using tt::tt_metal::IDevice;
 

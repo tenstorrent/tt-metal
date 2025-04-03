@@ -2,21 +2,54 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/tt_memory.h>
-#include "llrt.hpp"
-#include "tt_metal/detail/kernel_cache.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/kernel.hpp>
+#include <chrono>
+#include <errno.h>
+#include <fmt/base.h>
+#include <magic_enum/magic_enum.hpp>
+#include <stdint.h>
+#include <sys/types.h>
 #include <tt-metalium/device_pool.hpp>
-#include "llrt/hal.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/tt_memory.h>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <compare>
+#include <cstring>
+#include <exception>
+#include <filesystem>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
 #include <thread>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/dev_msgs.h>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include "hostdevcommon/common_values.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "jit_build/build.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include "llrt.hpp"
+#include "llrt/hal.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
+#include "umd/device/types/arch.h"
+#include <tt-metalium/utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
