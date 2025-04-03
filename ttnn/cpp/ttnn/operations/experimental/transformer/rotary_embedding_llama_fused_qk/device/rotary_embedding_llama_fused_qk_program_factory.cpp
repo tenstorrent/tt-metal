@@ -13,7 +13,7 @@
 #include <variant>
 #include <vector>
 
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 #include "rotary_embedding_llama_fused_qk_program_factory.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/buffer.hpp>

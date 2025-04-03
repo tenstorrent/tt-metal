@@ -16,7 +16,7 @@
 
 #include "cpp/ttnn/operations/data_movement/sharded/sharded_common.hpp"
 #include "cpp/ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.hpp"
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>

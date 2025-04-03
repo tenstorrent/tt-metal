@@ -13,7 +13,7 @@
 #include <vector>
 
 #include "create_qkv_heads_from_separate_tensors_device_operation.hpp"
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_constants.hpp>
 #include <tt-metalium/circular_buffer_types.hpp>

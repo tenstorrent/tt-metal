@@ -20,7 +20,7 @@
 #include <vector>
 
 #include "cpp/ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer_constants.hpp>

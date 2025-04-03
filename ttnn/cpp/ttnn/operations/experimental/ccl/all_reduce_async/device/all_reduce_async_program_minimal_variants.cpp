@@ -19,7 +19,7 @@
 #include <vector>
 
 #include "all_reduce_async_op.hpp"
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/circular_buffer_types.hpp>
 #include <tt-metalium/data_types.hpp>

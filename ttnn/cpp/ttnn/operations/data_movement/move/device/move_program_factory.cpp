@@ -23,7 +23,7 @@
 
 #include "cpp/ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/move/device/move_device_operation.hpp"
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>

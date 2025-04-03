@@ -23,7 +23,7 @@
 #include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
 #include "cpp/ttnn/operations/ccl/common/uops/command_lowering.hpp"
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 #include <tt-metalium/circular_buffer_types.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>

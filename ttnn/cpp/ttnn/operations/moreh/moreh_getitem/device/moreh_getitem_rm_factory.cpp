@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "cpp/ttnn/operations/experimental/reshape/view.hpp"
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 #include "moreh_getitem_device_operation.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/buffer.hpp>

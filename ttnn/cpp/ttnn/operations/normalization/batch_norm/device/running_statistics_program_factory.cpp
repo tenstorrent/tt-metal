@@ -18,7 +18,7 @@
 #include <variant>
 #include <vector>
 
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 #include "running_statistics_device_operation.hpp"
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/bfloat16.hpp>

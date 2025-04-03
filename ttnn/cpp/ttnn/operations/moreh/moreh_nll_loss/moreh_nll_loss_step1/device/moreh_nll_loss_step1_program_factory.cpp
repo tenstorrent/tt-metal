@@ -14,7 +14,7 @@
 #include <variant>
 #include <vector>
 
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 #include "moreh_nll_loss_step1_device_operation.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/allocator.hpp>

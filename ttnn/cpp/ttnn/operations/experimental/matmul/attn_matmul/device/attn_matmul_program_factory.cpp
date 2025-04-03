@@ -16,7 +16,7 @@
 #include <vector>
 
 #include "attn_matmul_device_operation.hpp"
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>

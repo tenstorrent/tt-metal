@@ -16,7 +16,7 @@
 #include <variant>
 #include <vector>
 
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 #include "rotary_embedding_llama_program_factory.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>

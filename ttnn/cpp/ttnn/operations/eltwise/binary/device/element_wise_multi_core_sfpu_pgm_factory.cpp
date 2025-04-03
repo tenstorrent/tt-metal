@@ -18,7 +18,7 @@
 
 #include "binary_device_operation.hpp"
 #include "cpp/ttnn/operations/eltwise/binary/device/eltwise_multi_core_program_factory_common.hpp"
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/buffer.hpp>

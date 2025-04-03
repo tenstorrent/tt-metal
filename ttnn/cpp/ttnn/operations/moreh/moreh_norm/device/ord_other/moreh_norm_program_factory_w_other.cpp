@@ -13,7 +13,7 @@
 #include <vector>
 
 #include "cpp/ttnn/operations/moreh/moreh_norm/device/moreh_norm_device_operation.hpp"
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>

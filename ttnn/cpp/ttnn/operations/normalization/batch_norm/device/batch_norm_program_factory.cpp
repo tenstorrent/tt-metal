@@ -19,7 +19,7 @@
 #include <vector>
 
 #include "batch_norm_device_operation.hpp"
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>

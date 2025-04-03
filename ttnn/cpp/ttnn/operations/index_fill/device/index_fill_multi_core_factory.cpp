@@ -13,7 +13,7 @@
 #include <variant>
 #include <vector>
 
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 #include "index_fill_device_operation.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/assert.hpp>

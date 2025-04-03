@@ -17,7 +17,7 @@
 #include <variant>
 #include <vector>
 
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 // We pull RotaryEmbedding from it to get token_idx from an operation
 // this is a circulas dependency and should be fixed
 #include "rotary_embedding_device_operation.hpp"

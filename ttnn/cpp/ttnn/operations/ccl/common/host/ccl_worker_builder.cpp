@@ -25,7 +25,7 @@
 #include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>

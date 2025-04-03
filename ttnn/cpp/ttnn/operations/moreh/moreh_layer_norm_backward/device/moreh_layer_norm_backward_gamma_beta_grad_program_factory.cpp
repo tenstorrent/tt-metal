@@ -12,7 +12,7 @@
 #include <variant>
 #include <vector>
 
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 #include "moreh_layer_norm_backward_gamma_beta_grad_device_operation.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/assert.hpp>

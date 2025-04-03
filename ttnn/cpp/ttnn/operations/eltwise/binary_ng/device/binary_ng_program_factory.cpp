@@ -18,7 +18,7 @@
 #include <vector>
 
 #include "binary_ng_utils.hpp"
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/base_types.hpp>

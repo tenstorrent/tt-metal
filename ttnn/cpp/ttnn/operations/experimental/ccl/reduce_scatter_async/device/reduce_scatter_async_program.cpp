@@ -34,7 +34,7 @@
 #include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "cpp/ttnn/operations/ccl/common/uops/command_lowering.hpp"
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/buffer.hpp>

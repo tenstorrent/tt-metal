@@ -15,7 +15,7 @@
 #include <variant>
 #include <vector>
 
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 #include "pool_op.hpp"
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/base_types.hpp>

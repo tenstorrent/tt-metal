@@ -6,7 +6,6 @@
 
 #include <boost/move/utility_core.hpp>
 #include <fmt/base.h>
-#include <nlohmann/detail/iterators/iter_impl.hpp>
 #include <nlohmann/json.hpp>
 #include <tt-metalium/assert.hpp>
 #include <algorithm>

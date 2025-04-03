@@ -18,7 +18,7 @@
 
 #include "dropout_device_operation_types.hpp"
 #include "dropout_program_factory.hpp"
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/base_types.hpp>

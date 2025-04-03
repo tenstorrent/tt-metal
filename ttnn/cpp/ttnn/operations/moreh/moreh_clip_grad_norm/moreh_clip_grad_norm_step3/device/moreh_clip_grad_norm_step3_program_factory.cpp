@@ -13,7 +13,7 @@
 #include <variant>
 #include <vector>
 
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 #include "moreh_clip_grad_norm_step3_device_operation.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/buffer.hpp>
