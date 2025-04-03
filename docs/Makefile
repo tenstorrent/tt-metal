@@ -13,6 +13,9 @@ TT_METALIUM_BUILDDIR	= $(BUILDDIR)/tt-metalium
 TTNN_BUILDDIR	= $(BUILDDIR)/ttnn
 PORT          	?= 8888
 DOCS_VERSION       	?= latest
+
+# register_python_operation doesn't load the doc string when fast_runtime_mode is enabled.
+# disable fast_runtime_mode to enable loading the doc string.
 TTNN_FLAGS      = TTNN_CONFIG_OVERRIDES='{"enable_fast_runtime_mode": false}'
 GITHUB_TOKEN    ?= INSERT_TOKEN_HERE
 TTNN_API_DIR    = source/ttnn/ttnn/api
