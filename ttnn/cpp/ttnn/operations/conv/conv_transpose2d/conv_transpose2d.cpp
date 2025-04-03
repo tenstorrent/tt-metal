@@ -22,6 +22,33 @@ using sliding_window::SlidingWindowConfig;
 
 namespace conv_transpose2d {
 
+ResultWithOptions result_to_result_with_options(
+    Result&& result, const bool return_output_dim, const bool return_weights_and_bias) {
+    auto [output_tensor, output_height, output_width, weight_tensor, bias_tensor] = result;
+    if (return_output_dim && return_weights_and_bias) {
+        return std::make_tuple(
+            output_tensor, std::make_tuple(output_height, output_width), std::make_tuple(weight_tensor, bias_tensor));
+    } else if (return_output_dim) {
+        return std::make_tuple(output_tensor, std::make_tuple(output_height, output_width));
+    } else if (return_weights_and_bias) {
+        return std::make_tuple(output_tensor, std::make_tuple(weight_tensor, bias_tensor));
+    }
+    return output_tensor;
+}
+
+Result result_with_options_to_result(ResultWithOptions&& result_with_options) {
+    auto [output_tensor, output_dimensions, device_weights_and_bias] = std::get<std::tuple<
+        ttnn::Tensor,
+        std::tuple<OutputHeight, OutputWidth>,
+        std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>>(result_with_options);
+    return std::make_tuple(
+        output_tensor,
+        std::get<0>(output_dimensions),
+        std::get<1>(output_dimensions),
+        std::get<0>(device_weights_and_bias),
+        std::get<1>(device_weights_and_bias));
+}
+
 template <typename T>
 Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel = true) {
     auto in_w_shape = conv_weight_tensor.get_padded_shape();
@@ -438,6 +465,102 @@ Result ConvTranpose2dOperation::invoke(
         std::move(compute_config_),
         std::move(memory_config),
         mirror_kernel);
+}
+
+ResultWithOptions ConvTranpose2dOperation::invoke(
+    QueueId queue_id,
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    IDevice* device,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 2> padding,
+    std::array<uint32_t, 2> output_padding,
+    std::array<uint32_t, 2> dilation,
+    uint32_t groups,
+    const bool return_output_dim,
+    const bool return_weights_and_bias,
+    std::optional<const ttnn::Tensor> bias_tensor,
+    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const MemoryConfig>& memory_config,
+    bool mirror_kernel) {
+    return result_to_result_with_options(
+        conv_transpose2d(
+            input_tensor,
+            weight_tensor,
+            device,
+            in_channels,
+            out_channels,
+            batch_size,
+            input_height,
+            input_width,
+            kernel_size,
+            stride,
+            padding,
+            output_padding,
+            dilation,
+            groups,
+            std::move(bias_tensor),
+            std::move(conv_config_),
+            std::move(compute_config_),
+            std::move(memory_config),
+            mirror_kernel),
+        return_output_dim,
+        return_weights_and_bias);
+}
+
+ResultWithOptions ConvTranpose2dOperation::invoke(
+    QueueId queue_id,
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    MeshDevice* device,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 2> padding,
+    std::array<uint32_t, 2> output_padding,
+    std::array<uint32_t, 2> dilation,
+    uint32_t groups,
+    const bool return_output_dim,
+    const bool return_weights_and_bias,
+    std::optional<const ttnn::Tensor> bias_tensor,
+    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const MemoryConfig>& memory_config,
+    bool mirror_kernel) {
+    return result_to_result_with_options(
+        conv_transpose2d(
+            input_tensor,
+            weight_tensor,
+            device,
+            in_channels,
+            out_channels,
+            batch_size,
+            input_height,
+            input_width,
+            kernel_size,
+            stride,
+            padding,
+            output_padding,
+            dilation,
+            groups,
+            std::move(bias_tensor),
+            std::move(conv_config_),
+            std::move(compute_config_),
+            std::move(memory_config),
+            mirror_kernel),
+        return_output_dim,
+        return_weights_and_bias);
 }
 
 }  // namespace conv_transpose2d

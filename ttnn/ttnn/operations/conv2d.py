@@ -160,65 +160,6 @@ def convert_conv_weight_tensor_to_grouped_layout(conv_weight_tensor, num_groups,
     )
 
 
-@ttnn.register_python_operation(name="ttnn.conv2d")
-def conv2d(
-    *,
-    input_tensor: ttnn.Tensor,  # may or may not be sharded
-    weight_tensor: ttnn.Tensor,
-    device: ttnn.Device,
-    in_channels: int,
-    out_channels: int,
-    batch_size: int,
-    input_height: int,
-    input_width: int,
-    kernel_size: Union[int, Tuple[int, int]],
-    stride: Union[int, Tuple[int, int]],
-    padding: Union[Tuple[int, int], Tuple[int, int, int, int]],
-    dilation: Union[int, Tuple[int, int]] = (1, 1),
-    groups: int = 1,
-    bias_tensor: ttnn.Tensor = None,
-    conv_config: Conv2dConfig = None,  # config overrides by user
-    compute_config=None,  # compute config overrides by user
-    memory_config: ttnn.MemoryConfig = None,  # memory config overrides by user
-    return_output_dim=False,
-    return_weights_and_bias=False,
-) -> Tuple[ttnn.Tensor, Tuple[int, int], Tuple[ttnn.Tensor, ttnn.Tensor]]:
-    (
-        conv_output,
-        output_height,
-        output_width,
-        prepared_device_weight,
-        prepared_device_bias,
-    ) = ttnn._ttnn.operations.conv.conv2d(
-        input_tensor=input_tensor,
-        weight_tensor=weight_tensor,
-        device=device,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        batch_size=batch_size,
-        input_height=input_height,
-        input_width=input_width,
-        kernel_size=kernel_size,
-        stride=stride,
-        padding=padding,
-        dilation=dilation,
-        groups=groups,
-        bias_tensor=bias_tensor,
-        conv_config=conv_config,
-        compute_config=compute_config,
-        memory_config=memory_config,
-    )
-
-    if return_output_dim and return_weights_and_bias:
-        return conv_output, [output_height, output_width], [prepared_device_weight, prepared_device_bias]
-    elif return_weights_and_bias:
-        return conv_output, [prepared_device_weight, prepared_device_bias]
-    elif return_output_dim:
-        return conv_output, [output_height, output_width]
-    else:
-        return conv_output
-
-
 def get_activation_function(name: str):
     if name == "relu":
         return torch.nn.functional.relu

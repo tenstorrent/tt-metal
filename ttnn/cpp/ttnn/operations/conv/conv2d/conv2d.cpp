@@ -6,9 +6,11 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <utility>
 
 #include <tt-metalium/buffer_constants.hpp>
+#include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -32,9 +34,32 @@ using sliding_window::SlidingWindowConfig;
 
 namespace conv2d {
 
-using OutputHeight = uint32_t;
-using OutputWidth = uint32_t;
-using Result = std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, ttnn::Tensor, std::optional<ttnn::Tensor>>;
+ResultWithOptions result_to_result_with_options(
+    Result&& result, const bool return_output_dim, const bool return_weights_and_bias) {
+    auto [output_tensor, output_height, output_width, weight_tensor, bias_tensor] = result;
+    if (return_output_dim && return_weights_and_bias) {
+        return std::make_tuple(
+            output_tensor, std::make_tuple(output_height, output_width), std::make_tuple(weight_tensor, bias_tensor));
+    } else if (return_output_dim) {
+        return std::make_tuple(output_tensor, std::make_tuple(output_height, output_width));
+    } else if (return_weights_and_bias) {
+        return std::make_tuple(output_tensor, std::make_tuple(weight_tensor, bias_tensor));
+    }
+    return output_tensor;
+}
+
+Result result_with_options_to_result(ResultWithOptions&& result_with_options) {
+    auto [output_tensor, output_dimensions, device_weights_and_bias] = std::get<std::tuple<
+        ttnn::Tensor,
+        std::tuple<OutputHeight, OutputWidth>,
+        std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>>(result_with_options);
+    return std::make_tuple(
+        output_tensor,
+        std::get<0>(output_dimensions),
+        std::get<1>(output_dimensions),
+        std::get<0>(device_weights_and_bias),
+        std::get<1>(device_weights_and_bias));
+}
 
 template <typename T>
 Result conv2d(
@@ -55,12 +80,60 @@ Result conv2d(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config) {
+    auto result_with_options = std::get<std::tuple<
+        ttnn::Tensor,
+        std::tuple<OutputHeight, OutputWidth>,
+        std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>>>(
+        conv2d(
+            input_tensor,
+            weight_tensor,
+            device,
+            in_channels,
+            out_channels,
+            batch_size,
+            input_height,
+            input_width,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            groups,
+            true,  // return_output_dim
+            true,  // return_weights_and_bias
+            bias_tensor,
+            conv_config_,
+            compute_config_,
+            memory_config));
+
+    return result_with_options_to_result(result_with_options);
+}
+
+template <typename T>
+ResultWithOptions conv2d(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    T* device,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+    std::array<uint32_t, 2> dilation,
+    uint32_t groups,
+    const bool return_output_dim,
+    const bool return_weights_and_bias,
+    std::optional<const ttnn::Tensor> bias_tensor,
+    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const MemoryConfig>& memory_config) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
-
 
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
 
@@ -240,7 +313,10 @@ Result conv2d(
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
             conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
         }
-        return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+        return result_to_result_with_options(
+            {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device},
+            return_output_dim,
+            return_weights_and_bias);
     } else {
         // run conv as matmul
         std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
@@ -277,7 +353,10 @@ Result conv2d(
             matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);
         }
 
-        return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
+        return result_to_result_with_options(
+            {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device},
+            return_output_dim,
+            return_weights_and_bias);
     }
 }
 
@@ -353,6 +432,92 @@ Result Conv2dOperation::invoke(
         padding,
         dilation,
         groups,
+        std::move(bias_tensor),
+        std::move(conv_config_),
+        std::move(compute_config_),
+        memory_config);
+}
+
+ResultWithOptions Conv2dOperation::invoke(
+    QueueId queue_id,
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    IDevice* device,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+    std::array<uint32_t, 2> dilation,
+    uint32_t groups,
+    const bool return_output_dim,
+    const bool return_weights_and_bias,
+    std::optional<const ttnn::Tensor> bias_tensor,
+    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const MemoryConfig>& memory_config) {
+    return conv2d(
+        input_tensor,
+        weight_tensor,
+        device,
+        in_channels,
+        out_channels,
+        batch_size,
+        input_height,
+        input_width,
+        kernel_size,
+        stride,
+        padding,
+        dilation,
+        groups,
+        return_output_dim,
+        return_weights_and_bias,
+        std::move(bias_tensor),
+        std::move(conv_config_),
+        std::move(compute_config_),
+        memory_config);
+}
+
+ResultWithOptions Conv2dOperation::invoke(
+    QueueId queue_id,
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    MeshDevice* device,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+    std::array<uint32_t, 2> dilation,
+    uint32_t groups,
+    const bool return_output_dim,
+    const bool return_weights_and_bias,
+    std::optional<const ttnn::Tensor> bias_tensor,
+    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const MemoryConfig>& memory_config) {
+    return conv2d(
+        input_tensor,
+        weight_tensor,
+        device,
+        in_channels,
+        out_channels,
+        batch_size,
+        input_height,
+        input_width,
+        kernel_size,
+        stride,
+        padding,
+        dilation,
+        groups,
+        return_output_dim,
+        return_weights_and_bias,
         std::move(bias_tensor),
         std::move(conv_config_),
         std::move(compute_config_),
