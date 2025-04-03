@@ -57,7 +57,6 @@ def parse_github_log_timestamp(line):
     # Wacky github workaround: truncate to 26 chars because github's timestamp
     # is 7 digits for fractional seconds instead of 6, which is the ISO format
     # E.g. 2024-09-25T14:33:11.1060679Z -> 2024-09-25T14:33:11.106067
-    # This isn't an issue for python versions > 3.10 (infra runs python 3.8)
     return datetime.fromisoformat(timestamp_str[:26])
 
 
