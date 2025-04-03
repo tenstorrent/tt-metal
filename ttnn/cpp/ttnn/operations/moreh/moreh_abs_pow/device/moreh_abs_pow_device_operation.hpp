@@ -18,18 +18,6 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace moreh {
-namespace moreh_abs_pow {
-struct MorehAbsPowOperation::MorehAbsPowFactory::shared_variables_t;
-struct MorehAbsPowOperation::operation_attributes_t;
-struct MorehAbsPowOperation::tensor_args_t;
-}  // namespace moreh_abs_pow
-}  // namespace moreh
-}  // namespace operations
-}  // namespace ttnn
-
 #define MOREH_ABS_POW_FACTORY_H(name)                                                       \
     struct name {                                                                           \
         struct shared_variables_t {                                                         \

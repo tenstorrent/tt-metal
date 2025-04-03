@@ -87,7 +87,7 @@ operation::ProgramWithCallbacks upsample_single_core(
 
     std::vector<uint32_t> reader_compile_time_args, writer_compile_time_args;
     bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(input_unit_size);
-    uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)log2(input_unit_size) : 0;
+    uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)std::log2(input_unit_size) : 0;
     reader_compile_time_args = {
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)src_is_dram,
@@ -95,7 +95,7 @@ operation::ProgramWithCallbacks upsample_single_core(
         (std::uint32_t)src_log2_stick_size};
 
     bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_unit_size);
-    uint32_t dst_log2_stick_size = dst_stick_size_is_power_of_two ? (std::uint32_t)log2(output_unit_size) : 0;
+    uint32_t dst_log2_stick_size = dst_stick_size_is_power_of_two ? (std::uint32_t)std::log2(output_unit_size) : 0;
     writer_compile_time_args = {
         (std::uint32_t)output_cb_index,
         (std::uint32_t)dst_is_dram,

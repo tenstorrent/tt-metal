@@ -21,23 +21,6 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace moreh {
-namespace moreh_norm_backward {
-struct MorehNormBackwardOperation::ProgramFactory::shared_variables_t;
-struct MorehNormBackwardOperation::operation_attributes_t;
-struct MorehNormBackwardOperation::tensor_args_t;
-}  // namespace moreh_norm_backward
-}  // namespace moreh
-}  // namespace operations
-}  // namespace ttnn
-namespace tt {
-namespace tt_metal {
-class Shape;
-}  // namespace tt_metal
-}  // namespace tt
-
 #define DEFINE_PROGRAM_FACTORY(FactoryName)                                                 \
     struct FactoryName {                                                                    \
         struct shared_variables_t {                                                         \

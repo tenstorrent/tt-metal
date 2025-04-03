@@ -4,13 +4,9 @@
 
 #include "global_circular_buffer.hpp"
 
-#include <abstract.h>
-#include <floatobject.h>
-#include <longobject.h>
 #include <pybind11/cast.h>
-#include <pyerrors.h>
-#include <stdint.h>
 #include <tt-metalium/global_circular_buffer_impl.hpp>
+#include <cstdint>
 #include <memory>
 #include <utility>
 #include <vector>

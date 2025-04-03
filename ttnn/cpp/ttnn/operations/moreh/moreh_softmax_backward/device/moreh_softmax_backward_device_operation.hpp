@@ -18,16 +18,6 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace moreh {
-namespace moreh_softmax_backward {
-struct MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::shared_variables_t;
-}  // namespace moreh_softmax_backward
-}  // namespace moreh
-}  // namespace operations
-}  // namespace ttnn
-
 namespace ttnn::operations::moreh::moreh_softmax_backward {
 
 enum class MorehSoftmaxBackwardOpParallelizationStrategy {

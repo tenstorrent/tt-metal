@@ -4,13 +4,9 @@
 
 #include "ttnn/operations/matmul/matmul_pybind.hpp"
 
-#include <abstract.h>
-#include <floatobject.h>
-#include <longobject.h>
 #include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/pytypes.h>
-#include <pyerrors.h>
 #include <tt-metalium/core_coord.hpp>
 #include <cstddef>
 #include <map>

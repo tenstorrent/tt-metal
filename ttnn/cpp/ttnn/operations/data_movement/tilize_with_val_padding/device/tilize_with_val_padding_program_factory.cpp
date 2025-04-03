@@ -209,7 +209,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
     uint32_t src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     uint32_t stick_size = unpadded_row_size_bytes;
     uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (uint32_t)log2(stick_size) : 0;
+    uint32_t log2_stick_size = stick_size_is_power_of_two ? (uint32_t)std::log2(stick_size) : 0;
     std::vector<uint32_t> reader_compile_time_args = {
         src0_is_dram, stick_size_is_power_of_two, log2_stick_size, tile_row_size_bytes};
 

@@ -77,13 +77,16 @@ MorehArangeOperation::spec_return_value_t MorehArangeOperation::compute_output_s
     if (operation_attributes.untilize_out) {
         return TensorSpec(
             Shape({num_elems}),
-            TensorLayout(
-                operation_attributes.dtype, PageConfig(Layout::ROW_MAJOR), operation_attributes.memory_config));
+            tt::tt_metal::TensorLayout(
+                operation_attributes.dtype,
+                tt::tt_metal::PageConfig(Layout::ROW_MAJOR),
+                operation_attributes.memory_config));
     }
 
     return TensorSpec(
         Shape({1, num_elems}),
-        TensorLayout(operation_attributes.dtype, PageConfig(Layout::TILE), operation_attributes.memory_config));
+        tt::tt_metal::TensorLayout(
+            operation_attributes.dtype, tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.memory_config));
 };
 
 MorehArangeOperation::tensor_return_value_t MorehArangeOperation::create_output_tensors(

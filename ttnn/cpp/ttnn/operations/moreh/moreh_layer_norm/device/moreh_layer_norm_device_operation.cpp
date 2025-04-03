@@ -99,7 +99,7 @@ MorehLayerNormOperation::spec_return_value_t MorehLayerNormOperation::compute_ou
     } else {
         result[0] = TensorSpec(
             input.get_logical_shape(),
-            TensorLayout(
+            tt::tt_metal::TensorLayout(
                 input.get_dtype(), tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.memory_config));
     }
 

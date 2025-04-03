@@ -18,18 +18,6 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace moreh {
-namespace moreh_sum {
-struct MorehSumOperation::MorehSumHFactory::shared_variables_t;
-struct MorehSumOperation::operation_attributes_t;
-struct MorehSumOperation::tensor_args_t;
-}  // namespace moreh_sum
-}  // namespace moreh
-}  // namespace operations
-}  // namespace ttnn
-
 #define MOREH_SUM_FACTORY_H(name)                                                           \
     struct name {                                                                           \
         struct shared_variables_t {                                                         \

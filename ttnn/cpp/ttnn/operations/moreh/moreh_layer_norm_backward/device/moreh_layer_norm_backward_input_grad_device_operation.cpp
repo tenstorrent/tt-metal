@@ -39,8 +39,10 @@ MorehLayerNormBackwardInputGradOperation::compute_output_specs(
     }
     return TensorSpec(
         tensor_args.input.get_logical_shape(),
-        TensorLayout(
-            tensor_args.output_grad.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
+        tt::tt_metal::TensorLayout(
+            tensor_args.output_grad.get_dtype(),
+            tt::tt_metal::PageConfig(Layout::TILE),
+            operation_attributes.memory_config));
 };
 
 MorehLayerNormBackwardInputGradOperation::tensor_return_value_t

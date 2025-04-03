@@ -111,7 +111,10 @@ RunningStatistics::spec_return_value_t RunningStatistics::compute_output_specs(
     const auto output_shape = tensor_args.batch_mean.get_logical_shape();
     return TensorSpec(
         output_shape,
-        TensorLayout(operation_attributes.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
+        tt::tt_metal::TensorLayout(
+            operation_attributes.get_dtype(),
+            tt::tt_metal::PageConfig(Layout::TILE),
+            operation_attributes.memory_config));
 }
 
 RunningStatistics::tensor_return_value_t RunningStatistics::create_output_tensors(

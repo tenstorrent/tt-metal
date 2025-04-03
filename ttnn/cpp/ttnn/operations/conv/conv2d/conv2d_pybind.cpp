@@ -2,13 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <abstract.h>
-#include <floatobject.h>
 #include <fmt/base.h>
-#include <longobject.h>
 #include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pyerrors.h>
 #include <stdint.h>
 #include <array>
 #include <optional>

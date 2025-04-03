@@ -169,7 +169,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     } else {
         bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(num_units_per_row);
-        uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)log2(num_units_per_row) : 0;
+        uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)std::log2(num_units_per_row) : 0;
         std::vector<uint32_t> reader_compile_time_args = {
             (std::uint32_t)input_cb_index,
             (std::uint32_t)scratch_cb_index,

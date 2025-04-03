@@ -4,12 +4,7 @@
 
 #include "global_semaphore.hpp"
 
-#include <abstract.h>
-#include <floatobject.h>
-#include <longobject.h>
 #include <pybind11/cast.h>
-#include <pyerrors.h>
-#include <stdint.h>
 #include <tt-metalium/global_semaphore.hpp>
 #include <memory>
 #include <vector>

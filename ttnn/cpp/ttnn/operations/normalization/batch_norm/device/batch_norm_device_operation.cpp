@@ -124,7 +124,10 @@ BatchNormOperation::spec_return_value_t BatchNormOperation::compute_output_specs
     const auto output_shape = tensor_args.input.get_logical_shape();
     return TensorSpec(
         output_shape,
-        TensorLayout(operation_attributes.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
+        tt::tt_metal::TensorLayout(
+            operation_attributes.get_dtype(),
+            tt::tt_metal::PageConfig(Layout::TILE),
+            operation_attributes.memory_config));
 }
 
 BatchNormOperation::tensor_return_value_t BatchNormOperation::create_output_tensors(

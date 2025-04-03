@@ -750,7 +750,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
         bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
         reader_compile_time_args.push_back((std::uint32_t)stick_size_is_power_of_two);
         if (stick_size_is_power_of_two) {
-            uint32_t log2_stick_size = (std::uint32_t)log2(stick_size);
+            uint32_t log2_stick_size = (std::uint32_t)std::log2(stick_size);
             reader_compile_time_args.push_back((std::uint32_t)log2_stick_size);
         } else {
             reader_compile_time_args.push_back(stick_size);
@@ -769,7 +769,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
         bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
         writer_compile_time_args.push_back((std::uint32_t)stick_size_is_power_of_two);
         if (stick_size_is_power_of_two) {
-            uint32_t log2_stick_size = (std::uint32_t)log2(stick_size);
+            uint32_t log2_stick_size = (std::uint32_t)std::log2(stick_size);
             writer_compile_time_args.push_back((std::uint32_t)log2_stick_size);
         } else {
             writer_compile_time_args.push_back(stick_size);
@@ -1648,7 +1648,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor& a, Tensor&
         bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
         reader_compile_time_args.push_back((std::uint32_t)stick_size_is_power_of_two);
         if (stick_size_is_power_of_two) {
-            uint32_t log2_stick_size = (std::uint32_t)log2(stick_size);
+            uint32_t log2_stick_size = (std::uint32_t)std::log2(stick_size);
             reader_compile_time_args.push_back((std::uint32_t)log2_stick_size);
         } else {
             reader_compile_time_args.push_back(stick_size);
@@ -1671,7 +1671,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor& a, Tensor&
         bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
         writer_compile_time_args.push_back((std::uint32_t)stick_size_is_power_of_two);
         if (stick_size_is_power_of_two) {
-            uint32_t log2_stick_size = (std::uint32_t)log2(stick_size);
+            uint32_t log2_stick_size = (std::uint32_t)std::log2(stick_size);
             writer_compile_time_args.push_back((std::uint32_t)log2_stick_size);
         } else {
             writer_compile_time_args.push_back(stick_size);
