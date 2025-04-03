@@ -3,15 +3,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-
-#include "device_fixture.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/core_descriptor.hpp>
+#include <stddef.h>
+#include <stdint.h>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/core_descriptor.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <memory>
+#include <optional>
+#include <utility>
+#include <vector>
 
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
 // FIXME: ARCH_NAME specific
 #include "dev_mem_map.h"
+#include <tt-metalium/device.hpp>
+#include "device_fixture.hpp"
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/metal_soc_descriptor.h>
+#include "tt_cluster.hpp"
 
 namespace unit_tests::test_l1_banking_allocator {
 

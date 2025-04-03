@@ -2,15 +2,38 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <gtest/gtest.h>
+#include <stdint.h>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/fabric_host_interface.h>
+#include <array>
+#include <cstddef>
+#include <map>
+#include <optional>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/fabric_edm_packet_header.hpp>
 #include "fabric_fixture.hpp"
-#include "tt_metal/llrt/tt_cluster.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_graph.hpp>
+#include "span.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "tt_metal/llrt/tt_cluster.hpp"
+#include "umd/device/tt_core_coordinates.h"
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
@@ -23,9 +46,11 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
 
     std::pair<mesh_id_t, chip_id_t> src_mesh_chip_id;
     std::pair<mesh_id_t, chip_id_t> dst_mesh_chip_id;
+    chip_id_t not_used_1;
+    chip_id_t not_used_2;
     // Find a device with a neighbour in the East direction
-    bool connection_found =
-        find_device_with_neighbor_in_direction(src_mesh_chip_id, dst_mesh_chip_id, RoutingDirection::E);
+    bool connection_found = find_device_with_neighbor_in_direction(
+        src_mesh_chip_id, dst_mesh_chip_id, not_used_1, not_used_2, RoutingDirection::E);
     if (!connection_found) {
         GTEST_SKIP() << "No path found between sender and receivers";
     }
@@ -92,7 +117,7 @@ TEST_F(Fabric1DFixture, TestUnicastRaw) {
     static constexpr std::size_t edm_buffer_size =
         tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes +
         sizeof(tt::tt_fabric::PacketHeader);
-    const auto edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
+    const auto edm_config = tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size);
 
     tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
         .edm_noc_x = edm_eth_core.x,
@@ -178,9 +203,11 @@ TEST_F(Fabric1DFixture, TestUnicastConnAPI) {
 
     std::pair<mesh_id_t, chip_id_t> src_mesh_chip_id;
     std::pair<mesh_id_t, chip_id_t> dst_mesh_chip_id;
+    chip_id_t not_used_1;
+    chip_id_t not_used_2;
     // Find a device with a neighbour in the East direction
-    bool connection_found =
-        find_device_with_neighbor_in_direction(src_mesh_chip_id, dst_mesh_chip_id, RoutingDirection::E);
+    bool connection_found = find_device_with_neighbor_in_direction(
+        src_mesh_chip_id, dst_mesh_chip_id, not_used_1, not_used_2, RoutingDirection::E);
     if (!connection_found) {
         GTEST_SKIP() << "No path found between sender and receivers";
     }

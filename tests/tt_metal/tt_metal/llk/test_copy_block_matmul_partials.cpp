@@ -2,8 +2,42 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stdint.h>
+#include <sys/types.h>
+#include <cstring>
+#include <initializer_list>
+#include <map>
+#include <memory>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
 #include "device_fixture.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include "span.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "umd/device/types/arch.h"
+#include <tt-metalium/utils.hpp>
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

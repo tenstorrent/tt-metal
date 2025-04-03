@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-#include "fmt/base.h"
+#include <fmt/base.h>
 #include <umd/device/types/arch.h>
 
 namespace tt {

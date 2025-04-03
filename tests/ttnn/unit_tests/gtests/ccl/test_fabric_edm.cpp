@@ -2,9 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tests/ttnn/unit_tests/gtests/ccl/test_fabric_edm_common.hpp"
-
+#include <fmt/base.h>
+#include <stdint.h>
+#include <cstddef>
+#include <string>
 #include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/fabric_edm_packet_header.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/logger.hpp>
+#include "tests/ttnn/unit_tests/gtests/ccl/test_fabric_edm_common.hpp"
 
 int main(int argc, char** argv) {
     std::size_t arg_idx = 1;

@@ -1,7 +1,6 @@
 #!/bin/bash
 set -eo pipefail
 
-
 # Allow overriding Python command via environment variable
 if [ -z "$PYTHON_CMD" ]; then
     PYTHON_CMD="python3"
@@ -10,7 +9,7 @@ else
 fi
 
 # Verify Python command exists
-if ! command -v $PYTHON_CMD &> /dev/null; then
+if ! command -v $PYTHON_CMD &>/dev/null; then
     echo "Python command not found: $PYTHON_CMD"
     exit 1
 fi
@@ -30,7 +29,7 @@ pip install --force-reinstall pip==21.2.4
 
 echo "Setting up virtual env"
 python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
-python3 -m pip install setuptools wheel
+python3 -m pip install setuptools wheel==0.45.1
 
 echo "Installing dev dependencies"
 python3 -m pip install -r $(pwd)/tt_metal/python_env/requirements-dev.txt
@@ -39,7 +38,7 @@ echo "Installing tt-metal"
 pip install -e .
 
 # Do not install hooks when this is a worktree
-if [ $(git rev-parse --git-dir) = $(git rev-parse --git-common-dir) ] ; then
+if [ $(git rev-parse --git-dir) = $(git rev-parse --git-common-dir) ]; then
     echo "Generating git hooks"
     pre-commit install
     pre-commit install --hook-type commit-msg

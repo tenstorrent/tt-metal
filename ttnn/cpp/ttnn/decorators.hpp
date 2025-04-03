@@ -407,7 +407,9 @@ consteval void assert_operation_in_correct_namespace() {
                 tt::stl::reflection::fixed_string_substring<0, prim_namespace.size()>(cpp_fully_qualified_name);
             static_assert(
                 not tt::stl::reflection::fixed_string_equals(namespace_substring, prim_namespace),
-                "Composite operations must not be in the `ttnn::prim` namespace.");
+                "Composite operations must not be in the `ttnn::prim` namespace. You may have forgotten to implement "
+                "one of: validate_on_program_cache_hit, validate_on_program_cache_miss, create_output_tensors, or "
+                "select_program_factory.");
         }
     }
 }
