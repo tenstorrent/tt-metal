@@ -2,14 +2,29 @@ name: "[post-commit] ttnn unit tests"
 
 on:
   workflow_call:
+    inputs:
+      test-mode:
+        description: 'Select test mode'
+        required: false
+        type: string
+        default: 'wheel'
   workflow_dispatch:
+    inputs:
+      test-mode:
+        description: 'Select test mode'
+        required: true
+        type: choice
+        options:
+          - wheel
+          - venv
+        default: 'wheel'
 
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
-      build-wheel: true
+      build-wheel: ${{ inputs.test-mode == 'wheel' }}
 
   ttnn-unit-tests:
     needs: build-artifact
@@ -28,3 +43,4 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      create-venv: ${{ inputs.test-mode == 'venv' }}

@@ -13,6 +13,11 @@ inputs:
     required: false
     description: Where to checkout
     default: docker-job
+  create-venv:
+    required: false
+    description: Whether to create a virtual environment
+    default: false
+    type: boolean
 runs:
   using: "composite"
   steps:
@@ -42,15 +47,21 @@ runs:
       run: tar -xf ttm_any.tar
       shell: bash
 
+    - name: 🐍 Create Virtual Environment
+      if: ${{ inputs.create-venv }}
+      working-directory: ${{ inputs.path }}
+      run: ./create_venv.sh
+      shell: bash
+
     - name: 🧪 Download Python Wheel
-      if: ${{ inputs.wheel-artifact-name != '' }}
+      if: ${{ inputs.wheel-artifact-name != '' && !inputs.create-venv }}
       uses: actions/download-artifact@v4
       with:
         name: ${{ inputs.wheel-artifact-name }}
         path: ${{ inputs.path }}
 
     - name: 💿 Install Wheel
-      if: ${{ inputs.wheel-artifact-name != '' }}
+      if: ${{ inputs.wheel-artifact-name != '' && !inputs.create-venv }}
       working-directory: ${{ inputs.path }}
       run: |
         echo "📂 In directory: $(pwd)"

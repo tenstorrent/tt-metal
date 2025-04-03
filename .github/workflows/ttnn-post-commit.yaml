@@ -26,39 +26,10 @@ on:
       wheel-artifact-name:
         required: true
         type: string
-
-  workflow_dispatch:
-    inputs:
-      arch:
-        required: true
-        type: choice
-        options:
-          - wormhole_b0
-          - blackhole
-      runner-label:
-        required: true
-        type: choice
-        options:
-          - N150
-          - N300
-          - BH
-      timeout:
+      create-venv:
         required: false
-        type: number
-        default: 45
-      num-groups:
-        required: false
-        type: number
-        default: 12
-      docker-image:
-        required: true
-        type: string
-      build-artifact-name:
-        required: true
-        type: string
-      wheel-artifact-name:
-        required: true
-        type: string
+        default: false
+        type: boolean
 
 jobs:
   ttnn:
@@ -123,7 +94,9 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
         timeout-minutes: 10
         with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          create-venv: ${{ inputs.create-venv }}
 
       - name: Set ttnn fast runtime if exists in config
         if: ${{ matrix.test-group.fast_runtime_mode_off }}
