@@ -4,7 +4,18 @@
 
 #include "sharded_to_interleaved_partial_op.hpp"
 
+#include <fmt/base.h>
+#include <array>
+#include <optional>
+
 #include "cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/tensor/enum_types.hpp"
 
 using namespace tt::tt_metal;
 

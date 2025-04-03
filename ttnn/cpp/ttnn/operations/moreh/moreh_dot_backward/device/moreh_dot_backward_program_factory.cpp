@@ -2,11 +2,37 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdio>
-
-#include "moreh_dot_backward_device_operation.hpp"
 #include <tt-metalium/util.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <map>
+#include <optional>
+#include <set>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "hostdevcommon/kernel_structs.h"
+#include "moreh_dot_backward_device_operation.hpp"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/utils.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+enum class DataFormat : uint8_t;
+}  // namespace tt
 
 namespace ttnn::operations::moreh::moreh_dot_backward {
 MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperation::SingleCore::create(

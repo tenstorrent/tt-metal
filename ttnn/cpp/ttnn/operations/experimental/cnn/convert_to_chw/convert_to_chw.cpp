@@ -4,8 +4,15 @@
 
 #include "convert_to_chw.hpp"
 
+#include <boost/container/vector.hpp>
+#include <algorithm>
+#include <vector>
+
 #include "device/convert_to_chw_op.hpp"
+#include <tt-metalium/buffer_constants.hpp>
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::cnn {
 

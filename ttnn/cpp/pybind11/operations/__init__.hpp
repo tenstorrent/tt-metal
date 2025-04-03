@@ -7,18 +7,18 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "pybind11/types.hpp"
+#include "cpp/ttnn/operations/ccl/ccl_pybind.hpp"
 #include "pybind11/operations/copy.hpp"
 #include "pybind11/operations/core.hpp"
 #include "pybind11/operations/creation.hpp"
 #include "pybind11/operations/trace.hpp"
+#include "pybind11/types.hpp"
 #include "ttnn/operations/bernoulli/bernoulli_pybind.hpp"
-#include "cpp/ttnn/operations/ccl/ccl_pybind.hpp"
 #include "ttnn/operations/conv/conv_pybind.hpp"
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
 #include "ttnn/operations/eltwise/binary/binary_pybind.hpp"
-#include "ttnn/operations/eltwise/binary_ng/binary_ng_pybind.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward_pybind.hpp"
+#include "ttnn/operations/eltwise/binary_ng/binary_ng_pybind.hpp"
 #include "ttnn/operations/eltwise/complex/complex_pybind.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary_pybind.hpp"
 #include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward_pybind.hpp"
@@ -43,10 +43,10 @@
 #include "ttnn/operations/pool/generic/generic_pools_pybind.hpp"
 #include "ttnn/operations/pool/global_avg_pool/global_avg_pool_pybind.hpp"
 #include "ttnn/operations/pool/upsample/upsample_pybind.hpp"
+#include "ttnn/operations/prefetcher/prefetcher_pybind.hpp"
 #include "ttnn/operations/reduction/reduction_pybind.hpp"
 #include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
-#include "ttnn/operations/prefetcher/prefetcher_pybind.hpp"
 #include "ttnn/operations/uniform/uniform_pybind.hpp"
 
 namespace py = pybind11;

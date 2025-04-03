@@ -4,17 +4,29 @@
 
 #include "ttnn/operations/core/core.hpp"
 
+#include <fmt/base.h>
+#include <functional>
 #include <utility>
+#include <vector>
 
-#include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/trace.hpp>
 #include "cpp/ttnn/operations/data_movement/move/move.hpp"
-#include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/shape.hpp>
+#include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
-#include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum class Layout;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::core {
 

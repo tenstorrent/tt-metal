@@ -2,26 +2,55 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
-#include <algorithm>
-
-#include <tt-metalium/core_coord.hpp>
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/buffer.hpp>
-#include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
-#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/math.hpp"
-#include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <sstream>
+#include <algorithm>
+#include <cstddef>
+#include <functional>
+#include <map>
+#include <optional>
+#include <string>
 #include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
 
 #include "cpp/ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include <tt-metalium/utils.hpp>
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+#include <umd/device/types/xy_pair.h>
+
+namespace tt {
+enum class DataFormat : uint8_t;
+namespace tt_fabric {
+enum class Topology;
+}  // namespace tt_fabric
+}  // namespace tt
 
 using namespace tt::constants;
 using namespace tt::tt_metal;

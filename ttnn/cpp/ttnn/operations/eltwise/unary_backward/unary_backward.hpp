@@ -5,8 +5,26 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <optional>
+#include <string>
+#include <vector>
+
+#include <tt-metalium/utils.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
+#include "ttnn/operations/functions.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Shape;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 

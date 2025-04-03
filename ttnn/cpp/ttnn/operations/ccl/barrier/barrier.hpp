@@ -4,8 +4,14 @@
 
 #pragma once
 
+#include <optional>
+
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+#include <tt-metalium/fabric_edm_types.hpp>
 #include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace operations::ccl {

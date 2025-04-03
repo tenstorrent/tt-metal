@@ -4,8 +4,20 @@
 
 #pragma once
 
-#include "ttnn/tensor/tensor.hpp"
+#include <stdint.h>
+#include <array>
+#include <optional>
+#include <vector>
+
+#include "ttnn/operation.hpp"
 #include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum class DataType;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 

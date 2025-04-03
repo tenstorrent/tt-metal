@@ -4,14 +4,26 @@
 
 #include "loss_pybind.hpp"
 
-#include <pybind11/operators.h>
+#include <fmt/base.h>
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <optional>
+#include <string>
 
+#include "cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/export_enum.hpp"
 #include "loss.hpp"
 #include "loss_types.hpp"
-#include "cpp/pybind11/export_enum.hpp"
-#include "cpp/pybind11/decorators.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace py = pybind11;
 

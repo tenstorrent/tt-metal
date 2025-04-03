@@ -3,17 +3,32 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "prod.hpp"
+
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
+#include <array>
+#include <functional>
+
+#include "cpp/ttnn/operations/creation.hpp"
+#include "cpp/ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "device/prod_nc_op.hpp"
 #include "device/prod_op_all.hpp"
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-#include "cpp/ttnn/operations/creation.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/data_movement/permute/permute.hpp"
-#include "ttnn/operations/functions.hpp"
-#include "ttnn/types.hpp"
-#include "ttnn/common/queue_id.hpp"
-#include "cpp/ttnn/operations/data_movement/squeeze/squeeze.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/permute/permute.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/operations/functions.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::reduction {
 

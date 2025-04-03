@@ -4,11 +4,17 @@
 
 #include "squeeze_pybind.hpp"
 
+#include <boost/move/utility_core.hpp>
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <pybind11/pytypes.h>
+#include <stdexcept>
 
 #include "cpp/pybind11/decorators.hpp"
+#include <tt-metalium/small_vector.hpp>
+#include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::data_movement {
 

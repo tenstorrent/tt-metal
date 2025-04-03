@@ -4,8 +4,28 @@
 
 #include "binary_ng_pybind.hpp"
 
+#include <boost/container/vector.hpp>
+#include <boost/move/utility_core.hpp>
+#include <pybind11/cast.h>
+#include <pybind11/pybind11.h>
+#include <optional>
+#include <string>
+
 #include "pybind11/decorators.hpp"
+#include <tt-metalium/small_vector.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/binary_ng/binary_ng.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum class DataType;
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::binary_ng {
 namespace detail {

@@ -7,6 +7,12 @@
 #include "ttnn/operations/moreh/moreh_adam/device/moreh_adam_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
+
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::moreh::moreh_adam {

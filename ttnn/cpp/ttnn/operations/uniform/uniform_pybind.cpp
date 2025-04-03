@@ -4,6 +4,11 @@
 
 #include "uniform_pybind.hpp"
 
+#include <pybind11/cast.h>
+#include <pybind11/pybind11.h>
+#include <optional>
+#include <string>
+
 #include "pybind11/decorators.hpp"
 #include "uniform.hpp"
 

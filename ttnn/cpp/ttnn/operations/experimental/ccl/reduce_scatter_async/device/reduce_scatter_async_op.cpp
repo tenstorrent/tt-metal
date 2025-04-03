@@ -3,13 +3,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
-#include <tt-metalium/sub_device_types.hpp>
-#include "cpp/ttnn/global_semaphore.hpp"
 
-#include <ranges>
+#include <boost/container/vector.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
+
+#include "cpp/ttnn/global_semaphore.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include <tt-metalium/tile.hpp>
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
 
 using namespace tt::tt_metal;
 

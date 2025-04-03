@@ -2,25 +2,45 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <utility>
+
 #include "conv2d_op.hpp"
-#include <tt-metalium/math.hpp>
-
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/constants.hpp>
-
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/allocator_types.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/types.hpp"
+#include <umd/device/types/arch.h>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;

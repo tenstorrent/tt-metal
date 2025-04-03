@@ -4,12 +4,22 @@
 
 #include "complex_unary_backward_op.hpp"
 
-#include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/eltwise/ternary/ternary_composite.hpp"
-#include "ttnn/operations/eltwise/ternary/where.hpp"
-#include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
+#include <optional>
+
+#include "ttnn/decorators.hpp"
 #include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
+#include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
+#include "ttnn/operations/eltwise/ternary/where.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/functions.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::complex_unary_backward {
 

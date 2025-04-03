@@ -6,7 +6,17 @@
 
 #include <optional>
 
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum class DataType;
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 namespace operations::data_movement {

@@ -4,10 +4,24 @@
 
 #pragma once
 
+#include <stddef.h>
+#include <memory>
 #include <optional>
-#include "ttnn/tensor/types.hpp"
+#include <vector>
+
+#include <tt-metalium/buffer.hpp>
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "types.hpp"
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+class Event;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 

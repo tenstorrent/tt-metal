@@ -3,7 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "index_fill_device_operation.hpp"
 
+#include <fmt/base.h>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
 
 namespace ttnn::operations::index_fill {
 IndexFillOperation::program_factory_t IndexFillOperation::select_program_factory(

@@ -1,9 +1,35 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <ctime>
+#include <limits>
+#include <map>
+#include <random>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "hostdevcommon/kernel_structs.h"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/utils.hpp>
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+#include <umd/device/types/xy_pair.h>
 #include "uniform_device_operation.hpp"
 
 namespace ttnn::operations::uniform {
@@ -98,9 +124,8 @@ UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation:
         }
 
         const float eps = 1e-6;
-        union {
-            float f;
-            uint32_t u;
+        float f;
+        uint32_t u;
         } f2u_from, f2u_to;
         f2u_from.f = operation_attributes.from;
         f2u_to.f = operation_attributes.to - eps;  // -eps make sure that generated number is < operation_attributes.to

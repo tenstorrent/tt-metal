@@ -2,21 +2,44 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
+#include <array>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <variant>
 #include <vector>
 
-#include <math.h>
-
-#include "upsample_op.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/math.hpp"
-
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
-#include <tt-metalium/math.hpp>
-
-#include <tt_stl/reflection.hpp>
+#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/host_buffer/owned_buffer.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "upsample_op.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;

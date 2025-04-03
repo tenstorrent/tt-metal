@@ -6,15 +6,25 @@
 
 #include <functional>
 #include <optional>
+#include <string>
+#include <tuple>
 #include <variant>
 
-#include "ttnn/tensor/tensor.hpp"
-#include "gelu_backward_program_factory.hpp"
-
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
-
 #include "gelu_backward_device_operation_types.hpp"
+#include "gelu_backward_program_factory.hpp"
+#include <tt_stl/reflection.hpp>
+#include <tt-metalium/utils.hpp>
+#include "ttnn/decorators.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum class DataType;
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::experimental::gelu_backward {
 

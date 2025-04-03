@@ -4,6 +4,12 @@
 
 #include "moreh_group_norm_pybind.hpp"
 
+#include <pybind11/cast.h>
+#include <pybind11/pybind11.h>
+#include <algorithm>
+#include <optional>
+#include <vector>
+
 #include "moreh_group_norm.hpp"
 #include "pybind11/decorators.hpp"
 

@@ -3,7 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <stdint.h>
+#include <array>
+#include <utility>
+
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum class ShardOrientation;
+enum class TensorMemoryLayout;
+}  // namespace tt_metal
+}  // namespace tt
 
 // TODO: DELETE Do not use using namespace in header file
 using namespace tt::constants;

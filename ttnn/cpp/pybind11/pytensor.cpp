@@ -2,30 +2,70 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <pybind11/operators.h>
+#include <boost/container/vector.hpp>
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
+#include <pybind11/attr.h>
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-
-#include <chrono>
-#include <memory>
-
-#include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
-#include "ttnn/tensor/tensor.hpp"
+#include <pybind11/pytypes.h>
+#include <tracy/Tracy.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <iterator>
+#include <memory>
+#include <optional>
+#include <string>
+#include <tuple>
+#include <type_traits>
+#include <unordered_map>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt_stl/reflection.hpp>
+#include <tt_stl/span.hpp>
+#include <tt_stl/strong_type.hpp>
+#include "tools/profiler/op_profiler.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include <tt-metalium/tile.hpp>
+#include "ttnn/any_device.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/tensor/host_buffer/types.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/distributed/distributed_tensor_config.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/host_buffer/owned_buffer.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
-#include "tools/profiler/op_profiler.hpp"
-
-#include "ttnn/common/queue_id.hpp"
-#include "ttnn/operations/core/core.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
-#include <tracy/Tracy.hpp>
+class bfloat16;
 
 using namespace tt::tt_metal;
 

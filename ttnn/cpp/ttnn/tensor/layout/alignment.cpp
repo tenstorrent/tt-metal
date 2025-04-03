@@ -4,7 +4,12 @@
 
 #include "alignment.hpp"
 
+#include <boost/container/vector.hpp>
+#include <stddef.h>
 #include <ostream>
+
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
 
 namespace tt::tt_metal {
 

@@ -5,8 +5,11 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <tt-metalium/mesh_trace_id.hpp>
 
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn {

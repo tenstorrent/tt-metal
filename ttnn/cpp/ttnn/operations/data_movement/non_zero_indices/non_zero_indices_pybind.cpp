@@ -2,12 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <fmt/base.h>
+#include <pybind11/cast.h>
+#include <optional>
+#include <string>
+#include <vector>
 
-#include "non_zero_indices_pybind.hpp"
-#include "non_zero_indices.hpp"
 #include "cpp/pybind11/decorators.hpp"
+#include "non_zero_indices.hpp"
+#include "non_zero_indices_pybind.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::data_movement {
 namespace detail {

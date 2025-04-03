@@ -3,11 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dram_prefetcher.hpp"
+
+#include <boost/container/vector.hpp>
+#include <algorithm>
 #include <optional>
 
 #include "device/dram_prefetcher_op.hpp"
-#include <tt-metalium/global_circular_buffer_impl.hpp>
-#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include "ttnn/run_operation.hpp"
 
 namespace ttnn::operations::dram_prefetcher {
 

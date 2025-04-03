@@ -4,11 +4,24 @@
 
 #include "nlp_create_qkv_heads_decode.hpp"
 
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <algorithm>
+#include <initializer_list>
 #include <utility>
+#include <vector>
+
 #include "device/nlp_create_qkv_heads_decode_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/core/core.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/run_operation.hpp"
+#include <umd/device/types/xy_pair.h>
 
 namespace ttnn::operations::experimental::transformer {
 

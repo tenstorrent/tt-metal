@@ -3,11 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gelu_backward_device_operation.hpp"
-#include "gelu_backward_program_factory.hpp"
 
-#include <magic_enum/magic_enum.hpp>
-#include <tt-metalium/constants.hpp>
-#include "tt-metalium/host_api.hpp"
+#include <fmt/base.h>
+
+#include "gelu_backward_program_factory.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/experimental/unary_backward/gelu_backward/device/gelu_backward_device_operation_types.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 

@@ -3,9 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "kv_cache.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/kv_cache/device/update_cache_op.hpp"
+
+#include <algorithm>
+#include <vector>
+
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/kv_cache/device/update_cache_op.hpp"
+#include "ttnn/run_operation.hpp"
 
 namespace ttnn::operations::kv_cache {
 

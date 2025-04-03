@@ -4,21 +4,54 @@
 
 #pragma once
 
-#include <functional>
-#include <variant>
-
+#include <bits/std_abs.h>
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/command_queue.hpp>
+#include <algorithm>
+#include <cstdlib>
+#include <functional>
+#include <optional>
+#include <variant>
+#include <vector>
+
+#include <tt_stl/strong_type.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "ttnn/any_device.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/any_device.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
+#include <umd/device/types/arch.h>
+
+namespace tt {
+namespace tt_metal {
+namespace distributed {
+class MeshDevice;
+}  // namespace distributed
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 namespace operations {

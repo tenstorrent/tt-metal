@@ -5,13 +5,21 @@
 
 #include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
+#include <fmt/base.h>
 #include <tt-metalium/assert.hpp>
+#include <algorithm>
+#include <cstdint>
+#include <functional>
+#include <iterator>
+#include <vector>
 
 #include "cpp/ttnn/tensor/tensor.hpp"
-
-#include <ranges>
-#include <vector>
-#include <cstdint>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn::ccl::cmd::builder {
 

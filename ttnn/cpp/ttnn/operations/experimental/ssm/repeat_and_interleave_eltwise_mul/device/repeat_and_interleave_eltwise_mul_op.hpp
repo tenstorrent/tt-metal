@@ -4,8 +4,15 @@
 //
 #pragma once
 
+#include <stdint.h>
+#include <vector>
+
+#include "ttnn/operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+
+enum class MathFidelity : uint8_t;
 
 namespace ttnn::operations::experimental::ssm {
 

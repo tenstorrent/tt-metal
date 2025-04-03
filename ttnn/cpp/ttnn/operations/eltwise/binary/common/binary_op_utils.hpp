@@ -5,10 +5,19 @@
 #pragma once
 
 #include <map>
+#include <optional>
 #include <string>
 
 #include "binary_op_types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+
+namespace ttnn {
+namespace operations {
+namespace binary {
+enum class BinaryOpType;
+}  // namespace binary
+}  // namespace operations
+}  // namespace ttnn
 
 namespace tt::tt_metal {
 enum class DataType;

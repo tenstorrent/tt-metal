@@ -3,12 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sampling_pybind.hpp"
+
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <stdint.h>
+#include <optional>
+#include <vector>
 
 #include "cpp/pybind11/decorators.hpp"
-
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/reduction/sampling/sampling.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+class CoreRangeSet;
 
 namespace ttnn::operations::reduction::detail {
 namespace py = pybind11;

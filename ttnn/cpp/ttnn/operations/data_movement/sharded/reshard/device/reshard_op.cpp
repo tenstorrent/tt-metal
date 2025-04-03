@@ -4,11 +4,17 @@
 
 #include "reshard_op.hpp"
 
-#include <magic_enum/magic_enum.hpp>
+#include <fmt/base.h>
+#include <tt-metalium/constants.hpp>
+#include <array>
 
 #include "reshard_program_factory.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;

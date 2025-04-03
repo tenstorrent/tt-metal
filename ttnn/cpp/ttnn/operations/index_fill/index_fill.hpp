@@ -3,7 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <stdint.h>
+#include <optional>
+#include <variant>
+
 #include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::index_fill {
 

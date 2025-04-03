@@ -4,8 +4,12 @@
 
 #include "moreh_adam_pybind.hpp"
 
+#include <pybind11/cast.h>
+#include <pybind11/pybind11.h>
+#include <memory>
+#include <optional>
+
 #include "pybind11/decorators.hpp"
-#include "pybind11/pytypes.h"
 #include "ttnn/operations/moreh/moreh_adam/moreh_adam.hpp"
 
 namespace ttnn::operations::moreh::moreh_adam {

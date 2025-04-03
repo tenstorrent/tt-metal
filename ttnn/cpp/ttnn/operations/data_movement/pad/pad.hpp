@@ -4,10 +4,17 @@
 
 #pragma once
 
-#include "ttnn/tensor/types.hpp"
+#include <stdint.h>
+#include <optional>
 #include <ranges>
-#include "ttnn/decorators.hpp"
+#include <utility>
+
+#include <tt_stl/span.hpp>
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace operations::data_movement {

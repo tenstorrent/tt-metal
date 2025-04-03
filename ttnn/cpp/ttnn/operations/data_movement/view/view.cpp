@@ -3,7 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "view.hpp"
+
+#include <fmt/base.h>
+
 #include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tile.hpp>
+#include "ttnn/core.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::data_movement {
 

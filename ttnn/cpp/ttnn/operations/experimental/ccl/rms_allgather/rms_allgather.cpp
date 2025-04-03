@@ -4,6 +4,26 @@
 
 #include "rms_allgather.hpp"
 
+#include <fmt/base.h>
+#include <algorithm>
+#include <cstddef>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/shape.hpp>
+#include "ttnn/core.hpp"
+#include "ttnn/global_semaphore.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_op.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+
 namespace ttnn {
 namespace operations::fused::normalization {
 

@@ -4,9 +4,24 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <optional>
+#include <tuple>
+#include <vector>
+
 #include "device/nlp_create_qkv_heads_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 namespace operations::experimental::transformer {

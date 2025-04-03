@@ -2,9 +2,38 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "moreh_getitem_device_operation.hpp"
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include <boost/container/vector.hpp>
+#include <boost/move/utility_core.hpp>
+#include <stdint.h>
+#include <algorithm>
+#include <array>
+#include <map>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
 #include "cpp/ttnn/operations/experimental/reshape/view.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "moreh_getitem_device_operation.hpp"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/utils.hpp>
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {

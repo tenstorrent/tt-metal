@@ -4,10 +4,20 @@
 
 #include "sdpa_decode.hpp"
 
+#include <fmt/base.h>
+#include <algorithm>
 #include <utility>
 
 #include "device/sdpa_decode_op.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/run_operation.hpp"
 
 using namespace tt::tt_metal;

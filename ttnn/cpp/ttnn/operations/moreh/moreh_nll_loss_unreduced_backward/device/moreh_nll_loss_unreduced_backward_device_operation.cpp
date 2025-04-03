@@ -4,6 +4,13 @@
 
 #include "moreh_nll_loss_unreduced_backward_device_operation.hpp"
 
+#include <fmt/base.h>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/device.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+
 namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward {
 
 MorehNllLossUnreducedBackwardDeviceOperation::program_factory_t

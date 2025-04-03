@@ -3,8 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layernorm_pybind.hpp"
+
+#include <fmt/base.h>
+#include <pybind11/cast.h>
+#include <pybind11/pybind11.h>
+#include <cstddef>
+#include <optional>
+#include <string>
+
 #include "cpp/pybind11/decorators.hpp"
 #include "layernorm.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include "ttnn/operations/normalization/layernorm/device/layernorm_types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::normalization::detail {
 

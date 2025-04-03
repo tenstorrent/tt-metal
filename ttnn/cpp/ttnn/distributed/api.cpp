@@ -4,18 +4,30 @@
 
 #include "ttnn/distributed/api.hpp"
 
-#include <memory>
-
-#include <tt_stl/overloaded.hpp>
-#include "tt-metalium/assert.hpp"
-#include "tt-metalium/mesh_coord.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/distributed/distributed_tensor_config.hpp"
+#include <fmt/base.h>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include <tt_stl/overloaded.hpp>
+#include <memory>
+#include <type_traits>
+#include <unordered_map>
+#include <utility>
+#include <variant>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/tile.hpp>
 #include "ttnn/distributed/distributed_tensor_config.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 

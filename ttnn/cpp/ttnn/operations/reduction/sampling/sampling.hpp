@@ -4,9 +4,17 @@
 
 #pragma once
 
-#include "ttnn/run_operation.hpp"
+#include <stdint.h>
+#include <optional>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace operations::reduction {

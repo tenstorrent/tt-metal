@@ -4,8 +4,14 @@
 
 #include "full_like_device_operation.hpp"
 
+#include <fmt/base.h>
 #include <optional>
 
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::full_like {

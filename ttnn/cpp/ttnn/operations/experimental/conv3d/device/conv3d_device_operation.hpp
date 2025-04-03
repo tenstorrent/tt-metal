@@ -7,11 +7,16 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <string>
+#include <tuple>
 #include <vector>
 
-#include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::experimental::conv3d {
 

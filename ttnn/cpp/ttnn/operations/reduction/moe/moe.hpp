@@ -4,10 +4,17 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <optional>
+#include <vector>
+
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
-
 #include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace operations::reduction {

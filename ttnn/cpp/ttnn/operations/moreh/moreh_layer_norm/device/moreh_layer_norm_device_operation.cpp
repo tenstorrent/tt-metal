@@ -4,7 +4,16 @@
 
 #include "moreh_layer_norm_device_operation.hpp"
 
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include <fmt/base.h>
+#include <string>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/shape.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -90,7 +99,8 @@ MorehLayerNormOperation::spec_return_value_t MorehLayerNormOperation::compute_ou
     } else {
         result[0] = TensorSpec(
             input.get_logical_shape(),
-            TensorLayout(input.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
+            TensorLayout(
+                input.get_dtype(), tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.memory_config));
     }
 
     if (tensor_args.mean.has_value()) {

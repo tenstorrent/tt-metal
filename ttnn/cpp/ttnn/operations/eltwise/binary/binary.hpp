@@ -5,10 +5,16 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
-#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
-#include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
+#include <optional>
+
 #include "device/binary_device_operation.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

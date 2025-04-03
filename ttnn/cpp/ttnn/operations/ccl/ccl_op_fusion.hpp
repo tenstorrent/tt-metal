@@ -4,7 +4,19 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <tt-metalium/program_impl.hpp>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+class Program;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 namespace experimental {

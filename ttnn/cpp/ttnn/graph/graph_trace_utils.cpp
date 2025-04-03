@@ -4,13 +4,22 @@
 
 #include "graph_trace_utils.hpp"
 
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
+#include <nlohmann/detail/iterators/iter_impl.hpp>
+#include <nlohmann/json.hpp>
+#include <tt-metalium/assert.hpp>
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>  // std::strtoul
+#include <map>
+#include <optional>
 #include <string>
-#include <cstdlib>  // std::strtoul
+#include <string_view>
 
 #include "graph_consts.hpp"
-#include "graph_processor.hpp"
-#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/small_vector.hpp>
 
 namespace ttnn::graph {
 

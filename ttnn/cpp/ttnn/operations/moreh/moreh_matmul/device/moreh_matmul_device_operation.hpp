@@ -4,13 +4,27 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <cstddef>
 #include <optional>
+#include <tuple>
+#include <variant>
 
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/small_vector.hpp>
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Shape;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::moreh::moreh_matmul {
 struct MorehMatmulOperation {

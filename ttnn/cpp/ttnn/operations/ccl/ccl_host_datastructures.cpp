@@ -2,8 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/ttnn/tensor/tensor_impl.hpp"
+#include <optional>
+
 #include "cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/math.hpp>
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_fabric {
+enum class Topology;
+}  // namespace tt_fabric
+}  // namespace tt
 
 using namespace tt::tt_metal;
 

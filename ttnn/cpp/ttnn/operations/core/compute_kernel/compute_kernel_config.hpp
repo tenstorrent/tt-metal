@@ -4,12 +4,14 @@
 
 #pragma once
 
-#include <array>
-#include <variant>
-#include <tuple>
-#include <optional>
-#include "umd/device/types/arch.h"
+#include <stdint.h>
 #include <tt-metalium/base_types.hpp>
+#include <array>
+#include <optional>
+#include <tuple>
+#include <variant>
+
+#include <umd/device/types/arch.h>
 
 namespace ttnn {
 

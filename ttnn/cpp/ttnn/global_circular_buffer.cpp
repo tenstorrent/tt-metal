@@ -4,9 +4,11 @@
 
 #include "global_circular_buffer.hpp"
 
-#include <memory>
-#include <tt-metalium/global_circular_buffer_impl.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/global_circular_buffer_impl.hpp>
+#include <algorithm>
+
+#include <tt-metalium/assert.hpp>
 
 namespace ttnn::global_circular_buffer {
 

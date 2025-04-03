@@ -3,6 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dram_prefetcher_pybind.hpp"
+
+#include <pybind11/cast.h>
+#include <pybind11/pybind11.h>
+#include <memory>
+
 #include "cpp/pybind11/decorators.hpp"
 #include "dram_prefetcher.hpp"
 

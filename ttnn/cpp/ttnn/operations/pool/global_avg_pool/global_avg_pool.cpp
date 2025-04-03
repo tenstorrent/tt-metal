@@ -3,8 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/pool/global_avg_pool/global_avg_pool.hpp"
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
+#include <stdint.h>
+
 #include "cpp/ttnn/operations/experimental/reshape/view.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 namespace tt {
 namespace tt_metal {

@@ -4,22 +4,70 @@
 
 #include "device.hpp"
 
+#include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
+
+#include <abstract.h>
+#include <boost/container/vector.hpp>
+#include <floatobject.h>
+#include <fmt/base.h>
+#include <longobject.h>
+#include <pybind11/cast.h>
 #include <pybind11/operators.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-
-#include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
-#include <tt-metalium/persistent_kernel_cache.hpp>
-#include <tt-metalium/memory_reporter.hpp>
+#include <pybind11/pytypes.h>
+#include <pyerrors.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/trace.hpp>
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/memory_reporter.hpp>
+#include <tt-metalium/persistent_kernel_cache.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <array>
+#include <functional>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <utility>
+#include <vector>
+
+#include "hostdevcommon/common_values.hpp"
+#include <tt_stl/span.hpp>
+#include <tt_stl/strong_type.hpp>
 #include "tools/profiler/op_profiler.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/profiler_optional_metadata.hpp>
+#include <tt-metalium/profiler_types.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/device.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+#include <umd/device/types/arch.h>
+#include <umd/device/types/cluster_descriptor_types.h>
+
+namespace tt {
+namespace tt_metal {
+enum class Layout;
+}  // namespace tt_metal
+}  // namespace tt
 
 using namespace tt::tt_metal;
 

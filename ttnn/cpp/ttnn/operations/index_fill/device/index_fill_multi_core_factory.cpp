@@ -2,11 +2,35 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
+#include <fmt/base.h>
 #include <tt-metalium/circular_buffer_types.hpp>
-#include "index_fill_device_operation.hpp"
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <cstdint>
+#include <map>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "hostdevcommon/kernel_structs.h"
+#include "index_fill_device_operation.hpp"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/utils.hpp>
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+#include <umd/device/types/xy_pair.h>
 
 using namespace tt;
 using namespace tt::tt_metal;

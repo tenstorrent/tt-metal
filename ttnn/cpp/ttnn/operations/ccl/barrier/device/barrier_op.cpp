@@ -4,7 +4,16 @@
 
 #include "ttnn/operations/ccl/barrier/device/barrier_op.hpp"
 
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <algorithm>
 #include <cstdint>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/fabric_edm_types.hpp>
+#include "ttnn/run_operation.hpp"
 
 namespace ttnn {
 

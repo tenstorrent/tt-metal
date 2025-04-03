@@ -2,17 +2,57 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/tensor/host_buffer/functions.hpp"
-#include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/math.hpp"
+#include <fmt/base.h>
+#include <stddef.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "ttnn/operation.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <map>
+#include <optional>
+#include <set>
+#include <tuple>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "hostdevcommon/kernel_structs.h"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/math.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/host_buffer/owned_buffer.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+#include <umd/device/types/xy_pair.h>
+
+namespace tt {
+enum class DataFormat : uint8_t;
+}  // namespace tt
 
 static const uint32_t max_read_size = 2048;  // max read size in bytes for reader and writer kernels
 using namespace tt::constants;

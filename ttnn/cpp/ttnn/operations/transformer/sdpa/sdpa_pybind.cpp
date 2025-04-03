@@ -4,11 +4,26 @@
 
 #include "sdpa_pybind.hpp"
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <stdint.h>
+#include <optional>
+#include <string>
+#include <tuple>
 
-#include "sdpa.hpp"
 #include "cpp/pybind11/decorators.hpp"
+#include "sdpa.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/transformer/sdpa_config.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::transformer {
 

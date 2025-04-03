@@ -4,20 +4,35 @@
 
 #include "types.hpp"
 
-#include <sstream>
-
+#include <abstract.h>
+#include <boost/container/vector.hpp>
+#include <boost/move/utility_core.hpp>
+#include <floatobject.h>
+#include <fmt/base.h>
+#include <longobject.h>
+#include <pybind11/cast.h>
 #include <pybind11/operators.h>
-#include <pybind11/stl.h>
-
+#include <pybind11/pytypes.h>
+#include <pyerrors.h>
 #include <tt-metalium/small_vector.hpp>
+#include <cstddef>
+#include <cstdint>
+#include <sstream>
+#include <string>
+#include <utility>
 
 #include "export_enum.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
 
 namespace ttnn {
+enum class BcastOpDim;
+enum class BcastOpMath;
+
 namespace types {
 
 void py_module_types(py::module& module) {

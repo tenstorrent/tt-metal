@@ -4,9 +4,15 @@
 
 #include "batch_norm_pybind.hpp"
 
-#include "batch_norm.hpp"
+#include <pybind11/cast.h>
+#include <pybind11/pybind11.h>
+#include <memory>
+#include <optional>
 
+#include "batch_norm.hpp"
 #include "pybind11/decorators.hpp"
+#include "ttnn/common/queue_id.hpp"
+
 namespace py = pybind11;
 namespace ttnn::operations::normalization::detail {
 void bind_batch_norm_operation(pybind11::module& module) {

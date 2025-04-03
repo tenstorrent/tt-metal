@@ -4,16 +4,20 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <functional>
 #include <optional>
-
-#include "ttnn/tensor/tensor.hpp"
-#include "dropout_program_factory.hpp"
-
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
+#include <tuple>
+#include <variant>
 
 #include "dropout_device_operation_types.hpp"
+#include "dropout_program_factory.hpp"
+#include <tt_stl/reflection.hpp>
+#include "ttnn/decorators.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::dropout {
 

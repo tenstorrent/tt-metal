@@ -5,7 +5,23 @@
 #include "halo.hpp"
 
 #include <utility>
+
 #include "device/halo_device_operation.hpp"
+#include "ttnn/types.hpp"
+
+namespace ttnn {
+namespace operations {
+namespace sliding_window {
+struct SlidingWindowConfig;
+}  // namespace sliding_window
+}  // namespace operations
+}  // namespace ttnn
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
+
 namespace ttnn::operations::sliding_window::halo {
 Tensor HaloOperation::invoke(
     QueueId queue_id,

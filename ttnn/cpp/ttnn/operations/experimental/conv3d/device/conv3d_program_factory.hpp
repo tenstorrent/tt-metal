@@ -4,7 +4,21 @@
 
 #pragma once
 
+#include <optional>
+
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+namespace ttnn {
+namespace operations {
+namespace experimental {
+namespace conv3d {
+struct Conv3dConfig;
+}  // namespace conv3d
+}  // namespace experimental
+}  // namespace operations
+}  // namespace ttnn
 
 namespace ttnn::operations::experimental::conv3d::detail {
 

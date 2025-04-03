@@ -3,9 +3,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rotary_embedding_llama_fused_qk_device_operation.hpp"
-#include "rotary_embedding_llama_fused_qk_program_factory.hpp"
 
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/constants.hpp>
+#include <array>
+#include <optional>
+#include <variant>
+
+#include "rotary_embedding_llama_fused_qk_program_factory.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
 
 namespace tt {
 

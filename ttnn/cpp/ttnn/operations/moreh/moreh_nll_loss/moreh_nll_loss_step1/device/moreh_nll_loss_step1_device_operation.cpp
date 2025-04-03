@@ -4,6 +4,13 @@
 
 #include "moreh_nll_loss_step1_device_operation.hpp"
 
+#include <fmt/base.h>
+
+#include <tt-metalium/assert.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+
 namespace ttnn::operations::moreh::moreh_nll_loss_step1 {
 
 MorehNllLossStep1DeviceOperation::program_factory_t MorehNllLossStep1DeviceOperation::select_program_factory(

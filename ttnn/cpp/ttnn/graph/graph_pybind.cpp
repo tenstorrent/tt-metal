@@ -4,10 +4,18 @@
 
 #include "graph_pybind.hpp"
 
+#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
+#include <pybind11/cast.h>
+#include <pybind11/pybind11.h>
+#include <pybind11/pytypes.h>
+#include <map>
+#include <string>
+#include <vector>
+
 #include "graph_processor.hpp"
 #include "graph_trace_utils.hpp"
-
-#include "pybind11/stl.h"
+#include <tt-metalium/graph_tracking.hpp>
 
 namespace ttnn::graph {
 

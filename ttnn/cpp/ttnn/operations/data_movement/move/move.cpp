@@ -4,13 +4,38 @@
 
 #include "ttnn/operations/data_movement/move/move.hpp"
 
-#include "device/move_device_operation.hpp"
-#include "ttnn/common/queue_id.hpp"
-#include "ttnn/decorators.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/distributed/api.hpp"
-
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/hal.hpp>
+#include <algorithm>
+#include <memory>
+#include <type_traits>
+#include <variant>
+#include <vector>
+
+#include "device/move_device_operation.hpp"
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/util.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/distributed/api.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct DeviceStorage;
+struct MultiDeviceStorage;
+}  // namespace tt_metal
+}  // namespace tt
 
 using namespace tt::tt_metal;
 

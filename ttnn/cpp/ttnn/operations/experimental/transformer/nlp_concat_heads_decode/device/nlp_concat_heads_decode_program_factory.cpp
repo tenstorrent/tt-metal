@@ -2,11 +2,39 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/util.hpp>
+#include <array>
+#include <cstdint>
+#include <map>
+#include <optional>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "hostdevcommon/kernel_structs.h"
 #include "nlp_concat_heads_decode_device_operation.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tile.hpp>
+#include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/types.hpp"
+#include <umd/device/types/xy_pair.h>
+
+namespace tt {
+enum class DataFormat : uint8_t;
+}  // namespace tt
 
 namespace ttnn::operations::experimental::transformer {
 

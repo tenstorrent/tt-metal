@@ -8,9 +8,9 @@
 #include <pybind11/stl.h>
 
 #include "cpp/pybind11/decorators.hpp"
-
 #include "ttnn/operations/experimental/reduction/cumprod/cumprod.hpp"
 #include "ttnn/types.hpp"
+
 namespace ttnn::operations::experimental::reduction::cumprod::detail {
 
 void bind_cumprod_operation(py::module& module);

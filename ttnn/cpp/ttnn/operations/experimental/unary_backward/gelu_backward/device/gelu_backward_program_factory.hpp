@@ -4,7 +4,10 @@
 
 #pragma once
 
+#include <stdint.h>
+
 #include "gelu_backward_device_operation_types.hpp"
+#include <tt-metalium/kernel_types.hpp>
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::gelu_backward::program {

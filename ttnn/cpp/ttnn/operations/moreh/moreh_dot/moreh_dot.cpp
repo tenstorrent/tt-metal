@@ -6,6 +6,13 @@
 
 #include "ttnn/operations/moreh/moreh_dot/device/moreh_dot_device_operation.hpp"
 
+namespace tt {
+namespace tt_metal {
+enum class DataType;
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
+
 namespace ttnn::operations::moreh::moreh_dot {
 
 Tensor MorehDot::invoke(

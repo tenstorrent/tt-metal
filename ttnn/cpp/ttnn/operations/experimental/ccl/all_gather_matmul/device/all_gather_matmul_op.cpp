@@ -2,17 +2,29 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
 #include <tt-metalium/core_coord.hpp>
-#include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
-#include "ttnn/operations/math.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
-#include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
+#include <algorithm>
+#include <cstdlib>
+#include <type_traits>
+#include <variant>
 
 /* All Gather Matmul fusion includes */
 #include "cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "cpp/ttnn/operations/matmul/device/matmul_op.hpp"
 #include "cpp/ttnn/operations/matmul/matmul.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tile.hpp>
+#include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
+#include "ttnn/run_operation.hpp"
 
 namespace ttnn {
 namespace experimental {

@@ -3,7 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cumprod_pybind.hpp"
+
+#include <pybind11/cast.h>
+#include <stdint.h>
+#include <memory>
+#include <optional>
+
+#include "pybind11/decorators.hpp"
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/operations/experimental/reduction/cumprod/cumprod.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::experimental::reduction::cumprod::detail {
 void bind_cumprod_operation(py::module& module) {

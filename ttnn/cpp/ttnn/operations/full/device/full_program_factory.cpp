@@ -2,9 +2,35 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "full_device_operation.hpp"
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/work_split.hpp>
+#include <algorithm>
+#include <map>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
 #include "cpp/ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "full_device_operation.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/utils.hpp>
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+enum class DataFormat : uint8_t;
+}  // namespace tt
 
 using namespace tt;
 using namespace tt::constants;

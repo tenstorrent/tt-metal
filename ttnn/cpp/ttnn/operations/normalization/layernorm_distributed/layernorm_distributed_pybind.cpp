@@ -3,9 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layernorm_distributed_pybind.hpp"
+
+#include <pybind11/cast.h>
+#include <pybind11/pybind11.h>
+#include <memory>
+#include <optional>
+
 #include "cpp/pybind11/decorators.hpp"
-#include "layernorm_pre_all_gather.hpp"
 #include "layernorm_post_all_gather.hpp"
+#include "layernorm_pre_all_gather.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::normalization::detail {
 

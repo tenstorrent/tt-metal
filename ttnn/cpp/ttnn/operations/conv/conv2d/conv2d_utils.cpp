@@ -2,28 +2,45 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <sys/types.h>
+#include <fmt/base.h>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/work_split.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <tuple>
+#include <utility>
 
 #include "conv2d_utils.hpp"
-#include <tt-metalium/buffer_constants.hpp>
-#include "tt-metalium/constants.hpp"
-#include <tt-metalium/hal.hpp>
+#include <tt_stl/reflection.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "ttnn/core.hpp"
+#include "ttnn/decorators.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
-#include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
-#include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/core_coord.hpp>
-#include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/core/to_layout/to_layout_op.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt;
 

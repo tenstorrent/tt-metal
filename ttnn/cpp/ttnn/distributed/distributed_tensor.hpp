@@ -4,8 +4,14 @@
 
 #pragma once
 
-#include "ttnn/tensor/tensor.hpp"
+#include <functional>
+#include <memory>
+#include <optional>
+#include <vector>
+
+#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::distributed {
 

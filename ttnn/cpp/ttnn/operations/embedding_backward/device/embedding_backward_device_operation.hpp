@@ -4,10 +4,15 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <optional>
+#include <vector>
 
-#include "ttnn/tensor/tensor.hpp"
+#include <tt_stl/reflection.hpp>
+#include <tt-metalium/constants.hpp>
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::constants;
 

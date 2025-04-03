@@ -2,12 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device/nlp_kv_cache_load_slice_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "nlp_kv_cache_load_slice.hpp"
-
+#include <boost/container/vector.hpp>
+#include <algorithm>
 #include <utility>
+#include <vector>
+
+#include "device/nlp_kv_cache_load_slice_device_operation.hpp"
+#include "nlp_kv_cache_load_slice.hpp"
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 

@@ -2,11 +2,34 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <optional>
-
-#include "moreh_adamw_device_operation.hpp"
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/work_split.hpp>
+#include <algorithm>
+#include <cmath>
+#include <map>
+#include <optional>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "hostdevcommon/kernel_structs.h"
+#include "moreh_adamw_device_operation.hpp"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::moreh::moreh_adamw {
 MorehAdamWDeviceOperation::MultiCore::cached_program_t MorehAdamWDeviceOperation::MultiCore::create(
@@ -164,7 +187,6 @@ MorehAdamWDeviceOperation::MultiCore::cached_program_t MorehAdamWDeviceOperation
     float beta1_exponent = std::pow(beta1, step);
     float beta2_exponent = std::pow(beta2, step);
 
-    union {
         float f;
         uint32_t u;
     } f2u_lr, f2u_beta1, f2u_beta2, f2u_eps, f2u_weight_decay, f2u_beta1_exponent, f2u_beta2_exponent;
@@ -274,7 +296,6 @@ void MorehAdamWDeviceOperation::MultiCore::override_runtime_arguments(
     const uint32_t max_exp_avg_sq_out_addr =
         operation_attributes.amsgrad ? tensor_return_value.at(3).value().buffer()->address() : 0;
 
-    union {
         float f;
         uint32_t u;
     } f2u_lr, f2u_beta1_exponent, f2u_beta2_exponent;

@@ -4,8 +4,20 @@
 
 #include "moreh_mean.hpp"
 
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <algorithm>
+
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/moreh/moreh_mean/device/moreh_mean_device_operation.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::moreh::moreh_mean {
 Tensor MorehMean::invoke(

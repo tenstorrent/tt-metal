@@ -4,6 +4,8 @@
 
 #include "moreh_layer_norm_backward_gamma_beta_grad_device_operation.hpp"
 
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::moreh::moreh_layer_norm_backward_gamma_beta_grad {

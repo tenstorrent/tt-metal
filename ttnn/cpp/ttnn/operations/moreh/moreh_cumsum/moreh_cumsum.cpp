@@ -3,6 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_cumsum.hpp"
+
+#include "ttnn/operations/moreh/moreh_cumsum/device/moreh_cumsum_device_operation.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
+
 namespace ttnn::operations::moreh::moreh_cumsum {
 Tensor MorehCumsum::invoke(
     const Tensor& input,

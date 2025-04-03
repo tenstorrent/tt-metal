@@ -4,21 +4,25 @@
 
 #include "operations/__init__.hpp"
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <pybind11/pytypes.h>
+#include <cstdint>
 
 #include "activation.hpp"
 #include "core.hpp"
 #include "device.hpp"
-#include "fabric.hpp"
-#include "profiler.hpp"
 #include "events.hpp"
+#include "fabric.hpp"
 #include "global_circular_buffer.hpp"
 #include "global_semaphore.hpp"
-#include "tensor.hpp"
+#include "profiler.hpp"
 #include "reports.hpp"
-#include "ttnn/distributed/distributed_pybind.hpp"
+#include "tensor.hpp"
+#include "ttnn/config.hpp"
+#include "ttnn/core.hpp"
 #include "ttnn/deprecated/tt_lib/csrc/operations/primary/module.hpp"
+#include "ttnn/distributed/distributed_pybind.hpp"
 #include "ttnn/graph/graph_pybind.hpp"
 #include "types.hpp"
 

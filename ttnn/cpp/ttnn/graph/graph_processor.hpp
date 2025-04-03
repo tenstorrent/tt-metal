@@ -4,16 +4,33 @@
 
 #pragma once
 
-#include <tt-metalium/graph_tracking.hpp>
 #include <nlohmann/json.hpp>
-#include "ttnn/tensor/tensor.hpp"
-
+#include <nlohmann/json_fwd.hpp>
+#include <tt-metalium/graph_tracking.hpp>
+#include <any>
+#include <cstdint>
+#include <functional>
+#include <memory>
 #include <mutex>
+#include <span>
 #include <stack>
+#include <string>
+#include <string_view>
 #include <typeindex>
 #include <unordered_map>
-#include <functional>
-#include <any>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include "ttnn/tensor/tensor.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Buffer;
+class IDevice;
+class Program;
+}  // namespace tt_metal
+}  // namespace tt
+
 namespace ttnn::graph {
 
 class ProcessorHooks : public tt::tt_metal::IGraphHooks {

@@ -4,26 +4,45 @@
 
 #include "tensor_ops.hpp"
 
-#include "ttnn/tensor/tensor.hpp"
-
+#include <fmt/base.h>
+#include <tracy/Tracy.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/math.hpp>
+#include <atomic>
 #include <cstdint>
+#include <functional>
+#include <iostream>
 #include <memory>
+#include <optional>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <variant>
 
-#include <tt-metalium/bfloat16.hpp>
+#include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include <tt-metalium/tile.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/work_executor_types.hpp>
+#include "ttnn/decorators.hpp"
+#include "ttnn/distributed/api.hpp"
+#include "ttnn/distributed/distributed_tensor_config.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
-#include <tracy/Tracy.hpp>
-#include <tt-metalium/graph_tracking.hpp>
-#include "ttnn/distributed/api.hpp"
-#include "ttnn/distributed/types.hpp"
-#include "ttnn/core.hpp"
-
-#include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
-#include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace tt::tt_metal::tensor_ops {
 

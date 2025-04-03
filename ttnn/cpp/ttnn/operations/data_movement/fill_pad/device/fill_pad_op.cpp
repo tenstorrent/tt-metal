@@ -3,9 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/fill_pad/device/fill_pad_op.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include <tt-metalium/constants.hpp>
+
+#include <fmt/base.h>
+#include <map>
+
+#include <tt-metalium/assert.hpp>
 #include "ttnn/operations/data_movement/fill_pad/device/fill_pad_program_factory.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::data_movement {
 

@@ -4,8 +4,31 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <cstddef>
+#include <optional>
+#include <tuple>
+#include <variant>
+
+#include <tt-metalium/kernel_types.hpp>
 #include "ttnn/decorators.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
+namespace ttnn {
+namespace operations {
+namespace moreh {
+namespace moreh_norm {
+struct MorehNormOperation::ProgramFactoryHOther::shared_variables_t;
+struct MorehNormOperation::operation_attributes_t;
+struct MorehNormOperation::tensor_args_t;
+}  // namespace moreh_norm
+}  // namespace moreh
+}  // namespace operations
+}  // namespace ttnn
 
 #define DEFINE_PROGRAM_FACTORY(FactoryName)                                                 \
     struct FactoryName {                                                                    \

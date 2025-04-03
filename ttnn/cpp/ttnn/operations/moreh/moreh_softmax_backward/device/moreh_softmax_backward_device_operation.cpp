@@ -4,6 +4,26 @@
 
 #include "moreh_softmax_backward_device_operation.hpp"
 
+#include <fmt/base.h>
+#include <memory>
+
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/util.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+
+namespace tt {
+enum class DataFormat : uint8_t;
+}  // namespace tt
+
 namespace ttnn::operations::moreh::moreh_softmax_backward {
 
 #define L1_512KB (512 * 1024)

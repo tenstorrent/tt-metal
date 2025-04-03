@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <unordered_map>
-#include <string>
-
+#include <fmt/base.h>
 #include <tt-metalium/assert.hpp>
+#include <string>
+#include <unordered_map>
+
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 
 namespace tt::tt_metal {

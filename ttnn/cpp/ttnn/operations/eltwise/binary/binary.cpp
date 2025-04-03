@@ -5,12 +5,23 @@
 
 #include "binary.hpp"
 
+#include <fmt/base.h>
+#include <stdint.h>
+#include <algorithm>
+#include <array>
+#include <tuple>
+#include <type_traits>
+#include <vector>
+
 #include "device/binary_device_operation.hpp"
-#include "ttnn/device_operation.hpp"
+#include <tt_stl/span.hpp>
+#include <tt_stl/strong_type.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/shape.hpp>
+#include "ttnn/operations/copy.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include "ttnn/operations/copy.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn::operations::binary {
 

@@ -2,9 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
+#include <ostream>
+
+#include <tt_stl/reflection.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
 
 namespace tt::tt_metal {
 

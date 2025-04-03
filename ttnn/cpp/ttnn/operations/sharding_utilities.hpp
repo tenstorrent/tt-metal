@@ -8,8 +8,10 @@
 
 #pragma once
 
-#include <tt-metalium/math.hpp>
+#include <stdint.h>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/math.hpp>
+#include <tuple>
 
 namespace tt::tt_metal {
 

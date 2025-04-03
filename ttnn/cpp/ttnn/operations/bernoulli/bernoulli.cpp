@@ -7,6 +7,13 @@
 
 #include "device/bernoulli_device_operation.hpp"
 
+namespace tt {
+namespace tt_metal {
+enum class DataType;
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
+
 namespace ttnn::operations::bernoulli {
 Tensor Bernoulli::invoke(
     const Tensor& input,

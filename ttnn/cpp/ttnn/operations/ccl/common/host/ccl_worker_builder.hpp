@@ -4,15 +4,40 @@
 
 #pragma once
 
-#include "cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "cpp/ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
-#include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
-#include "cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
-
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <unordered_map>
+#include <vector>
+
+#include "cpp/ttnn/operations/ccl/ccl_common.hpp"
+#include "cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include "ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+#include <umd/device/tt_xy_pair.h>
+
+class CoreRangeSet;
+namespace ttnn {
+namespace ccl {
+class EdmLineFabricOpInterface;
+struct tensor_address_runtime_args_overrider;
+}  // namespace ccl
+}  // namespace ttnn
+namespace tt {
+namespace tt_fabric {
+struct SenderWorkerAdapterSpec;
+struct edm_termination_info_t;
+}  // namespace tt_fabric
+namespace tt_metal {
+class Program;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -22,8 +47,8 @@ class IDevice;
 }  // namespace tt::tt_metal
 
 namespace ttnn::ccl {
-class WorkerEdmInterfaceArgs;
 class SenderWorkerAdapterSpec;
+class WorkerEdmInterfaceArgs;
 
 namespace worker_detail {
 

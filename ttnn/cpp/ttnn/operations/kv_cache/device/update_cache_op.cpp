@@ -4,7 +4,18 @@
 
 #include "cpp/ttnn/operations/kv_cache/device/update_cache_op.hpp"
 
+#include <boost/container/vector.hpp>
 #include <tt-metalium/constants.hpp>
+#include <array>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/types.hpp"
+#include <umd/device/types/arch.h>
 
 using namespace tt::tt_metal;
 

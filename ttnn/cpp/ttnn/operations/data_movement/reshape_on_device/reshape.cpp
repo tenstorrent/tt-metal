@@ -2,16 +2,30 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/common/constants.hpp"
-#include "ttnn/run_operation.hpp"
-#include "reshape.hpp"
+#include <boost/container/vector.hpp>
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
 #include <tt-metalium/constants.hpp>
 #include <ttnn/operations/functions.hpp>
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "device/reshape_op.hpp"
+#include <algorithm>
+#include <variant>
+#include <vector>
 
 #include "cpp/ttnn/operations/experimental/reshape/view.hpp"
+#include "device/reshape_op.hpp"
+#include "reshape.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/host_buffer/owned_buffer.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn::operations::data_movement {
 

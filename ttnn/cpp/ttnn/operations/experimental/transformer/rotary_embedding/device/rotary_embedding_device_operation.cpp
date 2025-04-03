@@ -3,10 +3,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rotary_embedding_device_operation.hpp"
-#include "rotary_embedding_program_factory.hpp"
 
-#include <tt-metalium/work_split.hpp>
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <array>
+
+#include "rotary_embedding_program_factory.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
 
 using namespace tt::constants;
 

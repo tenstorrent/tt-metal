@@ -2,25 +2,37 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <math.h>
-
-#include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/math.hpp"
-#include "ttnn/operation.hpp"
-#include "ttnn/operations/core/work_split/work_split_tilize.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
+#include <fmt/base.h>
 #include <tt-metalium/host_api.hpp>
-#include "cpp/ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
-
+#include <cmath>
+#include <cstdint>
+#include <map>
 #include <optional>
+#include <utility>
 #include <variant>
+#include <vector>
 
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/math.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/core.hpp"
-#include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/decorators.hpp"
+
+namespace tt {
+enum class DataFormat : uint8_t;
+}  // namespace tt
 
 #define MASK_64      0xFFFFFFFFFFFFFFC0
 #define OFFSET_64    0x000000000000003F

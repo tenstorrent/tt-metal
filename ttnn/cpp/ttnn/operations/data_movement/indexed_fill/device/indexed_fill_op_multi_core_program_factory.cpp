@@ -2,15 +2,40 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <math.h>
-
-#include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_op.hpp"
-#include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/math.hpp"
-
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/util.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <map>
+#include <optional>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_op.hpp"
+#include "ttnn/operations/math.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include <umd/device/types/xy_pair.h>
+
+namespace tt {
+enum class DataFormat : uint8_t;
+}  // namespace tt
 
 using namespace tt::tt_metal;
 
@@ -59,7 +84,7 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
     bool out_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     bool batch_ids_is_dram = batch_ids.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     bool stick_size_is_power_of_two = is_power_of_two_at_least_32(page_size);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)log2(page_size) : 0;
+    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(page_size) : 0;
 
     // Create Kernels
     // reader

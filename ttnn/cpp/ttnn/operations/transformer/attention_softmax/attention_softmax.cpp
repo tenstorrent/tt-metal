@@ -5,7 +5,19 @@
 
 #include "attention_softmax.hpp"
 
+#include <fmt/base.h>
+#include <algorithm>
+#include <cmath>
+#include <vector>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/normalization/softmax/device/softmax_op.hpp"
+#include "ttnn/run_operation.hpp"
 
 namespace ttnn::operations::transformer {
 

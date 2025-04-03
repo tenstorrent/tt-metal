@@ -3,15 +3,40 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rotary_embedding_program_factory.hpp"
-#include <tt-metalium/work_split.hpp>
 
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <array>
+#include <cstdint>
+#include <map>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "hostdevcommon/kernel_structs.h"
 // We pull RotaryEmbedding from it to get token_idx from an operation
 // this is a circulas dependency and should be fixed
 #include "rotary_embedding_device_operation.hpp"
-
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/utils.hpp>
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace tt {
 

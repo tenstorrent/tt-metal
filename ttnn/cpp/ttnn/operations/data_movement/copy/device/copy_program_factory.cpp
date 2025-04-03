@@ -2,17 +2,44 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <math.h>
-
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/util.hpp>
-#include "copy_device_operation.hpp"
-#include "ttnn/operations/math.hpp"
-
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
-#include <algorithm>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <cmath>
+#include <cstdint>
+#include <map>
+#include <optional>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "copy_device_operation.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/utils.hpp>
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/math.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include <umd/device/types/xy_pair.h>
+
+namespace tt {
+enum class DataFormat : uint8_t;
+}  // namespace tt
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -74,14 +101,14 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
         writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
     } else {
         bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(input_unit_size);
-        uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)log2(input_unit_size) : 0;
+        uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)std::log2(input_unit_size) : 0;
         reader_compile_time_args = {
             (std::uint32_t)src0_cb_index,
             (std::uint32_t)src_is_dram,
             (std::uint32_t)src_stick_size_is_power_of_two,
             (std::uint32_t)src_log2_stick_size};
         bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_unit_size);
-        uint32_t dst_log2_stick_size = dst_stick_size_is_power_of_two ? (std::uint32_t)log2(output_unit_size) : 0;
+        uint32_t dst_log2_stick_size = dst_stick_size_is_power_of_two ? (std::uint32_t)std::log2(output_unit_size) : 0;
         writer_compile_time_args = {
             (std::uint32_t)output_cb_index,
             (std::uint32_t)dst_is_dram,

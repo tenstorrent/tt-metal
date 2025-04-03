@@ -4,14 +4,24 @@
 
 #pragma once
 
-#include <optional>
-#include <ttnn/tensor/tensor.hpp>
-
-#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-#include "ttnn/operation.hpp"
-#include "ttnn/common/queue_id.hpp"
 #include <tt-metalium/device_impl.hpp>
 #include <tt_stl/type_name.hpp>
+#include <ttnn/tensor/tensor.hpp>
+#include <functional>
+#include <optional>
+#include <utility>
+#include <vector>
+
+#include <tt-metalium/device.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum class Layout;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

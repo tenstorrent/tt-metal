@@ -4,6 +4,7 @@
 
 #include "device/gelu_backward_device_operation.hpp"
 #include "gelu_backward.hpp"
+#include <tt-metalium/device.hpp>
 
 namespace ttnn::operations::experimental {
 

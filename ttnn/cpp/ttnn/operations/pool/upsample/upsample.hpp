@@ -4,9 +4,16 @@
 
 #pragma once
 
-#include "ttnn/tensor/types.hpp"
-#include "ttnn/operations/core/core.hpp"
+#include <optional>
+#include <string>
+#include <variant>
+
 #include "ttnn/decorators.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace operations {

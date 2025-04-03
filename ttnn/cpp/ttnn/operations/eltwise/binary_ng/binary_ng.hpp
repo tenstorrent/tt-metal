@@ -4,9 +4,24 @@
 
 #pragma once
 
+#include <optional>
+
+#include <tt_stl/span.hpp>
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
+namespace ttnn {
+namespace operations {
+namespace unary {
+struct UnaryWithParam;
+}  // namespace unary
+}  // namespace operations
+}  // namespace ttnn
 
 ttnn::Tensor typecast_to(ttnn::DataType dtype, const ttnn::Tensor& input);
 bool needs_typecast_to_bfloat16(const ttnn::DataType input);

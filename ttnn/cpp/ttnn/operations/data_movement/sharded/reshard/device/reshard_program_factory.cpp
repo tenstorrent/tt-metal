@@ -4,12 +4,43 @@
 
 #include "reshard_program_factory.hpp"
 
-#include <algorithm>
-
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <fmt/base.h>
+#include <stdlib.h>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/util.hpp>
+#include <algorithm>
+#include <array>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <tuple>
+#include <unordered_map>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "hostdevcommon/kernel_structs.h"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/types.hpp"
+#include <umd/device/tt_core_coordinates.h>
+
 using namespace tt::constants;
 using namespace tt::tt_metal;
 

@@ -4,14 +4,18 @@
 
 #include "unary.hpp"
 
-#include "ttnn/common/queue_id.hpp"
+#include <fmt/base.h>
+#include <algorithm>
+
 #include "device/unary_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/pool/downsample/device/downsample_op.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/eltwise/complex/complex.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/device.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/ternary/where.hpp"
+#include <umd/device/types/arch.h>
 
 namespace ttnn::operations::unary {
 

@@ -2,20 +2,49 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/creation.hpp"
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/operations/data_movement/clone/clone.hpp"
-#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
-#include "ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
-#include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc.hpp"
-#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
+#include <boost/container/vector.hpp>
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
+#include <math.h>
+#include <stdint.h>
+#include <algorithm>
+#include <functional>
+#include <limits>
+#include <tuple>
+#include <utility>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc.hpp"
+#include "ttnn/operations/reduction/generic/device/common.hpp"
+#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
+namespace operations {
+namespace experimental {
+namespace auto_format {
+class AutoFormat;
+}  // namespace auto_format
+}  // namespace experimental
+}  // namespace operations
+
 namespace operations::reduction {
 
 // input_shape has original shape while output_shape has reduction applied and last 2 dims padded.

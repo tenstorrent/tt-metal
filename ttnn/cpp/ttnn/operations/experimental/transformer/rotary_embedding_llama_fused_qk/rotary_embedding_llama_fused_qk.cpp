@@ -4,7 +4,19 @@
 
 #include "rotary_embedding_llama_fused_qk.hpp"
 
+#include <boost/container/vector.hpp>
+#include <algorithm>
+#include <vector>
+
 #include "device/rotary_embedding_llama_fused_qk_device_operation.hpp"
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 

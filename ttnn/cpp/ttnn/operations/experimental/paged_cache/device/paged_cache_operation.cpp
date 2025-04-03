@@ -4,9 +4,21 @@
 
 #include "paged_cache_operation.hpp"
 
-#include "paged_update_cache_program_factory.hpp"
-#include "paged_fused_update_cache_program_factory.hpp"
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <array>
+
 #include "paged_fill_cache_program_factory.hpp"
+#include "paged_fused_update_cache_program_factory.hpp"
+#include "paged_update_cache_program_factory.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 

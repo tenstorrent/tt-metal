@@ -4,16 +4,47 @@
 
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
-#include <algorithm>
-#include <cmath>
-#include <numeric>
-#include <optional>
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdlib>
+#include <iterator>
+#include <memory>
+#include <numeric>
+#include <optional>
+#include <type_traits>
+#include <utility>
 
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/global_circular_buffer_impl.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/util.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/types.hpp"
+#include <umd/device/types/arch.h>
+#include <umd/device/types/xy_pair.h>
 
 using namespace tt;
 using namespace tt::constants;

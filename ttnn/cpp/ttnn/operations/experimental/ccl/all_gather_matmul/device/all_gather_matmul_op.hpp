@@ -4,25 +4,38 @@
 
 #pragma once
 
-#include <cstdint>
-#include <tt-metalium/core_coord.hpp>
+#include <stddef.h>
 #include <tt-metalium/buffer.hpp>
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <tt-metalium/constants.hpp>
-#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "ttnn/operations/ccl/ccl_common.hpp"
-
-#include "ttnn/run_operation.hpp"
-
-#include <optional>
-#include <vector>
+#include <tt-metalium/core_coord.hpp>
 #include <algorithm>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <tuple>
+#include <vector>
 
 /* Fusion includes */
 #include "cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "cpp/ttnn/operations/matmul/device/matmul_op.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_fabric {
+enum class Topology;
+}  // namespace tt_fabric
+}  // namespace tt
 
 namespace ttnn {
 namespace experimental {

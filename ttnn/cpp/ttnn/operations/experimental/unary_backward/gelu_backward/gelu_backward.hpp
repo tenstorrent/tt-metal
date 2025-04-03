@@ -4,8 +4,16 @@
 
 #pragma once
 
+#include <optional>
+#include <string>
+
+#include <tt-metalium/utils.hpp>
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental {
 

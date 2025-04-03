@@ -4,8 +4,15 @@
 
 #include "moreh_mean_backward.hpp"
 
+#include <tt-metalium/shape.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/moreh/moreh_mean_backward/device/moreh_mean_backward_device_operation.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::moreh::moreh_mean_backward {
 Tensor MorehMeanBackward::invoke(

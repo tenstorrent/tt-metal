@@ -3,20 +3,49 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/distributed/distributed_pybind.hpp"
-#include <pybind11/cast.h>
-#include <cstddef>
-#include <memory>
-#include <pybind11/pytypes.h>
-#include "tt-metalium/mesh_coord.hpp"
-#include "distributed_tensor.hpp"
-#include "ttnn/distributed/api.hpp"
-#include "ttnn/distributed/types.hpp"
-#include <tt-metalium/command_queue.hpp>
 
-// This is required for automatic conversions, as in the creation of mesh devices
-// https://github.com/tenstorrent/tt-metal/issues/18082
-#include "pybind11/stl.h"
-#include "ttnn/tensor/types.hpp"
+#include <abstract.h>
+#include <boost/move/utility_core.hpp>
+#include <floatobject.h>
+#include <longobject.h>
+#include <pybind11/attr.h>
+#include <pybind11/cast.h>
+#include <pybind11/pytypes.h>
+#include <pyerrors.h>
+#include <stdint.h>
+#include <cstddef>
+#include <functional>
+#include <memory>
+#include <optional>
+#include <sstream>
+#include <tuple>
+#include <vector>
+
+#include "distributed_tensor.hpp"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include "ttnn/distributed/api.hpp"
+#include "ttnn/distributed/distributed_tensor_config.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+namespace pybind11 {
+namespace typing {
+template <typename T>
+class Iterator;
+}  // namespace typing
+}  // namespace pybind11
+namespace tt {
+namespace tt_metal {
+class DispatchCoreConfig;
+class SubDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 using namespace tt::tt_metal;
 

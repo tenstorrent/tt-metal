@@ -2,13 +2,35 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <vector>
-
-#include "moreh_clip_grad_norm_step1_device_operation.hpp"
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <map>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "hostdevcommon/kernel_structs.h"
+#include "moreh_clip_grad_norm_step1_device_operation.hpp"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::moreh::moreh_clip_grad_norm_step1 {
 

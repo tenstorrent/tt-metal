@@ -4,15 +4,39 @@
 
 #pragma once
 
-#include <tt-metalium/core_coord.hpp>
+#include <stdint.h>
 #include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <optional>
+#include <string>
+
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/tile.hpp>
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/global_cb_utils.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/decorators.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Shape;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
+namespace operations {
+namespace unary {
+enum class UnaryOpType;
+struct UnaryWithParam;
+}  // namespace unary
+}  // namespace operations
 
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;

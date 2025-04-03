@@ -7,6 +7,12 @@
 
 #include "device/uniform_device_operation.hpp"
 
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
+
 namespace ttnn::operations::uniform {
 Tensor Uniform::invoke(
     const Tensor& input,

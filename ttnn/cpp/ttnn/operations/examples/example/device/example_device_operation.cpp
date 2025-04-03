@@ -4,6 +4,11 @@
 
 #include "example_device_operation.hpp"
 
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
 namespace ttnn::operations::examples {
 
 ExampleDeviceOperation::program_factory_t ExampleDeviceOperation::select_program_factory(

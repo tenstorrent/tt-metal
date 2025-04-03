@@ -3,26 +3,64 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 
-#include <tt-metalium/core_coord.hpp>
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/buffer.hpp>
-#include "ttnn/operation.hpp"
-#include "ttnn/operations/ccl/ccl_host_types.hpp"
-#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "ttnn/operations/ccl/ccl_common.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/circular_buffer_types.hpp>
-
-#include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
-#include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
-#include "cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.hpp"
-
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <algorithm>
+#include <cstddef>
+#include <functional>
+#include <limits>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <tuple>
+#include <unordered_map>
+#include <utility>
+#include <variant>
 // Includes that need to be moved to CCL datastructures header
 #include <vector>
-#include <algorithm>
-#include <limits>
-#include <ranges>
+
+#include "cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include <tt-metalium/utils.hpp>
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include "ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_common.hpp"
+#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+#include <umd/device/types/xy_pair.h>
+
+namespace ttnn {
+namespace operations {
+namespace binary {
+enum class BinaryOpType;
+}  // namespace binary
+}  // namespace operations
+}  // namespace ttnn
+namespace tt {
+enum class DataFormat : uint8_t;
+}  // namespace tt
 
 using namespace tt::constants;
 using namespace tt::tt_metal;

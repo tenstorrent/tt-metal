@@ -3,14 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "view_pybind.hpp"
-#include "view.hpp"
 
+#include <boost/move/utility_core.hpp>
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <stdint.h>
+#include <memory>
 
 #include "cpp/pybind11/decorators.hpp"
-#include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
-#include "ttnn/types.hpp"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+#include "view.hpp"
 
 namespace ttnn::operations::experimental::reshape::detail {
 namespace py = pybind11;

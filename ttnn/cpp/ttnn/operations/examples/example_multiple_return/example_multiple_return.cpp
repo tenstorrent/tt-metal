@@ -5,6 +5,9 @@
 
 #include "example_multiple_return.hpp"
 
+#include "ttnn/operations/examples/example_multiple_return/device/example_multiple_return_device_operation.hpp"
+#include "ttnn/run_operation.hpp"
+
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::examples {

@@ -2,19 +2,51 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "llama_reduce_scatter_device_operation.hpp"
-#include <tt-metalium/work_split.hpp>
-#include <vector>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/device_pool.hpp>
-#include "ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
-#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "cpp/ttnn/operations/ccl/sharding_addrgen_helper.hpp"
+#include <bits/std_abs.h>
+#include <boost/container/vector.hpp>
+#include <stdint.h>
+#include <stdlib.h>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
-#include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
-#include <tt-metalium/sub_device.hpp>
+#include <algorithm>
+#include <array>
+#include <map>
+#include <optional>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "hostdevcommon/common_values.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "llama_reduce_scatter_device_operation.hpp"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/fabric_edm_packet_header.hpp>
+#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include <tt-metalium/tile.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+#include <umd/device/types/xy_pair.h>
 
 namespace ttnn::operations::experimental::ccl {
 

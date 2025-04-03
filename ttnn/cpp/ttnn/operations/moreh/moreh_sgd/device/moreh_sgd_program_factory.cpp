@@ -2,12 +2,36 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <stdint.h>
+#include <tt-metalium/work_split.hpp>
+#include <algorithm>
+#include <map>
+#include <optional>
+#include <string>
+#include <utility>
+#include <variant>
 #include <vector>
 
+#include "hostdevcommon/kernel_structs.h"
 #include "moreh_sgd_device_operation.hpp"
-#include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/utils.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::moreh::moreh_sgd {
 MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFactory::create(
@@ -187,7 +211,6 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
             TT_FATAL(false, "Core not in specified core ranges");
         }
 
-        union {
             float f;
             uint32_t u;
         } u_lr, u_momentum, u_dampening, u_weight_decay, u_one;

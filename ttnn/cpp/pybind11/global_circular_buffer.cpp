@@ -4,9 +4,25 @@
 
 #include "global_circular_buffer.hpp"
 
+#include <abstract.h>
+#include <floatobject.h>
+#include <longobject.h>
+#include <pybind11/cast.h>
+#include <pyerrors.h>
+#include <stdint.h>
 #include <tt-metalium/global_circular_buffer_impl.hpp>
+#include <memory>
+#include <utility>
+#include <vector>
+
 #include "cpp/ttnn/global_circular_buffer.hpp"
 #include "pybind11/pybind11.h"
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::global_circular_buffer {
 

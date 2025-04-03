@@ -3,11 +3,31 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "softmax_pybind.hpp"
+
+#include <abstract.h>
+#include <floatobject.h>
+#include <longobject.h>
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <pyerrors.h>
+#include <stdint.h>
+#include <cstddef>
+#include <memory>
+#include <optional>
 
 #include "cpp/pybind11/decorators.hpp"
 #include "softmax.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/normalization/softmax/device/softmax_types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::normalization::detail {
 

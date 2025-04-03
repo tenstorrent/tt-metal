@@ -4,13 +4,29 @@
 
 #include "binary_device_operation.hpp"
 
-#include <utility>
-
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/data_movement/bcast/bcast.hpp"
-
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
 #include <tracy/Tracy.hpp>
+#include <tt-metalium/constants.hpp>
+#include <algorithm>
+#include <utility>
+#include <vector>
+
+#include <tt_stl/strong_type.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include <umd/device/types/arch.h>
 
 using namespace tt::tt_metal;
 

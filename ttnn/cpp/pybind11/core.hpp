@@ -9,8 +9,8 @@
 #include <pybind11/stl/filesystem.h>
 
 #include "ttnn/core.hpp"
-#include "tt-metalium/lightmetal_binary.hpp"
-#include "tt-metalium/lightmetal_replay.hpp"
+#include <tt-metalium/lightmetal_binary.hpp>
+#include <tt-metalium/lightmetal_replay.hpp>
 
 namespace py = pybind11;
 

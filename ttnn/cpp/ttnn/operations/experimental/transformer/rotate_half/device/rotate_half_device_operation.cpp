@@ -4,9 +4,17 @@
 
 #include "rotate_half_device_operation.hpp"
 
-#include "single_core/rotate_half_program_factory.hpp"
+#include <fmt/base.h>
 
-#include "ttnn/run_operation.hpp"
+#include "single_core/rotate_half_program_factory.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 

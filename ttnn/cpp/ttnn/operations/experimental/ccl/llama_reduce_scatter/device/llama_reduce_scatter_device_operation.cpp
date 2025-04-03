@@ -2,13 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <tt-metalium/work_split.hpp>
+#include <algorithm>
+#include <array>
 #include <cstdint>
-#include <utility>
 
 #include "cpp/ttnn/tensor/types.hpp"
 #include "llama_reduce_scatter_device_operation.hpp"
-#include "cpp/ttnn/operations/data_movement/common/common.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tile.hpp>
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 

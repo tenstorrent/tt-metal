@@ -4,12 +4,32 @@
 
 #pragma once
 
+#include <fmt/base.h>
+#include <fmt/core.h>
+#include <limits.h>
+#include <stdint.h>
 #include <array>
+#include <cstddef>
+#include <functional>
 #include <string>
 #include <tuple>
-#include <fmt/core.h>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+class Shape;
+enum class ShardOrientation;
+enum class TensorMemoryLayout;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::sliding_window {
 

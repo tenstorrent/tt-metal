@@ -4,16 +4,25 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/global_circular_buffer_impl.hpp>
 #include <optional>
+#include <vector>
 
-#include "ttnn/run_operation.hpp"
-#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/global_cb_utils.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
-#include <tt-metalium/global_circular_buffer_impl.hpp>
-#include <tt-metalium/global_circular_buffer.hpp>
-
+namespace tt {
+namespace tt_metal {
+namespace experimental {
+class GlobalCircularBuffer;
+}  // namespace experimental
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::dram_prefetcher {
 

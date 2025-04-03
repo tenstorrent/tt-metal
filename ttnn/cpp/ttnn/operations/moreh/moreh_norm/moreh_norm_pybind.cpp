@@ -4,6 +4,12 @@
 
 #include "moreh_norm_pybind.hpp"
 
+#include <boost/move/utility_core.hpp>
+#include <pybind11/cast.h>
+#include <pybind11/pybind11.h>
+#include <memory>
+#include <optional>
+
 #include "moreh_norm.hpp"
 #include "pybind11/decorators.hpp"
 

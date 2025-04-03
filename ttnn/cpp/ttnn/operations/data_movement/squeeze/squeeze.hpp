@@ -4,8 +4,9 @@
 
 #pragma once
 
+#include <tt-metalium/small_vector.hpp>
 #include "ttnn/decorators.hpp"
-#include "tt-metalium/small_vector.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn {
 namespace operations::data_movement {

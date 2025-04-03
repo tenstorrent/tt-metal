@@ -4,9 +4,18 @@
 
 #include "moreh_matmul.hpp"
 
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include <algorithm>
+
+#include <tt-metalium/shape.hpp>
 #include "ttnn/operations/moreh/moreh_dot/moreh_dot.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/moreh/moreh_matmul/device/moreh_matmul_device_operation.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::moreh::moreh_matmul {
 

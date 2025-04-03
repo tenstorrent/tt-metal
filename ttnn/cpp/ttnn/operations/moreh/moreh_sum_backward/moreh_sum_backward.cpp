@@ -4,8 +4,20 @@
 
 #include "moreh_sum_backward.hpp"
 
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <algorithm>
+
 #include "device/moreh_sum_backward_device_operation.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/shape.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::moreh::moreh_sum_backward {
 Tensor MorehSumBackward::invoke(

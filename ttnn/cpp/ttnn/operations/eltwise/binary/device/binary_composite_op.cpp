@@ -3,22 +3,48 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_composite_op.hpp"
-#include <magic_enum/magic_enum.hpp>
-#include <utility>
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/types.hpp"
-#include <tt-metalium/bfloat16.hpp>
+
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/hal.hpp>
-#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
-#include "cpp/ttnn/operations/eltwise/ternary/where.hpp"
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <limits>
+#include <string>
+#include <type_traits>
+#include <utility>
+
 #include "cpp/ttnn/operations/copy.hpp"
-#include "ttnn/operations/eltwise/unary/unary_composite.hpp"
-#include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/matmul/matmul.hpp"
-#include "ttnn/operations/creation.hpp"
 #include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "cpp/ttnn/operations/eltwise/ternary/where.hpp"
+#include <tt_stl/strong_type.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/core/to_layout/to_layout_op.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/operations/functions.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+#include <umd/device/types/arch.h>
 
 namespace ttnn::operations::binary {
 

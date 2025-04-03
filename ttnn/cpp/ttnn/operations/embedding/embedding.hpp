@@ -4,8 +4,20 @@
 
 #pragma once
 
-#include "ttnn/operations/embedding/device/embedding_device_operation.hpp"
+#include <optional>
+
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/operations/embedding/device/embedding_device_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum class Layout;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 

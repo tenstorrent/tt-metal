@@ -4,12 +4,13 @@
 
 #include "moreh_adamw_pybind.hpp"
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <memory>
+#include <optional>
 
 #include "cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/moreh/moreh_adamw/moreh_adamw.hpp"
-#include "ttnn/types.hpp"
 
 namespace py = pybind11;
 

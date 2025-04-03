@@ -2,18 +2,48 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <stddef.h>
 #include <stdint.h>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/global_circular_buffer_impl.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/util.hpp>
+#include <algorithm>
+#include <array>
+#include <iterator>
+#include <map>
+#include <optional>
+#include <utility>
+#include <variant>
+#include <vector>
 
 #include "dram_prefetcher_op.hpp"
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/tile.hpp>
+#include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+#include <umd/device/types/xy_pair.h>
 
-#include <tt-metalium/global_circular_buffer_impl.hpp>
-#include <tt-metalium/global_circular_buffer.hpp>
+namespace tt {
+enum class DataFormat : uint8_t;
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::dram_prefetcher {
 

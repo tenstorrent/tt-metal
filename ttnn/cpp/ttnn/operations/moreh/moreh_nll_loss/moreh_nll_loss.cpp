@@ -5,10 +5,24 @@
 
 #include "moreh_nll_loss.hpp"
 
+#include <fmt/base.h>
+#include <algorithm>
+
+#include "cpp/ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 #include "moreh_nll_loss_helper.hpp"
 #include "moreh_nll_loss_step1/device/moreh_nll_loss_step1_device_operation.hpp"
 #include "moreh_nll_loss_step2/device/moreh_nll_loss_step2_device_operation.hpp"
-#include "cpp/ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::moreh::moreh_nll_loss {
 

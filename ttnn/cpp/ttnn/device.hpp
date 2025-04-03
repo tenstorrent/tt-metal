@@ -4,7 +4,15 @@
 
 #pragma once
 
+#include <stddef.h>
+
+#include "hostdevcommon/common_values.hpp"
+#include <tt-metalium/dispatch_core_common.hpp>
 #include "ttnn/types.hpp"
+
+namespace tt {
+enum class ARCH;
+}  // namespace tt
 
 namespace ttnn {
 

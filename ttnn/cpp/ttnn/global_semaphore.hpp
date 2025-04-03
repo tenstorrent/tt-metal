@@ -4,8 +4,18 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <memory>
+#include <tuple>
+#include <vector>
+
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/types.hpp"
+
+class CoreRangeSet;
 
 namespace ttnn::global_semaphore {
 

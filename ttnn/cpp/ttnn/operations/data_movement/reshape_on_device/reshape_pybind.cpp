@@ -4,12 +4,24 @@
 
 #include "reshape_pybind.hpp"
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <stdint.h>
+#include <optional>
 
 #include "cpp/pybind11/decorators.hpp"
+#include <tt-metalium/small_vector.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::data_movement {
 

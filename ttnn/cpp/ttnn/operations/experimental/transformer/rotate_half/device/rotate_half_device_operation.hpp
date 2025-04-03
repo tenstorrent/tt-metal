@@ -4,7 +4,11 @@
 
 #pragma once
 
+#include <vector>
+
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 

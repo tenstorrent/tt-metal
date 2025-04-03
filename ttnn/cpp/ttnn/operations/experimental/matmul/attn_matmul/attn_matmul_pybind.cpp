@@ -2,10 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/pybind11/decorators.hpp"
+#include <pybind11/cast.h>
+#include <stdint.h>
+#include <memory>
+#include <optional>
 
-#include "ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_pybind.hpp"
+#include "cpp/pybind11/decorators.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/matmul/attn_matmul/attn_matmul.hpp"
+#include "ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_pybind.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum class DataType;
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::experimental::matmul::detail {
 

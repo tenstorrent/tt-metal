@@ -2,8 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/pybind11/decorators.hpp"
+#include <pybind11/cast.h>
+#include <pybind11/pybind11.h>
+
 #include "sliding_window.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum class ShardOrientation;
+enum class TensorMemoryLayout;
+}  // namespace tt_metal
+}  // namespace tt
 
 using namespace tt::tt_metal;
 

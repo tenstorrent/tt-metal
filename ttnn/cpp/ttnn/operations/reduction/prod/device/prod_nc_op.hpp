@@ -4,15 +4,22 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <functional>
 #include <optional>
 #include <utility>
 #include <vector>
 
+#include <tt-metalium/small_vector.hpp>
+#include "ttnn/operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
 
 namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
 
 namespace operations {
 

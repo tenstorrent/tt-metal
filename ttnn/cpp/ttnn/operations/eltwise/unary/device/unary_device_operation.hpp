@@ -6,16 +6,33 @@
 
 #include <functional>
 #include <optional>
+#include <tuple>
+#include <variant>
+#include <vector>
 
-#include "ttnn/tensor/tensor.hpp"
+#include <tt_stl/reflection.hpp>
+#include "ttnn/decorators.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+#include "unary_device_operation_types.hpp"
 #include "unary_program_factory.hpp"
 #include "unary_sharded_program_factory.hpp"
 
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
-
-#include "unary_device_operation_types.hpp"
+namespace ttnn {
+namespace operations {
+namespace unary {
+struct UnaryWithParam;
+}  // namespace unary
+}  // namespace operations
+}  // namespace ttnn
+namespace tt {
+namespace tt_metal {
+enum class DataType;
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 
 namespace ttnn::operations::unary {

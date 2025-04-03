@@ -4,8 +4,39 @@
 
 #pragma once
 
+#include <boost/move/utility_core.hpp>
+#include <stdint.h>
+#include <cstddef>
+#include <optional>
+#include <tuple>
+#include <variant>
+
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/small_vector.hpp>
 #include "ttnn/decorators.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
+namespace ttnn {
+namespace operations {
+namespace moreh {
+namespace moreh_norm_backward {
+struct MorehNormBackwardOperation::ProgramFactory::shared_variables_t;
+struct MorehNormBackwardOperation::operation_attributes_t;
+struct MorehNormBackwardOperation::tensor_args_t;
+}  // namespace moreh_norm_backward
+}  // namespace moreh
+}  // namespace operations
+}  // namespace ttnn
+namespace tt {
+namespace tt_metal {
+class Shape;
+}  // namespace tt_metal
+}  // namespace tt
 
 #define DEFINE_PROGRAM_FACTORY(FactoryName)                                                 \
     struct FactoryName {                                                                    \

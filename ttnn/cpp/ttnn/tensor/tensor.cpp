@@ -4,34 +4,54 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-#include <cstdint>
-#include <memory>
-#include <utility>
-
+#include <tracy/Tracy.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt_stl/overloaded.hpp>
-#include "tt-metalium/mesh_device_view.hpp"
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstdlib>
+#include <iterator>
+#include <memory>
+#include <type_traits>
+#include <unordered_map>
+#include <utility>
+
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include <tt-metalium/tile.hpp>
+#include <tt-metalium/work_executor_types.hpp>
+#include "ttnn/core.hpp"
+#include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
+#include "ttnn/tensor/host_buffer/borrowed_buffer.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/host_buffer/owned_buffer.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/storage.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tracy/Tracy.hpp>
-#include <tt-metalium/graph_tracking.hpp>
-#include "ttnn/core.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn/distributed/api.hpp"
+#include <umd/device/types/xy_pair.h>
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 namespace {

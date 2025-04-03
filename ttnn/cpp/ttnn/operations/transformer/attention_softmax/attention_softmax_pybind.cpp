@@ -4,11 +4,14 @@
 
 #include "attention_softmax_pybind.hpp"
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <memory>
+#include <optional>
 
-#include "cpp/pybind11/decorators.hpp"
 #include "attention_softmax.hpp"
+#include "cpp/pybind11/decorators.hpp"
+#include "ttnn/operations/normalization/softmax/device/softmax_types.hpp"
 
 namespace ttnn::operations::transformer {
 

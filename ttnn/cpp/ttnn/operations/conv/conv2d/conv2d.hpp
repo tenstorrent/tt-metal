@@ -3,12 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <stdint.h>
+#include <array>
 #include <optional>
+#include <tuple>
+#include <variant>
 
-#include "ttnn/types.hpp"
-#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

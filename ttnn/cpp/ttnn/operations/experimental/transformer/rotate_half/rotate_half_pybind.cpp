@@ -4,8 +4,10 @@
 
 #include "rotate_half_pybind.hpp"
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <memory>
+#include <optional>
 
 #include "cpp/pybind11/decorators.hpp"
 #include "rotate_half.hpp"

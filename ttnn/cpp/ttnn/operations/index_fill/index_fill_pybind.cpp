@@ -4,12 +4,13 @@
 
 #include "index_fill_pybind.hpp"
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <memory>
+#include <optional>
 
-#include "index_fill.hpp"
 #include "cpp/pybind11/decorators.hpp"
-#include "ttnn/operations/index_fill/device/index_fill_device_operation.hpp"
+#include "index_fill.hpp"
 
 namespace py = pybind11;
 

@@ -6,7 +6,14 @@
 
 #include "device/full_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum class DataType;
+enum class Layout;
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::full {
 

@@ -4,8 +4,26 @@
 
 #include "untilize_with_unpadding_op.hpp"
 
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/run_operation.hpp"
+#include <fmt/base.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <array>
+#include <optional>
+#include <utility>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include <tt-metalium/tile.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
 #include "untilize_with_unpadding_program_factory.hpp"
 
 using namespace tt::tt_metal;

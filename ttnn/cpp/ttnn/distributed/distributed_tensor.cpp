@@ -2,11 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <stddef.h>
+#include <tt-metalium/assert.hpp>
+#include <algorithm>
+#include <iterator>
+
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/shape_base.hpp>
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
-#include <tt-metalium/assert.hpp>
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/xtensor/partition.hpp"
 
 namespace ttnn::distributed {

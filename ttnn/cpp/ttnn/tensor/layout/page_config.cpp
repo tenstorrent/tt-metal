@@ -4,7 +4,18 @@
 
 #include "page_config.hpp"
 
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/shape2d.hpp>
+#include <array>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tile.hpp>
+#include "ttnn/tensor/types.hpp"
 
 namespace tt::tt_metal {
 

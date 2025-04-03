@@ -3,13 +3,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fill_pad.hpp"
-#include "device/fill_pad_op.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/decorators.hpp"
-#include "ttnn/common/queue_id.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include <utility>
+
+#include <boost/container/vector.hpp>
+#include <stdint.h>
+#include <algorithm>
+#include <array>
+#include <vector>
+
 #include "cpp/ttnn/operations/copy.hpp"
+#include "device/fill_pad_op.hpp"
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn::operations::data_movement {
 

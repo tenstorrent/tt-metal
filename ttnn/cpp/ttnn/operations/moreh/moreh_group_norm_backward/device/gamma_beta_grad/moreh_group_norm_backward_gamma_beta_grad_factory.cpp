@@ -2,9 +2,33 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "moreh_group_norm_backward_gamma_beta_grad_device_operation.hpp"
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/work_split.hpp>
+#include <map>
+#include <optional>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "hostdevcommon/kernel_structs.h"
+#include "moreh_group_norm_backward_gamma_beta_grad_device_operation.hpp"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::moreh::moreh_group_norm_backward {
 MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGradFactory::cached_program_t

@@ -4,6 +4,8 @@
 
 #include "complex.hpp"
 
+#include <tt-metalium/assert.hpp>
+
 namespace ttnn {
 namespace operations::complex {
 

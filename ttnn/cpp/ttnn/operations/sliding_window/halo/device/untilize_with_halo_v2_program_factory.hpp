@@ -4,7 +4,17 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <vector>
+
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Program;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::data_movement::detail {
 

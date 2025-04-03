@@ -3,10 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "non_zero_indices.hpp"
+
+#include <boost/container/vector.hpp>
+#include <algorithm>
+
 #include "device/non_zero_indices_op.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/decorators.hpp"
+#include <tt-metalium/buffer_constants.hpp>
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 

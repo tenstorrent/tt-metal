@@ -6,6 +6,12 @@
 
 #include "ttnn/operations/moreh/moreh_abs_pow/device/moreh_abs_pow_device_operation.hpp"
 
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
+
 namespace ttnn::operations::moreh::moreh_abs_pow {
 Tensor MorehAbsPow::invoke(
     const Tensor& input,

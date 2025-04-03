@@ -3,13 +3,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "types.hpp"
+#include <vector>
+
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "types.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Shape;
+enum class Layout;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
-struct Tensor;
-struct MemoryConfig;
 class CommandQueue;
+struct MemoryConfig;
+struct Tensor;
+
 namespace distributed {
 class MeshDevice;
 }  // namespace distributed

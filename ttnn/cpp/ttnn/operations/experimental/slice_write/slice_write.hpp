@@ -4,7 +4,12 @@
 
 #pragma once
 
+#include <cstddef>
+#include <tuple>
+
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn {
 namespace operations {

@@ -5,12 +5,24 @@
 #pragma once
 
 #include <optional>
-
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/core/core.hpp"
+#include <vector>
 
 #include "layernorm_distributed_types.hpp"
+#include <tt-metalium/constants.hpp>
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
+namespace ttnn {
+namespace operations {
+namespace normalization {
+enum class LayerNormDistributedType;
+}  // namespace normalization
+}  // namespace operations
+}  // namespace ttnn
 
 using namespace tt::constants;
 

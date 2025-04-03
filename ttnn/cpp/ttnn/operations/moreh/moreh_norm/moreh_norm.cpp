@@ -4,9 +4,23 @@
 
 #include "moreh_norm.hpp"
 
-#include "device/moreh_norm_device_operation.hpp"
+#include <boost/container/vector.hpp>
+#include <boost/move/utility_core.hpp>
+#include <algorithm>
+#include <functional>
+#include <limits>
+#include <numeric>
+
 #include "cpp/ttnn/operations/moreh/moreh_abs_pow/moreh_abs_pow.hpp"
 #include "cpp/ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
+#include "device/moreh_norm_device_operation.hpp"
+#include <tt-metalium/shape.hpp>
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::moreh::moreh_norm {
 Tensor MorehNorm::invoke(

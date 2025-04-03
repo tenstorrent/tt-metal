@@ -3,13 +3,32 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <array>
 #include <cstdint>
+#include <iosfwd>
 #include <optional>
+#include <string>
+#include <tuple>
 
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/utils.hpp>
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
-#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Shape;
+enum class Layout;
+enum class ShardOrientation;
+enum class TensorMemoryLayout;
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 

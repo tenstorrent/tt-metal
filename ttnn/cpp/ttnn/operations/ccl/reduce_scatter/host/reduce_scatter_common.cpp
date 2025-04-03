@@ -3,11 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_common.hpp"
-#include "cpp/ttnn/operations/ccl/ccl_common.hpp"
 
-#include <cstdint>
+#include <algorithm>
+#include <array>
 #include <cstddef>
+#include <cstdint>
 #include <vector>
+
+#include "cpp/ttnn/operations/ccl/ccl_common.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/logger.hpp>
+#include "ttnn/types.hpp"
+#include <umd/device/types/xy_pair.h>
 
 namespace ttnn {
 namespace ccl {

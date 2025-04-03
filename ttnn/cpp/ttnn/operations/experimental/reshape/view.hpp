@@ -4,9 +4,18 @@
 
 #pragma once
 
-#include "ttnn/run_operation.hpp"
-#include "ttnn/decorators.hpp"
 #include <optional>
+
+#include "ttnn/decorators.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Shape;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 namespace operations::experimental::reshape {

@@ -5,10 +5,12 @@
 #pragma once
 
 #include <tt-metalium/core_coord.hpp>
-
+#include <cstddef>
 #include <cstdint>
-#include <vector>
+#include <functional>
+#include <limits>
 #include <optional>
+#include <vector>
 
 namespace ttnn {
 namespace ccl {

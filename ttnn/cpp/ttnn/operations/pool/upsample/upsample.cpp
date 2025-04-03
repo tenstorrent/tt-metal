@@ -3,7 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "upsample.hpp"
+
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <algorithm>
+#include <array>
+#include <type_traits>
+#include <vector>
+
 #include "device/upsample_op.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
 #include "ttnn/run_operation.hpp"
 
 namespace ttnn::operations::upsample {

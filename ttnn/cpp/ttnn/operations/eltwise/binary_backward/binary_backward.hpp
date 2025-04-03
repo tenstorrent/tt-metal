@@ -5,10 +5,20 @@
 
 #pragma once
 
+#include <algorithm>
+#include <optional>
+#include <string>
+#include <vector>
+
+#include <tt-metalium/utils.hpp>
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
+#include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

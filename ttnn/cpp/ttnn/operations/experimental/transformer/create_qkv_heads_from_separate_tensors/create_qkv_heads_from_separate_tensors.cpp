@@ -4,11 +4,20 @@
 
 #include "create_qkv_heads_from_separate_tensors.hpp"
 
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <algorithm>
+#include <initializer_list>
 #include <utility>
+#include <vector>
+
 #include "device/create_qkv_heads_from_separate_tensors_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/operations/core/core.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/run_operation.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 

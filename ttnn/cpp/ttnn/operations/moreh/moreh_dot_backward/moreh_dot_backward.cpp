@@ -5,6 +5,13 @@
 #include "moreh_dot_backward.hpp"
 
 #include "ttnn/operations/moreh/moreh_dot_backward/device/moreh_dot_backward_device_operation.hpp"
+#include "ttnn/run_operation.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 using namespace tt::tt_metal;
 

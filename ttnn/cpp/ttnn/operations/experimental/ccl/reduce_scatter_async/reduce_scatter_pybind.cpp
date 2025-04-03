@@ -4,15 +4,34 @@
 
 #include "reduce_scatter_pybind.hpp"
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <optional>
+#include <vector>
 
 #include "cpp/pybind11/decorators.hpp"
+#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include "ttnn/decorators.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_async/reduce_scatter.hpp"
-#include "ttnn/types.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
-
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace ttnn {
+namespace global_semaphore {
+struct MultiDeviceGlobalSemaphore;
+}  // namespace global_semaphore
+}  // namespace ttnn
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::experimental::ccl {
 

@@ -4,12 +4,31 @@
 
 #pragma once
 
-#include "ttnn/run_operation.hpp"
+#include <stddef.h>
+#include <stdint.h>
+#include <optional>
+#include <vector>
+
+#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/system_memory_manager.hpp>
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
 namespace ttnn {
+namespace operations {
+namespace binary {
+enum class BinaryOpType;
+}  // namespace binary
+}  // namespace operations
 
 struct ReduceScatter {
     const ttnn::operations::binary::BinaryOpType binary_op_type;

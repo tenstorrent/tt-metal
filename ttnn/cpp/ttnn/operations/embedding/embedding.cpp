@@ -4,12 +4,28 @@
 
 #include "ttnn/operations/embedding/embedding.hpp"
 
+#include <boost/container/vector.hpp>
+#include <algorithm>
 #include <utility>
-#include "ttnn/operations/core/core.hpp"
+#include <vector>
+
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/core/to_layout/to_layout_op.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/embedding/device/embedding_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum class Layout;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::embedding {
 

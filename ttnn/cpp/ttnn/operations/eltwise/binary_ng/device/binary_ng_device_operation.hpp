@@ -4,11 +4,34 @@
 
 #pragma once
 
+#include <boost/move/utility_core.hpp>
+#include <stdint.h>
+#include <optional>
+#include <tuple>
+#include <variant>
+
+#include <tt_stl/reflection.hpp>
+#include <tt_stl/span.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/small_vector.hpp>
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
+namespace ttnn {
+namespace operations {
+namespace binary_ng {
+enum class BinaryOpType;
+}  // namespace binary_ng
+}  // namespace operations
+}  // namespace ttnn
+
 namespace ttnn::operations::binary_ng {
 
 enum class SubtileBroadcastType {

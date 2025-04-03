@@ -4,12 +4,18 @@
 
 #include "ttnn/operations/embedding_backward/embedding_backward.hpp"
 
+#include <boost/container/vector.hpp>
+#include <algorithm>
 #include <utility>
+#include <vector>
 
-#include "cpp/ttnn/common/constants.hpp"
-#include "ttnn/operations/core/core.hpp"
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/embedding_backward/device/embedding_backward_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn::operations::embedding_backward {
 

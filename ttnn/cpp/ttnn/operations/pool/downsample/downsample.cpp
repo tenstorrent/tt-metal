@@ -3,7 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "downsample.hpp"
+
+#include <boost/container/vector.hpp>
+#include <algorithm>
+#include <vector>
+
 #include "device/downsample_op.hpp"
+#include <tt-metalium/buffer_constants.hpp>
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 

@@ -4,9 +4,17 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include <stdint.h>
 #include <tt-metalium/sub_device_types.hpp>
+#include <optional>
+
+#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace operations::experimental::ccl {

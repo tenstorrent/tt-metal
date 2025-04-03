@@ -4,9 +4,18 @@
 
 #pragma once
 
-#include "ttnn/tensor/tensor.hpp"
+#include <optional>
+#include <vector>
+
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+
+namespace ttnn {
+enum class BcastOpDim;
+enum class BcastOpMath;
+}  // namespace ttnn
 
 namespace ttnn::operations::data_movement {
 

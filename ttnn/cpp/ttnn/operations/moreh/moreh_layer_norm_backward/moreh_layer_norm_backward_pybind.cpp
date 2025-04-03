@@ -4,8 +4,12 @@
 
 #include "moreh_layer_norm_backward_pybind.hpp"
 
+#include <pybind11/cast.h>
+#include <pybind11/pybind11.h>
+#include <memory>
+#include <optional>
+
 #include "pybind11/decorators.hpp"
-#include "pybind11/pytypes.h"
 #include "ttnn/operations/moreh/moreh_layer_norm_backward/moreh_layer_norm_backward.hpp"
 
 namespace ttnn::operations::moreh::moreh_layer_norm_backward {

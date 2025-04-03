@@ -2,22 +2,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/container/vector.hpp>
+#include <boost/move/detail/reverse_iterator.hpp>
+#include <fmt/base.h>
+#include <algorithm>
 #include <functional>
+#include <numeric>
+#include <tuple>
+#include <utility>
+#include <vector>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
-
+#include "device/repeat_device_operation.hpp"
+#include "repeat.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
+#include "ttnn/operations/core/to_layout/to_layout_op.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
+#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/view/view.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "device/repeat_device_operation.hpp"
-#include "repeat.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::data_movement {
 

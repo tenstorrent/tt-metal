@@ -2,18 +2,42 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <optional>
-
-#include "binary_device_operation.hpp"
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "ttnn/device_operation.hpp"
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <array>
+#include <map>
+#include <optional>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "binary_device_operation.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/utils.hpp>
 #include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/data_movement/bcast/bcast.hpp"
+#include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::binary {
 

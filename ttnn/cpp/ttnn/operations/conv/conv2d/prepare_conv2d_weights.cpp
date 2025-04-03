@@ -3,17 +3,54 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/operations/sliding_window/sliding_window.hpp"
+
+#include <assert.h>
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
 #include <tt-metalium/work_split.hpp>
+#include <algorithm>
+#include <cmath>
+#include <functional>
+#include <tuple>
+#include <type_traits>
+#include <unordered_map>
+
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include <tt-metalium/utils.hpp>
+#include "ttnn/core.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/distributed/api.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/core/to_dtype/to_dtype_op.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/host_buffer/owned_buffer.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/types.hpp"
+
 namespace ttnn {
 namespace operations::conv {
 using namespace tt;

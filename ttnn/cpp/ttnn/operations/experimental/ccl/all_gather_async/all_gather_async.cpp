@@ -3,10 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_gather_async.hpp"
-#include <utility>
-#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
+
 #include "ttnn/distributed/types.hpp"
-#include "cpp/ttnn/global_semaphore.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 

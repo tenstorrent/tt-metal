@@ -4,9 +4,10 @@
 
 #pragma once
 
-#include "cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
-
+#include <stddef.h>
 #include <vector>
+
+#include "cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
 
 namespace tt::tt_metal {
 class Tensor;
@@ -15,6 +16,7 @@ class Tensor;
 namespace ttnn::ccl {
 
 struct tensor_command_map;
+
 std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> tensor_slice_commands_to_noc_commands(
     const std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand>& command_stream,
     const tt::tt_metal::Tensor& tensor,

@@ -2,11 +2,29 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/constants.hpp>
-#include "cpp/pybind11/decorators.hpp"
+#include <abstract.h>
+#include <floatobject.h>
+#include <fmt/base.h>
+#include <longobject.h>
+#include <pybind11/cast.h>
+#include <pybind11/pybind11.h>
+#include <pyerrors.h>
+#include <stdint.h>
+#include <array>
+#include <optional>
+#include <string>
 
-#include "conv3d_pybind.hpp"
 #include "conv3d.hpp"
+#include "conv3d_pybind.hpp"
+#include "cpp/pybind11/decorators.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/experimental/conv3d/device/conv3d_device_operation.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;

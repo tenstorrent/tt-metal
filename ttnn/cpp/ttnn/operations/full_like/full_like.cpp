@@ -6,6 +6,14 @@
 
 #include "ttnn/operations/full_like/device/full_like_device_operation.hpp"
 
+namespace tt {
+namespace tt_metal {
+enum class DataType;
+enum class Layout;
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
+
 namespace ttnn::operations::full_like {
 
 Tensor FullLike::invoke(

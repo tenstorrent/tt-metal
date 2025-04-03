@@ -6,6 +6,13 @@
 
 #include <ttnn/decorators.hpp>
 #include <ttnn/tensor/tensor.hpp>
+#include <optional>
+
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
+enum class MathFidelity : uint8_t;
 
 namespace ttnn::operations::experimental::ssm {
 

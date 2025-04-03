@@ -4,13 +4,22 @@
 
 #include "upsample_op.hpp"
 
-#include <algorithm>
-#include <cmath>
+#include <fmt/base.h>
+#include <array>
+#include <optional>
 
-#include <tt-metalium/util.hpp>
-#include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 
 namespace ttnn::operations::upsample {
 using namespace tt;

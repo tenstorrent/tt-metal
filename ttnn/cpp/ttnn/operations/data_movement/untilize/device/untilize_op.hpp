@@ -4,10 +4,14 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <optional>
+#include <vector>
 
-#include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::data_movement {
 

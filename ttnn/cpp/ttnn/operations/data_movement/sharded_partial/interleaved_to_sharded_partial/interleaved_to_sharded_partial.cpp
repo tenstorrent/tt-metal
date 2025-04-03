@@ -2,11 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/common/queue_id.hpp"
-#include "ttnn/run_operation.hpp"
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <tt-metalium/work_split.hpp>
+#include <algorithm>
+#include <type_traits>
+#include <vector>
+
 #include "device/interleaved_to_sharded_partial_op.hpp"
 #include "interleaved_to_sharded_partial.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 

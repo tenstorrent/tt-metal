@@ -4,9 +4,18 @@
 
 #pragma once
 
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/run_operation.hpp"
+#include <fmt/base.h>
+#include <stdint.h>
+#include <algorithm>
+#include <optional>
+#include <vector>
+
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/device.hpp>
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::kv_cache {
 

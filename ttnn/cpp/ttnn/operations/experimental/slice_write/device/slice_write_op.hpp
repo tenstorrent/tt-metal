@@ -5,9 +5,13 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 
-#include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/shape.hpp>
+#include "ttnn/operation.hpp"
 #include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental {
 

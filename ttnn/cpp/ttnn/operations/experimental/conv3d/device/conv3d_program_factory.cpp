@@ -2,12 +2,37 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
+#include <algorithm>
+#include <array>
+#include <map>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
 #include "conv3d_device_operation.hpp"
 #include "conv3d_program_factory.hpp"
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/constants.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/util.hpp>
 #include "ttnn/operations/cb_utils.hpp"
-#include <algorithm>
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::experimental::conv3d::detail {
 

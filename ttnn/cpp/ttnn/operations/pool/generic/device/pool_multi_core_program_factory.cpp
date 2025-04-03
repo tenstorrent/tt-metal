@@ -2,12 +2,49 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "pool_op.hpp"
-#include "tt-metalium/circular_buffer.hpp"
-#include "tt-metalium/circular_buffer_types.hpp"
-#include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"  // for reduce_op_utils
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/math.hpp>
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "hostdevcommon/kernel_structs.h"
+#include "pool_op.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/reduction/generic/device/common.hpp"
+#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"  // for reduce_op_utils
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+class CircularBuffer;
+}  // namespace tt_metal
+}  // namespace tt
 
 /**
  * Generic pool implementation that uses the new sliding window infrastructure.

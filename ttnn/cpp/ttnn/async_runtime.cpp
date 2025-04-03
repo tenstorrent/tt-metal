@@ -4,8 +4,20 @@
 
 #include "async_runtime.hpp"
 
-#include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/tensor/tensor_impl_wrapper.hpp"
+#include <stdint.h>
+#include <functional>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include "ttnn/tensor/tensor_utils.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Event;
+}  // namespace tt_metal
+}  // namespace tt
 
 using namespace tt::tt_metal;
 

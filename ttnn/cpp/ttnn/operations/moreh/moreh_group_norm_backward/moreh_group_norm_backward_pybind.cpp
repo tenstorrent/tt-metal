@@ -4,6 +4,12 @@
 
 #include "moreh_group_norm_backward_pybind.hpp"
 
+#include <pybind11/cast.h>
+#include <pybind11/pybind11.h>
+#include <algorithm>
+#include <optional>
+#include <vector>
+
 #include "moreh_group_norm_backward.hpp"
 #include "pybind11/decorators.hpp"
 

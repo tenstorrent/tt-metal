@@ -4,9 +4,30 @@
 
 #include "sdpa_op.hpp"
 
-#include "sdpa_program_factory.hpp"
-#include "ttnn/run_operation.hpp"
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <magic_enum/magic_enum.hpp>
 #include <tt-metalium/constants.hpp>
+#include <cmath>
+#include <cstddef>
+#include <string_view>
+
+#include "sdpa_program_factory.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include <umd/device/types/arch.h>
+
+enum class MathFidelity : uint8_t;
 
 using namespace tt::tt_metal;
 

@@ -2,11 +2,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/sliding_window/halo/device/untilize_with_halo_v2_program_factory.hpp"
-#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-#include "ttnn/tensor/shape/shape.hpp"
-#include "ttnn/operations/sliding_window/halo/device/halo_device_operation.hpp"
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <algorithm>
 #include <array>
+#include <cmath>
+#include <optional>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
+#include "ttnn/operations/sliding_window/halo/device/halo_device_operation.hpp"
+#include "ttnn/operations/sliding_window/halo/device/untilize_with_halo_v2_program_factory.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::sliding_window::halo {
 

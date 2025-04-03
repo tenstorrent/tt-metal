@@ -4,7 +4,11 @@
 
 #include "ttnn/operations/examples/example_multiple_return/example_multiple_return_pybind.hpp"
 
+#include <pybind11/cast.h>
+#include <memory>
+
 #include "cpp/pybind11/decorators.hpp"
+#include "ttnn/operations/examples/example_multiple_return/device/example_multiple_return_device_operation.hpp"
 #include "ttnn/operations/examples/example_multiple_return/example_multiple_return.hpp"
 
 namespace py = pybind11;

@@ -3,12 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_ng_utils.hpp"
-#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
-#include <tt-metalium/assert.hpp>
 
-#include <fmt/core.h>
-#include <fmt/format.h>
+#include <fmt/base.h>
 #include <magic_enum/magic_enum.hpp>
+#include <tt-metalium/assert.hpp>
+#include <bit>
+#include <cctype>
+#include <numeric>
+
+#include <tt-metalium/bfloat16.hpp>
+#include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
+#include "ttnn/operations/eltwise/binary_ng/types.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::binary_ng {
 

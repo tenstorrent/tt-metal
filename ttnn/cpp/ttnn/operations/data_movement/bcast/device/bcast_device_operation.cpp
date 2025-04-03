@@ -3,8 +3,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "bcast_device_operation.hpp"
+
+#include <fmt/base.h>
+#include <stdint.h>
+#include <variant>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/run_operation.hpp"
 
 // using namespace tt;
 // using namespace tt_metal;

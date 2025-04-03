@@ -4,10 +4,23 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <optional>
+#include <vector>
 
-#include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include "ttnn/operation.hpp"
 #include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+
+enum class MathFidelity : uint8_t;
+namespace tt {
+namespace tt_metal {
+enum class Layout;
+}  // namespace tt_metal
+}  // namespace tt
 
 using namespace tt::constants;
 

@@ -4,7 +4,17 @@
 
 #pragma once
 
+#include <cstddef>
+#include <optional>
+#include <tuple>
+#include <variant>
+
+#include <tt-metalium/kernel_types.hpp>
 #include "ttnn/decorators.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::moreh::moreh_arange {
 

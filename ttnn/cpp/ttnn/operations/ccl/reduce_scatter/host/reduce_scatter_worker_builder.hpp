@@ -4,11 +4,14 @@
 
 #pragma once
 
-#include "cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_common.hpp"
-#include "cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "cpp/ttnn/operations/ccl/ccl_common.hpp"
-
+#include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <vector>
+
+#include "cpp/ttnn/operations/ccl/ccl_common.hpp"
+#include "cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_common.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -22,6 +25,8 @@ class IDevice;
 namespace ttnn {
 namespace ccl {
 class WorkerEdmInterfaceArgs;
+enum EriscDataMoverTerminationMode : uint32_t;
+struct WorkerXY;
 
 namespace reduce_scatter_detail {
 

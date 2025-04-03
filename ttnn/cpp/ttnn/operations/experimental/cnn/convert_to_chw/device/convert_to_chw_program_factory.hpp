@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::cnn::detail {
 

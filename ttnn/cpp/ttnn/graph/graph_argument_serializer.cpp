@@ -3,10 +3,36 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "graph_argument_serializer.hpp"
+
+#include <boost/algorithm/string/replace.hpp>
+#include <cxxabi.h>
+#include <stdint.h>
+#include <sys/types.h>
+#include <cstdlib>
+#include <optional>
+#include <sstream>
+#include <typeinfo>
+#include <utility>
+#include <variant>
+
+#include <tt_stl/reflection.hpp>
+#include <tt_stl/strong_type.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include <tt-metalium/tile.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/alignment.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
-#include <boost/algorithm/string/replace.hpp>
+
+namespace ttnn {
+struct QueueIdTag;
+}  // namespace ttnn
 
 namespace ttnn::graph {
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Layout& layout) {

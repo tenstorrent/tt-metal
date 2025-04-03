@@ -4,6 +4,12 @@
 
 #include "fold_pybind.hpp"
 
+#include <pybind11/cast.h>
+#include <pybind11/pybind11.h>
+#include <stdint.h>
+#include <optional>
+#include <vector>
+
 #include "pybind11/decorators.hpp"
 #include "ttnn/operations/moreh/moreh_fold/fold.hpp"
 

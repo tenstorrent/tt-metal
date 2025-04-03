@@ -4,11 +4,25 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <tracy/Tracy.hpp>
+#include <algorithm>
+#include <memory>
+#include <string>
+#include <type_traits>
+#include <utility>
+#include <variant>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include <tt-metalium/work_executor_types.hpp>
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/types.hpp"
-
-#include <tracy/Tracy.hpp>
+#include <umd/device/types/arch.h>
 
 namespace tt {
 

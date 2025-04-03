@@ -4,12 +4,11 @@
 
 #include "ttnn/operations/trace.hpp"
 
-#include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/trace.hpp>
-#include <tt-metalium/mesh_trace_id.hpp>
-#include <tt-metalium/mesh_trace.hpp>
-
 #include <tracy/Tracy.hpp>
+#include <tt-metalium/mesh_trace.hpp>
+#include <tt-metalium/trace.hpp>
+
+#include <tt_stl/strong_type.hpp>
 
 namespace ttnn::operations::trace {
 

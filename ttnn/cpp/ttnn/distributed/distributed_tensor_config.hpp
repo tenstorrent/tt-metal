@@ -4,7 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
+#include <string>
 #include <unordered_map>
+#include <utility>
 #include <variant>
 
 namespace tt::tt_metal {

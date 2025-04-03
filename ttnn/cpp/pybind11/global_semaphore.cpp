@@ -4,10 +4,24 @@
 
 #include "global_semaphore.hpp"
 
+#include <abstract.h>
+#include <floatobject.h>
+#include <longobject.h>
+#include <pybind11/cast.h>
+#include <pyerrors.h>
+#include <stdint.h>
 #include <tt-metalium/global_semaphore.hpp>
+#include <memory>
+#include <vector>
+
 #include "cpp/ttnn/global_semaphore.hpp"
 #include "pybind11/pybind11.h"
-#include "pybind11/stl.h"
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::global_semaphore {
 

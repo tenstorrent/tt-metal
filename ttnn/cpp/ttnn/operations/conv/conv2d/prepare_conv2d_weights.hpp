@@ -4,16 +4,38 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <stdint.h>
+#include <array>
 #include <optional>
+#include <string>
+#include <utility>
+#include <variant>
+
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-#include "ttnn/types.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum class DataType;
+enum class Layout;
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::sliding_window {
 struct ParallelConfig;
 }
 
 namespace ttnn {
+namespace operations {
+namespace conv {
+namespace conv2d {
+struct Conv2dConfig;
+}  // namespace conv2d
+}  // namespace conv
+}  // namespace operations
 
 namespace operations::conv {
 namespace conv2d {

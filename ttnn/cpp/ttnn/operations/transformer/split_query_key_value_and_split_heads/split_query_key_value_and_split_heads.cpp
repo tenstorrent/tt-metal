@@ -4,13 +4,22 @@
 
 #include "split_query_key_value_and_split_heads.hpp"
 
-#include "ttnn/operations/core/core.hpp"
-
-#include "cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads.hpp"
-#include "cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_falcon7b/nlp_create_qkv_heads_falcon7b.hpp"
-#include "cpp/ttnn/operations/experimental/transformer/create_qkv_heads/create_qkv_heads.hpp"
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
+#include <algorithm>
 
 #include "cpp/ttnn/operations/experimental/reshape/view.hpp"
+#include "cpp/ttnn/operations/experimental/transformer/create_qkv_heads/create_qkv_heads.hpp"
+#include "cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads.hpp"
+#include "cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_falcon7b/nlp_create_qkv_heads_falcon7b.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::transformer {
 

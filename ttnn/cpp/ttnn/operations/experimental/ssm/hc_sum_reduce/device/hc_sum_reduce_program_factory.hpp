@@ -4,7 +4,11 @@
 
 #pragma once
 
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+enum class MathFidelity : uint8_t;
 
 namespace ttnn::operations::experimental::ssm::detail {
 

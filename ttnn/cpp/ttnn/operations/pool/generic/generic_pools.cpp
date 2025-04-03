@@ -4,15 +4,27 @@
 
 #include "generic_pools.hpp"
 
+#include <fmt/base.h>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/math.hpp>
+#include <limits>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
+#include "ttnn/operations/pool/generic/device/pool_op.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/math.hpp>
-
-#include <limits>
 
 namespace ttnn {
 namespace operations::pool {

@@ -4,16 +4,39 @@
 
 #include "ttnn/operations/matmul/matmul_pybind.hpp"
 
+#include <abstract.h>
+#include <floatobject.h>
+#include <longobject.h>
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-
+#include <pybind11/pytypes.h>
+#include <pyerrors.h>
+#include <tt-metalium/core_coord.hpp>
+#include <cstddef>
+#include <map>
+#include <optional>
+#include <string>
 #include <utility>
 
-#include "pybind11/decorators.hpp"
-#include <tt-metalium/core_coord.hpp>
 #include "cpp/pybind11/json_class.hpp"
+#include "pybind11/decorators.hpp"
+#include <tt-metalium/sub_device_types.hpp>
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/global_cb_utils.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum class DataType;
+struct MemoryConfig;
+struct Tile;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 namespace operations {

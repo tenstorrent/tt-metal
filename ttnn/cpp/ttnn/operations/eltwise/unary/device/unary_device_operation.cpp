@@ -4,11 +4,22 @@
 
 #include "unary_device_operation.hpp"
 
-#include <magic_enum/magic_enum.hpp>
-#include <tt-metalium/constants.hpp>
-#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "tools/profiler/op_profiler.hpp"
+#include <fmt/base.h>
+
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/shape.hpp>
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_device_operation_types.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_program_factory.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_sharded_program_factory.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/types.hpp"
+#include <umd/device/types/arch.h>
 
 using namespace tt::tt_metal;
 

@@ -3,29 +3,58 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <cstdint>
-#include <optional>
-
+#include <fmt/base.h>
+#include <stddef.h>
+#include <tracy/Tracy.hpp>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <array>
+#include <cstdint>
+#include <iosfwd>
+#include <memory>
+#include <optional>
+#include <string>
+#include <variant>
+#include <vector>
 
-#include <tracy/Tracy.hpp>
-
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/tile.hpp>
+#include <tt-metalium/tilize_utils.hpp>
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/types.hpp"
+
+class bfloat16;
+struct bfloat4_b;
+struct bfloat8_b;
 
 namespace tt {
 
 namespace tt_metal {
+class CommandQueue;
+class IDevice;
+class Shape;
+class TensorSpec;
+enum class DataType;
+enum class Layout;
+namespace distributed {
+class MeshDevice;
+}  // namespace distributed
+struct MemoryConfig;
 
 namespace tensor_impl {
 

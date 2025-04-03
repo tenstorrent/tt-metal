@@ -2,12 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/constants.hpp>
-#include "tools/profiler/op_profiler.hpp"
+#include <optional>
+
+#include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
-#include "ttnn/operations/eltwise/complex_unary/device/complex_unary_op.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::complex_binary {
 

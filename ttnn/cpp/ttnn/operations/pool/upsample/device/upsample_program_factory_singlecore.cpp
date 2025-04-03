@@ -2,19 +2,43 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <math.h>
-
-#include "upsample_op.hpp"
-#include "ttnn/operations/cb_utils.hpp"
-#include "ttnn/operations/math.hpp"
-
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
+#include <cmath>
+#include <cstdint>
+#include <map>
+#include <optional>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#include <tt_stl/reflection.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/utils.hpp>
+#include "ttnn/operation.hpp"
+#include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/math.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "upsample_op.hpp"
+
+namespace tt {
+enum class DataFormat : uint8_t;
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 using namespace tt::constants;
 using namespace tt::tt_metal;

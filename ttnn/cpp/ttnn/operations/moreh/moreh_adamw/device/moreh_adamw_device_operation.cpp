@@ -4,9 +4,16 @@
 
 #include "moreh_adamw_device_operation.hpp"
 
+#include <boost/container/vector.hpp>
 #include <optional>
 
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/device.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::moreh::moreh_adamw {

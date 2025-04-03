@@ -4,12 +4,13 @@
 
 #include "unsqueeze_pybind.hpp"
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
 
 #include "cpp/pybind11/decorators.hpp"
+#include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
-#include "ttnn/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::data_movement {
 

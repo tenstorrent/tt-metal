@@ -3,9 +3,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_ng.hpp"
+
+#include <fmt/base.h>
+#include <algorithm>
+
 #include "device/binary_ng_device_operation.hpp"
+#include <tt-metalium/assert.hpp>
 #include "ttnn/operations/copy.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/core/to_layout/to_layout_op.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+
+namespace ttnn {
+namespace operations {
+namespace unary {
+struct UnaryWithParam;
+}  // namespace unary
+}  // namespace operations
+}  // namespace ttnn
 
 ttnn::Tensor typecast_to(ttnn::DataType dtype, const ttnn::Tensor& input) {
     return input.get_dtype() == dtype ? input : ttnn::typecast(input, dtype);

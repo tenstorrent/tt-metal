@@ -4,8 +4,13 @@
 
 #pragma once
 
+#include <stdint.h>
+
 #include "dropout_device_operation_types.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "ttnn/device_operation.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::dropout::program {
 

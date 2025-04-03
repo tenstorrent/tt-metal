@@ -4,12 +4,26 @@
 
 #pragma once
 
+#include <boost/core/span.hpp>
+#include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <optional>
+#include <vector>
 
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/tile.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "types.hpp"
 
 namespace tt {
+enum class ARCH;
 
 namespace tt_metal {
 const ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape);

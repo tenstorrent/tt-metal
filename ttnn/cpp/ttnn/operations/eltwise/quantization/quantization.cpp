@@ -3,10 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "quantization.hpp"
+
+#include <fmt/base.h>
+#include <algorithm>
+#include <array>
+#include <type_traits>
+
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/logger.hpp>
 #include "ttnn/operations/copy.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
+#include "ttnn/operations/eltwise/binary_ng/types.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 
 ttnn::DataType get_output_dtype(

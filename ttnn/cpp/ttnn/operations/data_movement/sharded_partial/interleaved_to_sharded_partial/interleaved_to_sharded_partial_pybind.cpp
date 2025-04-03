@@ -2,13 +2,28 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <stdint.h>
+#include <tt-metalium/core_coord.hpp>
+#include <array>
+#include <optional>
+#include <variant>
 
 #include "cpp/pybind11/decorators.hpp"
 #include "interleaved_to_sharded_partial.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/core_coord.hpp>
+
+namespace tt {
+namespace tt_metal {
+enum class DataType;
+enum class ShardOrientation;
+enum class TensorMemoryLayout;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::data_movement {
 

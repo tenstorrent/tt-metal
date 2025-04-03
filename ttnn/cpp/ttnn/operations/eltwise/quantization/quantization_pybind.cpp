@@ -2,13 +2,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "pybind11/decorators.hpp"
-
-#include "quantization_pybind.hpp"
-#include "quantization.hpp"
-
+#include <pybind11/cast.h>
+#include <stdint.h>
+#include <optional>
 #include <string>
 #include <variant>
+
+#include "pybind11/decorators.hpp"
+#include "pybind11/pybind_fwd.hpp"
+#include "quantization.hpp"
+#include "quantization_pybind.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum class DataType;
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::quantization {
 namespace detail {

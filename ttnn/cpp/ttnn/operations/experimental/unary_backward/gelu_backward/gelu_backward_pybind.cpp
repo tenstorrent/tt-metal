@@ -2,12 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/pybind11/decorators.hpp"
+#include <fmt/base.h>
+#include <pybind11/cast.h>
+#include <optional>
+#include <string>
 
+#include "cpp/pybind11/decorators.hpp"
+#include <tt-metalium/utils.hpp>
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_pybind.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
 
-#include <fmt/format.h>
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::experimental::gelu_backward::detail {
 namespace py = pybind11;

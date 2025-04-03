@@ -8,7 +8,6 @@
 #include <pybind11/stl.h>
 
 #include "cpp/pybind11/decorators.hpp"
-
 #include "transpose.hpp"
 
 namespace ttnn::operations::data_movement::detail {

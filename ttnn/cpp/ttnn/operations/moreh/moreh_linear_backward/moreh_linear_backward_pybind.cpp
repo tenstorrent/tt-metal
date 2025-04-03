@@ -4,6 +4,11 @@
 
 #include "moreh_linear_backward_pybind.hpp"
 
+#include <pybind11/cast.h>
+#include <pybind11/pybind11.h>
+#include <optional>
+#include <vector>
+
 #include "pybind11/decorators.hpp"
 #include "ttnn/operations/moreh/moreh_linear_backward/moreh_linear_backward.hpp"
 

@@ -4,10 +4,21 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
+#include <stddef.h>
+#include <stdint.h>
 #include <tt-metalium/core_coord.hpp>
-#include "ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
+#include <optional>
+#include <string>
+#include <vector>
+
 #include "cpp/ttnn/distributed/api.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace operations::experimental::ccl {

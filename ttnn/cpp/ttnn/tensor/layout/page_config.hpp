@@ -4,15 +4,24 @@
 
 #pragma once
 
-#include <array>
-#include <optional>
-
+#include <stddef.h>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/tile.hpp>
+#include <array>
+#include <optional>
+#include <tuple>
+#include <variant>
 
 #include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/alignment.hpp"
 #include "ttnn/tensor/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum class DataType;
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

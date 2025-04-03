@@ -4,12 +4,26 @@
 
 #include "all_gather_pybind.hpp"
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <optional>
 
 #include "cpp/pybind11/decorators.hpp"
-#include "ttnn/operations/ccl/all_gather/all_gather.hpp"
+#include <tt-metalium/fabric_edm_types.hpp>
+#include "ttnn/decorators.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/ccl/all_gather/all_gather.hpp"
+#include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::ccl {
 

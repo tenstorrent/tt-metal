@@ -4,8 +4,26 @@
 
 #pragma once
 
-#include "ttnn/tensor/types.hpp"
+#include <stddef.h>
+#include <optional>
+#include <tuple>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/tile.hpp>
+#include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum class DataType;
+enum class Layout;
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

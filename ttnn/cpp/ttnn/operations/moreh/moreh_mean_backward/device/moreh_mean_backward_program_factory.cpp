@@ -2,15 +2,40 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/container/vector.hpp>
+#include <fmt/base.h>
+#include <stdint.h>
+#include <tt-metalium/work_split.hpp>
+#include <map>
+#include <optional>
+#include <string>
+#include <utility>
+#include <variant>
 #include <vector>
 
-#include <tt-metalium/bfloat16.hpp>
+#include "hostdevcommon/kernel_structs.h"
 #include "moreh_mean_backward_device_operation.hpp"
-#include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include <tt_stl/span.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/utils.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/operations/reduction/generic/device/common.hpp"
-#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 using namespace tt::tt_metal;
 

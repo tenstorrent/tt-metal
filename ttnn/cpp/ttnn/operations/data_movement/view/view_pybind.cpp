@@ -4,12 +4,23 @@
 
 #include "view_pybind.hpp"
 
+#include <boost/move/utility_core.hpp>
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <stdint.h>
 
 #include "cpp/pybind11/decorators.hpp"
+#include <tt-metalium/small_vector.hpp>
+#include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/view/view.hpp"
-#include "ttnn/types.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Shape;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::data_movement {
 

@@ -3,8 +3,31 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "llama_reduce_scatter_pybind.hpp"
-#include "llama_reduce_scatter.hpp"
+
+#include <pybind11/cast.h>
+#include <stdint.h>
 #include <tt-metalium/sub_device_types.hpp>
+#include <memory>
+#include <optional>
+
+#include "llama_reduce_scatter.hpp"
+#include "pybind11/decorators.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace ttnn {
+namespace global_semaphore {
+struct MultiDeviceGlobalSemaphore;
+}  // namespace global_semaphore
+}  // namespace ttnn
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
+
 namespace ttnn::operations::experimental::ccl {
 namespace py = pybind11;
 

@@ -3,13 +3,29 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
-#include "cpp/ttnn/operations/data_movement/concat/device/concat_program_factory.hpp"
 
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
+#include <boost/container/vector.hpp>
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
+#include <tt-metalium/logger.hpp>
+#include <algorithm>
+#include <optional>
+
+#include "cpp/ttnn/operations/data_movement/concat/device/concat_program_factory.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/run_operation.hpp"
-#include <tt-metalium/logger.hpp>
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;

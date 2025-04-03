@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/tensor/storage.hpp"
-#include "tt-metalium/mesh_coord.hpp"
+
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 namespace tt::tt_metal {
 

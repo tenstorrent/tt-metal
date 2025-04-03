@@ -3,13 +3,27 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/pool/generic/generic_pools_pybind.hpp"
-#include "ttnn/operations/pool/generic/generic_pools.hpp"
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <stdint.h>
+#include <array>
+#include <memory>
+#include <optional>
 
 #include "cpp/pybind11/decorators.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/pool/generic/generic_pools.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+enum class TensorMemoryLayout;
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::pool {
 

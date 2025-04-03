@@ -3,7 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ternary_composite_op.hpp"
+
+#include <fmt/base.h>
+#include <cmath>
+#include <limits>
+
+#include <tt-metalium/assert.hpp>
+#include "ttnn/decorators.hpp"
 #include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/ternary/where.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/functions.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::ternary {
 

@@ -5,11 +5,20 @@
 
 #pragma once
 
+#include <magic_enum/magic_enum.hpp>
 #include <functional>
 #include <optional>
-#include "ttnn/tensor/tensor.hpp"
-#include <magic_enum/magic_enum.hpp>
+#include <vector>
+
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace tt {
+namespace tt_metal {
+struct MemoryConfig;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::binary {
 

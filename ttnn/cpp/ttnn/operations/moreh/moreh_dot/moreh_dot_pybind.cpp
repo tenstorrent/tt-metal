@@ -4,12 +4,13 @@
 
 #include "moreh_dot_pybind.hpp"
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <memory>
+#include <optional>
 
-#include "device/moreh_dot_device_operation.hpp"
-#include "moreh_dot.hpp"
 #include "cpp/pybind11/decorators.hpp"
+#include "moreh_dot.hpp"
 
 namespace py = pybind11;
 

@@ -4,12 +4,37 @@
 
 #pragma once
 
-#include "binary_ng_device_operation.hpp"
-#include "ttnn/operations/eltwise/binary_ng/types.hpp"
-#include "ttnn/tensor/types.hpp"
-
+#include <stdint.h>
+#include <map>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
+#include <variant>
+
+#include "binary_ng_device_operation.hpp"
+#include <tt_stl/span.hpp>
+#include "ttnn/operations/eltwise/binary_ng/types.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+
+namespace ttnn {
+namespace operations {
+namespace binary_ng {
+enum class BinaryOpType;
+enum class SubtileBroadcastType;
+}  // namespace binary_ng
+namespace unary {
+enum class UnaryOpType;
+struct UnaryWithParam;
+}  // namespace unary
+}  // namespace operations
+}  // namespace ttnn
+namespace tt {
+namespace tt_metal {
+enum class DataType;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn::operations::binary_ng {
 
