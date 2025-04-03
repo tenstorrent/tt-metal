@@ -45,7 +45,7 @@
 #include "multi_command_queue_fixture.hpp"
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/system_memory_manager.hpp>
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "umd/device/types/arch.h"
 
 enum class CoreType;
@@ -233,8 +233,10 @@ vector<ShardedSubBufferStressTestConfig> generate_sharded_sub_buffer_test_config
 template <bool cq_dispatch_only = false>
 void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(IDevice* device, CommandQueue& cq, const TestBufferConfig& config) {
     // Clear out command queue
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device->id());
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
+    uint16_t channel =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
+    chip_id_t mmio_device_id =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
     uint32_t cq_size = device->sysmem_manager().get_cq_size();
     CoreType dispatch_core_type = get_dispatch_core_type();
     uint32_t cq_start =
@@ -242,7 +244,7 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(IDevice* device, CommandQueue
 
     std::vector<uint32_t> cq_zeros((cq_size - cq_start) / sizeof(uint32_t), 0);
 
-    tt::Cluster::instance().write_sysmem(
+    tt::tt_metal::MetalContext::instance().get_cluster().write_sysmem(
         cq_zeros.data(),
         (cq_size - cq_start),
         get_absolute_cq_offset(channel, 0, cq_size) + cq_start,
@@ -269,9 +271,9 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(IDevice* device, CommandQueue
             } else {
                 detail::WriteToBuffer(*bufa, src);
                 if (config.buftype == BufferType::DRAM) {
-                    tt::Cluster::instance().dram_barrier(device->id());
+                    tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
                 } else {
-                    tt::Cluster::instance().l1_barrier(device->id());
+                    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
                 }
             }
 
@@ -391,9 +393,9 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                 } else {
                     detail::WriteToBuffer(*buf, src);
                     if (buftype == BufferType::DRAM) {
-                        tt::Cluster::instance().dram_barrier(device->id());
+                        tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
                     } else {
-                        tt::Cluster::instance().l1_barrier(device->id());
+                        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
                     }
                 }
 
@@ -1070,8 +1072,10 @@ TEST_F(MultiCommandQueueSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForD
 
 TEST_F(MultiCommandQueueSingleDeviceBufferFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
     uint32_t page_size = 2048;
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
-    uint32_t command_queue_size = tt::Cluster::instance().get_host_channel_size(this->device_->id(), channel);
+    uint16_t channel =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_->id());
+    uint32_t command_queue_size =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_host_channel_size(this->device_->id(), channel);
     uint32_t num_pages = command_queue_size / page_size;
 
     TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
@@ -1585,7 +1589,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferL1ReadWrites) {
         // This test hangs on Blackhole A0 when using static VCs through static TLBs and there are large number of
         // reads/writes issued
         //  workaround is to use dynamic VC (implemented in UMD)
-        if (tt::Cluster::instance().is_galaxy_cluster()) {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
             test_params = {
                 {"cores",
                  {{1, 1},

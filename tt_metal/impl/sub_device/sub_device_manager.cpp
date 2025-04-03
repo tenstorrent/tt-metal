@@ -24,9 +24,9 @@
 #include "hal.hpp"
 #include "strong_type.hpp"
 #include "sub_device_manager.hpp"
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include "impl/context/metal_context.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/xy_pair.h>
 #include "vector_aligned.hpp"
@@ -208,7 +208,8 @@ void SubDeviceManager::validate_sub_devices() const {
         if (sub_device.has_core_type(HalProgrammableCoreType::ACTIVE_ETH)) {
             const auto& eth_cores = sub_device.cores(HalProgrammableCoreType::ACTIVE_ETH);
             uint32_t num_eth_cores = 0;
-            const auto& device_eth_cores = tt::Cluster::instance().get_active_ethernet_cores(device_->id());
+            const auto& device_eth_cores =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_->id());
             for (const auto& dev_eth_core : device_eth_cores) {
                 if (eth_cores.contains(dev_eth_core)) {
                     num_eth_cores++;
@@ -324,7 +325,7 @@ void SubDeviceManager::populate_noc_data() {
     noc_mcast_data_start_index_.resize(num_sub_devices);
     noc_unicast_data_start_index_.resize(num_sub_devices);
 
-    NOC noc_index = DispatchQueryManager::instance().go_signal_noc();
+    NOC noc_index = MetalContext::instance().get_dispatch_query_manager().go_signal_noc();
     uint32_t idx = 0;
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
         const auto& tensix_cores = sub_devices_[i].cores(HalProgrammableCoreType::TENSIX).merge_ranges();

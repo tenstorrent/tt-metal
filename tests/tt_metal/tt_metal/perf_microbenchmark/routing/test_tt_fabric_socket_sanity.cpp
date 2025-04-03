@@ -39,7 +39,7 @@
 #include "span.hpp"
 #include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 // #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
@@ -339,7 +339,8 @@ int main(int argc, char** argv) {
         log_info(LogTest, "GK Socket Info Addr = 0x{:08X}", socket_info_addr);
 
         for (auto device : device_map) {
-            auto neighbors = tt::Cluster::instance().get_ethernet_connected_device_ids(device.first);
+            auto neighbors =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connected_device_ids(device.first);
             std::vector<CoreCoord> device_router_cores;
             std::vector<CoreCoord> device_router_phys_cores;
             uint32_t router_mask = 0;
@@ -350,7 +351,8 @@ int main(int argc, char** argv) {
                         // sender device.
                         router_logical_core = device.second->get_ethernet_sockets(neighbor)[0];
                         router_phys_core = device.second->ethernet_core_from_logical_core(router_logical_core);
-                        auto eth_chan = tt::Cluster::instance()
+                        auto eth_chan = tt::tt_metal::MetalContext::instance()
+                                            .get_cluster()
                                             .get_soc_desc(test_device_id_l)
                                             .logical_eth_core_to_chan_map.at(router_logical_core);
                         routing_plane = control_plane->get_routing_plane_id(eth_chan);

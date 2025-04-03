@@ -4,7 +4,7 @@
 
 #include <kernel_types.hpp>
 #include <stdint.h>
-#include <tt_cluster.hpp>
+#include "impl/context/metal_context.hpp"
 #include <utility>
 
 #include "util.hpp"
@@ -15,7 +15,7 @@ ReaderDataMovementConfig::ReaderDataMovementConfig(
     std::vector<uint32_t> compile_args, std::map<std::string, std::string> defines, KernelBuildOptLevel opt_level) :
     DataMovementConfig{
         .processor = DataMovementProcessor::RISCV_1,
-        .noc = detail::GetPreferredNOCForDRAMRead(tt::Cluster::instance().arch()),
+        .noc = detail::GetPreferredNOCForDRAMRead(tt::tt_metal::MetalContext::instance().get_cluster().arch()),
         .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
         .compile_args = std::move(compile_args),
         .defines = std::move(defines),
@@ -25,7 +25,7 @@ WriterDataMovementConfig::WriterDataMovementConfig(
     std::vector<uint32_t> compile_args, std::map<std::string, std::string> defines, KernelBuildOptLevel opt_level) :
     DataMovementConfig{
         .processor = DataMovementProcessor::RISCV_0,
-        .noc = detail::GetPreferredNOCForDRAMWrite(tt::Cluster::instance().arch()),
+        .noc = detail::GetPreferredNOCForDRAMWrite(tt::tt_metal::MetalContext::instance().get_cluster().arch()),
         .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
         .compile_args = std::move(compile_args),
         .defines = std::move(defines),

@@ -13,7 +13,7 @@
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "rtoptions.hpp"
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_metal.hpp>
 
 namespace tt::tt_fabric {
@@ -36,7 +36,7 @@ TEST_F(ControlPlaneFixture, TestTGControlPlaneInit) {
 }
 
 TEST_F(ControlPlaneFixture, TestTGMeshAPIs) {
-    const auto control_plane = tt::Cluster::instance().get_control_plane();
+    const auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
     auto user_meshes = control_plane->get_user_physical_mesh_ids();
     EXPECT_EQ(user_meshes.size(), 1);
     EXPECT_EQ(user_meshes[0], 4);
@@ -103,7 +103,7 @@ TEST_F(ControlPlaneFixture, TestQuantaGalaxyControlPlaneInit) {
 }
 
 TEST_F(ControlPlaneFixture, TestQuantaGalaxyMeshAPIs) {
-    const auto control_plane = tt::Cluster::instance().get_control_plane();
+    const auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
     auto user_meshes = control_plane->get_user_physical_mesh_ids();
     EXPECT_EQ(user_meshes.size(), 1);
     EXPECT_EQ(user_meshes[0], 0);

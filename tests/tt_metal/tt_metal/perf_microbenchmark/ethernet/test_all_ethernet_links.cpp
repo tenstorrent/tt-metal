@@ -34,7 +34,7 @@
 #include <tt-metalium/persistent_kernel_cache.hpp>
 #include <thread>
 #include "llrt/hal.hpp"
-#include "llrt/tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 
 #include "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_ubenchmark_types.hpp"
 
@@ -141,7 +141,7 @@ public:
 
     void TearDown() {
         device_open_ = false;
-        tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
+        tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
         for (unsigned int id = 0; id < this->devices.size(); id++) {
             tt::tt_metal::CloseDevice(this->devices.at(id));
         }
@@ -161,7 +161,7 @@ private:
         }
         static std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> assigned_tensix_per_chip;
         auto& assigned_phys_tensix = assigned_tensix_per_chip[logical_eth_core.chip];
-        const auto& soc_d = tt::Cluster::instance().get_soc_desc(logical_eth_core.chip);
+        const auto& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(logical_eth_core.chip);
 
         auto physical_eth_core =
             soc_d.get_physical_ethernet_core_from_logical(CoreCoord{logical_eth_core.x, logical_eth_core.y});
@@ -208,7 +208,7 @@ private:
 
     void initialize_sender_receiver_pairs(const TestParams& params) {
         // chip id -> active eth ch on chip -> (connected chip, remote active eth ch)
-        auto all_eth_connections = tt::Cluster::instance().get_ethernet_connections();
+        auto all_eth_connections = tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connections();
 
         std::set<chip_id_t> sender_chips, receiver_chips;
         bool slow_dispath_mode = (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr);
@@ -226,7 +226,8 @@ private:
             bool is_sender = sender_chips.find(chip_id) != sender_chips.end();
             bool is_receiver = receiver_chips.find(chip_id) != receiver_chips.end();
 
-            for (chip_id_t connected_chip : tt::Cluster::instance().get_ethernet_connected_device_ids(chip_id)) {
+            for (chip_id_t connected_chip :
+                 tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connected_device_ids(chip_id)) {
                 bool connected_chip_is_sender = sender_chips.find(connected_chip) != sender_chips.end();
                 bool connected_chip_is_receiver = receiver_chips.find(connected_chip) != receiver_chips.end();
                 if (!connected_chip_is_sender and !connected_chip_is_receiver) {
@@ -256,11 +257,13 @@ private:
 
         for (auto sender_chip_id : sender_chips) {
             auto non_tunneling_eth_cores =
-                tt::Cluster::instance().get_active_ethernet_cores(sender_chip_id, !slow_dispath_mode);
+                tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(
+                    sender_chip_id, !slow_dispath_mode);
             for (auto logical_active_eth : non_tunneling_eth_cores) {
                 auto sender_eth = tt_cxy_pair(sender_chip_id, logical_active_eth);
-                auto receiver_eth_tuple = tt::Cluster::instance().get_connected_ethernet_core(
-                    std::make_tuple(sender_chip_id, logical_active_eth));
+                auto receiver_eth_tuple =
+                    tt::tt_metal::MetalContext::instance().get_cluster().get_connected_ethernet_core(
+                        std::make_tuple(sender_chip_id, logical_active_eth));
                 auto receiver_eth = tt_cxy_pair(std::get<0>(receiver_eth_tuple), std::get<1>(receiver_eth_tuple));
                 const auto& [sender_tensix, sender_buffer] = assign_tensix_and_allocate_buffer(params, sender_eth);
                 const auto& [receiver_tensix, receiver_buffer] =
@@ -420,7 +423,7 @@ void dump_eth_link_stats(
         auto receiver_virtual =
             receiver_device->virtual_core_from_logical_core(CoreCoord(link.receiver.x, link.receiver.y), CoreType::ETH);
 
-        tt::Cluster::instance().read_core(
+        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             link_stats.data(),
             link_stats.size() * sizeof(uint32_t),
             tt_cxy_pair(link.sender.chip, sender_virtual),
@@ -449,7 +452,7 @@ void dump_eth_link_stats(
             .retrains_triggered_by_crcs =
                 post_run ? link_stats[51] - s_stats_per_iter[iteration].retrains_triggered_by_crcs : link_stats[51]};
 
-        tt::Cluster::instance().read_core(
+        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             link_stats.data(),
             link_stats.size() * sizeof(uint32_t),
             tt_cxy_pair(link.receiver.chip, receiver_virtual),

@@ -11,9 +11,9 @@
 #include <unordered_map>
 #include <vector>
 
-#include "core_coord.hpp"
-#include "core_descriptor.hpp"
-#include "dispatch_core_common.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/core_descriptor.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/cluster_descriptor_types.h>
@@ -62,11 +62,15 @@ public:
     dispatch_core_manager(const dispatch_core_manager&) = delete;
     dispatch_core_manager(dispatch_core_manager&& other) noexcept = delete;
 
+    /// @brief dispatch_core_manager constructor initializes a list of cores per device that are designated for any
+    /// dispatch functionality
+    ///         This list contains dispatch cores that have not been assigned to a particular dispatch function
+    /// @param num_hw_cqs is used to get the correct collection of dispatch cores for a particular device
+    /// @param dispatch_core_config specfies the core type that is designated for dispatch functionality
+    dispatch_core_manager(const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs);
+
     // TODO: this should probably be in command_queue_interface.hpp, but it's here for now due to circular dependency
     static constexpr uint8_t MAX_NUM_HW_CQS = 2;
-    static void initialize(const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs) noexcept;
-
-    static dispatch_core_manager& instance();
 
     /// @brief Gets the location of the kernel desginated to read from the issue queue region from a particular command
     /// queue
@@ -185,13 +189,6 @@ public:
     std::vector<CoreCoord> get_all_logical_dispatch_cores(chip_id_t device_id);
 
 private:
-    /// @brief dispatch_core_manager constructor initializes a list of cores per device that are designated for any
-    /// dispatch functionality
-    ///         This list contains dispatch cores that have not been assigned to a particular dispatch function
-    /// @param num_hw_cqs is used to get the correct collection of dispatch cores for a particular device
-    /// @param dispatch_core_config specfies the core type that is designated for dispatch functionality
-    dispatch_core_manager(const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs);
-
     /// @brief reset_dispatch_core_manager initializes vector of cores per device for dispatch kernels
     /// @param dispatch_core_config specfies the core type for dispatch kernels
     void reset_dispatch_core_manager(const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs);

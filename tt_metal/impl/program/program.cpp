@@ -45,7 +45,7 @@
 #include "core_coord.hpp"
 #include "data_types.hpp"
 #include "dev_msgs.h"
-#include "dispatch/dispatch_core_manager.hpp"
+#include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
 #include "dprint_server.hpp"
 #include "hal.hpp"
@@ -72,7 +72,7 @@
 #include "tt_memory.h"
 #include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
-#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
@@ -1449,10 +1449,11 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
         //      - eth kernels cannot be on idle eth cores
         bool slow_dispatch = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
 
-        const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config();
+        const auto& dispatch_core_config =
+            MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
         CoreType dispatch_core_type = dispatch_core_config.get_core_type();
         const std::vector<CoreCoord>& storage_cores =
-            DispatchQueryManager::instance().get_logical_storage_cores_on_user_chips();
+            MetalContext::instance().get_dispatch_query_manager().get_logical_storage_cores_on_user_chips();
         bool on_storage_only_core =  std::any_of(storage_cores.begin(), storage_cores.end(), [&kernel](const CoreCoord& storage_core) {
             return kernel->is_on_logical_core(storage_core);
         });
@@ -1461,7 +1462,7 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
         // Kernels used to implement fast dispatch can be placed on dispatch cores
         if (not slow_dispatch and not fd_bootloader_mode) {
             const std::vector<CoreCoord>& dispatch_cores =
-                DispatchQueryManager::instance().get_logical_dispatch_cores_on_user_chips();
+                MetalContext::instance().get_dispatch_query_manager().get_logical_dispatch_cores_on_user_chips();
             bool on_dispatch_core = std::any_of(dispatch_cores.begin(), dispatch_cores.end(), [&kernel, &dispatch_core_type](const CoreCoord &dispatch_core) {
                 if (kernel->get_kernel_core_type() != dispatch_core_type) {
                     return false;

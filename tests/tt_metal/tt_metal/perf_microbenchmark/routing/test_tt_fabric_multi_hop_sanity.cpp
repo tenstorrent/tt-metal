@@ -39,7 +39,7 @@
 #include "span.hpp"
 #include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 // #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
@@ -341,7 +341,9 @@ int main(int argc, char** argv) {
         log_info(LogTest, "GK Socket Info Addr = 0x{:08X}", socket_info_addr);
 
         for (auto device : device_map) {
-            auto neighbors = tt::Cluster::instance().get_ethernet_cores_grouped_by_connected_chips(device.second->id());
+            auto neighbors =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(
+                    device.second->id());
             std::vector<CoreCoord> device_router_cores;
             std::vector<CoreCoord> device_router_phys_cores;
             uint32_t router_mask = 0;

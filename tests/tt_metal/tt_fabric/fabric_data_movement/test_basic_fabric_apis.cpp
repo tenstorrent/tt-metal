@@ -36,10 +36,11 @@
 #include <tt-metalium/program_impl.hpp>
 #include "span.hpp"
 #include <tt-metalium/system_memory_manager.hpp>
+#include "impl/context/metal_context.hpp"
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "tt_metal/llrt/tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
 
@@ -147,7 +148,7 @@ void RunAsyncWriteTest(
     std::pair<mesh_id_t, chip_id_t> end_mesh_chip_id;
     chip_id_t physical_end_device_id;
 
-    auto control_plane = tt::Cluster::instance().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     // Find a device with a neighbour in the specified direction
     if (!fixture->find_device_with_neighbor_in_direction(
@@ -197,8 +198,8 @@ void RunAsyncWriteTest(
     }
 
     // Wait for buffer data to be written to device
-    tt::Cluster::instance().l1_barrier(physical_end_device_id);
-    tt::Cluster::instance().l1_barrier(physical_start_device_id);
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(physical_end_device_id);
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(physical_start_device_id);
 
     auto receiver_noc_encoding =
         tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
@@ -206,7 +207,8 @@ void RunAsyncWriteTest(
     // Create the sender program
     std::vector<uint32_t> sender_compile_time_args = {
         (uint32_t)mode, (uint32_t)test_mode::TEST_ASYNC_WRITE, (uint32_t)is_raw_write};
-    auto outbound_eth_channels = tt::Cluster::instance().get_fabric_ethernet_channels(physical_start_device_id);
+    auto outbound_eth_channels =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(physical_start_device_id);
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -258,7 +260,7 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode) {
     std::pair<mesh_id_t, chip_id_t> end_mesh_chip_id;
     chip_id_t physical_end_device_id;
 
-    auto control_plane = tt::Cluster::instance().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     // Find a device with a neighbour in the East direction
     if (!fixture->find_device_with_neighbor_in_direction(
@@ -298,8 +300,8 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode) {
     receiver_buffer_data[0] = atomic_inc;
 
     // Wait for buffer data to be written to device
-    tt::Cluster::instance().l1_barrier(physical_end_device_id);
-    tt::Cluster::instance().l1_barrier(physical_start_device_id);
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(physical_end_device_id);
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(physical_start_device_id);
 
     auto receiver_noc_encoding =
         tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
@@ -312,7 +314,8 @@ void RunAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode) {
     }
     defines["DISABLE_LOW_LATENCY_ROUTING"] = "";
     std::vector<uint32_t> sender_compile_time_args = {(uint32_t)mode, (uint32_t)TEST_ATOMIC_INC, 0};
-    auto outbound_eth_channels = tt::Cluster::instance().get_fabric_ethernet_channels(physical_start_device_id);
+    auto outbound_eth_channels =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(physical_start_device_id);
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -356,7 +359,7 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
     std::pair<mesh_id_t, chip_id_t> end_mesh_chip_id;
     chip_id_t physical_end_device_id;
 
-    auto control_plane = tt::Cluster::instance().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     // Find a device with a neighbour in the East direction
     if (!fixture->find_device_with_neighbor_in_direction(
@@ -414,8 +417,8 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
     uint32_t atomic_inc = 5;
 
     // Wait for buffer data to be written to device
-    tt::Cluster::instance().l1_barrier(physical_end_device_id);
-    tt::Cluster::instance().l1_barrier(physical_start_device_id);
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(physical_end_device_id);
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(physical_start_device_id);
 
     auto receiver_noc_encoding =
         tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
@@ -429,7 +432,8 @@ void RunAsyncWriteAtomicIncTest(BaseFabricFixture* fixture, fabric_mode mode, bo
     defines["DISABLE_LOW_LATENCY_ROUTING"] = "";
     std::vector<uint32_t> sender_compile_time_args = {
         (uint32_t)mode, (uint32_t)TEST_ASYNC_WRITE_ATOMIC_INC, (uint32_t)is_raw_write};
-    auto outbound_eth_channels = tt::Cluster::instance().get_fabric_ethernet_channels(physical_start_device_id);
+    auto outbound_eth_channels =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(physical_start_device_id);
     std::vector<uint32_t> sender_runtime_args = {
         sender_buffer->address(),
         receiver_noc_encoding,
@@ -489,7 +493,7 @@ void RunAsyncWriteMulticastTest(
         mcast_hops[RoutingDirection::E] = 1;
     }
 
-    auto control_plane = tt::Cluster::instance().get_control_plane();
+    auto control_plane = tt::tt_metal::MetalContext::instance().get_cluster().get_control_plane();
 
     // Find a device with enough neighbours in the specified directions
     if (!fixture->find_device_with_neighbor_in_multi_direction(
@@ -536,7 +540,7 @@ void RunAsyncWriteMulticastTest(
             auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_id);
             auto receiver_buffer =
                 PrepareBuffer(receiver_device, data_size, receiver_logical_crs, receiver_buffer_data);
-            tt::Cluster::instance().l1_barrier(physical_end_device_id);
+            tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(physical_end_device_id);
             // Create the receiver program for validation
             auto receiver_program = tt_metal::CreateProgram();
             CreateReceiverKernel(
@@ -581,7 +585,7 @@ void RunAsyncWriteMulticastTest(
     }
 
     // Wait for buffer data to be written to device
-    tt::Cluster::instance().l1_barrier(physical_start_device_id);
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(physical_start_device_id);
 
     auto receiver_noc_encoding =
         tt::tt_metal::hal_ref.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
@@ -605,7 +609,8 @@ void RunAsyncWriteMulticastTest(
     }
 
     // Prepare runtime args based on whether it's multidirectional or not
-    auto outbound_eth_channels = tt::Cluster::instance().get_fabric_ethernet_channels(physical_start_device_id);
+    auto outbound_eth_channels =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(physical_start_device_id);
     std::vector<uint32_t> sender_runtime_args;
 
     if (multidirectional) {

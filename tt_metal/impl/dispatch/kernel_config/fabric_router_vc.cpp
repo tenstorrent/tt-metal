@@ -10,7 +10,7 @@
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch/kernel_config/prefetch.hpp"
 #include "fabric_router_vc.hpp"
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
 
@@ -21,7 +21,7 @@ void FabricRouterVC::GenerateDependentConfigs() {
     TT_ASSERT(
         upstream_kernels_.size() == downstream_kernels_.size(),
         "Fabric Router VC requires upstream.size() == downstream.size()");
-    auto& cluster = tt::Cluster::instance();
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& control_plane = cluster.get_control_plane();
     TT_FATAL(
         cluster.get_fabric_config() != FabricConfig::DISABLED && control_plane,

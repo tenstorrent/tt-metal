@@ -26,7 +26,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program_impl.hpp>
 #include "span.hpp"
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
@@ -68,7 +68,7 @@ static void RunTest(WatcherFixture* fixture, IDevice* device) {
 
     // The kernels need arguments to be passed in: the number of cycles to delay while syncing,
     // and an L1 buffer to use for the syncing.
-    uint32_t clk_mhz = tt::Cluster::instance().get_device_aiclk(device->id());
+    uint32_t clk_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id());
     uint32_t delay_cycles = clk_mhz * 2000000; // 2 seconds
     tt_metal::InterleavedBufferConfig l1_config {
         .device = device,

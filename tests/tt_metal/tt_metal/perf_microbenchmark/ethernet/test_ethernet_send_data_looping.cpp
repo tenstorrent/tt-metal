@@ -15,7 +15,7 @@
 #include <tt-metalium/kernel.hpp>
 #include <thread>
 #include "llrt.hpp"
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "eth_l1_address_map.h"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
@@ -43,7 +43,7 @@ public:
                 auto* device = tt::tt_metal::CreateDevice(id);
                 devices_.push_back(device);
             }
-            tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
+            tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(true);
 
         } else {
             TT_THROW("This suite can only be run on N300 Wormhole devices");
@@ -58,7 +58,7 @@ public:
 
     void TearDown() {
         device_open = false;
-        tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
+        tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
         for (unsigned int id = 0; id < devices_.size(); id++) {
             tt::tt_metal::CloseDevice(devices_.at(id));
         }
