@@ -97,16 +97,6 @@ run_n300_func_tests() {
   fi
 }
 
-run_mamba_perf() {
-  fail=0;
-
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mamba/demo/prompts.json' models/demos/wormhole/mamba/demo/demo.py --timeout 420; fail+=$?
-
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_n300_perf_tests(){
   fail=0
 
