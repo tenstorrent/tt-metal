@@ -1,5 +1,13 @@
 name: "[internal] ttnn unit tests impl"
 
+# This workflow is being used to test both the wheel and venv test modes.
+# The wrapper workflow will set the appropriate inputs for each mode.
+# If the create-venv input is true, then the workflow will call the create_venv.sh script.
+# This is a bit of a misnomer, because there is already a venv in the container.
+# It really is just installing the local python packages (ttnn) into the venv in editable install mode.
+# This mode of operation actually requires TT_METAL_HOME to be set to /work.
+# If the create-venv input is false, then the workflow will install the wheel and run the tests using the wheel.
+
 on:
   workflow_call:
     inputs:
@@ -97,6 +105,11 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           create-venv: ${{ inputs.create-venv }}
+
+      - name: Set TT_METAL_HOME if create-venv is true
+        if: ${{ inputs.create-venv }}
+        run: |
+          echo "TT_METAL_HOME=/work" >> $GITHUB_ENV
 
       - name: Set ttnn fast runtime if exists in config
         if: ${{ matrix.test-group.fast_runtime_mode_off }}
