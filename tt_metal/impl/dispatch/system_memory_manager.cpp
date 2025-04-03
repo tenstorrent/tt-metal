@@ -158,7 +158,6 @@ void SystemMemoryManager::set_last_completed_event(const uint8_t cq_id, const ui
         "completed event is {}",
         event_id,
         this->cq_to_last_completed_event[cq_id]);
-
     cq_to_event_locks[cq_id].lock();
     this->cq_to_last_completed_event[cq_id] = event_id;
     cq_to_event_locks[cq_id].unlock();
