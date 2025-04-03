@@ -82,7 +82,7 @@ def is_job_hanging_from_job_log(error_snippet, workflow_outputs_dir, workflow_ru
         return False
 
     log_lines = []
-    log_timestamps = []
+    last_ts, second_last_ts = None, None
     with open(log_file, "r", encoding="utf-8-sig") as log_f:
         log_lines = log_f.readlines()
 
@@ -95,21 +95,21 @@ def is_job_hanging_from_job_log(error_snippet, workflow_outputs_dir, workflow_ru
             timeout_timestamp = parse_github_log_timestamp(line)
 
             # Check if we have the previous two timestamps
-            if len(log_timestamps) < 2:
+            if last_ts is None or second_last_ts is None:
                 logger.warning("Not enough previous lines to compare time deltas.")
                 return False
 
             # Compare with the last two timestamps
             # Hang message vs last output line
-            delta_1 = timeout_timestamp - log_timestamps[-1]
+            delta_1 = timeout_timestamp - last_ts
             # Last output line vs 2nd last output line
-            delta_2 = log_timestamps[-1] - log_timestamps[-2]
+            delta_2 = last_ts - second_last_ts
 
             # Check if any of the deltas is greater than 5 minutes
             if delta_1.total_seconds() > max_time_delta_seconds or delta_2.total_seconds() > max_time_delta_seconds:
                 logger.info(f"Time difference between the timeout line and previous lines is greater than 5 minutes.")
                 logger.info(f"Timeout timestamp: {timeout_timestamp}")
-                logger.info(f"Previous timestamps: {log_timestamps[-2]}, {log_timestamps[-1]}")
+                logger.info(f"Previous timestamps: {second_last_ts}, {last_ts}")
                 logger.info(f"Hang detected for job: {str(workflow_job_id)}")
                 return True
             else:
@@ -118,8 +118,9 @@ def is_job_hanging_from_job_log(error_snippet, workflow_outputs_dir, workflow_ru
                 )
                 return False
 
-        # Always store the timestamp of the current line
-        log_timestamps.append(parse_github_log_timestamp(line))
+        # Update the second last and last timestamps
+        second_last_ts = last_ts
+        last_ts = parse_github_log_timestamp(line)
     return False
 
 
