@@ -564,7 +564,7 @@ void Device::reset_cores() {
                 launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
                 log_info(
                     tt::LogMetal,
-                    "While initializing Device {}, ethernet tunneler core {} on Device {} detected as still running, "
+                    "While initializing Device {}, active ethernet core {} on Device {} detected as still running, "
                     "issuing exit signal.",
                     this->id(),
                     virtual_core.str(),
@@ -572,6 +572,13 @@ void Device::reset_cores() {
                 launch_msg->kernel_config.exit_erisc_kernel = 1;
                 llrt::write_launch_msg_to_core(this->id(), virtual_core, launch_msg, &go_msg, launch_addr, false);
                 device_to_early_exit_cores[this->id()].insert(virtual_core);
+
+                // Clear launch erisc flag
+                auto core_type_idx = hal_ref.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
+                std::uint32_t launch_erisc_addr =
+                    tt::tt_metal::hal_ref.get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr;
+                std::vector<uint32_t> clear_flag_data = {0};
+                tt::llrt::write_hex_vec_to_core(this->id(), virtual_core, clear_flag_data, launch_erisc_addr);
             }
         }
     }
@@ -591,7 +598,8 @@ void Device::reset_cores() {
                 if (erisc_app_still_running(virtual_core)) {
                     log_info(
                         tt::LogMetal,
-                        "While initializing device {}, ethernet dispatch core {} on Device {} detected as still running, issuing exit signal.",
+                        "While initializing device {}, idle ethernet dispatch core {} on Device {} detected as still "
+                        "running, issuing exit signal.",
                         this->id(),
                         virtual_core.str(),
                         id_and_cores.first);

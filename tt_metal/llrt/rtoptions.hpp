@@ -143,6 +143,8 @@ class RunTimeOptions {
 
     bool erisc_iram_enabled = false;
 
+    bool skip_eth_cores_with_retrain = false;
+
     RunTimeOptions();
 
 public:
@@ -335,6 +337,8 @@ public:
     inline const std::filesystem::path& get_simulator_path() { return simulator_path; }
 
     inline bool get_erisc_iram_enabled() { return erisc_iram_enabled; }
+
+    inline bool get_skip_eth_cores_with_retrain() { return skip_eth_cores_with_retrain; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.

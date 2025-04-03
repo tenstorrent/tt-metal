@@ -120,6 +120,16 @@ RunTimeOptions::RunTimeOptions() {
         }
     }
 
+    const char* skip_eth_cores_with_retrain_str = std::getenv("TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN");
+    if (skip_eth_cores_with_retrain_str != nullptr) {
+        if (skip_eth_cores_with_retrain_str[0] == '0') {
+            skip_eth_cores_with_retrain = false;
+        }
+        if (skip_eth_cores_with_retrain_str[0] == '1') {
+            skip_eth_cores_with_retrain = true;
+        }
+    }
+
     const char* riscv_debug_info_enabled_str = std::getenv("TT_METAL_RISCV_DEBUG_INFO");
     set_riscv_debug_info_enabled(riscv_debug_info_enabled_str != nullptr);
 
