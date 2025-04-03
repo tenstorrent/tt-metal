@@ -2173,3 +2173,90 @@ def test_small_matmul_pcc(device):
     output_tensor = ttnn.to_torch(output1)
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+
+
+@pytest.mark.parametrize(
+    "out_block_h, out_block_w",
+    [
+        # (3, 1), (6, 1) are invalid combinations
+        (3, 2),
+        (6, 2),
+        (1, 1),
+        (1, 2),
+    ],
+)
+def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_block_w):
+    torch.manual_seed(0)
+    input_shape0 = (384, 64)
+    input_shape1 = (64, 64)
+    torch_input_tensor0 = torch.rand(input_shape0, dtype=torch.bfloat16)
+    torch_input_tensor1 = torch.rand(input_shape1, dtype=torch.bfloat16)
+    torch_output_tensor = torch.matmul(torch_input_tensor0, torch_input_tensor1)
+
+    memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+            (192, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardMode.PHYSICAL,
+        ),
+    )
+
+    input_tensor0 = ttnn.from_torch(
+        torch_input_tensor0, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config
+    )
+    input_tensor1 = ttnn.from_torch(torch_input_tensor1, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    grid = ttnn.CoreGrid(y=2, x=1)
+    memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED, buffer_type=ttnn.BufferType.L1, shard_spec=None
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(1, 2),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=out_block_h,
+        out_block_w=out_block_w,
+        per_core_M=6,
+        per_core_N=2,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
+    pcc = 0.999
+    # DRAM interleaved output
+    output_tensor = ttnn.matmul(
+        input_tensor0,
+        input_tensor1,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config=compute_kernel_config,
+        program_config=program_config,
+    )
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+
+    # L1 Sharded output
+    output_tensor = ttnn.matmul(
+        input_tensor0,
+        input_tensor1,
+        memory_config=memory_config,
+        compute_kernel_config=compute_kernel_config,
+        program_config=program_config,
+    )
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+
+    # L1 Sharded inferred output
+    output_tensor = ttnn.matmul(
+        input_tensor0, input_tensor1, compute_kernel_config=compute_kernel_config, program_config=program_config
+    )
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
