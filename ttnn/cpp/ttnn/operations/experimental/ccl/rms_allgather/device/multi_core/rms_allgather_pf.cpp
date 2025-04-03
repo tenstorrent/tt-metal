@@ -14,7 +14,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 #include <tt-metalium/circular_buffer_types.hpp>
-#include "ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
+#include "ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 
