@@ -545,7 +545,7 @@ void DeviceProfiler::emitCSVHeader(
     std::ofstream& log_file_ofs, const tt::ARCH& device_architecture, int device_core_frequency) const {
     log_file_ofs << "ARCH: " << get_string_lowercase(device_architecture)
                  << ", CHIP_FREQ[MHz]: " << device_core_frequency << std::endl;
-    log_file_ofs << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, run ID, "
+    log_file_ofs << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, "
                     "run host ID,  zone name, type, source line, source file, meta data"
                  << std::endl;
 }
