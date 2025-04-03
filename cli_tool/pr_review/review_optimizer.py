@@ -49,10 +49,15 @@ def get_codeowners(file_path):
         return []
 
 def select_reviewers(file_owners, include, skip):
+    # Normalize inputs to strip '@' from include and skip lists
+    include = {name.lstrip('@') for name in include}
+    skip = {name.lstrip('@') for name in skip}
+    
     # must include reviewers and reviewers can be skipped (on vacation, etc.)
     selected_reviewers = set(include)
+
     for file in file_owners:
-        file['owners'] = [owner for owner in file['owners'] if owner.lstrip('@') not in skip]
+        file['owners'] = [owner.lstrip('@') for owner in file['owners'] if owner.lstrip('@') not in skip]
 
     # Mark files covered by the included reviewers as reviewed
     for file in file_owners:
@@ -77,7 +82,7 @@ def select_reviewers(file_owners, include, skip):
         if not max_coverage_owner:
             break
         
-        selected_reviewers.add(max_coverage_owner)
+        selected_reviewers.add(max_coverage_owner.lstrip('@'))  # Normalize before adding
         
         # Remove all files that the selected owner can review
         covered_files = owner_files.pop(max_coverage_owner, set())
@@ -87,7 +92,8 @@ def select_reviewers(file_owners, include, skip):
         for owner in owner_files:
             owner_files[owner] -= covered_files
 
-    return sorted(selected_reviewers)
+    return sorted(f"@{reviewer}" for reviewer in selected_reviewers)  # Ensure consistent output format
+
 
 
 def review_optimizer():
