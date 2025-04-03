@@ -135,11 +135,13 @@ inline void fabric_send_pull_request(
         uint32_t header_wr_index = header_wrptr & CHAN_REQ_BUF_SIZE_MASK;
         uint64_t noc_addr = router_addr + offsetof(chan_req_buf, chan_req) + header_wr_index * sizeof(pull_request_t);
         noc_async_write_one_packet((uint32_t)header, noc_addr, sizeof(pull_request_t), noc_index);
+        noc_async_write_barrier();
     } else {
         tt_fabric_check_pull_request_slot<true>(router_addr, pull_request, wrptr);
     }
 
     tt_fabric_send_pull_request(router_addr, pull_request);
+    noc_async_write_barrier();
 }
 
 template <ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA, RoutingType routing_type = RoutingType::ROUTER_XY>

@@ -379,6 +379,7 @@ template <uint16_t mesh_id, uint16_t dev_id, uint32_t routing, tt::tt_fabric::Cl
 inline void relay_cb_async_write(
     T client_interface, uint32_t header_addr, uint32_t src_addr, uint64_t dst_addr, uint32_t size) {
     if constexpr (use_fabric(routing)) {
+        DPRINT << "Fabric Async Write " << size << " bytes. header = 0x" << HEX() << header_addr << ENDL();
         tt::tt_fabric::fabric_async_write_add_header<decltype(client_interface)>(
             client_interface,
             src_addr,
@@ -426,7 +427,7 @@ inline void relay_cb_release_pages(T client_interface, uint32_t header, uint32_t
             mesh_id,
             dev_id,
             reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::packet_header_t*>(header));
-        tt::tt_fabric::fabric_wait_for_pull_request_flushed(client_interface);
+        // tt::tt_fabric::fabric_wait_for_pull_request_flushed(client_interface);
     } else {
         cb_release_pages<noc_idx, noc_xy, sem_id>(n);
     }
