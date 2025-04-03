@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <bits/std_abs.h>
 #include <boost/container/vector.hpp>
 #include <stdint.h>
 #include <stdlib.h>
@@ -10,6 +9,7 @@
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <map>
 #include <optional>
 #include <string>

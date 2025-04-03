@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include <bits/std_abs.h>
 #include <fmt/base.h>
 #include <stdint.h>
 #include <tt-metalium/command_queue.hpp>
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <functional>
 #include <optional>

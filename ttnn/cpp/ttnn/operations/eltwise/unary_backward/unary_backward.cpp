@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <bits/std_abs.h>
 #include <boost/move/utility_core.hpp>
 #include <fmt/base.h>
 #include <tt-metalium/hal.hpp>
