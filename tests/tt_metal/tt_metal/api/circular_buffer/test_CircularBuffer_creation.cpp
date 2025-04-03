@@ -2,13 +2,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <stdint.h>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <map>
+#include <memory>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/circular_buffer_constants.h>
 #include "circular_buffer_test_utils.hpp"
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include "hostdevcommon/kernel_structs.h"
+#include <tt-metalium/program_impl.hpp>
+#include "umd/device/tt_core_coordinates.h"
+
+namespace tt {
+enum class DataFormat : uint8_t;
+}  // namespace tt
 
 using std::vector;
 using namespace tt::tt_metal;

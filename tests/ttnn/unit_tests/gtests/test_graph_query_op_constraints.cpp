@@ -2,42 +2,53 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <stddef.h>
+#include <tt-metalium/logger.hpp>
+#include <array>
 #include <cstdint>
-#include <functional>
 #include <optional>
-#include <ostream>
+#include <set>
+#include <sstream>
 #include <string>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
-#include <variant>
-#include <vector>
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include "gtest/gtest.h"
-#include <tt-metalium/event.hpp>
-#include <tt-metalium/program_impl.hpp>
-#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
-#include <nlohmann/json.hpp>
-#include <tt-metalium/logger.hpp>
-#include "ttnn/device.hpp"
-#include "ttnn/graph/graph_operation_queries.hpp"
-#include "ttnn/graph/graph_processor.hpp"
-#include "ttnn/graph/graph_trace_utils.hpp"
+#include <tt-metalium/shape.hpp>
+#include <tt-metalium/shape_base.hpp>
+#include "tt_cluster.hpp"
+#include "ttnn/decorators.hpp"
 #include "ttnn/graph/graph_query_op_constraints.hpp"
-#include "ttnn/operations/core/core.hpp"
+#include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
-#include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
+#include "ttnn/tensor/enum_types.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
+#include "umd/device/types/cluster_descriptor_types.h"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 namespace operations {

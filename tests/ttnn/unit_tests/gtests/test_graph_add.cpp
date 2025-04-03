@@ -2,25 +2,38 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "gtest/gtest.h"
+#include <boost/move/utility_core.hpp>
+#include <fmt/base.h>
+#include <nlohmann/json.hpp>
+#include <stddef.h>
 #include <tt-metalium/logger.hpp>
-#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
-#include "ttnn/device.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/creation.hpp"
-#include "ttnn_test_fixtures.hpp"
-
-#include "ttnn/tensor/types.hpp"
-
-#include "ttnn/graph/graph_processor.hpp"
-#include "ttnn/graph/graph_trace_utils.hpp"
-#include "ttnn/graph/graph_operation_queries.hpp"
-
-#include "ttnn/tensor/types.hpp"
-
 #include <cstdint>
+#include <optional>
+#include <set>
+#include <sstream>
 #include <string>
+#include <tuple>
+#include <unordered_set>
+#include <vector>
+
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/graph_tracking.hpp>
+#include "gtest/gtest.h"
+#include <tt-metalium/shape.hpp>
+#include "ttnn/decorators.hpp"
+#include "ttnn/graph/graph_operation_queries.hpp"
+#include "ttnn/graph/graph_trace_utils.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/functions.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn_test_fixtures.hpp"
 
 namespace ttnn {
 namespace operations {

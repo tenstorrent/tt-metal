@@ -2,25 +2,50 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <cctype>
 #include <chrono>
-#include <functional>
-#include <random>
-#include <stdexcept>
-#include <string>
-#include <vector>
-
+#include <errno.h>
+#include <fmt/base.h>
+#include <stdlib.h>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
-#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstring>
+#include <exception>
+#include <functional>
+#include <map>
+#include <memory>
+#include <optional>
+#include <random>
+#include <string>
+#include <tuple>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include "fmt/base.h"
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include "span.hpp"
 #include "test_common.hpp"
+#include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
+#include "umd/device/types/arch.h"
 
 using namespace tt;
 using std::chrono::duration_cast;
