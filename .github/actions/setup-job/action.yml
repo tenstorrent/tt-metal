@@ -48,7 +48,7 @@ runs:
       shell: bash
 
     - name: 🐍 Create Virtual Environment
-      if: ${{ inputs.create-venv }}
+      if: ${{ inputs.create-venv == true }}
       working-directory: ${{ inputs.path }}
       run: ./create_venv.sh
       shell: bash
