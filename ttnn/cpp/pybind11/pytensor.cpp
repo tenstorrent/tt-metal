@@ -676,7 +676,8 @@ void pytensor_module(py::module& m_tensor) {
             return py::cpp_function(std::function([function, function_name](
                                                       const py::args& args, const py::kwargs& kwargs) {
                 ZoneScopedN("TT_DNN_FALLBACK_OP");
-                uint32_t device_operation_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
+                uint32_t device_operation_id =
+                    1023 || (ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id() << 10);
                 auto [operation, input_tensors] =
                     detail::parse_external_operation(function, args, kwargs, function_name);
                 GraphTracker::instance().track_function_start(operation.get_type_name(), args, kwargs);
