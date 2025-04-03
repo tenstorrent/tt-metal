@@ -83,6 +83,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
     size_t num_targets_forward = 0;
     size_t num_targets_backward = 0;
+    bool dynamic_alternate = false;
     if (topology == ccl::Topology::Linear) {
         LineTopology line_topology(ring_size, ring_index);
         num_targets_forward =
@@ -93,9 +94,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         // TODO: Commonize
         num_targets_forward = tt::div_up(ring_size - 1, 2);
         num_targets_backward = ring_size - 1 - num_targets_forward;
-        if (ring_index % 2 == 0) {
-            std::swap(num_targets_forward, num_targets_backward);
+        constexpr bool static_alternate = true;
+        if constexpr (static_alternate) {
+            if (ring_index % 2 == 0) {
+                std::swap(num_targets_forward, num_targets_backward);
+            }
         }
+        // Even ring size will result in uneven fwd/backward distances
+        dynamic_alternate = ring_size % 2 == 0;
     }
 
     // Tensor Info
@@ -340,14 +346,15 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
 
     // Writer
     std::vector<uint32_t> writer_compile_args = {
-        ring_index,                       // my_chip_id
-        reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
-        num_packet_headers_storable,      // num_packet_headers_storable
-        src0_cb_index,                    // cb0_id
-        num_pages_per_packet,             // packet_size_in_pages
-        op_config.get_page_size(),        // tensor0_page_size
-        num_targets_forward,              // num_targets_forward_direction
-        num_targets_backward,             // num_targets_backward_direction
+        ring_index,                               // my_chip_id
+        reserved_packet_header_CB_index,          // reserved_packet_header_cb_id
+        num_packet_headers_storable,              // num_packet_headers_storable
+        src0_cb_index,                            // cb0_id
+        num_pages_per_packet,                     // packet_size_in_pages
+        op_config.get_page_size(),                // tensor0_page_size
+        num_targets_forward,                      // num_targets_forward_direction
+        num_targets_backward,                     // num_targets_backward_direction
+        static_cast<uint32_t>(dynamic_alternate)  // dynamic_alternate
     };
     log_trace(tt::LogOp, "Writer Compile Args:");
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -438,7 +445,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
             mcast_end_y.push_back(end_core.y);
         }
 
-        uint32_t out_ready_sem_wait_value = ring_size;
+        uint32_t out_ready_sem_wait_value = dynamic_alternate ? (ring_size + 1) : ring_size;
         std::vector<uint32_t> writer_rt_args = {
             reduction_cb_index,                   // tensor_address0
             semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)

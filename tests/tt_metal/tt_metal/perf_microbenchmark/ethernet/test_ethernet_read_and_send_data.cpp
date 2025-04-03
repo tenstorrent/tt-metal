@@ -3,29 +3,42 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <limits>
-#include <random>
-#include <thread>
-
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
+#include <assert.h>
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
-#include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/print_helpers.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
-#include "tt_metal/test_utils/env_vars.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
+#include <cstdlib>
+#include <exception>
+#include <iostream>
+#include <map>
+#include <memory>
+#include <string>
+#include <thread>
+#include <unordered_set>
+#include <variant>
+#include <vector>
 
-#include "tt_cluster.hpp"
-
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/data_types.hpp>
+#include "df/float32.hpp"
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include "span.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_cluster.hpp"
+#include "tt_metal/test_utils/env_vars.hpp"
+#include "tt_metal/test_utils/stimulus.hpp"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
 
 using namespace tt;
 using namespace tt::test_utils;

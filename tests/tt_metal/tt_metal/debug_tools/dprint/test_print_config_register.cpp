@@ -2,17 +2,33 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <unordered_set>
-#include <iostream>
-
-#include <tt-metalium/bfloat16.hpp>
-#include "debug_tools_fixture.hpp"
-#include "gtest/gtest.h"
-#include "debug_tools_test_utils.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <stdint.h>
+#include <sys/types.h>
 #include <tt-metalium/host_api.hpp>
-#include "tt_metal/test_utils/df/df.hpp"
-#include "tt_metal/test_utils/stimulus.hpp"
+#include <functional>
+#include <map>
+#include <sstream>
+#include <string>
+#include <unordered_set>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include "debug_tools_fixture.hpp"
+#include "debug_tools_test_utils.hpp"
+#include "gtest/gtest.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/test_utils/df/float32.hpp"
+#include "umd/device/types/arch.h"
+
+namespace tt {
+namespace tt_metal {
+class IDevice;
+}  // namespace tt_metal
+}  // namespace tt
+
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking dprint
 //////////////////////////////////////////////////////////////////////////////////////////
