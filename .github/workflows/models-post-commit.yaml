@@ -53,14 +53,6 @@ jobs:
       - cloud-virtual-machine
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - uses: ./.github/actions/retry-command
-        # For BH we use yyzo machines and they don't have MLPerf mounted
-        if: ${{ inputs.arch != 'blackhole' }}
-        with:
-          timeout-seconds: 100
-          max-retries: 10
-          backoff-seconds: 60
-          command: ./.github/scripts/cloud_utils/mount_weka.sh
       - uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
@@ -73,7 +65,6 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e ARCH_NAME=${{ inputs.arch }}
-            -e GITHUB_ACTIONS=true
           run_args: |
             source tests/scripts/run_python_model_tests.sh && run_python_model_tests_${{ inputs.arch }}
       - uses: ./.github/actions/slack-report
@@ -108,12 +99,6 @@ jobs:
       - cloud-virtual-machine
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - uses: ./.github/actions/retry-command
-        with:
-          timeout-seconds: 100
-          max-retries: 10
-          backoff-seconds: 60
-          command: ./.github/scripts/cloud_utils/mount_weka.sh
       - uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
