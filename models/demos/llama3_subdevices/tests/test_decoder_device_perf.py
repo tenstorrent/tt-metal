@@ -325,8 +325,8 @@ def test_llama_TG_perf_device(reset_seeds):
     expected_times_dict = {
         "Embeddings": [7230.0, 7241.0],
         "DramPrefetcher": [20261638.0],
-        "LayerNorm": [6230.0, 6449.0, 7743.0, 7426.0],
-        "AllGatherAsync": [2572.0, 11958.0, 2570.0],
+        "RMSAllGather": [7100.0, 5200.0, 7200.0, 5200.0],
+        "AllGatherAsync": [11958.0],
         "ReshardDeviceOperation": [1456.0, 1939.0, 2776.0],
         "Matmul": [8022.0, 9004.0, 9727.0, 10140.0, 16769.0],
         "AllReduceAsync": [219371.0, 11674841.0, 772010.0, 33516.0, 3713658.0],
