@@ -4,14 +4,17 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstring>
+#include <functional>
 #include <string>
 
-#include "hostdevcommon/kernel_structs.h"
+#include <hostdevcommon/kernel_structs.h>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/utils.hpp>
-#include <tt-metalium/circular_buffer_constants.h>  // for NUM_CIRCULAR_BUFFERS
+#include <tt-metalium/circular_buffer_constants.h>
 
 namespace tt {
 /**
@@ -131,7 +134,7 @@ public:
 // Hash for hlk_args
 inline void hash_hlk_args(size_t& seed, void* hlk_args, size_t hlk_args_size) {
     char buffer[hlk_args_size];
-    memcpy(buffer, hlk_args, hlk_args_size);
+    std::memcpy(buffer, hlk_args, hlk_args_size);
 
     for (int i = 0; i < hlk_args_size; i++) {
         tt::utils::hash_combine(seed, std::hash<char>{}(buffer[i]));

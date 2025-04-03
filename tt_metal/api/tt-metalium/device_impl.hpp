@@ -8,8 +8,8 @@
 #include <utility>
 
 #include <tt-metalium/device.hpp>
-#include "hostdevcommon/common_values.hpp"
-#include "hostdevcommon/kernel_structs.h"  // Leaked up to ttnn level from here
+#include <hostdevcommon/common_values.hpp>
+#include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
 #include <tt-metalium/work_executor_types.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/program_device_map.hpp>
