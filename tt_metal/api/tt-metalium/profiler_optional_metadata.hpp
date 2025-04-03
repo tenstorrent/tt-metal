@@ -4,7 +4,12 @@
 
 #pragma once
 
-#include "map"
+#include <cstdint>
+#include <map>
+#include <string>
+#include <utility>
+
+#include <umd/device/types/cluster_descriptor_types.h>
 
 class ProfilerOptionalMetadata {
     using RuntimeID = uint32_t;

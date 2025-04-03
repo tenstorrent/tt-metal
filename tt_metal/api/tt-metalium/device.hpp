@@ -14,8 +14,8 @@
 #include <unordered_set>
 #include <vector>
 
-#include "hostdevcommon/common_values.hpp"
-#include "hostdevcommon/kernel_structs.h"  // Not used here, but leaked to programming examples
+#include <hostdevcommon/common_values.hpp>
+#include <hostdevcommon/kernel_structs.h>  // Not used here, but leaked to programming examples
 #include <tt-metalium/work_executor_types.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/program_device_map.hpp>
