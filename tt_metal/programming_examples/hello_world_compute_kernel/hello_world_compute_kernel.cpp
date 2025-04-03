@@ -2,8 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "tt-metalium/fabric_types.hpp"
 #include "tt-metalium/kernel_types.hpp"
 
 using namespace tt;
@@ -11,9 +14,12 @@ using namespace tt::tt_metal;
 
 int main(int argc, char** argv) {
     // Initialize Program and Device
+    if (std::getenv("TT_METAL_FD_FABRIC")) {
+        tt::tt_metal::detail::InitializeFabricConfig(FabricConfig::FABRIC_2D);
+    }
 
     constexpr CoreCoord core = {0, 0};
-    int device_id = 0;
+    int device_id = 1;
     IDevice* device = CreateDevice(device_id);
     CommandQueue& cq = device->command_queue();
     Program program = CreateProgram();

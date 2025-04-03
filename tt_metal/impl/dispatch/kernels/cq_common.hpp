@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,7 @@
 #include "debug/dprint.h"
 #include "debug/ring_buffer.h"
 #include "cq_helpers.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 
 // The command queue read interface controls reads from the issue region, host owns the issue region write interface
 // Commands and data to send to device are pushed into the issue region
@@ -371,6 +372,85 @@ FORCE_INLINE void move_rd_to_next_block(uint32_t& rd_block_idx) {
 template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id, uint32_t cb_pages_per_block, uint32_t cb_blocks>
 FORCE_INLINE void move_rd_to_next_block_and_release_pages(uint32_t& block_noc_writes_to_clear, uint32_t& rd_block_idx) {
     cb_block_release_pages<noc_idx, noc_xy, sem_id, cb_pages_per_block>(block_noc_writes_to_clear);
+    move_rd_to_next_block<cb_blocks>(rd_block_idx);
+}
+
+template <uint16_t mesh_id, uint16_t dev_id, uint32_t routing, tt::tt_fabric::ClientDataMode data_mode, typename T>
+inline void relay_cb_async_write(
+    T client_interface, uint32_t header_addr, uint32_t src_addr, uint64_t dst_addr, uint32_t size) {
+    if constexpr (use_fabric(routing)) {
+        DPRINT << "Fabric Async Write " << size << " bytes. header = 0x" << HEX() << header_addr << ENDL();
+        tt::tt_fabric::fabric_async_write_add_header<decltype(client_interface)>(
+            client_interface,
+            src_addr,
+            mesh_id,
+            dev_id,
+            dst_addr,
+            size + tt::tt_fabric::PACKET_HEADER_SIZE_BYTES,
+            reinterpret_cast<tt::tt_fabric::packet_header_t*>(header_addr));
+        tt::tt_fabric::fabric_setup_pull_request<data_mode>(client_interface, src_addr, size);
+        tt::tt_fabric::fabric_send_pull_request<data_mode>(
+            client_interface,
+            routing,
+            mesh_id,
+            dev_id,
+            reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::packet_header_t*>(header_addr));
+        tt::tt_fabric::fabric_wait_for_pull_request_flushed(client_interface);
+    } else {
+        noc_async_write(src_addr, dst_addr, size);
+    }
+}
+
+template <
+    uint16_t mesh_id,
+    uint16_t dev_id,
+    uint32_t routing,
+    uint8_t noc_idx,
+    uint32_t noc_xy,
+    uint32_t sem_id,
+    typename T>
+inline void relay_cb_release_pages(T client_interface, uint32_t header, uint32_t n) {
+    constexpr uint32_t k_WrapBoundary = 31;  // Same as NOC API
+    if constexpr (use_fabric(routing)) {
+        tt::tt_fabric::fabric_atomic_inc_add_header(
+            header,
+            mesh_id,
+            dev_id,
+            get_noc_addr_helper(noc_xy, get_semaphore<fd_core_type>(sem_id)),
+            n,
+            k_WrapBoundary);
+        tt::tt_fabric::fabric_setup_pull_request<tt::tt_fabric::PACKETIZED_DATA>(
+            client_interface, header, tt::tt_fabric::PACKET_HEADER_SIZE_BYTES);
+        tt::tt_fabric::fabric_send_pull_request<tt::tt_fabric::PACKETIZED_DATA>(
+            client_interface,
+            routing,
+            mesh_id,
+            dev_id,
+            reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::packet_header_t*>(header));
+        // tt::tt_fabric::fabric_wait_for_pull_request_flushed(client_interface);
+    } else {
+        cb_release_pages<noc_idx, noc_xy, sem_id>(n);
+    }
+}
+
+template <
+    uint8_t noc_idx,
+    uint32_t noc_xy,
+    uint32_t sem_id,
+    uint32_t cb_pages_per_block,
+    uint32_t cb_blocks,
+    uint16_t mesh_id,
+    uint16_t dev_id,
+    uint32_t routing,
+    typename T>
+FORCE_INLINE void relay_cb_move_rd_to_next_block_and_release_pages(
+    T client_interface, uint32_t header, uint32_t& block_noc_writes_to_clear, uint32_t& rd_block_idx) {
+    if constexpr (use_fabric(routing)) {
+        relay_cb_release_pages<mesh_id, dev_id, routing, noc_idx, noc_xy, sem_id>(
+            client_interface, header, block_noc_writes_to_clear);
+    } else {
+        cb_block_release_pages<noc_idx, noc_xy, sem_id, cb_pages_per_block>(block_noc_writes_to_clear);
+    }
     move_rd_to_next_block<cb_blocks>(rd_block_idx);
 }
 

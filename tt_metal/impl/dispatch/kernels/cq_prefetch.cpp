@@ -9,6 +9,7 @@
 //    double buffered ScratchBuf for out of band data (e.g., from DRAM)
 //  - syncs w/ dispatcher via 2 semaphores, page_ready, page_done
 
+#include "fabric_host_interface.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -71,9 +72,11 @@ constexpr uint32_t upstream_mesh_id = get_compile_time_arg_val(28);
 constexpr uint32_t upstream_dev_id = get_compile_time_arg_val(29);
 constexpr uint32_t fabric_router_noc_xy = get_compile_time_arg_val(30);
 constexpr uint32_t client_interface_addr = get_compile_time_arg_val(31);
+constexpr uint32_t header_rb = get_compile_time_arg_val(32);
+constexpr uint32_t header_rb_size = 64 * 48;
 
-constexpr uint32_t is_d_variant = get_compile_time_arg_val(32);
-constexpr uint32_t is_h_variant = get_compile_time_arg_val(33);
+constexpr uint32_t is_d_variant = get_compile_time_arg_val(33);
+constexpr uint32_t is_h_variant = get_compile_time_arg_val(34);
 
 constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
@@ -119,6 +122,7 @@ constexpr uint32_t prefetch_q_log_minsize = 4;
 const uint32_t scratch_db_top[2] = {scratch_db_base0, scratch_db_base1};
 
 constexpr uint32_t cmddat_q_pages_per_block = cmddat_q_pages / cmddat_q_blocks;
+constexpr uint32_t header_rb_entries = header_rb_size / tt::tt_fabric::PACKET_HEADER_SIZE_BYTES;
 
 // Currently capping the same as dispatch
 constexpr uint32_t max_read_packed_cmd =
@@ -167,8 +171,23 @@ static uint32_t downstream_data_ptr_s = dispatch_s_buffer_base;
 static uint32_t block_next_start_addr[cmddat_q_blocks];
 static uint32_t rd_block_idx = 0;
 static uint32_t upstream_total_acquired_page_count = 0;
+
+#ifdef FVC_MODE_PULL
 static auto client_interface =
-    reinterpret_cast<volatile tt_l1_ptr fabric_pull_client_interface_t*>(client_interface_addr);
+    reinterpret_cast<volatile tt::tt_fabric::fabric_pull_client_interface_t*>(client_interface_addr);
+#else
+static auto client_interface =
+    reinterpret_cast<volatile tt::tt_fabric::fabric_push_client_interface_t*>(client_interface_addr);
+#endif
+
+static uint32_t fabric_header_rb_index = 0;
+
+inline uint32_t get_fabric_header() {
+    constexpr uint32_t header_rb_mask = header_rb_entries - 1;
+    uint32_t addr = header_rb + ((fabric_header_rb_index & header_rb_mask) * tt::tt_fabric::PACKET_HEADER_SIZE_BYTES);
+    fabric_header_rb_index = fabric_header_rb_index + 1;
+    return addr;
+}
 
 // Feature to stall the prefetcher, mainly for ExecBuf impl which reuses CmdDataQ
 static enum StallState { STALL_NEXT = 2, STALLED = 1, NOT_STALLED = 0 } stall_state = NOT_STALLED;
@@ -1310,23 +1329,59 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
 
     uint32_t downstream_pages_left = (downstream_cb_end - downstream_data_ptr) >> downstream_cb_log_page_size;
     if (downstream_pages_left >= npages) {
-        noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), length);
+        relay_cb_async_write<
+            downstream_mesh_id,
+            downstream_dev_id,
+            fabric_router_noc_xy,
+            tt::tt_fabric::ClientDataMode::RAW_DATA>(
+            client_interface,
+            get_fabric_header(),
+            data_ptr,
+            get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr),
+            length);
         downstream_data_ptr += npages * downstream_cb_page_size;
     } else {
         uint32_t tail_pages = npages - downstream_pages_left;
         uint32_t available = downstream_pages_left * downstream_cb_page_size;
         if (available > 0) {
-            noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr), available);
+            relay_cb_async_write<
+                downstream_mesh_id,
+                downstream_dev_id,
+                fabric_router_noc_xy,
+                tt::tt_fabric::ClientDataMode::RAW_DATA>(
+                client_interface,
+                get_fabric_header(),
+                data_ptr,
+                get_noc_addr_helper(downstream_noc_xy, downstream_data_ptr),
+                available);
             data_ptr += available;
             length -= available;
         }
-
-        noc_async_write(data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_base), length);
+        relay_cb_async_write<
+            downstream_mesh_id,
+            downstream_dev_id,
+            fabric_router_noc_xy,
+            tt::tt_fabric::ClientDataMode::RAW_DATA>(
+            client_interface,
+            get_fabric_header(),
+            data_ptr,
+            get_noc_addr_helper(downstream_noc_xy, downstream_cb_base),
+            length);
         downstream_data_ptr = downstream_cb_base + tail_pages * downstream_cb_page_size;
     }
 
-    noc_async_writes_flushed();
-    cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
+    // Raw data writes are already flushed
+    if constexpr (!use_fabric(fabric_router_noc_xy)) {
+        noc_async_writes_flushed();
+    }
+
+    relay_cb_release_pages<
+        downstream_mesh_id,
+        downstream_dev_id,
+        fabric_router_noc_xy,
+        my_noc_index,
+        downstream_noc_xy,
+        downstream_cb_sem_id>(client_interface, get_fabric_header(), npages);
 
     return fence;
 }
@@ -1438,7 +1493,13 @@ void kernel_main_d() {
         // TODO: evaluate less costly free pattern (blocks?)
         uint32_t total_length = length + sizeof(CQPrefetchHToPrefetchDHeader);
         uint32_t pages_to_free = (total_length + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
-        cb_release_pages<my_noc_index, upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);
+        relay_cb_release_pages<
+            upstream_mesh_id,
+            upstream_dev_id,
+            fabric_router_noc_xy,
+            my_noc_index,
+            upstream_noc_xy,
+            upstream_cb_sem_id>(client_interface, get_fabric_header(), pages_to_free);
 
         // Move to next page
         cmd_ptr = round_up_pow2(cmd_ptr, cmddat_q_page_size);
@@ -1449,8 +1510,10 @@ void kernel_main_d() {
     // TODO: This should be replaced with a signal similar to what packetized
     // components use.
     // DPRINT << "prefetch_d done" << ENDL();
-    noc_semaphore_inc(
-        get_noc_addr_helper(upstream_noc_xy, get_semaphore<fd_core_type>(upstream_cb_sem_id)), 0x80000000);
+    if (!use_fabric(fabric_router_noc_xy)) {
+        noc_semaphore_inc(
+            get_noc_addr_helper(upstream_noc_xy, get_semaphore<fd_core_type>(upstream_cb_sem_id)), 0x80000000);
+    }
 }
 
 void kernel_main_hd() {
@@ -1478,6 +1541,7 @@ void kernel_main_hd() {
 void kernel_main() {
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start" << ENDL();
     if constexpr (use_fabric(fabric_router_noc_xy)) {
+        DPRINT << "Using fabric" << ENDL();
         tt::tt_fabric::fabric_endpoint_init(client_interface, 0 /*unused*/);
     }
 
