@@ -8,24 +8,14 @@ run_falcon7b_func() {
 }
 
 run_mistral7b_func() {
-  fail=0
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/mistral7b/demo/demo.py; fail+=$?
-
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/mistral7b/demo/demo.py
 
 }
 
 run_qwen7b_func() {
-  fail=0
 
-  QWEN_DIR=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml FAKE_DEVICE=N150 pytest -n auto models/demos/qwen/demo/demo.py -k instruct --timeout 420; fail+=$?
-
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+  QWEN_DIR=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml FAKE_DEVICE=N150 pytest -n auto models/demos/qwen/demo/demo.py -k instruct --timeout 420
 
 }
 
@@ -42,7 +32,7 @@ run_llama3_func() {
 
   # Run Llama3 accuracy tests for 1B, 3B, 8B weights
   for llama_dir in "$llama1b" "$llama3b" "$llama8b"; do
-    LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py -k perf --timeout 420; fail+=$?
+    LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py -k perf --timeout 420 || fail=1
     echo "LOG_METAL: Llama3 accuracy tests for $llama_dir completed"
   done
 
@@ -53,23 +43,18 @@ run_llama3_func() {
 }
 
 run_vgg_func() {
-  fail=0
 
   #VGG11/VGG16
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/vgg/demo/demo.py --timeout 600; fail+=$?
-
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/vgg/demo/demo.py --timeout 600
 
 }
 
 run_bert_tiny_func() {
   fail=0
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/bert_tiny/demo/demo.py --timeout 600; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/bert_tiny/demo/demo.py --timeout 600 || fail=1
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/bert_tiny/demo/demo.py --timeout 600; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/bert_tiny/demo/demo.py --timeout 600 || fail=1
 
   if [[ $fail -ne 0 ]]; then
     exit 1
@@ -80,8 +65,8 @@ run_bert_tiny_func() {
 run_bert_func() {
   fail=0
 
-  pytest -n auto --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py -k batch_7; fail+=$?
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py -k batch_8; fail+=$?
+  pytest -n auto --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py -k batch_7 || fail=1
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py -k batch_8 || fail=1
 
   if [[ $fail -ne 0 ]]; then
     exit 1
@@ -90,22 +75,17 @@ run_bert_func() {
 }
 
 run_resnet_func() {
-  fail=0
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/wormhole/resnet50/demo/demo.py; fail+=$?
-
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/wormhole/resnet50/demo/demo.py
 
 }
 
 run_distilbert_func() {
   fail=0
 
-  pytest --disable-warnings models/demos/distilbert/demo/demo.py --timeout 600; fail+=$?
+  pytest --disable-warnings models/demos/distilbert/demo/demo.py --timeout 600 || fail=1
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/wormhole/distilbert/demo/demo.py --timeout 600; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/wormhole/distilbert/demo/demo.py --timeout 600 || fail=1
 
   if [[ $fail -ne 0 ]]; then
     exit 1
@@ -114,57 +94,32 @@ run_distilbert_func() {
 }
 
 run_covnet_mnist_func() {
-  fail=0
 
-  pytest --disable-warnings models/demos/convnet_mnist/demo/demo.py --timeout 600; fail+=$?
-
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+  pytest --disable-warnings models/demos/convnet_mnist/demo/demo.py --timeout 600
 
 }
 
 run_mnist_func() {
-  fail=0
 
-  pytest --disable-warnings models/demos/mnist/demo/demo.py --timeout 600; fail+=$?
-
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+  pytest --disable-warnings models/demos/mnist/demo/demo.py --timeout 600
 
 }
 
 run_squeezebert_func() {
-  fail=0
 
-  pytest --disable-warnings models/demos/squeezebert/demo/demo.py --timeout 600; fail+=$?
-
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+  pytest --disable-warnings models/demos/squeezebert/demo/demo.py --timeout 600
 
 }
 
 run_roberta_func() {
-  fail=0
 
-  pytest --disable-warnings models/demos/roberta/demo/demo.py --timeout 600; fail+=$?
-
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+  pytest --disable-warnings models/demos/roberta/demo/demo.py --timeout 600
 
 }
 
 run_stable_diffusion_func() {
-  fail=0
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings --input-path="models/demos/wormhole/stable_diffusion/demo/input_data.json" models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo --timeout 900; fail+=$?
-
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings --input-path="models/demos/wormhole/stable_diffusion/demo/input_data.json" models/demos/wormhole/stable_diffusion/demo/demo.py::test_demo --timeout 900
 
 }
 
@@ -232,13 +187,8 @@ run_common_func_tests() {
 }
 
 run_mistral7b_perf() {
-  fail=0
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/mistral7b/demo/demo_with_prefill.py; fail+=$?
-
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/mistral7b/demo/demo_with_prefill.py
 
 }
 
@@ -257,12 +207,12 @@ run_llama3_perf() {
   # Run all Llama3 tests for 1B, 3B, 8B weights for N150
   # To ensure a proper perf measurement and dashboard upload of the Llama3 models on a N150, we have to run them on the N300 perf pipeline for now
   for llama_dir in "$llama1b" "$llama3b" "$llama8b"; do
-    MESH_DEVICE=N150 LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600; fail+=$?
+    MESH_DEVICE=N150 LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 || fail=1
     echo "LOG_METAL: Llama3 tests for $llama_dir completed on N150"
   done
   # Run all Llama3 tests for 1B, 3B, 8B and 11B weights
   for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-    LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600; fail+=$?
+    LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 || fail=1
     echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
 
@@ -273,37 +223,22 @@ run_llama3_perf() {
 }
 
 run_falcon7b_perf() {
-  fail=0
 
   # Falcon7b (perf verification for 128/1024/2048 seq lens and output token verification)
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py; fail+=$?
-
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py
 
 }
 
 run_mamba_perf() {
-  fail=0
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mamba/demo/prompts.json' models/demos/wormhole/mamba/demo/demo.py --timeout 420; fail+=$?
-
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mamba/demo/prompts.json' models/demos/wormhole/mamba/demo/demo.py --timeout 420
 
 }
 
 run_whisper_perf() {
-  fail=0
 
   # Whisper conditional generation
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation"; fail+=$?
-
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/whisper/demo/demo.py --input-path="models/demos/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
 
 }
 
