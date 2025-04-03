@@ -23,24 +23,30 @@ void py_bind_conv2d(py::module& module) {
         module,
         ttnn::conv2d,
         R"doc(
-        Conv 2D
-        +-------------------+-------------------------------+---------------+-------------+----------+
-        | Argument          | Description                   | Data type     | Valid range | Required |
-        +===================+===============================+===============+=============+==========+
-        | input             | Input activations tensor      | Tensor        |             | Yes      |
-        | in_n              | Input nbatch                  | Tensor        |             | Yes      |
-        | in_h              | Input height                  | Tensor        |             | Yes      |
-        | in_w              | Input width                   | Tensor        |             | Yes      |
-        | kernel_h          | kernel window height          | uint32_t      |             | Yes      |
-        | kernel_w          | kernel window width           | uint32_t      |             | Yes      |
-        | stride_h          | stride in height dim          | uint32_t      |             | No       |
-        | stride_w          | stride in width dim           | uint32_t      |             | No       |
-        | pad_h             | padding in height dim         | uint32_t      |             | No       |
-        | pad_w             | padding in width dim          | uint32_t      |             | No       |
-        | dilation_h        | kernel dilation in height dim | uint32_t      |             | No       |
-        | dilation_w        | kernel dilation in width dim  | uint32_t      |             | No       |
-        | memory_config     | Output memory config          | MemoryConfig  |             | No       |
-        +-------------------+-------------------------------+---------------+-------------+----------+
+            Applies a 2D convolution over an input signal composed of several input planes.
+
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor.
+                weight_tensor (ttnn.Tensor): the weight tensor.
+                device (ttnn.IDevice): the device to use.
+                in_channels (int): number of input channels.
+                out_channels (int): number of output channels.
+                batch_size (int): batch size.
+                input_height (int): height of the input tensor.
+                input_width (int): width of the input tensor.
+                kernel_size (tuple[int, int]): size of the convolving kernel.
+                stride (tuple[int, int]): stride of the cross-correlation.
+                padding (tuple[int, int] or tuple[int, int, int, int]): zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
+                dilation (tuple[int, int]): spacing between kernel elements.
+                groups (int): number of blocked connections from input channels to output channels.
+                bias_tensor (ttnn.Tensor, optional): optional bias tensor. Default: None
+                conv_config (ttnn.Conv2dConfig, optional): configuration for convolution. Default: None
+                compute_config (ttnn.DeviceComputeKernelConfig, optional): configuration for compute kernel. Default: None
+                memory_config (ttnn.MemoryConfig, optional): configuration for memory. Default: None
+                queue_id (QueueId): queue id for operation. Default: DefaultQueueId
+            Returns:
+                ttnn.Tensor: the output tensor.
+
         )doc",
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::conv2d)& self,
@@ -363,7 +369,55 @@ void py_bind_conv2d(py::module& module) {
         py::arg("enable_weights_double_buffer") = false,
         py::arg("enable_split_reader") = false,
         py::arg("enable_subblock_padding") = false,
-        py::arg("in_place") = false);
+        py::arg("in_place") = false,
+        R"doc(
+        Conv2D configuration
+        +-------------------------------+-------------------------------+---------------+-------------+----------+
+        | Argument                      | Description                   | Data type     | Valid range | Required |
+        +===============================+===============================+===============+=============+==========+
+        | dtype                         | Activation data type          | DataType      |             | No       |
+        +-------------------------------+-------------------------------+---------------+-------------+----------+
+        | weights_dtype                 | Weights data type             | DataType      |             | No       |
+        +-------------------------------+-------------------------------+---------------+-------------+----------+
+        | activation                    | Activation function           | string        |             | No       |
+        +-------------------------------+-------------------------------+---------------+-------------+----------+
+        | input_channels_alignment      | Input channels alignment      | uint32_t      |             | No       |
+        +-------------------------------+-------------------------------+---------------+-------------+----------+
+        | deallocate_activation         | Deallocate activation tensor  | bool          |             | No       |
+        +-------------------------------+-------------------------------+---------------+-------------+----------+
+        | reallocate_halo_output       | Reallocate halo output tensor | bool          |             | No       |
+        +-------------------------------+-------------------------------+---------------+-------------+----------+
+        | act_block_h_override          | Activation block height       | uint32_t      |             | No       |
+        +-------------------------------+-------------------------------+---------------+-------------+----------+
+        | act_block_w_div               | Activation block width        | uint32_t      |             | No       |
+        +-------------------------------+-------------------------------+---------------+-------------+----------+
+        | reshard_if_not_optimal       | Reshard if not optimal        | bool          |             | No       |
+        +-------------------------------+-------------------------------+---------------+-------------+----------+
+        | override_sharding_config      | Override sharding config      | bool          |             | No       |
+        +-------------------------------+-------------------------------+---------------+-------------+----------+
+        | shard_layout                  | Shard layout                  | TensorLayout  |             | No       |
+        +-------------------------------+-------------------------------+---------------+-------------+----------+
+        | core_grid                     | Core grid                     | CoreRangeSet  |             | No       |
+        +-------------------------------+-------------------------------+---------------+-------------+----------+
+        | transpose_shards              | Transpose shards              | bool          |             | No       |
+        +-------------------------------+-------------------------------+---------------+-------------+----------+
+        | output_layout                 | Output layout                 | Layout        |             | No       |
+        +-------------------------------+-------------------------------+---------------+-------------+----------+
+        | preprocess_weights_on_device  | Preprocess weights on device  | bool          |             | No       |
+        +-------------------------------+-------------------------------+---------------+-------------+----------+
+        | always_preprocess_weights     | Always preprocess weights     | bool          |             | No       |
+        +-------------------------------+-------------------------------+---------------+-------------+----------+
+        | enable_act_double_buffer      | Enable activation double buff | bool          |             | No       |
+        +-------------------------------+-------------------------------+---------------+-------------+----------+
+        | enable_weights_double_buffer  | Enable weights double buffer  | bool          |             | No       |
+        +-------------------------------+-------------------------------+---------------+-------------+----------+
+        | enable_split_reader           | Enable split reader           | bool          |             | No       |
+        +-------------------------------+-------------------------------+---------------+-------------+----------+
+        | enable_subblock_padding       | Enable subblock padding       | bool          |             | No       |
+        +-------------------------------+-------------------------------+---------------+-------------+----------+
+        | in_place                      | In place                      | bool          |             | No       |
+        +-------------------------------+-------------------------------+---------------+-------------+----------+
+        )doc");
     py_conv_config.def_readwrite("dtype", &Conv2dConfig::dtype);
     py_conv_config.def_readwrite("weights_dtype", &Conv2dConfig::weights_dtype);
     py_conv_config.def_readwrite("activation", &Conv2dConfig::activation);

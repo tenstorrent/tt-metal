@@ -160,7 +160,7 @@ def convert_conv_weight_tensor_to_grouped_layout(conv_weight_tensor, num_groups,
     )
 
 
-@ttnn.register_python_operation(name="ttnn.conv2d")
+@ttnn.register_python_operation(name="ttnn.conv2d", doc=ttnn._ttnn.operations.conv.conv2d.__doc__)
 def conv2d(
     *,
     input_tensor: ttnn.Tensor,  # may or may not be sharded
