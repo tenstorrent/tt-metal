@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+import torch
+import pytest
+import ttnn
+from models.experimental.stable_diffusion_xl_base.ttnn_impl.tt_attention import TtAttention
+from diffusers import DiffusionPipeline
+from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import torch_random
+
+
+@pytest.mark.parametrize(
+    "input_shape, encoder_shape, attn_id",
+    [
+        ((1, 4096, 640), None, 1),
+        ((1, 4096, 640), (1, 77, 2048), 2),
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_attention(device, input_shape, encoder_shape, attn_id, use_program_cache):
+    pipe = DiffusionPipeline.from_pretrained(
+        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, variant="fp16"
+    )
+    unet = pipe.unet
+    unet.eval()
+    state_dict = unet.state_dict()
+
+    if attn_id == 1:
+        torch_attention = unet.down_blocks[1].attentions[0].transformer_blocks[0].attn1
+    else:
+        torch_attention = unet.down_blocks[1].attentions[0].transformer_blocks[0].attn2
+    tt_attention = TtAttention(
+        device, state_dict, f"down_blocks.1.attentions.0.transformer_blocks.0.attn{attn_id}", 640, 10, 640
+    )
+    torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
+    torch_encoder_tensor = (
+        torch_random(encoder_shape, -0.1, 0.1, dtype=torch.float32) if encoder_shape is not None else None
+    )
+
+    torch_output_tensor = torch_attention(torch_input_tensor, torch_encoder_tensor).unsqueeze(0)
+
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    ttnn_encoder_tensor = (
+        ttnn.from_torch(torch_encoder_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        if encoder_shape is not None
+        else None
+    )
+    ttnn_output_tensor = tt_attention.forward(ttnn_input_tensor, None, ttnn_encoder_tensor)
+    output_tensor = ttnn.to_torch(ttnn_output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)

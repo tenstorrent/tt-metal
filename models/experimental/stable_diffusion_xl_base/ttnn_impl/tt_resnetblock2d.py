@@ -136,6 +136,15 @@ class TtResnetBlock2D(nn.Module):
 
         hidden_states = ttnn.silu(hidden_states)
         # TBD: reshard
+        if C == 2560:
+            hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+            sharded_mem_config = ttnn.create_sharded_memory_config(
+                hidden_states.shape,
+                core_grid=ttnn.CoreGrid(y=8, x=5),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.COL_MAJOR,
+            )
+            hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_config)
         self.conv_config.shard_layout = hidden_states.memory_config().memory_layout
         [hidden_states, [H, W], [d_w, d_b]] = ttnn.conv2d(
             input_tensor=hidden_states,

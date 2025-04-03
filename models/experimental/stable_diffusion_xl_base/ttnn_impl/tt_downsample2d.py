@@ -77,4 +77,5 @@ class TtDownsample2D(nn.Module):
             return_weights_and_bias=True,
         )
 
+        hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         return tt_output_tensor_on_device, [self.output_channels, out_height, out_width]
