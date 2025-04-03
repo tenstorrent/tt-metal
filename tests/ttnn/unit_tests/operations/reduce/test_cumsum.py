@@ -39,20 +39,14 @@ def test_cumsum(size, dim, dtype, device):
     torch.manual_seed(29112024)
 
     torch_input_tensor = torch.rand(size, dtype=torch.float32)
-
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device)
 
-    if dtype is not None:
-        output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, dtype=dtype)
-    else:
-        output_tensor = ttnn.experimental.cumsum(input_tensor, dim)
+    output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, dtype=dtype)
 
+    expected_output_dtype = dtype if dtype is not None else input_tensor.dtype
+
+    assert output_tensor.dtype == expected_output_dtype
     assert output_tensor.shape == (size)
-
-    if dtype is not None:
-        assert output_tensor.dtype == dtype
-    else:
-        assert output_tensor.dtype == input_tensor.dtype
 
 
 @pytest.mark.parametrize(
@@ -89,18 +83,13 @@ def test_cumsum_with_preallocated_output(size, dim, dtype, device):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, device=device)
 
-    if dtype is not None:
-        preallocated_output_tensor = ttnn.zeros_like(input_tensor, dtype=dtype)
-        output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, dtype=dtype, output=preallocated_output_tensor)
+    preallocated_output_tensor = ttnn.zeros_like(input_tensor, dtype=dtype)
+    output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, dtype=dtype, output=preallocated_output_tensor)
 
-        assert output_tensor.dtype == dtype
-        assert preallocated_output_tensor.dtype == dtype
-    else:
-        preallocated_output_tensor = ttnn.zeros_like(input_tensor)
-        output_tensor = ttnn.experimental.cumsum(input_tensor, dim=dim, output=preallocated_output_tensor)
+    expected_output_dtype = dtype if dtype is not None else input_tensor.dtype
 
-        assert output_tensor.dtype == input_tensor.dtype
-        assert preallocated_output_tensor.dtype == input_tensor.dtype
+    assert output_tensor.dtype == expected_output_dtype
+    assert preallocated_output_tensor.dtype == expected_output_dtype
 
     assert output_tensor.shape == (size)
     assert preallocated_output_tensor.shape == (size)
