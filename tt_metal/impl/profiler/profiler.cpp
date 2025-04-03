@@ -18,6 +18,8 @@
 #include <iostream>
 
 #include "assert.hpp"
+#include "command_queue.hpp"
+#include "dispatch/device_command.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
@@ -79,11 +81,14 @@ void DeviceProfiler::readRiscProfilerResults(
             worker_core);
     uint32_t startIndex = coreFlatID * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
 
-    std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
-        device_id,
-        worker_core,
-        reinterpret_cast<uint64_t>(profiler_msg->control_vector),
-        kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+    // std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
+    //     device_id,
+    //     worker_core,
+    //     reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+    //     kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+
+    std::vector<std::uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE);
+    device->command_queue().enqueue_read_profiler_control_vector(worker_core, control_buffer.data(), true);
 
     if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
         (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {

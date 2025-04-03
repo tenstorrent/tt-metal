@@ -69,6 +69,7 @@ namespace tt_metal {
 
 void DumpDeviceProfileResults(IDevice* device, const Program& program) {
 #if defined(TRACY_ENABLE)
+    log_info("Dumping device profile results for device {} program {}", device->id(), program.get_id());
     std::vector<CoreCoord> worker_cores_in_program;
     std::vector<CoreCoord> eth_cores_in_program;
 
@@ -108,6 +109,7 @@ constexpr CoreCoord SYNC_CORE = {0, 0};
 
 void setControlBuffer(chip_id_t device_id, std::vector<uint32_t>& control_buffer) {
 #if defined(TRACY_ENABLE)
+    tt::log_info("Setting control buffer for device {}", device_id);
     const metal_SocDescriptor& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
 
     control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM] = soc_d.profiler_ceiled_core_count_perf_dram_bank;
@@ -628,6 +630,7 @@ void ClearProfilerControlBuffer(IDevice* device) {
 void InitDeviceProfiler(IDevice* device) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
+    tt::log_info("Init device profiler for device {}", device->id());
     auto device_id = device->id();
     CoreCoord logical_grid_size = device->logical_grid_size();
     TracySetCpuTime(TracyGetCpuTime());
@@ -674,6 +677,7 @@ void InitDeviceProfiler(IDevice* device) {
             tt_metal_device_profiler_map.at(device_id).output_dram_buffer->size() / sizeof(uint32_t), 0);
         tt_metal::detail::WriteToBuffer(tt_metal_device_profiler_map.at(device_id).output_dram_buffer, inputs_DRAM);
     }
+    tt::log_info("Finish init device profiler for device {}", device->id());
 #endif
 }
 
