@@ -272,18 +272,18 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     // Capture padding_config_buffer, local_config_buffer, remote_config_buffer to cache this with the program
     if (!capture_buffers) {
-        padding_config_buffer = nullptr;
-        gather_config_buffer0 = nullptr;
-        gather_config_buffer1 = nullptr;
+        padding_config_storage = {};
+        gather_config_storage0 = {};
+        gather_config_storage1 = {};
     }
     auto override_runtime_arguments_callback = [src_cb,
                                                 out_cb,
                                                 padding_config_cb,
                                                 gather_config_cb0,
                                                 gather_config_cb1,
-                                                padding_config_buffer,
-                                                gather_config_buffer0,
-                                                gather_config_buffer1](
+                                                padding_config_storage,
+                                                gather_config_storage0,
+                                                gather_config_storage1](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,
@@ -400,7 +400,8 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core_v2(
         cb_indices.padding_config_cb_id,
         kernel_config_df,
         1,
-        padding_config_buffer->size() / num_cores);
+        padding_config_buffer->size() / num_cores,
+        padding_config_buffer);
 
     auto local_config_storage = local_config.device_storage();
     auto local_config_buffer = local_config_storage.get_buffer();
