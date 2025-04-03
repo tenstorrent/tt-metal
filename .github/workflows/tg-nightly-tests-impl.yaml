@@ -12,6 +12,10 @@ on:
       build-artifact-name:
         required: true
         type: string
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
 
 jobs:
   tg-nightly-tests:
@@ -29,7 +33,11 @@ jobs:
           }, # Ammar Vora
         ]
     name: ${{ matrix.test-group.name }}
-    runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "pipeline-functional"]
+    runs-on:
+      - arch-wormhole_b0
+      - config-tg
+      - pipeline-functional
+      - ${{ inputs.extra-tag }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
