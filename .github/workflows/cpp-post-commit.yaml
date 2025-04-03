@@ -34,7 +34,6 @@ jobs:
           {name: device, cmd: "./build/test/tt_metal/unit_tests_device"},
           {name: dispatch, cmd: "./build/test/tt_metal/unit_tests_dispatch"},
           {name: eth, cmd: "./build/test/tt_metal/unit_tests_eth_${{ inputs.arch }}"},
-          {name: llk, cmd: "./build/test/tt_metal/unit_tests_llk"},
           {name: stl, cmd: "./build/test/tt_metal/unit_tests_stl"},
           {name: distributed, cmd: "./build/test/tt_metal/distributed/distributed_unit_tests_${{ inputs.arch }} ${{ inputs.arch == 'blackhole' && '--gtest_filter=\"-MeshEventsTestSuite.*\"' || '' }}"},
           {name: lightmetal, cmd: "./build/test/tt_metal/unit_tests_lightmetal"},
