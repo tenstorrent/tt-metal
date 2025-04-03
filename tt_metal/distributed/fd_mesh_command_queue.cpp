@@ -251,7 +251,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                 program_cmd_seq,
                 dispatch_metadata.stall_first,
                 dispatch_metadata.stall_before_program,
-                mesh_workload.get_runtime_id());
+                program.get_runtime_id());
             active_sub_grids.push_back(device_range);
         } else {
             this->write_program_cmds_to_subgrid(
@@ -260,7 +260,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                 dispatch_metadata.stall_first,
                 dispatch_metadata.stall_before_program,
                 chip_ids_in_workload,
-                mesh_workload.get_runtime_id());
+                program.get_runtime_id());
         }
     }
     // Send go signals to devices not running a program to ensure consistent global state

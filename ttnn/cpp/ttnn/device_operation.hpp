@@ -378,8 +378,7 @@ void enqueue_mesh_workload(
     // Important! `TT_DNN_DEVICE_OP` must be used in conjunction with `TracyOpMeshWorkload` to feed profiler
     // regresion
     // tests well-formed data.
-
-    workload.set_runtime_id(ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id());
+    mesh_device_operation_utils::set_runtime_id(workload);
     if (mesh_device_operation_utils::track_workload(workload, mesh_device)) {
         return;
     }

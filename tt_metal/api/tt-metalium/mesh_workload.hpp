@@ -50,7 +50,6 @@ private:
     bool finalized_ = false;
     std::unordered_map<MeshCoordinateRange, std::unordered_map<KernelHandle, RuntimeArgsPerCore>> runtime_args_;
     MeshCommandQueue* last_used_command_queue_ = nullptr;
-    uint32_t runtime_id_ = 0;
 
     template <typename T>
     friend void program_dispatch::finalize_program_offsets(T&, IDevice*);
@@ -65,8 +64,6 @@ public:
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs() { return programs_; }
     const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const { return programs_; }
-    void set_runtime_id(uint32_t id) { runtime_id_ = id; }
-    uint32_t get_runtime_id() { return runtime_id_; }
     // For testing purposes only
     void set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq);
     MeshCommandQueue* get_last_used_command_queue() const;
