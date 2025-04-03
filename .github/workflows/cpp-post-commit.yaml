@@ -16,6 +16,11 @@ on:
         required: false
         type: number
         default: 35
+      enable-watcher:
+        required: false
+        type: boolean
+        default: false
+        description: "Run with watcher enabled"
 
 jobs:
   cpp-unit-tests:
@@ -36,7 +41,7 @@ jobs:
           {name: eth, cmd: "./build/test/tt_metal/unit_tests_eth_${{ inputs.arch }}"},
           {name: llk, cmd: "./build/test/tt_metal/unit_tests_llk"},
           {name: stl, cmd: "./build/test/tt_metal/unit_tests_stl"},
-          {name: distributed, cmd: "./build/test/tt_metal/distributed/distributed_unit_tests_${{ inputs.arch }} ${{ inputs.arch == 'blackhole' && '--gtest_filter=\"-MeshEventsTestSuite.*\"' || '' }}"},
+          {name: distributed, cmd: "./build/test/tt_metal/distributed/distributed_unit_tests_${{ inputs.arch }} ${{ inputs.arch == 'blackhole' && '--gtest_filter=\"-MeshEventsTestSuite.*\"' || '' }}"},  # GH Issue:19751
           {name: lightmetal, cmd: "./build/test/tt_metal/unit_tests_lightmetal"},
           {name: dispatch multicmd queue, cmd: "TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=MultiCommandQueue*Fixture.*"},
           {name: ttnn cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn},
@@ -69,6 +74,7 @@ jobs:
             -e ARCH_NAME=${{ inputs.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
+            ${{ inputs.enable-watcher == true && '-e TT_METAL_WATCHER=1 -e TT_METAL_WATCHER_APPEND=1 -e TT_METAL_WATCHER_NOINLINE=1' || '' }}
           run_args: |
             pip install --force-reinstall pip==21.2.4
             pip install -r tt_metal/python_env/requirements-dev.txt

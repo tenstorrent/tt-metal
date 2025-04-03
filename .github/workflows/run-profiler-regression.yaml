@@ -22,6 +22,11 @@ on:
       docker-image:
         required: true
         type: string
+      enable-watcher:
+        required: false
+        type: boolean
+        default: false
+        description: "Run with watcher enabled"
   workflow_dispatch:
     inputs:
       arch:
@@ -50,6 +55,11 @@ on:
       docker-image:
         required: true
         type: string
+      enable-watcher:
+        required: false
+        type: boolean
+        default: false
+        description: "Run with watcher enabled"
 
 jobs:
   profiler-regression:
@@ -91,6 +101,12 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: Set up env vars for watcher
+        if: inputs.enable-watcher == true
+        run: |
+          echo "TT_METAL_WATCHER=1" >> $GITHUB_ENV
+          echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
+          echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
       - name: Run profiler regression tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |

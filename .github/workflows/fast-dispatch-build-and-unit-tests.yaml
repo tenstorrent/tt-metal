@@ -17,6 +17,11 @@ on:
         required: false
         type: string
         default: "ubuntu-20.04"
+      enable-watcher:
+        required: false
+        type: boolean
+        default: false
+        description: "Run with watcher enabled"
   workflow_dispatch:
     inputs:
       arch:
@@ -41,6 +46,11 @@ on:
         required: false
         type: string
         default: "ubuntu-20.04"
+      enable-watcher:
+        required: false
+        type: boolean
+        default: false
+        description: "Run with watcher enabled"
 
 jobs:
   fd-tests:
@@ -83,6 +93,7 @@ jobs:
           docker_opts: |
             -e ARCH_NAME=${{ inputs.arch }}
             -e GITHUB_ACTIONS=true
+            ${{ inputs.enable-watcher == true && '-e TT_METAL_WATCHER=1 -e TT_METAL_WATCHER_APPEND=1 -e TT_METAL_WATCHER_NOINLINE=1' || '' }}
           run_args: |
             ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
