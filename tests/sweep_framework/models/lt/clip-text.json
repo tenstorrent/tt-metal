@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "lt",
-    "Input Size": "[(77,), (77, 1)]",
-    "Output Size": "[(77, 77)]",
-    "Attributes": "Tensor[(77,)], Tensor[(77, 1)]",
-    "Count": 1
-  }
-]

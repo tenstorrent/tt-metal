@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "mul_",
-    "Input Size": "[(540, 540), (540, 540)]",
-    "Output Size": "[(540, 540)]",
-    "Attributes": "Tensor[(540, 540)], Tensor[(540, 540)]",
-    "Count": 1
-  }
-]

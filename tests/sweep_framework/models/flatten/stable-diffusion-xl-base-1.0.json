@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "flatten",
-    "Input Size": "[(1, 6)]",
-    "Output Size": "[(6,)]",
-    "Attributes": "Tensor[(1, 6)]",
-    "Count": 1
-  }
-]

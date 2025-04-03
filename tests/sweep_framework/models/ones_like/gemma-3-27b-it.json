@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "ones_like",
-    "Input Size": "[(1, 1, 540, 540)]",
-    "Output Size": "[(1, 1, 540, 540)]",
-    "Attributes": "Tensor[(1, 1, 540, 540)]",
-    "Count": 52
-  }
-]

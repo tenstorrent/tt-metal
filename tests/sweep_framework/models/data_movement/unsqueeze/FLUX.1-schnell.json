@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "unsqueeze",
-    "Input Size": "[(1, 3072)]",
-    "Output Size": "[(1, 1, 3072)]",
-    "Attributes": "Tensor[(1, 3072)], 1",
-    "Count": 114
-  }
-]

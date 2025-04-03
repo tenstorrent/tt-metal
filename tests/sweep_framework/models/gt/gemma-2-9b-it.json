@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "gt",
-    "Input Size": "[(256,), (256, 1)]",
-    "Output Size": "[(256, 256)]",
-    "Attributes": "Tensor[(256,)], Tensor[(256, 1)]",
-    "Count": 1
-  }
-]

@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "gt",
-    "Input Size": "[(1, 4)]",
-    "Output Size": "[(1, 4)]",
-    "Attributes": "Tensor[(1, 4)], 0",
-    "Count": 1
-  }
-]

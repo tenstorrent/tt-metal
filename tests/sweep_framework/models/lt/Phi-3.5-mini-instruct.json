@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "lt",
-    "Input Size": "[(2048,), (2048, 1)]",
-    "Output Size": "[(2048, 2048)]",
-    "Attributes": "Tensor[(2048,)], Tensor[(2048, 1)]",
-    "Count": 1
-  }
-]

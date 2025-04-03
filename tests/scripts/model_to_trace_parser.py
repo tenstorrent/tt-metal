@@ -30,25 +30,28 @@ def is_duplicate(new_entry, existing_entries):
     return any(new_entry == entry for entry in existing_entries)
 
 
-def parse_trace_df(df):
-    return [
-        {
-            "Name": row["Name"],
-            "Input Size": row["Input Size"],
-            "Output Size": row["Output Size"],
-            "Attributes": str(row["Attributes"]).strip() if pd.notna(row["Attributes"]) else None,
-            "Count": row["Count"],
-        }
-        for _, row in df.iterrows()
-    ]
+def parse_trace_df(df, op_col):
+    traces = []
+    for _, row in df.iterrows():
+        entry = {"Name": row[op_col]}  # use the given column for op name
+        for col in df.columns:
+            if col == op_col:
+                continue
+            val = row[col]
+            if pd.isna(val):
+                entry[col] = None
+            else:
+                entry[col] = str(val).strip()
+        traces.append(entry)
+    return traces
 
 
 def safe_mkdir(path):
     os.makedirs(path, exist_ok=True)
 
 
-def main(op_file, model_dir, category_map, output_root="parsed_traces"):
-    op_categories = load_op_categories(args.category_map)
+def main(op_file, model_dir, category_map, op_col, output_root="parsed_traces"):
+    op_categories = load_op_categories(category_map)
     known_ops = load_known_ops(op_file)
     unknown_ops = set()
     uncategorized_ops = set()
@@ -67,7 +70,11 @@ def main(op_file, model_dir, category_map, output_root="parsed_traces"):
             print(f"[!] Error reading {trace_file}: {e}")
             continue
 
-        trace_entries = parse_trace_df(df)
+        if op_col not in df.columns:
+            print(f"[!] Column '{op_col}' not found in {trace_file}. Skipping.")
+            continue
+
+        trace_entries = parse_trace_df(df, op_col)
 
         for entry in trace_entries:
             op = entry["Name"]
@@ -77,7 +84,7 @@ def main(op_file, model_dir, category_map, output_root="parsed_traces"):
                 unknown_ops.add(base_op)
 
             # Output path: parsed_traces/{base_op}/{model_name}.json
-            category_path = op_categories.get(base_op, base_op)  # fallback to base_op if not categorized
+            category_path = op_categories.get(base_op, base_op)
             if category_path == "":
                 category_path = base_op
             if base_op not in op_categories and base_op not in uncategorized_ops:
@@ -99,6 +106,7 @@ def main(op_file, model_dir, category_map, output_root="parsed_traces"):
                 existing.append(entry)
                 with open(json_path, "w") as f:
                     json.dump(existing, f, indent=2)
+
     if not new:
         print("\n[!] No new traces found")
 
@@ -109,13 +117,16 @@ def main(op_file, model_dir, category_map, output_root="parsed_traces"):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Parse torchview_ops.xlsx files into categorized op trace JSONs.")
     parser.add_argument("--op_list", required=True, help="Path to .txt file with list of known ops (e.g., all_ops.txt)")
     parser.add_argument("--model_dir", required=True, help="Path to directory containing model folders")
     parser.add_argument(
         "--category_map", required=True, help="Path to op_categories.json file mapping op names to category folders."
     )
+    parser.add_argument(
+        "--op_col", required=True, help="Column name in the xlsx that contains the op name (e.g., 'Name')"
+    )
     parser.add_argument("--output_root", default="parsed_traces", help="Directory to save parsed JSON traces")
     args = parser.parse_args()
 
-    main(args.op_list, args.model_dir, args.category_map, args.output_root)
+    main(args.op_list, args.model_dir, args.category_map, args.op_col, args.output_root)

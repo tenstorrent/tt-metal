@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "transpose",
-    "Input Size": "[(1, 12, 400, 64)]",
-    "Output Size": "[(1, 12, 64, 400)]",
-    "Attributes": "Tensor[(1, 12, 400, 64)], -1, -2",
-    "Count": 12
-  }
-]

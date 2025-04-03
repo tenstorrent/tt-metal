@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "relu",
-    "Input Size": "[(1, 400, 128)]",
-    "Output Size": "[(1, 400, 128)]",
-    "Attributes": "Tensor[(1, 400, 128)]",
-    "Count": 12
-  }
-]

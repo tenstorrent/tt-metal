@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "max_pool2d",
-    "Input Size": "[(1, 64, 400, 510)]",
-    "Output Size": "[(1, 64, 200, 255)]",
-    "Attributes": "Tensor[(1, 64, 400, 510)], 3",
-    "Count": 1
-  }
-]

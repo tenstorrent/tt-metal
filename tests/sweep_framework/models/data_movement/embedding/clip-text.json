@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "embedding",
-    "Input Size": "[(1, 77)]",
-    "Output Size": "[(1, 77, 768)]",
-    "Attributes": "Tensor[(1, 77)], Tensor[(49408, 768)]",
-    "Count": 1
-  }
-]

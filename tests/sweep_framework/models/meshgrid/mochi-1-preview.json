@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "meshgrid",
-    "Input Size": "[(14,), (30,), (53,)]",
-    "Output Size": "[(14, 30, 53), (14, 30, 53), (14, 30, 53)]",
-    "Attributes": "Tensor[(14,)], Tensor[(30,)], Tensor[(53,)]",
-    "Count": 1
-  }
-]

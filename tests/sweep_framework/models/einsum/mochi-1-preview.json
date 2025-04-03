@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "einsum",
-    "Input Size": "[(22260, 3)]",
-    "Output Size": "[(22260, 24, 64)]",
-    "Attributes": "nd,dhf->nhf, Tensor[(22260, 3)], Tensor[(3, 24, 64)]",
-    "Count": 1
-  }
-]

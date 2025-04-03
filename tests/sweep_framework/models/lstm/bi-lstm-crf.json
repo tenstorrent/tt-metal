@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "lstm",
-    "Input Size": "[(4, 100), (4,), (2, 1, 64), (2, 1, 64)]",
-    "Output Size": "[(4, 128), (2, 1, 64), (2, 1, 64)]",
-    "Attributes": "Tensor[(4, 100)], Tensor[(4,)], Tensor[(2, 1, 64)] Tensor[(2, 1, 64)], Tensor[(256, 100)] Tensor[(256, 64)] Tensor[(256,)] Tensor[(256,)] Tensor[(256, 100)] Tensor[(256, 64)] Tensor[(256,)] Tensor[(256,)], True, 1, 0.0, False, True",
-    "Count": 1
-  }
-]

@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "split_with_sizes",
-    "Input Size": "[(2, 22516, 3072)]",
-    "Output Size": "[(2, 22260, 3072), (2, 256, 3072)]",
-    "Attributes": "Tensor[(2, 22516, 3072)], (22260, 256)",
-    "Count": 48
-  }
-]

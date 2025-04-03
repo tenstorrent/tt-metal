@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "type_as",
-    "Input Size": "[(1, 256, 3584), (1, 256, 3584)]",
-    "Output Size": "[(1, 256, 3584)]",
-    "Attributes": "Tensor[(1, 256, 3584)], Tensor[(1, 256, 3584)]",
-    "Count": 169
-  }
-]

@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "__rdiv__",
-    "Input Size": "[(48,)]",
-    "Output Size": "[(48,)]",
-    "Attributes": "Tensor[(48,)], 1.0",
-    "Count": 32
-  }
-]

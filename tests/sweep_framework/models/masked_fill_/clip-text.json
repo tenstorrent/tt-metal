@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "masked_fill_",
-    "Input Size": "[(77, 77), (77, 77)]",
-    "Output Size": "[(77, 77)]",
-    "Attributes": "Tensor[(77, 77)], Tensor[(77, 77)], 0",
-    "Count": 1
-  }
-]

@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "contiguous",
-    "Input Size": "[(1, 2048, 32, 96)]",
-    "Output Size": "[(1, 2048, 32, 96)]",
-    "Attributes": "Tensor[(1, 2048, 32, 96)]",
-    "Count": 32
-  }
-]

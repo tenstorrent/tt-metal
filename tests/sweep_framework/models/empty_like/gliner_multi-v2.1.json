@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "empty_like",
-    "Input Size": "[(1,)]",
-    "Output Size": "[(1,)]",
-    "Attributes": "Tensor[(1,)]",
-    "Count": 1
-  }
-]

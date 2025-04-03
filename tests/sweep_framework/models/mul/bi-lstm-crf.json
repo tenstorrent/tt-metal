@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "mul",
-    "Input Size": "[(1, 6), (1, 1)]",
-    "Output Size": "[(1, 6)]",
-    "Attributes": "Tensor[(1, 6)], Tensor[(1, 1)]",
-    "Count": 8
-  }
-]

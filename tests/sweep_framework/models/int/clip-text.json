@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "int",
-    "Input Size": "[(1, 77)]",
-    "Output Size": "[(1, 77)]",
-    "Attributes": "Tensor[(1, 77)]",
-    "Count": 1
-  }
-]

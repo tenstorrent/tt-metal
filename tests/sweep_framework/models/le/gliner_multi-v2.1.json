@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "le",
-    "Input Size": "[(336, 336)]",
-    "Output Size": "[(336, 336)]",
-    "Attributes": "Tensor[(336, 336)], 128",
-    "Count": 1
-  }
-]

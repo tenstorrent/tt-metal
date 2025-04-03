@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "tanh",
-    "Input Size": "[(1, 256, 256000)]",
-    "Output Size": "[(1, 256, 256000)]",
-    "Attributes": "Tensor[(1, 256, 256000)]",
-    "Count": 1
-  }
-]

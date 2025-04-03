@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "cumsum",
-    "Input Size": "[(589,)]",
-    "Output Size": "[(589,)]",
-    "Attributes": "Tensor[(589,)], 0",
-    "Count": 40
-  }
-]

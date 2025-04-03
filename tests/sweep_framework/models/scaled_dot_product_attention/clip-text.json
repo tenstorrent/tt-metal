@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "scaled_dot_product_attention",
-    "Input Size": "[(1, 12, 77, 64), (1, 12, 77, 64), (1, 12, 77, 64), (1, 1, 77, 77)]",
-    "Output Size": "[(1, 12, 77, 64)]",
-    "Attributes": "Tensor[(1, 12, 77, 64)], Tensor[(1, 12, 77, 64)], Tensor[(1, 12, 77, 64)]",
-    "Count": 12
-  }
-]

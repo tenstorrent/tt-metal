@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "triu",
-    "Input Size": "[(256, 256)]",
-    "Output Size": "[(256, 256)]",
-    "Attributes": "Tensor[(256, 256)]",
-    "Count": 1
-  }
-]

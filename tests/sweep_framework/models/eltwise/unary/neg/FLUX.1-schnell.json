@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "neg",
-    "Input Size": "[(1, 24, 4352, 64)]",
-    "Output Size": "[(1, 24, 4352, 64)]",
-    "Attributes": "Tensor[(1, 24, 4352, 64)]",
-    "Count": 114
-  }
-]

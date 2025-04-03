@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "_pack_padded_sequence",
-    "Input Size": "[(1, 220, 512), (1,)]",
-    "Output Size": "[(220, 512), (220,)]",
-    "Attributes": "Tensor[(1, 220, 512)], Tensor[(1,)], True",
-    "Count": 1
-  }
-]

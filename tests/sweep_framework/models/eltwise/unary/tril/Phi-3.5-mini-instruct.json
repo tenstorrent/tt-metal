@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "tril",
-    "Input Size": "[(2048, 2048)]",
-    "Output Size": "[(2048, 2048)]",
-    "Attributes": "Tensor[(2048, 2048)]",
-    "Count": 1
-  }
-]

@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "zeros_like",
-    "Input Size": "[(1, 336, 768)]",
-    "Output Size": "[(1, 336, 768)]",
-    "Attributes": "Tensor[(1, 336, 768)]",
-    "Count": 1
-  }
-]

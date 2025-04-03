@@ -1,9 +1,0 @@
-[
-  {
-    "Name": "silu",
-    "Input Size": "[(1, 2048, 8192)]",
-    "Output Size": "[(1, 2048, 8192)]",
-    "Attributes": "Tensor[(1, 2048, 8192)]",
-    "Count": 32
-  }
-]
