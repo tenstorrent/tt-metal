@@ -11,14 +11,18 @@ from models.utility_functions import torch_random
 
 
 @pytest.mark.parametrize(
-    "input_shape, encoder_shape, attn_id",
+    "input_shape, encoder_shape, attn_id, down_block_id, query_dim, num_attn_heads, out_dim",
     [
-        ((1, 4096, 640), None, 1),
-        ((1, 4096, 640), (1, 77, 2048), 2),
+        ((1, 4096, 640), None, 1, 1, 640, 10, 640),
+        ((1, 4096, 640), (1, 77, 2048), 2, 1, 640, 10, 640),
+        ((1, 1024, 1280), None, 1, 2, 1280, 20, 1280),
+        ((1, 1024, 1280), (1, 77, 2048), 2, 2, 1280, 20, 1280),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_attention(device, input_shape, encoder_shape, attn_id, use_program_cache):
+def test_attention(
+    device, input_shape, encoder_shape, attn_id, down_block_id, query_dim, num_attn_heads, out_dim, use_program_cache
+):
     pipe = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, variant="fp16"
     )
@@ -27,11 +31,16 @@ def test_attention(device, input_shape, encoder_shape, attn_id, use_program_cach
     state_dict = unet.state_dict()
 
     if attn_id == 1:
-        torch_attention = unet.down_blocks[1].attentions[0].transformer_blocks[0].attn1
+        torch_attention = unet.down_blocks[down_block_id].attentions[0].transformer_blocks[0].attn1
     else:
-        torch_attention = unet.down_blocks[1].attentions[0].transformer_blocks[0].attn2
+        torch_attention = unet.down_blocks[down_block_id].attentions[0].transformer_blocks[0].attn2
     tt_attention = TtAttention(
-        device, state_dict, f"down_blocks.1.attentions.0.transformer_blocks.0.attn{attn_id}", 640, 10, 640
+        device,
+        state_dict,
+        f"down_blocks.{down_block_id}.attentions.0.transformer_blocks.0.attn{attn_id}",
+        query_dim,
+        num_attn_heads,
+        out_dim,
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_encoder_tensor = (

@@ -136,7 +136,7 @@ class TtResnetBlock2D(nn.Module):
 
         hidden_states = ttnn.silu(hidden_states)
         # TBD: reshard
-        if C == 2560:
+        if C >= 1920:
             hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
             sharded_mem_config = ttnn.create_sharded_memory_config(
                 hidden_states.shape,
@@ -234,7 +234,18 @@ class TtResnetBlock2D(nn.Module):
         )
         C = self.tt_conv2_weights.shape[0]
         if self.tt_conv3_weights is not None:
-            self.conv_config.shard_layout = hidden_states.memory_config().memory_layout
+            if input_tensor.shape[3] >= 1920:
+                input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+                sharded_mem_config = ttnn.create_sharded_memory_config(
+                    input_tensor.shape,
+                    core_grid=ttnn.CoreGrid(y=8, x=5),
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.COL_MAJOR,
+                )
+                input_tensor = ttnn.to_memory_config(input_tensor, sharded_mem_config)
+                self.conv_config.shard_layout = input_tensor.memory_config().memory_layout
+            else:
+                self.conv_config.shard_layout = hidden_states.memory_config().memory_layout
             [input_tensor, [H, W], [d_w, d_b]] = ttnn.conv2d(
                 input_tensor=input_tensor,
                 weight_tensor=self.tt_conv3_weights,

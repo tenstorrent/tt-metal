@@ -39,7 +39,7 @@ def test_upsample2d(device, input_shape, up_block_id, stride, padding, dilation,
     ttnn_input_tensor = to_channel_last_ttnn(torch_input_tensor, ttnn.bfloat16, device, ttnn.DRAM_MEMORY_CONFIG)
     ttnn_output_tensor, output_shape = tt_upsample.forward(ttnn_input_tensor)
     output_tensor = from_channel_last_ttnn(
-        ttnn_output_tensor, [input_shape[0], output_shape[0], output_shape[1], torch_output_tensor.shape[1]]
+        ttnn_output_tensor, [input_shape[0], output_shape[1], output_shape[2], output_shape[0]]
     )
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.996)
