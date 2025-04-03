@@ -1,4 +1,4 @@
-Converting torch Model to ttnn
+Converting PyTorch Model to TT-NN
 ###############################
 
 .. note::
