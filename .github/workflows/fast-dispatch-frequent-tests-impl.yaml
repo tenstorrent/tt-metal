@@ -30,6 +30,14 @@ jobs:
               ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.py bench.json
             timeout: 10
             # Allan Liu
+          - name: "BH pgm dispatch nightly"
+            arch: wormhole_b0
+            runs-on: ["cloud-virtual-machine", "BH", "in-service"]
+            run-args: |
+              mkdir -p generated/test_reports
+              ./build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_blackhole --benchmark_out_format=json --benchmark_out=bench.json
+              ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.py bench.json -g tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/pgm_dispatch_blackhole_golden.json
+            timeout: 10
     name: ${{ matrix.test-group.name }}
     env:
       LOGURU_LEVEL: INFO
