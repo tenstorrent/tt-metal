@@ -84,4 +84,5 @@ run_python_model_tests_blackhole() {
     done
 
     pytest tests/ttnn/integration_tests/resnet/test_ttnn_functional_resnet50.py
+    pytest tests/ttnn/integration_tests/yolov4/test_ttnn_yolov4_bh.py
 }
