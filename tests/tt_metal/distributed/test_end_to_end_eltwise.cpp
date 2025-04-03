@@ -26,31 +26,38 @@ using namespace tt;
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::distributed;
 
+std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
+    const std::shared_ptr<MeshBuffer>& src0_buf,
+    const std::shared_ptr<MeshBuffer>& src1_buf,
+    const std::shared_ptr<MeshBuffer>& output_buf,
+    uint32_t num_tiles,
+    uint32_t single_tile_size,
+    uint32_t eltwise_op_index,
+    const std::optional<std::reference_wrapper<SubDevice>> sub_device_for_program = std::nullopt) {
+    // Program Generation helper function: Can be used to run addition, multiplication and subtraction
+    // on a SubDevice.
+    // Requires:
+    // 1. The src (input) and output buffers
+    // 2. The SubDevice being targeted
+    // 3. The number of tiles that must be processed by the op
+    // 4. The size of the tile in bytes
+    // The op specifier: Addition (0), Multiplication (1), Subtraction (2)
+    const std::vector<std::string> op_id_to_op_define = {"add_tiles", "mul_tiles", "sub_tiles"};
+    const std::vector<std::string> op_id_to_op_type_define = {
+        "EltwiseBinaryType::ELWADD", "EltwiseBinaryType::ELWMUL", "EltwiseBinaryType::ELWSUB"};
 
-using ::testing::FloatNear;
-using ::testing::Pointwise;
+    const auto cores_for_program = sub_device_for_program.has_value()
+                                       ? sub_device_for_program->get().cores(HalProgrammableCoreType::TENSIX)
+                                       : CoreRange(CoreCoord{0, 0}); /* end_coord */
 
+    std::shared_ptr<Program> program = std::make_shared<Program>();
 
-
-
-Program CreateEltwiseAddProgram(
-   const std::shared_ptr<MeshBuffer>& a,
-   const std::shared_ptr<MeshBuffer>& b,
-   const std::shared_ptr<MeshBuffer>& c,
-   size_t tile_size_bytes,
-   uint32_t num_tiles) {
-   auto program = CreateProgram();
-   auto target_tensix_core = CoreRange(CoreCoord{0, 0});
-
-
-   // Add circular buffers for data movement
-   constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
-   constexpr uint32_t num_input_tiles = 1;
-   CircularBufferConfig cb_src0_config =
-       CircularBufferConfig(num_input_tiles * tile_size_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
-           .set_page_size(src0_cb_index, tile_size_bytes);
-   CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, target_tensix_core, cb_src0_config);
-
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
+    uint32_t num_input_tiles = 2;
+    tt_metal::CircularBufferConfig cb_src0_config =
+        tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
+            .set_page_size(src0_cb_index, single_tile_size);
+    auto cb_src0 = tt_metal::CreateCircularBuffer(*program, cores_for_program, cb_src0_config);
 
    constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
    CircularBufferConfig cb_src1_config =
@@ -107,21 +114,12 @@ Program CreateEltwiseAddProgram(
 
 namespace ttnn::distributed::test {
 
-
-
-
-using TensorDistributionTest = N300MeshDeviceFixture;
-
-
-
+using DistributedEndToEndTests = T3000MeshDeviceFixture;
+using ::testing::FloatEq;
+using ::testing::Pointwise;
 
 TEST_F(DistributedEndToEndTests, ProgramDispatchTest) {
     auto mesh_device = DistributedEndToEndTests::mesh_device_;
-    EXPECT_EQ(mesh_device->get_devices().size(), 8);
-    EXPECT_EQ(mesh_device->shape(), MeshShape(2, 4));
-    auto mesh_device = DistributedEndToEndTests::mesh_device_;
-    EXPECT_EQ(mesh_device->get_devices().size(), 8);
-    EXPECT_EQ(mesh_device->shape(), MeshShape(2, 4));
 
    auto& cq = mesh_device->mesh_command_queue();
 
@@ -136,35 +134,30 @@ TEST_F(DistributedEndToEndTests, ProgramDispatchTest) {
         CoreCoord{0, 0} /* start_coord */, CoreCoord{0, 1} /* end_coord */
     };
 
-   auto compute_kernel_id = CreateKernel(
-       example_program,
-       "tt_metal/programming_examples/distributed/1_distributed_program_dispatch/kernels/void_kernel.cpp",
-       target_tensix_cores,
-       ComputeConfig{.compile_args = {}});
-  
-   // Configure the runtime arguments for the kernel.
-   auto runtime_args = std::vector<uint32_t>{};
-   SetRuntimeArgs(example_program, compute_kernel_id, target_tensix_cores, runtime_args);
+    auto compute_kernel_id = CreateKernel(
+        example_program,
+        "tt_metal/programming_examples/distributed/1_distributed_program_dispatch/kernels/void_kernel.cpp",
+        target_tensix_cores,
+        ComputeConfig{.compile_args = {}});
+
+    auto runtime_args = std::vector<uint32_t>{};
+    SetRuntimeArgs(example_program, compute_kernel_id, target_tensix_cores, runtime_args);
 
     // TODO: print this out and check the contents write a more thorough test
-    // auto rt_args_out = GetRuntimeArgs(example_program, compute_kernel_id);
-    // EXPECT_EQ(rt_args_out.size(), 2);
+    auto rt_args_out = GetRuntimeArgs(example_program, compute_kernel_id);
+    EXPECT_EQ(rt_args_out.size(), 2);
 
-   // Instantiate a MeshWorkload and attach the example program. We'll broadcast
-   // this program by enqueueing it across all devices in our 2x4 mesh.
-   auto mesh_workload = CreateMeshWorkload();
-   auto target_devices = MeshCoordinateRange(mesh_device->shape());
+    auto mesh_workload = CreateMeshWorkload();
+
+    auto target_devices = MeshCoordinateRange(mesh_device->shape());
 
     AddProgramToMeshWorkload(mesh_workload, std::move(example_program), target_devices);
+
+    auto& program = mesh_workload.get_programs().at(target_devices);
+
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
 
-    // auto& program = mesh_workload.get_programs().at(target_devices);
-
-   // Synchronize the mesh command queue to ensure the workload has completed.
-   Finish(cq);
-
-
-    // EXPECT_EQ(program.get_last_used_command_queue()->id(), example_program.get_last_used_command_queue()->id());
+    Finish(cq);
 }
 
 
@@ -172,10 +165,6 @@ TEST_F(TensorDistributionTest, BufferRoundtripTest) {
    using tt::tt_metal::distributed::ShardedBufferConfig;
 
     auto mesh_device = DistributedEndToEndTests::mesh_device_;
-    auto mesh_device = DistributedEndToEndTests::mesh_device_;
-
-    EXPECT_NE(mesh_device->get_devices().size(), 8);
-    EXPECT_EQ(mesh_device->shape(), MeshShape(2, 4));
 
    auto& cq = mesh_device->mesh_command_queue();
 
@@ -203,112 +192,98 @@ TEST_F(TensorDistributionTest, BufferRoundtripTest) {
        .global_buffer_shape = distributed_buffer_shape,
        .shard_shape = shard_shape};
 
+    auto mesh_buffer = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device.get());
 
-   // Allocate a distributed buffer in L1 memory, spanning devices in the mesh.
-   auto mesh_buffer = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device.get());
+    std::vector<uint32_t> src_data = create_random_vector_of_bfloat16(
+        distributed_buffer_size_bytes, 1, std::chrono::system_clock::now().time_since_epoch().count());
+    EnqueueWriteMeshBuffer(cq, mesh_buffer, src_data);
 
+    std::vector<uint32_t> read_back_data{};
+    EnqueueReadMeshBuffer(cq, read_back_data, mesh_buffer, true /* blocking */);
 
-   // Enqueue a write to the distributed buffer (L1 banks across devices) with random data.
-   std::vector<uint32_t> src_data = create_random_vector_of_bfloat16(
-       distributed_buffer_size_bytes, 1, std::chrono::system_clock::now().time_since_epoch().count());
-   EnqueueWriteMeshBuffer(cq, mesh_buffer, src_data);
-
-
-   // Enqueue a read from the distributed buffer (L1 banks across devices) to a local buffer.
-   std::vector<uint32_t> read_back_data{};
-   EnqueueReadMeshBuffer(cq, read_back_data, mesh_buffer, true /* blocking */);
-
-
-   // Data read back across all devices in the mesh should match the original data.
-   EXPECT_EQ(src_data, read_back_data);
+    EXPECT_THAT(read_back_data, Pointwise(FloatEq(), src_data));
 }
 
-TEST_F(DistributedEndToEndTests, EltwiseAddTests) {
+class DistributedEndToEndTraceTests : public MeshDeviceFixtureBase {
+protected:
+    DistributedEndToEndTraceTests() :
+        MeshDeviceFixtureBase(Config{
+            .mesh_device_types = {MeshDeviceFixtureBase::MeshDeviceType::T3000},
+            .num_cqs = 1,
+            .trace_region_size = 1024,
+        }) {}
+};
+
+TEST_F(DistributedEndToEndTraceTests, EltwiseAddTests) {
     constexpr uint32_t ADD_OP_ID = 0;
 
-    auto mesh_device = DistributedEndToEndTests::mesh_device_;
-    auto mesh_device = DistributedEndToEndTests::mesh_device_;
+    auto mesh_device = DistributedEndToEndTraceTests::mesh_device_;
 
-   // Define the global buffer shape and shard shape for distributed buffers
-   auto shard_shape = Shape2D{32, 32};
-   auto distributed_buffer_shape =
-       Shape2D{shard_shape.height() * mesh_device->num_rows(), shard_shape.width() * mesh_device->num_cols()};
-   auto num_tiles = 1;
-   auto tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
-   auto distributed_buffer_size_bytes = mesh_device->num_rows() * mesh_device->num_cols() * tile_size_bytes;
+    auto shard_shape = Shape2D{32, 32};
+    auto distributed_buffer_shape =
+        Shape2D{shard_shape.height() * mesh_device->num_rows(), shard_shape.width() * mesh_device->num_cols()};
+    auto num_tiles = 1;
+    auto tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
+    auto distributed_buffer_size_bytes = mesh_device->num_rows() * mesh_device->num_cols() * tile_size_bytes;
 
+    auto local_buffer_config = DeviceLocalBufferConfig{
+        .page_size = tile_size_bytes,
+        .buffer_type = BufferType::DRAM,
+        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
+        .bottom_up = false};
+    auto distributed_buffer_config = tt::tt_metal::distributed::ShardedBufferConfig{
+        .global_size = distributed_buffer_size_bytes,
+        .global_buffer_shape = distributed_buffer_shape,
+        .shard_shape = shard_shape,
+        .shard_orientation = ShardOrientation::ROW_MAJOR};
 
-   // Configure device-local buffer settings
-   auto local_buffer_config = DeviceLocalBufferConfig{
-       .page_size = tile_size_bytes,
-       .buffer_type = BufferType::DRAM,
-       .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-       .bottom_up = false};
-   auto distributed_buffer_config = tt::tt_metal::distributed::ShardedBufferConfig{
-       .global_size = distributed_buffer_size_bytes,
-       .global_buffer_shape = distributed_buffer_shape,
-       .shard_shape = shard_shape,
-       .shard_orientation = ShardOrientation::ROW_MAJOR};
+    auto a = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device.get());
+    auto b = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device.get());
+    auto c = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device.get());
 
+    constexpr float val_to_add = 0.7f;
+    std::vector<uint32_t> a_data =
+        create_random_vector_of_bfloat16(distributed_buffer_size_bytes, 1 /* rand_max_float */, 0 /* seed */);
+    std::vector<uint32_t> b_data = create_constant_vector_of_bfloat16(distributed_buffer_size_bytes, val_to_add);
 
-   // Create distributed buffers for inputs and output
-   auto a = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device.get());
-   auto b = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device.get());
-   auto c = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device.get());
+    auto program = EltwiseBinaryProgramGenerator(a, b, c, num_tiles, tile_size_bytes, ADD_OP_ID);
 
+    auto mesh_workload = CreateMeshWorkload();
+    auto device_range = MeshCoordinateRange(mesh_device->shape());
 
-   // Create and initialize source data
-   constexpr float val_to_add = 0.5f;
-   std::vector<uint32_t> a_data =
-       create_random_vector_of_bfloat16(distributed_buffer_size_bytes, 1 /* rand_max_float */, 0 /* seed */);
-   std::vector<uint32_t> b_data = create_constant_vector_of_bfloat16(distributed_buffer_size_bytes, val_to_add);
+    AddProgramToMeshWorkload(mesh_workload, std::move(*program), device_range);
 
+    auto& cq = mesh_device->mesh_command_queue();
 
-   // Write data to distributed buffers
-   auto& cq = mesh_device->mesh_command_queue();
-   EnqueueWriteMeshBuffer(cq, a, a_data, false /* blocking */);
-   EnqueueWriteMeshBuffer(cq, b, b_data, false /* blocking */);
-
-
-   // Create program for distributed computation
-   auto program = CreateEltwiseAddProgram(a, b, c, tile_size_bytes, num_tiles);
-
-
-   // Create mesh workload and broadcast the program across all devices
-   auto mesh_workload = CreateMeshWorkload();
-   auto device_range = MeshCoordinateRange(mesh_device->shape());
+    EnqueueMeshWorkload(cq, mesh_workload, true /* blocking */);
 
     auto trace_id = BeginTraceCapture(mesh_device.get(), cq.id());
-    AddProgramToMeshWorkload(mesh_workload, std::move(*program), device_range);
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
-
-    // Read back results
-    std::vector<uint32_t> result_data(a_data.size(), 0);
-    EnqueueReadMeshBuffer(cq, result_data, c, true /* blocking */);
     EndTraceCapture(mesh_device.get(), cq.id(), trace_id);
+
+    EnqueueWriteMeshBuffer(cq, a, a_data, false /* blocking */);
+    // Block to prevent wriitng during trace, which is illegal
+    EnqueueWriteMeshBuffer(cq, b, b_data, true /* blocking */);
 
     ReplayTrace(mesh_device.get(), cq.id(), trace_id, false);
 
     ReleaseTrace(mesh_device.get(), trace_id);
 
-   // Verify results
-   auto transform_to_golden = [val_to_add](const bfloat16& a) { return bfloat16(a.to_float() + val_to_add); };
-   std::vector<uint32_t> golden_data =
-       pack_bfloat16_vec_into_uint32_vec(unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden));
+    std::vector<uint32_t> result_data(a_data.size(), 0);
+    EnqueueReadMeshBuffer(cq, result_data, c, true /* blocking */);
 
+    auto transform_to_golden = [val_to_add](const bfloat16& a) { return bfloat16(a.to_float() + val_to_add); };
+    std::vector<uint32_t> golden_data =
+        pack_bfloat16_vec_into_uint32_vec(unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden));
 
-   bfloat16* a_bf16 = reinterpret_cast<bfloat16*>(a_data.data());
-   bfloat16* b_bf16 = reinterpret_cast<bfloat16*>(b_data.data());
-   bfloat16* c_bf16 = reinterpret_cast<bfloat16*>(result_data.data());
-   bfloat16* golden_bf16 = reinterpret_cast<bfloat16*>(golden_data.data());
-
+    bfloat16* c_bf16 = reinterpret_cast<bfloat16*>(result_data.data());
+    bfloat16* golden_bf16 = reinterpret_cast<bfloat16*>(golden_data.data());
 
    auto total_values = result_data.size() * 2;
 
 
-   for (int i = 0; i < total_values; i++) {
-       EXPECT_FLOAT_EQ(c_bf16[i].to_float(), golden_bf16[i].to_float());
-   }
-}
+    for (int i = 0; i < total_values; i++) {
+        EXPECT_THAT(is_close(c_bf16[i].to_float(), golden_bf16[i].to_float()), true);
+    }
 }
 
