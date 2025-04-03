@@ -30,7 +30,7 @@ jobs:
             toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
             build-type: "Release"
           - version: "22.04"
-            toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
             build-type: "Release"
           - version: "22.04"
             toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"

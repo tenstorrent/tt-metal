@@ -161,23 +161,21 @@ target_include_directories(ttml PUBLIC ${CLI11_SOURCE_DIR}/include)
 
 target_include_directories(ttml PUBLIC ${TOKENZIER_CPP_PATH}/include)
 
-if(ENABLE_LIBCXX)
-    target_link_libraries(
-        tokenizers_cpp
-        PUBLIC
-            ${LIBC++}
-            ${LIBC++ABI}
-    )
-    target_compile_options(tokenizers_cpp PUBLIC -stdlib=libc++)
+target_link_libraries(
+    tokenizers_cpp
+    PUBLIC
+        ${LIBC++}
+        ${LIBC++ABI}
+)
+target_compile_options(tokenizers_cpp PUBLIC -stdlib=libc++)
 
-    target_link_libraries(
-        wandbcpp
-        PUBLIC
-            ${LIBC++}
-            ${LIBC++ABI}
-    )
-    target_compile_options(wandbcpp PUBLIC -stdlib=libc++)
-endif()
+target_link_libraries(
+    wandbcpp
+    PUBLIC
+        ${LIBC++}
+        ${LIBC++ABI}
+)
+target_compile_options(wandbcpp PUBLIC -stdlib=libc++)
 
 add_definitions(-DTOKENIZERS_DATA_PATH="${CMAKE_SOURCE_DIR}/data")
 
