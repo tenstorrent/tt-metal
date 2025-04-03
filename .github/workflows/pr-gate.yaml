@@ -51,6 +51,32 @@ jobs:
       build-type: ${{ inputs.build-type || 'ASan' }}
       publish-artifact: false
 
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      version: 22.04
+      skip-tt-train: false
+
+  cpp-unit-tests:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    needs: build-artifact
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, runner-label: N150 },
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
+    uses: ./.github/workflows/cpp-post-commit.yaml
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+
   find-changed-files:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
