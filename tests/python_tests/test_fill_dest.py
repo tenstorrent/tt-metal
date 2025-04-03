@@ -77,8 +77,6 @@ def test_fill_dest(testname, formats, dest_acc):
 
     run_elf_files(testname)
 
-    run_shell_command("cd .. && make clean")
-
     wait_for_tensix_operations_finished()
     res_from_L1 = []
     for address in pack_addresses:
