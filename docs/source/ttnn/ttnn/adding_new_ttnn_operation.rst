@@ -1,5 +1,5 @@
 Adding New TT-NN Operation
-#########################
+##########################
 
 .. note::
    This document is meant for contributors to TT-NN.
