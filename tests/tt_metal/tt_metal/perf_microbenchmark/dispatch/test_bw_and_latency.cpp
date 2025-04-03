@@ -2,25 +2,54 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <chrono>
+#include <emmintrin.h>
+#include <fmt/base.h>
+#include <stdlib.h>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/event.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/metal_soc_descriptor.h>
 #include <algorithm>
 #include <cstdint>
-#include <functional>
-#include <random>
+#include <exception>
+#include <iomanip>
+#include <map>
+#include <memory>
+#include <optional>
+#include <sstream>
 #include <string>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#include "core_coord.hpp"
-#include "logger.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/command_queue_common.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/dispatch_mem_map.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include "span.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
 #include "test_common.hpp"
-#include "rtoptions.hpp"
-#include <tt-metalium/metal_soc_descriptor.h>
-#include <tt-metalium/event.hpp>
-#include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/allocator.hpp>
-
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_cluster.hpp"
+#include "umd/device/tt_core_coordinates.h"
+#include "umd/device/tt_xy_pair.h"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/utils.hpp>
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 constexpr uint32_t DEFAULT_ITERATIONS = 1000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 2;

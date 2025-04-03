@@ -5,9 +5,9 @@
 #include <cstdint>
 #include <iostream>
 #include <vector>
-#include "assert.hpp"
-#include "logger.hpp"
-#include "small_vector.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/small_vector.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"

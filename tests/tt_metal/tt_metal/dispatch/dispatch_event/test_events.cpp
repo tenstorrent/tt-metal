@@ -2,16 +2,31 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <future>
-
-#include "command_queue_fixture.hpp"
-#include "gtest/gtest.h"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include "impl/debug/watcher_server.hpp"
-#include <tt-metalium/event.hpp>
+#include <chrono>
+#include <fmt/base.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/event.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <future>
+#include <initializer_list>
+#include <memory>
+#include <thread>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include "command_queue_fixture.hpp"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
+#include "gtest/gtest.h"
+#include "impl/debug/watcher_server.hpp"
+#include <tt-metalium/logger.hpp>
+#include "rtoptions.hpp"
+#include <tt-metalium/system_memory_manager.hpp>
+#include "tt_cluster.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 
 namespace tt::tt_metal {

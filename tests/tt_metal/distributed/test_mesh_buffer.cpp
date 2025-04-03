@@ -2,16 +2,41 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <boost/move/utility_core.hpp>
 #include <gtest/gtest.h>
-#include <memory>
-#include <random>
-
-#include "env_lib.hpp"
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/mesh_device_view.hpp>
+#include <stdint.h>
 #include <tt-metalium/distributed.hpp>
+#include <array>
+#include <cstddef>
+#include <initializer_list>
+#include <memory>
+#include <numeric>
+#include <optional>
+#include <random>
+#include <set>
+#include <string>
+#include <tuple>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include "env_lib.hpp"
+#include "hostdevcommon/common_values.hpp"
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_config.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/shape2d.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_cluster.hpp"
+#include <tt-metalium/util.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {

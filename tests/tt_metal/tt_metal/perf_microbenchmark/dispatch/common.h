@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include <unordered_map>
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
@@ -15,7 +15,7 @@
 #include "noc/noc_parameters.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 
-#include "hal.hpp"
+#include <tt-metalium/hal.hpp>
 #include "llrt.hpp"
 #include <tt-metalium/tt_align.hpp>
 

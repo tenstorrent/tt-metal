@@ -2,12 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <memory>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_constants.hpp>
-#include "gtest/gtest.h"
+#include <memory>
 
 #include "device_fixture.hpp"
+#include "gtest/gtest.h"
+#include <tt-metalium/host_api.hpp>
 
 namespace tt::tt_metal {
 

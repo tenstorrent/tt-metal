@@ -3,14 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-
+#include <tt_stl/any_range.hpp>
 #include <algorithm>
 #include <array>
 #include <deque>
+#include <iterator>
 #include <memory>
+#include <type_traits>
+#include <utility>
 #include <vector>
-
-#include <tt_stl/any_range.hpp>
 
 // convenience alias that guarantees at least vector and deque will fit within the capacity
 MAKE_ANY_RANGE(IntRange, tt::stl::AnySizedRandomAccessRangeFor<int&, std::vector<int>, std::deque<int>>);
