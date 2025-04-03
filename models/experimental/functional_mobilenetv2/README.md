@@ -11,7 +11,7 @@ The MobileNetV2 model has been pre-trained on the ImageNet dataset and can be us
 The entry point to mobilenetv2 model is MobileNetV2 in `models/experimental/functional_mobilenetv2/tt/ttnn_monilenetv2.py`.
 
 Use the following command to run the model :
-` pytest -k "pretrained_weight_true" tests/ttnn/integration_tests/mobilenetv2/test_mobilenetv2.py`
+`pytest -k "pretrained_weight_true" tests/ttnn/integration_tests/mobilenetv2/test_mobilenetv2.py`
 
 Note : The model supports a batch size of 8 for a resolution of 224. If you prefer to use a different batch size, it is recommended to modify the batch_size accordingly in the test file.
 
