@@ -1,5 +1,5 @@
 Adding New TT-NN Operation
-#########################
+##########################
 
 .. note::
    This document is meant for contributors to TT-NN.
@@ -12,19 +12,19 @@ FAQ
 ***
 
 What is a TT-NN operation?
--------------------------
+--------------------------
 
 A TT-NN operation is a function that takes in one or more input tensors and produces one or more output tensors. It is implemented in C++ and can be called from Python.
 
 What steps are needed to add TT-NN operation in C++?
----------------------------------------------------
+----------------------------------------------------
 1. There are 2 options for writing a new operation. Optiona ``a`` is to write a device operation and option ``b`` is to write a composite operation
    a. Implement device operation in C++. Device operation is a struct that specifies how to create output tensors and a program to run on the device.
    b. Implement a composite operation in C++. Composite operation simply defines ``operator()`` method that calls other operations.
 2. Register the struct using `ttnn::register_operation`.
 
 What steps are needed to add TT-NN operation in Python?
-------------------------------------------------------
+-------------------------------------------------------
 1. Take an existing registered C++ operation and add a Python binding for it using `ttnn::bind_registered_operation`.
    The operation will be auto-registered in python. If the operation is called `ttnn::add` in C++, then the python binding will be `ttnn.add`.
 2. (Optional) Attach golden function to the operation using `ttnn.attach_golden_function`. This is useful for debugging and testing.
