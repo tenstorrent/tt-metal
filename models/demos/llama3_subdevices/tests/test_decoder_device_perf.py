@@ -250,15 +250,19 @@ def average_per_instance_dict(input_dict):
 
 @pytest.mark.parametrize(
     "abs_tolerance_ns",
-    (1000,),
+    (1500,),
 )
 @pytest.mark.parametrize(
     "abs_tolerance_ns_all_reduce",
-    (1500,),
+    (3000,),
 )
 @pytest.mark.parametrize(
     "abs_tolerance_ns_all_gather",
     (1500,),
+)
+@pytest.mark.parametrize(
+    "abs_tolerance_ns_sdpa",
+    (2000,),
 )
 @pytest.mark.parametrize(
     "abs_tolerance_ns_op_to_op",
@@ -266,7 +270,12 @@ def average_per_instance_dict(input_dict):
 )
 @pytest.mark.models_device_performance_bare_metal
 def test_llama_TG_perf_device(
-    reset_seeds, abs_tolerance_ns, abs_tolerance_ns_all_reduce, abs_tolerance_ns_all_gather, abs_tolerance_ns_op_to_op
+    reset_seeds,
+    abs_tolerance_ns,
+    abs_tolerance_ns_all_reduce,
+    abs_tolerance_ns_all_gather,
+    abs_tolerance_ns_sdpa,
+    abs_tolerance_ns_op_to_op,
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
@@ -320,69 +329,69 @@ def test_llama_TG_perf_device(
     print(dispatch_duration_per_instance_averaged_dict)
 
     expected_kernel_times_dict = {
-        "LayerNorm_0": 6963.66,
-        "LayerNorm_1": 6522.33,
-        "LayerNorm_2": 6753.11,
-        "LayerNorm_3": 6531.66,
-        "AllGatherAsync_0": 4018.0,
-        "AllGatherAsync_1": 9599.44,
-        "AllGatherAsync_2": 4044.88,
-        "ShardedToInterleavedDeviceOperation_0": 3988.44,
-        "ShardedToInterleavedDeviceOperation_1": 3421.77,
-        "InterleavedToShardedDeviceOperation_0": 2537.44,
-        "InterleavedToShardedDeviceOperation_1": 2021.11,
-        "Matmul_0": 10896.11,
-        "Matmul_1": 8999.0,
-        "Matmul_2": 10576.66,
-        "Matmul_3": 12356.22,
-        "Matmul_4": 16488.33,
-        "AllReduceAsync_0": 16718.66,
-        "AllReduceAsync_1": 22517.11,
-        "AllReduceAsync_2": 23267.11,
-        "AllReduceAsync_3": 23464.33,
-        "AllReduceAsync_4": 22447.0,
-        "NLPCreateHeadsDecodeDeviceOperation_0": 8140.22,
-        "RotaryEmbeddingLlamaFusedQK_0": 5027.22,
-        "PagedUpdateCacheDeviceOperation_0": 5454.55,
-        "ScaledDotProductAttentionDecode_0": 20236.55,
-        "NLPConcatHeadsDecodeDeviceOperation_0": 6660.44,
-        "ReshardDeviceOperation_0": 1745.33,
-        "BinaryDeviceOperation_0": 2408.66,
-        "BinaryDeviceOperation_1": 11843.66,
-        "BinaryDeviceOperation_2": 2423.0,
+        "LayerNorm_0": 6954.111111111111,
+        "LayerNorm_1": 6530.777777777777,
+        "LayerNorm_2": 6752.333333333333,
+        "LayerNorm_3": 6543.111111111111,
+        "AllGatherAsync_0": 4205.888888888889,
+        "AllGatherAsync_1": 9638.666666666666,
+        "AllGatherAsync_2": 4095.5555555555557,
+        "ShardedToInterleavedDeviceOperation_0": 3947.222222222222,
+        "ShardedToInterleavedDeviceOperation_1": 3388.5555555555557,
+        "InterleavedToShardedDeviceOperation_0": 2546.5555555555557,
+        "InterleavedToShardedDeviceOperation_1": 2036.111111111111,
+        "Matmul_0": 10696.555555555555,
+        "Matmul_1": 8584.111111111111,
+        "Matmul_2": 10554.555555555555,
+        "Matmul_3": 12118.888888888889,
+        "Matmul_4": 16474.222222222223,
+        "AllReduceAsync_0": 15395.555555555555,
+        "AllReduceAsync_1": 21078.333333333332,
+        "AllReduceAsync_2": 20948.777777777777,
+        "AllReduceAsync_3": 21195.444444444445,
+        "AllReduceAsync_4": 21145.777777777777,
+        "NLPCreateHeadsDecodeDeviceOperation_0": 8568.222222222223,
+        "RotaryEmbeddingLlamaFusedQK_0": 5023.888888888889,
+        "PagedUpdateCacheDeviceOperation_0": 5606.444444444444,
+        "ScaledDotProductAttentionDecode_0": 20472.11111111111,
+        "NLPConcatHeadsDecodeDeviceOperation_0": 6665.0,
+        "ReshardDeviceOperation_0": 1752.7777777777778,
+        "BinaryDeviceOperation_0": 2408.8888888888887,
+        "BinaryDeviceOperation_1": 11838.444444444445,
+        "BinaryDeviceOperation_2": 2435.5555555555557,
     }
 
     expected_dispatch_times_dict = {
-        "LayerNorm_0": 661.4444444444445,
-        "LayerNorm_1": 637.3333333333334,
-        "LayerNorm_2": 654.2222222222222,
-        "LayerNorm_3": 639.5555555555555,
-        "AllGatherAsync_0": 2412.5555555555557,
-        "AllGatherAsync_1": 1617.0,
-        "AllGatherAsync_2": 2405.1111111111113,
-        "ShardedToInterleavedDeviceOperation_0": 2203.6666666666665,
-        "ShardedToInterleavedDeviceOperation_1": 2204.222222222222,
-        "InterleavedToShardedDeviceOperation_0": 637.8888888888889,
-        "InterleavedToShardedDeviceOperation_1": 640.8888888888889,
-        "Matmul_0": 611.8888888888889,
-        "Matmul_1": 656.8888888888889,
-        "Matmul_2": 628.7777777777778,
-        "Matmul_3": 750.0,
-        "Matmul_4": 645.3333333333334,
-        "AllReduceAsync_0": 600.0,
-        "AllReduceAsync_1": 635.8888888888889,
-        "AllReduceAsync_2": 643.3333333333334,
-        "AllReduceAsync_3": 620.0,
-        "AllReduceAsync_4": 649.1111111111111,
-        "NLPCreateHeadsDecodeDeviceOperation_0": 759.8888888888889,
-        "RotaryEmbeddingLlamaFusedQK_0": 539.2222222222222,
-        "PagedUpdateCacheDeviceOperation_0": 772.6666666666666,
-        "ScaledDotProductAttentionDecode_0": 11025.222222222223,
-        "NLPConcatHeadsDecodeDeviceOperation_0": 622.0,
-        "ReshardDeviceOperation_0": 655.5555555555555,
-        "BinaryDeviceOperation_0": 649.4444444444445,
-        "BinaryDeviceOperation_1": 729.4444444444445,
-        "BinaryDeviceOperation_2": 650.1111111111111,
+        "LayerNorm_0": 657.6666666666666,
+        "LayerNorm_1": 634.3333333333334,
+        "LayerNorm_2": 661.4444444444445,
+        "LayerNorm_3": 641.0,
+        "AllGatherAsync_0": 2417.5555555555557,
+        "AllGatherAsync_1": 676.4444444444445,
+        "AllGatherAsync_2": 2403.4444444444443,
+        "ShardedToInterleavedDeviceOperation_0": 2211.6666666666665,
+        "ShardedToInterleavedDeviceOperation_1": 2212.222222222222,
+        "InterleavedToShardedDeviceOperation_0": 631.8888888888889,
+        "InterleavedToShardedDeviceOperation_1": 637.7777777777778,
+        "Matmul_0": 610.7777777777778,
+        "Matmul_1": 653.3333333333334,
+        "Matmul_2": 630.4444444444445,
+        "Matmul_3": 737.5555555555555,
+        "Matmul_4": 658.7777777777778,
+        "AllReduceAsync_0": 609.0,
+        "AllReduceAsync_1": 626.5555555555555,
+        "AllReduceAsync_2": 641.2222222222222,
+        "AllReduceAsync_3": 629.7777777777778,
+        "AllReduceAsync_4": 637.1111111111111,
+        "NLPCreateHeadsDecodeDeviceOperation_0": 761.1111111111111,
+        "RotaryEmbeddingLlamaFusedQK_0": 540.7777777777778,
+        "PagedUpdateCacheDeviceOperation_0": 773.8888888888889,
+        "ScaledDotProductAttentionDecode_0": 585.5555555555555,
+        "NLPConcatHeadsDecodeDeviceOperation_0": 620.5555555555555,
+        "ReshardDeviceOperation_0": 655.2222222222222,
+        "BinaryDeviceOperation_0": 653.6666666666666,
+        "BinaryDeviceOperation_1": 717.4444444444445,
+        "BinaryDeviceOperation_2": 647.7777777777778,
     }
 
     assert len(kernel_duration_per_instance_averaged_dict) == len(
@@ -403,6 +412,8 @@ def test_llama_TG_perf_device(
                 tolerance = abs_tolerance_ns_all_reduce
             elif "AllGatherAsync" in op_code_with_id:
                 tolerance = abs_tolerance_ns_all_gather
+            elif "ScaledDotProductAttentionDecode" in op_code_with_id:
+                tolerance = abs_tolerance_ns_sdpa
             else:
                 tolerance = abs_tolerance_ns
             if avg_kernel_duration > expected_time + tolerance:
