@@ -12,14 +12,14 @@ ttnn.enable_detailed_buffer_report = True
 ttnn.enable_detailed_tensor_report = True
 ttnn.enable_comparison_mode = False
 
-from models.demos.yolov4.ttnn.downsample1 import Down1
-from models.demos.yolov4.ttnn.downsample2 import Down2
-from models.demos.yolov4.ttnn.downsample3 import Down3
-from models.demos.yolov4.ttnn.downsample4 import Down4
-from models.demos.yolov4.ttnn.downsample5 import Down5
-from models.demos.yolov4.ttnn.neck import TtNeck
-from models.demos.yolov4.ttnn.head import TtHead
-from models.demos.yolov4.ttnn.genboxes import TtGenBoxes
+from models.demos.yolov4.tt.downsample1 import Down1
+from models.demos.yolov4.tt.downsample2 import Down2
+from models.demos.yolov4.tt.downsample3 import Down3
+from models.demos.yolov4.tt.downsample4 import Down4
+from models.demos.yolov4.tt.downsample5 import Down5
+from models.demos.yolov4.tt.genboxes import TtGenBoxes
+from models.demos.yolov4.tt.head import TtHead
+from models.demos.yolov4.tt.neck import TtNeck
 
 
 class TtYOLOv4:

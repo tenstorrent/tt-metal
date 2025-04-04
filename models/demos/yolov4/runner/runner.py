@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from models.demos.yolov4.common import get_model_result
-from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
+from models.demos.yolov4.tt.yolov4 import TtYOLOv4
 
 
 class YOLOv4Runner:
