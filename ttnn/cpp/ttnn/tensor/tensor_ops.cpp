@@ -186,12 +186,16 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, IDevic
 
 Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distributed::MeshDevice* mesh_device) {
     ZoneScoped;
+    TT_ASSERT(
+        input_tensor.is_host_tensor(),
+        "to(layout) must be called on host tensors with MULTI_DEVICE_HOST_STORAGE when multiple "
+        "workers "
+        "are specified");
+
     GraphTracker::instance().track_function_start("Tensor::to_layout", input_tensor, target_layout, mesh_device);
     if (mesh_device) {
-        auto workers = ttnn::distributed::get_mapped_devices(input_tensor, *mesh_device);
-        TT_FATAL(
-            validate_worker_modes(workers),
-            "All device threads/workers must be running in the same mode (ASYNC or SYNC)");
+        // Mesh Device provided - have a handle to the thread-pool
+        uint32_t num_shards = ttnn::distributed::get_mapped_devices(input_tensor, *mesh_device).size();
 
         std::optional<DistributedTensorConfig> distributed_config = std::nullopt;
         if (auto* host_storage = std::get_if<MultiDeviceHostStorage>(&input_tensor.get_storage());
@@ -199,31 +203,28 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
             distributed_config = host_storage->strategy;
         }
 
-        Tensor tensor_modified_layout = Tensor(workers.size(), distributed_config);
-        for (int worker_index = 0; worker_index < workers.size(); ++worker_index) {
-            auto& worker = workers[worker_index];
-            worker->push_work([input_tensor, tensor_modified_layout, target_layout, worker, worker_index]() mutable {
-                TT_ASSERT(
-                    input_tensor.is_host_tensor(),
-                    "to(layout) must be called on host tensors with MULTI_DEVICE_HOST_STORAGE when multiple "
-                    "workers "
-                    "are specified");
-
-                auto shard = get_shard_for_device(input_tensor, worker, worker_index);
-                shard = tensor_impl::to_layout_wrapper(shard, target_layout);
-                insert_buffer_and_shape_for_device(worker, shard, tensor_modified_layout, worker_index);
-                if (worker_index == 0) {
-                    auto orig_layout = input_tensor.get_tensor_spec().tensor_layout();
-                    auto upd_layout = TensorLayout(
-                        orig_layout.get_data_type(),
-                        PageConfig(target_layout, orig_layout.get_tile()),
-                        orig_layout.get_memory_config());
-                    tensor_modified_layout.set_tensor_spec(TensorSpec(input_tensor.get_logical_shape(), upd_layout));
-                }
-            });
+        Tensor tensor_modified_layout = Tensor(num_shards, distributed_config);
+        for (std::size_t shard_idx = 0; shard_idx < num_shards; ++shard_idx) {
+            // Multi-Thread Host tilization of shards.
+            mesh_device->enqueue_to_thread_pool(
+                [&input_tensor, &tensor_modified_layout, target_layout, mesh_device, shard_idx]() {
+                    ZoneScopedN("HostTilize");
+                    auto shard = get_shard_for_device(input_tensor, mesh_device, shard_idx);
+                    shard = tensor_impl::to_layout_wrapper(shard, target_layout);
+                    insert_buffer_and_shape_for_device(mesh_device, shard, tensor_modified_layout, shard_idx);
+                });
         }
+        // Update tensor metadata in main thread while thread-pool performs tilization.
+        auto orig_layout = input_tensor.get_tensor_spec().tensor_layout();
+        auto upd_layout = TensorLayout(
+            orig_layout.get_data_type(),
+            PageConfig(target_layout, orig_layout.get_tile()),
+            orig_layout.get_memory_config());
+        tensor_modified_layout.set_tensor_spec(TensorSpec(input_tensor.get_logical_shape(), upd_layout));
         tensor_modified_layout = tt::tt_metal::set_tensor_id(tensor_modified_layout);
         GraphTracker::instance().track_function_end(tensor_modified_layout);
+        // Wait for thread-pool
+        mesh_device->wait_for_thread_pool();
         return tensor_modified_layout;
     }
     // Running without worker threads (non-async)

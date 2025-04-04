@@ -4,11 +4,16 @@
 
 #include "rtoptions.hpp"
 
+#include <ctype.h>
 #include <stdio.h>
-#include <stdlib.h>
-
+#include <cstdlib>
 #include <cstring>
+#include <functional>
+#include <stdexcept>
 #include <string>
+
+#include "assert.hpp"
+#include <umd/device/tt_core_coordinates.h>
 
 using std::vector;
 
@@ -112,6 +117,16 @@ RunTimeOptions::RunTimeOptions() {
         }
         if (clear_l1_enabled_str[0] == '1') {
             clear_l1 = true;
+        }
+    }
+
+    const char* skip_eth_cores_with_retrain_str = std::getenv("TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN");
+    if (skip_eth_cores_with_retrain_str != nullptr) {
+        if (skip_eth_cores_with_retrain_str[0] == '0') {
+            skip_eth_cores_with_retrain = false;
+        }
+        if (skip_eth_cores_with_retrain_str[0] == '1') {
+            skip_eth_cores_with_retrain = true;
         }
     }
 

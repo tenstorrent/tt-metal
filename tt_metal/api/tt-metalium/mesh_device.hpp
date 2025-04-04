@@ -4,23 +4,53 @@
 
 #pragma once
 
+#include <tt_stl/span.hpp>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <ostream>
+#include <set>
+#include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
-#include "device.hpp"
-#include "dispatch_core_common.hpp"
+#include <hostdevcommon/common_values.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh_config.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
+#include <tt-metalium/program_device_map.hpp>
+#include <tt-metalium/small_vector.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/trace_buffer.hpp>
+#include <umd/device/types/arch.h>
+#include <tt-metalium/work_executor_types.hpp>
 
-#include "mesh_config.hpp"
-#include "mesh_coord.hpp"
-#include "mesh_device_view.hpp"
-#include "mesh_trace_id.hpp"
-#include "small_vector.hpp"
-#include "sub_device_types.hpp"
-#include <tt_stl/span.hpp>
+enum class CoreType;
+namespace tt {
+namespace tt_metal {
+class Allocator;
+class CommandQueue;
+class SubDevice;
+class SystemMemoryManager;
+namespace program_cache {
+namespace detail {
+struct ProgramCache;
+}  // namespace detail
+}  // namespace program_cache
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 

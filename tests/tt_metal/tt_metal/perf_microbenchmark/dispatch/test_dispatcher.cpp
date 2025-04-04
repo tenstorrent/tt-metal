@@ -2,19 +2,48 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <functional>
-#include <random>
-
-#include "logger.hpp"
+#include <chrono>
+#include <fmt/base.h>
+#include <stdint.h>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include "rtoptions.hpp"
-#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include "common.h"
+#include <algorithm>
+#include <cstdlib>
+#include <ctime>
+#include <exception>
+#include <iomanip>
+#include <map>
+#include <memory>
+#include <optional>
+#include <sstream>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/command_queue_common.hpp>
+#include "common.h"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/dispatch_mem_map.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include "llrt.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/metal_soc_descriptor.h>
+#include <tt-metalium/program_impl.hpp>
+#include "rtoptions.hpp"
+#include "span.hpp"
 #include "test_common.hpp"
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include "umd/device/tt_core_coordinates.h"
+#include <tt-metalium/utils.hpp>
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;
@@ -441,7 +470,7 @@ int main(int argc, char** argv) {
         TT_ASSERT((l1_buf_base & (dispatch_buffer_page_size_g - 1)) == 0);
 
         // Make sure user doesn't exceed available L1 space with cmd line arguments.
-        auto& soc_desc = tt::Cluster::instance().get_soc_desc(device->id());
+        auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
         if (prefetcher_buffer_size_g + l1_buf_base > soc_desc.worker_l1_size) {
             log_fatal(
                 LogTest,

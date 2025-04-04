@@ -2,25 +2,36 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <mesh_device.hpp>
-
-#include <cstddef>
-#include <memory>
-#include <unordered_map>
-#include <utility>
-#include <source_location>
-
-#include <logger.hpp>
-#include <host_api.hpp>
-#include <tt_metal.hpp>
-#include <system_mesh.hpp>
-#include <mesh_device_view.hpp>
-#include <mesh_command_queue.hpp>
+#include <boost/container/vector.hpp>
 #include <device_impl.hpp>
+#include <logger.hpp>
+#include <mesh_command_queue.hpp>
+#include <mesh_coord.hpp>
+#include <mesh_device.hpp>
+#include <mesh_device_view.hpp>
+#include <small_vector.hpp>
 #include <sub_device.hpp>
 #include <sub_device_manager_tracker.hpp>
+#include <system_mesh.hpp>
+#include <tt_metal.hpp>
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cstddef>
+#include <iterator>
+#include <memory>
+#include <source_location>
+#include <unordered_map>
+#include <utility>
 
-#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
+#include "allocator.hpp"
+#include "assert.hpp"
+#include "dispatch_settings.hpp"
+#include "launch_message_ring_buffer_state.hpp"
+#include "mesh_trace.hpp"
+#include "shape_base.hpp"
+#include "span.hpp"
+#include "strong_type.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/api/tt-metalium/device_pool.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
@@ -32,6 +43,21 @@
 #include <env_lib.hpp>
 
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
+#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
+#include <umd/device/types/xy_pair.h>
+
+enum class CoreType;
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+class SystemMemoryManager;
+namespace program_cache {
+namespace detail {
+struct ProgramCache;
+}  // namespace detail
+}  // namespace program_cache
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -43,7 +69,7 @@ int generate_unique_mesh_id() {
 
 std::shared_ptr<ThreadPool> create_default_thread_pool(const std::vector<IDevice*>& physical_devices) {
     // Bind the thread-pool to the physical devices being used.
-    if (physical_devices.size() == 1) {
+    if (tt::parse_env("TT_MESH_PASS_THROUGH_THREAD_POOL", false) || physical_devices.size() == 1) {
         return create_passthrough_thread_pool();
     } else if (tt::parse_env("TT_MESH_BOOST_THREAD_POOL", false)) {
         return create_boost_thread_pool(physical_devices.size());
@@ -284,6 +310,9 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
         allocator_config.l1_bank_remap);
     for (auto device : submesh->get_devices()) {
         dynamic_cast<Device*>(device)->mesh_device = submesh;
+    }
+    if (program_cache_->is_enabled()) {
+        submesh->enable_program_cache();
     }
 
     submeshes_.push_back(submesh);
@@ -691,7 +720,7 @@ std::shared_ptr<MeshTraceBuffer> MeshDevice::get_mesh_trace(const MeshTraceId& t
     if (trace != trace_buffer_pool_.end()) {
         return trace->second;
     }
-    TT_THROW("Trace Instance with ID {} is not initialized", *trace_id);
+    TT_THROW("MeshDevice ID {} Trace Instance with ID {} is not initialized", this->id(), *trace_id);
 }
 
 void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {

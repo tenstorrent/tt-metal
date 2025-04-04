@@ -1,8 +1,26 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+#include <stdint.h>
+#include <functional>
+#include <map>
+#include <string>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include "span.hpp"
+#include "impl/context/metal_context.hpp"
+#include <tt-metalium/utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking that the finish command can wait for the last dprint.
@@ -25,7 +43,7 @@ static void RunTest(DPrintFixture* fixture, IDevice* device) {
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Run the program, use a large delay for the last print to emulate a long-running kernel.
-    uint32_t clk_mhz = tt::Cluster::instance().get_device_aiclk(device->id());
+    uint32_t clk_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id());
     uint32_t delay_cycles = clk_mhz * 2000000; // 2 seconds
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {

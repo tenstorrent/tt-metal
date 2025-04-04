@@ -9,10 +9,10 @@
 #include <tt-metalium/program_impl.hpp>
 #include <tt-metalium/hal.hpp>
 
-#include "umd/device/types/cluster_descriptor_types.h"
-#include "fabric_edm_types.hpp"
-#include "fabric_edm_packet_header.hpp"
-#include "edm_fabric_counters.hpp"
+#include <umd/device/types/cluster_descriptor_types.h>
+#include <tt-metalium/fabric_edm_types.hpp>
+#include <tt-metalium/fabric_edm_packet_header.hpp>
+#include <tt-metalium/edm_fabric_counters.hpp>
 
 #include <unordered_map>
 #include <optional>
@@ -24,7 +24,6 @@ namespace tt::tt_fabric {
 struct FabricEriscDatamoverConfig {
     static constexpr std::size_t num_sender_channels = 3;
     static constexpr std::size_t num_receiver_channels = 2;
-    static constexpr bool constrain_to_power_of_2_buffer_slot_counts = true;
 
     static constexpr std::size_t field_size = 16;
     static constexpr std::size_t buffer_alignment = 32;
@@ -88,11 +87,7 @@ struct FabricEriscDatamoverConfig {
     std::size_t buffer_region_start;
     std::size_t available_channel_buffering_space;
 
-    FabricEriscDatamoverConfig(
-        std::size_t channel_buffer_size_bytes,
-        std::size_t sender_ratio_size,
-        std::size_t receiver_ratio_size,
-        Topology topology = Topology::Linear);
+    FabricEriscDatamoverConfig(std::size_t channel_buffer_size_bytes, Topology topology = Topology::Linear);
 
     std::size_t channel_buffer_size_bytes = 0;
     std::size_t channel_buffer_size_bytes_with_channel_sync = 0;

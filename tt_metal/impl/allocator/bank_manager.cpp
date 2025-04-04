@@ -4,10 +4,18 @@
 
 #include "bank_manager.hpp"
 
-#include <util.hpp>
-#include <math.hpp>
 #include <magic_enum/magic_enum.hpp>
+#include <util.hpp>
+#include <limits>
+#include <string_view>
+#include <utility>
+
+#include "allocator/algorithms/allocator_algorithm.hpp"
+#include "allocator_types.hpp"
+#include "assert.hpp"
+#include "buffer_constants.hpp"
 #include "llrt/hal.hpp"
+#include "logger.hpp"
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 
 namespace tt {

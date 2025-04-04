@@ -9,13 +9,19 @@ on:
       runner-label:
         required: true
         type: string
-      docker-image:
-        required: true
-        type: string
       timeout:
         required: false
         type: number
         default: 35
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
 
 jobs:
   cpp-unit-tests:
@@ -34,7 +40,6 @@ jobs:
           {name: device, cmd: "./build/test/tt_metal/unit_tests_device"},
           {name: dispatch, cmd: "./build/test/tt_metal/unit_tests_dispatch"},
           {name: eth, cmd: "./build/test/tt_metal/unit_tests_eth_${{ inputs.arch }}"},
-          {name: llk, cmd: "./build/test/tt_metal/unit_tests_llk"},
           {name: stl, cmd: "./build/test/tt_metal/unit_tests_stl"},
           {name: distributed, cmd: "./build/test/tt_metal/distributed/distributed_unit_tests_${{ inputs.arch }} ${{ inputs.arch == 'blackhole' && '--gtest_filter=\"-MeshEventsTestSuite.*\"' || '' }}"},
           {name: lightmetal, cmd: "./build/test/tt_metal/unit_tests_lightmetal"},
@@ -44,9 +49,23 @@ jobs:
           {name: ttnn tensor cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn_tensor},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
-    env:
-      ARCH_NAME: ${{ inputs.arch }}
-      LOGURU_LEVEL: INFO
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
+        TT_METAL_HOME: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     runs-on: >-
       ${{
         startsWith(inputs.runner-label, 'tt-beta-ubuntu')
@@ -54,25 +73,19 @@ jobs:
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
     steps:
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - uses: ./.github/actions/prepare-metal-run
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          # Unsure why these C++ tests need the wheel...  a cleanup to do separately
+          # https://github.com/tenstorrent/tt-metal/issues/20166
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ${{ matrix.test-group.name }} tests
         #GH Issue 16167
         if: ${{ !(inputs.runner-label == 'BH' && matrix.test-group.name == 'tools') }}
         timeout-minutes: ${{ inputs.timeout }}
-        uses: ./.github/actions/docker-run
-        with:
-          docker_image: ${{ inputs.docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=${{ inputs.arch }}
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e GTEST_OUTPUT=xml:generated/test_reports/
-          run_args: |
-            pip install --force-reinstall pip==21.2.4
-            pip install -r tt_metal/python_env/requirements-dev.txt
-            pip install -e .
+        run: |
             mkdir -p generated/test_reports
             ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
@@ -85,7 +98,7 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           path: |
-            generated/test_reports/
+            /work/generated/test_reports/
           prefix: "test_reports_"
       - name: Generate system logs on failure
         uses: ./.github/actions/generate-system-logs
@@ -95,4 +108,4 @@ jobs:
         if: ${{ failure() }}
         with:
           path: |
-            generated/test_reports/
+            /work/generated/test_reports/

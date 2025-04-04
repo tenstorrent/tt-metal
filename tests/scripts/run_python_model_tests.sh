@@ -35,7 +35,7 @@ run_python_model_tests_wormhole_b0() {
     # higher sequence lengths and different formats trigger memory issues
     pytest models/demos/falcon7b_common/tests/unit_tests/test_falcon_matmuls_and_bmms_with_mixed_precision.py -k "seq_len_128 and in0_BFLOAT16-in1_BFLOAT8_B-out_BFLOAT16-weights_DRAM"
     pytest tests/ttnn/integration_tests/resnet/test_ttnn_functional_resnet50.py -k "pretrained_weight_false"
-    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/integration_tests/yolov4/test_ttnn_yolov4.py -k "pretrained_weight_false"
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py -k "pretrained_weight_false"
 
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/integration_tests/yolov8x/test_yolov8x.py::test_yolov8x_640 -k "pretrained_weight_false"
 
@@ -84,4 +84,5 @@ run_python_model_tests_blackhole() {
     done
 
     pytest tests/ttnn/integration_tests/resnet/test_ttnn_functional_resnet50.py
+    pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4_bh.py
 }

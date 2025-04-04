@@ -2,12 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "eth_tunneler.hpp"
-#include "eth_router.hpp"
-#include "demux.hpp"
-#include "mux.hpp"
 
-#include <host_api.hpp>
-#include <tt_metal.hpp>
+#include <map>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "assert.hpp"
+#include "demux.hpp"
+#include "device.hpp"
+#include "impl/context/metal_context.hpp"
+#include "dispatch/kernel_config/fd_kernel.hpp"
+#include "dispatch_core_common.hpp"
+#include "eth_router.hpp"
+#include "hal.hpp"
+#include "mux.hpp"
+#include "impl/context/metal_context.hpp"
+#include <umd/device/tt_xy_pair.h>
+#include "utils.hpp"
 
 using namespace tt::tt_metal;
 
@@ -19,12 +31,15 @@ void EthTunnelerKernel::GenerateStaticConfigs() {
         downstream_device_id = servicing_device_id_;
     }
     if (this->IsRemote()) {
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(downstream_device_id);
-        logical_core_ =
-            dispatch_core_manager::instance().tunneler_core(device_->id(), downstream_device_id, channel, cq_id_);
+        uint16_t channel =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(downstream_device_id);
+        logical_core_ = MetalContext::instance().get_dispatch_core_manager().tunneler_core(
+            device_->id(), downstream_device_id, channel, cq_id_);
     } else {
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_->id());
-        logical_core_ = dispatch_core_manager::instance().us_tunneler_core_local(device_->id(), channel, cq_id_);
+        uint16_t channel =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
+        logical_core_ =
+            MetalContext::instance().get_dispatch_core_manager().us_tunneler_core_local(device_->id(), channel, cq_id_);
     }
     static_config_.endpoint_id_start_index = 0xDACADACA;
     static_config_.in_queue_start_addr_words = 0x19A00 >> 4;
@@ -48,11 +63,13 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
         // For remote tunneler, we don't actually have the device constructed for the paired tunneler, so can't pull
         // info from it. Core coord can be computed without the device, and relevant fields match this tunneler.
         chip_id_t downstream_device_id = FDKernel::GetDownstreamDeviceId(device_id_);
-        uint16_t downstream_channel = tt::Cluster::instance().get_assigned_channel_for_device(downstream_device_id);
-        tt_cxy_pair paired_logical_core =
-            dispatch_core_manager::instance().us_tunneler_core_local(downstream_device_id, downstream_channel, cq_id_);
+        uint16_t downstream_channel =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(downstream_device_id);
+        tt_cxy_pair paired_logical_core = MetalContext::instance().get_dispatch_core_manager().us_tunneler_core_local(
+            downstream_device_id, downstream_channel, cq_id_);
         tt_cxy_pair paired_physical_coord =
-            tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(paired_logical_core, CoreType::ETH);
+            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                paired_logical_core, CoreType::ETH);
 
         // Upstream, we expect a US_TUNNELER_LOCAL and one or more PACKET_ROUTER
         EthTunnelerKernel* tunneler_kernel = nullptr;
@@ -146,11 +163,13 @@ void EthTunnelerKernel::GenerateDependentConfigs() {
         // Upstream, we expect a US_TUNNELER_REMOTE and a MUX_D. Same deal where upstream tunneler may not be populated
         // yet since its device may not be created yet.
         chip_id_t upstream_device_id = FDKernel::GetUpstreamDeviceId(device_id_);
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id_);
-        tt_cxy_pair paired_logical_core =
-            dispatch_core_manager::instance().tunneler_core(upstream_device_id, device_id_, channel, cq_id_);
+        uint16_t channel =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id_);
+        tt_cxy_pair paired_logical_core = MetalContext::instance().get_dispatch_core_manager().tunneler_core(
+            upstream_device_id, device_id_, channel, cq_id_);
         tt_cxy_pair paired_physical_coord =
-            tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(paired_logical_core, CoreType::ETH);
+            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                paired_logical_core, CoreType::ETH);
 
         TT_ASSERT(upstream_kernels_.size() == 2);
         auto tunneler_kernel = dynamic_cast<EthTunnelerKernel*>(upstream_kernels_[0]);

@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include <unordered_map>
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
@@ -15,7 +15,7 @@
 #include "noc/noc_parameters.h"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 
-#include "hal.hpp"
+#include <tt-metalium/hal.hpp>
 #include "llrt.hpp"
 #include <tt-metalium/tt_align.hpp>
 
@@ -122,7 +122,7 @@ DeviceData::DeviceData(
     this->banked = is_banked;
     this->amt_written = 0;
 
-    const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
+    const metal_SocDescriptor& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
     const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
     for (const CoreCoord& core_coord : pcie_cores) {
         CoreCoord core = {core_coord.x, core_coord.y};

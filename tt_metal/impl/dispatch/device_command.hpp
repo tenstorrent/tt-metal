@@ -4,17 +4,25 @@
 
 #pragma once
 
+#include <stdint.h>
+#include <tt_stl/aligned_allocator.hpp>
+#include <algorithm>
 #include <bit>
 #include <cstddef>
+#include <tuple>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
-#include "env_lib.hpp"
 #include "command_queue_interface.hpp"
-#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include "memcpy.hpp"
-#include <tt_stl/aligned_allocator.hpp>
+#include "env_lib.hpp"
+#include "hal_types.hpp"
 #include "llrt/hal.hpp"
+#include "memcpy.hpp"
+#include "span.hpp"
 #include "tt_align.hpp"
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include "vector_aligned.hpp"
 
 namespace tt::tt_metal {
 
@@ -120,6 +128,7 @@ public:
 
     template <typename PackedSubCmd>
     void add_dispatch_write_packed(
+        uint8_t type,
         uint16_t num_sub_cmds,
         uint32_t common_addr,
         uint16_t packed_data_sizeB,
@@ -135,6 +144,7 @@ public:
     //  0:address, 1:size, 2:stride
     template <typename PackedSubCmd>
     void add_dispatch_write_packed(
+        uint8_t type,
         uint16_t num_sub_cmds,
         uint32_t common_addr,
         uint16_t packed_data_sizeB,
@@ -148,6 +158,7 @@ public:
 
     // Add write packed large, with no data.
     void add_dispatch_write_packed_large(
+        uint8_t type,
         uint16_t alignment,
         uint16_t num_sub_cmds,
         const std::vector<CQDispatchWritePackedLargeSubCmd>& sub_cmds,
@@ -156,6 +167,7 @@ public:
 
     // Add write packed large, with data inlined.
     void add_dispatch_write_packed_large(
+        uint8_t type,
         uint16_t alignment,
         uint16_t num_sub_cmds,
         const std::vector<CQDispatchWritePackedLargeSubCmd>& sub_cmds,
@@ -187,6 +199,7 @@ private:
 
     // Write packed large cmd and subcmds, but not data.
     void add_dispatch_write_packed_large_internal(
+        uint8_t type,
         bool flush_prefetch,
         uint16_t alignment,
         uint32_t payload_sizeB,

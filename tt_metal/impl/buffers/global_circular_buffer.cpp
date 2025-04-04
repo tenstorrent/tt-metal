@@ -2,24 +2,34 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <global_circular_buffer_impl.hpp>
-
-#include <cstdint>
-#include <memory>
-#include <vector>
-
 #include <assert.hpp>
-#include <core_coord.hpp>
-#include <tt_metal.hpp>
-#include <host_api.hpp>
 #include <buffer.hpp>
 #include <buffer_constants.hpp>
+#include <core_coord.hpp>
 #include <device.hpp>
-#include "llrt/hal.hpp"
+#include <global_circular_buffer_impl.hpp>
+#include <host_api.hpp>
 #include <tt_align.hpp>
+#include <tt_metal.hpp>
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <unordered_map>
+#include <utility>
+#include <variant>
+#include <vector>
 
-#include "tt_cluster.hpp"
-#include <tt_stl/overloaded.hpp>
+#include "distributed.hpp"
+#include "hal_types.hpp"
+#include "llrt/hal.hpp"
+#include "mesh_buffer.hpp"
+#include "mesh_device.hpp"
+#include "reflection.hpp"
+#include "span.hpp"
+#include "impl/context/metal_context.hpp"
+#include <umd/device/types/xy_pair.h>
 
 namespace tt::tt_metal {
 namespace experimental {
@@ -142,7 +152,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
         } else {
             if (device->using_slow_dispatch()) {
                 detail::WriteToBuffer(*cb_config_buffer.get_buffer(), cb_config_host_buffer);
-                tt::Cluster::instance().l1_barrier(device->id());
+                tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
             } else {
                 EnqueueWriteBuffer(
                     device->command_queue(), *cb_config_buffer.get_buffer(), cb_config_host_buffer.data(), false);

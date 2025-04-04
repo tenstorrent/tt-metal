@@ -3,14 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <boost/asio.hpp>
+#include <boost/asio/post.hpp>
+#include <boost/asio/thread_pool.hpp>
+#include <cstddef>
 #include <future>
-#include <iostream>
-#include <numa.h>
-#include <semaphore>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
 #include <sched.h>         // Needed for setting process priorities
 #include <sys/resource.h>  // Needed for setting process priorities
+#include <numa.h>
 #include <tt-metalium/device.hpp>
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 
@@ -33,8 +38,9 @@ bool balanced_physical_device_numa() {
     if (numa_available() != -1) {
         int num_nodes = numa_max_node() + 1;
         std::unordered_set<int> numa_nodes_for_cluster = {};
-        for (uint32_t device_id = 0; device_id < tt::Cluster::instance().number_of_devices(); device_id++) {
-            auto numa_node_for_device = tt::Cluster::instance().get_numa_node_for_device(device_id);
+        for (uint32_t device_id = 0; device_id < MetalContext::instance().get_cluster().number_of_devices();
+             device_id++) {
+            auto numa_node_for_device = MetalContext::instance().get_cluster().get_numa_node_for_device(device_id);
             numa_nodes_for_cluster.insert(numa_node_for_device);
         }
         return numa_nodes_for_cluster.size() == num_nodes;
@@ -49,12 +55,12 @@ uint32_t get_cpu_core_for_physical_device(uint32_t physical_device_id) {
     // Initialize to an invalid value. Determine the NUMA Node based on the physical device id.
     // If a NUMA Node is not found, use a round robin policy.
     int numa_node = -1;
-    if (physical_device_id < tt::Cluster::instance().number_of_devices()) {
+    if (physical_device_id < MetalContext::instance().get_cluster().number_of_devices()) {
         // If the cluster uses all NUMA nodes, assign worker threads to CPU cores based
         // on the NUMA layout. If not, balance the worker threads across all NUMA Nodes/
         // CPU cores to minimize resource contention.
         numa_node = devices_balanced_across_numa_nodes
-                        ? tt::Cluster::instance().get_numa_node_for_device(physical_device_id)
+                        ? MetalContext::instance().get_cluster().get_numa_node_for_device(physical_device_id)
                         : physical_device_id % 2;
     }
     if (cpu_cores_per_numa_node.find(numa_node) != cpu_cores_per_numa_node.end()) {

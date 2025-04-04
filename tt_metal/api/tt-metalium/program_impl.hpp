@@ -7,12 +7,12 @@
 #include <memory>
 #include <optional>
 
-#include "kernel_types.hpp"
-#include "circular_buffer_types.hpp"
-#include "semaphore.hpp"
-#include "program_device_map.hpp"
-#include "worker_config_buffer.hpp"
-#include "dev_msgs.h"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/semaphore.hpp>
+#include <tt-metalium/program_device_map.hpp>
+#include <tt-metalium/worker_config_buffer.hpp>
+#include <tt-metalium/dev_msgs.h>
 
 namespace tt {
 
@@ -200,7 +200,11 @@ class Program {
     friend KernelHandle detail::AddKernel(Program &program, const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType core_type);
     friend std::shared_ptr<Kernel> detail::GetKernel(const Program &program, KernelHandle kernel_id);
 
-    friend uint32_t CreateSemaphore(Program &program, const std::variant<CoreRange,CoreRangeSet> &core_spec, uint32_t initial_value, CoreType core_type);
+    friend uint32_t CreateSemaphore(
+        Program& program,
+        const std::variant<CoreRange, CoreRangeSet>& core_spec,
+        uint32_t initial_value,
+        CoreType core_type);
 
     CBHandle add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config);
     CBHandle add_circular_buffer(

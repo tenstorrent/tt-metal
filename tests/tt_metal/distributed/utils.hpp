@@ -4,8 +4,24 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <memory>
+#include <unordered_set>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/program_impl.hpp>
+
+namespace tt {
+namespace tt_metal {
+namespace distributed {
+class MeshBuffer;
+class MeshDevice;
+}  // namespace distributed
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal::distributed::test::utils {
 

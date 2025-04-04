@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "routing_table_generator.hpp"
+#include <tt-metalium/routing_table_generator.hpp>
 #include <tt-metalium/fabric_host_interface.h>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -57,7 +57,7 @@ class ControlPlane {
 
        size_t get_num_active_fabric_routers(mesh_id_t mesh_id, chip_id_t chip_id) const;
 
-       std::vector<chan_id_t> get_active_fabric_eth_channels_in_direction(
+       std::set<chan_id_t> get_active_fabric_eth_channels_in_direction(
            mesh_id_t mesh_id, chip_id_t chip_id, RoutingDirection routing_direction) const;
 
        eth_chan_directions get_eth_chan_direction(mesh_id_t mesh_id, chip_id_t chip_id, int chan) const;

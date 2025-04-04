@@ -3,12 +3,27 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <gmock/gmock.h>
+#include <xtensor/xarray.hpp>
+#include <xtensor/xbuilder.hpp>
+#include <xtensor/xexception.hpp>
+#include <xtensor/xiterator.hpp>
+#include <xtensor/xlayout.hpp>
+#include <xtensor/xmath.hpp>
+#include <xtensor/xstorage.hpp>
+#include <xtensor/xtensor_forward.hpp>
+#include <xtensor/xtensor_simd.hpp>
+#include <xtensor/xutils.hpp>
+#include <tuple>
+#include <vector>
 
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/xtensor/conversion_utils.hpp"
+#include "gmock/gmock.h"
 #include "ttnn/tensor/xtensor/partition.hpp"
-#include "ttnn/tensor/xtensor/xtensor_all_includes.hpp"
+
+namespace tt {
+namespace tt_metal {
+class Tensor;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace ttnn {
 namespace {

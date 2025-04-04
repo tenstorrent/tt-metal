@@ -7,20 +7,20 @@
 #include <memory>
 #include <utility>
 
-#include "device.hpp"
-#include "hostdevcommon/common_values.hpp"
-#include "hostdevcommon/kernel_structs.h"  // Leaked up to ttnn level from here
-#include "work_executor_types.hpp"
-#include "data_types.hpp"
-#include "program_device_map.hpp"
-#include "hal_types.hpp"
-#include "command_queue_interface.hpp"
-#include "command_queue.hpp"
-#include "sub_device_manager_tracker.hpp"
-#include "sub_device_types.hpp"
-#include "trace_buffer.hpp"
+#include <tt-metalium/device.hpp>
+#include <hostdevcommon/common_values.hpp>
+#include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
+#include <tt-metalium/work_executor_types.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/program_device_map.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/command_queue_interface.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/sub_device_manager_tracker.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/trace_buffer.hpp>
 #include <tt_stl/span.hpp>
-#include "program_cache.hpp"
+#include <tt-metalium/program_cache.hpp>
 
 namespace tt::tt_metal {
 
