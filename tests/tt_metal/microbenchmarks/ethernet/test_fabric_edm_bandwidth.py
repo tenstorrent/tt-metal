@@ -26,6 +26,7 @@ class FabricTestMode(Enum):
     HalfRing = 1
     FullRing = 2
     SaturateChipToChipRing = 3
+    RingAsLinear = 4
 
 
 def get_device_freq():
@@ -429,6 +430,7 @@ def test_fabric_4_chip_one_link_mcast_saturate_chip_to_chip_ring_bw(
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_4chip_one_link_mcast_bw(
     num_messages,
     num_links,
@@ -436,6 +438,7 @@ def test_fabric_4chip_one_link_mcast_bw(
     line_sync,
     line_size,
     packet_size,
+    fabric_test_mode,
 ):
     run_fabric_edm(
         is_unicast=False,
@@ -446,7 +449,7 @@ def test_fabric_4chip_one_link_mcast_bw(
         line_sync=line_sync,
         line_size=line_size,
         packet_size=packet_size,
-        fabric_mode=FabricTestMode.Linear,
+        fabric_mode=fabric_test_mode,
         disable_sends_for_interior_workers=False,
         unidirectional=False,
         senders_are_unidirectional=True,
@@ -459,8 +462,15 @@ def test_fabric_4chip_one_link_mcast_bw(
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_4chip_one_link_bidirectional_single_producer_mcast_bw(
-    num_messages, num_links, num_op_invocations, line_sync, line_size, packet_size
+    num_messages,
+    num_links,
+    num_op_invocations,
+    line_sync,
+    line_size,
+    packet_size,
+    fabric_test_mode,
 ):
     run_fabric_edm(
         is_unicast=False,
@@ -471,7 +481,7 @@ def test_fabric_4chip_one_link_bidirectional_single_producer_mcast_bw(
         line_sync=line_sync,
         line_size=line_size,
         packet_size=packet_size,
-        fabric_mode=FabricTestMode.Linear,
+        fabric_mode=fabric_test_mode,
         disable_sends_for_interior_workers=True,
         unidirectional=False,
         senders_are_unidirectional=True,
@@ -484,6 +494,7 @@ def test_fabric_4chip_one_link_bidirectional_single_producer_mcast_bw(
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_4chip_one_link_unidirectional_single_producer_mcast_bw(
     num_messages,
     num_links,
@@ -491,6 +502,7 @@ def test_fabric_4chip_one_link_unidirectional_single_producer_mcast_bw(
     line_sync,
     line_size,
     packet_size,
+    fabric_test_mode,
 ):
     run_fabric_edm(
         is_unicast=False,
@@ -501,7 +513,7 @@ def test_fabric_4chip_one_link_unidirectional_single_producer_mcast_bw(
         line_sync=line_sync,
         line_size=line_size,
         packet_size=packet_size,
-        fabric_mode=FabricTestMode.Linear,
+        fabric_mode=fabric_test_mode,
         disable_sends_for_interior_workers=True,
         unidirectional=True,
         senders_are_unidirectional=True,
@@ -514,6 +526,7 @@ def test_fabric_4chip_one_link_unidirectional_single_producer_mcast_bw(
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [2, 3, 4])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_4chip_two_link_mcast_bw(
     num_messages,
     num_links,
@@ -521,6 +534,7 @@ def test_fabric_4chip_two_link_mcast_bw(
     line_sync,
     line_size,
     packet_size,
+    fabric_test_mode,
 ):
     run_fabric_edm(
         is_unicast=False,
@@ -531,7 +545,7 @@ def test_fabric_4chip_two_link_mcast_bw(
         line_sync=line_sync,
         line_size=line_size,
         packet_size=packet_size,
-        fabric_mode=FabricTestMode.Linear,
+        fabric_mode=fabric_test_mode,
         disable_sends_for_interior_workers=False,
         senders_are_unidirectional=True,
     )
@@ -543,6 +557,7 @@ def test_fabric_4chip_two_link_mcast_bw(
 @pytest.mark.parametrize("line_size", [2])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_one_link_non_forwarding_unicast_bw(
     num_messages,
     num_links,
@@ -550,6 +565,7 @@ def test_fabric_one_link_non_forwarding_unicast_bw(
     line_sync,
     line_size,
     packet_size,
+    fabric_test_mode,
 ):
     run_fabric_edm(
         is_unicast=True,
@@ -560,7 +576,7 @@ def test_fabric_one_link_non_forwarding_unicast_bw(
         line_sync=line_sync,
         line_size=line_size,
         packet_size=packet_size,
-        fabric_mode=FabricTestMode.Linear,
+        fabric_mode=fabric_test_mode,
         disable_sends_for_interior_workers=False,
         senders_are_unidirectional=True,
     )
@@ -572,6 +588,7 @@ def test_fabric_one_link_non_forwarding_unicast_bw(
 @pytest.mark.parametrize("line_size", [2])
 @pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_two_link_non_forwarding_unicast_bw(
     num_messages,
     num_links,
@@ -579,6 +596,7 @@ def test_fabric_two_link_non_forwarding_unicast_bw(
     line_sync,
     line_size,
     packet_size,
+    fabric_test_mode,
 ):
     run_fabric_edm(
         is_unicast=True,
@@ -589,7 +607,7 @@ def test_fabric_two_link_non_forwarding_unicast_bw(
         line_sync=line_sync,
         line_size=line_size,
         packet_size=packet_size,
-        fabric_mode=FabricTestMode.Linear,
+        fabric_mode=fabric_test_mode,
         disable_sends_for_interior_workers=False,
         senders_are_unidirectional=True,
     )
@@ -601,6 +619,7 @@ def test_fabric_two_link_non_forwarding_unicast_bw(
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_one_link_forwarding_unicast_multiproducer_multihop_bw(
     num_messages,
     num_links,
@@ -608,6 +627,7 @@ def test_fabric_one_link_forwarding_unicast_multiproducer_multihop_bw(
     line_sync,
     line_size,
     packet_size,
+    fabric_test_mode,
 ):
     run_fabric_edm(
         is_unicast=True,
@@ -618,7 +638,7 @@ def test_fabric_one_link_forwarding_unicast_multiproducer_multihop_bw(
         line_sync=line_sync,
         line_size=line_size,
         packet_size=packet_size,
-        fabric_mode=FabricTestMode.Linear,
+        fabric_mode=fabric_test_mode,
         disable_sends_for_interior_workers=False,
         senders_are_unidirectional=True,
     )
@@ -630,6 +650,7 @@ def test_fabric_one_link_forwarding_unicast_multiproducer_multihop_bw(
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_one_link_forwarding_unicast_single_producer_multihop_bw(
     num_messages,
     num_links,
@@ -637,6 +658,7 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_bw(
     line_sync,
     line_size,
     packet_size,
+    fabric_test_mode,
 ):
     run_fabric_edm(
         is_unicast=True,
@@ -647,7 +669,7 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_bw(
         line_sync=line_sync,
         line_size=line_size,
         packet_size=packet_size,
-        fabric_mode=FabricTestMode.Linear,
+        fabric_mode=fabric_test_mode,
         disable_sends_for_interior_workers=True,
         unidirectional=False,
         senders_are_unidirectional=True,
@@ -660,6 +682,7 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_bw(
 @pytest.mark.parametrize("line_size", [4])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
+@pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_one_link_forwarding_unicast_unidirectional_single_producer_multihop_bw(
     num_messages,
     num_links,
@@ -667,6 +690,7 @@ def test_fabric_one_link_forwarding_unicast_unidirectional_single_producer_multi
     line_sync,
     line_size,
     packet_size,
+    fabric_test_mode,
 ):
     run_fabric_edm(
         is_unicast=True,
@@ -677,7 +701,7 @@ def test_fabric_one_link_forwarding_unicast_unidirectional_single_producer_multi
         line_sync=line_sync,
         line_size=line_size,
         packet_size=packet_size,
-        fabric_mode=FabricTestMode.Linear,
+        fabric_mode=fabric_test_mode,
         disable_sends_for_interior_workers=True,
         unidirectional=True,
         senders_are_unidirectional=True,
@@ -691,6 +715,7 @@ def test_fabric_one_link_forwarding_unicast_unidirectional_single_producer_multi
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("noc_message_type", ["noc_unicast_flush_atomic_inc", "noc_unicast_no_flush_atomic_inc"])
 @pytest.mark.parametrize("packet_size", [16])
+@pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_one_link_forwarding_unicast_single_producer_multihop_atomic_inc_bw(
     num_messages,
     num_links,
@@ -699,6 +724,7 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_atomic_inc_
     line_size,
     noc_message_type,
     packet_size,
+    fabric_test_mode,
 ):
     run_fabric_edm(
         is_unicast=True,
@@ -709,7 +735,7 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_atomic_inc_
         line_sync=line_sync,
         line_size=line_size,
         packet_size=packet_size,
-        fabric_mode=FabricTestMode.Linear,
+        fabric_mode=fabric_test_mode,
         disable_sends_for_interior_workers=True,
         senders_are_unidirectional=True,
     )
@@ -727,6 +753,7 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_atomic_inc_
 @pytest.mark.parametrize(
     "noc_message_type", ["noc_fused_unicast_write_flush_atomic_inc", "noc_fused_unicast_write_no_flush_atomic_inc"]
 )
+@pytest.mark.parametrize("fabric_test_mode", [FabricTestMode.Linear, FabricTestMode.RingAsLinear])
 def test_fabric_one_link_multihop_fused_write_atomic_inc_bw(
     is_unicast,
     num_messages,
@@ -738,6 +765,7 @@ def test_fabric_one_link_multihop_fused_write_atomic_inc_bw(
     disable_sends_for_interior_workers,
     noc_message_type,
     unidirectional,
+    fabric_test_mode,
 ):
     run_fabric_edm(
         is_unicast=is_unicast,
@@ -748,7 +776,7 @@ def test_fabric_one_link_multihop_fused_write_atomic_inc_bw(
         line_sync=line_sync,
         line_size=line_size,
         packet_size=packet_size,
-        fabric_mode=FabricTestMode.Linear,
+        fabric_mode=fabric_test_mode,
         disable_sends_for_interior_workers=disable_sends_for_interior_workers,
         unidirectional=unidirectional,
         senders_are_unidirectional=True,
