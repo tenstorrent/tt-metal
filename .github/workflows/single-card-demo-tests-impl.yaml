@@ -101,6 +101,7 @@ jobs:
             -v /mnt/MLPerf:/mnt/MLPerf:ro
           install_wheel: true
           run_args: |
+            mkdir benchmark_data_dir
             source ${{ github.workspace }}/tests/scripts/single_card/run_single_card_demo_tests.sh
             ${{ matrix.test-group.cmd }}
       - name: Save environment data
