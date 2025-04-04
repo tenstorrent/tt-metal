@@ -7,12 +7,8 @@ import torch
 import pytest
 import ttnn
 import numpy as np
-from models.utility_functions import (
-    skip_for_blackhole,
-)
 
 
-@skip_for_blackhole("Fails on BH. Issue #19638")
 def test_dopout(device):
     t = torch.ones(
         (

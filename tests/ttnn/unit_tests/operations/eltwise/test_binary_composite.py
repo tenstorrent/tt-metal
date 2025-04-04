@@ -13,7 +13,7 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     compare_equal,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import is_grayskull, skip_for_grayskull
+from models.utility_functions import is_grayskull, skip_for_grayskull, skip_for_blackhole
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
 )
@@ -271,6 +271,7 @@ def test_binary_subalpha_ttnn(input_shapes, alpha, device):
     assert comp_pass
 
 
+@skip_for_blackhole("Fails on BH. Issue #19642")
 @pytest.mark.parametrize("accurate_mode", [False, True])
 @pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
 @pytest.mark.parametrize(
