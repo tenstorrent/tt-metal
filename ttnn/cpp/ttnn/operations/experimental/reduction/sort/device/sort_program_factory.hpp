@@ -12,12 +12,13 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::reduction::sort::program {
+using namespace tt::tt_metal;
 
 struct SortProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle gelu_bw_reader_kernel_id;
-        tt::tt_metal::KernelHandle gelu_bw_compute_kernel_id;
-        tt::tt_metal::KernelHandle gelu_bw_writer_kernel_id;
+        KernelHandle reader_kernel_id;
+        KernelHandle compute_kernel_id;
+        KernelHandle writer_kernel_id;
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
