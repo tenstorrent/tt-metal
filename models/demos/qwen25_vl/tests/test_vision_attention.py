@@ -18,9 +18,11 @@ from models.utility_functions import (
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
-
-from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLVisionAttention
-from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, standardize_hf_keys
+from models.tt_transformers.tt.load_checkpoints import (
+    convert_hf_to_meta,
+    standardize_hf_keys,
+    convert_rope_style_hf_to_meta,
+)
 
 
 @torch.no_grad()
@@ -41,7 +43,7 @@ def test_vision_attention_inference(
     reset_seeds,
     ensure_gc,
 ):
-    dtype = ttnn.bfloat8_b
+    dtype = ttnn.bfloat16  # NOCOMMIT
     pcc = 0.99
     batch_size = 1  # For prefill we only support batch_size = 1
 
@@ -57,16 +59,18 @@ def test_vision_attention_inference(
     seq_len = ((ref_seq_len // ModelArgs.MAX_QKV_MM_SEQ_LEN) + 1) * ModelArgs.MAX_QKV_MM_SEQ_LEN
 
     model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=seq_len)
-    reference_model = Qwen2_5_VLVisionAttention(
-        model_args.hf_config.vision_config.hidden_size, num_heads=model_args.hf_config.vision_config.num_heads
-    )
+    reference_model = model_args.reference_attention()
+    # reference_model = Qwen2_5_VLVisionAttention(model_args.hf_config.vision_config.hidden_size, model_args.hf_config.vision_config.num_heads)
+    # reference_model.load_state_dict(model_args.reference_attention().state_dict())
+
     state_dict = standardize_hf_keys(reference_model.state_dict())
     state_dict = convert_hf_to_meta(state_dict, model_args.head_dim)
     state_dict_prefix = model_args.get_state_dict_prefix("VisionAttention", 0)
     state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
 
     # Example inputs and preprocessing
-    pt_attention_input = torch.randn(1, 1, ref_seq_len, model_args.dim)
+    # pt_attention_input = torch.randn(1, 1, ref_seq_len, model_args.dim)
+    pt_attention_input = torch.load("ref_1_attn_norm.pt").unsqueeze(0).unsqueeze(0)
     cu_seqlens, cu_window_seqlens, position_embeddings, window_index = qwen2_5_vision_transformer_preprocess(
         seq_len=ref_seq_len,
         grid_thw=image_grid_thw,
@@ -78,8 +82,16 @@ def test_vision_attention_inference(
 
     # pre-compute the rotational embedding matrix and send to device
     cos, sin = position_embeddings
-    cos = torch.nn.functional.pad(cos, (0, 0, 0, seq_len - ref_seq_len)).unsqueeze(0).unsqueeze(0)
-    sin = torch.nn.functional.pad(sin, (0, 0, 0, seq_len - ref_seq_len)).unsqueeze(0).unsqueeze(0)
+    print(f"{cos.shape=}")
+    print(f"{cos[:,:10]=}")
+    print(f"{sin[:,:10]=}")
+
+    # thanks, gemini 2.5 pro
+    cos, sin = convert_rope_style_hf_to_meta(cos, sin)
+
+    # pad sequence length with cos = 1, sin = 0 (identity rotation)
+    cos = torch.nn.functional.pad(cos, (0, 0, 0, seq_len - ref_seq_len), value=1).unsqueeze(0).unsqueeze(0)
+    sin = torch.nn.functional.pad(sin, (0, 0, 0, seq_len - ref_seq_len), value=0).unsqueeze(0).unsqueeze(0)
     cos = ttnn.from_torch(
         cos,
         dtype=ttnn.bfloat16,

@@ -15,7 +15,6 @@ from models.utility_functions import (
 )
 from models.utility_functions import skip_for_grayskull
 
-from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLPatchMerger
 from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
 
 
@@ -45,11 +44,7 @@ def test_patch_merger_inference(rows, batch_size, mesh_device, use_program_cache
     model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=rows)
 
     # Create reference model with correct dimensions
-    reference_model = Qwen2_5_VLPatchMerger(
-        dim=model_args.hf_config.vision_config.out_hidden_size,
-        context_dim=model_args.hf_config.vision_config.hidden_size,
-        spatial_merge_size=model_args.hf_config.vision_config.spatial_merge_size,
-    )
+    reference_model = model_args.reference_patch_merger()
 
     state_dict = convert_hf_to_meta(reference_model.state_dict(), model_args.head_dim)
     state_dict_prefix = model_args.get_state_dict_prefix("PatchMerger")

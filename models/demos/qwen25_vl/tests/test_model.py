@@ -15,8 +15,11 @@ from models.utility_functions import (
 )
 from models.utility_functions import skip_for_grayskull
 
-from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VisionTransformerPretrainedModel
-from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, standardize_hf_keys
+from models.tt_transformers.tt.load_checkpoints import (
+    convert_hf_to_meta,
+    standardize_hf_keys,
+    convert_rope_style_hf_to_meta,
+)
 
 
 @torch.no_grad()
@@ -44,7 +47,7 @@ def test_vision_model_inference(
 ):
     dtype = ttnn.bfloat8_b
     pcc = (
-        0.99 if num_layers and num_layers <= 3 else 0.95
+        0.99 if num_layers and num_layers <= 3 else 0.91
     )  # Llama 3 repo allows 0.91 for prefill, vision probably even less sensitive to pcc
     batch_size = 1  # For prefill we only support batch_size = 1
 
@@ -52,7 +55,7 @@ def test_vision_model_inference(
 
     # Example inputs for http://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg
     # pixel_values are produced by Qwen2_5_VLImageProcessor, these come from the above img
-    pt_pixel_values = torch.randn([14308, 1176])
+    pt_pixel_values = torch.randn([14308, 1176]) * 0.8320 + 1.2969  # std and mean from above img
     # image_grid_thw (`torch.LongTensor` of shape `(num_images, 3)`, *optional*):
     #     The temporal, height and width of feature shape of each image in LLM.
     # for this test assume 1 image of size 98 x 146 patches as used in with their repo example img
@@ -68,7 +71,9 @@ def test_vision_model_inference(
         num_layers = model_args.hf_config.vision_config.depth
 
     # Create reference model
-    reference_model = Qwen2_5_VisionTransformerPretrainedModel(model_args.hf_config.vision_config)
+    reference_model = model_args.reference_vision_model()
+    # reference_model = Qwen2_5_VisionTransformerPretrainedModel(model_args.hf_config.vision_config)
+    # reference_model.load_state_dict(model_args.reference_vision_model().state_dict(), strict=False)
     # FIXME: state_dict = model_args.load_state_dict()
     state_dict = standardize_hf_keys(reference_model.state_dict())
     state_dict = convert_hf_to_meta(state_dict, model_args.head_dim)
@@ -87,8 +92,12 @@ def test_vision_model_inference(
 
     # Pre-compute the rotational embedding matrix and send to device
     cos, sin = position_embeddings
-    cos = torch.nn.functional.pad(cos, (0, 0, 0, seq_len - ref_seq_len)).unsqueeze(0).unsqueeze(0)
-    sin = torch.nn.functional.pad(sin, (0, 0, 0, seq_len - ref_seq_len)).unsqueeze(0).unsqueeze(0)
+    # thanks, gemini 2.5 pro
+    cos, sin = convert_rope_style_hf_to_meta(cos, sin)
+
+    # pad sequence length with cos = 1, sin = 0 (identity rotation)
+    cos = torch.nn.functional.pad(cos, (0, 0, 0, seq_len - ref_seq_len), value=1).unsqueeze(0).unsqueeze(0)
+    sin = torch.nn.functional.pad(sin, (0, 0, 0, seq_len - ref_seq_len), value=0).unsqueeze(0).unsqueeze(0)
     cos = ttnn.from_torch(
         cos,
         dtype=ttnn.bfloat16,
@@ -118,7 +127,7 @@ def test_vision_model_inference(
     patch_input = reference_model.patch_embed(pt_pixel_values)  # Use ref model for conv3d for now
     tt_input = tt_model.prepare_input(patch_input, window_index)
 
-    # Run TT model (only blocks, not patch embedding/merging)
+    # Run TT model
     tt_out = tt_model(
         tt_input,
         unpadded_seq_len=ref_seq_len,

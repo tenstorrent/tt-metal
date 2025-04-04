@@ -1,30 +1,26 @@
+import ttnn
 import torch
 from models.utility_functions import comp_pcc
 
 
 def compare(base_name):
-    model = torch.load("model_" + base_name + ".pt")
-    test = torch.load("test_" + base_name + ".pt")
+    model = torch.load("our_" + base_name + ".pt", weights_only=False)
+    test = torch.load("ref_" + base_name + ".pt", weights_only=False)
+    model = model[: test.shape[0], : test.shape[1]]
 
     print(f"{base_name}: PCC: {comp_pcc(model, test)[1]}")
 
-    print(f"{base_name}: Row-wise max absolute difference:")
-    for i in range(model.shape[0]):
-        print(base_name, i, i % 448, (model[i] - test[i]).abs().max().item())
+    # print(f"{base_name}: Row-wise max absolute difference:")
+    # for i in range(model.shape[0]):
+    #     print(base_name, i, i % 448, (model[i] - test[i]).abs().max().item())
 
 
-compare("1_post_norm")
-compare("1a_untilized")
-compare("1b_reshaped")
-compare("2_tilized")
-compare("3_post_linear")
-compare("4_post_gelu")
-compare("5_post_linear")
+# for i in range(32):
+#     compare(f"x_{i}")
 
-# print('Column-wise max absolute difference:')
-# for i in range(model.shape[1]):
-#     print(i, (model[:, i] - test[:, i]).abs().max())
-
-# print('Row 3191:')
-# for i in range(model.shape[1]):
-#     print(i, (model[3191, i] - test[3191, i]).abs().max())
+compare("1_attn_norm")
+compare("2_attn")
+compare("3_residual_add")
+compare("4_ff_norm")
+compare("5_ff")
+compare("6_residual_add")

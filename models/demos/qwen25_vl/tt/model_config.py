@@ -77,3 +77,31 @@ class VisionModelArgs(ModelArgs):
             "": "",  # If no module is given, just get layer prefix
         }
         return layer_prefix + module_map[module_name]
+
+    def reference_vision_model(self):
+        # Workaround until Qwen2.5-VL is fully integrated into a HF release
+        from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
+            Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
+        )
+
+        print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
+        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+        return model.visual
+
+    def reference_vision_block(self, layer_num=0):
+        return self.reference_vision_model().blocks[layer_num]
+
+    def reference_mlp(self):
+        return self.reference_vision_block().mlp
+
+    def reference_attention(self):
+        return self.reference_vision_block().attn
+
+    def reference_rms_norm(self):
+        return self.reference_vision_block().norm2
+
+    def reference_patch_merger(self):
+        return self.reference_vision_model().merger
+
+    def reference_patch_embed(self):
+        return self.reference_vision_model().patch_embed

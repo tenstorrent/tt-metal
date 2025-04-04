@@ -57,6 +57,7 @@ class VisionBlock(LightweightModule):
             RMSNorm(
                 device=mesh_device,
                 dim=args.dim,
+                eps=1e-6,  # Qwen2_5_VLVisionBlock hard-codes this
                 state_dict=state_dict,
                 state_dict_prefix=args.get_state_dict_prefix("", layer_num),
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
@@ -72,6 +73,7 @@ class VisionBlock(LightweightModule):
             RMSNorm(
                 device=mesh_device,
                 dim=args.dim,
+                eps=1e-6,  # Qwen2_5_VLVisionBlock hard-codes this
                 state_dict=state_dict,
                 state_dict_prefix=args.get_state_dict_prefix("", layer_num),
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
@@ -90,6 +92,17 @@ class VisionBlock(LightweightModule):
         cu_seqlens,
         rot_mats,
     ) -> ttnn.Tensor:
+        def save_x(x, i):
+            import torch
+
+            mesh_composer = ttnn.ConcatMesh2dToTensor(
+                self.args.mesh_device, dims=(1, 3), mesh_shape=self.args.cluster_shape
+            )
+            torch_x = ttnn.to_torch(x, mesh_composer=mesh_composer)
+            torch_x = torch_x[:, 0:1, :, : x.shape[3]].squeeze(0).squeeze(0)
+            print("Not saving", i)
+            # torch.save(torch.Tensor(torch_x), f"our_{i}.pt")
+
         TG = self.args.is_galaxy
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
         skip_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
@@ -98,22 +111,27 @@ class VisionBlock(LightweightModule):
         ), f"VisionBlock input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode="prefill")
+        save_x(attn_in, "1_attn_norm")
         # Attention takes replicated inputs and produces fractured outputs
         attn_out = self.attention.forward(
             attn_in,
             cu_seqlens=cu_seqlens,
             rot_mats=rot_mats,
         )
+        save_x(attn_out, "2_attn")
 
         # Here x and attn_out are both fractured across devices
         h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
+        save_x(h, "3_residual_add")
         ttnn.deallocate(attn_out)
         x.deallocate(True)
 
         # Norms take fractured inputs and output replicated across devices
         ff_in = self.ff_norm(h, mode="prefill")
+        save_x(ff_in, "4_ff_norm")
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in, mode="prefill")
+        save_x(ff_out, "5_ff")
         # ff_out and h are both fractured across devices
         out = ttnn.add(
             h,
@@ -121,4 +139,5 @@ class VisionBlock(LightweightModule):
             memory_config=skip_mem_cfg,
             dtype=self.args.ccl_dtype if TG and not self.args.is_distributed_norm(mode="prefill") else ttnn.bfloat16,
         )
+        save_x(out, "6_residual_add")
         return out  # fractured across devices

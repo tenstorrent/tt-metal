@@ -13,12 +13,6 @@ class PatchMerger(LightweightModule):
     def __init__(self, mesh_device, args, state_dict, weight_cache_path, dtype):
         super().__init__()
 
-        # state_dict = torch.load("ref_merger_state_dict.pt")
-
-        # state_dict = convert_hf_to_meta(state_dict, args.head_dim)
-        # state_dict_prefix = args.get_state_dict_prefix("PatchMerger")
-        # state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
-
         self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.args = args

@@ -12,7 +12,11 @@ from models.demos.qwen25_vl.tt.patch_merger import PatchMerger
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.demos.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
 from models.tt_transformers.tt.common import get_rot_transformation_mat
-from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, standardize_hf_keys
+from models.tt_transformers.tt.load_checkpoints import (
+    convert_hf_to_meta,
+    standardize_hf_keys,
+    convert_rope_style_hf_to_meta,
+)
 
 
 class VisionTransformer(LightweightModule):
@@ -95,7 +99,7 @@ class VisionTransformer(LightweightModule):
         x = x[window_index, :, :]
         x = x.reshape(patch_seq_len, -1)
         seq_len = ((patch_seq_len // 128) + 1) * 128
-        x = torch.nn.functional.pad(x, (0, 0, 0, seq_len - patch_seq_len))
+        x = torch.nn.functional.pad(x, (0, 0, 0, seq_len - patch_seq_len)).unsqueeze(0)
         x = self.args.prepare_residual_tensor_prefill(
             x,
             force_replicated=False if self.args.is_galaxy else True,
@@ -137,6 +141,13 @@ class VisionTransformer(LightweightModule):
                 cu_seqlens=cu_seqlens_now,
                 rot_mats=rot_mats,
             )
+
+            mesh_composer = ttnn.ConcatMesh2dToTensor(
+                self.args.mesh_device, dims=(1, 3), mesh_shape=self.args.cluster_shape
+            )
+            torch_x = ttnn.to_torch(x, mesh_composer=mesh_composer)
+            torch_x = torch_x[:, 0:1, :, : x.shape[3]].squeeze(0).squeeze(0)
+            torch.save(torch_x, f"our_x_{i}.pt")
 
         # Merge patches - first remove any sequence length padding
         x = x[:, :, :unpadded_seq_len, :]
@@ -227,9 +238,14 @@ class DropInVisionTransformer(torch.nn.Module):
 
         # 4. Prepare rotational embeddings (cos, sin) -> pad -> convert to TT tensors
         cos_orig, sin_orig = position_embeddings
-        # Pad to seq_len and add Batch=1, Head=1 dims
-        cos_padded = torch.nn.functional.pad(cos_orig, (0, 0, 0, seq_len - unpadded_seq_len)).unsqueeze(0).unsqueeze(0)
-        sin_padded = torch.nn.functional.pad(sin_orig, (0, 0, 0, seq_len - unpadded_seq_len)).unsqueeze(0).unsqueeze(0)
+        cos_orig, sin_orig = convert_rope_style_hf_to_meta(cos_orig, sin_orig)
+        # pad sequence length with cos = 1, sin = 0 (identity rotation)
+        cos_padded = (
+            torch.nn.functional.pad(cos_orig, (0, 0, 0, seq_len - unpadded_seq_len), value=1).unsqueeze(0).unsqueeze(0)
+        )
+        sin_padded = (
+            torch.nn.functional.pad(sin_orig, (0, 0, 0, seq_len - unpadded_seq_len), value=0).unsqueeze(0).unsqueeze(0)
+        )
         # Convert to TT tensors on the mesh device
         cos = ttnn.from_torch(
             cos_padded,
@@ -276,7 +292,8 @@ class DropInVisionTransformer(torch.nn.Module):
         final_output = tt_output_torch[reverse_indices, :]
 
         if self.debug:
+            logger.info(f"DropInVisionTransformer: Debug enabled, running reference model...")
             reference_output = self.reference_model.forward(pixel_values, grid_thw)
             _, pcc = comp_pcc(reference_output, final_output)
-            logger.info(f"DropInVisionTransformer PCC: {pcc}")
+            logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
         return final_output

@@ -14,8 +14,6 @@ from models.utility_functions import (
 )
 from models.utility_functions import skip_for_grayskull
 
-from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VisionTransformerPretrainedModel
-
 
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
@@ -66,7 +64,7 @@ def test_wrapped_vision_model_inference(
         num_layers = model_args.hf_config.vision_config.depth
 
     # Create reference model
-    reference_model = Qwen2_5_VisionTransformerPretrainedModel(model_args.hf_config.vision_config)
+    reference_model = model_args.reference_vision_model()
     torch_model = DropInVisionTransformer(reference_model, model_args)
 
     # Run reference model

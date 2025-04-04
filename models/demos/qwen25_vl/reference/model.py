@@ -273,14 +273,11 @@ class Qwen2_5_VLVisionAttention(nn.Module):
         else:
             cos, sin = position_embeddings
 
-        print(cos.shape, sin.shape)
-        print(cos)
         q, k = apply_rotary_pos_emb_vision(q, k, cos, sin)
 
         attention_mask = torch.full(
             [1, seq_length, seq_length], torch.finfo(q.dtype).min, device=q.device, dtype=q.dtype
         )
-        print(cu_seqlens)
         for i in range(1, len(cu_seqlens)):
             attention_mask[..., cu_seqlens[i - 1] : cu_seqlens[i], cu_seqlens[i - 1] : cu_seqlens[i]] = 0
 
@@ -366,13 +363,23 @@ class Qwen2_5_VLVisionBlock(nn.Module):
         rotary_pos_emb: Optional[torch.Tensor] = None,
         position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
     ) -> torch.Tensor:
-        hidden_states = hidden_states + self.attn(
-            self.norm1(hidden_states),
+        attn_in = self.norm1(hidden_states)
+        # torch.save(attn_in, f"ref_1_attn_norm.pt")
+        attn_out = self.attn(
+            attn_in,
             cu_seqlens=cu_seqlens,
             rotary_pos_emb=rotary_pos_emb,
             position_embeddings=position_embeddings,
         )
-        hidden_states = hidden_states + self.mlp(self.norm2(hidden_states))
+        # torch.save(attn_out, f"ref_2_attn.pt")
+        hidden_states = hidden_states + attn_out
+        # torch.save(hidden_states, f"ref_3_residual_add.pt")
+        ff_in = self.norm2(hidden_states)
+        # torch.save(ff_in, f"ref_4_ff_norm.pt")
+        ff_out = self.mlp(ff_in)
+        # torch.save(ff_out, f"ref_5_ff.pt")
+        hidden_states = hidden_states + ff_out
+        # torch.save(hidden_states, f"ref_6_residual_add.pt")
         return hidden_states
 
 
@@ -577,6 +584,8 @@ class Qwen2_5_VisionTransformerPretrainedModel(Qwen2_5_VLPreTrainedModel):
                 )
             else:
                 hidden_states = blk(hidden_states, cu_seqlens=cu_seqlens_now, position_embeddings=position_embeddings)
+
+            # torch.save(hidden_states, f"ref_x_{layer_num}.pt")
 
         hidden_states = self.merger(hidden_states)
         reverse_indices = torch.argsort(window_index)

@@ -271,7 +271,7 @@ class Attention(LightweightModule):
 
         self.wo = ttnn.as_tensor(
             pt_wo,
-            dtype=ttnn.bfloat8_b,
+            dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if (self.use_fused_all_gather_matmul or self.TG) else wo_mem_config,
@@ -729,10 +729,12 @@ class Attention(LightweightModule):
 
         # workaround until rotary embeddings support sub-tile head dims
         if self.head_dim != self.padded_head_dim:
-            pad_head_dim = lambda x: ttnn.pad(
-                x, (x.shape[0], x.shape[1], x.shape[2], self.padded_head_dim), (0, 0, 0, 0), 0.0
+            pad_head_dim = lambda x, v: ttnn.pad(
+                x, (x.shape[0], x.shape[1], x.shape[2], self.padded_head_dim), (0, 0, 0, 0), v
             )
-            rot_mats = [pad_head_dim(r) for r in rot_mats]
+            # pad with cos = 1, sin = 0
+            rot_mats = [pad_head_dim(rot_mats[0], 1.0), pad_head_dim(rot_mats[1], 0.0)]
+            # print(f'{rot_mats[0].shape=}')
 
         q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
             q_heads_1QSD_pre_rot,

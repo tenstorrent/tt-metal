@@ -52,9 +52,7 @@ def test_rms_norm_inference(
 
     model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=max_seq_len)
 
-    reference_model = Qwen2RMSNorm(
-        model_args.hf_config.vision_config.hidden_size, eps=model_args.hf_config.rms_norm_eps
-    )
+    reference_model = model_args.reference_rms_norm()
 
     state_dict = reference_model.state_dict()
     state_dict = {f"norm1.{k}": v for k, v in state_dict.items()}
@@ -63,6 +61,7 @@ def test_rms_norm_inference(
     tt_inner_norm = RMSNorm(
         device=mesh_device,
         dim=model_args.dim,
+        eps=1e-6,  # Qwen2_5_VLVisionBlock hard-codes this
         state_dict=state_dict,
         state_dict_prefix="",
         weight_key="norm1",
