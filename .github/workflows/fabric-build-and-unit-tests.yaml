@@ -73,7 +73,6 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: /work/generated/test_reports/
           prefix: "test_reports_"
       - name: Generate system logs on failure
         uses: ./.github/actions/generate-system-logs
@@ -81,5 +80,3 @@ jobs:
       - name: Generate gtest annotations on failure
         uses: ./.github/actions/generate-gtest-failure-message
         if: ${{ failure() }}
-        with:
-          path: /work/generated/test_reports/
