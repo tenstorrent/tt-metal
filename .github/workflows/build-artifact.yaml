@@ -138,6 +138,9 @@ jobs:
         CCACHE_TEMPDIR: /tmp/ccache
         CARGO_HOME: /tmp/.cargo
         TT_FROM_PRECOMPILED_DIR: /work
+        # TODO: Revisit the addition of these env vars https://github.com/tenstorrent/tt-metal/issues/20161
+        TRACY_NO_INVARIANT_CHECK: 1
+        TRACY_NO_ISA_EXTENSIONS: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
