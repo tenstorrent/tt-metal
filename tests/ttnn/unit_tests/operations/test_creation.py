@@ -128,9 +128,9 @@ def test_full_like_opt_tensor(device, input_shape, fill_value, layout):
     input_tensor = ttnn.to_device(input_tensor, device)
 
     cq_id = 0
-    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
     ttnn.full_like(input_tensor, fill_value=fill_value, optional_tensor=opt_tensor, queue_id=cq_id)
-    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
 
     assert ttnn.is_tensor_storage_on_device(opt_tensor)
     opt_tensor = ttnn.from_device(opt_tensor)
@@ -227,9 +227,9 @@ def test_full_with_opt_tensor(device, input_shape, layout, fill_value):
     )
 
     cq_id = 0
-    pages_before = ttnn._ttnn.reports.get_buffer_pages()
+    pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
     ttnn.full(input_shape, device=device, fill_value=fill_value, optional_tensor=opt_tensor, queue_id=cq_id)
-    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
     assert ttnn.is_tensor_storage_on_device(opt_tensor)
     opt_tensor = ttnn.to_torch(opt_tensor)
 

@@ -674,7 +674,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         act_block_num_tiles_split,
         act_tile_size);
 
-    auto conv_reader_indices_buffer = conv_reader_indices.value().device_buffer();
+    auto conv_reader_indices_storage = conv_reader_indices.value().device_storage();
 
     cb_indices.cb_for_reader_indices = cb_indices.get_next_cb_index();
     tt::tt_metal::create_cb(
@@ -684,7 +684,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         out_block_h_datums * 2,
         1,
         tt::DataFormat::Float16_b,
-        &*conv_reader_indices_buffer);
+        conv_reader_indices_storage.get_buffer());
 
     if (has_bias) {
         uint32_t bias_tile_size = tt_metal::detail::TileSize(bias_df);
@@ -911,9 +911,15 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
              (uint32_t)(core_index < output_num_cores)});
     }
 
-    // Capture conv_reader_indices_buffer to cache this with the program
+    // Capture conv_reader_indices_storage to cache this with the program
     auto override_runtime_arguments_callback =
-        [conv_reader_indices_buffer, cb_input, cb_output, has_bias, full_core_grid, total_num_cores, weights_kernel_id](
+        [conv_reader_indices_storage,
+         cb_input,
+         cb_output,
+         has_bias,
+         full_core_grid,
+         total_num_cores,
+         weights_kernel_id](
             const void* operation,
             tt::tt_metal::Program& program,
             const std::vector<Tensor>& input_tensors,

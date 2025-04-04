@@ -891,6 +891,7 @@ namespace operations {
 namespace matmul {
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
+    const ttnn::MeshCoordinate& mesh_coord,
     const Tensor& a,
     const Tensor& b,
     const std::optional<const Tensor>& bias,
@@ -930,7 +931,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_shard
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.get_dtype());
     }
 
-    tt::tt_metal::IDevice* device = a.device();
+    tt::tt_metal::IDevice* device = a.mesh_device()->get_device(mesh_coord);
 
     TT_FATAL(a.shard_spec().has_value() && output.shard_spec().has_value(), "Error");
     CoreRangeSet all_cores_storage = a.shard_spec().value().grid;
@@ -1008,6 +1009,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_shard
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
+    const ttnn::MeshCoordinate& mesh_coord,
     const Tensor& a,
     const Tensor& b,
     const std::optional<const Tensor>& bias,
@@ -1022,6 +1024,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_shard
     bool skip_in0_mcast,
     bool skip_write_back) {
     return matmul_multi_core_reuse_dram_sharded_optimized_(
+        mesh_coord,
         a,
         b,
         bias,

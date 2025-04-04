@@ -76,7 +76,7 @@ void test_raw_host_memory_pointer() {
     using namespace tt::tt_metal::owned_buffer;
 
     int device_id = 0;
-    tt::tt_metal::IDevice* device = tt::tt_metal::CreateDevice(device_id);
+    auto device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
     ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
 
@@ -122,7 +122,7 @@ void test_raw_host_memory_pointer() {
     /* Sanity Check End */
 
     /*  Run and Print Start   */
-    Tensor a_dev = a_cpu.to_device(device);
+    Tensor a_dev = a_cpu.to_device(device.get());
 
     Tensor c_dev = ttnn::sqrt(a_dev);
 
@@ -187,8 +187,6 @@ void test_raw_host_memory_pointer() {
     for (auto& element : tt::tt_metal::owned_buffer::get_as<bfloat16>(tensor_for_printing)) {
         TT_ASSERT(element == bfloat16(10.0f));
     }
-
-    TT_FATAL(tt::tt_metal::CloseDevice(device), "Error");
 }
 
 int main() {

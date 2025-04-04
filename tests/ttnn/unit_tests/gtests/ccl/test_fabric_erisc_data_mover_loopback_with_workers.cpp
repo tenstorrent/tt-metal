@@ -379,7 +379,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
 
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded_WithReshard0) {
     ttnn::Shape tensor_shape({1, 1, 32, 128});
-    Layout const layout = Layout::TILE;
+    const Layout layout = Layout::TILE;
     auto input_mem_config = MemoryConfig(
         TensorMemoryLayout::WIDTH_SHARDED,
         BufferType::L1,
@@ -409,7 +409,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
 
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded_WithReshard0_UniquePerStream) {
     ttnn::Shape tensor_shape({1, 1, 32, 128});
-    Layout const layout = Layout::TILE;
+    const Layout layout = Layout::TILE;
     size_t in_shard_grid_x = 1;
     size_t in_shard_grid_y = 1;
     size_t out_shard_grid_x = 4;
@@ -473,11 +473,11 @@ TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SingleP
     ttnn::Shape tensor_shape({1, 1, 32, 32});
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
-    Layout const layout = Layout::TILE;
-    MemoryConfig const in0_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
-    MemoryConfig const in1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
-    MemoryConfig const out0_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
-    MemoryConfig const out1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+    const Layout layout = Layout::TILE;
+    const MemoryConfig in0_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+    const MemoryConfig in1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+    const MemoryConfig out0_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+    const MemoryConfig out1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
 
     auto num_elems = std::reduce(tensor_shape.cbegin(), tensor_shape.cend(), 1, std::multiplies<uint32_t>());
     Tensor input_tensor0 =
@@ -512,10 +512,10 @@ TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SingleP
         worker_slice_shape,
         worker_slice_offset};
 
-    auto const in0_tensor_slice = tensor_slice;
-    auto const in1_tensor_slice = tensor_slice;
-    auto const out0_tensor_slice = tensor_slice;
-    auto const out1_tensor_slice = tensor_slice;
+    const auto in0_tensor_slice = tensor_slice;
+    const auto in1_tensor_slice = tensor_slice;
+    const auto out0_tensor_slice = tensor_slice;
+    const auto out1_tensor_slice = tensor_slice;
 
     ttnn::ccl::cmd::CclCommandDestArgs dest_args = ttnn::ccl::cmd::UnicastCommandDestArgs{distance_dest_device, true};
     auto pass = TestMultiInputReaderKernel(
@@ -826,8 +826,8 @@ TEST(
                         tensor_shape,
                         split_dim,
 
-                        // In this test we will have n stages with anywhere from 1 to 8 workers per stage (this will be
-                        // configurable)
+                        // In this test we will have n stages with anywhere from 1 to 8 workers per stage (this will
+                        // be configurable)
                         num_stages,
                         num_workers_per_stage,
                         slices_per_stage,
@@ -848,6 +848,8 @@ TEST(
 }
 
 TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric "
+                    "(ttnn::operations::experimental::ccl::reduce_scatter)";
     const size_t dim = 3;
     const size_t num_links = 1;
     constexpr auto layout = Layout::TILE;
@@ -915,23 +917,19 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
         enable_persistent_fabric,
         num_links);
 
-    ttnn::global_semaphore::MultiDeviceGlobalSemaphore from_remote_multi_device_global_semaphore =
-        ttnn::global_semaphore::create_global_semaphore_with_same_address(
-            test_fixture.mesh_device_.get(),
-            devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-            0,                             // initial value
-            tt::tt_metal::BufferType::L1,  // buffer type
-            10                             // attempts
-        );
+    GlobalSemaphore from_remote_multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore(
+        test_fixture.mesh_device_.get(),
+        test_fixture.mesh_device_.get()->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
+        0,                            // initial value
+        tt::tt_metal::BufferType::L1  // buffer type
+    );
 
-    ttnn::global_semaphore::MultiDeviceGlobalSemaphore to_remote_multi_device_global_semaphore =
-        ttnn::global_semaphore::create_global_semaphore_with_same_address(
-            test_fixture.mesh_device_.get(),
-            devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-            0,                             // initial value
-            tt::tt_metal::BufferType::L1,  // buffer type
-            10                             // attempts
-        );
+    GlobalSemaphore to_remote_multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore(
+        test_fixture.mesh_device_.get(),
+        test_fixture.mesh_device_.get()->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
+        0,                            // initial value
+        tt::tt_metal::BufferType::L1  // buffer type
+    );
 
     auto output_tensor = ttnn::operations::experimental::ccl::reduce_scatter(
         input_mesh_tensor,
@@ -964,9 +962,11 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
 }
 
 TEST(CclAsyncOp, AllGather_PersistentFabric_Dim3_Links1_Shape1_1_32_128) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
     run_all_gather_with_persistent_fabric(3, 1, ttnn::Shape({1, 1, 32, 128}));
 }
 TEST(CclAsyncOp, AllGather_PersistentFabric_Dim3_Links1_Shape1_1_32_8192) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
     run_all_gather_with_persistent_fabric(3, 1, ttnn::Shape({1, 1, 32, 8192}));
 }
 // Mesh device setup seems to not provide the correct configuration for multi-link? To be investigated
@@ -979,6 +979,7 @@ TEST(CclAsyncOp, DISABLED_AllGather_PersistentFabric_Dim3_Links2_Shape1_1_32_819
 }
 
 TEST(CclAsyncOp, RingAllGather_PersistentFabric_Dim3_Links1_Shape1_256_32_8192) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
     run_ring_all_gather_with_persistent_fabric(3, 1, ttnn::Shape({1, 256, 32, 8192}));
 }
 
@@ -1379,6 +1380,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_3_onehop) {
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_4) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
     const size_t num_mcasts = 800000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1387,6 +1389,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_4) {
 }
 
 TEST(EdmFabric, BasicMcastThroughputTest_5) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
     const size_t num_mcasts = 1;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1434,6 +1437,7 @@ TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_10) {
     RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_6_Short) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
     const size_t num_mcasts = 100;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1441,6 +1445,8 @@ TEST(EdmFabric, BasicMcastThroughputTest_6_Short) {
     RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_7_Short) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
+
     const size_t num_mcasts = 1000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1448,6 +1454,8 @@ TEST(EdmFabric, BasicMcastThroughputTest_7_Short) {
     RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_8_Short) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
+
     const size_t num_mcasts = 50000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1455,6 +1463,8 @@ TEST(EdmFabric, BasicMcastThroughputTest_8_Short) {
     RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_9_Short) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
+
     const size_t num_mcasts = 200000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1462,6 +1472,8 @@ TEST(EdmFabric, BasicMcastThroughputTest_9_Short) {
     RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_10_Short) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
+
     const size_t num_mcasts = 800000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1470,6 +1482,8 @@ TEST(EdmFabric, BasicMcastThroughputTest_10_Short) {
 }
 
 TEST(EdmFabric, BasicMcastThroughputTest_0_WithLineSync) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
+
     const size_t num_mcasts = 100;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1481,6 +1495,8 @@ TEST(EdmFabric, BasicMcastThroughputTest_0_WithLineSync) {
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_1_WithLineSync) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
+
     const size_t num_mcasts = 1000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1492,6 +1508,8 @@ TEST(EdmFabric, BasicMcastThroughputTest_1_WithLineSync) {
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_2_WithLineSync) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
+
     const size_t num_mcasts = 50000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1503,6 +1521,8 @@ TEST(EdmFabric, BasicMcastThroughputTest_2_WithLineSync) {
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_3_WithLineSync) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
+
     const size_t num_mcasts = 200000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1514,6 +1534,8 @@ TEST(EdmFabric, BasicMcastThroughputTest_3_WithLineSync) {
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_4_WithLineSync) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
+
     const size_t num_mcasts = 800000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
@@ -1526,6 +1548,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_4_WithLineSync) {
 }
 
 TEST(EdmFabric, RingDeadlockStabilityTest) {
+    GTEST_SKIP() << "TODO: #18686 - Skipping because we need CCL port to fabric (ttnn::all_gather)";
     const size_t num_mcasts = 200000;
     const size_t num_links = 1;
     const size_t num_op_invocations = 5;

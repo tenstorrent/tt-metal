@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "common_test_utils.hpp"
+#include <stdexcept>
+#include <cmath>
 
 #include <cmath>
 #include <stdexcept>

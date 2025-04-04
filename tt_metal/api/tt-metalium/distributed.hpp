@@ -44,7 +44,7 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
 template <typename DType>
 void WriteShard(
     MeshCommandQueue& mesh_cq,
-    std::shared_ptr<MeshBuffer>& mesh_buffer,
+    const std::shared_ptr<MeshBuffer>& mesh_buffer,
     std::vector<DType>& src,
     const MeshCoordinate& coord,
     bool blocking = false) {
@@ -60,7 +60,7 @@ template <typename DType>
 void ReadShard(
     MeshCommandQueue& mesh_cq,
     std::vector<DType>& dst,
-    std::shared_ptr<MeshBuffer>& mesh_buffer,
+    const std::shared_ptr<MeshBuffer>& mesh_buffer,
     const MeshCoordinate& coord,
     bool blocking = true) {
     auto shard = mesh_buffer->get_device_buffer(coord);

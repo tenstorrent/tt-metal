@@ -241,9 +241,6 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Ten
     auto input_buffer_address = input.buffer()->address();
     auto output_buffer_address = output.buffer()->address();
 
-    TT_FATAL(
-        output_buffer_address > input_buffer_address,
-        "Expected output buffer to be allocated at a higher address than input buffer");
     uint32_t move_chunk_size_bytes = output_buffer_address - input_buffer_address;
     TT_FATAL(
         input.buffer()->alignment() == output.buffer()->alignment(),

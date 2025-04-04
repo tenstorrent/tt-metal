@@ -39,8 +39,11 @@ Tensor convert_tensor(const Tensor& input_tensor, compute_& compute) {
             input_tensor.get_storage());
     };
 
-    return ttnn::distributed::is_multi_device_tensor(input_tensor) ? transform(input_tensor, convert_tensor)
-                                                                   : convert_tensor(input_tensor);
+    TT_FATAL(!is_device_tensor(input_tensor), "convert_tensor only supports host tensors");
+
+    // TODO: #15840 - Treat multi-device host vs owned/borrowed tensors uniformly.
+    return ttnn::distributed::is_multi_device_host_tensor(input_tensor) ? transform(input_tensor, convert_tensor)
+                                                                        : convert_tensor(input_tensor);
 }
 
 template <typename Func, typename... Args>
@@ -1076,7 +1079,6 @@ ttnn::Tensor prepare_conv_weights(
 
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
-
 
     auto opt_conv_op_block_config = get_opt_block_config(
         mm_conv,

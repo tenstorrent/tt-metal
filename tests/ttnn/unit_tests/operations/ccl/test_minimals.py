@@ -11,7 +11,6 @@ from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_and_load_sub_device_manager_with_fabric_interface,
     teardown_fabric_interface,
-    create_global_semaphore_with_same_address,
 )
 
 from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.rms_test import run_rms_trace
@@ -122,9 +121,7 @@ def run_all_gather_impl(
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
-    ccl_semaphore_handles = [
-        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
-    ]
+    ccl_semaphore_handles = [create_global_semaphore(mesh_device, ccl_sub_device_crs) for _ in range(num_iters)]
 
     ### For sharded all gather only
     if bool(input_shard_shape) != bool(input_shard_grid) and bool(tensor_mem_layout) != bool(input_shard_grid):

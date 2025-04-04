@@ -21,7 +21,7 @@ struct ExecuteFusedRMSNorm {
         const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
         const uint32_t cluster_axis,
         const MeshDevice& mesh_device,
-        const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+        const GlobalSemaphore& semaphore,
         const std::optional<ttnn::Tensor>& persistent_output_tensor = std::nullopt,
         const std::optional<size_t> num_preferred_links = std::nullopt,
         const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,

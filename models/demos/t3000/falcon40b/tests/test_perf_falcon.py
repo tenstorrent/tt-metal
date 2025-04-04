@@ -277,7 +277,7 @@ def run_test_FalconCausalLM_end_to_end(
             use_cache=use_cache,
         )
         # TODO: Return token id to simulate real situation in decode
-        _ = ttnn.to_torch(tt_FalconCausalLM.perf_e2e_test_tile_tensor)
+        _ = ttnn.to_torch(ttnn.get_device_tensors(tt_FalconCausalLM.perf_e2e_test_tile_tensor)[0])
 
     ttnn.synchronize_device(mesh_device)
 

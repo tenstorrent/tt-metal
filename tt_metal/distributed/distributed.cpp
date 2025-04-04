@@ -20,9 +20,11 @@ void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program&& program, co
 }
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
-    mesh_workload.compile(mesh_cq.device());
-    mesh_workload.load_binaries(mesh_cq);
-    mesh_workload.generate_dispatch_commands(mesh_cq);
+    if (mesh_cq.device()->using_fast_dispatch()) {
+        mesh_workload.compile(mesh_cq.device());
+        mesh_workload.load_binaries(mesh_cq);
+        mesh_workload.generate_dispatch_commands(mesh_cq);
+    }
     mesh_cq.enqueue_mesh_workload(mesh_workload, blocking);
 }
 
@@ -43,6 +45,9 @@ MeshEvent EnqueueRecordEventToHost(
 void EnqueueWaitForEvent(MeshCommandQueue& mesh_cq, const MeshEvent& event) { mesh_cq.enqueue_wait_for_event(event); }
 
 void EventSynchronize(const MeshEvent& event) {
+    if (event.device()->using_slow_dispatch()) {
+        return;
+    }
     for (const auto& coord : event.device_range()) {
         auto physical_device = event.device()->get_device(coord);
         while (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id());
@@ -66,6 +71,9 @@ void ReplayTrace(MeshDevice* device, uint8_t cq_id, const MeshTraceId& trace_id,
 void ReleaseTrace(MeshDevice* device, const MeshTraceId& trace_id) { device->release_mesh_trace(trace_id); }
 
 void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    if (!device->is_initialized()) {
+        return;
+    }
     if (cq_id.has_value()) {
         device->mesh_command_queue(*cq_id).finish(sub_device_ids);
     } else {
