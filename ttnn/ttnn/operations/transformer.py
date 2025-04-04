@@ -5,6 +5,7 @@
 from typing import Optional
 
 import ttnn
+import ttnn._ttnn
 
 SDPAProgramConfig = ttnn._ttnn.operations.transformer.SDPAProgramConfig
 
