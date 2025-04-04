@@ -16,18 +16,18 @@
 #include "assert.hpp"
 #include "buffer_constants.hpp"
 #include "dispatch.hpp"
-#include "dispatch/dispatch_core_manager.hpp"
+#include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch_mem_map.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "logger.hpp"
 #include "math.hpp"
 #include "strong_type.hpp"
 #include "sub_device_types.hpp"
 #include "tt_align.hpp"
-#include "tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
+#include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 
 enum class CoreType;
@@ -273,7 +273,7 @@ uint32_t calculate_max_data_size(const CoreType& dispatch_core_type) {
 }
 
 bool are_pages_larger_than_max_prefetch_cmd_size(const Buffer& buffer) {
-    const CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type();
+    const CoreType dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
     const uint32_t max_data_size = calculate_max_data_size(dispatch_core_type);
     return buffer.aligned_page_size() > max_data_size;
 }
@@ -487,16 +487,14 @@ void issue_buffer_dispatch_command_sequence(
     CoreType dispatch_core_type) {
     uint32_t num_worker_counters = sub_device_ids.size();
     uint32_t data_size_bytes = dispatch_params.pages_per_txn * dispatch_params.page_size_to_write;
-    uint32_t pcie_alignment = hal_ref.get_alignment(HalMemType::HOST);
-    uint32_t cmd_sequence_sizeB = align(
-        sizeof(CQPrefetchCmd) +      // CQ_PREFETCH_CMD_RELAY_INLINE
-            sizeof(CQDispatchCmd) +  // CQ_DISPATCH_CMD_WRITE_PAGED or CQ_DISPATCH_CMD_WRITE_LINEAR
-            data_size_bytes,
-        pcie_alignment);
+    tt::tt_metal::DeviceCommandCalculator calculator;
+    calculator.add_dispatch_write_linear<true, true>(data_size_bytes);
     if (dispatch_params.issue_wait) {
-        cmd_sequence_sizeB +=
-            pcie_alignment * num_worker_counters;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
+        for (int i = 0; i < num_worker_counters; ++i) {
+            calculator.add_dispatch_wait();
+        }
     }
+    const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
 
@@ -858,14 +856,14 @@ void issue_read_buffer_dispatch_command_sequence(
     Buffer& buffer, T& dispatch_params, tt::stl::Span<const SubDeviceId> sub_device_ids, CoreType dispatch_core_type) {
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
     uint32_t num_worker_counters = sub_device_ids.size();
-    // accounts for padding
-    uint32_t cmd_sequence_sizeB =
-        hal_ref.get_alignment(HalMemType::HOST) *
-            num_worker_counters +                  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-        hal_ref.get_alignment(HalMemType::HOST) +  // CQ_PREFETCH_CMD_STALL
-        hal_ref.get_alignment(
-            HalMemType::HOST) +  // CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH + CQ_DISPATCH_CMD_WRITE_LINEAR_HOST
-        hal_ref.get_alignment(HalMemType::HOST);  // CQ_PREFETCH_CMD_RELAY_LINEAR or CQ_PREFETCH_CMD_RELAY_PAGED
+    tt::tt_metal::DeviceCommandCalculator calculator;
+    for (int i = 0; i < num_worker_counters; ++i) {
+        calculator.add_dispatch_wait();
+    }
+    calculator.add_prefetch_stall();
+    calculator.add_dispatch_write_linear_host();
+    calculator.add_prefetch_relay_paged();
+    const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
@@ -1086,7 +1084,7 @@ void copy_completion_queue_data_into_user_space(
             void* contiguous_dst = (void*)(uint64_t(dst) + contig_dst_offset);
             if (page_size == padded_page_size) {
                 uint32_t data_bytes_xfered = bytes_xfered - offset_in_completion_q_data;
-                tt::Cluster::instance().read_sysmem(
+                tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
                     contiguous_dst,
                     data_bytes_xfered,
                     completion_q_read_ptr + offset_in_completion_q_data,
@@ -1135,7 +1133,7 @@ void copy_completion_queue_data_into_user_space(
                         num_bytes_to_copy = page_size;
                     }
 
-                    tt::Cluster::instance().read_sysmem(
+                    tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
                         (char*)(uint64_t(contiguous_dst) + dst_offset_bytes),
                         num_bytes_to_copy,
                         completion_q_read_ptr + src_offset_bytes,
@@ -1208,7 +1206,7 @@ void copy_completion_queue_data_into_user_space(
                     }
                 }
 
-                tt::Cluster::instance().read_sysmem(
+                tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
                     (char*)(uint64_t(dst) + dst_offset_bytes),
                     num_bytes_to_copy,
                     completion_q_read_ptr + src_offset_bytes,

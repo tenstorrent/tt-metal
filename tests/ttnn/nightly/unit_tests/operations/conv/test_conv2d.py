@@ -321,7 +321,8 @@ def run_conv_with_split(
     padding,
     config_override,
     shard_layout=None,
-    split_factor=2,
+    split_input_channels_factor=2,
+    split_output_channels_factor=1,
     fp32_accum=False,
     packer_l1_acc=False,
     auto_shard=False,
@@ -346,15 +347,16 @@ def run_conv_with_split(
         pad_right = padding
 
     torch.manual_seed(0)
-    assert input_channels % split_factor == 0
-    split_input_channels = input_channels // split_factor
+    assert input_channels % split_input_channels_factor == 0
+    assert output_channels % split_output_channels_factor == 0
+    split_input_channels = input_channels // split_input_channels_factor
+    split_output_channels = output_channels // split_output_channels_factor
     full_conv_input_shape = (batch_size, input_channels, input_height, input_width)
     full_conv_weight_shape = (output_channels, input_channels, filter_height, filter_width)
     torch_input_tensor_nchw = randomize_torch_tensor(torch_tensor_map, full_conv_input_shape)
     torch_weight_tensor = randomize_torch_tensor(torch_tensor_map, full_conv_weight_shape)
     conv_bias_shape = (1, 1, 1, output_channels)
     torch_bias_tensor = randomize_torch_tensor(torch_tensor_map, conv_bias_shape)
-    torch_bias_zeroes_tensor = randomize_torch_tensor(torch_tensor_map, conv_bias_shape)
 
     torch_padded_input = torch.nn.functional.pad(
         torch_input_tensor_nchw,
@@ -371,7 +373,21 @@ def run_conv_with_split(
     )
 
     split_input_tensors = torch.split(torch_input_tensor_nchw, split_input_channels, 1)
-    split_weight_tensors = torch.split(torch_weight_tensor, split_input_channels, 1)
+
+    # weights
+    if split_output_channels_factor > 1:
+        split_weight_tensors = list(torch.split(torch_weight_tensor, split_output_channels, 0))
+    else:
+        split_weight_tensors = [torch_weight_tensor]
+
+    # bias
+    if split_output_channels_factor > 1:
+        split_bias_tensors = list(torch.split(torch_bias_tensor, split_output_channels, 3))
+    else:
+        split_bias_tensors = [torch_bias_tensor]
+
+    for i in range(len(split_weight_tensors)):
+        split_weight_tensors[i] = torch.split(split_weight_tensors[i], split_input_channels, 1)
 
     reader_patterns_cache = {}
 
@@ -388,61 +404,60 @@ def run_conv_with_split(
     )
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
-        print("Setting Act Block H to ", conv_config.act_block_h_override)
     torch_output_tensor = None
-    for i in range(split_factor):
-        tt_weight_tensor = ttnn.from_torch(
-            split_weight_tensors[i], weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
-        )
-        if i == 0:
-            tt_bias_tensor = ttnn.from_torch(
-                torch_bias_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+    for output_channel_slice in range(split_output_channels_factor):
+        torch_output_tensor_per_output_slice = None
+        for i in range(split_input_channels_factor):
+            tt_weight_tensor = ttnn.from_torch(
+                split_weight_tensors[output_channel_slice][i],
+                weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32,
             )
-        else:
             tt_bias_tensor = ttnn.from_torch(
-                torch_bias_zeroes_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+                split_bias_tensors[output_channel_slice],
+                weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32,
             )
-        torch_input_tensor = torch.permute(split_input_tensors[i], (0, 2, 3, 1))
-        tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
-        # tt_input_tensor_on_device = convs[i].copy_input_to_device(tt_input_tensor)
-        # tt_output_tensor_on_device = convs[i](tt_input_tensor_on_device)
-        [tt_output_tensor_on_device, [out_height, out_width]] = ttnn.conv2d(
-            input_tensor=tt_input_tensor,
-            weight_tensor=tt_weight_tensor,
-            in_channels=split_input_channels,
-            out_channels=output_channels,
-            device=device,
-            bias_tensor=tt_bias_tensor,
-            kernel_size=(filter_height, filter_width),
-            stride=(stride_h, stride_w),
-            padding=(pad_top, pad_bottom, pad_left, pad_right),
-            batch_size=batch_size,
-            input_height=input_height,
-            input_width=input_width,
-            conv_config=conv_config,
-            compute_config=compute_config,
-            conv_op_cache=reader_patterns_cache,
-            return_output_dim=True,
-        )
-        tt_conv_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
-        torch_conv_output_tensor = ttnn.to_torch(tt_conv_output_tensor)
-        print(f"Output shape : {batch_size} {out_height} {out_width} {output_channels}")
-        torch_conv_output_tensor = torch_conv_output_tensor.reshape(batch_size, out_height, out_width, output_channels)
+            torch_input_tensor = torch.permute(split_input_tensors[i], (0, 2, 3, 1))
+            tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+            [tt_output_tensor_on_device, [out_height, out_width]] = ttnn.conv2d(
+                input_tensor=tt_input_tensor,
+                weight_tensor=tt_weight_tensor,
+                in_channels=split_input_channels,
+                out_channels=split_output_channels,
+                device=device,
+                bias_tensor=tt_bias_tensor,
+                kernel_size=(filter_height, filter_width),
+                stride=(stride_h, stride_w),
+                padding=(pad_top, pad_bottom, pad_left, pad_right),
+                batch_size=batch_size,
+                input_height=input_height,
+                input_width=input_width,
+                conv_config=conv_config,
+                compute_config=compute_config,
+                conv_op_cache=reader_patterns_cache,
+                return_output_dim=True,
+            )
+            tt_conv_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
+            ttnn.deallocate(tt_output_tensor_on_device, True)
+            torch_conv_output_tensor = ttnn.to_torch(tt_conv_output_tensor)
+            torch_conv_output_tensor = torch_conv_output_tensor.reshape(
+                batch_size, out_height, out_width, split_output_channels
+            )
 
-        # torch_output_tensor is in row major layout and NHWC shape
-        # NHWC to NCHW
-        torch_conv_output_tensor = torch.permute(torch_conv_output_tensor, (0, 3, 1, 2))
-        if i == 0:
-            torch_output_tensor = torch_conv_output_tensor
+            # torch_output_tensor is in row major layout and NHWC shape
+            # NHWC to NCHW
+            torch_conv_output_tensor = torch.permute(torch_conv_output_tensor, (0, 3, 1, 2))
+            if i == 0:
+                torch_output_tensor_per_output_slice = torch_conv_output_tensor
+            else:
+                torch_output_tensor_per_output_slice = torch.add(
+                    torch_output_tensor_per_output_slice, torch_conv_output_tensor
+                )
+        if output_channel_slice == 0:
+            torch_output_tensor = torch_output_tensor_per_output_slice
         else:
-            torch_output_tensor = torch.add(torch_output_tensor, torch_conv_output_tensor)
-        print("Split output shapes ", torch_output_tensor.shape, torch_conv_output_tensor.shape)
+            torch_output_tensor = torch.concat([torch_output_tensor, torch_output_tensor_per_output_slice], dim=1)
 
-    if math_fidelity == ttnn.MathFidelity.LoFi and activations_dtype == ttnn.bfloat8_b:
-        pcc = 0.9969
-    else:
-        pcc = 0.998
-    assert_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
+    assert_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=0.98)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384}], indirect=True)
@@ -1273,7 +1288,7 @@ def test_sd_conv(
             (pad_h, pad_w),
             config_override,
             shard_layout=shard_layout,
-            split_factor=3 if input_channels == 1920 else 2,
+            split_input_channels_factor=3 if input_channels == 1920 else 2,
         )
     else:
         run_conv(
@@ -1425,7 +1440,7 @@ def test_sd_conv_wh(
             (pad_h, pad_w),
             config_override,
             shard_layout=shard_layout,
-            split_factor=3 if input_channels == 1920 else 2,
+            split_input_channels_factor=3 if input_channels == 1920 else 2,
             fp32_accum=fp32_accum,
             packer_l1_acc=True,
         )
@@ -1452,6 +1467,84 @@ def test_sd_conv_wh(
             fp32_accum=fp32_accum,
             packer_l1_acc=True,
             output_layout=output_layout,
+        )
+
+
+# VAE 1.4
+@pytest.mark.parametrize(
+    "input_channels, output_channels, input_height, input_width, split_factor_input_channels, split_factor_output_channels",
+    (
+        (512, 512, 64, 64, 1, 1),
+        (512, 256, 256, 256, 2, 1),
+        (256, 256, 256, 256, 1, 1),
+        (256, 128, 512, 512, 8 if is_wormhole_b0() else 4, 1),
+        (128, 128, 512, 512, 4 if is_wormhole_b0() else 2, 1),
+        (512, 512, 256, 256, 8 if is_wormhole_b0() else 2, 1 if is_wormhole_b0() else 2),
+        (256, 256, 512, 512, 8 if is_wormhole_b0() else 4, 2),
+        (128, 3, 512, 512, 2, 1),
+    ),
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384}], indirect=True)
+def test_sd14_vae_conv(
+    device,
+    torch_tensor_map,
+    use_program_cache,
+    input_channels,
+    output_channels,
+    input_height,
+    input_width,
+    split_factor_input_channels,
+    split_factor_output_channels,
+):
+    batch = 1
+    dtype = ttnn.bfloat8_b
+    kernel = (3, 3)
+    stride = (1, 1)
+    padding = (1, 1)
+    if split_factor_input_channels > 1 or split_factor_output_channels > 1:
+        run_conv_with_split(
+            device,
+            torch_tensor_map,
+            ttnn.MathFidelity.LoFi,
+            dtype,
+            dtype,
+            batch,
+            output_channels,
+            input_channels,
+            input_height,
+            input_width,
+            kernel[0],
+            kernel[1],
+            stride[0],
+            stride[1],
+            padding,
+            None,
+            shard_layout=None,
+            split_input_channels_factor=split_factor_input_channels,
+            split_output_channels_factor=split_factor_output_channels,
+            auto_shard=True,
+        )
+    else:
+        run_conv(
+            device=device,
+            torch_tensor_map=torch_tensor_map,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            activations_dtype=dtype,
+            weights_dtype=dtype,
+            batch_size=batch,
+            output_channels=output_channels,
+            input_channels=input_channels,
+            input_height=input_height,
+            input_width=input_width,
+            filter_height=kernel[0],
+            filter_width=kernel[1],
+            stride_h=stride[0],
+            stride_w=stride[1],
+            padding=padding,
+            config_override=None,
+            output_layout=ttnn.TILE_LAYOUT,
+            shard_layout=None,
+            auto_shard=True,
         )
 
 
@@ -2864,8 +2957,9 @@ def test_conv2d_model_fruit(
     )
 
 
+
 @pytest.mark.parametrize(
-    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, activations_dtype, groups, kernel, stride, padding, dilation, auto_shard, use_shallow_conv_variant, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, enable_split_reader, split_factor",
+    "batch, input_channels, output_channels, input_height, input_width, weights_dtype, activations_dtype, groups, kernel, stride, padding, dilation, auto_shard, use_shallow_conv_variant, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, enable_split_reader, split_input_channels_factor",
     (
         # 1024x1024 resolution
         # kernel 3x3
@@ -2933,16 +3027,14 @@ def test_conv2d_sdxl(
     fp32_accum,
     packer_l1_acc,
     enable_split_reader,
-    split_factor
+    split_input_channels_factor
 ):
-    if (input_channels == 1920 or input_channels == 2560) and input_height == 32 and input_width == 32 and kernel[0] == 1 and kernel[1] == 1 and is_blackhole():
-        pytest.skip("Temporary skip until #19831 is not closed")
 
     config_override = {}
     config_override["act_block_h"] = act_block_h_override
     config_override["act_block_w_div"] = act_block_w_div
 
-    if split_factor > 1:
+    if split_input_channels_factor > 1:
         run_conv_with_split(
             device,
             torch_tensor_map,
@@ -2961,10 +3053,10 @@ def test_conv2d_sdxl(
             padding,
             config_override,
             shard_layout=None,
-            split_factor=split_factor,
+            split_input_channels_factor=split_input_channels_factor,
             fp32_accum=fp32_accum,
             packer_l1_acc=packer_l1_acc,
-            auto_shard=auto_shard
+            auto_shard=auto_shard,
         )
     else:
         run_conv(

@@ -3,8 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-
+#include <stdint.h>
 #include <tt_stl/slotmap.hpp>
+#include <algorithm>
+#include <iterator>
+#include <stdexcept>
+#include <string>
+#include <vector>
 
 MAKE_SLOTMAP_KEY(IntKey, uint16_t, 10);
 using IntSlotMap = tt::stl::SlotMap<IntKey, int>;

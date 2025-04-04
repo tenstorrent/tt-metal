@@ -40,4 +40,6 @@ void kernel_main() {
                                      ((1 << REMOTE_DEST_WORDS_FREE_WIDTH) - 1))) {
         }
     }
+
+    noc_async_writes_flushed();
 }

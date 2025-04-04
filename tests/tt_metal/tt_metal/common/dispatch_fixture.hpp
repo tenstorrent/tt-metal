@@ -65,6 +65,12 @@ protected:
     tt::ARCH arch_;
     std::vector<tt::tt_metal::IDevice*> devices_;
     bool slow_dispatch_;
+    const size_t l1_small_size_{DEFAULT_L1_SMALL_SIZE};
+    const size_t trace_region_size_{DEFAULT_TRACE_REGION_SIZE};
+
+    DispatchFixture(
+        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE, size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) :
+        l1_small_size_{l1_small_size}, trace_region_size_{trace_region_size} {};
 
     void SetUp() override {
         this->DetectDispatchMode();
@@ -82,14 +88,14 @@ protected:
         tt::DevicePool::initialize(
             ids,
             tt::llrt::RunTimeOptions::get_instance().get_num_hw_cqs(),
-            DEFAULT_L1_SMALL_SIZE,
+            l1_small_size_,
             DEFAULT_TRACE_REGION_SIZE,
             dispatch_core_config);
         devices_ = tt::DevicePool::instance().get_all_active_devices();
     }
 
     void TearDown() override {
-        tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
+        tt::tt_metal::MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(false);
         // Close all opened devices
         for (unsigned int id = 0; id < devices_.size(); id++) {
             // The test may ahve closed the device already, so only close if active.

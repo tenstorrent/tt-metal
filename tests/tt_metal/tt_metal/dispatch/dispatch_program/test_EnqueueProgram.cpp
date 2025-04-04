@@ -2,29 +2,64 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <magic_enum/magic_enum.hpp>
+#include <stdlib.h>
+#include <string.h>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
+#include <map>
+#include <memory>
 #include <random>
+#include <set>
+#include <string>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/circular_buffer_types.hpp>
 #include "command_queue_fixture.hpp"
-#include "core_coord.hpp"
-#include "hal.hpp"
-#include "llrt.hpp"
-#include "multi_command_queue_fixture.hpp"
-#include "random_program_fixture.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "dispatch_test_utils.hpp"
+#include "env_lib.hpp"
 #include "gtest/gtest.h"
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/device_impl.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
+#include "llrt.hpp"
 #include "llrt/hal.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/kernel.hpp>
-#include <tt-metalium/allocator.hpp>
-#include "sub_device_types.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/logger.hpp>
+#include "multi_command_queue_fixture.hpp"
+#include <tt-metalium/program_impl.hpp>
+#include "random_program_fixture.hpp"
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/semaphore.hpp>
+#include "span.hpp"
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "impl/context/metal_context.hpp"
 #include "umd/device/tt_core_coordinates.h"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/utils.hpp>
+
+namespace tt {
+namespace tt_metal {
+class CommandQueue;
+}  // namespace tt_metal
+}  // namespace tt
 
 namespace tt::tt_metal {
 
@@ -744,7 +779,7 @@ bool verify_rt_args(
     bool pass = true;
     std::string label = unique ? "Unique" : "Common";
     // Same idea as ReadFromDeviceL1() but with ETH support.
-    tt::Cluster::instance().l1_barrier(device->id());
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
     auto noc_xy = riscv == tt::RISCV::ERISC ? device->ethernet_core_from_logical_core(logical_core)
                                             : device->worker_core_from_logical_core(logical_core);
     std::vector<uint32_t> args_readback = tt::llrt::read_hex_vec_from_core(device->id(), noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));

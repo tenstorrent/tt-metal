@@ -38,32 +38,12 @@ void kernel_main() {
     tt_l1_ptr uint32_t* core_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;
 
-    // print every compile and runtime arg in uint32_t
-    DPRINT << "ct args: \n";
-    DPRINT << "my_chip_id: " << (uint32_t)my_chip_id << "\n";
-    DPRINT << "cb0_id: " << (uint32_t)cb0_id << "\n";
-    DPRINT << "tensor0_page_size: " << (uint32_t)tensor0_page_size << "\n";
-
-    DPRINT << "rt args: \n";
-    DPRINT << "tensor_address0: " << (uint32_t)tensor_address0 << "\n";
-    DPRINT << "num_tiles_per_core: " << (uint32_t)num_tiles_per_core << "\n";
-    DPRINT << "num_tiles_to_read: " << (uint32_t)num_tiles_to_read << "\n";
-    DPRINT << "first_core_tile_start_offset: " << (uint32_t)first_core_tile_start_offset << "\n";
-    DPRINT << "num_cores: " << (uint32_t)num_cores << "\n";
-    for (uint32_t i = 0; i < num_cores; i++) {
-        DPRINT << "core_noc_x[" << i << "]: " << (uint32_t)core_noc_x[i] << "\n";
-        DPRINT << "core_noc_y[" << i << "]: " << (uint32_t)core_noc_y[i] << "\n";
-    }
-
     // interleaved addrgen
-
-    DPRINT << "tensor -> CB: " << (uint32_t)cb0_id << "\n";
 
     uint32_t tiles_read = 0;
     uint32_t shard_tile_id = first_core_tile_start_offset;
     uint32_t core_id = 0;
     while (tiles_read < num_tiles_to_read) {
-        DPRINT << "tiles_read: " << tiles_read << "\n";
         uint32_t num_tiles_to_read_this_core =
             std::min(num_tiles_per_core - shard_tile_id, num_tiles_to_read - tiles_read);
         cb_reserve_back(cb0_id, num_tiles_to_read_this_core);
@@ -79,6 +59,4 @@ void kernel_main() {
         shard_tile_id = 0;
         core_id++;
     }
-
-    DPRINT << "DONE \n";
 }

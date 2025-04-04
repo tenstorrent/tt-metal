@@ -2,14 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include <stdint.h>
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <limits>
+#include <memory>
+#include <numeric>
 
 #include "gtest/gtest.h"
-
-#include <limits>
-#include <numeric>
-#include <ranges>
+#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 
 using ttnn::ccl::Shape4D;
 using ttnn::ccl::cmd::CclCommandTensor;

@@ -4,6 +4,10 @@
 
 #pragma once
 
+#include <mutex>
+#include <stdint.h>
+#include <unordered_set>
+
 namespace tt::tt_metal::detail {
 struct HashLookup {
     static HashLookup& inst() {

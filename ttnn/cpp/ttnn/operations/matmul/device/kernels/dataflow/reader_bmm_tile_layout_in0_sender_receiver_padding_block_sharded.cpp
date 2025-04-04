@@ -53,6 +53,7 @@ void kernel_main() {
     // In case we need to send multiple blocks per shard, and shard height in tiles is greater than 1
     // Than we first need to extract the sub-blocks from the shard, and then send them to the destinations
     constexpr bool extract_shard_sub_blocks = shard_height_in_tiles > 1 && num_blocks_per_shard > 1;
+    constexpr uint32_t out_block_h = shard_height_in_tiles / num_blocks_h_dim;
     constexpr uint32_t shard_read_stride = shard_width_in_tiles * in0_single_tile_size_bytes;
     constexpr uint32_t shard_read_width = in0_single_tile_size_bytes * in0_block_w;
     constexpr uint32_t in0_tensor_next_h_dim_block_stride = shard_read_stride * in0_block_h;
@@ -156,9 +157,8 @@ void kernel_main() {
                             uint32_t l1_write_extract_shard_in0 = in0_tensor_local_l1_write_addr;
                             uint64_t noc_shard_read_addr = get_noc_addr(in0_tensor_current_inner_dim_block_start_addr);
 
-                            for (uint32_t i = 0; i < shard_height_in_tiles; i++) {
+                            for (uint32_t i = 0; i < out_block_h; i++) {
                                 noc_async_read(noc_shard_read_addr, l1_write_extract_shard_in0, shard_read_width);
-
                                 l1_write_extract_shard_in0 += shard_read_width;
                                 noc_shard_read_addr += shard_read_stride;
                             }
@@ -225,7 +225,7 @@ void kernel_main() {
                                 // All work is done on one core (the current one).
                                 // noc_semaphore_set_multicast_loopback_src is a no-op in this case.
                                 // Data needs to be written directly in the core.
-                                in0_mcast_receiver_semaphore_addr_ptr[0] = in0_mcast_sender_semaphore_valid_addr_ptr[0];
+                                in0_mcast_receiver_semaphore_addr_ptr[0] = VALID;
                             } else {
                                 noc_semaphore_set_multicast_loopback_src(
                                     in0_mcast_sender_semaphore_valid_addr,

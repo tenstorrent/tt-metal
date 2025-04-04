@@ -46,7 +46,7 @@ class LMHead(LightweightModule):
         if args.is_galaxy:
             num_splits = 1
             cache_file_name = (
-                None if args.dummy_weights else weight_cache_path / f"output_lm_head_{num_splits}_split_shard_0"
+                None if args.dummy_weights else weight_cache_path / f"output_lm_head_{num_splits}_split_shard_0_dram"
             )
             padded_lm_head = torch.zeros(1, 1, args.dim, self.padded_vocab_size)
             padded_lm_head[:, :, :, : self.vocab_size] = torch_output_weights
@@ -69,7 +69,7 @@ class LMHead(LightweightModule):
                         layout=ttnn.TILE_LAYOUT,
                         dtype=dtype,
                         memory_config=memory_config,
-                        # cache_file_name=cache_file_name,
+                        cache_file_name=cache_file_name,
                     )
                 )
         else:
