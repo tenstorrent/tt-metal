@@ -164,6 +164,7 @@ def import_tracy_op_logs(logFolder):
                     traceID = int(IDs[1].strip())
                     if "BEGIN" in opDataStr:
                         traceIDs[deviceID] = traceID
+                        print("Append begin trace id " + str(traceID) + " for " + str(deviceID))
                     elif "END" in opDataStr:
                         assert traceIDs[deviceID] == traceID, (
                             f"Wrong trace ID, device {deviceID} should finish on trace ID "
@@ -172,6 +173,7 @@ def import_tracy_op_logs(logFolder):
                         traceIDs[deviceID] = None
                     elif "REPLAY" in opDataStr:
                         replayIDTime = opDataTime
+
                         if deviceID in traceReplays:
                             if traceID in traceReplays[deviceID]:
                                 traceReplays[deviceID][traceID].append(replayIDTime)
@@ -247,6 +249,7 @@ def get_device_op_data(ops):
     for opID, opData in ops.items():
         if "device_id" in opData.keys():
             deviceID = opData["device_id"]
+            print("Getting op " + str(opID) + " From: " + str(deviceID))
             if deviceID not in deviceOps.keys():
                 deviceOps[deviceID] = [opData]
             else:
@@ -298,7 +301,7 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces):
                         deviceOpID = timeID["run_host_id"]
                         assert (
                             deviceOpID in opIDHostDataDict
-                        ), f"Device op ID not present: Device op ID {deviceOpID} not present in host data"
+                        ), f"Device op ID not present: Device op ID {deviceOpID} not present in host data on device {device}"
                         traceID = opIDHostDataDict[deviceOpID]["metal_trace_id"]
                         if traceID is not None:
                             if device in traceOps:

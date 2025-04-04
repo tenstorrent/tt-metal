@@ -717,7 +717,9 @@ std::shared_ptr<MeshTraceBuffer>& MeshDevice::create_mesh_trace(const MeshTraceI
 }
 
 void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id) {
-    TracyTTMetalReleaseTrace(this->id(), *trace_id);
+    for (auto device : this->get_devices()) {
+        TracyTTMetalReleaseTrace(device->id(), *trace_id);
+    }
     trace_buffer_pool_.erase(trace_id);
 }
 
@@ -730,13 +732,17 @@ std::shared_ptr<MeshTraceBuffer> MeshDevice::get_mesh_trace(const MeshTraceId& t
 }
 
 void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
-    TracyTTMetalBeginTrace(this->id(), *trace_id);
+    for (auto device : this->get_devices()) {
+        TracyTTMetalBeginTrace(device->id(), *trace_id);
+    }
     auto& mesh_trace_buffer = this->create_mesh_trace(trace_id);
     mesh_command_queues_[cq_id]->record_begin(trace_id, mesh_trace_buffer->desc);
 }
 
 void MeshDevice::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
-    TracyTTMetalEndTrace(this->id(), *trace_id);
+    for (auto device : this->get_devices()) {
+        TracyTTMetalEndTrace(device->id(), *trace_id);
+    }
     auto trace_buffer = this->get_mesh_trace(trace_id);
     mesh_command_queues_[cq_id]->record_end();
     MeshTrace::populate_mesh_buffer(*(mesh_command_queues_[cq_id]), trace_buffer);
@@ -744,7 +750,9 @@ void MeshDevice::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
 
 void MeshDevice::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) {
     std::cout << "Call Replay trace" << std::endl;
-    TracyTTMetalReplayTrace(this->id(), *trace_id);
+    for (auto device : this->get_devices()) {
+        TracyTTMetalReplayTrace(device->id(), *trace_id);
+    }
     mesh_command_queues_[cq_id]->enqueue_trace(trace_id, blocking);
 }
 
