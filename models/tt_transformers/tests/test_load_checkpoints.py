@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 ##### Python imports #####
-from inspect import currentframe
 import pytest
 from loguru import logger
 import os
