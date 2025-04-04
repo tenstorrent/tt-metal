@@ -368,7 +368,6 @@ def test_matmul_2d_host_perf(
                 elif math_fidelity == ttnn.MathFidelity.HiFi4:
                     cycle_per_tile = HiFi4_cycle
                 num_cores_user_grid = grid_size[0] * grid_size[1]
-                compute_grid_size = device.compute_with_storage_grid_size()
                 num_cores_full_grid = compute_grid_size.x * compute_grid_size.y
                 ideal_cycle_full_grid = m * k * n / tile_h / tile_w / 32 * cycle_per_tile / num_cores_full_grid
                 ideal_cycle_user_grid = m * k * n / tile_h / tile_w / 32 * cycle_per_tile / num_cores_user_grid
