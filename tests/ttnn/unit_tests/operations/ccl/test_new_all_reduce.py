@@ -98,7 +98,7 @@ def run_all_reduce_impl(
     mesh_device.enable_async(enable_async)
 
     if enable_async:
-        logger.info(f"Using Async Mode for All Gather Op Dispatch")
+        logger.info(f"Using Async Mode for All Reduce Op Dispatch")
 
     ##################################
     ##### Set up fabric stuff
@@ -116,17 +116,9 @@ def run_all_reduce_impl(
 
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
-    # if create_persistent_fabric:
-    #     mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-    #         mesh_device,
-    #         [worker_sub_device],
-    #         0,
-    #         0,
-    #         enable_persistent_fabric,
-    #         wrap_fabric_around_mesh=wrap_mesh,
-    #         topology=all_reduce_topology,
-    #     )
-    #     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
+    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
     num_buffers = 8

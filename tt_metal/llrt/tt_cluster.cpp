@@ -998,7 +998,9 @@ std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
         const auto& connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
         for (const auto& [other_chip_id, eth_cores] : connected_chips) {
             for (const auto& eth_core : eth_cores) {
-                if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::BI_DIR_TUNNELING and
+                const auto& routing_info = this->device_eth_routing_info_.at(chip_id).at(eth_core);
+                if ((routing_info == EthRouterMode::BI_DIR_TUNNELING or
+                     routing_info == EthRouterMode::FABRIC_ROUTER) and
                     skip_reserved_tunnel_cores) {
                     continue;
                 }
