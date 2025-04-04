@@ -13,7 +13,6 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
     permute_conv_parameters,
     dealloc_input,
 )
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import conv_cache
 
 
 class transformer_2d_model:
@@ -295,7 +294,6 @@ class transformer_2d_model:
             bias_tensor=self.proj_in_conv_bias,
             **conv_kwargs,
             compute_config=compute_config,
-            conv_op_cache=conv_cache,
             return_output_dim=False,
             return_weights_and_bias=False,
         )
@@ -375,7 +373,6 @@ class transformer_2d_model:
                     **conv_kwargs_1,
                     weight_tensor=self.proj_out_conv_weights,
                     bias_tensor=self.proj_out_conv_bias,
-                    conv_op_cache=conv_cache,
                     return_output_dim=True,
                     return_weights_and_bias=True,
                 )

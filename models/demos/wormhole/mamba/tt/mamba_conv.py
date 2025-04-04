@@ -101,8 +101,6 @@ class MambaConv:
                 input_length=self.config.input_length,
                 conv_config=self.conv1d_config,
                 compute_config=self.conv1d_compute_config,
-                conv_op_cache={},
-                debug=False,
                 groups=self.config.groups // self.config.channels_split_factor,
                 return_output_dim=True,
                 return_weights_and_bias=True,

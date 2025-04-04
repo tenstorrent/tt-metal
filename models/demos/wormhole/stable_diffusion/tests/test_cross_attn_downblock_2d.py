@@ -52,7 +52,6 @@ def test_cross_attention_downblock_512x512(
     torch_down_block = unet.down_blocks[block_index]
 
     # Initialize ttnn component
-    reader_patterns_cache = {}
     parameters = preprocess_model_parameters(
         initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
     )
@@ -60,9 +59,7 @@ def test_cross_attention_downblock_512x512(
     N, _, H, W = hidden_states
     compute_kernel_config = get_default_compute_config(device)
 
-    ttnn_down_block = cross_attention_down_block_2d(
-        device, parameters, reader_patterns_cache, N, H, W, compute_kernel_config
-    )
+    ttnn_down_block = cross_attention_down_block_2d(device, parameters, N, H, W, compute_kernel_config)
 
     # Prepare inputs
     in_channels = hidden_states[1]
